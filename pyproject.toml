@@ -1,0 +1,16 @@
+[project]
+name = "easy-multi-provider"
+version = "0.1.0"
+description = "Web-configured local model router for Codex"
+requires-python = ">=3.8"
+dependencies = ["cryptography>=2.8,<45"]
+
+[project.scripts]
+easy-multi-provider = "easy_multi_provider.main:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["easy_multi_provider*"]

@@ -1,0 +1,41 @@
+{
+  "host": "127.0.0.1",
+  "port": 4200,
+  "native_catalog_path": "~/.codex/models_cache.json",
+  "account_store_path": "state/accounts",
+  "secret_store_path": "state/secrets",
+  "codex_base_url": "https://chatgpt.com/backend-api/codex",
+  "accounts": [],
+  "providers": [
+    {
+      "id": "chatgpt-subscription",
+      "name": "ChatGPT Subscription",
+      "base_url": "https://chatgpt.com/backend-api/codex",
+      "protocol": "responses",
+      "auth_mode": "forward",
+      "api_key": "",
+      "enabled": true
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "base_url": "https://api.deepseek.com/v1",
+      "protocol": "chat_completions",
+      "auth_mode": "api_key",
+      "api_key": "",
+      "enabled": true
+    }
+  ],
+  "models": [
+    {
+      "id": "deepseek/deepseek-chat",
+      "provider": "deepseek",
+      "upstream_id": "deepseek-chat",
+      "display_name": "DeepSeek Chat",
+      "description": "DeepSeek Chat via API",
+      "reasoning_levels": ["medium"],
+      "context_window": 64000,
+      "enabled": true
+    }
+  ]
+}

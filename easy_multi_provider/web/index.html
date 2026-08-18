@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EasyMultiProvider</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#e5e7eb;background:#0f172a;line-height:1.5}
+*{box-sizing:border-box}body{margin:0}main{max-width:1180px;margin:auto;padding:28px 18px}
+h1{margin:0 0 4px;font-size:26px}h2{font-size:17px;margin:0 0 14px}p{color:#94a3b8;margin:4px 0 18px}
+section{background:#111c31;border:1px solid #253552;border-radius:10px;padding:18px;margin:16px 0}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.wide{grid-column:1/-1}
+label{display:block;color:#94a3b8;font-size:12px;margin:0 0 4px}input,select{width:100%;background:#0b1324;color:#e5e7eb;border:1px solid #334155;border-radius:6px;padding:8px}
+button{border:0;border-radius:6px;padding:8px 13px;background:#2563eb;color:white;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#334155}button.danger{background:#b91c1c}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:9px;border-bottom:1px solid #253552;vertical-align:top}th{color:#94a3b8;font-weight:500}
+code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-space:pre-wrap;background:#0b1324;padding:12px;border-radius:6px;color:#bfdbfe;overflow:auto}
+.muted{color:#94a3b8}.pill{display:inline-block;background:#1e3a8a;border-radius:99px;padding:2px 8px;font-size:11px}.danger-text{color:#fca5a5}
+.quota{white-space:pre-line}.model-hidden{opacity:.65}
+@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}table{display:block;overflow:auto;white-space:nowrap}}
+</style>
+</head>
+<body>
+<main>
+<h1>EasyMultiProvider</h1>
+<p>浏览器配置本地 Router；Codex 仍通过自己的 <code>/model</code> 选择模型。</p>
+
+<section>
+<h2>Codex 集成</h2>
+<div class="grid">
+  <div class="wide"><label>本地服务地址</label><div id="listen_info" class="muted">当前页面地址</div></div>
+  <div class="wide"><label>原生 Codex catalog 路径</label><input id="native_catalog_path"></div>
+</div>
+<button onclick="saveConfig()">保存配置</button>
+<button class="secondary" onclick="refreshCatalog()">生成合并 catalog</button>
+<button class="secondary" onclick="loadIntegration()">刷新 Codex 配置片段</button>
+<pre id="integration">尚未加载</pre>
+</section>
+
+<section>
+<h2>Codex Subscription Accounts</h2>
+<p class="muted">服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器，也不会写入 config/catalog。</p>
+<div class="grid">
+  <div><label>账户 ID（必填）</label><input id="a_id" placeholder="ship"></div>
+  <div><label>显示名称（可选）</label><input id="a_name" placeholder="留空使用账户 ID"></div>
+  <div><label>模型前缀（可选）</label><input id="a_prefix" placeholder="留空使用账户 ID"></div>
+  <div><label>auth.json / 备份文件</label><input id="a_auth_json" type="file"></div>
+</div>
+<button onclick="importAccount()">导入账户</button>
+<button class="secondary" onclick="refreshAllAccounts()">刷新全部余量</button>
+<p class="muted">导入后会自动检查是否与当前 Codex 登录或其他已导入账户重复；重复副本不会出现在生成的订阅模型列表中，但不会自动删除加密凭据。</p>
+<p class="muted">余量显示示例：</p>
+<pre>19%/7d MMDD-HHmm (UTC-7)
+99%/5h MMDD-HHmm (UTC-7)</pre>
+<div id="accounts"></div>
+</section>
+
+<section>
+<h2>Providers</h2>
+<p class="muted">保存 Provider 后点击“拉取模型”会自动加入可用模型；Anthropic 没有统一的模型列表接口，需要手动添加。</p>
+<div class="grid">
+  <div><label>ID</label><input id="p_id" placeholder="deepseek"></div>
+  <div><label>显示名称</label><input id="p_name" placeholder="DeepSeek"></div>
+  <div class="wide"><label>Base URL</label><input id="p_base_url" placeholder="https://api.example.com/v1"></div>
+  <div><label>协议</label><select id="p_protocol"><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></div>
+  <div><label>认证</label><select id="p_auth_mode"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option><option value="forward">Forward Codex auth</option></select></div>
+  <div><label>API Key（新值；已有值留空保持）</label><input id="p_api_key" type="password"></div>
+</div>
+<button onclick="upsertProvider()">保存 Provider</button>
+<div id="providers"></div>
+</section>
+
+<section>
+<h2>Models / 路由</h2>
+<p class="muted">只填上游模型名，Provider 会自动生成 Codex 模型名，例如填写 <code>gemini-2.5-flash</code> 后使用 <code>gemini/gemini-2.5-flash</code>。</p>
+<div class="grid">
+  <div><label>上游模型名</label><input id="m_upstream_id" placeholder="gemini-2.5-flash"></div>
+  <div><label>Provider</label><select id="m_provider"></select></div>
+  <div><label>上下文窗口（token，可手动调整）</label><input id="m_context_window" type="number" min="0" value="0"></div>
+  <div><label>自动获取</label><button class="secondary" onclick="inspectModel()">获取上游最大值</button></div>
+</div>
+<button id="model_submit" onclick="upsertModel()">添加模型</button>
+<button id="model_cancel" class="secondary" onclick="cancelModelEdit()" style="display:none">取消编辑</button>
+<div id="models"></div>
+</section>
+
+<div id="status" class="muted"></div>
+</main>
+<script>
+let state = null;
+let inspectedReasoningLevels = null;
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(path, options = {}) {
+  options.headers = Object.assign({'Content-Type':'application/json'}, options.headers || {});
+  const response = await fetch(path, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || response.statusText);
+  return data;
+}
+function notice(message, error = false) { $('status').textContent = message; $('status').className = error ? 'danger-text' : 'muted'; }
+function fill() {
+  $('listen_info').textContent = window.location.origin;
+  $('native_catalog_path').value = state.native_catalog_path;
+  renderAccounts();
+  $('m_provider').innerHTML = state.providers.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join('');
+  $('providers').innerHTML = state.providers.length ? `<table><tr><th>ID</th><th>Endpoint</th><th>协议</th><th>认证</th><th>操作</th></tr>${state.providers.map(p => `<tr><td><code>${esc(p.id)}</code><br>${esc(p.name)}</td><td>${esc(p.base_url)}</td><td>${esc(p.protocol)}</td><td>${esc(p.auth_mode)}${p.api_key_set ? ' · key已设置' : ''}</td><td><button class="secondary" onclick="discoverProvider('${esc(p.id)}')">拉取模型</button><button class="danger" onclick="removeProvider('${esc(p.id)}')">删除</button></td></tr>`).join('')}</table>` : '<p class="muted">还没有 Provider。</p>';
+  $('models').innerHTML = state.models.length ? `<table><tr><th>模型</th><th>Provider</th><th>显示</th><th>操作</th></tr>${state.models.map(m => `<tr class="${m.enabled ? '' : 'model-hidden'}"><td><code>${esc(m.id)}</code><br><span class="muted">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc((m.reasoning_levels || ['medium']).join('/'))}</span></td><td><span class="pill">${esc(m.provider)}</span></td><td><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? '已显示' : '已隐藏'}</td><td><button class="secondary" onclick="editModel('${esc(m.id)}')">编辑</button><button class="secondary" onclick="testModel('${esc(m.id)}')">测试</button><button class="danger" onclick="removeModel('${esc(m.id)}')">删除</button></td></tr>`).join('')}</table>` : '<p class="muted">还没有外部模型；订阅模型会从 native catalog 读取。</p>';
+}
+function utcOffsetLabel(date) {
+  const minutes = -date.getTimezoneOffset();
+  const sign = minutes >= 0 ? '+' : '-';
+  const absolute = Math.abs(minutes);
+  const hours = Math.floor(absolute / 60);
+  const remainder = absolute % 60;
+  return `UTC${sign}${hours}${remainder ? ':' + String(remainder).padStart(2, '0') : ''}`;
+}
+function localTimeText(value) {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
+  const date = new Date((timestamp > 100000000000 ? timestamp : timestamp * 1000));
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = number => String(number).padStart(2, '0');
+  const local = `${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}`;
+  return `${local} (${utcOffsetLabel(date)})`;
+}
+function compactWindowText(minutes) {
+  const value = Number(minutes);
+  if (!Number.isFinite(value) || value <= 0) return '?';
+  for (const [unit, label] of [[1440, 'day'], [60, 'hour']]) {
+    if (value % unit === 0) {
+      const count = value / unit;
+      return `${count}${label[0]}`;
+    }
+  }
+  return `${value}m`;
+}
+function quotaText(account) {
+  const limits = account.quota && account.quota.rate_limits;
+  if (!limits) return '未刷新';
+  const windows = [limits.primary, limits.secondary]
+    .filter(limit => limit && typeof limit.usedPercent === 'number')
+    .sort((left, right) => Number(right.windowDurationMins || 0) - Number(left.windowDurationMins || 0));
+  if (!windows.length) return '未刷新';
+  const values = windows.map(limit => {
+    const left = Math.min(100, Math.max(0, 100 - limit.usedPercent));
+    const reset = localTimeText(limit.resetsAt);
+    return `${left}%/${compactWindowText(limit.windowDurationMins)}${reset ? ` ${reset}` : ''}`;
+  });
+  return values.join('\n');
+}
+function integerCredit(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? String(Math.round(number)) : String(value);
+}
+function creditText(account) {
+  const quota = account.quota;
+  if (!quota) return 'credit 未查询';
+  const credit = quota.credits;
+  if (!credit) return 'credit 未提供';
+  const parts = [];
+  if (credit.unlimited === true) parts.push('credit unlimited');
+  else if (credit.balance !== undefined) parts.push(`credit ${integerCredit(credit.balance)}`);
+  if (credit.individual_limit && typeof credit.individual_limit.remaining_percent === 'number') {
+    parts.push(`monthly ${credit.individual_limit.remaining_percent}% left`);
+  }
+  if (credit.reset_credits && Number.isInteger(credit.reset_credits.available_count)) {
+    parts.push(`reset ${credit.reset_credits.available_count}`);
+  }
+  const expires = credit.reset_credits && Array.isArray(credit.reset_credits.credits)
+    ? credit.reset_credits.credits.map(item => localTimeText(item && item.expires_at)).filter(Boolean)
+    : [];
+  expires.forEach(value => parts.push(`expire ${value}`));
+  if (credit.spend_control_reached === true) parts.push('spend limit reached');
+  return parts.length ? parts.join(' · ') : 'credit 未提供';
+}
+function renderAccounts() {
+  const accounts = state.accounts || [];
+  $('accounts').innerHTML = accounts.length ? `<table><tr><th>账户</th><th>前缀</th><th>余量</th><th>状态</th><th>操作</th></tr>${accounts.map(a => `<tr><td><code>${esc(a.id)}</code>${a.name && a.name !== a.id ? '<br>'+esc(a.name) : ''}${a.quota && a.quota.account_label ? '<br><span class="muted">'+esc(a.quota.account_label)+'</span>' : ''}</td><td><span class="pill">${esc(a.prefix)}</span></td><td><span class="quota">${esc(quotaText(a))}</span><br><span class="muted">${esc(creditText(a))}</span></td><td>${a.credential_set ? '凭据已保存' : '未导入凭据'}${a.duplicate ? '<br><span class="danger-text">已过滤：与'+esc(a.duplicate_of)+'重复</span>' : ''}</td><td><button class="secondary" onclick="editAccount('${esc(a.id)}')">编辑</button><button class="secondary" onclick="refreshAccount('${esc(a.id)}')">刷新</button><button class="danger" onclick="removeAccount('${esc(a.id)}')">删除</button></td></tr>`).join('')}</table>` : '<p class="muted">还没有 Codex subscription 账户。</p>';
+}
+async function load() { try { state = await api('/api/config'); fill(); await loadIntegration(); notice('配置已加载'); } catch (error) { notice(error.message, true); } }
+async function saveConfig() {
+  try {
+    state.native_catalog_path = $('native_catalog_path').value.trim();
+    state = await api('/api/config', {method:'POST', body:JSON.stringify(state)});
+    await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice('配置已保存，catalog 已同步');
+  } catch (error) { notice(error.message, true); }
+}
+async function importAccount() {
+  try {
+    const file = $('a_auth_json').files[0];
+    if (!file) throw new Error('请选择 auth.json');
+    const id = $('a_id').value.trim();
+    if (!id) throw new Error('请填写账户 ID；显示名称和模型前缀可以留空');
+    const auth = JSON.parse(await file.text());
+    const name = $('a_name').value.trim() || id;
+    const prefix = $('a_prefix').value.trim() || id;
+    await api('/api/accounts/import', {method:'POST', body:JSON.stringify({id, name, prefix, auth_json:auth})});
+    state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration();
+    ['a_id', 'a_name', 'a_prefix'].forEach(id => $(id).value = ''); $('a_auth_json').value = ''; notice('账户已导入');
+  } catch (error) { notice(error.message, true); }
+}
+async function editAccount(id) {
+  const account = (state.accounts || []).find(item => item.id === id);
+  if (!account) return;
+  const name = prompt('显示名称（留空使用账户 ID）', account.name);
+  if (name === null) return;
+  const prefix = prompt('模型前缀（留空使用账户 ID）', account.prefix);
+  if (prefix === null) return;
+  const next = Object.assign({}, state, {accounts: state.accounts.map(item => item.id === id ? Object.assign({}, item, {name: name.trim() || id, prefix: prefix.trim() || id}) : item)});
+  try { state = await api('/api/config', {method:'POST', body:JSON.stringify(next)}); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice('账户信息已保存'); } catch (error) { notice(error.message, true); }
+}
+async function refreshAccount(id) {
+  try {
+    const result = await api('/api/accounts/' + encodeURIComponent(id) + '/quota', {method:'POST', body:'{}'});
+    const index = state.accounts.findIndex(a => a.id === id); if (index >= 0) state.accounts[index] = result.account;
+    renderAccounts(); notice('账户余量已刷新');
+  } catch (error) { notice(error.message, true); }
+}
+async function refreshAllAccounts() {
+  try { await Promise.all((state.accounts || []).map(a => refreshAccount(a.id))); notice('全部账户余量已刷新'); } catch (error) { notice(error.message, true); }
+}
+async function removeAccount(id) {
+  if (!confirm('删除账户 '+id+' 的本地加密凭据？不会撤销远端 Token。')) return;
+  try { await api('/api/accounts/' + encodeURIComponent(id), {method:'DELETE'}); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice('账户本地凭据已删除'); } catch (error) { notice(error.message, true); }
+}
+function upsertProvider() {
+  const provider = {id:$('p_id').value.trim(), name:$('p_name').value.trim(), base_url:$('p_base_url').value.trim(), protocol:$('p_protocol').value, auth_mode:$('p_auth_mode').value, api_key:$('p_api_key').value, enabled:true};
+  const index = state.providers.findIndex(item => item.id === provider.id); if (index >= 0) state.providers[index] = provider; else state.providers.push(provider); saveConfig();
+}
+function removeProvider(id) { if (!confirm('删除 Provider '+id+'？')) return; state.providers = state.providers.filter(p => p.id !== id); state.models = state.models.filter(m => m.provider !== id); saveConfig(); }
+async function discoverProvider(id) {
+  try {
+    notice('正在拉取 ' + id + ' 的模型列表 …');
+    const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider:id})});
+    state = await api('/api/config'); fill(); await loadIntegration();
+    notice(`${id} 已发现 ${result.available} 个模型，新增 ${result.added} 个；已同步 catalog`);
+  } catch (error) { notice('拉取失败：' + error.message, true); }
+}
+async function toggleModel(id, enabled) {
+  const model = state.models.find(item => item.id === id);
+  if (!model) return;
+  const previous = model.enabled;
+  model.enabled = enabled;
+  try {
+    state = await api('/api/config', {method:'POST', body:JSON.stringify(state)});
+    await api('/api/catalog/refresh', {method:'POST', body:'{}'});
+    fill(); await loadIntegration(); notice(enabled ? '模型已显示' : '模型已隐藏；已从 Codex /model 目录移除');
+  } catch (error) {
+    model.enabled = previous; fill(); notice(error.message, true);
+  }
+}
+function upsertModel() {
+  const provider = $('m_provider').value;
+  const entered = $('m_upstream_id').value.trim();
+  if (!provider) return notice('请先保存一个 Provider', true);
+  if (!entered) return notice('请填写上游模型名', true);
+  const prefix = provider + '/';
+  const upstream = entered.startsWith(prefix) ? entered.slice(prefix.length) : entered;
+  const id = prefix + upstream;
+  const previous = state.models.find(item => item.id === editingModelId);
+  const model = {id, provider, display_name:previous && previous.display_name || upstream, description:previous && previous.description || '', upstream_id:upstream, reasoning_levels:inspectedReasoningLevels || previous && previous.reasoning_levels || ['medium'], context_window:Number($('m_context_window').value)||0, enabled:previous ? previous.enabled : true};
+  if (editingModelId && editingModelId !== id) state.models = state.models.filter(item => item.id !== editingModelId);
+  const index = state.models.findIndex(item => item.id === model.id); if (index >= 0) state.models[index] = model; else state.models.push(model); saveConfig();
+  cancelModelEdit();
+}
+function removeModel(id) { state.models = state.models.filter(m => m.id !== id); saveConfig(); }
+let editingModelId = '';
+function editModel(id) {
+  const model = state.models.find(item => item.id === id);
+  if (!model) return;
+  editingModelId = id;
+  inspectedReasoningLevels = Array.isArray(model.reasoning_levels) ? model.reasoning_levels.slice() : null;
+  $('m_provider').value = model.provider;
+  $('m_upstream_id').value = model.upstream_id || id.slice((model.provider + '/').length);
+  $('m_context_window').value = Number(model.context_window || 0);
+  $('model_submit').textContent = '保存修改';
+  $('model_cancel').style.display = 'inline-block';
+  notice('已载入模型设置，可以修改上下文窗口');
+}
+function cancelModelEdit() {
+  editingModelId = '';
+  inspectedReasoningLevels = null;
+  $('m_upstream_id').value = '';
+  $('m_context_window').value = 0;
+  $('model_submit').textContent = '添加模型';
+  $('model_cancel').style.display = 'none';
+}
+async function inspectModel() {
+  const provider = $('m_provider').value;
+  const entered = $('m_upstream_id').value.trim();
+  if (!provider) return notice('请先保存一个 Provider', true);
+  if (!entered) return notice('请填写上游模型名', true);
+  const prefix = provider + '/';
+  const upstream = entered.startsWith(prefix) ? entered.slice(prefix.length) : entered;
+  try {
+    const result = await api('/api/models/metadata', {method:'POST', body:JSON.stringify({provider, model:upstream})});
+    $('m_context_window').value = result.context_window;
+    inspectedReasoningLevels = Array.isArray(result.reasoning_levels) && result.reasoning_levels.length ? result.reasoning_levels : null;
+    const reasoning = inspectedReasoningLevels ? ` · reasoning ${inspectedReasoningLevels.join('/')}` : '';
+    notice(`已获取上限：输入 ${Number(result.input_token_limit).toLocaleString()} · 输出 ${Number(result.output_token_limit).toLocaleString()}${reasoning}；仍可手动调整`);
+  } catch (error) { notice('获取失败：' + error.message, true); }
+}
+async function testModel(id) {
+  try {
+    notice('正在测试 ' + id + ' …');
+    const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})});
+    notice('测试成功：' + (result.output_text || '已收到模型响应'));
+  } catch (error) { notice('测试失败：' + error.message, true); }
+}
+async function refreshCatalog() { try { const result = await api('/api/catalog/refresh', {method:'POST', body:'{}'}); await loadIntegration(); notice(`catalog 已生成：${result.model_count} 个模型`); } catch (error) { notice(error.message, true); } }
+async function loadIntegration() { try { const info = await api('/api/integration'); $('integration').textContent = info.snippet + '\n\n# catalog: ' + info.catalog_path; } catch (error) { $('integration').textContent = error.message; } }
+load();
+</script>
+</body>
+</html>
