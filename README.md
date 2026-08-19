@@ -23,7 +23,8 @@ runtime. The source checkout remains useful for development and tests.
 
 ## Features
 
-- Prefix-based model routing, such as `chen/glm` and `ship/gpt-5.6-luna`.
+- Prefix-based model routing, such as `glm-provider/glm` and
+  `subscription/gpt-5.6-luna`.
 - Multiple encrypted Codex subscription credentials.
 - Duplicate subscription detection without deleting encrypted credentials.
 - Chat Completions, Responses, and Anthropic Messages upstream protocols.
@@ -111,8 +112,9 @@ codex --profile emp
 ```
 
 All accounts and Providers managed by EMP are one Provider from Codex's point
-of view. Use `/model` to switch between entries such as `ship/gpt-5.6-luna`,
-`chen/glm`, and `gemini/gemini-2.5-flash` within the same EMP session group.
+of view. Use `/model` to switch between entries such as
+`subscription/gpt-5.6-luna`, `glm-provider/glm`, and
+`gemini/gemini-2.5-flash` within the same EMP session group.
 
 The plain Codex command remains the normal subscription client:
 
@@ -149,12 +151,12 @@ when the upstream is not Chat Completions-compatible.
 | `chat_completions` | OpenAI-compatible APIs and Gemini AI Studio | Bearer API key |
 | `anthropic_messages` | Anthropic-compatible API | Anthropic API key |
 
-For a GLM provider, configure an ID such as `chen`, choose **Chat
+For a GLM provider, configure an ID such as `glm-provider`, choose **Chat
 Completions**, save the API key, and add or discover the upstream model `glm`.
 Use the resulting Codex model ID:
 
 ```text
-chen/glm
+glm-provider/glm
 ```
 
 If the upstream requires `/v1`, include `/v1` in the Base URL. EasyMultiProvider
@@ -170,8 +172,8 @@ Before relying on the setup, verify both paths:
 
 1. Test a normal ChatGPT App conversation with EMP stopped.
 2. Start EMP and repeat a normal ChatGPT App conversation.
-3. Run `codex --profile emp`, choose `chen/glm` with `/model`, and confirm the
-   request reaches EMP.
+3. Run `codex --profile emp`, choose `glm-provider/glm` with `/model`, and
+   confirm the request reaches EMP.
 4. Resume a normal session with plain `codex resume --all`.
 5. Stop EMP and confirm the normal App/session path still works.
 
