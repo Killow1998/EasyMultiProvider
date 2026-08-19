@@ -5,8 +5,9 @@ Codex as the client and exposes one local Responses endpoint that can route to
 Codex subscriptions, OpenAI-compatible APIs, Gemini AI Studio, and Anthropic
 Messages providers.
 
-The first public release is `v0.1.0`. It is a local Linux-validated MVP; other
-platforms and the ChatGPT App path still require separate manual acceptance.
+The stable public baseline is `v0.1.0`; the current development line targets
+`v0.2.0`. Both are local Linux-validated releases; other platforms and the
+ChatGPT App path still require separate manual acceptance.
 
 ## Install a Release
 
@@ -32,6 +33,8 @@ runtime. The source checkout remains useful for development and tests.
   connection tests.
 - Codex quota, rate-limit, and credit snapshots when the local Codex app-server
   exposes them.
+- Encrypted `.emp` migration bundles for moving configuration and credentials
+  between machines.
 - Loopback-only management by default.
 
 ## Quick Start
@@ -86,7 +89,7 @@ The dashboard provides:
 - **Accounts**: import `auth.json` and backup names such as `auth.json.bk1`
   through a file picker, enter only the account ID, refresh quota, edit the
   combined display-name/model-prefix value, and remove local encrypted
-  credentials.
+  credentials. Export or import an encrypted `.emp` bundle for migration.
 - **Providers**: choose an official preset with fixed endpoint/protocol data,
   or create a custom Provider with a Base URL, protocol, and API key without
   exposing the stored key back to the browser.
@@ -99,6 +102,26 @@ The dashboard provides:
 
 Only the account ID is required during import. Display name and model prefix
 default to that ID.
+
+## Data Migration (`.emp`)
+
+Use **Export EMP Data** to download an encrypted `.emp` bundle. The bundle is
+protected by a migration password and contains configuration, model routes,
+Provider keys, and Codex subscription credentials.
+
+On the destination machine:
+
+1. Create a new local `state/master.key` or set
+   `EASY_MULTI_PROVIDER_MASTER_KEY` to a newly generated key.
+2. Start EasyMultiProvider and choose **Import EMP Data**.
+3. Select the `.emp` file and enter the migration password.
+
+The source and destination `state/master.key` values may be different. The
+source master key is never included in the bundle; imported credentials are
+decrypted in memory and re-encrypted with the destination key. Import uses
+merge semantics: matching account, Provider, and model IDs are replaced, and
+other destination entries are kept. The destination machine's host, port,
+Codex endpoint, catalog path, and local vault paths are kept as-is.
 
 ## Codex Profiles and Session Isolation
 
@@ -192,6 +215,8 @@ loading behavior depends on the installed App version.
 | `/api/catalog/refresh` | POST | Regenerate the Codex model catalog |
 | `/api/integration` | GET | Return the Codex integration snippet |
 | `/api/integration/generate` | POST | Regenerate the catalog and write the EMP Codex profile |
+| `/api/migration/export` | POST | Download an encrypted `.emp` migration bundle |
+| `/api/migration/import` | POST | Decrypt and merge an `.emp` migration bundle |
 | `/v1/models` | GET | List enabled routed models |
 | `/v1/responses` | POST | Codex-facing Responses endpoint |
 
@@ -224,7 +249,9 @@ curl http://127.0.0.1:4200/v1/models
   dependencies.
 - Credentials are decrypted only when needed and are never returned by the
   configuration API.
+- Migration bundles are encrypted with a user-supplied password; the target
+  machine re-encrypts imported credentials with its own local master key.
 - External API providers do not claim to have Codex subscription balances.
 - Run a real text request before relying on tools, reasoning, images, search,
   or provider-specific features; protocol support varies by upstream.
-- The v0.1.0 release has not been audited with Codex Security.
+- The v0.1.0/v0.2.0 development line has not been audited with Codex Security.

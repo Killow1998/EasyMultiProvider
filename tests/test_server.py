@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import tempfile
@@ -143,6 +144,8 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("info.command", html)
         self.assertIn("position:fixed", html)
         self.assertIn("EMP 配置已生成", html)
+        self.assertIn("/api/migration/export", html)
+        self.assertIn("easy-multi-provider-0.2.0.emp", html)
 
     def test_integration_generation_endpoint_writes_profile(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -180,6 +183,73 @@ class ServerAccountTests(unittest.TestCase):
                         self.assertTrue(Path(payload["profile_path"]).exists())
                         self.assertTrue(Path(payload["catalog_path"]).exists())
                         connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_migration_endpoints_export_and_import_emp_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(
+                normalize(
+                    {
+                        "secret_store_path": str(root / "state" / "secrets"),
+                        "providers": [
+                            {
+                                "id": "demo",
+                                "base_url": "https://example.com/v1",
+                                "api_key": "provider-secret",
+                            }
+                        ],
+                    }
+                ),
+                config_path,
+            )
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            headers = {
+                "Cookie": "emp_session=" + state.session_token,
+                "Content-Type": "application/json",
+            }
+            try:
+                with patch(
+                    "easy_multi_provider.server.generated_catalog_path",
+                    return_value=root / "generated" / "catalog.json",
+                ):
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request(
+                        "POST",
+                        "/api/migration/export",
+                        json.dumps({"password": "migration-pass-3"}).encode(),
+                        headers,
+                    )
+                    response = connection.getresponse()
+                    bundle = response.read()
+                    self.assertEqual(response.status, 200)
+                    self.assertIn("easy-multi-provider-0.2.0.emp", response.getheader("Content-Disposition"))
+                    self.assertTrue(bundle.startswith(b"EMP-MIGRATION"))
+                    connection.close()
+
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request(
+                        "POST",
+                        "/api/migration/import",
+                        json.dumps(
+                            {
+                                "password": "migration-pass-3",
+                                "bundle": base64.b64encode(bundle).decode("ascii"),
+                            }
+                        ).encode(),
+                        headers,
+                    )
+                    response = connection.getresponse()
+                    payload = json.loads(response.read().decode())
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(payload["providers"], 1)
+                    connection.close()
             finally:
                 server.shutdown()
                 server.server_close()

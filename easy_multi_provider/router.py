@@ -374,7 +374,7 @@ def _discovery_headers(provider: Dict[str, Any], native_gemini: bool) -> Dict[st
     key = api_key(provider)
     if not key:
         raise RouterError("API key is not configured for provider: %s" % provider["id"], 503)
-    headers = {"Accept": "application/json", "User-Agent": "EasyMultiProvider/0.1"}
+    headers = {"Accept": "application/json", "User-Agent": "EasyMultiProvider/0.2"}
     headers["x-goog-api-key" if native_gemini else "Authorization"] = (
         key if native_gemini else "Bearer " + key
     )
@@ -519,7 +519,7 @@ def _headers(provider: Dict[str, Any], incoming: Dict[str, str], stream: bool) -
     headers = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream" if stream else "application/json",
-        "User-Agent": "EasyMultiProvider/0.1",
+        "User-Agent": "EasyMultiProvider/0.2",
     }
     if provider.get("auth_mode") == "api_key":
         key = api_key(provider)

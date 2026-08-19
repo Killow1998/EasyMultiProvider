@@ -40,8 +40,9 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 <section>
 <h2>Codex Subscription Accounts</h2>
 <p class="muted">服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器，也不会写入 config/catalog。</p>
-<div class="toolbar"><button onclick="selectAccountFile()">导入账户</button><button id="refresh_all" class="secondary" onclick="refreshAllAccounts()">刷新全部余量</button><input id="a_auth_json" type="file" hidden accept=".json,.bk1,.bk2,.bk3,.backup" onchange="accountFileChosen(this)"></div>
+<div class="toolbar"><button onclick="selectAccountFile()">导入账户</button><button id="refresh_all" class="secondary" onclick="refreshAllAccounts()">刷新全部余量</button><button class="secondary" onclick="exportMigration()">导出 EMP 数据</button><button class="secondary" onclick="selectMigrationFile()">导入 EMP 数据</button><input id="a_auth_json" type="file" hidden accept=".json,.bk1,.bk2,.bk3,.backup" onchange="accountFileChosen(this)"><input id="migration_file" type="file" hidden accept=".emp,application/octet-stream" onchange="migrationFileChosen(this)"></div>
 <p class="muted">导入时只需要填写账户 ID；显示名称和模型前缀默认使用账户 ID，可在列表中编辑。重复账户不会生成重复订阅模型，但不会自动删除加密凭据。</p>
+<p class="muted">EMP 迁移包包含配置、模型、Provider key 和订阅凭据；导出时设置迁移密码，导入到其他设备后会重新写入该设备自己的加密存储。</p>
 <pre>19%/7d MMDD-HHmm (UTC-7)
 99%/5h MMDD-HHmm (UTC-7)</pre>
 <div id="accounts"></div>
@@ -75,6 +76,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 <script>
 let state = null;
 let pendingAccountAuth = null;
+let pendingMigrationFile = null;
 let modalReasoningLevels = null;
 let editingModelId = '';
 const refreshErrors = {};
@@ -97,6 +99,28 @@ async function api(path, options = {}) {
   try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {error:{message:text || '服务器返回了无效响应'}}; }
   if (!response.ok) throw new Error(data.error?.message || response.statusText || `HTTP ${response.status}`);
   return data;
+}
+function bytesToBase64(bytes) { let binary = ''; const chunk = 0x8000; for (let index = 0; index < bytes.length; index += chunk) binary += String.fromCharCode(...bytes.subarray(index, index + chunk)); return btoa(binary); }
+async function exportMigration() {
+  openModal('导出 EMP 数据', '<p class="muted">导出的 <code>.emp</code> 文件包含本地配置和加密凭据。请使用至少 8 个字节的迁移密码，并通过安全方式把文件和密码分别传到另一台设备。</p><label>迁移密码<input id="modal_migration_password" type="password" autocomplete="new-password" autofocus></label><label>确认迁移密码<input id="modal_migration_password_confirm" type="password" autocomplete="new-password"></label>', '下载 .emp', async () => {
+    const password = $('modal_migration_password').value; const confirmPassword = $('modal_migration_password_confirm').value;
+    if (password !== confirmPassword) throw new Error('两次迁移密码不一致'); if (new TextEncoder().encode(password).length < 8) throw new Error('迁移密码至少需要 8 个字节');
+    const response = await fetch('/api/migration/export', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password})});
+    if (!response.ok) { let data = {}; try { data = await response.json(); } catch (_) {} throw new Error(data.error?.message || response.statusText); }
+    const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'easy-multi-provider-0.2.0.emp'; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); closeModal(); notice('EMP 迁移包已下载');
+  });
+}
+function selectMigrationFile() { $('migration_file').click(); }
+async function migrationFileChosen(input) {
+  const file = input.files[0]; if (!file) return; if (file.size > 32 * 1024 * 1024) { input.value = ''; return notice('EMP 文件不能超过 32 MB', true); }
+  pendingMigrationFile = file;
+  openModal('导入 EMP 数据', `<p class="muted">已选择：${esc(file.name)}<br>导入采用合并模式：同 ID 的账户、Provider 和模型以迁移包为准，其他本地数据保留。</p><label>迁移密码<input id="modal_import_migration_password" type="password" autocomplete="current-password" autofocus></label>`, '导入并合并', submitMigrationImport);
+}
+async function submitMigrationImport() {
+  const password = $('modal_import_migration_password').value; if (!password) throw new Error('请填写迁移密码'); if (!pendingMigrationFile) throw new Error('请重新选择 EMP 文件');
+  const encoded = bytesToBase64(new Uint8Array(await pendingMigrationFile.arrayBuffer()));
+  const result = await api('/api/migration/import', {method:'POST', body:JSON.stringify({password, bundle:encoded})});
+  pendingMigrationFile = null; $('migration_file').value = ''; closeModal(); state = await api('/api/config'); fill(); await loadIntegration(); notice(`迁移完成：账户 ${result.accounts} 个，Provider ${result.providers} 个，模型 ${result.models} 个`);
 }
 function notice(message, error = false) { $('status').textContent = message; $('status').className = error ? 'danger-text' : 'muted'; }
 function protocolLabel(value) { return ({auto:'自动检测',responses:'Responses',chat_completions:'Chat Completions',anthropic_messages:'Anthropic Messages'}[value] || value); }

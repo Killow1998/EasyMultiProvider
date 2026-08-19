@@ -79,6 +79,11 @@ def _validate_auth(auth: Any) -> Dict[str, Any]:
     return copy.deepcopy(auth)
 
 
+def validate_auth_json(auth: Any) -> Dict[str, Any]:
+    """Validate imported credential JSON without writing it."""
+    return _validate_auth(auth)
+
+
 def normalize_account(raw: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise AccountError("each account must be an object")

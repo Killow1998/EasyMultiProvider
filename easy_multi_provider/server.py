@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import base64
 import json
 import hmac
 import os
@@ -26,6 +27,7 @@ from .catalog import (
     write_codex_profile,
 )
 from .config import ConfigError, config_path, load, merge_web_update, public_config, save
+from .migration import export_bundle, import_bundle
 from .quota import QuotaError, account_refresh_lock, refresh_account_quota
 from .router import RouterError, discover_models, model_metadata, proxy
 
@@ -176,6 +178,17 @@ class AppState:
             save(updated, self.path)
             self.config = load(self.path)
             return self.snapshot()
+
+    def export_migration(self, password: str) -> bytes:
+        with self.lock:
+            return export_bundle(self.config, self.path, password)
+
+    def import_migration(self, bundle: bytes, password: str) -> Dict[str, int]:
+        with self.lock:
+            self.config, summary = import_bundle(self.config, bundle, password, self.path)
+            catalog_path = write_catalog(self.config, generated_catalog_path())
+            summary["catalog_path"] = str(catalog_path.resolve())
+            return summary
 
     def discover_provider_models(
         self, provider_id: str, selected: Optional[list] = None
@@ -346,7 +359,7 @@ def _json_bytes(value: Any) -> bytes:
 
 def make_handler(state: AppState):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "EasyMultiProvider/0.1"
+        server_version = "EasyMultiProvider/0.2"
 
         def setup(self) -> None:
             super().setup()
@@ -434,7 +447,7 @@ def make_handler(state: AppState):
         def _error(self, status: int, message: str) -> None:
             self._send(status, _json_bytes({"error": {"message": message}}))
 
-        def _body(self) -> Dict[str, Any]:
+        def _body(self, max_length: int = 5 * 1024 * 1024) -> Dict[str, Any]:
             if self.headers.get_content_type() != "application/json":
                 raise ConfigError("Content-Type must be application/json")
             try:
@@ -443,7 +456,7 @@ def make_handler(state: AppState):
                 raise ConfigError("invalid Content-Length")
             if length < 0:
                 raise ConfigError("Content-Length cannot be negative")
-            if length > 5 * 1024 * 1024:
+            if length > max_length:
                 raise ConfigError("request body is too large")
             raw = self.rfile.read(length)
             try:
@@ -532,7 +545,7 @@ def make_handler(state: AppState):
                 self._error(401 if self._same_origin() else 403, "proxy caller authentication is required")
                 return
             try:
-                body = self._body()
+                body = self._body(32 * 1024 * 1024 if path == "/api/migration/import" else 5 * 1024 * 1024)
                 if path == "/api/config":
                     updated = state.update(body)
                     self._send(200, _json_bytes(public_config(updated)))
@@ -549,6 +562,29 @@ def make_handler(state: AppState):
                     auth_json = body.pop("auth_json", None)
                     account = state.import_account(body, auth_json)
                     self._send(200, _json_bytes({"account": public_accounts([account])[0]}))
+                    return
+                if path == "/api/migration/export":
+                    bundle = state.export_migration(body.get("password"))
+                    self._send(
+                        200,
+                        bundle,
+                        "application/octet-stream",
+                        {
+                            "Cache-Control": "no-store",
+                            "Content-Disposition": 'attachment; filename="easy-multi-provider-0.2.0.emp"',
+                        },
+                    )
+                    return
+                if path == "/api/migration/import":
+                    encoded = body.get("bundle")
+                    if not isinstance(encoded, str) or not encoded:
+                        raise ConfigError("migration bundle is required")
+                    try:
+                        bundle = base64.b64decode(encoded.encode("ascii"), validate=True)
+                    except (UnicodeEncodeError, ValueError) as exc:
+                        raise ConfigError("migration bundle is not valid base64") from exc
+                    summary = state.import_migration(bundle, body.get("password"))
+                    self._send(200, _json_bytes({"status": "ok", **summary}))
                     return
                 if path.startswith("/api/accounts/") and path.endswith("/quota"):
                     account_id = unquote(path[len("/api/accounts/") : -len("/quota")].rstrip("/"))

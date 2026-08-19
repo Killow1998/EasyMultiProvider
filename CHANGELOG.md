@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 (Unreleased)
+
+- Added encrypted `.emp` migration bundles for moving configuration, model
+  routes, Provider keys, and Codex subscription credentials between machines.
+- Imported credentials are re-encrypted with the destination machine's local
+  master key; the migration bundle never contains the local master key.
+
 ## 0.1.0
 
 - Added local Web UI management for encrypted Codex subscription accounts,

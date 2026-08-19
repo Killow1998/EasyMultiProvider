@@ -307,7 +307,7 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
                 "clientInfo": {
                     "name": "easy-multi-provider",
                     "title": "EasyMultiProvider",
-                    "version": "0.1.0",
+                    "version": "0.2.0",
                 },
                 "capabilities": {},
             },
