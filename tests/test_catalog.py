@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from tests.support import ensure_test_master_key
 from easy_multi_provider.accounts import public_accounts
-from easy_multi_provider.catalog import build_catalog, integration_info, write_catalog
+from easy_multi_provider.catalog import build_catalog, integration_info, write_catalog, write_codex_profile
 from easy_multi_provider.config import normalize
 from easy_multi_provider.vault import write_encrypted_json
 
@@ -49,6 +49,19 @@ class CatalogTests(unittest.TestCase):
         self.assertIn('supports_websockets = false', info["snippet"])
         self.assertIn('requires_openai_auth = true', info["snippet"])
         self.assertNotIn("openai_base_url", info["snippet"])
+
+    def test_writes_emp_profile_under_codex_home(self):
+        config = normalize({"host": "127.0.0.1", "port": 4200})
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"CODEX_HOME": str(Path(directory) / "codex")}
+        ):
+            catalog_path = Path(directory) / "generated" / "codex-models.json"
+            profile_path = write_codex_profile(config, catalog_path)
+            self.assertEqual(profile_path, Path(directory) / "codex" / "emp.config.toml")
+            contents = profile_path.read_text(encoding="utf-8")
+            self.assertIn('model_provider = "easy-multi-provider"', contents)
+            self.assertIn('model_catalog_json = ', contents)
+            self.assertEqual(profile_path.stat().st_mode & 0o777, 0o600)
 
     def test_subscription_accounts_get_prefixed_native_aliases(self):
         with tempfile.TemporaryDirectory() as directory:

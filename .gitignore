@@ -18,3 +18,9 @@ auth.json
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Local planning notes; never publish these files.
+task_plan.md
+progress.md
+findings.md
+MULTI_ACCOUNT_PLAN.md

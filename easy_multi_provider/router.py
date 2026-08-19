@@ -9,11 +9,22 @@ import uuid
 from typing import Any, Dict, Iterable, Iterator, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .accounts import AccountError, auth_headers
-from .config import api_key
-from .quota import QuotaError, read_account_quota
+from .config import MAX_CONTEXT_WINDOW, api_key
+from .quota import QuotaError, refresh_account_quota
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        raise URLError("upstream redirects are disabled")
+
+
+# Credential-bearing requests must never replay headers to a redirected URL.
+def urlopen(request: Request, timeout: float):
+    """Build after startup so automatically imported system proxies are used."""
+    return build_opener(_NoRedirectHandler()).open(request, timeout=timeout)
 
 
 class RouterError(Exception):
@@ -33,6 +44,194 @@ _GEMINI_REASONING_LEVELS = (
     ("gemini-3-pro", ["low", "high"]),
     ("gemini-2.5", ["low", "medium", "high"]),
 )
+
+MAX_UPSTREAM_BODY_BYTES = 16 * 1024 * 1024
+MAX_DISCOVERY_BODY_BYTES = 4 * 1024 * 1024
+MAX_DISCOVERY_TOTAL_BYTES = 8 * 1024 * 1024
+MAX_DISCOVERY_SECONDS = 60
+MAX_DISCOVERY_FIELD_BYTES = 4096
+MAX_DISCOVERY_TOKEN_BYTES = 4096
+MAX_SSE_FRAME_BYTES = 1024 * 1024
+MAX_STREAM_TEXT_BYTES = 16 * 1024 * 1024
+MAX_DISCOVERED_MODELS = 1000
+MAX_UPSTREAM_SECONDS = 180
+UPSTREAM_SOCKET_TIMEOUT = 30
+
+
+def _set_response_timeout(response: Any, timeout: float) -> None:
+    for candidate in (
+        response,
+        getattr(response, "fp", None),
+        getattr(getattr(response, "fp", None), "raw", None),
+    ):
+        sock = getattr(candidate, "_sock", None)
+        if sock is not None and hasattr(sock, "settimeout"):
+            sock.settimeout(max(0.1, timeout))
+            return
+
+
+def _read_limited(
+    response: Any, limit: int, purpose: str, deadline: float = None
+) -> bytes:
+    response_headers = getattr(response, "headers", {})
+    content_length = response_headers.get("Content-Length") if response_headers else None
+    if content_length:
+        try:
+            if int(content_length) < 0 or int(content_length) > limit:
+                raise RouterError("upstream %s is too large" % purpose, 502)
+        except ValueError:
+            raise RouterError("upstream %s has invalid Content-Length" % purpose, 502)
+    chunks = []
+    total = 0
+    while True:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                response.close()
+                raise RouterError("upstream %s timed out" % purpose, 504)
+            _set_response_timeout(response, min(UPSTREAM_SOCKET_TIMEOUT, remaining))
+        try:
+            chunk = response.read(64 * 1024)
+        except TypeError:
+            # Small test doubles may expose read() without a size argument.
+            chunk = response.read()
+            if len(chunk) > limit:
+                raise RouterError("upstream %s is too large" % purpose, 502)
+            return chunk
+        except OSError as exc:
+            if deadline is not None and time.monotonic() >= deadline:
+                response.close()
+                raise RouterError("upstream %s timed out" % purpose, 504) from exc
+            raise
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise RouterError("upstream %s is too large" % purpose, 502)
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+class _DeadlineResponse:
+    def __init__(self, response: Any, deadline: float):
+        self._response = response
+        self._deadline = deadline
+        self._unsized_read = False
+
+    @property
+    def status(self):
+        return self._response.status
+
+    @property
+    def headers(self):
+        return self._response.headers
+
+    def _check_deadline(self) -> None:
+        if time.monotonic() > self._deadline:
+            self.close()
+            raise RouterError("upstream request timed out", 504)
+
+    def read(self, size: int = -1) -> bytes:
+        self._check_deadline()
+        if self._unsized_read:
+            return b""
+        _set_response_timeout(
+            self._response,
+            min(UPSTREAM_SOCKET_TIMEOUT, self._deadline - time.monotonic()),
+        )
+        try:
+            return self._response.read(size)
+        except TypeError:
+            self._unsized_read = True
+            return self._response.read()
+        except OSError as exc:
+            if time.monotonic() >= self._deadline:
+                self.close()
+                raise RouterError("upstream request timed out", 504) from exc
+            raise
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self._check_deadline()
+        _set_response_timeout(
+            self._response,
+            min(UPSTREAM_SOCKET_TIMEOUT, self._deadline - time.monotonic()),
+        )
+        try:
+            return next(self._response)
+        except OSError as exc:
+            if time.monotonic() >= self._deadline:
+                self.close()
+                raise RouterError("upstream request timed out", 504) from exc
+            raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def close(self) -> None:
+        close = getattr(self._response, "close", None)
+        if close:
+            close()
+
+
+class _LimitedResponse:
+    def __init__(self, response: Any, limit: int):
+        self._response = response
+        self._limit = limit
+        self._read = 0
+
+    @property
+    def status(self):
+        return self._response.status
+
+    @property
+    def headers(self):
+        return self._response.headers
+
+    def read(self, size: int = -1) -> bytes:
+        if self._read >= self._limit:
+            return b""
+        remaining = self._limit - self._read
+        requested = remaining if size is None or size < 0 else min(size, remaining)
+        try:
+            chunk = self._response.read(requested)
+        except TypeError:
+            chunk = self._response.read()
+        if not chunk:
+            return b""
+        self._read += len(chunk)
+        if self._read > self._limit:
+            raise RouterError("upstream stream is too large", 502)
+        return chunk
+
+    def __iter__(self):
+        while True:
+            chunk = self.read(64 * 1024)
+            if not chunk:
+                return
+            yield chunk
+
+    def close(self) -> None:
+        self._response.close()
+
+
+def _bounded_stream_response(response: Any) -> _LimitedResponse:
+    headers = getattr(response, "headers", {})
+    content_length = headers.get("Content-Length") if headers else None
+    if content_length:
+        try:
+            if int(content_length) < 0 or int(content_length) > MAX_UPSTREAM_BODY_BYTES:
+                response.close()
+                raise RouterError("upstream stream is too large", 502)
+        except ValueError:
+            response.close()
+            raise RouterError("upstream stream has invalid Content-Length", 502)
+    return _LimitedResponse(response, MAX_UPSTREAM_BODY_BYTES)
 
 
 def _gemini_reasoning_levels(model: str, metadata: Dict[str, Any]) -> list:
@@ -88,6 +287,7 @@ def _upstream_model(provider: Dict[str, Any], model: Dict[str, Any], requested: 
 
 
 def _endpoint(provider: Dict[str, Any]) -> str:
+    provider = resolve_provider_protocol(provider)
     base = provider["base_url"].rstrip("/")
     suffixes = {
         "responses": "/responses",
@@ -115,7 +315,9 @@ def model_metadata(provider: Dict[str, Any], upstream_model: str) -> Dict[str, A
     )
     try:
         with urlopen(request, timeout=30) as response:
-            value = json.loads(response.read().decode("utf-8"))
+            value = json.loads(
+                _read_limited(response, MAX_DISCOVERY_BODY_BYTES, "模型信息响应").decode("utf-8")
+            )
     except HTTPError as exc:
         detail = exc.read(4096).decode("utf-8", "replace")
         raise RouterError("上游模型信息查询失败 %d: %s" % (exc.code, detail), exc.code) from exc
@@ -124,19 +326,15 @@ def model_metadata(provider: Dict[str, Any], upstream_model: str) -> Dict[str, A
     input_limit = value.get("inputTokenLimit")
     output_limit = value.get("outputTokenLimit")
     if (
-        not isinstance(input_limit, int)
-        or isinstance(input_limit, bool)
-        or input_limit <= 0
-        or not isinstance(output_limit, int)
-        or isinstance(output_limit, bool)
-        or output_limit <= 0
+        not _positive_int(input_limit)
+        or not _positive_int(output_limit)
     ):
         raise RouterError("上游未返回有效的上下文上限，请手动填写", 502)
     return {
         "model": upstream_model,
-        "context_window": input_limit,
-        "input_token_limit": input_limit,
-        "output_token_limit": output_limit,
+        "context_window": _positive_int(input_limit),
+        "input_token_limit": _positive_int(input_limit),
+        "output_token_limit": _positive_int(output_limit),
         "reasoning_levels": _gemini_reasoning_levels(upstream_model, value),
     }
 
@@ -144,10 +342,22 @@ def model_metadata(provider: Dict[str, Any], upstream_model: str) -> Dict[str, A
 _DISCOVERABLE_MODEL_ID = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 
-def _get_json(request: Request, purpose: str) -> Dict[str, Any]:
+def _get_json(request: Request, purpose: str, budget: Dict[str, Any] = None) -> Dict[str, Any]:
+    if budget and time.monotonic() > budget["deadline"]:
+        raise RouterError("上游%s超时" % purpose, 504)
     try:
         with urlopen(request, timeout=30) as response:
-            value = json.loads(response.read().decode("utf-8"))
+            raw = _read_limited(
+                response,
+                MAX_DISCOVERY_BODY_BYTES,
+                purpose,
+                budget["deadline"] if budget else None,
+            )
+            if budget:
+                budget["bytes"] += len(raw)
+                if budget["bytes"] > MAX_DISCOVERY_TOTAL_BYTES:
+                    raise RouterError("上游%s超过安全总大小" % purpose, 502)
+            value = json.loads(raw.decode("utf-8"))
     except HTTPError as exc:
         detail = exc.read(4096).decode("utf-8", "replace")
         raise RouterError("上游%s失败 %d: %s" % (purpose, exc.code, detail), exc.code) from exc
@@ -172,14 +382,29 @@ def _discovery_headers(provider: Dict[str, Any], native_gemini: bool) -> Dict[st
 
 
 def _positive_int(value: Any) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+    return (
+        value
+        if isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 < value <= MAX_CONTEXT_WINDOW
+        else 0
+    )
 
 
 def _model_id(value: Any) -> str:
     model_id = str(value or "").strip()
+    if len(model_id.encode("utf-8")) > MAX_DISCOVERY_FIELD_BYTES:
+        return ""
     if model_id.startswith("models/"):
         model_id = model_id[len("models/"):]
     return model_id if _DISCOVERABLE_MODEL_ID.fullmatch(model_id or "") else ""
+
+
+def _model_text(value: Any, fallback: str, field: str) -> str:
+    text = str(value or fallback)
+    if len(text.encode("utf-8")) > MAX_DISCOVERY_FIELD_BYTES:
+        raise RouterError("上游模型%s过大" % field, 502)
+    return text
 
 
 def _gemini_models(provider: Dict[str, Any]) -> list:
@@ -189,12 +414,15 @@ def _gemini_models(provider: Dict[str, Any]) -> list:
     headers = _discovery_headers(provider, True)
     result = []
     page_token = ""
+    budget = {"bytes": 0, "deadline": time.monotonic() + MAX_DISCOVERY_SECONDS}
     for _ in range(20):
         url = base + "/models"
         if page_token:
             url += "?pageToken=" + quote(page_token, safe="")
-        value = _get_json(Request(url, headers=headers), "Gemini 模型列表查询")
+        value = _get_json(Request(url, headers=headers), "Gemini 模型列表查询", budget)
         for item in value.get("models", []):
+            if len(result) >= MAX_DISCOVERED_MODELS:
+                raise RouterError("上游模型列表超过安全上限", 502)
             if not isinstance(item, dict):
                 continue
             methods = item.get("supportedGenerationMethods")
@@ -206,15 +434,20 @@ def _gemini_models(provider: Dict[str, Any]) -> list:
             result.append(
                 {
                     "upstream_id": model_id,
-                    "display_name": str(item.get("displayName") or model_id),
-                    "description": str(item.get("description") or ""),
+                    "display_name": _model_text(item.get("displayName"), model_id, "显示名称"),
+                    "description": _model_text(item.get("description"), "", "描述"),
                     "context_window": _positive_int(item.get("inputTokenLimit")),
                     "input_token_limit": _positive_int(item.get("inputTokenLimit")),
                     "output_token_limit": _positive_int(item.get("outputTokenLimit")),
                     "reasoning_levels": _gemini_reasoning_levels(model_id, item) or ["medium"],
+                    "created_at": _positive_int(
+                        item.get("created") or item.get("created_at") or item.get("updated_at")
+                    ),
                 }
             )
-        page_token = str(value.get("nextPageToken") or "")
+        page_token = value.get("nextPageToken") or ""
+        if not isinstance(page_token, str) or len(page_token.encode("utf-8")) > MAX_DISCOVERY_TOKEN_BYTES:
+            raise RouterError("上游分页标记过大", 502)
         if not page_token:
             break
     return result
@@ -226,12 +459,16 @@ def _generic_models(provider: Dict[str, Any]) -> list:
         if base.endswith(suffix):
             base = base[:-len(suffix)]
             break
+    budget = {"bytes": 0, "deadline": time.monotonic() + MAX_DISCOVERY_SECONDS}
     value = _get_json(
         Request(base + "/models", headers=_discovery_headers(provider, False)),
         "模型列表查询",
+        budget,
     )
     result = []
     for item in value.get("data", []):
+        if len(result) >= MAX_DISCOVERED_MODELS:
+            raise RouterError("上游模型列表超过安全上限", 502)
         if not isinstance(item, dict):
             continue
         model_id = _model_id(item.get("id"))
@@ -245,17 +482,31 @@ def _generic_models(provider: Dict[str, Any]) -> list:
         result.append(
             {
                 "upstream_id": model_id,
-                "display_name": str(item.get("display_name") or item.get("name") or model_id),
-                "description": str(item.get("description") or ""),
+                "display_name": _model_text(
+                    item.get("display_name") or item.get("name"), model_id, "显示名称"
+                ),
+                "description": _model_text(item.get("description"), "", "描述"),
                 "context_window": context,
                 "reasoning_levels": ["medium"],
+                "created_at": _positive_int(
+                    item.get("created") or item.get("created_at") or item.get("updated_at")
+                ),
             }
         )
     return result
 
 
+def resolve_provider_protocol(provider: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve auto to the safe default without making an upstream request."""
+    if provider.get("protocol") != "auto":
+        return provider
+    provider["protocol"] = "chat_completions"
+    return provider
+
+
 def discover_models(provider: Dict[str, Any]) -> list:
     """Fetch safe model metadata without making one request per model."""
+    provider = resolve_provider_protocol(provider)
     if provider.get("protocol") == "anthropic_messages":
         raise RouterError("Anthropic Messages 没有统一的模型列表接口，请手动添加", 400)
     parsed = urlparse(provider.get("base_url", ""))
@@ -310,7 +561,11 @@ def _request(
     stream: bool = False,
 ):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    deadline = time.monotonic() + MAX_UPSTREAM_SECONDS
     for attempt in range(2):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RouterError("upstream request timed out", 504)
         request = Request(
             _endpoint(provider),
             data=data,
@@ -318,11 +573,16 @@ def _request(
             method="POST",
         )
         try:
-            return urlopen(request, timeout=180)
+            response = urlopen(request, timeout=min(UPSTREAM_SOCKET_TIMEOUT, remaining))
+            return (
+                _DeadlineResponse(response, deadline)
+                if hasattr(response, "close")
+                else response
+            )
         except HTTPError as exc:
             if attempt == 0 and exc.code == 401 and provider.get("auth_mode") == "account":
                 try:
-                    read_account_quota(provider["account"])
+                    refresh_account_quota(provider["account"])
                 except (OSError, QuotaError, ValueError):
                     pass
                 else:
@@ -332,6 +592,16 @@ def _request(
                 time.sleep(0.5)
                 continue
             detail = exc.read(4096).decode("utf-8", "replace")
+            if (
+                attempt == 0
+                and exc.code == 400
+                and "reasoning_effort" in payload
+                and "reasoning_effort" in detail
+            ):
+                payload = dict(payload)
+                payload.pop("reasoning_effort", None)
+                data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                continue
             raise RouterError("upstream returned %d: %s" % (exc.code, detail), exc.code)
         except URLError as exc:
             raise RouterError("upstream connection failed: %s" % exc.reason, 502)
@@ -620,7 +890,11 @@ def forward_responses(
     payload = dict(body)
     payload["model"] = _upstream_model(provider, model, body["model"])
     with _request(provider, payload, incoming, bool(body.get("stream"))) as response:
-        return response.status, response.headers.get("Content-Type", "application/json"), response.read()
+        return (
+            response.status,
+            response.headers.get("Content-Type", "application/json"),
+            _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses 响应"),
+        )
 
 
 def forward_responses_stream(
@@ -631,7 +905,7 @@ def forward_responses_stream(
 ):
     payload = dict(body)
     payload["model"] = _upstream_model(provider, model, body["model"])
-    return _request(provider, payload, incoming, True)
+    return _bounded_stream_response(_request(provider, payload, incoming, True))
 
 
 def chat_completion(
@@ -642,7 +916,7 @@ def chat_completion(
 ) -> Tuple[int, str, bytes]:
     payload = responses_to_chat(body, _upstream_model(provider, model, body["model"]))
     with _request(provider, payload, incoming, False) as response:
-        raw = response.read()
+        raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Chat Completions 响应")
     try:
         value = json.loads(raw.decode("utf-8"))
     except ValueError:
@@ -658,7 +932,7 @@ def anthropic_completion(
 ) -> Tuple[int, str, bytes]:
     payload = responses_to_anthropic(body, _upstream_model(provider, model, body["model"]))
     with _request(provider, payload, incoming, False) as response:
-        raw = response.read()
+        raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Anthropic 响应")
     try:
         value = json.loads(raw.decode("utf-8"))
     except ValueError:
@@ -672,14 +946,26 @@ def _sse_frame(event: str, value: Dict[str, Any]) -> bytes:
 
 def _sse_data(response: Any) -> Iterator[str]:
     pending = []
+    pending_bytes = 0
+    stream_bytes = 0
     try:
         for raw in response:
+            stream_bytes += len(raw)
+            if stream_bytes > MAX_UPSTREAM_BODY_BYTES:
+                raise RouterError("upstream SSE stream is too large", 502)
+            if len(raw) > MAX_SSE_FRAME_BYTES:
+                raise RouterError("upstream SSE frame is too large", 502)
             line = raw.decode("utf-8", "replace").rstrip("\r\n")
             if line.startswith("data:"):
-                pending.append(line[5:].lstrip())
+                value = line[5:].lstrip()
+                pending_bytes += len(value.encode("utf-8"))
+                if pending_bytes > MAX_SSE_FRAME_BYTES:
+                    raise RouterError("upstream SSE frame is too large", 502)
+                pending.append(value)
             elif not line and pending:
                 yield "\n".join(pending)
                 pending = []
+                pending_bytes = 0
         if pending:
             yield "\n".join(pending)
     finally:
@@ -697,6 +983,7 @@ def stream_chat_completion(
     response_id = "resp_" + uuid.uuid4().hex
     message_id = "msg_" + uuid.uuid4().hex
     text = []
+    text_bytes = 0
     response = {
         "id": response_id,
         "object": "response",
@@ -745,6 +1032,10 @@ def stream_chat_completion(
             delta = choices[0].get("delta", {}) if choices else {}
             piece = delta.get("content") or ""
             if piece:
+                piece_bytes = len(str(piece).encode("utf-8"))
+                if text_bytes + piece_bytes > MAX_STREAM_TEXT_BYTES:
+                    raise RouterError("upstream streamed text is too large", 502)
+                text_bytes += piece_bytes
                 text.append(piece)
                 yield frame(
                     "response.output_text.delta",
@@ -811,6 +1102,7 @@ def stream_anthropic_completion(
     response_id = "resp_" + uuid.uuid4().hex
     message_id = "msg_" + uuid.uuid4().hex
     text = []
+    text_bytes = 0
     response = {
         "id": response_id,
         "object": "response",
@@ -858,6 +1150,10 @@ def stream_anthropic_completion(
                 continue
             piece = delta.get("text") or ""
             if piece:
+                piece_bytes = len(str(piece).encode("utf-8"))
+                if text_bytes + piece_bytes > MAX_STREAM_TEXT_BYTES:
+                    raise RouterError("upstream streamed text is too large", 502)
+                text_bytes += piece_bytes
                 text.append(piece)
                 yield frame(
                     "response.output_text.delta",
@@ -915,6 +1211,9 @@ def proxy(
     if not isinstance(model_id, str) or not model_id:
         raise RouterError("request.model is required")
     provider, model = find_route(config, model_id)
+    # Model discovery remains optional; Responses and Anthropic can still be
+    # selected explicitly.
+    provider = resolve_provider_protocol(provider)
     if body.get("stream") and provider["protocol"] == "chat_completions":
         return {"kind": "stream", "content_type": "text/event-stream"}, stream_chat_completion(
             provider, body, model, incoming

@@ -9,6 +9,7 @@ from unittest.mock import patch
 from tests.support import ensure_test_master_key
 import easy_multi_provider.router as router
 from easy_multi_provider.router import (
+    RouterError,
     _response_from_anthropic,
     _response_from_chat,
     find_route,
@@ -35,6 +36,24 @@ class RouterTests(unittest.TestCase):
         provider, model = find_route(self.config, "demo/model")
         self.assertEqual(provider["id"], "demo")
         self.assertEqual(model["id"], "demo/model")
+
+    def test_limited_discovery_read_stops_after_deadline(self):
+        class DripResponse:
+            def __init__(self):
+                self.closed = False
+
+            def read(self, size):
+                return b"x"
+
+            def close(self):
+                self.closed = True
+
+        response = DripResponse()
+        with patch.object(router.time, "monotonic", side_effect=[0, 2]):
+            with self.assertRaises(RouterError) as raised:
+                router._read_limited(response, 100, "discovery", deadline=1)
+        self.assertEqual(raised.exception.status, 504)
+        self.assertTrue(response.closed)
 
     def test_upstream_model_drops_repeated_local_provider_prefix(self):
         provider = {"id": "gemini"}
@@ -121,6 +140,134 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(request.full_url, "https://example.com/v1/models")
         self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
         self.assertEqual([item["upstream_id"] for item in value], ["demo-a"])
+
+    def test_auto_model_discovery_resolves_to_chat_completions(self):
+        provider = {
+            "id": "demo",
+            "base_url": "https://example.com/v1",
+            "protocol": "auto",
+            "auth_mode": "api_key",
+            "api_key": "test-key",
+        }
+
+        class FakeResponse:
+            def read(self):
+                return json.dumps({"data": [{"id": "demo-a"}]}).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        with patch.object(router, "urlopen", side_effect=[FakeResponse(), FakeResponse()]):
+            value = router.discover_models(provider)
+        self.assertEqual(provider["protocol"], "chat_completions")
+        self.assertEqual(value[0]["upstream_id"], "demo-a")
+
+    def test_auto_provider_can_proxy_without_model_discovery(self):
+        config = {
+            "providers": [{
+                "id": "demo",
+                "base_url": "https://example.com/v1",
+                "protocol": "auto",
+                "auth_mode": "api_key",
+                "api_key": "test-key",
+            }],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
+        }
+        with patch.object(
+            router,
+            "chat_completion",
+            return_value=(200, "application/json", b"{}"),
+        ) as completion:
+            metadata, result = router.proxy(
+                config,
+                {"model": "demo/glm", "input": "hello"},
+                {},
+            )
+        self.assertEqual(metadata["status"], 200)
+        self.assertEqual(result, b"{}")
+        self.assertEqual(completion.call_args.args[0]["protocol"], "chat_completions")
+
+    def test_auto_endpoint_does_not_require_model_discovery(self):
+        provider = {
+            "base_url": "https://example.com/v1",
+            "protocol": "auto",
+        }
+        self.assertEqual(router._endpoint(provider), "https://example.com/v1/chat/completions")
+
+    def test_chat_request_retries_without_unsupported_reasoning_effort(self):
+        provider = {
+            "id": "demo",
+            "base_url": "https://example.com/v1",
+            "protocol": "chat_completions",
+            "auth_mode": "api_key",
+            "api_key": "test-key",
+        }
+        first = HTTPError(
+            "https://example.com/v1/chat/completions",
+            400,
+            "unsupported",
+            {},
+            BytesIO(b'{"error":{"message":"unsupported reasoning_effort"}}'),
+        )
+
+        class FakeResponse:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+            sent = False
+
+            def read(self, size=-1):
+                if self.sent:
+                    return b""
+                self.sent = True
+                return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        with patch.object(router, "urlopen", side_effect=[first, FakeResponse()]) as opened:
+            status, _, raw = router.chat_completion(
+                provider,
+                {
+                    "model": "demo/model",
+                    "input": "hello",
+                    "reasoning": {"effort": "medium"},
+                },
+                {"upstream_id": "model"},
+                {},
+            )
+        self.assertEqual(status, 200)
+        self.assertIn(b'"output_text": "ok"', raw)
+        retry_payload = json.loads(opened.call_args_list[1].args[0].data)
+        self.assertNotIn("reasoning_effort", retry_payload)
+
+    def test_model_discovery_ignores_unbounded_context_metadata(self):
+        provider = {
+            "id": "demo",
+            "base_url": "https://example.com/v1",
+            "protocol": "chat_completions",
+            "auth_mode": "api_key",
+            "api_key": "test-key",
+        }
+
+        class FakeResponse:
+            def read(self):
+                return json.dumps({"data": [{"id": "demo-a", "context_window": 10**300}]}).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        with patch.object(router, "urlopen", return_value=FakeResponse()):
+            value = router.discover_models(provider)
+        self.assertEqual(value[0]["context_window"], 0)
 
     def test_gemini_model_discovery_paginates_and_filters_non_generation_models(self):
         provider = {
@@ -302,7 +449,7 @@ class RouterTests(unittest.TestCase):
 
             failure = HTTPError("https://example.com/v1/responses", 401, "expired", {}, BytesIO(b""))
             with patch.object(router, "urlopen", side_effect=[failure, FakeResponse()]) as opened:
-                with patch.object(router, "read_account_quota", return_value={} ) as refreshed:
+                with patch.object(router, "refresh_account_quota", return_value={} ) as refreshed:
                     router.forward_responses(
                         provider,
                         {"model": "ship/gpt-native", "input": "hello"},

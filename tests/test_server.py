@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -9,13 +10,48 @@ from pathlib import Path
 
 from tests.support import ensure_test_master_key
 from easy_multi_provider.config import api_key, load, normalize, save
-from easy_multi_provider.server import AppState, make_handler
+from easy_multi_provider.server import AppState, WEB_FILE, configure_proxy_environment, make_handler
 
 
 ensure_test_master_key()
 
 
 class ServerAccountTests(unittest.TestCase):
+    def test_system_proxy_is_imported_when_environment_has_none(self):
+        proxy_keys = {
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
+        }
+        clean_environment = {
+            key: value for key, value in os.environ.items() if key not in proxy_keys
+        }
+        settings = {
+            "http": "http://127.0.0.1:7897",
+            "https": "http://127.0.0.1:7897",
+            "all": "socks5://127.0.0.1:7897",
+            "no": "localhost,127.0.0.1",
+        }
+        with patch.dict(os.environ, clean_environment, clear=True), patch(
+            "easy_multi_provider.server.getproxies", return_value={}
+        ), patch("easy_multi_provider.server._gnome_proxy_settings", return_value=settings):
+            self.assertEqual(configure_proxy_environment(), "system")
+            self.assertEqual(os.environ["HTTPS_PROXY"], settings["https"])
+            self.assertEqual(os.environ["ALL_PROXY"], settings["all"])
+            self.assertEqual(os.environ["NO_PROXY"], settings["no"])
+
+    def test_explicit_proxy_environment_wins(self):
+        with patch.dict(os.environ, {"HTTPS_PROXY": "http://proxy.invalid"}, clear=True), patch(
+            "easy_multi_provider.server.getproxies"
+        ) as system_proxies:
+            self.assertEqual(configure_proxy_environment(), "environment")
+            system_proxies.assert_not_called()
+
     def test_proxy_requests_are_not_serialized_by_state_lock(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
@@ -37,7 +73,10 @@ class ServerAccountTests(unittest.TestCase):
                     "POST",
                     "/v1/responses",
                     b'{"model":"demo/fixed","input":"hello"}',
-                    {"Content-Type": "application/json"},
+                    {
+                        "Content-Type": "application/json",
+                        "Cookie": "emp_session=" + state.session_token,
+                    },
                 )
                 statuses.append(connection.getresponse().status)
                 connection.close()
@@ -96,6 +135,55 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(state.config["providers"][0]["api_key"], "")
             self.assertEqual(api_key(load(config_path)["providers"][0]), "provider-secret")
 
+    def test_modal_submission_errors_are_visible_inside_modal(self):
+        html = WEB_FILE.read_text(encoding="utf-8")
+        self.assertIn('id="modal_status"', html)
+        self.assertIn("catch (error) { $('modal_status').textContent = error.message; }", html)
+        self.assertIn("/api/integration/generate", html)
+        self.assertIn("info.command", html)
+        self.assertIn("position:fixed", html)
+        self.assertIn("EMP 配置已生成", html)
+
+    def test_integration_generation_endpoint_writes_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                headers = {"Cookie": "emp_session=" + state.session_token}
+                with patch.dict(os.environ, {"CODEX_HOME": str(root / "codex")}):
+                    with patch(
+                        "easy_multi_provider.server.generated_catalog_path",
+                        return_value=root / "generated" / "codex-models.json",
+                    ):
+                        connection = HTTPConnection(*server.server_address)
+                        connection.request("GET", "/api/integration", headers=headers)
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, 200)
+                        response.read()
+                        connection.close()
+
+                        connection = HTTPConnection(*server.server_address)
+                        connection.request(
+                            "POST",
+                            "/api/integration/generate",
+                            b"{}",
+                            {**headers, "Content-Type": "application/json"},
+                        )
+                        response = connection.getresponse()
+                        payload = json.loads(response.read().decode("utf-8"))
+                        self.assertEqual(response.status, 200)
+                        self.assertTrue(Path(payload["profile_path"]).exists())
+                        self.assertTrue(Path(payload["catalog_path"]).exists())
+                        connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+
     def test_provider_discovery_adds_models_and_preserves_hidden_state(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -129,15 +217,16 @@ class ServerAccountTests(unittest.TestCase):
                     },
                 ],
             ), patch("easy_multi_provider.server.write_catalog", return_value=root / "catalog.json"):
-                result = state.discover_provider_models("demo")
-            self.assertEqual(result["available"], 2)
+                preview = state.discover_provider_models("demo")
+                self.assertEqual(preview["available"], 2)
+                result = state.discover_provider_models("demo", ["hidden", "new-model"])
             self.assertEqual(result["added"], 1)
             models = {item["id"]: item for item in state.config["models"]}
             self.assertFalse(models["demo/hidden"]["enabled"])
             self.assertEqual(models["demo/hidden"]["reasoning_levels"], ["low", "high"])
             self.assertTrue(models["demo/new-model"]["enabled"])
 
-    def test_account_upload_works_without_web_token_and_never_returns_auth_json(self):
+    def test_account_upload_needs_no_manual_web_token_and_never_returns_auth_json(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.json"
@@ -170,7 +259,10 @@ class ServerAccountTests(unittest.TestCase):
                     "POST",
                     "/api/accounts/import",
                     body,
-                    {"Content-Type": "application/json"},
+                    {
+                        "Content-Type": "application/json",
+                        "Cookie": "emp_session=" + state.session_token,
+                    },
                 )
                 response = connection.getresponse()
                 payload = response.read().decode("utf-8")
@@ -184,7 +276,11 @@ class ServerAccountTests(unittest.TestCase):
                 self.assertFalse((root / "state" / "accounts" / "ship" / "auth.json").exists())
 
                 connection = HTTPConnection(*server.server_address)
-                connection.request("GET", "/api/accounts")
+                connection.request(
+                    "GET",
+                    "/api/accounts",
+                    headers={"Cookie": "emp_session=" + state.session_token},
+                )
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
                 listing = json.loads(response.read().decode("utf-8"))
@@ -196,6 +292,7 @@ class ServerAccountTests(unittest.TestCase):
                 connection.request(
                     "DELETE",
                     "/api/accounts/ship",
+                    headers={"Cookie": "emp_session=" + state.session_token},
                 )
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
@@ -232,13 +329,16 @@ class ServerAccountTests(unittest.TestCase):
                     "rate_limits": {"primary": {"usedPercent": 10}},
                     "updated_at": 123,
                 }
-                with patch("easy_multi_provider.server.read_account_quota", return_value=snapshot):
+                with patch("easy_multi_provider.server.refresh_account_quota", return_value=snapshot):
                     connection = HTTPConnection(*server.server_address)
                     connection.request(
                         "POST",
                         "/api/accounts/ship/quota",
                         b"{}",
-                        {"Content-Type": "application/json"},
+                        {
+                            "Content-Type": "application/json",
+                            "Cookie": "emp_session=" + state.session_token,
+                        },
                     )
                     response = connection.getresponse()
                     payload = response.read().decode("utf-8")
@@ -246,6 +346,77 @@ class ServerAccountTests(unittest.TestCase):
                     self.assertIn('"usedPercent": 10', payload)
                     self.assertNotIn("account-secret", payload)
                     connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_management_and_proxy_require_automatic_session_or_caller_auth(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = HTTPConnection(*server.server_address)
+                connection.request("GET", "/api/config")
+                self.assertEqual(connection.getresponse().status, 401)
+                connection.close()
+
+                connection = HTTPConnection(*server.server_address)
+                connection.request(
+                    "GET",
+                    "/api/config",
+                    headers={
+                        "Cookie": "emp_session=" + state.session_token,
+                        "Host": "evil.example:%d" % server.server_address[1],
+                        "Origin": "http://evil.example:%d" % server.server_address[1],
+                    },
+                )
+                self.assertEqual(connection.getresponse().status, 403)
+                connection.close()
+
+                connection = HTTPConnection(*server.server_address)
+                connection.request(
+                    "POST",
+                    "/v1/responses",
+                    b'{"model":"demo/fixed","input":"hello"}',
+                    {
+                        "Content-Type": "application/json",
+                        "Authorization": "Bearer attacker-controlled",
+                    },
+                )
+                self.assertEqual(connection.getresponse().status, 401)
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_web_root_requires_bootstrap_url_before_issuing_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = HTTPConnection(*server.server_address)
+                connection.request("GET", "/")
+                response = connection.getresponse()
+                self.assertEqual(response.status, 401)
+                self.assertIsNone(response.getheader("Set-Cookie"))
+                response.read()
+                connection.close()
+
+                connection = HTTPConnection(*server.server_address)
+                connection.request("GET", "/?bootstrap=" + state.bootstrap_token)
+                response = connection.getresponse()
+                self.assertEqual(response.status, 303)
+                self.assertIn("emp_session=", response.getheader("Set-Cookie"))
+                response.read()
+                connection.close()
             finally:
                 server.shutdown()
                 server.server_close()

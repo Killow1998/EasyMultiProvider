@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import queue
+import shutil
 import subprocess
+import stat
 import tempfile
 import threading
 import time
@@ -17,6 +19,65 @@ from .vault import VaultError, write_encrypted_json
 
 class QuotaError(ValueError):
     """Raised when Codex cannot provide a safe quota snapshot."""
+
+
+# ponytail: one bounded lock is enough for the low-frequency quota path;
+# replace with a bounded per-account pool only if measured quota contention matters.
+_refresh_lock = threading.RLock()
+_last_refresh = 0.0
+_REFRESH_COOLDOWN_SECONDS = 2.0
+
+
+def _trusted_codex_binary(codex_binary: str):
+    binary_path = shutil.which(codex_binary) if not os.path.isabs(codex_binary) else codex_binary
+    if not binary_path:
+        raise QuotaError("Codex executable is unavailable")
+    binary = Path(binary_path).resolve()
+    try:
+        target = binary.stat()
+    except OSError as exc:
+        raise QuotaError("Codex executable is unavailable") from exc
+    current_uid = getattr(os, "getuid", lambda: None)()
+    allowed_owners = {0, current_uid} if current_uid is not None else {target.st_uid}
+    if (
+        not stat.S_ISREG(target.st_mode)
+        or not os.access(str(binary), os.X_OK)
+        or target.st_uid not in allowed_owners
+    ):
+        raise QuotaError("Codex executable is not trusted")
+    if os.name != "nt":
+        for parent in (binary, *binary.parents):
+            info = parent.stat()
+            if info.st_mode & stat.S_IWOTH:
+                raise QuotaError("Codex executable path is writable")
+            if info.st_mode & stat.S_IWGRP and info.st_uid not in allowed_owners:
+                raise QuotaError("Codex executable path is not owner-managed")
+    return binary, (target.st_dev, target.st_ino)
+
+
+def _verify_codex_binary(binary: Path, identity) -> None:
+    try:
+        verified, current_identity = _trusted_codex_binary(str(binary))
+    except QuotaError as exc:
+        raise QuotaError("Codex executable was replaced") from exc
+    if verified != binary or current_identity != identity:
+        raise QuotaError("Codex executable was replaced")
+
+
+def account_refresh_lock(account_id: Any) -> threading.RLock:
+    return _refresh_lock
+
+
+def refresh_account_quota(account: Dict[str, Any]) -> Dict[str, Any]:
+    """Serialize and cool down explicit and automatic account refreshes."""
+    global _last_refresh
+    with account_refresh_lock(account.get("id")):
+        now = time.monotonic()
+        if now - _last_refresh < _REFRESH_COOLDOWN_SECONDS:
+            raise QuotaError("account quota refresh is cooling down")
+        result = read_account_quota(account)
+        _last_refresh = time.monotonic()
+        return result
 
 
 def _enqueue_lines(stream: Any, output: Any) -> None:
@@ -81,8 +142,9 @@ def _query_app_server(process: Any, requests: list, timeout: int) -> str:
             return
 
     try:
-        # Keep stdin open and sequence account/rate-limit calls. app-server can
-        # need the account response before it starts the rate-limit request.
+        # Keep stdin open and sequence account/rate-limit calls. An isolated
+        # app-server may still be completing account refresh when it receives
+        # the rate-limit request; the shared Codex home only hid this race.
         send(requests[0])
         wait_for(1)
         send(requests[1])
@@ -232,10 +294,11 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
     auth_file = account.get("auth_file", "")
     if not auth_file:
         raise QuotaError("account credentials are not configured")
+    binary, identity = _trusted_codex_binary(codex_binary)
     try:
         auth = load_auth(account)
     except (AccountError, VaultError) as exc:
-        raise QuotaError("account credentials are unavailable") from exc
+        raise QuotaError(str(exc)) from exc
     requests = [
         {
             "id": 1,
@@ -267,12 +330,36 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
             'cli_auth_credentials_store = "file"\n', encoding="utf-8"
         )
         os.chmod(str(codex_home / "config.toml"), 0o600)
-        env = os.environ.copy()
-        env["CODEX_HOME"] = str(codex_home)
+        env = {
+            "CODEX_HOME": str(codex_home),
+            "HOME": str(Path.home()),
+            "PATH": os.environ.get("PATH", ""),
+        }
+        # Keep only process settings needed by Codex and network/TLS proxy
+        # settings. Do not inherit API keys or unrelated host state.
+        for key in (
+            "LANG",
+            "LC_ALL",
+            "TERM",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "no_proxy",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "NODE_EXTRA_CA_CERTS",
+        ):
+            if os.environ.get(key):
+                env[key] = os.environ[key]
         process = None
         try:
+            _verify_codex_binary(binary, identity)
             process = subprocess.Popen(
-                [codex_binary, "app-server", "--stdio"],
+                [str(binary), "app-server", "--stdio"],
                 cwd=str(codex_home),
                 env=env,
                 stdin=subprocess.PIPE,

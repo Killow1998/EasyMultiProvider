@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 
-from easy_multi_provider.vault import MASTER_KEY_ENV, VaultError, read_encrypted_json, write_encrypted_json
+from easy_multi_provider.vault import (
+    MASTER_KEY_ENV,
+    MASTER_KEY_FILE_ENV,
+    VaultError,
+    read_encrypted_json,
+    write_encrypted_json,
+)
 
 
 class VaultTests(unittest.TestCase):
@@ -23,9 +29,21 @@ class VaultTests(unittest.TestCase):
 
     def test_missing_master_key_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
-            with patch.dict(os.environ, {}, clear=True):
+            missing = str(Path(directory) / "missing.key")
+            with patch.dict(os.environ, {MASTER_KEY_FILE_ENV: missing}, clear=True):
                 with self.assertRaises(VaultError):
                     write_encrypted_json(Path(directory) / "secret.enc", {"value": "x"})
+
+    def test_private_master_key_file_is_used_when_env_is_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key_path = Path(directory) / "master.key"
+            key_path.write_text(Fernet.generate_key().decode("ascii"), encoding="utf-8")
+            if os.name != "nt":
+                key_path.chmod(0o600)
+            value_path = Path(directory) / "secret.enc"
+            with patch.dict(os.environ, {MASTER_KEY_FILE_ENV: str(key_path)}, clear=True):
+                write_encrypted_json(value_path, {"value": "file-key"})
+                self.assertEqual(read_encrypted_json(value_path), {"value": "file-key"})
 
 
 if __name__ == "__main__":

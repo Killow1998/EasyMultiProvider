@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -49,6 +50,31 @@ class ConfigTests(unittest.TestCase):
             save(updated, path)
             self.assertEqual(api_key(load(path)["providers"][0]), "secret-value")
 
+    def test_web_update_cannot_supply_private_credential_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            current = normalize({"providers": [self.provider], "models": [self.model]})
+            save(current, path)
+            current = load(path)
+            incoming = public_config(current)
+            incoming["providers"][0]["api_key_file"] = str(Path(directory).parent / "stolen.key")
+            with self.assertRaises(ConfigError):
+                merge_web_update(current, incoming, path)
+
+    def test_loaded_account_path_must_match_derived_vault_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            raw = normalize({"account_store_path": str(Path(directory) / "accounts")})
+            raw["accounts"] = [{
+                "id": "ship",
+                "name": "Ship",
+                "prefix": "ship",
+                "auth_file": str(Path(directory).parent / "auth.json.enc"),
+            }]
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                load(path)
+
     def test_round_trip_uses_private_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
@@ -70,13 +96,65 @@ class ConfigTests(unittest.TestCase):
             secret_file = Path(stored["providers"][0]["api_key_file"])
             self.assertEqual(secret_file.stat().st_mode & 0o777, 0o600)
 
+    def test_relative_config_path_does_not_delete_new_provider_key(self):
+        original = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                os.chdir(directory)
+                path = Path("config.json")
+                provider = dict(self.provider, api_key="", api_key_file="state/secrets/deepseek.key.enc")
+                save(normalize({"providers": [provider]}), path)
+                current = load(path)
+                incoming = public_config(current)
+                incoming["providers"][0]["api_key"] = "new-secret-value"
+                save(merge_web_update(current, incoming, path), path)
+                self.assertEqual(api_key(load(path)["providers"][0]), "new-secret-value")
+            finally:
+                os.chdir(original)
+
+    def test_removed_provider_key_file_is_cleaned_after_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            save(normalize({"providers": [self.provider], "models": [self.model]}), path)
+            secret_file = Path(load(path)["providers"][0]["api_key_file"])
+            self.assertTrue(secret_file.exists())
+            save(normalize({}), path)
+            self.assertFalse(secret_file.exists())
+
     def test_unknown_model_provider_rejected(self):
         with self.assertRaises(ConfigError):
             normalize({"models": [self.model]})
 
+    def test_provider_id_cannot_escape_secret_store(self):
+        with self.assertRaises(ConfigError):
+            normalize({"providers": [{"id": "..", "base_url": "https://example.com/v1"}]})
+        with self.assertRaises(ConfigError):
+            normalize({"providers": [{"id": "nested/provider", "base_url": "https://example.com/v1"}]})
+
     def test_non_loopback_host_is_rejected(self):
         with self.assertRaises(ConfigError):
             normalize({"host": "0.0.0.0"})
+
+    def test_remote_cleartext_upstream_is_rejected(self):
+        with self.assertRaises(ConfigError):
+            normalize({"providers": [{"id": "demo", "base_url": "http://example.com/v1"}]})
+
+    def test_model_context_window_has_a_safe_upper_bound(self):
+        with self.assertRaises(ConfigError):
+            normalize({
+                "providers": [{"id": "demo", "base_url": "https://example.com/v1"}],
+                "models": [{
+                    "id": "demo/model",
+                    "provider": "demo",
+                    "context_window": 100_000_001,
+                }],
+            })
+        self.assertEqual(
+            normalize({"providers": [{"id": "demo", "base_url": "http://127.0.0.1:9999/v1"}]})[
+                "providers"
+            ][0]["base_url"],
+            "http://127.0.0.1:9999/v1",
+        )
 
     def test_anthropic_messages_provider_is_valid(self):
         value = normalize({
@@ -89,6 +167,23 @@ class ConfigTests(unittest.TestCase):
             }]
         })
         self.assertEqual(value["providers"][0]["protocol"], "anthropic_messages")
+
+    def test_auto_provider_protocol_is_valid(self):
+        value = normalize({
+            "providers": [{
+                "id": "custom",
+                "base_url": "https://example.com/v1",
+                "protocol": "auto",
+            }]
+        })
+        self.assertEqual(value["providers"][0]["protocol"], "auto")
+
+    def test_model_created_at_is_preserved(self):
+        value = normalize({
+            "providers": [{"id": "demo", "base_url": "https://example.com/v1"}],
+            "models": [{"id": "demo/new", "provider": "demo", "created_at": 123}],
+        })
+        self.assertEqual(value["models"][0]["created_at"], 123)
 
     def test_account_import_is_separate_and_redacted(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,125 +1,228 @@
 # EasyMultiProvider
 
-通过浏览器配置本地 Provider 和模型路由，让 Codex 的 `/model` 同时看到原生订阅模型和外部 API 模型。
+Local, browser-configured model routing for Codex. EasyMultiProvider keeps
+Codex as the client and exposes one local Responses endpoint that can route to
+Codex subscriptions, OpenAI-compatible APIs, Gemini AI Studio, and Anthropic
+Messages providers.
 
-## 工作方式
+The first public release is `v0.1.0`. It is a local Linux-validated MVP; other
+platforms and the ChatGPT App path still require separate manual acceptance.
 
-```text
-Codex /model
-    ↓ model_catalog_json
-Codex → http://127.0.0.1:4200/v1
-          ├─ ship/gpt-*            → 选择 ship 的 Codex subscription
-          ├─ plus258/gpt-*         → 选择 plus258 的 Codex subscription
-          ├─ gq/glm-*              → OpenAI-compatible Chat Completions
-          └─ ant/claude-*          → Anthropic Messages
-```
+## Install a Release
 
-Web 页面只管理本地 Router，不控制桌面端，也不修改 Codex Desktop。
-
-## 环境与启动
-
-项目用 `mise` 管理 Python/uv 版本，用 `uv` 管理虚拟环境和依赖。当前 `mise.toml` 选择 Python 3.11 与 uv 0.11.1。
+Download the wheel from the GitHub Release page and install it in an isolated
+environment:
 
 ```bash
-cd /home/nuc/NA2H/EasyMultiProvider
-mise install
+uv venv
+uv pip install ./easy_multi_provider-0.1.0-py3-none-any.whl
+```
+
+The wheel includes the Web UI, so it does not require a source checkout at
+runtime. The source checkout remains useful for development and tests.
+
+## Features
+
+- Prefix-based model routing, such as `chen/glm` and `ship/gpt-5.6-luna`.
+- Multiple encrypted Codex subscription credentials.
+- Duplicate subscription detection without deleting encrypted credentials.
+- Chat Completions, Responses, and Anthropic Messages upstream protocols.
+- Browser model discovery, manual model editing, visibility toggles, and
+  connection tests.
+- Codex quota, rate-limit, and credit snapshots when the local Codex app-server
+  exposes them.
+- Loopback-only management by default.
+
+## Quick Start
+
+EasyMultiProvider uses `uv` for Python, the virtual environment, and locked
+dependencies. No separate version manager is required.
+
+```bash
+# Run these commands from the project directory.
+uv python install 3.11
 uv sync
-```
-
-加密凭据必须使用一个长期保存的 Fernet 主密钥。只在 shell 的 secret manager 或本机环境中保存，不要写入 `mise.toml`、`config.json` 或 Git：
-
-```bash
-export EASY_MULTI_PROVIDER_MASTER_KEY="$(uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
-uv run python -m easy_multi_provider --config config.json
-```
-
-上面的生成命令只执行一次；以后启动时重新导出同一个主密钥。
-
-打开 <http://127.0.0.1:4200>，在页面中添加 Provider 和模型。
-
-Web 页面不修改监听端口；默认端口是 `4200`。如需避开端口冲突，在启动时使用 `--port 4300`（或修改启动配置）后，重新打开 <http://127.0.0.1:4300>。
-
-可以从示例复制配置：
-
-```bash
 cp config.example.json config.json
 ```
 
-`config.json` 和生成的 catalog 会使用私有文件权限；不要提交它们，也不要把 API Key 写进日志。
-Web 导入的 Codex `auth.json` 会先在内存解析，再写入 `state/accounts/<id>/auth.json.enc`；API Key 写入 `state/secrets/*.enc`，由主密钥加密，`config.json` 只保存非敏感元数据和文件引用。运行 quota 刷新时，程序才会在操作系统临时目录创建 `0600` 的短生命周期 `auth.json` 供 `codex app-server` 使用，完成后自动删除。缺少主密钥时凭据读写会失败关闭。`.gitignore` 已忽略 `state/`、`config.json`、生成目录和密钥文件。
+Generate a Fernet key once and store it in a password manager or another
+private local secret store:
 
-目标环境包括 Windows 10/11、macOS Intel 和 Ubuntu 20/22/24。Unix 使用 `0700/0600` 文件权限；Windows 的权限模型由用户目录 ACL 负责，因此不要把项目目录放在共享目录中。
-
-## Codex 接入
-
-在 Web 页面点击“生成合并 catalog”，然后把页面显示的配置片段加入 `~/.codex/config.toml`：
-
-```toml
-model_provider = "easy-multi-provider"
-model_catalog_json = "/absolute/path/to/EasyMultiProvider/generated/codex-models.json"
-
-[model_providers.easy-multi-provider]
-name = "EasyMultiProvider"
-base_url = "http://127.0.0.1:4200/v1"
-wire_api = "responses"
-requires_openai_auth = true
-supports_websockets = false
+```bash
+uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 ```
 
-重启 Codex 后，`/model` 会使用合并后的目录。专用 provider 禁用 EasyMultiProvider 尚未实现的 Responses WebSocket，并避免内置 OpenAI provider 对 ChatGPT 请求启用 zstd body 压缩。原生模型会匹配唯一的 `auth_mode = "forward"` Provider；外部模型通过显式的 `provider/model` ID 匹配配置中的模型。
+Export the same key whenever EasyMultiProvider runs:
 
-导入账户后，catalog 会把原生模型复制为账户前缀，例如 `ship/gpt-5`、`plus258/gpt-5`。Router 只读取选中账户私有目录中的 Token，并覆写对应的 `Authorization` 与 `chatgpt-account-id`；不会把上传账户 Token 与当前 Codex 请求的认证头混用。
+```bash
+export EASY_MULTI_PROVIDER_MASTER_KEY='<your-existing-fernet-key>'
+uv run python -m easy_multi_provider --config config.json
+```
 
-Web 导入账户时只需填写账户 ID；显示名称和模型前缀留空会默认使用账户 ID，之后可在账户列表点击“编辑”修改。
+For a local-only setup, the CLI also reads `state/master.key` when the
+environment variable is absent. The file must be a private `0600` file and is
+ignored by Git. The environment variable takes precedence.
 
-账户导入后会用 `tokens.account_id`（没有时再用 access token 的内存值）与当前 `CODEX_HOME/auth.json` 比对。重复账户仍保留为加密副本，但页面会标记“已过滤”，不会为它生成重复的 subscription 模型别名；两个导入副本互相重复时也只保留第一个别名。
+The server prints a one-use browser URL. Open that URL to enter the Web UI.
+The default listener is `http://127.0.0.1:4200`; use `--port` if that port is
+already occupied.
 
-Provider 保存后可在列表点击“拉取模型”：通用 API Key Provider 请求 `GET /models`，Gemini AI Studio 自动请求原生 `GET /models` 并分页读取可生成内容的模型，同时带入可返回的上下文上限和已知 reasoning levels。模型会自动加入并刷新 catalog；在模型列表取消“显示”只会把它标记为 disabled，不删除配置，且不会出现在 Codex 的 `/model` 列表中。Anthropic Messages 没有统一的模型列表接口，仍需手动添加。
+EMP automatically prefers `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` from its
+launch environment. When they are absent, it reads the operating system proxy
+settings; on Linux this includes a GNOME manual proxy. It does not guess by
+scanning common local proxy ports. Startup prints `Network proxy: environment`,
+`system`, or `direct` so the active path is visible.
 
-`requires_openai_auth = true` 会保留现有 ChatGPT 登录态，因此切到外部模型后 `/status` 仍能显示当前 subscription 的套餐和 rate-limit 窗口。Web 账户刷新还会尽量显示 Codex 返回的 credit balance、月度 credit limit、earned reset credits 和 spend-control 状态；后端未返回字段时显示“未提供”，不推算精确剩余金额。这里显示的是 ChatGPT subscription 数据，不是外部 API Provider 的余额。
+The Web UI writes subscription credentials and provider API keys to encrypted
+files under `state/`. `config.json`, `state/`, and generated catalogs are
+ignored by Git. Never put the master key, `auth.json`, or an API key in the
+repository.
 
-## Provider 类型
+## Web UI
 
-- `responses`：直接转发 Codex Responses 请求。
-- `chat_completions`：将基础文本、工具定义和流式文本转换到 Chat Completions。
-- `anthropic_messages`：转换到 Anthropic `/v1/messages`，支持文本、基础工具调用和流式文本。
-- `forward`：只转发来自本地 Codex 请求的必要认证头；不在 EasyMultiProvider 中保存 ChatGPT Token。
-- `api_key`：使用 Web 配置保存的本地 API Key，保存后写入加密 secret 文件。
-- `anthropic_api_key`：使用 `x-api-key` 与 `anthropic-version` 调用 Anthropic Messages。
+The dashboard provides:
 
-第一版覆盖通用文本、工具定义转换和流式文本链路；流式 function-call 增量拼装、reasoning、图片、搜索和 Codex 专用工具仍取决于上游协议，接入后应先用一个真实的工具调用任务验证。
+- **Accounts**: import `auth.json` and backup names such as `auth.json.bk1`
+  through a file picker, enter only the account ID, refresh quota, edit the
+  combined display-name/model-prefix value, and remove local encrypted
+  credentials.
+- **Providers**: choose an official preset with fixed endpoint/protocol data,
+  or create a custom Provider with a Base URL, protocol, and API key without
+  exposing the stored key back to the browser.
+- **Models**: preview the upstream model list, select which models to import,
+  edit context windows, test a model, and hide unused entries without deleting
+  them. Models are grouped by Provider; visible and newer models appear first.
+- **Codex integration**: generate the merged catalog and write one EMP profile
+  to `$CODEX_HOME/emp.config.toml` (or `~/.codex/emp.config.toml` by default),
+  then show the `codex --profile emp` command.
+
+Only the account ID is required during import. Display name and model prefix
+default to that ID.
+
+## Codex Profiles and Session Isolation
+
+Click **Generate EMP Config** in the Web UI. EMP writes one profile for the
+whole router and prints the exact command to use. Start EMP in one terminal
+and the opt-in profile in another:
+
+```bash
+uv run python -m easy_multi_provider --config config.json
+codex --profile emp
+```
+
+All accounts and Providers managed by EMP are one Provider from Codex's point
+of view. Use `/model` to switch between entries such as `ship/gpt-5.6-luna`,
+`chen/glm`, and `gemini/gemini-2.5-flash` within the same EMP session group.
+
+The plain Codex command remains the normal subscription client:
+
+```bash
+codex
+codex resume --all
+```
+
+EMP sessions use Codex's `easy-multi-provider` group. Use the same profile to
+resume them:
+
+```bash
+codex --profile emp resume --all
+```
+
+Codex does not merge the native `openai` group and the EMP group. Existing
+normal subscription sessions are not deleted; resume them with plain `codex`.
+
+An unprefixed native model such as `gpt-5.6-luna` requires exactly one enabled
+`forward` provider. Otherwise use the account prefix or the provider prefix.
+
+Custom Providers can use `auto` protocol mode without first importing models.
+Requests use Chat Completions by default, which covers OpenAI-compatible
+endpoints such as GLM, Qwen, and Gemini-compatible gateways. Clicking **Pull
+Models** additionally checks `/models`, resolves the saved protocol, and lets
+you select models to import. Select Responses or Anthropic Messages explicitly
+when the upstream is not Chat Completions-compatible.
+
+## Provider Routing
+
+| Protocol | Typical upstream | Authentication |
+|---|---|---|
+| `responses` | Codex or Responses-compatible API | forwarded Codex auth or API key |
+| `chat_completions` | OpenAI-compatible APIs and Gemini AI Studio | Bearer API key |
+| `anthropic_messages` | Anthropic-compatible API | Anthropic API key |
+
+For a GLM provider, configure an ID such as `chen`, choose **Chat
+Completions**, save the API key, and add or discover the upstream model `glm`.
+Use the resulting Codex model ID:
+
+```text
+chen/glm
+```
+
+If the upstream requires `/v1`, include `/v1` in the Base URL. EasyMultiProvider
+appends the protocol endpoint, for example `/chat/completions`.
+
+## ChatGPT App Compatibility Check
+
+EMP is a separate local process and does not write the default Codex config or
+change the ChatGPT App by itself. The supported workflow is to use the `emp`
+profile explicitly for EMP and leave the normal profile unchanged.
+
+Before relying on the setup, verify both paths:
+
+1. Test a normal ChatGPT App conversation with EMP stopped.
+2. Start EMP and repeat a normal ChatGPT App conversation.
+3. Run `codex --profile emp`, choose `chen/glm` with `/model`, and confirm the
+   request reaches EMP.
+4. Resume a normal session with plain `codex resume --all`.
+5. Stop EMP and confirm the normal App/session path still works.
+
+The ChatGPT App path is a manual acceptance test because its provider/config
+loading behavior depends on the installed App version.
 
 ## API
 
-```text
-GET  /api/config
-POST /api/config
-POST /api/providers/discover
-GET  /api/accounts
-POST /api/accounts/import
-POST /api/accounts/<id>/quota
-DELETE /api/accounts/<id>
-POST /api/catalog/refresh
-GET  /api/integration
-GET  /v1/models
-POST /v1/responses
-GET  /healthz
-```
+| Endpoint | Method | Description |
+|---|---|---|
+| `/healthz` | GET | Process health check |
+| `/api/config` | GET/POST | Read or update safe configuration metadata |
+| `/api/accounts/import` | POST | Import and encrypt a Codex credential |
+| `/api/accounts/<id>/quota` | POST | Refresh one account's quota |
+| `/api/providers/discover` | POST | Discover provider models |
+| `/api/catalog/refresh` | POST | Regenerate the Codex model catalog |
+| `/api/integration` | GET | Return the Codex integration snippet |
+| `/api/integration/generate` | POST | Regenerate the catalog and write the EMP Codex profile |
+| `/v1/models` | GET | List enabled routed models |
+| `/v1/responses` | POST | Codex-facing Responses endpoint |
 
-默认只监听 `127.0.0.1`，Web 管理和账户操作仅通过本机同源请求提供，不开放 LAN/公网。
+The service binds to loopback by default. Do not expose it to a LAN or public
+network without adding an appropriate access boundary.
 
-## 测试
+## Testing
 
 ```bash
-EASY_MULTI_PROVIDER_MASTER_KEY="$(uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" \
-  uv run python -m unittest discover -s tests -v
+uv run python -m unittest discover -s tests -v
 ```
 
-真实 Codex CLI 固定响应测试默认跳过，显式运行：
+The optional real Codex CLI demo is disabled by default:
 
 ```bash
 EASY_MP_RUN_CODEX_CLI=1 PYTHONPATH=. \
   uv run python -m unittest tests.test_codex_cli_demo -v
 ```
 
-它会在临时目录生成 `demo/fixed`，启动本地固定 Responses 上游和 EasyMultiProvider，再执行 `codex exec --ignore-user-config --ephemeral ... -m demo/fixed`。预期最终响应严格等于 `EASY_MULTIPROVIDER_DEMO_OK`；测试不会修改 `~/.codex/config.toml`，也不会保存 Codex 会话。
+Useful local checks after starting the server:
+
+```bash
+curl http://127.0.0.1:4200/healthz
+curl http://127.0.0.1:4200/v1/models
+```
+
+## Development Notes
+
+- Python code uses the standard library HTTP server and `uv`-managed
+  dependencies.
+- Credentials are decrypted only when needed and are never returned by the
+  configuration API.
+- External API providers do not claim to have Codex subscription balances.
+- Run a real text request before relying on tools, reasoning, images, search,
+  or provider-specific features; protocol support varies by upstream.
+- The v0.1.0 release has not been audited with Codex Security.

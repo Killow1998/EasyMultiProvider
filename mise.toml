@@ -1,9 +1,0 @@
-[tools]
-python = "3.11"
-uv = "0.11.1"
-
-[env]
-UV_PROJECT_ENVIRONMENT = ".venv"
-
-[settings]
-python.uv_venv_auto = "create|source"

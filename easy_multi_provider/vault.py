@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from cryptography.fernet import Fernet, InvalidToken
 
 
 MASTER_KEY_ENV = "EASY_MULTI_PROVIDER_MASTER_KEY"
+MASTER_KEY_FILE_ENV = "EASY_MULTI_PROVIDER_MASTER_KEY_FILE"
+DEFAULT_MASTER_KEY_FILE = Path("state") / "master.key"
 _FORMAT = b"easy-multi-provider-v1\n"
 
 
@@ -22,7 +25,26 @@ class VaultError(ValueError):
 def _fernet() -> Fernet:
     raw = os.environ.get(MASTER_KEY_ENV, "").strip()
     if not raw:
-        raise VaultError("set %s before using encrypted credentials" % MASTER_KEY_ENV)
+        key_path = Path(os.environ.get(MASTER_KEY_FILE_ENV, "").strip() or DEFAULT_MASTER_KEY_FILE)
+        try:
+            info = key_path.stat()
+            if not stat.S_ISREG(info.st_mode):
+                raise VaultError("master key file is not a regular file")
+            if os.name != "nt":
+                current_uid = getattr(os, "getuid", lambda: info.st_uid)()
+                if info.st_uid not in {0, current_uid}:
+                    raise VaultError("master key file is not owned by the current user")
+                if info.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+                    raise VaultError("master key file must be private")
+            raw = key_path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            raw = ""
+        except OSError as exc:
+            raise VaultError("master key file is unavailable") from exc
+    if not raw:
+        raise VaultError(
+            "set %s or create a private state/master.key" % MASTER_KEY_ENV
+        )
     try:
         return Fernet(raw.encode("ascii"))
     except (UnicodeEncodeError, ValueError, TypeError) as exc:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import ipaddress
 import json
 import os
 import re
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import quote, urlparse
 
-from .accounts import normalize_account, public_accounts
+from .accounts import AccountError, canonicalize_account_paths, normalize_account, public_accounts
 from .vault import VaultError, read_encrypted_text, write_encrypted_text
 
 
@@ -28,7 +29,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 _ID = re.compile(r"^[A-Za-z0-9._/-]+$")
-_PROTOCOLS = {"responses", "chat_completions", "anthropic_messages"}
+_PROVIDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+MAX_CONTEXT_WINDOW = 100_000_000
+_PROTOCOLS = {"auto", "responses", "chat_completions", "anthropic_messages"}
 _AUTH_MODES = {"api_key", "anthropic_api_key", "forward"}
 
 
@@ -62,11 +65,27 @@ def _validate_id(value: Any, field: str) -> str:
     return value
 
 
+def _validate_provider_id(value: Any) -> str:
+    value = _string(value, "provider.id", required=True)
+    if not _PROVIDER_ID.fullmatch(value):
+        raise ConfigError("provider.id must be a safe single path segment")
+    return value
+
+
 def _validate_url(value: Any, field: str) -> str:
     value = _string(value, field, required=True).rstrip("/")
     parsed = urlparse(value)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ConfigError("%s must be an http(s) URL" % field)
+    if parsed.username or parsed.password:
+        raise ConfigError("%s must not contain URL credentials" % field)
+    try:
+        hostname = (parsed.hostname or "").lower()
+        loopback = hostname == "localhost" or ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        loopback = False
+    if parsed.scheme == "http" and not loopback:
+        raise ConfigError("%s must use HTTPS unless it targets loopback" % field)
     return value
 
 
@@ -74,7 +93,7 @@ def _normalize_provider(raw: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise ConfigError("each provider must be an object")
     provider = {
-        "id": _validate_id(raw.get("id"), "provider.id"),
+        "id": _validate_provider_id(raw.get("id")),
         "name": _string(raw.get("name")) or _string(raw.get("id"), "provider.id"),
         "base_url": _validate_url(raw.get("base_url"), "provider.base_url"),
         "protocol": _string(raw.get("protocol")) or "chat_completions",
@@ -85,7 +104,7 @@ def _normalize_provider(raw: Dict[str, Any]) -> Dict[str, Any]:
         "enabled": bool(raw.get("enabled", True)),
     }
     if provider["protocol"] not in _PROTOCOLS:
-        raise ConfigError("provider.protocol must be responses, chat_completions, or anthropic_messages")
+        raise ConfigError("provider.protocol must be auto, responses, chat_completions, or anthropic_messages")
     if provider["auth_mode"] not in _AUTH_MODES:
         raise ConfigError("provider.auth_mode must be api_key, anthropic_api_key, or forward")
     if provider["auth_mode"] == "forward" and provider["protocol"] != "responses":
@@ -100,6 +119,14 @@ def _normalize_model(raw: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(levels, list) or not levels:
         raise ConfigError("model.reasoning_levels must be a non-empty list")
     levels = [_string(level, "model.reasoning_levels") for level in levels]
+    context_window = int(raw.get("context_window", 0) or 0)
+    if context_window < 0:
+        raise ConfigError("model.context_window cannot be negative")
+    if context_window > MAX_CONTEXT_WINDOW:
+        raise ConfigError("model.context_window is too large")
+    created_at = int(raw.get("created_at", 0) or 0)
+    if created_at < 0:
+        raise ConfigError("model.created_at cannot be negative")
     model = {
         "id": _validate_id(raw.get("id"), "model.id"),
         "provider": _validate_id(raw.get("provider"), "model.provider"),
@@ -107,11 +134,10 @@ def _normalize_model(raw: Dict[str, Any]) -> Dict[str, Any]:
         "display_name": _string(raw.get("display_name")),
         "description": _string(raw.get("description")),
         "reasoning_levels": levels,
-        "context_window": int(raw.get("context_window", 0) or 0),
+        "context_window": context_window,
+        "created_at": created_at,
         "enabled": bool(raw.get("enabled", True)),
     }
-    if model["context_window"] < 0:
-        raise ConfigError("model.context_window cannot be negative")
     return model
 
 
@@ -168,23 +194,59 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return result
 
 
+def _canonicalize_private_paths(config: Dict[str, Any], path: Path) -> Dict[str, Any]:
+    try:
+        canonicalize_account_paths(config, path)
+    except AccountError as exc:
+        raise ConfigError(str(exc)) from exc
+
+    secret_root = Path(config["secret_store_path"]).expanduser()
+    if not secret_root.is_absolute():
+        secret_root = path.parent / secret_root
+    secret_root = secret_root.resolve()
+    for provider in config.get("providers", []):
+        raw_path = provider.get("api_key_file", "")
+        if not raw_path:
+            continue
+        expected = secret_root / (quote(provider["id"], safe="") + ".key.enc")
+        actual = Path(raw_path).expanduser()
+        if not actual.is_absolute():
+            actual = path.parent / actual
+        if actual.resolve() != expected or actual.is_symlink():
+            raise ConfigError("provider.api_key_file must be managed inside the secret store")
+        provider["api_key_file"] = str(expected)
+    return config
+
+
 def load(path: Optional[Path] = None) -> Dict[str, Any]:
     path = Path(path or config_path())
     if not path.exists():
         return normalize(None)
     try:
         with path.open("r", encoding="utf-8") as handle:
-            return normalize(json.load(handle))
+            return _canonicalize_private_paths(normalize(json.load(handle)), path)
     except json.JSONDecodeError as exc:
         raise ConfigError("invalid JSON in %s: %s" % (path, exc))
 
 
 def save(config: Dict[str, Any], path: Optional[Path] = None) -> Path:
     path = Path(path or config_path())
-    normalized = normalize(config)
+    previous_secret_files = set()
+    if path.exists():
+        try:
+            previous = load(path)
+            previous_secret_files = {
+                str(item.get("api_key_file"))
+                for item in previous.get("providers", [])
+                if item.get("api_key_file")
+            }
+        except (OSError, ConfigError):
+            pass
+    normalized = _canonicalize_private_paths(normalize(config), path)
     secret_root = Path(normalized["secret_store_path"]).expanduser()
     if not secret_root.is_absolute():
         secret_root = path.parent / secret_root
+    secret_root = secret_root.resolve()
     for provider in normalized["providers"]:
         key = provider.get("api_key", "")
         if key and key != "••••••••":
@@ -199,36 +261,59 @@ def save(config: Dict[str, Any], path: Optional[Path] = None) -> Path:
             provider["api_key"] = ""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".easy-multi-provider-", dir=str(path.parent))
+    committed = False
     try:
         os.chmod(temporary, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(normalized, handle, indent=2, ensure_ascii=False)
             handle.write("\n")
         os.replace(temporary, str(path))
+        committed = True
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+    if committed:
+        current_secret_files = {
+            str(item.get("api_key_file"))
+            for item in normalized.get("providers", [])
+            if item.get("api_key_file")
+        }
+        for obsolete in previous_secret_files - current_secret_files:
+            try:
+                Path(obsolete).unlink()
+            except OSError:
+                pass
     return path
 
 
-def merge_web_update(current: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+def merge_web_update(
+    current: Dict[str, Any], incoming: Dict[str, Any], path: Optional[Path] = None
+) -> Dict[str, Any]:
     """Apply a Web update while preserving secrets omitted by the UI."""
     if not isinstance(incoming, dict):
         raise ConfigError("request body must be an object")
     merged = copy.deepcopy(incoming)
+    for field in ("account_store_path", "secret_store_path", "native_catalog_path"):
+        if field in current:
+            merged[field] = current[field]
     old_by_id = {item["id"]: item for item in current.get("providers", [])}
     for provider in merged.get("providers", []):
         old = old_by_id.get(provider.get("id"), {})
         if "api_key" not in provider or provider.get("api_key") == "••••••••":
             provider["api_key"] = old.get("api_key", "")
-        if "api_key_file" not in provider and old.get("api_key_file"):
+        if provider.get("api_key_file") and provider.get("api_key_file") != old.get("api_key_file"):
+            raise ConfigError("provider.api_key_file is managed by EasyMultiProvider")
+        if old.get("api_key_file"):
             provider["api_key_file"] = old["api_key_file"]
     old_accounts = {item["id"]: item for item in current.get("accounts", [])}
     for account in merged.get("accounts", []):
         old = old_accounts.get(account.get("id"), {})
-        if not account.get("auth_file") and old.get("auth_file"):
+        if account.get("auth_file") and account.get("auth_file") != old.get("auth_file"):
+            raise ConfigError("account.auth_file is managed by EasyMultiProvider")
+        if old.get("auth_file"):
             account["auth_file"] = old["auth_file"]
-    return normalize(merged)
+    normalized = normalize(merged)
+    return _canonicalize_private_paths(normalized, Path(path)) if path else normalized
 
 
 def public_config(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -250,6 +335,8 @@ def api_key(provider: Dict[str, Any]) -> str:
     secret_file = provider.get("api_key_file", "")
     if secret_file:
         try:
+            if Path(secret_file).is_symlink():
+                return ""
             return read_encrypted_text(Path(secret_file)).strip()
         except (OSError, VaultError):
             return ""

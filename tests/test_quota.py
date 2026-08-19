@@ -1,11 +1,17 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from tests.support import ensure_test_master_key
-from easy_multi_provider.quota import parse_app_server_output, read_account_quota
+from easy_multi_provider.quota import (
+    _trusted_codex_binary,
+    account_refresh_lock,
+    parse_app_server_output,
+    read_account_quota,
+)
 from easy_multi_provider.vault import write_encrypted_json
 
 
@@ -13,6 +19,23 @@ ensure_test_master_key()
 
 
 class QuotaTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Unix path permission checks do not apply")
+    def test_trusts_owner_managed_group_writable_codex_path(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            binary = root / "codex"
+            binary.write_text("#!/bin/sh\n", encoding="utf-8")
+            binary.chmod(0o770)
+            root.chmod(0o770)
+
+            trusted, identity = _trusted_codex_binary(str(binary))
+
+            self.assertEqual(trusted, binary.resolve())
+            self.assertEqual(identity, (binary.stat().st_dev, binary.stat().st_ino))
+
+    def test_account_refresh_lock_does_not_retain_identifier_keys(self):
+        self.assertIs(account_refresh_lock("one"), account_refresh_lock("two"))
+
     def test_parser_keeps_quota_and_masks_account_identity(self):
         output = "\n".join(
             [
@@ -74,11 +97,14 @@ class QuotaTests(unittest.TestCase):
         self.assertNotIn("opaque-reset-id", json.dumps(value))
 
     def test_quota_process_is_pinned_to_account_directory(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             account_dir = Path(directory) / "ship"
             account_dir.mkdir()
             auth_file = account_dir / "auth.json.enc"
             write_encrypted_json(auth_file, {"tokens": {"access_token": "secret"}})
+            codex_file = Path(directory) / "codex"
+            codex_file.write_text("#!/bin/sh\n", encoding="utf-8")
+            codex_file.chmod(0o700)
 
             class FakeStream:
                 def __init__(self, lines=()):
@@ -121,11 +147,17 @@ class QuotaTests(unittest.TestCase):
                     self.returncode = -9
 
             process = FakeProcess()
-            with patch("easy_multi_provider.quota.subprocess.Popen", return_value=process) as started:
-                value = read_account_quota({"auth_file": str(auth_file)})
+            with patch.dict(os.environ, {"HTTPS_PROXY": "http://proxy.invalid"}, clear=False), patch(
+                "easy_multi_provider.quota.subprocess.Popen", return_value=process
+            ) as started:
+                value = read_account_quota(
+                    {"auth_file": str(auth_file)}, codex_binary=str(codex_file)
+                )
             self.assertEqual(value["plan_type"], "plus")
             kwargs = started.call_args.kwargs
             self.assertNotEqual(kwargs["env"]["CODEX_HOME"], str(account_dir))
+            self.assertNotIn("EASY_MULTI_PROVIDER_MASTER_KEY", kwargs["env"])
+            self.assertEqual(kwargs["env"]["HTTPS_PROXY"], "http://proxy.invalid")
             self.assertNotIn("secret", process.stdin.body)
             self.assertEqual(json.loads(process.stdin.body.splitlines()[1])["method"], "initialized")
             self.assertTrue(process.stdin.closed)

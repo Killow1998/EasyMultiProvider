@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hmac
 import json
 import os
 import re
@@ -26,6 +27,29 @@ def account_root(config: Dict[str, Any], config_path: Optional[Path] = None) -> 
     if not path.is_absolute() and config_path is not None:
         path = Path(config_path).parent / path
     return path
+
+
+def account_auth_path(
+    config: Dict[str, Any], account_id: str, config_path: Optional[Path] = None
+) -> Path:
+    account_id = _segment(account_id, "account.id")
+    return account_root(config, config_path).expanduser().resolve() / account_id / "auth.json.enc"
+
+
+def canonicalize_account_paths(config: Dict[str, Any], config_path: Path) -> Dict[str, Any]:
+    """Keep every configured account credential inside the derived account vault."""
+    for account in config.get("accounts", []):
+        raw_path = account.get("auth_file", "")
+        if not raw_path:
+            continue
+        expected = account_auth_path(config, account["id"], config_path)
+        actual = Path(raw_path).expanduser()
+        if not actual.is_absolute():
+            actual = Path(config_path).parent / actual
+        if actual.resolve() != expected or actual.is_symlink():
+            raise AccountError("account.auth_file must be managed inside the account store")
+        account["auth_file"] = str(expected)
+    return config
 
 
 def _segment(value: Any, field: str) -> str:
@@ -94,7 +118,7 @@ def import_account(
     account_id = _segment(metadata.get("id"), "account.id")
     prefix = _segment(metadata.get("prefix"), "account.prefix")
     auth = _validate_auth(auth_json)
-    path = account_root(config, config_path) / account_id / "auth.json.enc"
+    path = account_auth_path(config, account_id, config_path)
     try:
         write_encrypted_json(path, auth)
     except VaultError as exc:
@@ -137,6 +161,8 @@ def load_auth(account: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(path, str) or not path:
         raise AccountError("credentials are not configured for account: %s" % account.get("id", ""))
     try:
+        if Path(path).is_symlink():
+            raise AccountError("stored account credentials cannot be a symlink")
         return _validate_auth(read_encrypted_json(Path(path)))
     except (OSError, VaultError, ValueError) as exc:
         raise AccountError("stored encrypted auth.json is invalid") from exc
@@ -176,6 +202,19 @@ def _stored_account_identities(account: Dict[str, Any]) -> Set[Tuple[str, str]]:
 def codex_auth_path() -> Path:
     root = os.environ.get("CODEX_HOME")
     return (Path(root).expanduser() if root else Path.home() / ".codex") / "auth.json"
+
+
+def valid_caller_authorization(value: str) -> bool:
+    """Accept only the bearer token from the current Codex login."""
+    if not isinstance(value, str) or not value.startswith("Bearer "):
+        return False
+    supplied = value[7:].strip()
+    if not supplied:
+        return False
+    for kind, candidate in _auth_file_identities(codex_auth_path()):
+        if kind == "access_token" and hmac.compare_digest(supplied, candidate):
+            return True
+    return False
 
 
 def duplicate_account_status(accounts: Iterable[Dict[str, Any]]) -> Dict[str, str]:
