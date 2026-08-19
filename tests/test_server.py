@@ -138,6 +138,7 @@ class ServerAccountTests(unittest.TestCase):
 
     def test_modal_submission_errors_are_visible_inside_modal(self):
         html = WEB_FILE.read_text(encoding="utf-8")
+        self.assertIn('<div id="status"', html)
         self.assertIn('id="modal_status"', html)
         self.assertIn("catch (error) { $('modal_status').textContent = error.message; }", html)
         self.assertIn("/api/integration/generate", html)

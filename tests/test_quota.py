@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.support import ensure_test_master_key
+from easy_multi_provider import quota as quota_module
 from easy_multi_provider.quota import (
     _trusted_codex_binary,
     account_refresh_lock,
@@ -35,6 +36,31 @@ class QuotaTests(unittest.TestCase):
 
     def test_account_refresh_lock_does_not_retain_identifier_keys(self):
         self.assertIs(account_refresh_lock("one"), account_refresh_lock("two"))
+
+    def test_refreshes_different_accounts_without_cross_account_cooldown(self):
+        with patch.object(quota_module, "_last_refresh", 0.0), patch.object(
+            quota_module, "_last_refresh_key", b"", create=True
+        ), patch.object(
+            quota_module, "read_account_quota", side_effect=[{"id": "one"}, {"id": "two"}]
+        ), patch.object(
+            quota_module.time, "monotonic", side_effect=[100.0, 100.0, 100.0, 100.0]
+        ):
+            self.assertEqual(
+                quota_module.refresh_account_quota({"id": "one"}), {"id": "one"}
+            )
+            self.assertEqual(
+                quota_module.refresh_account_quota({"id": "two"}), {"id": "two"}
+            )
+
+    def test_repeated_same_account_still_respects_cooldown(self):
+        with patch.object(quota_module, "_last_refresh", 0.0), patch.object(
+            quota_module, "_last_refresh_key", b"", create=True
+        ), patch.object(
+            quota_module, "read_account_quota", return_value={"id": "one"}
+        ), patch.object(quota_module.time, "monotonic", side_effect=[100.0, 100.0, 100.0]):
+            quota_module.refresh_account_quota({"id": "one"})
+            with self.assertRaisesRegex(quota_module.QuotaError, "cooling down"):
+                quota_module.refresh_account_quota({"id": "one"})
 
     def test_parser_keeps_quota_and_masks_account_identity(self):
         output = "\n".join(

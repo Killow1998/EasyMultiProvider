@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -25,6 +26,7 @@ class QuotaError(ValueError):
 # replace with a bounded per-account pool only if measured quota contention matters.
 _refresh_lock = threading.RLock()
 _last_refresh = 0.0
+_last_refresh_key = b""
 _REFRESH_COOLDOWN_SECONDS = 2.0
 
 
@@ -68,15 +70,22 @@ def account_refresh_lock(account_id: Any) -> threading.RLock:
     return _refresh_lock
 
 
+def _account_refresh_key(account: Dict[str, Any]) -> bytes:
+    # Retain one digest instead of a raw, user-controlled account identifier.
+    return hashlib.sha256(str(account.get("id", "")).encode("utf-8")).digest()
+
+
 def refresh_account_quota(account: Dict[str, Any]) -> Dict[str, Any]:
     """Serialize and cool down explicit and automatic account refreshes."""
-    global _last_refresh
+    global _last_refresh, _last_refresh_key
     with account_refresh_lock(account.get("id")):
         now = time.monotonic()
-        if now - _last_refresh < _REFRESH_COOLDOWN_SECONDS:
+        refresh_key = _account_refresh_key(account)
+        if refresh_key == _last_refresh_key and now - _last_refresh < _REFRESH_COOLDOWN_SECONDS:
             raise QuotaError("account quota refresh is cooling down")
         result = read_account_quota(account)
         _last_refresh = time.monotonic()
+        _last_refresh_key = refresh_key
         return result
 
 
