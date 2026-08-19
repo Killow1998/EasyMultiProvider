@@ -1,7 +1,0 @@
-{
-  "name": "easy-multi-provider-security-tools",
-  "private": true,
-  "devDependencies": {
-    "@openai/codex-security": "0.1.14"
-  }
-}

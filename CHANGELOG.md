@@ -6,6 +6,8 @@
   routes, Provider keys, and Codex subscription credentials between machines.
 - Imported credentials are re-encrypted with the destination machine's local
   master key; the migration bundle never contains the local master key.
+- Fixed Web UI status notifications and batch quota refresh across multiple
+  accounts; repeated refreshes of the same account remain rate-limited.
 
 ## 0.1.0
 

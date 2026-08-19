@@ -123,6 +123,27 @@ merge semantics: matching account, Provider, and model IDs are replaced, and
 other destination entries are kept. The destination machine's host, port,
 Codex endpoint, catalog path, and local vault paths are kept as-is.
 
+Do not copy the source machine's `state/master.key` to the destination. Create
+the destination key locally, then use the `.emp` file and migration password to
+move the encrypted data.
+
+## Test on Another Machine
+
+The current `v0.2.0` line is source-tested and uses only Python and `uv`:
+
+```bash
+git clone git@github.com:Killow1998/EasyMultiProvider.git
+cd EasyMultiProvider
+uv sync
+cp config.example.json config.json
+uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+```
+
+Save the generated value as the destination's private `state/master.key`, or
+use `EASY_MULTI_PROVIDER_MASTER_KEY`. Then start EMP, open its one-use browser
+URL, and choose **Import EMP Data**. The source `config.json`, `state/`, and
+planning files are not required on the destination.
+
 ## Codex Profiles and Session Isolation
 
 Click **Generate EMP Config** in the Web UI. EMP writes one profile for the
