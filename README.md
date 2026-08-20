@@ -5,9 +5,9 @@ Codex as the client and exposes one local Responses endpoint that can route to
 Codex subscriptions, OpenAI-compatible APIs, Gemini AI Studio, and Anthropic
 Messages providers.
 
-The stable public baseline is `v0.1.0`; the current development line targets
-`v0.2.0`. Both are local Linux-validated releases; other platforms and the
-ChatGPT App path still require separate manual acceptance.
+The stable public baseline is `v0.1.0`; the current release candidate targets
+`v0.3.0`. The candidate is locally validated; other platforms and the ChatGPT
+App path still require separate manual acceptance.
 
 ## Install a Release
 
@@ -16,7 +16,7 @@ environment:
 
 ```bash
 uv venv
-uv pip install ./easy_multi_provider-0.1.0-py3-none-any.whl
+uv pip install ./easy_multi_provider-0.3.0-py3-none-any.whl
 ```
 
 The wheel includes the Web UI, so it does not require a source checkout at
@@ -77,6 +77,16 @@ settings; on Linux this includes a GNOME manual proxy. It does not guess by
 scanning common local proxy ports. Startup prints `Network proxy: environment`,
 `system`, or `direct` so the active path is visible.
 
+If startup reports an environment proxy whose local service is not running,
+external Providers such as Gemini will fail while local Codex routing still
+works. Fix or start that proxy, or test direct access with:
+
+```bash
+env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+    -u http_proxy -u https_proxy -u all_proxy \
+    uv run python -m easy_multi_provider --config config.json
+```
+
 The Web UI writes subscription credentials and provider API keys to encrypted
 files under `state/`. `config.json`, `state/`, and generated catalogs are
 ignored by Git. Never put the master key, `auth.json`, or an API key in the
@@ -91,8 +101,9 @@ The dashboard provides:
   combined display-name/model-prefix value, and remove local encrypted
   credentials. Export or import an encrypted `.emp` bundle for migration.
 - **Providers**: choose an official preset with fixed endpoint/protocol data,
-  or create a custom Provider with a Base URL, protocol, and API key without
-  exposing the stored key back to the browser.
+  including **ChatGPT Subscription**, which forwards the Codex login carried by
+  the EMP profile, or create a custom Provider with a Base URL, protocol, and
+  API key without exposing the stored key back to the browser.
 - **Models**: preview the upstream model list, select which models to import,
   edit context windows, test a model, and hide unused entries without deleting
   them. Models are grouped by Provider; visible and newer models appear first.
@@ -127,9 +138,10 @@ Do not copy the source machine's `state/master.key` to the destination. Create
 the destination key locally, then use the `.emp` file and migration password to
 move the encrypted data.
 
-## Test on Another Machine
+## Migration on Another Machine
 
-The current `v0.2.0` line is source-tested and uses only Python and `uv`:
+For a fresh destination that will receive an EMP migration bundle, install the
+same source line with Python and `uv`:
 
 ```bash
 git clone git@github.com:Killow1998/EasyMultiProvider.git
@@ -186,6 +198,13 @@ endpoints such as GLM, Qwen, and Gemini-compatible gateways. Clicking **Pull
 Models** additionally checks `/models`, resolves the saved protocol, and lets
 you select models to import. Select Responses or Anthropic Messages explicitly
 when the upstream is not Chat Completions-compatible.
+
+Chat Completions providers preserve standard structured tool calls, including
+tool-call history on the next turn. If an upstream emits `<think>` or
+`<tool_call>` as ordinary text, EMP stops that response with a clear upstream
+error instead of exposing or executing the markup. The Provider editor also
+offers **仅文本**, which omits tool definitions for endpoints that should only
+answer conversationally.
 
 ## Provider Routing
 
@@ -275,4 +294,4 @@ curl http://127.0.0.1:4200/v1/models
 - External API providers do not claim to have Codex subscription balances.
 - Run a real text request before relying on tools, reasoning, images, search,
   or provider-specific features; protocol support varies by upstream.
-- The v0.1.0/v0.2.0 development line has not been audited with Codex Security.
+- The v0.3.0 release candidate has not been audited with Codex Security.

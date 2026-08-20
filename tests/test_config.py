@@ -34,6 +34,13 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(safe["providers"][0]["api_key"], "••••••••")
         self.assertNotIn("secret-value", json.dumps(safe))
 
+    def test_provider_tool_call_mode_defaults_and_validates(self):
+        self.assertEqual(normalize({"providers": [self.provider]})["providers"][0]["tool_call_mode"], "native")
+        disabled = dict(self.provider, tool_call_mode="disabled")
+        self.assertEqual(normalize({"providers": [disabled]})["providers"][0]["tool_call_mode"], "disabled")
+        with self.assertRaises(ConfigError):
+            normalize({"providers": [dict(self.provider, tool_call_mode="text")]})
+
     def test_web_update_preserves_omitted_secret(self):
         current = normalize({"providers": [self.provider], "models": [self.model]})
         incoming = public_config(current)

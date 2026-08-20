@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import getproxies
 
+from . import __version__
 from .accounts import account_root, import_account, public_accounts, valid_caller_authorization
 from .catalog import (
     build_catalog,
@@ -359,7 +360,7 @@ def _json_bytes(value: Any) -> bytes:
 
 def make_handler(state: AppState):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "EasyMultiProvider/0.2"
+        server_version = "EasyMultiProvider/%s" % __version__
 
         def setup(self) -> None:
             super().setup()
@@ -571,7 +572,7 @@ def make_handler(state: AppState):
                         "application/octet-stream",
                         {
                             "Cache-Control": "no-store",
-                            "Content-Disposition": 'attachment; filename="easy-multi-provider-0.2.0.emp"',
+                            "Content-Disposition": 'attachment; filename="easy-multi-provider-%s.emp"' % __version__,
                         },
                     )
                     return
@@ -633,14 +634,31 @@ def make_handler(state: AppState):
                         state.snapshot(), body, {key: value for key, value in self.headers.items()}
                     )
                     if metadata["kind"] == "stream":
+                        iterator = iter(result)
+                        first_chunk = next(iterator, b"")
+                        close_after_stream = b'"type": "response.failed"' in first_chunk
                         self.send_response(200)
                         self.send_header("Content-Type", metadata["content_type"])
                         self.send_header("Cache-Control", "no-cache")
-                        self.send_header("Connection", "keep-alive")
+                        self.send_header("Connection", "close" if close_after_stream else "keep-alive")
                         self.end_headers()
-                        for chunk in result:
-                            self.wfile.write(chunk)
-                            self.wfile.flush()
+                        try:
+                            if first_chunk:
+                                if b'"type": "response.failed"' in first_chunk:
+                                    close_after_stream = True
+                                self.wfile.write(first_chunk)
+                                self.wfile.flush()
+                            for chunk in iterator:
+                                if b'"type": "response.failed"' in chunk:
+                                    close_after_stream = True
+                                self.wfile.write(chunk)
+                                self.wfile.flush()
+                        finally:
+                            close_iterator = getattr(iterator, "close", None)
+                            if callable(close_iterator):
+                                close_iterator()
+                        if close_after_stream:
+                            self.close_connection = True
                     elif metadata["kind"] == "raw_stream":
                         self.send_response(metadata.get("status", 200))
                         self.send_header("Content-Type", metadata["content_type"])

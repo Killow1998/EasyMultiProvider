@@ -37,6 +37,25 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(provider["id"], "demo")
         self.assertEqual(model["id"], "demo/model")
 
+    def test_forward_provider_uses_codex_session_auth(self):
+        headers = router._headers(
+            {
+                "id": "chatgpt-subscription",
+                "protocol": "responses",
+                "auth_mode": "forward",
+            },
+            {
+                "Authorization": "Bearer session-token",
+                "ChatGPT-Account-ID": "account-1",
+                "Originator": "codex_cli_rs",
+            },
+            False,
+        )
+        self.assertEqual(headers["Authorization"], "Bearer session-token")
+        self.assertEqual(headers["chatgpt-account-id"], "account-1")
+        self.assertEqual(headers["originator"], "codex_cli_rs")
+        self.assertEqual(headers["User-Agent"], "EasyMultiProvider/0.3.0")
+
     def test_limited_discovery_read_stops_after_deadline(self):
         class DripResponse:
             def __init__(self):
@@ -54,6 +73,27 @@ class RouterTests(unittest.TestCase):
                 router._read_limited(response, 100, "discovery", deadline=1)
         self.assertEqual(raised.exception.status, 504)
         self.assertTrue(response.closed)
+
+    def test_limited_response_iteration_preserves_streaming_chunks(self):
+        class StreamingResponse:
+            status = 200
+            headers = {"Content-Type": "text/event-stream"}
+
+            def __iter__(self):
+                yield b"data: first\n"
+                yield b"\n"
+
+            def read(self, size=-1):
+                raise AssertionError("stream iteration must not use buffered read()")
+
+            def close(self):
+                pass
+
+        response = router._LimitedResponse(StreamingResponse(), 1024)
+        self.assertEqual(list(response), [b"data: first\n", b"\n"])
+
+        with self.assertRaises(RouterError):
+            list(router._LimitedResponse(StreamingResponse(), 4))
 
     def test_upstream_model_drops_repeated_local_provider_prefix(self):
         provider = {"id": "gemini"}
@@ -357,6 +397,46 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(payload["messages"][1], {"role": "user", "content": "Hello"})
         self.assertEqual(payload["max_tokens"], 32)
 
+    def test_function_call_history_becomes_chat_tool_messages(self):
+        payload = responses_to_chat({
+            "model": "demo/model",
+            "input": [
+                {
+                    "type": "function_call",
+                    "id": "call_1",
+                    "call_id": "call_1",
+                    "name": "exec",
+                    "arguments": '{"cmd":"pwd"}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": " /tmp",
+                },
+            ],
+        }, "model")
+        self.assertEqual(payload["messages"][0]["role"], "assistant")
+        self.assertEqual(payload["messages"][0]["tool_calls"][0]["id"], "call_1")
+        self.assertEqual(payload["messages"][0]["tool_calls"][0]["function"]["name"], "exec")
+        self.assertEqual(payload["messages"][1], {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": " /tmp",
+        })
+
+    def test_disabled_tool_mode_omits_chat_tools(self):
+        payload = responses_to_chat({
+            "model": "demo/model",
+            "input": "Hello",
+            "tools": [{
+                "type": "function",
+                "name": "exec",
+                "description": "run a command",
+                "parameters": {"type": "object"},
+            }],
+        }, "model", {"tool_call_mode": "disabled"})
+        self.assertNotIn("tools", payload)
+
     def test_responses_reasoning_effort_becomes_chat_reasoning_effort(self):
         payload = responses_to_chat({
             "model": "demo/model",
@@ -465,6 +545,18 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(result["output_text"], "Hello")
         self.assertEqual(result["output"][0]["content"][0]["text"], "Hello")
 
+    def test_chat_response_rejects_textual_tool_markup(self):
+        with self.assertRaises(RouterError) as raised:
+            _response_from_chat({
+                "choices": [{"message": {"content": "<tool_call>exec</tool_call>"}}]
+            }, "demo/model")
+        self.assertEqual(raised.exception.status, 502)
+
+    def test_chat_response_surfaces_json_error(self):
+        with self.assertRaises(RouterError) as raised:
+            _response_from_chat({"error": {"message": "invalid model"}}, "demo/model")
+        self.assertEqual(str(raised.exception), "Chat Completions upstream error: invalid model")
+
     def test_responses_request_becomes_anthropic_messages(self):
         payload = responses_to_anthropic({
             "model": "ant/claude",
@@ -522,6 +614,129 @@ class RouterTests(unittest.TestCase):
         self.assertIn("event: response.output_text.delta", output)
         self.assertIn('"item_id":', output)
         self.assertIn("event: response.completed", output)
+
+    def test_stream_preserves_structured_chat_tool_calls(self):
+        class FakeResponse:
+            def __iter__(self):
+                return iter([
+                    b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"exec","arguments":"{\\"cmd\\":"}}]}}]}\n',
+                    b'\n',
+                    b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"pwd\\"}"}}]}}]}\n',
+                    b'\n',
+                    b'data: [DONE]\n',
+                    b'\n',
+                ])
+
+            def close(self):
+                pass
+
+        provider = {"id": "demo", "protocol": "chat_completions", "auth_mode": "api_key", "base_url": "https://example.com/v1"}
+        model = {"id": "demo/model"}
+        body = {"model": "demo/model", "input": "Run pwd", "stream": True}
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            output = b"".join(router.stream_chat_completion(provider, body, model, {})).decode("utf-8")
+        self.assertIn("event: response.function_call_arguments.delta", output)
+        self.assertIn("event: response.function_call_arguments.done", output)
+        self.assertIn('"type": "function_call"', output)
+        self.assertIn('"arguments": "{\\\"cmd\\\":\\\"pwd\\\"}"', output)
+        self.assertIn("event: response.completed", output)
+
+    def test_stream_rejects_textual_tool_markup(self):
+        class FakeResponse:
+            def __iter__(self):
+                return iter([
+                    b'data: {"choices":[{"delta":{"content":"<tool_call>"}}]}\n',
+                    b'\n',
+                ])
+
+            def close(self):
+                pass
+
+        provider = {"id": "demo", "protocol": "chat_completions", "auth_mode": "api_key", "base_url": "https://example.com/v1"}
+        model = {"id": "demo/model"}
+        body = {"model": "demo/model", "input": "Run pwd", "stream": True}
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            output = b"".join(router.stream_chat_completion(provider, body, model, {})).decode("utf-8")
+        self.assertIn("textual reasoning/tool-call markup", output)
+
+    def test_stream_accepts_non_sse_chat_response(self):
+        class FakeResponse:
+            def __iter__(self):
+                return iter([b'{"choices":[{"message":{"content":"Hello"}}]}'])
+
+            def close(self):
+                pass
+
+        provider = {"id": "demo", "protocol": "chat_completions", "auth_mode": "api_key", "base_url": "https://example.com/v1"}
+        model = {"id": "demo/model"}
+        body = {"model": "demo/model", "input": "Hello", "stream": True}
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            output = b"".join(router.stream_chat_completion(provider, body, model, {})).decode("utf-8")
+        self.assertIn('"delta": "Hello"', output)
+        self.assertIn("event: response.completed", output)
+
+        class ResponsesResponse:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __init__(self, value):
+                self.value = value
+                self.closed = False
+
+            def read(self, size=-1):
+                value, self.value = self.value, b""
+                return value
+
+            def close(self):
+                self.closed = True
+
+        response_body = json.dumps({
+            "id": "resp-json",
+            "object": "response",
+            "status": "completed",
+            "output": [{
+                "id": "msg-json",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hello", "annotations": []}],
+            }],
+            "output_text": "Hello",
+        }).encode("utf-8")
+        response = ResponsesResponse(response_body)
+        converted = b"".join(router._validated_responses_stream(response)).decode("utf-8")
+        self.assertIn("event: response.completed", converted)
+        self.assertIn('"delta": "Hello"', converted)
+        self.assertTrue(response.closed)
+
+    def test_stream_surfaces_empty_upstream_response(self):
+        class FakeResponse:
+            def __iter__(self):
+                return iter([b"data: [DONE]\n", b"\n"])
+
+            def close(self):
+                pass
+
+        provider = {"id": "demo", "protocol": "chat_completions", "auth_mode": "api_key", "base_url": "https://example.com/v1"}
+        model = {"id": "demo/model"}
+        body = {"model": "demo/model", "input": "Hello", "stream": True}
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            output = b"".join(router.stream_chat_completion(provider, body, model, {})).decode("utf-8")
+        self.assertIn("empty Chat Completions response", output)
+
+        class ResponsesResponse:
+            status = 200
+            headers = {"Content-Type": "text/event-stream"}
+
+            def __iter__(self):
+                return iter([b"data: [DONE]\n", b"\n"])
+
+            def close(self):
+                pass
+
+        output = b"".join(router._validated_responses_stream(ResponsesResponse())).decode("utf-8")
+        self.assertIn("event: response.failed", output)
+        self.assertNotIn("event: response.completed", output)
 
     def test_anthropic_stream_has_codex_response_events(self):
         class FakeResponse:
