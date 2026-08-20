@@ -15,6 +15,8 @@ from .vault import VaultError, read_encrypted_json, write_encrypted_json
 
 _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _MAX_AUTH_BYTES = 1024 * 1024
+_MAX_HIDDEN_MODELS = 1000
+_MAX_MODEL_ID_BYTES = 256
 
 
 class AccountError(ValueError):
@@ -66,6 +68,22 @@ def _name(value: Any, fallback: str) -> str:
     return value.strip() or fallback
 
 
+def _hidden_models(value: Any) -> list:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > _MAX_HIDDEN_MODELS:
+        raise AccountError("account.hidden_models must be a bounded list")
+    result = set()
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise AccountError("account.hidden_models must contain model IDs")
+        model_id = item.strip()
+        if len(model_id.encode("utf-8")) > _MAX_MODEL_ID_BYTES:
+            raise AccountError("account.hidden_models contains an oversized model ID")
+        result.add(model_id)
+    return sorted(result)
+
+
 def _validate_auth(auth: Any) -> Dict[str, Any]:
     if not isinstance(auth, dict):
         raise AccountError("auth_json must be a JSON object")
@@ -98,6 +116,7 @@ def normalize_account(raw: Dict[str, Any]) -> Dict[str, Any]:
         "prefix": prefix,
         "auth_file": auth_file.strip(),
         "enabled": bool(raw.get("enabled", True)),
+        "hidden_models": _hidden_models(raw.get("hidden_models")),
         "quota": copy.deepcopy(raw.get("quota")) if isinstance(raw.get("quota"), dict) else None,
     }
 
@@ -136,6 +155,7 @@ def import_account(
             "prefix": prefix,
             "auth_file": str(path),
             "enabled": metadata.get("enabled", True),
+            "hidden_models": metadata.get("hidden_models", []),
         }
     )
 
@@ -152,6 +172,7 @@ def public_accounts(accounts: Iterable[Dict[str, Any]]) -> list:
                 "name": account["name"],
                 "prefix": account["prefix"],
                 "enabled": account["enabled"],
+                "hidden_models": account["hidden_models"],
                 "credential_set": bool(account["auth_file"]),
                 "quota": account["quota"],
                 "duplicate": account["id"] in duplicates,

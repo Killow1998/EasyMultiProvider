@@ -653,19 +653,13 @@ class LocalStack:
     def _write_profile(self) -> None:
         profile = "\n".join(
             [
-                'model_provider = "easy-multi-provider"',
+                'model_provider = "openai"',
                 'model_catalog_json = %s' % json.dumps(str(self.catalog_path)),
+                'openai_base_url = %s' % json.dumps(self.emp_url),
                 'model = "gpt-5.6-luna"',
                 'model_reasoning_effort = "max"',
                 'approval_policy = "never"',
                 'sandbox_mode = "read-only"',
-                "",
-                "[model_providers.easy-multi-provider]",
-                'name = "EasyMultiProvider"',
-                'base_url = %s' % json.dumps(self.emp_url),
-                'wire_api = "responses"',
-                "requires_openai_auth = true",
-                "supports_websockets = false",
                 "",
             ]
         )

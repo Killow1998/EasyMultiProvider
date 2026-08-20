@@ -3,7 +3,7 @@ import json
 import tempfile
 from io import BytesIO
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from unittest.mock import patch
 
 from tests.support import ensure_test_master_key
@@ -13,9 +13,11 @@ from easy_multi_provider.router import (
     _response_from_anthropic,
     _response_from_chat,
     find_route,
+    proxy_compact,
     responses_to_anthropic,
     responses_to_chat,
 )
+from easy_multi_provider.transport import sse_json_events
 from easy_multi_provider.vault import write_encrypted_json
 
 
@@ -54,7 +56,7 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(headers["Authorization"], "Bearer session-token")
         self.assertEqual(headers["chatgpt-account-id"], "account-1")
         self.assertEqual(headers["originator"], "codex_cli_rs")
-        self.assertEqual(headers["User-Agent"], "EasyMultiProvider/0.3.0")
+        self.assertEqual(headers["User-Agent"], "EasyMultiProvider/" + router.__version__)
 
     def test_limited_discovery_read_stops_after_deadline(self):
         class DripResponse:
@@ -73,6 +75,49 @@ class RouterTests(unittest.TestCase):
                 router._read_limited(response, 100, "discovery", deadline=1)
         self.assertEqual(raised.exception.status, 504)
         self.assertTrue(response.closed)
+
+    def test_upstream_body_read_uses_remaining_global_deadline(self):
+        class Socket:
+            timeout = None
+
+            def settimeout(self, value):
+                self.timeout = value
+
+        class Raw:
+            _sock = Socket()
+
+        class FP:
+            raw = Raw()
+
+        class SlowBodyResponse:
+            fp = FP()
+
+            def read(self, size=-1):
+                if self.fp.raw._sock.timeout < 60:
+                    raise TimeoutError("The read operation timed out")
+                return b"complete"
+
+            def close(self):
+                pass
+
+        with patch.object(router.time, "monotonic", return_value=0):
+            response = router._DeadlineResponse(SlowBodyResponse(), 180)
+            self.assertEqual(response.read(), b"complete")
+        self.assertEqual(SlowBodyResponse.fp.raw._sock.timeout, 180)
+
+    def test_upstream_body_timeout_is_reported_as_gateway_timeout(self):
+        class TimedOutResponse:
+            def read(self, size=-1):
+                raise TimeoutError("The read operation timed out")
+
+            def close(self):
+                pass
+
+        with patch.object(router.time, "monotonic", return_value=0):
+            response = router._DeadlineResponse(TimedOutResponse(), 180)
+            with self.assertRaises(RouterError) as raised:
+                response.read()
+        self.assertEqual(raised.exception.status, 504)
 
     def test_limited_response_iteration_preserves_streaming_chunks(self):
         class StreamingResponse:
@@ -181,7 +226,7 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
         self.assertEqual([item["upstream_id"] for item in value], ["demo-a"])
 
-    def test_auto_model_discovery_resolves_to_chat_completions(self):
+    def test_auto_model_discovery_does_not_guess_the_generation_protocol(self):
         provider = {
             "id": "demo",
             "base_url": "https://example.com/v1",
@@ -202,10 +247,10 @@ class RouterTests(unittest.TestCase):
 
         with patch.object(router, "urlopen", side_effect=[FakeResponse(), FakeResponse()]):
             value = router.discover_models(provider)
-        self.assertEqual(provider["protocol"], "chat_completions")
+        self.assertEqual(provider["protocol"], "auto")
         self.assertEqual(value[0]["upstream_id"], "demo-a")
 
-    def test_auto_provider_can_proxy_without_model_discovery(self):
+    def test_auto_provider_prefers_responses_without_model_discovery(self):
         config = {
             "providers": [{
                 "id": "demo",
@@ -218,7 +263,7 @@ class RouterTests(unittest.TestCase):
         }
         with patch.object(
             router,
-            "chat_completion",
+            "forward_responses",
             return_value=(200, "application/json", b"{}"),
         ) as completion:
             metadata, result = router.proxy(
@@ -227,15 +272,85 @@ class RouterTests(unittest.TestCase):
                 {},
             )
         self.assertEqual(metadata["status"], 200)
+        self.assertEqual(metadata["resolved_protocol"], "responses")
+        self.assertEqual(result, b"{}")
+        self.assertEqual(completion.call_args.args[0]["protocol"], "responses")
+
+    def test_auto_stream_prefers_responses(self):
+        config = {
+            "providers": [{
+                "id": "demo",
+                "base_url": "https://example.com/v1",
+                "protocol": "auto",
+                "auth_mode": "api_key",
+                "api_key": "test-key",
+            }],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
+        }
+        stream = iter([b'event: response.completed\ndata: {"type":"response.completed"}\n\n'])
+        with patch.object(
+            router,
+            "forward_responses_stream",
+            return_value=stream,
+        ) as completion:
+            metadata, result = router.proxy(
+                config,
+                {"model": "demo/glm", "input": "hello", "stream": True},
+                {},
+            )
+        self.assertEqual(metadata["resolved_protocol"], "responses")
+        self.assertIs(result, stream)
+        self.assertEqual(completion.call_args.args[0]["protocol"], "responses")
+
+    def test_auto_provider_falls_back_when_responses_endpoint_is_unavailable(self):
+        config = {
+            "providers": [{
+                "id": "demo",
+                "base_url": "https://example.com/v1",
+                "protocol": "auto",
+                "auth_mode": "api_key",
+                "api_key": "test-key",
+            }],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
+        }
+        with patch.object(
+            router,
+            "forward_responses",
+            side_effect=RouterError("upstream returned 404: not found", 404),
+        ), patch.object(
+            router,
+            "chat_completion",
+            return_value=(200, "application/json", b"{}"),
+        ) as completion:
+            metadata, result = router.proxy(
+                config,
+                {"model": "demo/glm", "input": "hello"},
+                {},
+            )
+        self.assertEqual(metadata["resolved_protocol"], "chat_completions")
         self.assertEqual(result, b"{}")
         self.assertEqual(completion.call_args.args[0]["protocol"], "chat_completions")
 
-    def test_auto_endpoint_does_not_require_model_discovery(self):
-        provider = {
-            "base_url": "https://example.com/v1",
-            "protocol": "auto",
+    def test_auto_provider_does_not_hide_authentication_failures(self):
+        config = {
+            "providers": [{
+                "id": "demo",
+                "base_url": "https://example.com/v1",
+                "protocol": "auto",
+                "auth_mode": "api_key",
+                "api_key": "test-key",
+            }],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
         }
-        self.assertEqual(router._endpoint(provider), "https://example.com/v1/chat/completions")
+        with patch.object(
+            router,
+            "forward_responses",
+            side_effect=RouterError("upstream returned 401", 401),
+        ), patch.object(router, "chat_completion") as completion:
+            with self.assertRaises(RouterError) as raised:
+                router.proxy(config, {"model": "demo/glm", "input": "hello"}, {})
+        self.assertEqual(raised.exception.status, 401)
+        completion.assert_not_called()
 
     def test_chat_request_retries_without_unsupported_reasoning_effort(self):
         provider = {
@@ -373,18 +488,117 @@ class RouterTests(unittest.TestCase):
             "accounts": [{
                 "id": "plus",
                 "name": "Plus",
-                "prefix": "plus258",
+                "prefix": "secondary",
                 "auth_file": "/tmp/plus-auth.json",
                 "enabled": True,
             }],
             "providers": [],
             "models": [],
         }
-        provider, model = find_route(config, "plus258/gpt-native")
+        provider, model = find_route(config, "secondary/gpt-native")
         self.assertEqual(provider["auth_mode"], "account")
         self.assertEqual(provider["account"]["id"], "plus")
         self.assertEqual(provider["base_url"], "https://chatgpt.com/backend-api/codex")
         self.assertEqual(model["upstream_id"], "gpt-native")
+
+    def test_subscription_compaction_uses_native_compact_endpoint(self):
+        config = {
+            "providers": [{
+                "id": "chatgpt",
+                "base_url": "https://chatgpt.com/backend-api/codex",
+                "enabled": True,
+                "auth_mode": "forward",
+                "protocol": "responses",
+            }],
+            "models": [],
+        }
+
+        class FakeResponse:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+            sent = False
+
+            def read(self, size=-1):
+                if self.sent:
+                    return b""
+                self.sent = True
+                return b'{"output":[]}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        with patch.object(router, "urlopen", return_value=FakeResponse()) as opened:
+            metadata, raw = proxy_compact(
+                config,
+                {"model": "gpt-native", "input": []},
+                {"Authorization": "Bearer subscription-token"},
+            )
+        request = opened.call_args.args[0]
+        self.assertEqual(request.full_url, "https://chatgpt.com/backend-api/codex/responses/compact")
+        self.assertEqual(json.loads(request.data)["model"], "gpt-native")
+        self.assertEqual(metadata["status"], 200)
+        self.assertEqual(raw, b'{"output":[]}')
+
+    def test_chat_provider_supports_v1_and_v2_remote_compaction(self):
+        summary_response = json.dumps({
+            "id": "resp_summary",
+            "object": "response",
+            "status": "completed",
+            "output": [],
+            "output_text": "continue from the saved state",
+        }).encode()
+        history = [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "keep this request"}],
+        }]
+        with patch.object(
+            router,
+            "chat_completion",
+            return_value=(200, "application/json", summary_response),
+        ) as completion:
+            metadata, raw = proxy_compact(
+                self.config,
+                {"model": "demo/model", "input": history},
+                {},
+            )
+            compacted = json.loads(raw)
+            self.assertEqual(metadata["status"], 200)
+            self.assertIn("continue from the saved state", compacted["output"][-1]["content"][0]["text"])
+
+            metadata, stream = router.proxy(
+                self.config,
+                {
+                    "model": "demo/model",
+                    "stream": True,
+                    "input": history + [{"type": "compaction_trigger"}],
+                },
+                {},
+            )
+            events = list(sse_json_events(stream))
+
+        done = [event for event in events if event.get("type") == "response.output_item.done"]
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["item"]["type"], "compaction")
+        self.assertNotIn("status", done[0]["item"])
+        replay = responses_to_chat(
+            {"model": "demo/model", "input": [done[0]["item"]]},
+            "model",
+        )
+        self.assertIn("continue from the saved state", replay["messages"][0]["content"])
+        opaque = responses_to_chat(
+            {
+                "model": "demo/model",
+                "input": [{"type": "compaction", "encrypted_content": "provider-secret"}],
+            },
+            "model",
+        )
+        self.assertIn("another provider", opaque["messages"][0]["content"])
+        summary_request = completion.call_args.args[1]
+        self.assertNotIn("compaction_trigger", json.dumps(summary_request))
 
     def test_responses_request_becomes_chat_request(self):
         payload = responses_to_chat({
@@ -459,6 +673,51 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(opened.call_count, 2)
         sleep.assert_called_once_with(0.5)
 
+    def test_request_retries_transient_connection_failure(self):
+        provider = {"id": "demo", "protocol": "chat_completions", "auth_mode": "api_key", "api_key": "key", "base_url": "https://example.com/v1"}
+
+        class FakeResponse:
+            status = 200
+
+        with patch.object(router, "urlopen", side_effect=[URLError("temporary TLS EOF"), FakeResponse()]) as opened:
+            with patch.object(router.time, "sleep") as sleep:
+                result = router._request(provider, {}, {}, False)
+        self.assertIsInstance(result, FakeResponse)
+        self.assertEqual(opened.call_count, 2)
+        sleep.assert_called_once_with(0.5)
+
+    def test_request_summarizes_html_error_without_echoing_the_page(self):
+        provider = {
+            "id": "demo",
+            "protocol": "responses",
+            "auth_mode": "api_key",
+            "api_key": "key",
+            "base_url": "https://example.com/v1",
+        }
+        page = (
+            b'<!DOCTYPE html><html><head><link href="data:image/png;base64,'
+            + (b"A" * 10000)
+            + b'"></head><body>Forbidden</body></html>'
+        )
+        failure = HTTPError(
+            "https://example.com/v1/responses",
+            403,
+            "Forbidden",
+            {"Content-Type": "text/html; charset=utf-8"},
+            BytesIO(page),
+        )
+
+        with patch.object(router, "urlopen", side_effect=failure):
+            with self.assertRaises(RouterError) as raised:
+                router._request(provider, {"model": "demo"}, {}, False)
+
+        message = str(raised.exception)
+        self.assertEqual(raised.exception.status, 403)
+        self.assertIn("upstream returned 403 (text/html)", message)
+        self.assertIn("gateway or WAF", message)
+        self.assertNotIn("base64", message)
+        self.assertLess(len(message), 240)
+
     def test_subscription_request_uses_only_selected_account_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
             auth_path = Path(directory) / "auth.json.enc"
@@ -466,13 +725,13 @@ class RouterTests(unittest.TestCase):
                     "tokens": {"access_token": "selected-secret", "account_id": "selected-account"}
                 })
             provider = {
-                "id": "ship",
+                "id": "primary",
                 "protocol": "responses",
                 "auth_mode": "account",
                 "base_url": "https://example.com/v1",
-                "account": {"id": "ship", "auth_file": str(auth_path)},
+                "account": {"id": "primary", "auth_file": str(auth_path)},
             }
-            model = {"id": "ship/gpt-native", "upstream_id": "gpt-native"}
+            model = {"id": "primary/gpt-native", "upstream_id": "gpt-native"}
 
             class FakeResponse:
                 status = 200
@@ -493,7 +752,7 @@ class RouterTests(unittest.TestCase):
             with patch.object(router, "urlopen", return_value=FakeResponse()) as opened:
                 router.forward_responses(
                     provider,
-                    {"model": "ship/gpt-native", "input": "hello"},
+                    {"model": "primary/gpt-native", "input": "hello"},
                     model,
                     {"Authorization": "Bearer wrong-account"},
                 )
@@ -501,18 +760,77 @@ class RouterTests(unittest.TestCase):
             self.assertEqual(request.get_header("Authorization"), "Bearer selected-secret")
             self.assertEqual(request.get_header("Chatgpt-account-id"), "selected-account")
 
+    def test_external_responses_provider_does_not_receive_codex_client_metadata(self):
+        provider = {
+            "id": "demo",
+            "protocol": "responses",
+            "auth_mode": "api_key",
+            "base_url": "https://example.com/v1",
+        }
+        model = {"id": "demo/model", "upstream_id": "model"}
+
+        class FakeResponse:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+            sent = False
+
+            def read(self, size=-1):
+                if self.sent:
+                    return b""
+                self.sent = True
+                return b"{}"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        with patch.object(router, "_request", return_value=FakeResponse()) as requested:
+            router.forward_responses(
+                provider,
+                {
+                    "model": "demo/model",
+                    "input": "hello",
+                    "client_metadata": {
+                        "thread_id": "private-thread",
+                        "x-codex-turn-metadata": "private-metadata",
+                    },
+                },
+                model,
+                {},
+            )
+
+        payload = requested.call_args.args[1]
+        self.assertNotIn("client_metadata", payload)
+        self.assertEqual(payload["model"], "model")
+        self.assertEqual(payload["input"], "hello")
+
+    def test_subscription_responses_preserve_native_codex_client_metadata(self):
+        metadata = {"thread_id": "native-thread"}
+        payload = router._responses_payload(
+            {"id": "primary", "auth_mode": "account"},
+            {
+                "model": "primary/gpt-native",
+                "input": "hello",
+                "client_metadata": metadata,
+            },
+            {"id": "primary/gpt-native", "upstream_id": "gpt-native"},
+        )
+        self.assertEqual(payload["client_metadata"], metadata)
+
     def test_subscription_request_refreshes_account_once_after_401(self):
         with tempfile.TemporaryDirectory() as directory:
             auth_path = Path(directory) / "auth.json.enc"
             write_encrypted_json(auth_path, {"tokens": {"access_token": "stale-secret"}})
             provider = {
-                "id": "ship",
+                "id": "primary",
                 "protocol": "responses",
                 "auth_mode": "account",
                 "base_url": "https://example.com/v1",
-                "account": {"id": "ship", "auth_file": str(auth_path)},
+                "account": {"id": "primary", "auth_file": str(auth_path)},
             }
-            model = {"id": "ship/gpt-native", "upstream_id": "gpt-native"}
+            model = {"id": "primary/gpt-native", "upstream_id": "gpt-native"}
 
             class FakeResponse:
                 status = 200
@@ -532,7 +850,7 @@ class RouterTests(unittest.TestCase):
                 with patch.object(router, "refresh_account_quota", return_value={} ) as refreshed:
                     router.forward_responses(
                         provider,
-                        {"model": "ship/gpt-native", "input": "hello"},
+                        {"model": "primary/gpt-native", "input": "hello"},
                         model,
                         {},
                     )
@@ -737,6 +1055,57 @@ class RouterTests(unittest.TestCase):
         output = b"".join(router._validated_responses_stream(ResponsesResponse())).decode("utf-8")
         self.assertIn("event: response.failed", output)
         self.assertNotIn("event: response.completed", output)
+
+    def test_translated_stream_timeout_is_a_terminal_response_failure(self):
+        model = {"id": "demo/model"}
+        body = {"model": "demo/model", "input": "Hello", "stream": True}
+        providers_and_streams = (
+            (
+                {"id": "demo", "protocol": "chat_completions", "auth_mode": "api_key", "base_url": "https://example.com/v1"},
+                router.stream_chat_completion,
+            ),
+            (
+                {"id": "demo", "protocol": "anthropic_messages", "auth_mode": "anthropic_api_key", "base_url": "https://example.com/v1"},
+                router.stream_anthropic_completion,
+            ),
+        )
+        for provider, stream in providers_and_streams:
+            with self.subTest(protocol=provider["protocol"]), patch.object(
+                router,
+                "_request",
+                side_effect=RouterError("upstream request timed out", 504),
+            ):
+                output = b"".join(stream(provider, body, model, {})).decode("utf-8")
+            self.assertIn("event: response.failed", output)
+            self.assertIn('"status": "failed"', output)
+            self.assertIn("HTTP 504", output)
+            self.assertNotIn('"type": "error"', output)
+
+    def test_responses_stream_accepts_headerless_sse(self):
+        class HeaderlessResponse:
+            status = 200
+            headers = {}
+
+            def __init__(self):
+                self.body = (
+                    b'event: response.completed\n'
+                    b'data: {"type":"response.completed","response":'
+                    b'{"id":"resp-headerless","status":"completed","output":[]}}\n\n'
+                )
+                self.closed = False
+
+            def read(self, size=-1):
+                body, self.body = self.body, b""
+                return body
+
+            def close(self):
+                self.closed = True
+
+        response = HeaderlessResponse()
+        output = b"".join(router._validated_responses_stream(response)).decode("utf-8")
+        self.assertIn("event: response.completed", output)
+        self.assertNotIn("event: response.failed", output)
+        self.assertTrue(response.closed)
 
     def test_anthropic_stream_has_codex_response_events(self):
         class FakeResponse:

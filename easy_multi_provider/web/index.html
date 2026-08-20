@@ -147,14 +147,14 @@ function fill() {
   renderAccounts(); renderProviders(); renderModels();
 }
 async function load() { try { state = await api('/api/config'); fill(); await loadIntegration(); notice('配置已加载'); } catch (error) { notice(error.message, true); } }
-function integrationText(info) { return info.snippet + '\n\n# profile: ' + info.profile_path + '\n# run: ' + info.command + '\n# catalog: ' + info.catalog_path; }
+function integrationText(info) { return info.snippet + '\n\n# profile: ' + info.profile_path + '\n# run: ' + info.command + '\n# resume: ' + info.resume_command + '\n# catalog: ' + info.catalog_path; }
 async function generateIntegration() {
   try {
     state.native_catalog_path = $('native_catalog_path').value.trim();
     state = await api('/api/config', {method:'POST', body:JSON.stringify(state)});
     const info = await api('/api/integration/generate', {method:'POST', body:'{}'});
     fill(); $('integration').textContent = integrationText(info);
-    openModal('EMP 配置已生成', `<p>配置文件和合并 catalog 已写入本机。</p><label>启动命令</label><pre>${esc(info.command)}</pre><p class="muted">Profile：<code>${esc(info.profile_path)}</code><br>Catalog：<code>${esc(info.catalog_path)}</code></p>`, '', null);
+    openModal('EMP 配置已生成', `<p>配置文件和合并 catalog 已写入本机。</p><label>启动命令</label><pre>${esc(info.command)}</pre><label>恢复会话（原生 Codex）</label><pre>${esc(info.resume_command)}</pre><p class="muted">Profile：<code>${esc(info.profile_path)}</code><br>Catalog：<code>${esc(info.catalog_path)}</code></p>`, '', null);
     notice('EMP 配置已生成');
   } catch (error) {
     notice(error.message, true);
@@ -188,7 +188,7 @@ async function accountFileChosen(input) {
   const file = input.files[0]; if (!file) return;
   try {
     pendingAccountAuth = JSON.parse(await file.text());
-    openModal('导入 Codex 账户', `<p class="muted">已选择：${esc(file.name)}<br>支持 auth.json 及备份文件名。</p><label>账户 ID（必填）<input id="modal_account_id" placeholder="例如 ship" autofocus></label>`, '导入账户', submitAccountImport);
+    openModal('导入 Codex 账户', `<p class="muted">已选择：${esc(file.name)}<br>支持 auth.json 及备份文件名。</p><label>账户 ID（必填）<input id="modal_account_id" placeholder="例如 primary" autofocus></label>`, '导入账户', submitAccountImport);
   } catch (error) { input.value = ''; notice('auth 文件不是有效 JSON：' + error.message, true); }
 }
 async function submitAccountImport() {
@@ -198,12 +198,17 @@ async function submitAccountImport() {
 }
 function editAccount(id) {
   const account = (state.accounts || []).find(item => item.id === id); if (!account) return;
-  openModal('编辑账户', `<p class="muted">账户 ID：<code>${esc(id)}</code></p><label>显示名称 / 模型前缀<input id="modal_account_alias" value="${esc(account.name || id)}"></label><p class="muted">保存后这个值同时用于显示名称和模型前缀。</p>`, '保存修改', async () => {
+  const options = state.subscription_models || []; const hidden = new Set(account.hidden_models || []);
+  const modelSelection = options.length ? `<label>在 Codex /model 中显示</label><div class="toolbar"><button type="button" class="secondary" onclick="setSubscriptionModelChecks(true)">全部显示</button><button type="button" class="secondary" onclick="setSubscriptionModelChecks(false)">全部隐藏</button></div><div class="model-selection">${options.map(model => `<label class="model-option"><input type="checkbox" name="subscription_model" value="${esc(model.id)}" ${hidden.has(model.id) ? '' : 'checked'}><span><strong>${esc(model.display_name || model.id)}</strong><small>${esc(model.id)}</small></span></label>`).join('')}</div>` : '<p class="muted">当前没有可用的原生 Coding Agent 模型；请先让 Codex 更新原生 catalog。</p>';
+  openModal('编辑账户', `<p class="muted">账户 ID：<code>${esc(id)}</code></p><label>显示名称 / 模型前缀<input id="modal_account_alias" value="${esc(account.name || id)}"></label><p class="muted">保存后这个值同时用于显示名称和模型前缀。Codex 内部隐藏模型（例如 Auto Review）不会出现在下方。</p>${modelSelection}`, '保存修改', async () => {
     const alias = $('modal_account_alias').value.trim() || id;
-    state.accounts = state.accounts.map(item => item.id === id ? Object.assign({}, item, {name:alias, prefix:alias}) : item);
+    const selected = new Set([...document.querySelectorAll('input[name="subscription_model"]:checked')].map(input => input.value));
+    const hiddenModels = options.length ? options.filter(model => !selected.has(model.id)).map(model => model.id) : (account.hidden_models || []);
+    state.accounts = state.accounts.map(item => item.id === id ? Object.assign({}, item, {name:alias, prefix:alias, hidden_models:hiddenModels}) : item);
     await persistState('账户信息已保存'); closeModal();
   });
 }
+function setSubscriptionModelChecks(checked) { document.querySelectorAll('input[name="subscription_model"]').forEach(input => { input.checked = checked; }); }
 async function refreshAccount(id, announce = true) { if (refreshingAccounts.has(id)) return false; refreshingAccounts.add(id); delete refreshErrors[id]; renderAccounts(); try { const result = await api('/api/accounts/' + encodeURIComponent(id) + '/quota', {method:'POST', body:'{}'}); const index = state.accounts.findIndex(a => a.id === id); if (index >= 0) state.accounts[index] = result.account; if (announce) notice('账户余量已刷新'); return true; } catch (error) { refreshErrors[id] = error.message; if (announce) notice('刷新失败：' + error.message, true); return false; } finally { refreshingAccounts.delete(id); renderAccounts(); } }
 async function refreshAllAccounts() { const accounts = state.accounts || []; if (!accounts.length) return notice('还没有 Codex subscription 账户', true); const button = $('refresh_all'); button.disabled = true; try { const results = await Promise.all(accounts.map(a => refreshAccount(a.id, false))); const failed = accounts.filter((_, index) => !results[index]); notice(failed.length ? `刷新完成：成功 ${accounts.length - failed.length} 个，失败 ${failed.length} 个` : '全部账户余量已刷新', Boolean(failed.length)); } finally { button.disabled = false; } }
 async function removeAccount(id) { if (!confirm('删除账户 '+id+' 的本地加密凭据？不会撤销远端 Token。')) return; try { await api('/api/accounts/' + encodeURIComponent(id), {method:'DELETE'}); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice('账户本地凭据已删除'); } catch (error) { notice(error.message, true); } }
@@ -212,7 +217,16 @@ function renderProviders() {
   const providers = state.providers || [];
   if (!providers.length) { $('providers').innerHTML = '<p class="muted">还没有 Provider。</p>'; return; }
   const toolLabel = value => value === 'disabled' ? '仅文本' : '结构化 tool call';
-  $('providers').innerHTML = `<table><tr><th>ID</th><th>Endpoint</th><th>协议</th><th>认证</th><th>工具调用</th><th>操作</th></tr>${providers.map(p => `<tr><td><code>${esc(p.id)}</code><br>${esc(p.name)}</td><td>${esc(p.base_url)}</td><td>${esc(protocolLabel(p.protocol))}</td><td>${esc(authLabel(p.auth_mode))}${p.api_key_set ? ' · key已设置' : ''}</td><td>${esc(toolLabel(p.tool_call_mode))}</td><td><button class="secondary" onclick="discoverProvider('${esc(p.id)}')">拉取模型</button><button class="secondary" onclick="editProvider('${esc(p.id)}')">编辑</button><button class="danger" onclick="removeProvider('${esc(p.id)}')">删除</button></td></tr>`).join('')}</table>`;
+  $('providers').innerHTML = `<table><tr><th>ID</th><th>Endpoint</th><th>协议</th><th>认证</th><th>工具调用</th><th>操作</th></tr>${providers.map(p => {
+    const models = (state.models || []).filter(model => model.provider === p.id); const allHidden = models.length > 0 && models.every(model => !model.enabled);
+    return `<tr><td><code>${esc(p.id)}</code><br>${esc(p.name)}</td><td>${esc(p.base_url)}</td><td>${esc(protocolLabel(p.protocol))}</td><td>${esc(authLabel(p.auth_mode))}${p.api_key_set ? ' · key已设置' : ''}</td><td>${esc(toolLabel(p.tool_call_mode))}</td><td><button class="secondary" onclick="discoverProvider('${esc(p.id)}')">拉取模型</button><button class="secondary" onclick="editProvider('${esc(p.id)}')">编辑</button><button class="secondary" ${models.length ? '' : 'disabled'} onclick="toggleProviderModels('${esc(p.id)}', ${allHidden})">${allHidden ? '显示全部模型' : '隐藏全部模型'}</button><button class="danger" onclick="removeProvider('${esc(p.id)}')">删除</button></td></tr>`;
+  }).join('')}</table>`;
+}
+async function toggleProviderModels(id, enabled) {
+  const models = (state.models || []).filter(model => model.provider === id); if (!models.length) return notice('该 Provider 还没有已导入模型', true);
+  const previous = models.map(model => model.enabled); models.forEach(model => { model.enabled = enabled; });
+  try { await persistState(enabled ? `${id} 的模型已全部显示` : `${id} 的模型已全部隐藏`); }
+  catch (error) { models.forEach((model, index) => { model.enabled = previous[index]; }); fill(); notice(error.message, true); }
 }
 function openProviderChooser() {
   openModal('添加 Provider', '<p class="muted">官方 Provider 使用固定的 Base URL、协议和认证方式。自建 Provider 可选择自动检测。</p><div class="choice-grid">' + Object.entries(officialProviders).map(([key,p]) => `<button class="choice" onclick="chooseOfficialProvider('${key}')"><strong>${esc(p.name)}</strong><small>${esc(p.hint)}</small></button>`).join('') + '<button class="choice" onclick="openCustomProviderForm()"><strong>自建 Provider</strong><small>填写 Base URL、API Key 和协议</small></button></div>', '', null);
@@ -228,7 +242,7 @@ function chooseOfficialProvider(key) {
 }
 function openCustomProviderForm(existing) {
   existing = existing || {};
-  openModal(existing.id ? '编辑自建 Provider' : '添加自建 Provider', `<div class="grid"><div><label>ID（必填）</label><input id="modal_provider_id" value="${esc(existing.id || '')}" placeholder="例如 chen" ${existing.id ? 'readonly' : ''}></div><div><label>显示名称（可选）</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="留空使用 ID"></div><div class="wide"><label>Base URL（必填）</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com/v1"></div><div><label>协议</label><select id="modal_provider_protocol"><option value="auto">自动检测</option><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></div><div><label>认证</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option></select></div><div><label>工具调用</label><select id="modal_provider_tools"><option value="native">结构化 tool call</option><option value="disabled">仅文本（不发送工具定义）</option></select></div><div class="wide"><label>API Key${existing.api_key_set ? '（留空保持已有值）' : '（必填）'}</label><input id="modal_provider_key" type="password"></div></div><p class="muted">自动检测可直接使用，无需先拉取模型；默认按 Chat Completions 转发。模型必须返回标准结构化工具调用，无法做到时可切换为“仅文本”。</p>`, '保存 Provider', async () => {
+  openModal(existing.id ? '编辑自建 Provider' : '添加自建 Provider', `<div class="grid"><div><label>ID（必填）</label><input id="modal_provider_id" value="${esc(existing.id || '')}" placeholder="例如 my-provider" ${existing.id ? 'readonly' : ''}></div><div><label>显示名称（可选）</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="留空使用 ID"></div><div class="wide"><label>Base URL（必填）</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com/v1"></div><div><label>协议</label><select id="modal_provider_protocol"><option value="auto">自动检测</option><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></div><div><label>认证</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option></select></div><div><label>工具调用</label><select id="modal_provider_tools"><option value="native">结构化 tool call</option><option value="disabled">仅文本（不发送工具定义）</option></select></div><div class="wide"><label>API Key${existing.api_key_set ? '（留空保持已有值）' : '（必填）'}</label><input id="modal_provider_key" type="password"></div></div><p class="muted">自动检测不会额外生成测试内容：首次真实请求优先使用 Responses，端点明确不支持时回退 Chat Completions，并保存成功协议。Anthropic Provider 请选择 Anthropic 认证。模型必须返回标准结构化工具调用，无法做到时可切换为“仅文本”。</p>`, '保存 Provider', async () => {
     const id = $('modal_provider_id').value.trim(); const base = $('modal_provider_base').value.trim(); if (!id || !base) throw new Error('ID 和 Base URL 不能为空'); const keyValue = $('modal_provider_key').value.trim();
     if (!keyValue && !existing.api_key_set) throw new Error('请填写 API Key');
     await saveProvider({id, name:$('modal_provider_name').value.trim() || id, base_url:base, protocol:$('modal_provider_protocol').value, auth_mode:$('modal_provider_auth').value, tool_call_mode:$('modal_provider_tools').value, api_key:keyValue}); closeModal();

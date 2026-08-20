@@ -199,7 +199,20 @@ class CodexCliDemoTests(unittest.TestCase):
                 write_catalog(config, catalog_path)
 
                 state = AppState(config_path)
-                router_server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+                base_handler = make_handler(state)
+
+                class TrackingHandler(base_handler):
+                    def _serve_responses_websocket(self):
+                        self.server.websocket_upgrades += 1
+                        return super()._serve_responses_websocket()
+
+                    def _websocket_events(self, metadata, result):
+                        self.server.websocket_requests += 1
+                        yield from super()._websocket_events(metadata, result)
+
+                router_server = ThreadingHTTPServer(("127.0.0.1", 0), TrackingHandler)
+                router_server.websocket_upgrades = 0
+                router_server.websocket_requests = 0
                 router_thread = threading.Thread(target=router_server.serve_forever, daemon=True)
                 router_thread.start()
                 router_url = "http://127.0.0.1:%d/v1" % router_server.server_address[1]
@@ -217,19 +230,11 @@ class CodexCliDemoTests(unittest.TestCase):
                     "-m",
                     "demo/fixed",
                     "-c",
-                    'model_provider="easy-multi-provider"',
+                    'model_provider="openai"',
                     "-c",
                     'model_catalog_json="%s"' % str(catalog_path),
                     "-c",
-                    'model_providers.easy-multi-provider.name="EasyMultiProvider"',
-                    "-c",
-                    'model_providers.easy-multi-provider.base_url="%s"' % router_url,
-                    "-c",
-                    'model_providers.easy-multi-provider.wire_api="responses"',
-                    "-c",
-                    'model_providers.easy-multi-provider.requires_openai_auth=true',
-                    "-c",
-                    'model_providers.easy-multi-provider.supports_websockets=false',
+                    'openai_base_url="%s"' % router_url,
                     "-c",
                     'model_reasoning_effort="medium"',
                     "-c",
@@ -254,6 +259,8 @@ class CodexCliDemoTests(unittest.TestCase):
                 )
                 self.assertEqual(output_path.read_text(encoding="utf-8").strip(), FIXED_REPLY)
                 self.assertEqual(fake_server.seen_models, ["fixed-model"])
+                self.assertGreater(router_server.websocket_upgrades, 0)
+                self.assertGreater(router_server.websocket_requests, 0)
         finally:
             if router_server is not None:
                 router_server.shutdown()

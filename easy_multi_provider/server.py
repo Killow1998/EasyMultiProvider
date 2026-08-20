@@ -11,10 +11,11 @@ import secrets
 import subprocess
 import sys
 import threading
+import uuid
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import getproxies
 
@@ -24,13 +25,22 @@ from .catalog import (
     build_catalog,
     generated_catalog_path,
     integration_info,
+    subscription_model_options,
     write_catalog,
     write_codex_profile,
 )
 from .config import ConfigError, config_path, load, merge_web_update, public_config, save
 from .migration import export_bundle, import_bundle
 from .quota import QuotaError, account_refresh_lock, refresh_account_quota
-from .router import RouterError, discover_models, model_metadata, proxy
+from .router import RouterError, discover_models, model_metadata, proxy, proxy_compact
+from .transport import (
+    TransportError,
+    WebSocketConnection,
+    WebSocketProtocolError,
+    decode_content,
+    sse_json_events,
+    websocket_accept,
+)
 
 
 WEB_FILE = Path(__file__).with_name("web").joinpath("index.html")
@@ -180,6 +190,40 @@ class AppState:
             self.config = load(self.path)
             return self.snapshot()
 
+    def _remember_resolved_protocol(self, metadata: Dict[str, Any]) -> None:
+        provider_id = metadata.get("provider_id")
+        protocol = metadata.get("resolved_protocol")
+        if protocol not in ("responses", "chat_completions", "anthropic_messages"):
+            return
+        with self.lock:
+            provider = next(
+                (
+                    item
+                    for item in self.config.get("providers", [])
+                    if item.get("id") == provider_id
+                ),
+                None,
+            )
+            if provider is None or provider.get("protocol") != "auto":
+                return
+            provider["protocol"] = protocol
+            save(self.config, self.path)
+            self.config = load(self.path)
+
+    def route(
+        self, body: Dict[str, Any], incoming: Dict[str, str]
+    ) -> Tuple[Dict[str, Any], Any]:
+        metadata, result = proxy(self.snapshot(), body, incoming)
+        self._remember_resolved_protocol(metadata)
+        return metadata, result
+
+    def route_compact(
+        self, body: Dict[str, Any], incoming: Dict[str, str]
+    ) -> Tuple[Dict[str, Any], bytes]:
+        metadata, result = proxy_compact(self.snapshot(), body, incoming)
+        self._remember_resolved_protocol(metadata)
+        return metadata, result
+
     def export_migration(self, password: str) -> bytes:
         with self.lock:
             return export_bundle(self.config, self.path, password)
@@ -206,11 +250,6 @@ class AppState:
         with self.discovery_lock:
             discovered = discover_models(provider)
         with self.lock:
-            for configured in self.config.get("providers", []):
-                if configured.get("id") == provider_id and configured.get("protocol") != provider.get("protocol"):
-                    configured["protocol"] = provider["protocol"]
-                    save(self.config, self.path)
-                    break
             if selected is None:
                 return {
                     "provider": provider_id,
@@ -358,6 +397,12 @@ def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False).encode("utf-8")
 
 
+def _management_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    result = public_config(config)
+    result["subscription_models"] = subscription_model_options(config)
+    return result
+
+
 def make_handler(state: AppState):
     class Handler(BaseHTTPRequestHandler):
         server_version = "EasyMultiProvider/%s" % __version__
@@ -460,6 +505,16 @@ def make_handler(state: AppState):
             if length > max_length:
                 raise ConfigError("request body is too large")
             raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ConfigError("request body is incomplete")
+            try:
+                raw = decode_content(
+                    raw,
+                    self.headers.get("Content-Encoding", ""),
+                    max_length,
+                )
+            except TransportError as exc:
+                raise ConfigError(str(exc)) from exc
             try:
                 value = json.loads(raw.decode("utf-8"))
             except (UnicodeDecodeError, ValueError) as exc:
@@ -468,8 +523,191 @@ def make_handler(state: AppState):
                 raise ConfigError("request body must be a JSON object")
             return value
 
+        def _websocket_error(
+            self,
+            websocket: WebSocketConnection,
+            message: str,
+            status: int = 400,
+            code: str = "invalid_request",
+        ) -> None:
+            websocket.send_json(
+                {
+                    "type": "error",
+                    "status": status,
+                    "error": {"code": code, "message": message},
+                }
+            )
+
+        def _websocket_events(self, metadata: Dict[str, Any], result: Any):
+            kind = metadata.get("kind")
+            if kind == "stream":
+                iterator = iter(result)
+                try:
+                    for event in sse_json_events(iterator):
+                        yield event
+                finally:
+                    close = getattr(iterator, "close", None)
+                    if callable(close):
+                        close()
+                return
+            if kind == "raw_stream":
+                try:
+                    chunks = iter(lambda: result.read(8192), b"")
+                    for event in sse_json_events(chunks):
+                        yield event
+                finally:
+                    result.close()
+                return
+            try:
+                response = json.loads(result.decode("utf-8"))
+            except (AttributeError, UnicodeDecodeError, ValueError) as exc:
+                raise TransportError("upstream response is not valid JSON") from exc
+            if not isinstance(response, dict):
+                raise TransportError("upstream response must be a JSON object")
+            response_id = response.get("id") or "resp_" + uuid.uuid4().hex
+            response["id"] = response_id
+            yield {"type": "response.created", "response": {"id": response_id}}
+            for index, item in enumerate(response.get("output", []) or []):
+                if isinstance(item, dict):
+                    yield {
+                        "type": "response.output_item.done",
+                        "output_index": index,
+                        "item": item,
+                    }
+            yield {"type": "response.completed", "response": response}
+
+        def _serve_responses_websocket(self) -> None:
+            if not self._proxy_allowed():
+                self._error(
+                    401 if self._same_origin() else 403,
+                    "proxy caller authentication is required",
+                )
+                return
+            connection_tokens = {
+                item.strip().lower()
+                for item in self.headers.get("Connection", "").split(",")
+            }
+            if (
+                self.headers.get("Upgrade", "").lower() != "websocket"
+                or "upgrade" not in connection_tokens
+                or self.headers.get("Sec-WebSocket-Version") != "13"
+            ):
+                self._error(400, "invalid websocket upgrade")
+                return
+            try:
+                accept = websocket_accept(self.headers.get("Sec-WebSocket-Key", ""))
+            except TransportError as exc:
+                self._error(400, str(exc))
+                return
+            self.wfile.write(
+                (
+                    "HTTP/1.1 101 Switching Protocols\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    "Sec-WebSocket-Accept: %s\r\n\r\n" % accept
+                ).encode("ascii")
+            )
+            self.wfile.flush()
+            self.close_connection = True
+            self.connection.settimeout(180)
+            websocket = WebSocketConnection(self.rfile, self.wfile)
+            last_response_id = None
+            last_input = None
+            try:
+                while True:
+                    text = websocket.receive_text()
+                    if text is None:
+                        return
+                    try:
+                        request = json.loads(text)
+                        if not isinstance(request, dict):
+                            raise TransportError("websocket request must be a JSON object")
+                        if request.pop("type", None) != "response.create":
+                            raise TransportError("websocket request.type must be response.create")
+                        previous_response_id = request.pop("previous_response_id", None)
+                        generate = request.pop("generate", None)
+                        current_input = request.get("input", [])
+                        if previous_response_id is not None:
+                            if previous_response_id != last_response_id or last_input is None:
+                                self._websocket_error(
+                                    websocket,
+                                    "Previous response was not found. Retrying the full request.",
+                                    404,
+                                    "previous_response_not_found",
+                                )
+                                continue
+                            if not isinstance(last_input, list) or not isinstance(current_input, list):
+                                raise TransportError("incremental websocket input must be a list")
+                            request["input"] = last_input + current_input
+                        if generate is False:
+                            response_id = "resp_" + uuid.uuid4().hex
+                            last_response_id = response_id
+                            last_input = request.get("input", [])
+                            usage = {
+                                "input_tokens": 0,
+                                "input_tokens_details": None,
+                                "output_tokens": 0,
+                                "output_tokens_details": None,
+                                "total_tokens": 0,
+                            }
+                            websocket.send_json(
+                                {"type": "response.created", "response": {"id": response_id}}
+                            )
+                            websocket.send_json(
+                                {
+                                    "type": "response.completed",
+                                    "response": {
+                                        "id": response_id,
+                                        "object": "response",
+                                        "status": "completed",
+                                        "output": [],
+                                        "usage": usage,
+                                    },
+                                }
+                            )
+                            continue
+                        metadata, result = state.route(
+                            request, {key: value for key, value in self.headers.items()}
+                        )
+                        output_items = []
+                        completed_id = None
+                        for event in self._websocket_events(metadata, result):
+                            websocket.send_json(event)
+                            if event.get("type") == "response.output_item.done":
+                                item = event.get("item")
+                                if isinstance(item, dict):
+                                    output_items.append(item)
+                            if event.get("type") == "response.completed":
+                                response = event.get("response")
+                                if isinstance(response, dict):
+                                    completed_id = response.get("id")
+                                    if not output_items and isinstance(response.get("output"), list):
+                                        output_items = [
+                                            item for item in response["output"] if isinstance(item, dict)
+                                        ]
+                        if isinstance(completed_id, str) and completed_id:
+                            base_input = request.get("input", [])
+                            if isinstance(base_input, list):
+                                last_response_id = completed_id
+                                last_input = base_input + output_items
+                    except RouterError as exc:
+                        self._websocket_error(websocket, str(exc), exc.status, "router_error")
+                    except (TransportError, ValueError) as exc:
+                        self._websocket_error(websocket, str(exc))
+            except EOFError:
+                return
+            except WebSocketProtocolError as exc:
+                websocket.close(exc.code, str(exc))
+            except Exception:
+                websocket.close(1011, "internal server error")
+            finally:
+                websocket.close()
+
         def do_GET(self) -> None:
             path = urlparse(self.path).path
+            if path == "/v1/responses" and self.headers.get("Upgrade", "").lower() == "websocket":
+                self._serve_responses_websocket()
+                return
             if path in ("/", "/index.html") and not self._same_origin():
                 self._error(403, "cross-origin Web UI request rejected")
                 return
@@ -502,7 +740,7 @@ def make_handler(state: AppState):
                 self._send(200, _json_bytes({"status": "ok"}))
                 return
             if path == "/api/config":
-                self._send(200, _json_bytes(public_config(state.snapshot())))
+                self._send(200, _json_bytes(_management_config(state.snapshot())))
                 return
             if path == "/api/accounts":
                 self._send(200, _json_bytes({"accounts": public_accounts(state.snapshot().get("accounts", []))}))
@@ -542,14 +780,18 @@ def make_handler(state: AppState):
             if path.startswith("/api/") and not self._management_allowed():
                 self._error(401 if self._same_origin() else 403, "management session is required")
                 return
-            if path == "/v1/responses" and not self._proxy_allowed():
+            if path in ("/v1/responses", "/v1/responses/compact") and not self._proxy_allowed():
                 self._error(401 if self._same_origin() else 403, "proxy caller authentication is required")
                 return
             try:
-                body = self._body(32 * 1024 * 1024 if path == "/api/migration/import" else 5 * 1024 * 1024)
+                body = self._body(
+                    32 * 1024 * 1024
+                    if path in ("/api/migration/import", "/v1/responses", "/v1/responses/compact")
+                    else 5 * 1024 * 1024
+                )
                 if path == "/api/config":
                     updated = state.update(body)
-                    self._send(200, _json_bytes(public_config(updated)))
+                    self._send(200, _json_bytes(_management_config(updated)))
                     return
                 if path == "/api/providers/discover":
                     provider_id = body.get("provider")
@@ -629,9 +871,19 @@ def make_handler(state: AppState):
                         upstream_model = upstream_model[len(prefix):]
                     self._send(200, _json_bytes(model_metadata(provider, upstream_model)))
                     return
+                if path == "/v1/responses/compact":
+                    metadata, result = state.route_compact(
+                        body, {key: value for key, value in self.headers.items()}
+                    )
+                    self._send(
+                        metadata.get("status", 200),
+                        result,
+                        metadata.get("content_type", "application/json"),
+                    )
+                    return
                 if path == "/v1/responses":
-                    metadata, result = proxy(
-                        state.snapshot(), body, {key: value for key, value in self.headers.items()}
+                    metadata, result = state.route(
+                        body, {key: value for key, value in self.headers.items()}
                     )
                     if metadata["kind"] == "stream":
                         iterator = iter(result)

@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 from tests.support import ensure_test_master_key
 from easy_multi_provider.accounts import public_accounts
-from easy_multi_provider.catalog import build_catalog, integration_info, write_catalog, write_codex_profile
+from easy_multi_provider.catalog import (
+    build_catalog,
+    integration_info,
+    subscription_model_options,
+    write_catalog,
+    write_codex_profile,
+)
 from easy_multi_provider.config import normalize
 from easy_multi_provider.vault import write_encrypted_json
 
@@ -41,14 +47,16 @@ class CatalogTests(unittest.TestCase):
             self.assertTrue(output.exists())
             self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["models"][-1]["slug"], "demo/model")
 
-    def test_integration_snippet_uses_dedicated_non_websocket_provider(self):
+    def test_integration_snippet_reuses_native_openai_session_identity(self):
         config = normalize({"host": "127.0.0.1", "port": 4200})
         info = integration_info(config, Path("generated/codex-models.json"))
-        self.assertIn('model_provider = "easy-multi-provider"', info["snippet"])
-        self.assertIn('[model_providers.easy-multi-provider]', info["snippet"])
-        self.assertIn('supports_websockets = false', info["snippet"])
-        self.assertIn('requires_openai_auth = true', info["snippet"])
-        self.assertNotIn("openai_base_url", info["snippet"])
+        self.assertIn('model_provider = "openai"', info["snippet"])
+        self.assertIn('openai_base_url = "http://127.0.0.1:4200/v1"', info["snippet"])
+        self.assertNotIn("[model_providers.", info["snippet"])
+        self.assertNotIn("enable_request_compression", info["snippet"])
+        self.assertNotIn("remote_compaction_v2", info["snippet"])
+        self.assertNotIn("supports_websockets", info["snippet"])
+        self.assertEqual(info["resume_command"], "codex resume --profile emp")
 
     def test_writes_emp_profile_under_codex_home(self):
         config = normalize({"host": "127.0.0.1", "port": 4200})
@@ -65,7 +73,8 @@ class CatalogTests(unittest.TestCase):
                 (Path(directory) / "codex" / "emp.config.toml").resolve(),
             )
             contents = profile_path.read_text(encoding="utf-8")
-            self.assertIn('model_provider = "easy-multi-provider"', contents)
+            self.assertIn('model_provider = "openai"', contents)
+            self.assertIn('openai_base_url = "http://127.0.0.1:4200/v1"', contents)
             self.assertIn('model_catalog_json = ', contents)
             self.assertEqual(profile_path.stat().st_mode & 0o777, 0o600)
 
@@ -83,12 +92,53 @@ class CatalogTests(unittest.TestCase):
             config = normalize({
                 "native_catalog_path": str(native_path),
                 "accounts": [
-                    {"id": "ship", "name": "Ship", "prefix": "ship", "auth_file": "/tmp/ship-auth.json"},
-                    {"id": "plus", "name": "Plus", "prefix": "plus258", "auth_file": "/tmp/plus-auth.json"},
+                    {"id": "primary", "name": "Primary", "prefix": "primary", "auth_file": "/tmp/primary-auth.json"},
+                    {"id": "plus", "name": "Plus", "prefix": "secondary", "auth_file": "/tmp/plus-auth.json"},
                 ],
             })
             slugs = [item["slug"] for item in build_catalog(config)["models"]]
-            self.assertEqual(slugs, ["gpt-native", "ship/gpt-native", "plus258/gpt-native"])
+            self.assertEqual(slugs, ["gpt-native", "primary/gpt-native", "secondary/gpt-native"])
+
+    def test_subscription_aliases_respect_native_and_account_visibility(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(json.dumps({"models": [
+                {
+                    "slug": "gpt-current",
+                    "display_name": "Current",
+                    "visibility": "list",
+                    "supported_in_api": True,
+                },
+                {
+                    "slug": "gpt-optional",
+                    "display_name": "Optional",
+                    "visibility": "list",
+                    "supported_in_api": True,
+                },
+                {
+                    "slug": "codex-auto-review",
+                    "display_name": "Codex Auto Review",
+                    "visibility": "hide",
+                    "supported_in_api": True,
+                },
+            ]}), encoding="utf-8")
+            config = normalize({
+                "native_catalog_path": str(native_path),
+                "accounts": [{
+                    "id": "primary",
+                    "prefix": "primary",
+                    "auth_file": "/tmp/primary-auth.json",
+                    "hidden_models": ["gpt-optional"],
+                }],
+            })
+
+            catalog = build_catalog(config)
+            aliases = [item["slug"] for item in catalog["models"] if item["slug"].startswith("primary/")]
+            self.assertEqual(aliases, ["primary/gpt-current"])
+            self.assertEqual(
+                [item["id"] for item in subscription_model_options(config)],
+                ["gpt-current", "gpt-optional"],
+            )
 
     def test_duplicate_subscription_is_marked_and_filtered_from_catalog(self):
         with tempfile.TemporaryDirectory() as directory:

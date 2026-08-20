@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import time
@@ -47,6 +48,8 @@ _GEMINI_REASONING_LEVELS = (
 )
 
 MAX_UPSTREAM_BODY_BYTES = 16 * 1024 * 1024
+MAX_UPSTREAM_ERROR_BYTES = 4096
+MAX_UPSTREAM_ERROR_TEXT_CHARS = 512
 MAX_DISCOVERY_BODY_BYTES = 4 * 1024 * 1024
 MAX_DISCOVERY_TOTAL_BYTES = 8 * 1024 * 1024
 MAX_DISCOVERY_SECONDS = 60
@@ -65,6 +68,52 @@ _TEXTUAL_PROTOCOL_MARKERS = (
     "<|tool_call|>",
     "<|tool_calls|>",
 )
+_COMPACTION_PROMPT = """You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another language model that will resume the task.
+
+Include current progress, key decisions, constraints, user preferences, remaining steps, and critical data or references. Be concise, structured, and focused on seamless continuation."""
+_COMPACTION_SUMMARY_PREFIX = (
+    "Another language model started this task and produced a continuation summary. "
+    "Use it to continue without repeating completed work:"
+)
+_COMPACTION_PREFIX = "emp1:"
+
+
+def _http_error_detail(exc: HTTPError) -> Tuple[str, str]:
+    """Return a bounded diagnostic without echoing an upstream HTML page."""
+    headers = getattr(exc, "headers", {}) or {}
+    content_type = str(headers.get("Content-Type", "")).split(";", 1)[0].strip().lower()
+    raw = exc.read(MAX_UPSTREAM_ERROR_BYTES)
+    decoded = raw.decode("utf-8", "replace")
+    if content_type in ("text/html", "application/xhtml+xml") or re.match(
+        r"\s*(?:<!doctype\s+html|<html\b)", decoded, re.I
+    ):
+        return (
+            content_type or "text/html",
+            "HTML error page omitted; the upstream gateway or WAF may have rejected the request",
+        )
+
+    detail = decoded
+    if "json" in content_type or decoded.lstrip().startswith(("{", "[")):
+        try:
+            value = json.loads(decoded)
+        except ValueError:
+            pass
+        else:
+            if isinstance(value, dict):
+                detail = _upstream_error_text(value.get("error") or value.get("message") or value)
+            else:
+                detail = str(value)
+    detail = re.sub(r"\s+", " ", detail).strip()
+    if not detail:
+        detail = str(getattr(exc, "reason", "") or "no response detail")
+    if len(detail) > MAX_UPSTREAM_ERROR_TEXT_CHARS:
+        detail = detail[: MAX_UPSTREAM_ERROR_TEXT_CHARS - 3].rstrip() + "..."
+    return content_type or "unknown content type", detail
+
+
+def _http_error_message(prefix: str, exc: HTTPError) -> str:
+    content_type, detail = _http_error_detail(exc)
+    return "%s %d (%s): %s" % (prefix, exc.code, content_type, detail)
 
 
 def _set_response_timeout(response: Any, timeout: float) -> None:
@@ -146,13 +195,16 @@ class _DeadlineResponse:
             return b""
         _set_response_timeout(
             self._response,
-            min(UPSTREAM_SOCKET_TIMEOUT, self._deadline - time.monotonic()),
+            self._deadline - time.monotonic(),
         )
         try:
             return self._response.read(size)
         except TypeError:
             self._unsized_read = True
             return self._response.read()
+        except TimeoutError as exc:
+            self.close()
+            raise RouterError("upstream request timed out", 504) from exc
         except OSError as exc:
             if time.monotonic() >= self._deadline:
                 self.close()
@@ -166,10 +218,13 @@ class _DeadlineResponse:
         self._check_deadline()
         _set_response_timeout(
             self._response,
-            min(UPSTREAM_SOCKET_TIMEOUT, self._deadline - time.monotonic()),
+            self._deadline - time.monotonic(),
         )
         try:
             return next(self._response)
+        except TimeoutError as exc:
+            self.close()
+            raise RouterError("upstream request timed out", 504) from exc
         except OSError as exc:
             if time.monotonic() >= self._deadline:
                 self.close()
@@ -297,9 +352,17 @@ def _upstream_model(provider: Dict[str, Any], model: Dict[str, Any], requested: 
     return requested[len(prefix):] if requested.startswith(prefix) else requested
 
 
-def _endpoint(provider: Dict[str, Any]) -> str:
+def _endpoint(provider: Dict[str, Any], operation: str = "") -> str:
     provider = resolve_provider_protocol(provider)
     base = provider["base_url"].rstrip("/")
+    if operation == "responses_compact":
+        if provider["protocol"] != "responses":
+            raise RouterError("remote compact passthrough requires the Responses protocol")
+        if base.endswith("/responses/compact"):
+            return base
+        if base.endswith("/responses"):
+            return base + "/compact"
+        return base + "/responses/compact"
     suffixes = {
         "responses": "/responses",
         "chat_completions": "/chat/completions",
@@ -330,8 +393,7 @@ def model_metadata(provider: Dict[str, Any], upstream_model: str) -> Dict[str, A
                 _read_limited(response, MAX_DISCOVERY_BODY_BYTES, "模型信息响应").decode("utf-8")
             )
     except HTTPError as exc:
-        detail = exc.read(4096).decode("utf-8", "replace")
-        raise RouterError("上游模型信息查询失败 %d: %s" % (exc.code, detail), exc.code) from exc
+        raise RouterError(_http_error_message("上游模型信息查询失败", exc), exc.code) from exc
     except (OSError, ValueError) as exc:
         raise RouterError("上游模型信息查询失败: %s" % exc, 502) from exc
     input_limit = value.get("inputTokenLimit")
@@ -370,8 +432,7 @@ def _get_json(request: Request, purpose: str, budget: Dict[str, Any] = None) -> 
                     raise RouterError("上游%s超过安全总大小" % purpose, 502)
             value = json.loads(raw.decode("utf-8"))
     except HTTPError as exc:
-        detail = exc.read(4096).decode("utf-8", "replace")
-        raise RouterError("上游%s失败 %d: %s" % (purpose, exc.code, detail), exc.code) from exc
+        raise RouterError(_http_error_message("上游%s失败" % purpose, exc), exc.code) from exc
     except (OSError, ValueError) as exc:
         raise RouterError("上游%s失败: %s" % (purpose, exc), 502) from exc
     if not isinstance(value, dict):
@@ -510,18 +571,27 @@ def _generic_models(provider: Dict[str, Any]) -> list:
     return result
 
 
-def resolve_provider_protocol(provider: Dict[str, Any]) -> Dict[str, Any]:
-    """Resolve auto to the safe default without making an upstream request."""
+def resolve_provider_protocol(
+    provider: Dict[str, Any], preferred: str = "responses"
+) -> Dict[str, Any]:
+    """Return an explicit protocol candidate without mutating saved config."""
     if provider.get("protocol") != "auto":
         return provider
-    provider["protocol"] = "chat_completions"
-    return provider
+    resolved = dict(provider)
+    resolved["protocol"] = (
+        "anthropic_messages"
+        if provider.get("auth_mode") == "anthropic_api_key"
+        else preferred
+    )
+    return resolved
 
 
 def discover_models(provider: Dict[str, Any]) -> list:
     """Fetch safe model metadata without making one request per model."""
-    provider = resolve_provider_protocol(provider)
-    if provider.get("protocol") == "anthropic_messages":
+    if provider.get("protocol") == "anthropic_messages" or (
+        provider.get("protocol") == "auto"
+        and provider.get("auth_mode") == "anthropic_api_key"
+    ):
         raise RouterError("Anthropic Messages 没有统一的模型列表接口，请手动添加", 400)
     parsed = urlparse(provider.get("base_url", ""))
     if parsed.hostname == "generativelanguage.googleapis.com":
@@ -573,6 +643,7 @@ def _request(
     payload: Dict[str, Any],
     incoming: Dict[str, str],
     stream: bool = False,
+    operation: str = "",
 ):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     deadline = time.monotonic() + MAX_UPSTREAM_SECONDS
@@ -581,7 +652,7 @@ def _request(
         if remaining <= 0:
             raise RouterError("upstream request timed out", 504)
         request = Request(
-            _endpoint(provider),
+            _endpoint(provider, operation),
             data=data,
             headers=_headers(provider, incoming, stream),
             method="POST",
@@ -605,7 +676,7 @@ def _request(
                 exc.read(4096)
                 time.sleep(0.5)
                 continue
-            detail = exc.read(4096).decode("utf-8", "replace")
+            content_type, detail = _http_error_detail(exc)
             if (
                 attempt == 0
                 and exc.code == 400
@@ -616,8 +687,14 @@ def _request(
                 payload.pop("reasoning_effort", None)
                 data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                 continue
-            raise RouterError("upstream returned %d: %s" % (exc.code, detail), exc.code)
+            raise RouterError(
+                "upstream returned %d (%s): %s" % (exc.code, content_type, detail),
+                exc.code,
+            )
         except URLError as exc:
+            if attempt == 0:
+                time.sleep(0.5)
+                continue
             raise RouterError("upstream connection failed: %s" % exc.reason, 502)
     raise RouterError("upstream request failed", 502)
 
@@ -636,6 +713,56 @@ def _content_text(content: Any) -> str:
     return "".join(parts)
 
 
+def _message_item(text: str) -> Dict[str, Any]:
+    return {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": text}],
+    }
+
+
+def _encode_compaction(summary: str) -> str:
+    encoded = base64.urlsafe_b64encode(summary.encode("utf-8")).decode("ascii")
+    return _COMPACTION_PREFIX + encoded
+
+
+def _decode_compaction(item: Dict[str, Any]) -> str:
+    value = item.get("encrypted_content")
+    if not isinstance(value, str) or not value.startswith(_COMPACTION_PREFIX):
+        return ""
+    encoded = value[len(_COMPACTION_PREFIX):]
+    try:
+        return base64.b64decode(encoded, altchars=b"-_", validate=True).decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        return ""
+
+
+def _normalize_compaction_input(
+    source: Any, drop_trigger: bool = False, opaque_placeholder: bool = False
+) -> Any:
+    if not isinstance(source, list):
+        return source
+    result = []
+    for item in source:
+        if not isinstance(item, dict):
+            result.append(item)
+            continue
+        if drop_trigger and item.get("type") == "compaction_trigger":
+            continue
+        if item.get("type") == "compaction":
+            summary = _decode_compaction(item)
+            if summary:
+                result.append(_message_item(_COMPACTION_SUMMARY_PREFIX + "\n\n" + summary))
+                continue
+            if opaque_placeholder:
+                result.append(
+                    _message_item("[Earlier conversation history was compacted by another provider.]")
+                )
+                continue
+        result.append(item)
+    return result
+
+
 def _messages(body: Dict[str, Any]) -> list:
     messages = []
     instructions = body.get("instructions")
@@ -649,6 +776,7 @@ def _messages(body: Dict[str, Any]) -> list:
         source = [source]
     if not isinstance(source, list):
         return messages
+    source = _normalize_compaction_input(source, opaque_placeholder=True)
     for item in source:
         if not isinstance(item, dict):
             continue
@@ -750,6 +878,7 @@ def _anthropic_messages(body: Dict[str, Any]) -> list:
         source = [source]
     if not isinstance(source, list):
         source = []
+    source = _normalize_compaction_input(source, opaque_placeholder=True)
     messages = []
     for item in source:
         if not isinstance(item, dict):
@@ -946,8 +1075,7 @@ def forward_responses(
     model: Dict[str, Any],
     incoming: Dict[str, str],
 ) -> Tuple[int, str, bytes]:
-    payload = dict(body)
-    payload["model"] = _upstream_model(provider, model, body["model"])
+    payload = _responses_payload(provider, body, model)
     with _request(provider, payload, incoming, bool(body.get("stream"))) as response:
         return (
             response.status,
@@ -962,10 +1090,37 @@ def forward_responses_stream(
     model: Dict[str, Any],
     incoming: Dict[str, str],
 ):
-    payload = dict(body)
-    payload["model"] = _upstream_model(provider, model, body["model"])
+    payload = _responses_payload(provider, body, model)
     upstream = _bounded_stream_response(_request(provider, payload, incoming, True))
     return _validated_responses_stream(upstream)
+
+
+def forward_responses_compact(
+    provider: Dict[str, Any],
+    body: Dict[str, Any],
+    model: Dict[str, Any],
+    incoming: Dict[str, str],
+) -> Tuple[int, str, bytes]:
+    payload = _responses_payload(provider, body, model)
+    with _request(provider, payload, incoming, False, "responses_compact") as response:
+        return (
+            response.status,
+            response.headers.get("Content-Type", "application/json"),
+            _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses compact response"),
+        )
+
+
+def _responses_payload(
+    provider: Dict[str, Any], body: Dict[str, Any], model: Dict[str, Any]
+) -> Dict[str, Any]:
+    payload = dict(body)
+    # Codex client telemetry is not model input. Keep it on native account
+    # passthroughs, but do not disclose it to unrelated API-key Providers.
+    if provider.get("auth_mode") == "api_key":
+        payload.pop("client_metadata", None)
+    payload["model"] = _upstream_model(provider, model, body["model"])
+    payload["input"] = _normalize_compaction_input(payload.get("input"))
+    return payload
 
 
 def chat_completion(
@@ -1004,16 +1159,120 @@ def anthropic_completion(
     return 200, "application/json", json.dumps(_response_from_anthropic(value, body["model"])).encode("utf-8")
 
 
+def _response_text(raw: bytes) -> str:
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise RouterError("compaction upstream returned invalid JSON", 502) from exc
+    text = value.get("output_text") if isinstance(value, dict) else None
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    parts = []
+    for item in value.get("output", []) if isinstance(value, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        for part in item.get("content", []) or []:
+            if isinstance(part, dict) and part.get("type") in ("output_text", "text"):
+                parts.append(str(part.get("text", "")))
+    summary = "\n".join(parts).strip()
+    if not summary:
+        raise RouterError("compaction upstream returned an empty summary", 502)
+    return summary
+
+
+def _summary_body(body: Dict[str, Any]) -> Dict[str, Any]:
+    source = body.get("input", [])
+    if isinstance(source, str):
+        source = [_message_item(source)]
+    elif isinstance(source, dict):
+        source = [source]
+    elif not isinstance(source, list):
+        source = []
+    payload = dict(body)
+    payload["input"] = list(_normalize_compaction_input(source, drop_trigger=True)) + [
+        _message_item(_COMPACTION_PROMPT)
+    ]
+    payload["stream"] = False
+    payload["tools"] = []
+    payload.pop("previous_response_id", None)
+    return payload
+
+
+def _summarize(
+    provider: Dict[str, Any],
+    body: Dict[str, Any],
+    model: Dict[str, Any],
+    incoming: Dict[str, str],
+) -> str:
+    payload = _summary_body(body)
+    if provider["protocol"] == "responses":
+        _, _, raw = forward_responses(provider, payload, model, incoming)
+    elif provider["protocol"] == "chat_completions":
+        _, _, raw = chat_completion(provider, payload, model, incoming)
+    else:
+        _, _, raw = anthropic_completion(provider, payload, model, incoming)
+    return _response_text(raw)
+
+
+def _retained_user_messages(source: Any, budget: int = 80_000) -> list:
+    if not isinstance(source, list):
+        return []
+    messages = []
+    for item in source:
+        if not isinstance(item, dict) or item.get("type", "message") != "message":
+            continue
+        if item.get("role") != "user":
+            continue
+        text = _content_text(item.get("content", ""))
+        if text.strip():
+            messages.append(text)
+    retained = []
+    for text in reversed(messages):
+        if budget <= 0:
+            break
+        retained.append(text[-budget:])
+        budget -= len(retained[-1])
+    return [_message_item(text) for text in reversed(retained)]
+
+
+def _compaction_response(model: str, summary: str) -> Dict[str, Any]:
+    item = {
+        "id": "cmp_" + uuid.uuid4().hex,
+        "type": "compaction",
+        "encrypted_content": _encode_compaction(summary),
+    }
+    return {
+        "id": "resp_" + uuid.uuid4().hex,
+        "object": "response",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": model,
+        "output": [item],
+        "usage": None,
+    }
+
+
+def _is_compaction_trigger(body: Dict[str, Any]) -> bool:
+    source = body.get("input")
+    return bool(
+        isinstance(source, list)
+        and source
+        and isinstance(source[-1], dict)
+        and source[-1].get("type") == "compaction_trigger"
+    )
+
+
 def _sse_frame(event: str, value: Dict[str, Any]) -> bytes:
     return ("event: %s\ndata: %s\n\n" % (event, json.dumps(value, ensure_ascii=False))).encode("utf-8")
 
 
 def _response_failure_frame(message: str, status: int = 502) -> bytes:
+    display_message = "HTTP %d: %s" % (status, message)
     response = {
         "id": "resp_" + uuid.uuid4().hex,
         "object": "response",
         "status": "failed",
-        "error": {"code": "upstream_error", "message": message},
+        "error": {"code": "upstream_error", "message": display_message},
     }
     return _sse_frame("response.failed", {"type": "response.failed", "response": response})
 
@@ -1089,7 +1348,8 @@ def _response_json_stream(value: Dict[str, Any]) -> Iterator[bytes]:
         item.setdefault("id", "item_" + uuid.uuid4().hex)
         item_type = item.get("type", "message")
         added = dict(item)
-        added["status"] = "in_progress"
+        if item_type != "compaction":
+            added["status"] = "in_progress"
         yield _sse_frame(
             "response.output_item.added",
             {"type": "response.output_item.added", "output_index": index, "item": added},
@@ -1124,7 +1384,8 @@ def _response_json_stream(value: Dict[str, Any]) -> Iterator[bytes]:
                 {"type": "response.function_call_arguments.done", "item_id": item["id"], "output_index": index, "arguments": arguments},
             )
         done = dict(item)
-        done["status"] = "completed"
+        if item_type != "compaction":
+            done["status"] = "completed"
         yield _sse_frame("response.output_item.done", {"type": "response.output_item.done", "output_index": index, "item": done})
     yield _sse_frame("response.completed", {"type": "response.completed", "response": response})
 
@@ -1133,14 +1394,19 @@ def _validated_responses_stream(response: Any) -> Iterator[bytes]:
     """Pass through valid Responses SSE and terminate malformed streams explicitly."""
     try:
         content_type = str(getattr(response, "headers", {}).get("Content-Type", "")).lower()
+        chunks = response
         if "text/event-stream" not in content_type:
             raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses stream")
-            try:
-                value = json.loads(raw.decode("utf-8", "replace"))
-            except (UnicodeDecodeError, ValueError):
-                raise RouterError("upstream Responses stream was neither SSE nor valid JSON", 502)
-            yield from _response_json_stream(value)
-            return
+            stripped = raw.lstrip()
+            if stripped.startswith((b"event:", b"data:", b":")):
+                chunks = (raw,)
+            else:
+                try:
+                    value = json.loads(raw.decode("utf-8", "replace"))
+                except (UnicodeDecodeError, ValueError):
+                    raise RouterError("upstream Responses stream was neither SSE nor valid JSON", 502)
+                yield from _response_json_stream(value)
+                return
 
         line_buffer = ""
         pending_data = []
@@ -1175,7 +1441,7 @@ def _validated_responses_stream(response: Any) -> Iterator[bytes]:
                 saw_error = True
                 error_message = str(value.get("message") or value.get("error") or "upstream Responses stream returned an error")
 
-        for raw in response:
+        for raw in chunks:
             raw_bytes = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
             text = raw_bytes.decode("utf-8", "replace")
             line_buffer += text
@@ -1421,7 +1687,7 @@ def stream_chat_completion(
         )
         yield frame("response.completed", {"type": "response.completed", "response": response})
     except RouterError as exc:
-        yield frame("error", {"type": "error", "message": str(exc), "code": exc.status})
+        yield _response_failure_frame(str(exc), exc.status)
 
 
 def stream_anthropic_completion(
@@ -1534,7 +1800,84 @@ def stream_anthropic_completion(
         yield frame("response.output_item.done", {"output_index": 0, "item": output})
         yield frame("response.completed", {"type": "response.completed", "response": response})
     except RouterError as exc:
-        yield frame("error", {"type": "error", "message": str(exc), "code": exc.status})
+        yield _response_failure_frame(str(exc), exc.status)
+
+
+_AUTO_PROTOCOL_REJECTION_STATUSES = {404, 405, 415, 501}
+
+
+def _auto_protocol_candidates(provider: Dict[str, Any]) -> Tuple[str, ...]:
+    if provider.get("auth_mode") == "anthropic_api_key":
+        return ("anthropic_messages",)
+    base = str(provider.get("base_url", "")).rstrip("/")
+    if base.endswith("/chat/completions"):
+        return ("chat_completions", "responses")
+    return ("responses", "chat_completions")
+
+
+def _tag_route(
+    metadata: Dict[str, Any], provider: Dict[str, Any]
+) -> Dict[str, Any]:
+    tagged = dict(metadata)
+    tagged["provider_id"] = provider.get("id")
+    tagged["resolved_protocol"] = provider.get("protocol")
+    return tagged
+
+
+def _proxy_resolved(
+    provider: Dict[str, Any],
+    model: Dict[str, Any],
+    body: Dict[str, Any],
+    incoming: Dict[str, str],
+) -> Tuple[Dict[str, Any], Any]:
+    if _is_compaction_trigger(body) and provider["protocol"] != "responses":
+        response = _compaction_response(
+            body["model"], _summarize(provider, body, model, incoming)
+        )
+        if body.get("stream"):
+            return _tag_route(
+                {
+                    "kind": "stream",
+                    "status": 200,
+                    "content_type": "text/event-stream",
+                },
+                provider,
+            ), _response_json_stream(response)
+        return _tag_route(
+            {
+                "kind": "body",
+                "status": 200,
+                "content_type": "application/json",
+            },
+            provider,
+        ), json.dumps(response, ensure_ascii=False).encode("utf-8")
+    if body.get("stream") and provider["protocol"] == "chat_completions":
+        return _tag_route(
+            {"kind": "stream", "content_type": "text/event-stream"}, provider
+        ), stream_chat_completion(provider, body, model, incoming)
+    if body.get("stream") and provider["protocol"] == "anthropic_messages":
+        return _tag_route(
+            {"kind": "stream", "content_type": "text/event-stream"}, provider
+        ), stream_anthropic_completion(provider, body, model, incoming)
+    if provider["protocol"] == "responses":
+        if body.get("stream"):
+            upstream = forward_responses_stream(provider, body, model, incoming)
+            return _tag_route(
+                {
+                    "kind": "stream",
+                    "status": 200,
+                    "content_type": "text/event-stream",
+                },
+                provider,
+            ), upstream
+        status, content_type, raw = forward_responses(provider, body, model, incoming)
+    elif provider["protocol"] == "chat_completions":
+        status, content_type, raw = chat_completion(provider, body, model, incoming)
+    else:
+        status, content_type, raw = anthropic_completion(provider, body, model, incoming)
+    return _tag_route(
+        {"kind": "body", "status": status, "content_type": content_type}, provider
+    ), raw
 
 
 def proxy(
@@ -1546,28 +1889,69 @@ def proxy(
     if not isinstance(model_id, str) or not model_id:
         raise RouterError("request.model is required")
     provider, model = find_route(config, model_id)
-    # Model discovery remains optional; Responses and Anthropic can still be
-    # selected explicitly.
-    provider = resolve_provider_protocol(provider)
-    if body.get("stream") and provider["protocol"] == "chat_completions":
-        return {"kind": "stream", "content_type": "text/event-stream"}, stream_chat_completion(
-            provider, body, model, incoming
-        )
-    if body.get("stream") and provider["protocol"] == "anthropic_messages":
-        return {"kind": "stream", "content_type": "text/event-stream"}, stream_anthropic_completion(
-            provider, body, model, incoming
-        )
+    if provider.get("protocol") != "auto":
+        return _proxy_resolved(provider, model, body, incoming)
+
+    candidates = _auto_protocol_candidates(provider)
+    for index, protocol in enumerate(candidates):
+        resolved = dict(provider)
+        resolved["protocol"] = protocol
+        try:
+            return _proxy_resolved(resolved, model, body, incoming)
+        except RouterError as exc:
+            can_fallback = (
+                index + 1 < len(candidates)
+                and exc.status in _AUTO_PROTOCOL_REJECTION_STATUSES
+            )
+            if not can_fallback:
+                raise
+    raise RouterError("unable to resolve provider protocol", 502)
+
+
+def proxy_compact(
+    config: Dict[str, Any],
+    body: Dict[str, Any],
+    incoming: Dict[str, str],
+) -> Tuple[Dict[str, Any], bytes]:
+    model_id = body.get("model")
+    if not isinstance(model_id, str) or not model_id:
+        raise RouterError("request.model is required")
+    provider, model = find_route(config, model_id)
+    if provider.get("protocol") == "auto":
+        candidates = _auto_protocol_candidates(provider)
+        for index, protocol in enumerate(candidates):
+            resolved = dict(provider)
+            resolved["protocol"] = protocol
+            try:
+                return _proxy_compact_resolved(resolved, model, body, incoming)
+            except RouterError as exc:
+                if (
+                    index + 1 == len(candidates)
+                    or exc.status not in _AUTO_PROTOCOL_REJECTION_STATUSES
+                ):
+                    raise
+        raise RouterError("unable to resolve provider protocol", 502)
+    return _proxy_compact_resolved(provider, model, body, incoming)
+
+
+def _proxy_compact_resolved(
+    provider: Dict[str, Any],
+    model: Dict[str, Any],
+    body: Dict[str, Any],
+    incoming: Dict[str, str],
+) -> Tuple[Dict[str, Any], bytes]:
     if provider["protocol"] == "responses":
-        if body.get("stream"):
-            upstream = forward_responses_stream(provider, body, model, incoming)
-            return {
-                "kind": "stream",
-                "status": 200,
-                "content_type": "text/event-stream",
-            }, upstream
-        status, content_type, raw = forward_responses(provider, body, model, incoming)
-    elif provider["protocol"] == "chat_completions":
-        status, content_type, raw = chat_completion(provider, body, model, incoming)
+        status, content_type, raw = forward_responses_compact(
+            provider, body, model, incoming
+        )
     else:
-        status, content_type, raw = anthropic_completion(provider, body, model, incoming)
-    return {"kind": "body", "status": status, "content_type": content_type}, raw
+        summary = _summarize(provider, body, model, incoming)
+        output = _retained_user_messages(body.get("input"))
+        output.append(
+            _message_item(_COMPACTION_SUMMARY_PREFIX + "\n\n" + summary)
+        )
+        status, content_type = 200, "application/json"
+        raw = json.dumps({"output": output}, ensure_ascii=False).encode("utf-8")
+    return _tag_route(
+        {"kind": "body", "status": status, "content_type": content_type}, provider
+    ), raw

@@ -90,9 +90,33 @@ def _account_entry(account: Dict[str, Any], native: Dict[str, Any]) -> Dict[str,
         native.get("display_name") or slug,
     )
     entry["description"] = "ChatGPT subscription: %s" % (account.get("name") or account["prefix"])
-    entry["visibility"] = "list"
-    entry["supported_in_api"] = True
+    entry["visibility"] = native.get("visibility", "list")
+    entry["supported_in_api"] = native.get("supported_in_api", True)
     return entry
+
+
+def _subscription_native_models(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    native = load_native_catalog(config)
+    return [
+        item
+        for item in native["models"]
+        if isinstance(item, dict)
+        and str(item.get("slug", "")).strip()
+        and item.get("visibility", "list") == "list"
+        and item.get("supported_in_api", True) is not False
+    ]
+
+
+def subscription_model_options(config: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Return native Coding Agent models that subscription aliases may expose."""
+    return [
+        {
+            "id": str(model["slug"]),
+            "display_name": str(model.get("display_name") or model["slug"]),
+            "description": str(model.get("description") or ""),
+        }
+        for model in _subscription_native_models(config)
+    ]
 
 
 def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -107,6 +131,7 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
     external = []
     account_aliases = []
     duplicate_accounts = duplicate_account_status(config.get("accounts", []))
+    subscription_models = _subscription_native_models(config)
     for account in config.get("accounts", []):
         if (
             not account.get("enabled", True)
@@ -114,7 +139,10 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
             or account.get("id") in duplicate_accounts
         ):
             continue
-        for model in native_models:
+        hidden_models = set(account.get("hidden_models", []))
+        for model in subscription_models:
+            if model.get("slug") in hidden_models:
+                continue
             alias = _account_entry(account, model)
             if alias["slug"] not in existing:
                 account_aliases.append(alias)
@@ -163,15 +191,9 @@ def integration_info(config: Dict[str, Any], catalog_path: Path) -> Dict[str, An
 
     snippet = "\n".join(
         [
-            'model_provider = "easy-multi-provider"',
+            'model_provider = "openai"',
             "model_catalog_json = %s" % toml_string(str(catalog_path.resolve())),
-            "",
-            "[model_providers.easy-multi-provider]",
-            'name = "EasyMultiProvider"',
-            "base_url = %s" % toml_string(base_url),
-            'wire_api = "responses"',
-            "requires_openai_auth = true",
-            "supports_websockets = false",
+            "openai_base_url = %s" % toml_string(base_url),
         ]
     )
     return {
@@ -179,6 +201,7 @@ def integration_info(config: Dict[str, Any], catalog_path: Path) -> Dict[str, An
         "catalog_path": str(catalog_path.resolve()),
         "profile_path": str(codex_profile_path()),
         "command": "codex --profile emp",
+        "resume_command": "codex resume --profile emp",
         "snippet": snippet,
     }
 

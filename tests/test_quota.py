@@ -124,7 +124,7 @@ class QuotaTests(unittest.TestCase):
 
     def test_quota_process_is_pinned_to_account_directory(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
-            account_dir = Path(directory) / "ship"
+            account_dir = Path(directory) / "primary"
             account_dir.mkdir()
             auth_file = account_dir / "auth.json.enc"
             write_encrypted_json(auth_file, {"tokens": {"access_token": "secret"}})

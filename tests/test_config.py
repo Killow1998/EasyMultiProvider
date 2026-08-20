@@ -47,6 +47,20 @@ class ConfigTests(unittest.TestCase):
         updated = merge_web_update(current, incoming)
         self.assertEqual(updated["providers"][0]["api_key"], "secret-value")
 
+    def test_web_update_saves_account_model_visibility_and_preserves_credentials(self):
+        current = normalize({
+            "accounts": [{
+                "id": "primary",
+                "prefix": "primary",
+                "auth_file": "/tmp/primary-auth.json.enc",
+            }],
+        })
+        incoming = public_config(current)
+        incoming["accounts"][0]["hidden_models"] = ["gpt-optional"]
+        updated = merge_web_update(current, incoming)
+        self.assertEqual(updated["accounts"][0]["hidden_models"], ["gpt-optional"])
+        self.assertEqual(updated["accounts"][0]["auth_file"], "/tmp/primary-auth.json.enc")
+
     def test_web_update_preserves_externalized_api_key(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
@@ -73,9 +87,9 @@ class ConfigTests(unittest.TestCase):
             path = Path(directory) / "config.json"
             raw = normalize({"account_store_path": str(Path(directory) / "accounts")})
             raw["accounts"] = [{
-                "id": "ship",
-                "name": "Ship",
-                "prefix": "ship",
+                "id": "primary",
+                "name": "Primary",
+                "prefix": "primary",
                 "auth_file": str(Path(directory).parent / "auth.json.enc"),
             }]
             path.write_text(json.dumps(raw), encoding="utf-8")
@@ -204,9 +218,9 @@ class ConfigTests(unittest.TestCase):
                     "account_id": "account-private",
                 },
             }
-            account = import_account(config, {"id": "ship", "name": "Ship", "prefix": "ship"}, auth)
-            self.assertEqual(account["id"], "ship")
-            encrypted_path = root / "ship" / "auth.json.enc"
+            account = import_account(config, {"id": "primary", "name": "Primary", "prefix": "primary"}, auth)
+            self.assertEqual(account["id"], "primary")
+            encrypted_path = root / "primary" / "auth.json.enc"
             self.assertEqual(encrypted_path.stat().st_mode & 0o777, 0o600)
             self.assertNotIn("do-not-leak", encrypted_path.read_text(encoding="utf-8"))
             safe = public_accounts([account])
@@ -214,6 +228,17 @@ class ConfigTests(unittest.TestCase):
             self.assertNotIn("do-not-leak", encoded)
             self.assertNotIn("refresh_token", encoded)
             self.assertNotIn("auth_file", safe[0])
+
+    def test_account_hidden_models_are_normalized_and_public(self):
+        account = normalize({
+            "accounts": [{
+                "id": "primary",
+                "prefix": "primary",
+                "hidden_models": ["gpt-old", "gpt-old", "codex-auto-review"],
+            }],
+        })["accounts"][0]
+        self.assertEqual(account["hidden_models"], ["codex-auto-review", "gpt-old"])
+        self.assertEqual(public_accounts([account])[0]["hidden_models"], account["hidden_models"])
 
 
 if __name__ == "__main__":

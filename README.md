@@ -5,9 +5,10 @@ Codex as the client and exposes one local Responses endpoint that can route to
 Codex subscriptions, OpenAI-compatible APIs, Gemini AI Studio, and Anthropic
 Messages providers.
 
-The stable public baseline is `v0.1.0`; the current release candidate targets
-`v0.3.0`. The candidate is locally validated; other platforms and the ChatGPT
-App path still require separate manual acceptance.
+The stable public baseline is `v0.1.0`; the current development line targets
+`v0.4.0`. The v0.3.0 subscription-forwarding changes are merged and locally
+validated; other platforms and the ChatGPT App path still require separate
+manual acceptance.
 
 ## Install a Release
 
@@ -16,7 +17,7 @@ environment:
 
 ```bash
 uv venv
-uv pip install ./easy_multi_provider-0.3.0-py3-none-any.whl
+uv pip install ./easy_multi_provider-0.4.0-py3-none-any.whl
 ```
 
 The wheel includes the Web UI, so it does not require a source checkout at
@@ -28,9 +29,11 @@ runtime. The source checkout remains useful for development and tests.
   `subscription/gpt-5.6-luna`.
 - Multiple encrypted Codex subscription credentials.
 - Duplicate subscription detection without deleting encrypted credentials.
+- Per-subscription model visibility without exposing native hidden models such
+  as Codex Auto Review.
 - Chat Completions, Responses, and Anthropic Messages upstream protocols.
 - Browser model discovery, manual model editing, visibility toggles, and
-  connection tests.
+  connection tests, including a Provider-wide hide/show action.
 - Codex quota, rate-limit, and credit snapshots when the local Codex app-server
   exposes them.
 - Encrypted `.emp` migration bundles for moving configuration and credentials
@@ -98,8 +101,11 @@ The dashboard provides:
 
 - **Accounts**: import `auth.json` and backup names such as `auth.json.bk1`
   through a file picker, enter only the account ID, refresh quota, edit the
-  combined display-name/model-prefix value, and remove local encrypted
-  credentials. Export or import an encrypted `.emp` bundle for migration.
+  combined display-name/model-prefix value, choose which native Coding Agent
+  models that subscription exposes, and remove local encrypted credentials.
+  Native entries already hidden by Codex, such as Auto Review, are never
+  offered as subscription models. Export or import an encrypted `.emp` bundle
+  for migration.
 - **Providers**: choose an official preset with fixed endpoint/protocol data,
   including **ChatGPT Subscription**, which forwards the Codex login carried by
   the EMP profile, or create a custom Provider with a Base URL, protocol, and
@@ -107,9 +113,10 @@ The dashboard provides:
 - **Models**: preview the upstream model list, select which models to import,
   edit context windows, test a model, and hide unused entries without deleting
   them. Models are grouped by Provider; visible and newer models appear first.
+  A Provider row can hide or show all of its imported models at once.
 - **Codex integration**: generate the merged catalog and write one EMP profile
   to `$CODEX_HOME/emp.config.toml` (or `~/.codex/emp.config.toml` by default),
-  then show the `codex --profile emp` command.
+  then show native Codex start and resume commands.
 
 Only the account ID is required during import. Display name and model prefix
 default to that ID.
@@ -156,7 +163,7 @@ use `EASY_MULTI_PROVIDER_MASTER_KEY`. Then start EMP, open its one-use browser
 URL, and choose **Import EMP Data**. The source `config.json`, `state/`, and
 planning files are not required on the destination.
 
-## Codex Profiles and Session Isolation
+## Codex Profile and Shared Session History
 
 Click **Generate EMP Config** in the Web UI. EMP writes one profile for the
 whole router and prints the exact command to use. Start EMP in one terminal
@@ -179,25 +186,52 @@ codex
 codex resume --all
 ```
 
-EMP sessions use Codex's `easy-multi-provider` group. Use the same profile to
-resume them:
+The EMP profile keeps Codex's native `openai` session identity and changes only
+its `openai_base_url`. This lets the native resume picker show the same history
+as the default profile:
 
 ```bash
-codex --profile emp resume --all
+codex resume --profile emp
+codex resume --all --profile emp
 ```
 
-Codex does not merge the native `openai` group and the EMP group. Existing
-normal subscription sessions are not deleted; resume them with plain `codex`.
+No helper command or session database migration is required. Without `--all`,
+Codex keeps its normal current-directory filter. Because the history is shared,
+plain `codex resume` can also display sessions created through the EMP profile;
+the profile-specific Base URL does not affect plain `codex` startup.
+
+The generated profile does not disable Codex request-body compression, remote
+compaction, WebSocket, or other native features. EMP accepts compressed HTTP
+requests and the Responses WebSocket transport. It passes native Responses
+compaction through and supplies compatible compaction for translated Chat
+Completions and Anthropic models.
 
 An unprefixed native model such as `gpt-5.6-luna` requires exactly one enabled
 `forward` provider. Otherwise use the account prefix or the provider prefix.
 
 Custom Providers can use `auto` protocol mode without first importing models.
-Requests use Chat Completions by default, which covers OpenAI-compatible
-endpoints such as GLM, Qwen, and Gemini-compatible gateways. Clicking **Pull
-Models** additionally checks `/models`, resolves the saved protocol, and lets
-you select models to import. Select Responses or Anthropic Messages explicitly
-when the upstream is not Chat Completions-compatible.
+The first real model request prefers Responses and falls back to Chat
+Completions only when the Responses endpoint explicitly rejects that protocol;
+EMP then saves the working protocol. This negotiation does not send a separate
+generation request. Clicking **Pull Models** checks `/models` and lets you
+select models to import, but a model-list response alone is not treated as
+proof of a generation protocol. Select Anthropic Messages explicitly, or use
+Anthropic authentication, for Anthropic-compatible endpoints.
+
+Once a streamed response has started, its HTTP or WebSocket handshake has
+already succeeded. A later upstream timeout is therefore reported as a terminal
+`response.failed` event whose message includes the upstream HTTP status (for
+example `HTTP 504`), rather than as a second HTTP response or a generic missing
+terminal-event error. Codex may still apply its own native retry policy to a
+reported 504; EMP does not disable or override that client behavior.
+
+For API-key Responses Providers, EMP keeps the complete model-visible input
+and tool definitions but removes Codex-only `client_metadata` before forwarding
+the request. Native subscription passthrough keeps that metadata. If an
+upstream returns an HTML error page, EMP omits the page body and reports a
+concise status such as `HTTP 403 (text/html)`; this normally indicates that the
+upstream gateway or WAF rejected a coding-agent request rather than a protocol
+negotiation failure.
 
 Chat Completions providers preserve standard structured tool calls, including
 tool-call history on the next turn. If an upstream emits `<think>` or

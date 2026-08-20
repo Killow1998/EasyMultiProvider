@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.0 (Unreleased)
+
+### Product
+
+- Reused Codex's native `openai` session identity while routing the EMP profile
+  through `openai_base_url`, so native resume commands include default history.
+- Added the native profile resume command to generated integration output.
+- Added native Responses WebSocket handling and bounded zstd/gzip/deflate
+  request decoding without disabling Codex transport features.
+- Preserved Codex remote compaction v1/v2, including translated Chat
+  Completions and Anthropic providers.
+- Accepted valid subscription SSE streams when an upstream proxy omits the
+  `Content-Type` response header.
+- Kept native hidden models such as Codex Auto Review out of subscription
+  aliases, and added per-account model visibility controls.
+- Added one-click hide/show for every imported model under a Provider.
+- Separated the 30-second upstream connection timeout from the 180-second
+  response deadline and retried one transient connection failure, preventing
+  slow Gemini responses from being cut off as internal errors.
+- Made custom Provider `auto` mode negotiate Responses first, fall back only on
+  explicit protocol rejection, and persist the working protocol instead of
+  silently forcing Chat Completions during model discovery.
+- Converted translated streaming failures into terminal `response.failed`
+  events with the upstream HTTP status, so Codex displays the real failure
+  instead of only reporting a missing terminal event.
+- Kept Codex client telemetry out of external API-key Responses requests while
+  preserving native subscription passthrough, and replaced raw upstream HTML
+  error pages with bounded gateway/WAF diagnostics.
+
 ## 0.3.0 (Unreleased)
 
 ### Product

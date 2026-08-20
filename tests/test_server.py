@@ -1,6 +1,8 @@
 import base64
 import json
 import os
+import socket
+import struct
 import tempfile
 import threading
 import unittest
@@ -9,7 +11,10 @@ from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 from pathlib import Path
 
+import zstandard
+
 from tests.support import ensure_test_master_key
+from easy_multi_provider import __version__
 from easy_multi_provider.config import api_key, load, normalize, save
 from easy_multi_provider.server import AppState, WEB_FILE, configure_proxy_environment, make_handler
 
@@ -17,7 +22,230 @@ from easy_multi_provider.server import AppState, WEB_FILE, configure_proxy_envir
 ensure_test_master_key()
 
 
+def _masked_text_frame(value):
+    payload = value.encode("utf-8")
+    mask = b"\x01\x02\x03\x04"
+    if len(payload) < 126:
+        header = bytes((0x81, 0x80 | len(payload)))
+    else:
+        header = bytes((0x81, 0x80 | 126)) + struct.pack("!H", len(payload))
+    return header + mask + bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+
+
+def _read_exact(stream, length):
+    value = bytearray()
+    while len(value) < length:
+        chunk = stream.read(length - len(value))
+        if not chunk:
+            raise EOFError("websocket closed")
+        value.extend(chunk)
+    return bytes(value)
+
+
+def _read_text_frame(stream):
+    first, second = _read_exact(stream, 2)
+    length = second & 0x7F
+    if length == 126:
+        length = struct.unpack("!H", _read_exact(stream, 2))[0]
+    elif length == 127:
+        length = struct.unpack("!Q", _read_exact(stream, 8))[0]
+    payload = _read_exact(stream, length)
+    return first & 0x0F, payload.decode("utf-8")
+
+
 class ServerAccountTests(unittest.TestCase):
+    def test_web_exposes_subscription_and_provider_visibility_controls(self):
+        html = WEB_FILE.read_text(encoding="utf-8")
+        self.assertIn('name="subscription_model"', html)
+        self.assertIn("hidden_models", html)
+        self.assertIn("toggleProviderModels", html)
+        self.assertIn("隐藏全部模型", html)
+
+    def test_successful_auto_protocol_is_persisted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({
+                "providers": [{
+                    "id": "demo",
+                    "name": "Demo",
+                    "base_url": "https://example.com/v1",
+                    "protocol": "auto",
+                    "auth_mode": "api_key",
+                    "api_key": "test-key",
+                }],
+                "models": [{
+                    "id": "demo/model",
+                    "provider": "demo",
+                    "upstream_id": "model",
+                }],
+            }), config_path)
+            state = AppState(config_path)
+            with patch(
+                "easy_multi_provider.server.proxy",
+                return_value=(
+                    {
+                        "kind": "body",
+                        "status": 200,
+                        "content_type": "application/json",
+                        "provider_id": "demo",
+                        "resolved_protocol": "responses",
+                    },
+                    b"{}",
+                ),
+            ):
+                state.route({"model": "demo/model", "input": "hello"}, {})
+            provider = state.snapshot()["providers"][0]
+            self.assertEqual(provider["protocol"], "responses")
+            self.assertEqual(api_key(provider), "test-key")
+
+    def test_compact_endpoint_routes_remote_compaction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with patch(
+                    "easy_multi_provider.server.proxy_compact",
+                    return_value=(
+                        {"kind": "body", "status": 200, "content_type": "application/json"},
+                        b'{"output":[]}',
+                    ),
+                ) as routed:
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request(
+                        "POST",
+                        "/v1/responses/compact",
+                        b'{"model":"demo/fixed","input":[]}',
+                        {
+                            "Content-Type": "application/json",
+                            "Cookie": "emp_session=" + state.session_token,
+                        },
+                    )
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(json.loads(response.read()), {"output": []})
+                    connection.close()
+                routed.assert_called_once()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_zstd_compressed_proxy_request_is_decoded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            body = b'{"model":"demo/fixed","input":"hello"}'
+            encoded = zstandard.ZstdCompressor().compress(body)
+            try:
+                with patch(
+                    "easy_multi_provider.server.proxy",
+                    return_value=(
+                        {"kind": "body", "status": 200, "content_type": "application/json"},
+                        b"{}",
+                    ),
+                ) as routed:
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request(
+                        "POST",
+                        "/v1/responses",
+                        encoded,
+                        {
+                            "Content-Type": "application/json",
+                            "Content-Encoding": "zstd",
+                            "Cookie": "emp_session=" + state.session_token,
+                        },
+                    )
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    response.read()
+                    connection.close()
+                self.assertEqual(routed.call_args.args[1]["input"], "hello")
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_responses_websocket_routes_response_create(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            response_id = "resp_websocket_test"
+            events = [
+                (
+                    'event: response.created\ndata: {"type":"response.created",'
+                    '"response":{"id":"%s"}}\n\n' % response_id
+                ).encode(),
+                (
+                    'event: response.completed\ndata: {"type":"response.completed",'
+                    '"response":{"id":"%s","usage":{"input_tokens":1,'
+                    '"output_tokens":1,"total_tokens":2}}}\n\n' % response_id
+                ).encode(),
+            ]
+            client = None
+            stream = None
+            try:
+                with patch(
+                    "easy_multi_provider.server.proxy",
+                    return_value=(
+                        {"kind": "stream", "status": 200, "content_type": "text/event-stream"},
+                        iter(events),
+                    ),
+                ) as routed:
+                    client = socket.create_connection(server.server_address, timeout=3)
+                    stream = client.makefile("rb")
+                    port = server.server_address[1]
+                    client.sendall((
+                        (
+                            "GET /v1/responses HTTP/1.1\r\n"
+                            "Host: 127.0.0.1:%d\r\n"
+                            "Upgrade: websocket\r\n"
+                            "Connection: Upgrade\r\n"
+                            "Sec-WebSocket-Version: 13\r\n"
+                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                            "Cookie: emp_session=%s\r\n\r\n"
+                        )
+                        % (port, state.session_token)
+                    ).encode("ascii"))
+                    self.assertIn(b" 101 ", stream.readline())
+                    while stream.readline() not in (b"\r\n", b"\n", b""):
+                        pass
+                    client.sendall(
+                        _masked_text_frame(
+                            json.dumps(
+                                {
+                                    "type": "response.create",
+                                    "model": "demo/fixed",
+                                    "input": "hello",
+                                    "stream": True,
+                                }
+                            )
+                        )
+                    )
+                    received = []
+                    while not any(item.get("type") == "response.completed" for item in received):
+                        opcode, text = _read_text_frame(stream)
+                        self.assertEqual(opcode, 1)
+                        received.append(json.loads(text))
+                self.assertEqual(routed.call_count, 1)
+                self.assertNotIn("type", routed.call_args.args[1])
+            finally:
+                if stream is not None:
+                    stream.close()
+                if client is not None:
+                    client.close()
+                server.shutdown()
+                server.server_close()
+
     def test_system_proxy_is_imported_when_environment_has_none(self):
         proxy_keys = {
             "HTTP_PROXY",
@@ -105,12 +333,12 @@ class ServerAccountTests(unittest.TestCase):
             )
             state = AppState(config_path)
             account = state.import_account(
-                {"id": "ship", "name": "Ship", "prefix": "ship"},
+                {"id": "primary", "name": "Primary", "prefix": "primary"},
                 {"auth_mode": "chatgpt", "tokens": {"access_token": "account-secret"}},
             )
             auth_path = Path(account["auth_file"])
             self.assertTrue(auth_path.exists())
-            state.delete_account("ship")
+            state.delete_account("primary")
             self.assertFalse(auth_path.exists())
             self.assertFalse(auth_path.parent.exists())
             self.assertEqual(state.config["accounts"], [])
@@ -230,7 +458,10 @@ class ServerAccountTests(unittest.TestCase):
                     response = connection.getresponse()
                     bundle = response.read()
                     self.assertEqual(response.status, 200)
-                    self.assertIn("easy-multi-provider-0.3.0.emp", response.getheader("Content-Disposition"))
+                    self.assertIn(
+                        "easy-multi-provider-%s.emp" % __version__,
+                        response.getheader("Content-Disposition"),
+                    )
                     self.assertTrue(bundle.startswith(b"EMP-MIGRATION"))
                     connection.close()
 
@@ -316,9 +547,9 @@ class ServerAccountTests(unittest.TestCase):
             try:
                 body = json.dumps(
                     {
-                        "id": "ship",
-                        "name": "Ship",
-                        "prefix": "ship",
+                        "id": "primary",
+                        "name": "Primary",
+                        "prefix": "primary",
                         "auth_json": {
                             "auth_mode": "chatgpt",
                             "tokens": {"access_token": "account-secret"},
@@ -343,8 +574,8 @@ class ServerAccountTests(unittest.TestCase):
                 connection.close()
                 self.assertNotIn("account-secret", config_path.read_text(encoding="utf-8"))
                 self.assertNotIn("refresh_token", config_path.read_text(encoding="utf-8"))
-                self.assertTrue((root / "state" / "accounts" / "ship" / "auth.json.enc").exists())
-                self.assertFalse((root / "state" / "accounts" / "ship" / "auth.json").exists())
+                self.assertTrue((root / "state" / "accounts" / "primary" / "auth.json.enc").exists())
+                self.assertFalse((root / "state" / "accounts" / "primary" / "auth.json").exists())
 
                 connection = HTTPConnection(*server.server_address)
                 connection.request(
@@ -355,14 +586,14 @@ class ServerAccountTests(unittest.TestCase):
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
                 listing = json.loads(response.read().decode("utf-8"))
-                self.assertEqual(listing["accounts"][0]["prefix"], "ship")
+                self.assertEqual(listing["accounts"][0]["prefix"], "primary")
                 self.assertTrue(listing["accounts"][0]["credential_set"])
                 connection.close()
 
                 connection = HTTPConnection(*server.server_address)
                 connection.request(
                     "DELETE",
-                    "/api/accounts/ship",
+                    "/api/accounts/primary",
                     headers={"Cookie": "emp_session=" + state.session_token},
                 )
                 response = connection.getresponse()
@@ -387,7 +618,7 @@ class ServerAccountTests(unittest.TestCase):
             )
             state = AppState(config_path)
             state.import_account(
-                {"id": "ship", "name": "Ship", "prefix": "ship"},
+                {"id": "primary", "name": "Primary", "prefix": "primary"},
                 {"auth_mode": "chatgpt", "tokens": {"access_token": "account-secret"}},
             )
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
@@ -404,7 +635,7 @@ class ServerAccountTests(unittest.TestCase):
                     connection = HTTPConnection(*server.server_address)
                     connection.request(
                         "POST",
-                        "/api/accounts/ship/quota",
+                        "/api/accounts/primary/quota",
                         b"{}",
                         {
                             "Content-Type": "application/json",
