@@ -33,6 +33,7 @@ _PROVIDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 MAX_CONTEXT_WINDOW = 100_000_000
 _PROTOCOLS = {"auto", "responses", "chat_completions", "anthropic_messages"}
 _AUTH_MODES = {"api_key", "anthropic_api_key", "forward"}
+_TOOL_CALL_MODES = {"native", "disabled"}
 
 
 class ConfigError(ValueError):
@@ -98,6 +99,7 @@ def _normalize_provider(raw: Dict[str, Any]) -> Dict[str, Any]:
         "base_url": _validate_url(raw.get("base_url"), "provider.base_url"),
         "protocol": _string(raw.get("protocol")) or "chat_completions",
         "auth_mode": _string(raw.get("auth_mode")) or "api_key",
+        "tool_call_mode": _string(raw.get("tool_call_mode")) or "native",
         "api_key": _string(raw.get("api_key")),
         "api_key_file": _string(raw.get("api_key_file")),
         "anthropic_version": _string(raw.get("anthropic_version")) or "2023-06-01",
@@ -109,6 +111,8 @@ def _normalize_provider(raw: Dict[str, Any]) -> Dict[str, Any]:
         raise ConfigError("provider.auth_mode must be api_key, anthropic_api_key, or forward")
     if provider["auth_mode"] == "forward" and provider["protocol"] != "responses":
         raise ConfigError("forward providers must use the Responses protocol")
+    if provider["tool_call_mode"] not in _TOOL_CALL_MODES:
+        raise ConfigError("provider.tool_call_mode must be native or disabled")
     return provider
 
 

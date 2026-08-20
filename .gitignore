@@ -6,6 +6,7 @@ dist/
 *.egg-info/
 generated/
 state/
+artifacts/
 accounts/
 secrets/
 auth.json

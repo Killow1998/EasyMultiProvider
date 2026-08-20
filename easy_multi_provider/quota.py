@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
+from . import __version__
 from .accounts import AccountError, load_auth
 from .vault import VaultError, write_encrypted_json
 
@@ -316,7 +317,7 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
                 "clientInfo": {
                     "name": "easy-multi-provider",
                     "title": "EasyMultiProvider",
-                    "version": "0.2.0",
+                    "version": __version__,
                 },
                 "capabilities": {},
             },

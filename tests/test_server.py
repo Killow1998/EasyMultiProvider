@@ -146,7 +146,7 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("position:fixed", html)
         self.assertIn("EMP 配置已生成", html)
         self.assertIn("/api/migration/export", html)
-        self.assertIn("easy-multi-provider-0.2.0.emp", html)
+        self.assertIn("easy-multi-provider-0.3.0.emp", html)
 
     def test_integration_generation_endpoint_writes_profile(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -230,7 +230,7 @@ class ServerAccountTests(unittest.TestCase):
                     response = connection.getresponse()
                     bundle = response.read()
                     self.assertEqual(response.status, 200)
-                    self.assertIn("easy-multi-provider-0.2.0.emp", response.getheader("Content-Disposition"))
+                    self.assertIn("easy-multi-provider-0.3.0.emp", response.getheader("Content-Disposition"))
                     self.assertTrue(bundle.startswith(b"EMP-MIGRATION"))
                     connection.close()
 

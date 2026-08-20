@@ -57,7 +57,13 @@ class CatalogTests(unittest.TestCase):
         ):
             catalog_path = Path(directory) / "generated" / "codex-models.json"
             profile_path = write_codex_profile(config, catalog_path)
-            self.assertEqual(profile_path, Path(directory) / "codex" / "emp.config.toml")
+            # macOS may expose TemporaryDirectory through /var while resolve()
+            # canonicalizes it to /private/var.  The contract is the location,
+            # not the spelling of the symlinked prefix.
+            self.assertEqual(
+                profile_path.resolve(),
+                (Path(directory) / "codex" / "emp.config.toml").resolve(),
+            )
             contents = profile_path.read_text(encoding="utf-8")
             self.assertIn('model_provider = "easy-multi-provider"', contents)
             self.assertIn('model_catalog_json = ', contents)
