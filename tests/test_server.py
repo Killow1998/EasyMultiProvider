@@ -16,6 +16,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 import zstandard
+from cryptography.fernet import Fernet
 
 from tests.support import ensure_test_master_key
 from easy_multi_provider import __version__
@@ -30,6 +31,7 @@ from easy_multi_provider.codex_runtime import (
     TargetedCodexHostStopper,
 )
 from easy_multi_provider.integration import IntegrationManager, ServiceNotReady
+from easy_multi_provider.vault import MASTER_KEY_ENV, MASTER_KEY_FILE_ENV
 from easy_multi_provider.server import (
     AppState,
     WEB_FILE,
@@ -2421,6 +2423,7 @@ class ServerAccountTests(unittest.TestCase):
             config_path.write_text('title = "native"\n', encoding="utf-8")
             lease_path = codex_home / "easy-multi-provider" / "integration" / "lease.json"
             catalog_path = codex_home / "easy-multi-provider" / "catalog.json"
+            master_key_path = root / "state" / "master.key"
             first = IntegrationManager(config_path, lease_path, instance_id="old")
             first.enable(
                 "http://127.0.0.1:45678/v1",
@@ -2453,6 +2456,8 @@ class ServerAccountTests(unittest.TestCase):
                 {
                     "CODEX_HOME": str(codex_home),
                     "EASY_MULTI_PROVIDER_CONFIG": str(emp_config),
+                    MASTER_KEY_ENV: "",
+                    MASTER_KEY_FILE_ENV: str(master_key_path),
                 },
                 clear=False,
             ), patch(
@@ -2472,6 +2477,7 @@ class ServerAccountTests(unittest.TestCase):
             self.assertNotIn("openai_base_url", restored)
             self.assertNotIn("model_catalog_json", restored)
             self.assertEqual(first.status().state, "restored")
+            Fernet(master_key_path.read_text(encoding="utf-8").strip().encode("ascii"))
 
     def test_migration_endpoints_export_and_import_emp_bundle(self):
         with tempfile.TemporaryDirectory() as directory:

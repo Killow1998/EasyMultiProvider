@@ -7,7 +7,7 @@ import os
 import stat
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -22,33 +22,106 @@ class VaultError(ValueError):
     """Raised when encrypted credentials cannot be read or written safely."""
 
 
-def _fernet() -> Fernet:
-    raw = os.environ.get(MASTER_KEY_ENV, "").strip()
-    if not raw:
-        key_path = Path(os.environ.get(MASTER_KEY_FILE_ENV, "").strip() or DEFAULT_MASTER_KEY_FILE)
-        try:
-            info = key_path.stat()
-            if not stat.S_ISREG(info.st_mode):
-                raise VaultError("master key file is not a regular file")
-            if os.name != "nt":
-                current_uid = getattr(os, "getuid", lambda: info.st_uid)()
-                if info.st_uid not in {0, current_uid}:
-                    raise VaultError("master key file is not owned by the current user")
-                if info.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-                    raise VaultError("master key file must be private")
-            raw = key_path.read_text(encoding="utf-8").strip()
-        except FileNotFoundError:
-            raw = ""
-        except OSError as exc:
-            raise VaultError("master key file is unavailable") from exc
-    if not raw:
-        raise VaultError(
-            "set %s or create a private state/master.key" % MASTER_KEY_ENV
-        )
+def _key_path() -> Path:
+    return Path(
+        os.environ.get(MASTER_KEY_FILE_ENV, "").strip() or DEFAULT_MASTER_KEY_FILE
+    )
+
+
+def _validate_key(raw: str, source: str) -> str:
     try:
-        return Fernet(raw.encode("ascii"))
+        Fernet(raw.encode("ascii"))
     except (UnicodeEncodeError, ValueError, TypeError) as exc:
-        raise VaultError("%s is not a valid Fernet key" % MASTER_KEY_ENV) from exc
+        raise VaultError("%s is not a valid Fernet key" % source) from exc
+    return raw
+
+
+def _read_key_file(key_path: Path) -> str:
+    try:
+        info = key_path.lstat()
+        if key_path.is_symlink() or not stat.S_ISREG(info.st_mode):
+            raise VaultError("master key file is not a regular file")
+        if os.name != "nt":
+            current_uid = getattr(os, "getuid", lambda: info.st_uid)()
+            if info.st_uid not in {0, current_uid}:
+                raise VaultError("master key file is not owned by the current user")
+            if info.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+                raise VaultError("master key file must be private")
+        raw = key_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise VaultError("master key file is unavailable") from exc
+    return _validate_key(raw, "master key file")
+
+
+def _create_key_file(key_path: Path) -> None:
+    parent_existed = key_path.parent.exists()
+    try:
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt" and (
+            not parent_existed or key_path == DEFAULT_MASTER_KEY_FILE
+        ):
+            os.chmod(str(key_path.parent), 0o700)
+    except OSError as exc:
+        raise VaultError("master key directory is unavailable") from exc
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(str(key_path), flags, 0o600)
+    except FileExistsError:
+        return
+    except OSError as exc:
+        raise VaultError("master key file cannot be created") from exc
+
+    try:
+        if os.name != "nt" and hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(Fernet.generate_key() + b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as exc:
+        try:
+            key_path.unlink()
+        except OSError:
+            pass
+        raise VaultError("master key file cannot be created") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _master_key() -> str:
+    raw = os.environ.get(MASTER_KEY_ENV, "").strip()
+    if raw:
+        return _validate_key(raw, MASTER_KEY_ENV)
+    key_path = _key_path()
+    try:
+        return _read_key_file(key_path)
+    except FileNotFoundError:
+        _create_key_file(key_path)
+        return _read_key_file(key_path)
+
+
+def ensure_master_key() -> Optional[Path]:
+    """Ensure a valid local key exists without exposing or replacing it."""
+
+    if os.environ.get(MASTER_KEY_ENV, "").strip():
+        _master_key()
+        return None
+    key_path = _key_path()
+    _master_key()
+    return key_path
+
+
+def _fernet() -> Fernet:
+    return Fernet(_master_key().encode("ascii"))
 
 
 def _write(path: Path, value: bytes) -> None:

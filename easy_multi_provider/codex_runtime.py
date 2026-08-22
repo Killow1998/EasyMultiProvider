@@ -807,7 +807,7 @@ class CodexRuntimeController:
                     "params": {
                         "clientInfo": {
                             "name": "easy-multi-provider",
-                            "version": "0.5.0",
+                            "version": "0.5.1",
                         },
                         "capabilities": {"experimentalApi": True},
                     },

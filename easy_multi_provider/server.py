@@ -85,6 +85,7 @@ from .transport import (
     sse_json_events,
     websocket_accept,
 )
+from .vault import ensure_master_key
 
 
 WEB_FILE = Path(__file__).with_name("web").joinpath("index.html")
@@ -2377,6 +2378,7 @@ def startup_reconcile(state: AppState, server: BoundedThreadingHTTPServer) -> In
 def serve(path: Optional[Path] = None, host: Optional[str] = None, port: Optional[int] = None) -> None:
     if host and host != "127.0.0.1":
         raise ConfigError("host must be 127.0.0.1 for local-only management")
+    ensure_master_key()
     proxy_source = configure_proxy_environment()
     paths = resolve_integration_paths()
     manager = IntegrationManager(
