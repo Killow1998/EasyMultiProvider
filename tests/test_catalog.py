@@ -9,10 +9,9 @@ from tests.support import ensure_test_master_key
 from easy_multi_provider.accounts import public_accounts
 from easy_multi_provider.catalog import (
     build_catalog,
-    integration_info,
+    generated_catalog_path,
     subscription_model_options,
     write_catalog,
-    write_codex_profile,
 )
 from easy_multi_provider.config import normalize
 from easy_multi_provider.vault import write_encrypted_json
@@ -22,6 +21,83 @@ ensure_test_master_key()
 
 
 class CatalogTests(unittest.TestCase):
+    def test_catalog_display_names_include_only_known_usable_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "gpt-native",
+                                "display_name": "Native",
+                                "description": "Native model",
+                                "context_window": 272000,
+                                "effective_context_window_percent": 95,
+                                "base_instructions": "Be useful",
+                                "model_messages": {},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = normalize(
+                {
+                    "native_catalog_path": str(native_path),
+                    "accounts": [
+                        {
+                            "id": "primary",
+                            "name": "Primary",
+                            "prefix": "primary",
+                            "auth_file": "/tmp/primary-auth.json",
+                        }
+                    ],
+                    "providers": [
+                        {"id": "demo", "base_url": "https://example.com/v1"}
+                    ],
+                    "models": [
+                        {
+                            "id": "demo/large",
+                            "display_name": "Large",
+                            "provider": "demo",
+                            "context_window": 1_048_576,
+                        },
+                        {
+                            "id": "demo/unknown",
+                            "display_name": "Unknown",
+                            "provider": "demo",
+                            "context_window": 0,
+                        },
+                    ],
+                }
+            )
+
+            models = {item["slug"]: item for item in build_catalog(config)["models"]}
+
+            self.assertEqual(models["gpt-native"]["display_name"], "Native [258K]")
+            self.assertEqual(
+                models["gpt-native"]["description"], "Native model · Context 258K"
+            )
+            self.assertEqual(
+                models["primary/gpt-native"]["display_name"],
+                "Primary · Native [258K]",
+            )
+            self.assertEqual(
+                models["primary/gpt-native"]["description"],
+                "ChatGPT subscription: Primary · Context 258K",
+            )
+            self.assertEqual(models["demo/large"]["display_name"], "Large [1.05M]")
+            self.assertEqual(
+                models["demo/large"]["description"],
+                "External provider model · Context 1.05M",
+            )
+            self.assertEqual(models["demo/unknown"]["display_name"], "Unknown")
+            self.assertEqual(
+                models["demo/unknown"]["description"], "External provider model"
+            )
+            self.assertNotIn("context_window", models["demo/unknown"])
+
     def test_merges_native_and_external_models(self):
         with tempfile.TemporaryDirectory() as directory:
             native_path = Path(directory) / "native.json"
@@ -47,36 +123,22 @@ class CatalogTests(unittest.TestCase):
             self.assertTrue(output.exists())
             self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["models"][-1]["slug"], "demo/model")
 
-    def test_integration_snippet_reuses_native_openai_session_identity(self):
-        config = normalize({"host": "127.0.0.1", "port": 4200})
-        info = integration_info(config, Path("generated/codex-models.json"))
-        self.assertIn('model_provider = "openai"', info["snippet"])
-        self.assertIn('openai_base_url = "http://127.0.0.1:4200/v1"', info["snippet"])
-        self.assertNotIn("[model_providers.", info["snippet"])
-        self.assertNotIn("enable_request_compression", info["snippet"])
-        self.assertNotIn("remote_compaction_v2", info["snippet"])
-        self.assertNotIn("supports_websockets", info["snippet"])
-        self.assertEqual(info["resume_command"], "codex resume --profile emp")
-
-    def test_writes_emp_profile_under_codex_home(self):
-        config = normalize({"host": "127.0.0.1", "port": 4200})
-        with tempfile.TemporaryDirectory() as directory, patch.dict(
-            os.environ, {"CODEX_HOME": str(Path(directory) / "codex")}
-        ):
-            catalog_path = Path(directory) / "generated" / "codex-models.json"
-            profile_path = write_codex_profile(config, catalog_path)
-            # macOS may expose TemporaryDirectory through /var while resolve()
-            # canonicalizes it to /private/var.  The contract is the location,
-            # not the spelling of the symlinked prefix.
+    def test_generated_catalog_path_is_stable_below_codex_home(self):
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory) / "codex"
             self.assertEqual(
-                profile_path.resolve(),
-                (Path(directory) / "codex" / "emp.config.toml").resolve(),
+                generated_catalog_path(codex_home),
+                (codex_home / "easy-multi-provider" / "catalog.json").resolve(),
             )
-            contents = profile_path.read_text(encoding="utf-8")
-            self.assertIn('model_provider = "openai"', contents)
-            self.assertIn('openai_base_url = "http://127.0.0.1:4200/v1"', contents)
-            self.assertIn('model_catalog_json = ', contents)
-            self.assertEqual(profile_path.stat().st_mode & 0o777, 0o600)
+
+    def test_generated_catalog_path_uses_code_home_without_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory) / "codex"
+            with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}):
+                self.assertEqual(
+                    generated_catalog_path(),
+                    (codex_home / "easy-multi-provider" / "catalog.json").resolve(),
+                )
 
     def test_subscription_accounts_get_prefixed_native_aliases(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -133,6 +195,12 @@ class CatalogTests(unittest.TestCase):
             })
 
             catalog = build_catalog(config)
+            native_models = {
+                item["slug"]: item
+                for item in catalog["models"]
+                if not item["slug"].startswith("primary/")
+            }
+            self.assertEqual(native_models["codex-auto-review"]["visibility"], "hide")
             aliases = [item["slug"] for item in catalog["models"] if item["slug"].startswith("primary/")]
             self.assertEqual(aliases, ["primary/gpt-current"])
             self.assertEqual(
@@ -144,12 +212,20 @@ class CatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             native_path = root / "native.json"
-            native_path.write_text(json.dumps({"models": [{
-                "slug": "gpt-native",
-                "display_name": "Native",
-                "base_instructions": "Be useful",
-                "model_messages": {},
-            }]}), encoding="utf-8")
+            native_path.write_text(json.dumps({"models": [
+                {
+                    "slug": "gpt-native",
+                    "display_name": "Native",
+                    "base_instructions": "Be useful",
+                    "model_messages": {},
+                },
+                {
+                    "slug": "gpt-hidden-by-current-login",
+                    "display_name": "Hidden by current login",
+                    "base_instructions": "Be useful",
+                    "model_messages": {},
+                },
+            ]}), encoding="utf-8")
             codex_home = root / "codex"
             codex_home.mkdir()
             (codex_home / "auth.json").write_text(json.dumps({
@@ -166,7 +242,12 @@ class CatalogTests(unittest.TestCase):
             config = normalize({
                 "native_catalog_path": str(native_path),
                 "accounts": [
-                    {"id": "same", "prefix": "same", "auth_file": str(duplicate_path)},
+                    {
+                        "id": "same",
+                        "prefix": "same",
+                        "auth_file": str(duplicate_path),
+                        "hidden_models": ["gpt-hidden-by-current-login"],
+                    },
                     {"id": "unique", "prefix": "unique", "auth_file": str(unique_path)},
                 ],
             })
@@ -175,7 +256,22 @@ class CatalogTests(unittest.TestCase):
                 accounts = public_accounts(config["accounts"])
             self.assertEqual(
                 [item["slug"] for item in catalog["models"]],
-                ["gpt-native", "unique/gpt-native"],
+                [
+                    "gpt-native",
+                    "gpt-hidden-by-current-login",
+                    "unique/gpt-native",
+                    "unique/gpt-hidden-by-current-login",
+                ],
+            )
+            by_slug = {item["slug"]: item for item in catalog["models"]}
+            self.assertEqual(by_slug["gpt-native"].get("visibility", "list"), "list")
+            self.assertEqual(
+                by_slug["gpt-hidden-by-current-login"]["visibility"],
+                "hide",
+            )
+            self.assertEqual(
+                by_slug["unique/gpt-hidden-by-current-login"].get("visibility", "list"),
+                "list",
             )
             duplicate = next(item for item in accounts if item["id"] == "same")
             self.assertTrue(duplicate["duplicate"])

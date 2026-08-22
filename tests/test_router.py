@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from tests.support import ensure_test_master_key
 import easy_multi_provider.router as router
+from easy_multi_provider.capabilities import endpoint_fingerprint
 from easy_multi_provider.router import (
     RouterError,
     _response_from_anthropic,
@@ -298,9 +299,213 @@ class RouterTests(unittest.TestCase):
                 {"model": "demo/glm", "input": "hello", "stream": True},
                 {},
             )
+            list(result)
         self.assertEqual(metadata["resolved_protocol"], "responses")
-        self.assertIs(result, stream)
         self.assertEqual(completion.call_args.args[0]["protocol"], "responses")
+
+    def test_auto_provider_prioritizes_matching_observed_protocol(self):
+        provider = {
+            "id": "demo",
+            "base_url": "https://example.com/v1",
+            "protocol": "auto",
+            "auth_mode": "api_key",
+            "api_key": "test-key",
+            "resolved_protocol": "chat_completions",
+            "protocol_observation": {
+                "endpoint_fingerprint": endpoint_fingerprint("https://example.com/v1"),
+                "deployment_identity": "default",
+                "upstream_model": "glm",
+                "source": "observed",
+                "confidence": 1.0,
+                "observed_at": "2026-08-21T00:00:00+00:00",
+            },
+        }
+        config = {
+            "providers": [provider],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
+        }
+        with patch.object(
+            router, "chat_completion", return_value=(200, "application/json", b"{}")
+        ) as chat, patch.object(router, "forward_responses") as responses:
+            metadata, _ = router.proxy(config, {"model": "demo/glm", "input": []}, {})
+        self.assertEqual(metadata["resolved_protocol"], "chat_completions")
+        self.assertEqual(metadata["protocol_decision"], "observed_priority")
+        chat.assert_called_once()
+        responses.assert_not_called()
+
+    def test_stale_observed_protocol_is_ignored(self):
+        provider = {
+            "id": "demo",
+            "base_url": "https://example.com/v1",
+            "protocol": "auto",
+            "auth_mode": "api_key",
+            "api_key": "test-key",
+            "resolved_protocol": "chat_completions",
+            "protocol_observation": {
+                "endpoint_fingerprint": endpoint_fingerprint("https://other.example/v1"),
+                "deployment_identity": "default",
+                "upstream_model": "glm",
+            },
+        }
+        config = {
+            "providers": [provider],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
+        }
+        with patch.object(
+            router, "forward_responses", return_value=(200, "application/json", b"{}")
+        ) as responses, patch.object(router, "chat_completion") as chat:
+            metadata, _ = router.proxy(config, {"model": "demo/glm", "input": []}, {})
+        self.assertEqual(metadata["resolved_protocol"], "responses")
+        self.assertEqual(metadata["protocol_decision"], "normal_order")
+        responses.assert_called_once()
+        chat.assert_not_called()
+
+    def test_auto_fallback_is_limited_to_protocol_rejection_statuses(self):
+        config = {
+            "providers": [{
+                "id": "demo",
+                "base_url": "https://example.com/v1",
+                "protocol": "auto",
+                "auth_mode": "api_key",
+                "api_key": "test-key",
+            }],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
+        }
+        for status in (404, 405, 415, 501):
+            with self.subTest(status=status), patch.object(
+                router,
+                "forward_responses",
+                side_effect=RouterError("protocol rejected", status),
+            ), patch.object(
+                router, "chat_completion", return_value=(200, "application/json", b"{}")
+            ) as chat:
+                metadata, _ = router.proxy(config, {"model": "demo/glm", "input": []}, {})
+                self.assertEqual(metadata["resolved_protocol"], "chat_completions")
+                chat.assert_called_once()
+
+    def test_auto_does_not_fallback_on_auth_waf_rate_limit_server_or_timeout(self):
+        config = {
+            "providers": [{
+                "id": "demo",
+                "base_url": "https://example.com/v1",
+                "protocol": "auto",
+                "auth_mode": "api_key",
+                "api_key": "test-key",
+            }],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
+        }
+        for status in (401, 403, 429, 500, 502, 503, 504):
+            with self.subTest(status=status), patch.object(
+                router,
+                "forward_responses",
+                side_effect=RouterError("request failed", status),
+            ), patch.object(router, "chat_completion") as chat:
+                with self.assertRaises(RouterError) as raised:
+                    router.proxy(config, {"model": "demo/glm", "input": []}, {})
+                self.assertEqual(raised.exception.status, status)
+                chat.assert_not_called()
+
+    def test_auto_does_not_fallback_on_network_exception(self):
+        config = {
+            "providers": [{
+                "id": "demo",
+                "base_url": "https://example.com/v1",
+                "protocol": "auto",
+                "auth_mode": "api_key",
+                "api_key": "test-key",
+            }],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
+        }
+        with patch.object(
+            router, "forward_responses", side_effect=OSError("network-secret")
+        ), patch.object(router, "chat_completion") as chat:
+            with self.assertRaises(OSError):
+                router.proxy(config, {"model": "demo/glm", "input": []}, {})
+            chat.assert_not_called()
+
+    def test_auto_final_failure_emits_selected_safe_observation(self):
+        config = {
+            "providers": [{
+                "id": "demo",
+                "base_url": "https://example.com/v1",
+                "protocol": "auto",
+                "auth_mode": "api_key",
+                "api_key": "test-key",
+            }],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
+        }
+        observations = []
+        with patch.object(
+            router,
+            "forward_responses",
+            side_effect=RouterError("auth-secret", 401),
+        ), patch.object(router, "chat_completion") as chat:
+            with self.assertRaises(RouterError):
+                router.proxy(
+                    config,
+                    {"model": "demo/glm", "input": []},
+                    {},
+                    observations.append,
+                )
+        chat.assert_not_called()
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0]["resolved_protocol"], "responses")
+        self.assertEqual(observations[0]["status"], 401)
+        self.assertEqual(observations[0]["error_class"], "auth")
+        self.assertEqual(observations[0]["protocol_decision"], "normal_order")
+        self.assertFalse(observations[0]["protocol_fallback"])
+
+    def test_explicit_protocol_never_falls_back(self):
+        config = {
+            "providers": [{
+                "id": "demo",
+                "base_url": "https://example.com/v1",
+                "protocol": "responses",
+                "auth_mode": "api_key",
+                "api_key": "test-key",
+            }],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
+        }
+        with patch.object(
+            router, "forward_responses", return_value=(404, "application/json", b"{}")
+        ) as responses, patch.object(router, "chat_completion") as chat:
+            metadata, raw = router.proxy(config, {"model": "demo/glm", "input": []}, {})
+        self.assertEqual(metadata["resolved_protocol"], "responses")
+        self.assertEqual(metadata["status"], 404)
+        self.assertEqual(raw, b"{}")
+        responses.assert_called_once()
+        chat.assert_not_called()
+
+    def test_auto_stream_can_fallback_after_eager_protocol_rejection(self):
+        config = {
+            "providers": [{
+                "id": "demo",
+                "base_url": "https://example.com/v1",
+                "protocol": "auto",
+                "auth_mode": "api_key",
+                "api_key": "test-key",
+            }],
+            "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
+        }
+        observations = []
+        stream = iter([b'event: response.completed\ndata: {"type":"response.completed"}\n\n'])
+        with patch.object(
+            router,
+            "forward_responses_stream",
+            side_effect=RouterError("protocol rejected", 404),
+        ), patch.object(router, "stream_chat_completion", return_value=stream) as chat:
+            metadata, result = router.proxy(
+                config,
+                {"model": "demo/glm", "input": [], "stream": True},
+                {},
+                observations.append,
+            )
+            output = b"".join(result)
+        self.assertIn(b"response.completed", output)
+        chat.assert_called_once()
+        self.assertEqual(observations[-1]["resolved_protocol"], "chat_completions")
+        self.assertTrue(observations[-1]["protocol_fallback"])
+        self.assertTrue(observations[-1]["success"])
 
     def test_auto_provider_falls_back_when_responses_endpoint_is_unavailable(self):
         config = {
@@ -482,6 +687,89 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(provider["id"], "chatgpt")
         self.assertEqual(model["upstream_id"], "gpt-native")
 
+    def test_known_native_model_uses_implicit_current_login_route_without_provider(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "gpt-native",
+                                "visibility": "list",
+                                "supported_in_api": True,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "native_catalog_path": str(native_path),
+                "codex_base_url": "https://chatgpt.com/backend-api/codex",
+                "providers": [],
+                "models": [],
+            }
+
+            provider, model = find_route(config, "gpt-native")
+
+            self.assertEqual(provider["auth_mode"], "forward")
+            self.assertEqual(provider["protocol"], "responses")
+            self.assertEqual(
+                provider["base_url"], "https://chatgpt.com/backend-api/codex"
+            )
+            self.assertTrue(provider["implicit_native"])
+            self.assertEqual(model["upstream_id"], "gpt-native")
+            self.assertEqual(config["providers"], [])
+
+    def test_implicit_native_route_forwards_current_login_and_account_headers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps({"models": [{"slug": "gpt-native"}]}),
+                encoding="utf-8",
+            )
+            config = {
+                "native_catalog_path": str(native_path),
+                "codex_base_url": "https://chatgpt.com/backend-api/codex",
+                "providers": [],
+                "models": [],
+            }
+            incoming = {
+                "Authorization": "Bearer current-login",
+                "ChatGPT-Account-ID": "current-account",
+            }
+
+            class FakeResponse:
+                status = 200
+                headers = {"Content-Type": "application/json"}
+
+                def __init__(self):
+                    self.sent = False
+
+                def read(self, size=-1):
+                    if self.sent:
+                        return b""
+                    self.sent = True
+                    return b"{}"
+
+                def close(self):
+                    pass
+
+            with patch.object(router, "urlopen", return_value=FakeResponse()) as opened:
+                metadata, raw = router.proxy(
+                    config,
+                    {"model": "gpt-native", "input": "hello"},
+                    incoming,
+                )
+
+            request = opened.call_args.args[0]
+            self.assertEqual(metadata["provider_id"], "codex-native")
+            self.assertEqual(request.full_url, "https://chatgpt.com/backend-api/codex/responses")
+            self.assertEqual(request.get_header("Authorization"), "Bearer current-login")
+            self.assertEqual(request.get_header("Chatgpt-account-id"), "current-account")
+            self.assertEqual(raw, b"{}")
+
     def test_subscription_prefix_selects_account_and_strips_prefix(self):
         config = {
             "codex_base_url": "https://chatgpt.com/backend-api/codex",
@@ -541,6 +829,125 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(json.loads(request.data)["model"], "gpt-native")
         self.assertEqual(metadata["status"], 200)
         self.assertEqual(raw, b'{"output":[]}')
+
+    def test_implicit_native_compaction_uses_native_compact_endpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps({"models": [{"slug": "gpt-native"}]}),
+                encoding="utf-8",
+            )
+            config = {
+                "native_catalog_path": str(native_path),
+                "codex_base_url": "https://chatgpt.com/backend-api/codex",
+                "providers": [],
+                "models": [],
+            }
+
+            class FakeResponse:
+                status = 200
+                headers = {"Content-Type": "application/json"}
+
+                def __init__(self):
+                    self.sent = False
+
+                def read(self, size=-1):
+                    if self.sent:
+                        return b""
+                    self.sent = True
+                    return b'{"output":[]}'
+
+                def close(self):
+                    pass
+
+            with patch.object(router, "urlopen", return_value=FakeResponse()) as opened:
+                metadata, raw = proxy_compact(
+                    config,
+                    {"model": "gpt-native", "input": []},
+                    {"Authorization": "Bearer current-login"},
+                )
+
+            request = opened.call_args.args[0]
+            self.assertEqual(
+                request.full_url,
+                "https://chatgpt.com/backend-api/codex/responses/compact",
+            )
+            self.assertEqual(json.loads(request.data)["model"], "gpt-native")
+            self.assertEqual(metadata["status"], 200)
+            self.assertEqual(raw, b'{"output":[]}')
+
+    def test_hidden_native_model_routes_without_becoming_user_selectable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {"slug": "gpt-native", "visibility": "list"},
+                            {"slug": "gpt-hidden", "visibility": "hide"},
+                            {"slug": "gpt-unsupported", "supported_in_api": False},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "native_catalog_path": str(native_path),
+                "providers": [],
+                "models": [],
+            }
+
+            provider, model = find_route(config, "gpt-hidden")
+            self.assertTrue(provider["implicit_native"])
+            self.assertEqual(model["upstream_id"], "gpt-hidden")
+
+            for model_id in ("gpt-unknown", "gpt-unsupported"):
+                with self.subTest(model_id=model_id):
+                    with self.assertRaises(RouterError) as raised:
+                        find_route(config, model_id)
+                    self.assertEqual(raised.exception.status, 404)
+
+    def test_explicit_and_prefixed_routes_precede_implicit_native_route(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps({"models": [{"slug": "gpt-native"}]}),
+                encoding="utf-8",
+            )
+            config = {
+                "native_catalog_path": str(native_path),
+                "codex_base_url": "https://chatgpt.com/backend-api/codex",
+                "providers": [
+                    {
+                        "id": "external",
+                        "base_url": "https://example.com/v1",
+                        "protocol": "responses",
+                        "auth_mode": "api_key",
+                    }
+                ],
+                "models": [
+                    {
+                        "id": "gpt-native",
+                        "provider": "external",
+                        "upstream_id": "external-native",
+                    }
+                ],
+                "accounts": [
+                    {
+                        "id": "primary",
+                        "prefix": "primary",
+                        "auth_file": "/tmp/primary-auth.json",
+                    }
+                ],
+            }
+
+            explicit_provider, explicit_model = find_route(config, "gpt-native")
+            prefixed_provider, prefixed_model = find_route(config, "primary/gpt-native")
+
+            self.assertEqual(explicit_provider["id"], "external")
+            self.assertEqual(explicit_model["upstream_id"], "external-native")
+            self.assertEqual(prefixed_provider["auth_mode"], "account")
+            self.assertEqual(prefixed_model["upstream_id"], "gpt-native")
 
     def test_chat_provider_supports_v1_and_v2_remote_compaction(self):
         summary_response = json.dumps({
@@ -638,7 +1045,7 @@ class RouterTests(unittest.TestCase):
             "content": " /tmp",
         })
 
-    def test_disabled_tool_mode_omits_chat_tools(self):
+    def test_chat_translation_preserves_structured_tools(self):
         payload = responses_to_chat({
             "model": "demo/model",
             "input": "Hello",
@@ -648,8 +1055,8 @@ class RouterTests(unittest.TestCase):
                 "description": "run a command",
                 "parameters": {"type": "object"},
             }],
-        }, "model", {"tool_call_mode": "disabled"})
-        self.assertNotIn("tools", payload)
+        }, "model")
+        self.assertEqual(payload["tools"][0]["function"]["name"], "exec")
 
     def test_responses_reasoning_effort_becomes_chat_reasoning_effort(self):
         payload = responses_to_chat({
@@ -880,10 +1287,17 @@ class RouterTests(unittest.TestCase):
             "model": "ant/claude",
             "instructions": "Be concise",
             "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
+            "tools": [{
+                "type": "function",
+                "name": "exec",
+                "description": "run a command",
+                "parameters": {"type": "object"},
+            }],
             "max_output_tokens": 32,
         }, "claude")
         self.assertEqual(payload["system"], "Be concise")
         self.assertEqual(payload["messages"][0]["content"][0], {"type": "text", "text": "Hello"})
+        self.assertEqual(payload["tools"][0]["name"], "exec")
         self.assertEqual(payload["max_tokens"], 32)
 
     def test_anthropic_response_becomes_responses_response(self):

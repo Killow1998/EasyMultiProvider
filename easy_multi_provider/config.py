@@ -13,6 +13,12 @@ from typing import Any, Dict, Optional
 from urllib.parse import quote, urlparse
 
 from .accounts import AccountError, canonicalize_account_paths, normalize_account, public_accounts
+from .capabilities import (
+    input_modalities_known,
+    make_provenance,
+    normalize_input_modalities,
+    observed_at_now,
+)
 from .vault import VaultError, read_encrypted_text, write_encrypted_text
 
 
@@ -31,9 +37,33 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 _ID = re.compile(r"^[A-Za-z0-9._/-]+$")
 _PROVIDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 MAX_CONTEXT_WINDOW = 100_000_000
+MAX_OUTPUT_LIMIT = MAX_CONTEXT_WINDOW
 _PROTOCOLS = {"auto", "responses", "chat_completions", "anthropic_messages"}
 _AUTH_MODES = {"api_key", "anthropic_api_key", "forward"}
-_TOOL_CALL_MODES = {"native", "disabled"}
+_CAPABILITY_SOURCE_FIELDS = {
+    "streaming",
+    "structured_tools",
+    "parallel_tools",
+    "reasoning_levels",
+    "context_window",
+    "output_limit",
+    "websocket",
+    "input_modalities",
+    "supports_image_detail_original",
+}
+_EXPLICIT_CAPABILITY_FIELDS = {
+    "input_modalities",
+    "supports_image_detail_original",
+}
+_BOOLEAN_CAPABILITIES = {
+    "streaming",
+    "structured_tools",
+    "parallel_tools",
+    "websocket",
+}
+_SAFE_CAPABILITY_ID = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
+_ENDPOINT_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
+_CONCRETE_PROTOCOLS = {"responses", "chat_completions", "anthropic_messages"}
 
 
 class ConfigError(ValueError):
@@ -90,6 +120,195 @@ def _validate_url(value: Any, field: str) -> str:
     return value
 
 
+def _normalize_capabilities(raw: Any, field: str) -> Dict[str, bool]:
+    """Keep only explicitly configured boolean capability facts."""
+
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigError("%s must be an object" % field)
+    result: Dict[str, bool] = {}
+    for name in _BOOLEAN_CAPABILITIES:
+        if name not in raw:
+            continue
+        value = raw[name]
+        if not isinstance(value, bool):
+            raise ConfigError("%s.%s must be boolean" % (field, name))
+        result[name] = value
+    return result
+
+
+def _capability_known(field: str, value: Any) -> bool:
+    if field in _BOOLEAN_CAPABILITIES:
+        return isinstance(value, bool)
+    if field == "reasoning_levels":
+        return isinstance(value, list) and bool(value)
+    if field == "input_modalities":
+        return input_modalities_known(value)
+    if field == "supports_image_detail_original":
+        return isinstance(value, bool)
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _default_capability_source(
+    field: str, values: Dict[str, Any], explicit_fields: set
+) -> str:
+    if field in _EXPLICIT_CAPABILITY_FIELDS:
+        return "manual" if field in explicit_fields else "unknown"
+    return "inferred" if _capability_known(field, values.get(field)) else "unknown"
+
+
+def _normalize_capability_sources(
+    raw: Any, values: Dict[str, Any], explicit_fields: Optional[set] = None
+) -> Dict[str, Dict[str, Any]]:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ConfigError("model.capability_sources must be an object")
+    explicit_fields = explicit_fields or set()
+    result: Dict[str, Dict[str, Any]] = {}
+    for field in _CAPABILITY_SOURCE_FIELDS:
+        if field not in raw:
+            if field in values and _capability_known(field, values[field]):
+                result[field] = make_provenance(
+                    _default_capability_source(field, values, explicit_fields)
+                )
+            continue
+        value = raw[field]
+        if not isinstance(value, dict):
+            raise ConfigError("model.capability_sources.%s must be an object" % field)
+        default_source = _default_capability_source(field, values, explicit_fields)
+        source = value.get("source", default_source)
+        try:
+            provenance = make_provenance(
+                source,
+                value.get("confidence"),
+                value.get("observed_at"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ConfigError("invalid provenance for model.%s" % field) from exc
+        result[field] = provenance
+    return result
+
+
+def _safe_capability_identity(value: Any, field: str) -> str:
+    value = _string(value, field)
+    if value and not _SAFE_CAPABILITY_ID.fullmatch(value):
+        raise ConfigError("%s contains unsupported characters" % field)
+    return value
+
+
+def _normalize_protocol_observation(raw: Any) -> Dict[str, Any]:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ConfigError("protocol_observation must be an object")
+    source = raw.get("source", "unknown")
+    try:
+        result = make_provenance(
+            source,
+            raw.get("confidence"),
+            raw.get("observed_at"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("invalid protocol_observation") from exc
+    fingerprint = _string(raw.get("endpoint_fingerprint"), "protocol_observation.endpoint_fingerprint")
+    if fingerprint and not _ENDPOINT_FINGERPRINT.fullmatch(fingerprint):
+        raise ConfigError("protocol_observation.endpoint_fingerprint is invalid")
+    result["endpoint_fingerprint"] = fingerprint
+    result["deployment_identity"] = _safe_capability_identity(
+        raw.get("deployment_identity"), "protocol_observation.deployment_identity"
+    )
+    result["upstream_model"] = _safe_capability_identity(
+        raw.get("upstream_model"), "protocol_observation.upstream_model"
+    )
+    return result
+
+
+def _normalize_context_calibrations(raw: Any) -> list:
+    """Keep only bounded numeric calibration facts with safe identity keys."""
+
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ConfigError("model.context_calibrations must be a list")
+    result = []
+    for item in raw[:8]:
+        if not isinstance(item, dict):
+            raise ConfigError("model.context_calibrations entries must be objects")
+        fingerprint = _string(
+            item.get("endpoint_fingerprint"),
+            "model.context_calibrations.endpoint_fingerprint",
+        )
+        if not _ENDPOINT_FINGERPRINT.fullmatch(fingerprint):
+            raise ConfigError("model.context_calibrations endpoint fingerprint is invalid")
+        protocol = _string(item.get("protocol"), "model.context_calibrations.protocol")
+        if protocol not in _CONCRETE_PROTOCOLS:
+            raise ConfigError("model.context_calibrations protocol is invalid")
+        upstream = _safe_capability_identity(
+            item.get("upstream_model"),
+            "model.context_calibrations.upstream_model",
+        )
+        deployment = _safe_capability_identity(
+            item.get("deployment_identity"),
+            "model.context_calibrations.deployment_identity",
+        )
+        if not upstream or not deployment:
+            raise ConfigError("model.context_calibrations identity is required")
+        clean = {
+            "endpoint_fingerprint": fingerprint,
+            "upstream_model": upstream,
+            "protocol": protocol,
+            "deployment_identity": deployment,
+        }
+        for name in ("largest_success_estimate", "smallest_failure_estimate"):
+            value = item.get(name)
+            if value in (None, ""):
+                clean[name] = None
+                continue
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                raise ConfigError("model.context_calibrations.%s must be numeric" % name)
+            if isinstance(value, bool) or value <= 0 or value > MAX_CONTEXT_WINDOW:
+                raise ConfigError("model.context_calibrations.%s is out of range" % name)
+            clean[name] = value
+        for name, default in (
+            ("largest_success_source", "unknown"),
+            ("smallest_failure_source", "unknown"),
+        ):
+            source = _string(item.get(name, default), "model.context_calibrations.%s" % name)
+            if source not in ("observed", "unknown"):
+                raise ConfigError("model.context_calibrations.%s is invalid" % name)
+            clean[name] = source
+        for name in ("largest_success_confidence", "smallest_failure_confidence"):
+            value = item.get(name, 1.0 if "largest" in name and clean["largest_success_estimate"] else 1.0 if "smallest" in name and clean["smallest_failure_estimate"] else 0.0)
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                raise ConfigError("model.context_calibrations.%s must be numeric" % name)
+            if not 0.0 <= value <= 1.0:
+                raise ConfigError("model.context_calibrations.%s is out of range" % name)
+            clean[name] = value
+        for name in ("largest_success_observed_at", "smallest_failure_observed_at"):
+            value = item.get(name)
+            if value is not None:
+                try:
+                    make_provenance("observed", observed_at=value)
+                except (TypeError, ValueError) as exc:
+                    raise ConfigError("model.context_calibrations.%s is invalid" % name) from exc
+            clean[name] = value
+        result.append(clean)
+    return result
+
+
+def _resolved_protocol(raw: Any) -> str:
+    value = _string(raw, "resolved_protocol")
+    if value and value not in _PROTOCOLS - {"auto"}:
+        raise ConfigError("resolved_protocol must be a concrete protocol")
+    return value
+
+
 def _normalize_provider(raw: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise ConfigError("each provider must be an object")
@@ -99,11 +318,20 @@ def _normalize_provider(raw: Dict[str, Any]) -> Dict[str, Any]:
         "base_url": _validate_url(raw.get("base_url"), "provider.base_url"),
         "protocol": _string(raw.get("protocol")) or "chat_completions",
         "auth_mode": _string(raw.get("auth_mode")) or "api_key",
-        "tool_call_mode": _string(raw.get("tool_call_mode")) or "native",
         "api_key": _string(raw.get("api_key")),
         "api_key_file": _string(raw.get("api_key_file")),
         "anthropic_version": _string(raw.get("anthropic_version")) or "2023-06-01",
         "enabled": bool(raw.get("enabled", True)),
+        "deployment_identity": _safe_capability_identity(
+            raw.get("deployment_identity"), "provider.deployment_identity"
+        ),
+        "resolved_protocol": _resolved_protocol(raw.get("resolved_protocol")),
+        "protocol_observation": _normalize_protocol_observation(
+            raw.get("protocol_observation")
+        ),
+        "capabilities": _normalize_capabilities(
+            raw.get("capabilities"), "provider.capabilities"
+        ),
     }
     if provider["protocol"] not in _PROTOCOLS:
         raise ConfigError("provider.protocol must be auto, responses, chat_completions, or anthropic_messages")
@@ -111,8 +339,6 @@ def _normalize_provider(raw: Dict[str, Any]) -> Dict[str, Any]:
         raise ConfigError("provider.auth_mode must be api_key, anthropic_api_key, or forward")
     if provider["auth_mode"] == "forward" and provider["protocol"] != "responses":
         raise ConfigError("forward providers must use the Responses protocol")
-    if provider["tool_call_mode"] not in _TOOL_CALL_MODES:
-        raise ConfigError("provider.tool_call_mode must be native or disabled")
     return provider
 
 
@@ -128,9 +354,22 @@ def _normalize_model(raw: Dict[str, Any]) -> Dict[str, Any]:
         raise ConfigError("model.context_window cannot be negative")
     if context_window > MAX_CONTEXT_WINDOW:
         raise ConfigError("model.context_window is too large")
+    output_limit = int(
+        raw.get("output_limit", raw.get("output_token_limit", 0)) or 0
+    )
+    if output_limit < 0:
+        raise ConfigError("model.output_limit cannot be negative")
+    if output_limit > MAX_OUTPUT_LIMIT:
+        raise ConfigError("model.output_limit is too large")
     created_at = int(raw.get("created_at", 0) or 0)
     if created_at < 0:
         raise ConfigError("model.created_at cannot be negative")
+    visibility = _string(raw.get("visibility"), "model.visibility") or "list"
+    if visibility not in {"list", "hide"}:
+        raise ConfigError("model.visibility must be list or hide")
+    supports_image_detail_original = raw.get("supports_image_detail_original", False)
+    if not isinstance(supports_image_detail_original, bool):
+        supports_image_detail_original = False
     model = {
         "id": _validate_id(raw.get("id"), "model.id"),
         "provider": _validate_id(raw.get("provider"), "model.provider"),
@@ -139,9 +378,29 @@ def _normalize_model(raw: Dict[str, Any]) -> Dict[str, Any]:
         "description": _string(raw.get("description")),
         "reasoning_levels": levels,
         "context_window": context_window,
+        "output_limit": output_limit,
         "created_at": created_at,
         "enabled": bool(raw.get("enabled", True)),
+        "visibility": visibility,
+        "input_modalities": normalize_input_modalities(raw.get("input_modalities")),
+        "supports_image_detail_original": supports_image_detail_original,
+        "deployment_identity": _safe_capability_identity(
+            raw.get("deployment_identity"), "model.deployment_identity"
+        ),
+        "resolved_protocol": _resolved_protocol(raw.get("resolved_protocol")),
+        "protocol_observation": _normalize_protocol_observation(
+            raw.get("protocol_observation")
+        ),
+        "context_calibrations": _normalize_context_calibrations(
+            raw.get("context_calibrations")
+        ),
+        "capabilities": _normalize_capabilities(
+            raw.get("capabilities"), "model.capabilities"
+        ),
     }
+    model["capability_sources"] = _normalize_capability_sources(
+        raw.get("capability_sources"), model, set(raw)
+    )
     return model
 
 
@@ -309,6 +568,12 @@ def merge_web_update(
             raise ConfigError("provider.api_key_file is managed by EasyMultiProvider")
         if old.get("api_key_file"):
             provider["api_key_file"] = old["api_key_file"]
+        if old and any(
+            provider.get(field) != old.get(field)
+            for field in ("base_url", "protocol", "deployment_identity")
+        ):
+            provider["resolved_protocol"] = ""
+            provider["protocol_observation"] = {}
     old_accounts = {item["id"]: item for item in current.get("accounts", [])}
     for account in merged.get("accounts", []):
         old = old_accounts.get(account.get("id"), {})
@@ -316,6 +581,46 @@ def merge_web_update(
             raise ConfigError("account.auth_file is managed by EasyMultiProvider")
         if old.get("auth_file"):
             account["auth_file"] = old["auth_file"]
+    old_models = {item["id"]: item for item in current.get("models", [])}
+    for model in merged.get("models", []):
+        if not isinstance(model, dict):
+            continue
+        old = old_models.get(model.get("id"))
+        model["context_calibrations"] = copy.deepcopy(
+            old.get("context_calibrations", []) if old else []
+        )
+        for field in (
+            "visibility",
+            "input_modalities",
+            "supports_image_detail_original",
+        ):
+            if old and field not in model:
+                model[field] = copy.deepcopy(old.get(field))
+        sources = copy.deepcopy(model.get("capability_sources") or {})
+        for field in (
+            "reasoning_levels",
+            "context_window",
+            "output_limit",
+            "streaming",
+            "structured_tools",
+            "parallel_tools",
+            "websocket",
+            "input_modalities",
+            "supports_image_detail_original",
+        ):
+            if field not in model:
+                continue
+            previous = old.get(field) if old else None
+            if old is None or model.get(field) != previous:
+                sources[field] = make_provenance("manual", observed_at=observed_at_now())
+        if sources:
+            model["capability_sources"] = sources
+        if old and any(
+            model.get(field) != old.get(field)
+            for field in ("provider", "upstream_id", "deployment_identity")
+        ):
+            model["resolved_protocol"] = ""
+            model["protocol_observation"] = {}
     normalized = normalize(merged)
     return _canonicalize_private_paths(normalized, Path(path)) if path else normalized
 

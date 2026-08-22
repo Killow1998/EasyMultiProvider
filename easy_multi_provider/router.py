@@ -7,14 +7,28 @@ import json
 import re
 import time
 import uuid
-from typing import Any, Dict, Iterable, Iterator, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import __version__
 from .accounts import AccountError, auth_headers
+from .capabilities import (
+    deployment_identity,
+    endpoint_fingerprint,
+    input_modalities_metadata_source,
+    normalize_input_modalities,
+    observed_at_now,
+)
+from .catalog import load_native_catalog
 from .config import MAX_CONTEXT_WINDOW, api_key
+from .context_guard import (
+    ContextGuardBlocked,
+    format_context_error,
+    is_explicit_context_error,
+    mark_explicit_failure,
+)
 from .quota import QuotaError, refresh_account_quota
 
 
@@ -33,6 +47,20 @@ class RouterError(Exception):
     def __init__(self, message: str, status: int = 400):
         super().__init__(message)
         self.status = status
+
+
+class ContextLengthError(RouterError):
+    """Normalized, non-retryable context-length failure."""
+
+    def __init__(
+        self,
+        observation: Optional[Dict[str, Any]] = None,
+        status: int = 413,
+        preflight: bool = False,
+    ):
+        self.context_observation = dict(observation or {})
+        self.preflight = bool(preflight)
+        super().__init__(format_context_error(self.context_observation), status)
 
 
 _GEMINI_REASONING_LEVELS = (
@@ -76,13 +104,83 @@ _COMPACTION_SUMMARY_PREFIX = (
     "Use it to continue without repeating completed work:"
 )
 _COMPACTION_PREFIX = "emp1:"
+_PROTOCOL_REJECTION_STATUSES = frozenset({404, 405, 415, 501})
+_AUTO_PROTOCOL_REJECTION_STATUSES = _PROTOCOL_REJECTION_STATUSES
+_CONCRETE_PROTOCOLS = frozenset(
+    {"responses", "chat_completions", "anthropic_messages"}
+)
 
 
-def _http_error_detail(exc: HTTPError) -> Tuple[str, str]:
+def _route_error_class(status: Any) -> str:
+    if status in (401, 403):
+        return "auth"
+    if status == 429:
+        return "rate_limit"
+    if status in _PROTOCOL_REJECTION_STATUSES:
+        return "protocol_rejection"
+    if status in (408, 504):
+        return "timeout"
+    if isinstance(status, int) and 500 <= status <= 599:
+        return "upstream_5xx"
+    if status is None:
+        return "network"
+    return "router_error"
+
+
+def _stream_exception(exc: BaseException) -> Tuple[Optional[int], str]:
+    """Map a stream exception to safe terminal metadata without its text."""
+
+    if isinstance(exc, ContextLengthError):
+        return exc.status, "context_length_exceeded"
+    if isinstance(exc, RouterError):
+        return exc.status, _route_error_class(exc.status)
+    if isinstance(exc, TimeoutError):
+        return 504, "timeout"
+    if isinstance(exc, (OSError, URLError)):
+        return 502, "network"
+    return 502, "stream_error"
+
+
+def _terminal_exception(exc: BaseException) -> Dict[str, Any]:
+    if isinstance(exc, ContextLengthError):
+        return {
+            "success": False,
+            "status": exc.status,
+            "error_class": "context_length_exceeded",
+            "context_observation": dict(exc.context_observation),
+        }
+    status, error_class = _stream_exception(exc)
+    return {"success": False, "status": status, "error_class": error_class}
+
+
+def _notify_terminal(
+    callback: Optional[Callable[[Dict[str, Any]], None]],
+    status: Any,
+    error_class: str = "none",
+    context_observation: Optional[Mapping[str, Any]] = None,
+) -> None:
+    if callback is None:
+        return
+    try:
+        value = {
+            "success": error_class == "none" and isinstance(status, int) and 200 <= status < 300,
+            "status": status,
+            "error_class": error_class,
+        }
+        if isinstance(context_observation, Mapping):
+            value["context_observation"] = dict(context_observation)
+        callback(value)
+    except Exception:
+        # Diagnostics and persistence must never change the proxy result.
+        pass
+
+
+def _http_error_detail(exc: HTTPError, raw: Optional[bytes] = None) -> Tuple[str, str]:
     """Return a bounded diagnostic without echoing an upstream HTML page."""
     headers = getattr(exc, "headers", {}) or {}
     content_type = str(headers.get("Content-Type", "")).split(";", 1)[0].strip().lower()
-    raw = exc.read(MAX_UPSTREAM_ERROR_BYTES)
+    if raw is None:
+        raw = exc.read(MAX_UPSTREAM_ERROR_BYTES)
     decoded = raw.decode("utf-8", "replace")
     if content_type in ("text/html", "application/xhtml+xml") or re.match(
         r"\s*(?:<!doctype\s+html|<html\b)", decoded, re.I
@@ -309,6 +407,33 @@ def _gemini_reasoning_levels(model: str, metadata: Dict[str, Any]) -> list:
     return []
 
 
+def _implicit_native_route(
+    config: Dict[str, Any], model_id: str
+) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    if "/" in model_id:
+        return None
+    native = load_native_catalog(config)
+    for item in native.get("models", []):
+        if not isinstance(item, dict) or item.get("slug") != model_id:
+            continue
+        if item.get("supported_in_api", True) is False:
+            continue
+        return (
+            {
+                "id": "codex-native",
+                "name": "Native Codex",
+                "base_url": config.get(
+                    "codex_base_url", "https://chatgpt.com/backend-api/codex"
+                ),
+                "protocol": "responses",
+                "auth_mode": "forward",
+                "implicit_native": True,
+            },
+            {"id": model_id, "upstream_id": model_id},
+        )
+    return None
+
+
 def find_route(config: Dict[str, Any], model_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     for model in config.get("models", []):
         if model.get("enabled", True) and model.get("id") == model_id:
@@ -340,6 +465,10 @@ def find_route(config: Dict[str, Any], model_id: str) -> Tuple[Dict[str, Any], D
     ]
     if len(forward) == 1:
         return forward[0], {"id": model_id, "upstream_id": model_id}
+    if not forward:
+        implicit = _implicit_native_route(config, model_id)
+        if implicit is not None:
+            return implicit
     raise RouterError("unknown model: %s" % model_id, 404)
 
 
@@ -515,6 +644,12 @@ def _gemini_models(provider: Dict[str, Any]) -> list:
                     "input_token_limit": _positive_int(item.get("inputTokenLimit")),
                     "output_token_limit": _positive_int(item.get("outputTokenLimit")),
                     "reasoning_levels": _gemini_reasoning_levels(model_id, item) or ["medium"],
+                    "input_modalities": ["text"],
+                    "supports_image_detail_original": False,
+                    "capability_sources": {
+                        "input_modalities": {"source": "unknown"},
+                        "supports_image_detail_original": {"source": "unknown"},
+                    },
                     "created_at": _positive_int(
                         item.get("created") or item.get("created_at") or item.get("updated_at")
                     ),
@@ -554,6 +689,15 @@ def _generic_models(provider: Dict[str, Any]) -> list:
             or item.get("context_length")
             or item.get("inputTokenLimit")
         )
+        architecture = item.get("architecture")
+        architecture = architecture if isinstance(architecture, dict) else {}
+        raw_modalities = architecture.get("input_modalities")
+        raw_image_detail = item.get(
+            "supports_image_detail_original", architecture.get("supports_image_detail_original")
+        )
+        supports_image_detail_original = (
+            raw_image_detail if isinstance(raw_image_detail, bool) else False
+        )
         result.append(
             {
                 "upstream_id": model_id,
@@ -563,6 +707,18 @@ def _generic_models(provider: Dict[str, Any]) -> list:
                 "description": _model_text(item.get("description"), "", "描述"),
                 "context_window": context,
                 "reasoning_levels": ["medium"],
+                "input_modalities": normalize_input_modalities(raw_modalities),
+                "supports_image_detail_original": supports_image_detail_original,
+                "capability_sources": {
+                    "input_modalities": {
+                        "source": input_modalities_metadata_source(raw_modalities)
+                    },
+                    "supports_image_detail_original": {
+                        "source": "advertised"
+                        if isinstance(raw_image_detail, bool)
+                        else "unknown"
+                    },
+                },
                 "created_at": _positive_int(
                     item.get("created") or item.get("created_at") or item.get("updated_at")
                 ),
@@ -644,6 +800,7 @@ def _request(
     incoming: Dict[str, str],
     stream: bool = False,
     operation: str = "",
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     deadline = time.monotonic() + MAX_UPSTREAM_SECONDS
@@ -651,6 +808,15 @@ def _request(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise RouterError("upstream request timed out", 504)
+        if context_check is not None:
+            try:
+                observation = context_check(payload, stream, operation)
+            except ContextGuardBlocked as exc:
+                raise ContextLengthError(exc.assessment.to_safe_dict(), preflight=True) from exc
+            if isinstance(observation, Mapping):
+                # This is a short-lived safe assessment attached to the resolved
+                # provider copy.  It is never serialized or persisted here.
+                provider["_context_observation"] = dict(observation)
         request = Request(
             _endpoint(provider, operation),
             data=data,
@@ -665,6 +831,17 @@ def _request(
                 else response
             )
         except HTTPError as exc:
+            raw = exc.read(MAX_UPSTREAM_ERROR_BYTES)
+            if is_explicit_context_error(
+                exc.code,
+                (getattr(exc, "headers", {}) or {}).get("Content-Type", ""),
+                raw,
+            ):
+                observation = mark_explicit_failure(
+                    provider.get("_context_observation", {}),
+                    provider.get("_context_observation", {}).get("input_estimate"),
+                )
+                raise ContextLengthError(observation) from exc
             if attempt == 0 and exc.code == 401 and provider.get("auth_mode") == "account":
                 try:
                     refresh_account_quota(provider["account"])
@@ -673,10 +850,9 @@ def _request(
                 else:
                     continue
             if attempt == 0 and exc.code in (429, 500, 502, 503, 504):
-                exc.read(4096)
                 time.sleep(0.5)
                 continue
-            content_type, detail = _http_error_detail(exc)
+            content_type, detail = _http_error_detail(exc, raw)
             if (
                 attempt == 0
                 and exc.code == 400
@@ -699,6 +875,18 @@ def _request(
     raise RouterError("upstream request failed", 502)
 
 
+def _raise_if_context_response(
+    provider: Dict[str, Any], status: Any, content_type: Any, raw: bytes
+) -> None:
+    if not is_explicit_context_error(status, content_type, raw):
+        return
+    observation = mark_explicit_failure(
+        provider.get("_context_observation", {}),
+        provider.get("_context_observation", {}).get("input_estimate"),
+    )
+    raise ContextLengthError(observation)
+
+
 def _content_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -711,6 +899,38 @@ def _content_text(content: Any) -> str:
         elif isinstance(item, dict) and item.get("type") in ("input_text", "output_text", "text"):
             parts.append(str(item.get("text", "")))
     return "".join(parts)
+
+
+def _chat_content(content: Any) -> Any:
+    """Translate Responses message parts without losing image order."""
+
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    result = []
+    has_image = False
+    for item in content:
+        if isinstance(item, str):
+            result.append({"type": "text", "text": item})
+            continue
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type in ("input_text", "output_text", "text"):
+            result.append({"type": "text", "text": str(item.get("text", ""))})
+            continue
+        if item_type != "input_image":
+            continue
+        image_url = item.get("image_url")
+        if isinstance(image_url, dict):
+            image_url = image_url.get("url")
+        if isinstance(image_url, str):
+            result.append({"type": "image_url", "image_url": {"url": image_url}})
+            has_image = True
+    if has_image:
+        return result
+    return "".join(item["text"] for item in result if item["type"] == "text")
 
 
 def _message_item(text: str) -> Dict[str, Any]:
@@ -783,7 +1003,7 @@ def _messages(body: Dict[str, Any]) -> list:
         item_type = item.get("type", "message")
         if item_type == "message":
             role = item.get("role", "user")
-            messages.append({"role": role, "content": _content_text(item.get("content", ""))})
+            messages.append({"role": role, "content": _chat_content(item.get("content", ""))})
         elif item_type == "function_call":
             arguments = item.get("arguments", "{}")
             if not isinstance(arguments, str):
@@ -835,11 +1055,9 @@ def _tools(body: Dict[str, Any]) -> list:
     return result
 
 
-def responses_to_chat(
-    body: Dict[str, Any], upstream_model: str, provider: Dict[str, Any] = None
-) -> Dict[str, Any]:
+def responses_to_chat(body: Dict[str, Any], upstream_model: str) -> Dict[str, Any]:
     payload = {"model": upstream_model, "messages": _messages(body), "stream": bool(body.get("stream"))}
-    tools = [] if provider and provider.get("tool_call_mode") == "disabled" else _tools(body)
+    tools = _tools(body)
     if tools:
         payload["tools"] = tools
     for source, target in (
@@ -937,9 +1155,7 @@ def _anthropic_tools(body: Dict[str, Any]) -> list:
     return result
 
 
-def responses_to_anthropic(
-    body: Dict[str, Any], upstream_model: str, provider: Dict[str, Any] = None
-) -> Dict[str, Any]:
+def responses_to_anthropic(body: Dict[str, Any], upstream_model: str) -> Dict[str, Any]:
     payload = {
         "model": upstream_model,
         "max_tokens": int(body.get("max_output_tokens", 4096) or 4096),
@@ -949,7 +1165,7 @@ def responses_to_anthropic(
     instructions = body.get("instructions")
     if instructions:
         payload["system"] = _content_text(instructions)
-    tools = [] if provider and provider.get("tool_call_mode") == "disabled" else _anthropic_tools(body)
+    tools = _anthropic_tools(body)
     if tools:
         payload["tools"] = tools
     for source, target in (("temperature", "temperature"), ("top_p", "top_p")):
@@ -1015,7 +1231,7 @@ def _validate_textual_protocol(value: Any) -> None:
     if any(marker in text for marker in _TEXTUAL_PROTOCOL_MARKERS):
         raise RouterError(
             "upstream returned textual reasoning/tool-call markup; "
-            "use structured tool calls or set this Provider to text-only mode",
+            "this endpoint must return structured tool calls for Codex",
             502,
         )
 
@@ -1074,14 +1290,16 @@ def forward_responses(
     body: Dict[str, Any],
     model: Dict[str, Any],
     incoming: Dict[str, str],
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> Tuple[int, str, bytes]:
     payload = _responses_payload(provider, body, model)
-    with _request(provider, payload, incoming, bool(body.get("stream"))) as response:
-        return (
-            response.status,
-            response.headers.get("Content-Type", "application/json"),
-            _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses 响应"),
-        )
+    with _request(
+        provider, payload, incoming, bool(body.get("stream")), context_check=context_check
+    ) as response:
+        content_type = response.headers.get("Content-Type", "application/json")
+        raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses 响应")
+        _raise_if_context_response(provider, response.status, content_type, raw)
+        return response.status, content_type, raw
 
 
 def forward_responses_stream(
@@ -1089,10 +1307,14 @@ def forward_responses_stream(
     body: Dict[str, Any],
     model: Dict[str, Any],
     incoming: Dict[str, str],
+    terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ):
     payload = _responses_payload(provider, body, model)
-    upstream = _bounded_stream_response(_request(provider, payload, incoming, True))
-    return _validated_responses_stream(upstream)
+    upstream = _bounded_stream_response(
+        _request(provider, payload, incoming, True, context_check=context_check)
+    )
+    return _validated_responses_stream(upstream, terminal_callback, provider)
 
 
 def forward_responses_compact(
@@ -1100,14 +1322,21 @@ def forward_responses_compact(
     body: Dict[str, Any],
     model: Dict[str, Any],
     incoming: Dict[str, str],
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> Tuple[int, str, bytes]:
     payload = _responses_payload(provider, body, model)
-    with _request(provider, payload, incoming, False, "responses_compact") as response:
-        return (
-            response.status,
-            response.headers.get("Content-Type", "application/json"),
-            _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses compact response"),
-        )
+    with _request(
+        provider,
+        payload,
+        incoming,
+        False,
+        "responses_compact",
+        context_check=context_check,
+    ) as response:
+        content_type = response.headers.get("Content-Type", "application/json")
+        raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses compact response")
+        _raise_if_context_response(provider, response.status, content_type, raw)
+        return response.status, content_type, raw
 
 
 def _responses_payload(
@@ -1128,12 +1357,13 @@ def chat_completion(
     body: Dict[str, Any],
     model: Dict[str, Any],
     incoming: Dict[str, str],
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> Tuple[int, str, bytes]:
-    payload = responses_to_chat(
-        body, _upstream_model(provider, model, body["model"]), provider
-    )
-    with _request(provider, payload, incoming, False) as response:
+    payload = responses_to_chat(body, _upstream_model(provider, model, body["model"]))
+    with _request(provider, payload, incoming, False, context_check=context_check) as response:
+        content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Chat Completions 响应")
+    _raise_if_context_response(provider, response.status, content_type, raw)
     try:
         value = json.loads(raw.decode("utf-8"))
     except ValueError:
@@ -1146,12 +1376,13 @@ def anthropic_completion(
     body: Dict[str, Any],
     model: Dict[str, Any],
     incoming: Dict[str, str],
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> Tuple[int, str, bytes]:
-    payload = responses_to_anthropic(
-        body, _upstream_model(provider, model, body["model"]), provider
-    )
-    with _request(provider, payload, incoming, False) as response:
+    payload = responses_to_anthropic(body, _upstream_model(provider, model, body["model"]))
+    with _request(provider, payload, incoming, False, context_check=context_check) as response:
+        content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Anthropic 响应")
+    _raise_if_context_response(provider, response.status, content_type, raw)
     try:
         value = json.loads(raw.decode("utf-8"))
     except ValueError:
@@ -1203,14 +1434,21 @@ def _summarize(
     body: Dict[str, Any],
     model: Dict[str, Any],
     incoming: Dict[str, str],
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> str:
     payload = _summary_body(body)
     if provider["protocol"] == "responses":
-        _, _, raw = forward_responses(provider, payload, model, incoming)
+        _, _, raw = forward_responses(
+            provider, payload, model, incoming, context_check=context_check
+        )
     elif provider["protocol"] == "chat_completions":
-        _, _, raw = chat_completion(provider, payload, model, incoming)
+        _, _, raw = chat_completion(
+            provider, payload, model, incoming, context_check=context_check
+        )
     else:
-        _, _, raw = anthropic_completion(provider, payload, model, incoming)
+        _, _, raw = anthropic_completion(
+            provider, payload, model, incoming, context_check=context_check
+        )
     return _response_text(raw)
 
 
@@ -1390,8 +1628,25 @@ def _response_json_stream(value: Dict[str, Any]) -> Iterator[bytes]:
     yield _sse_frame("response.completed", {"type": "response.completed", "response": response})
 
 
-def _validated_responses_stream(response: Any) -> Iterator[bytes]:
+def _validated_responses_stream(
+    response: Any,
+    terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    provider: Optional[Dict[str, Any]] = None,
+) -> Iterator[bytes]:
     """Pass through valid Responses SSE and terminate malformed streams explicitly."""
+    reported = False
+
+    def report(
+        status: Any,
+        error_class: str = "none",
+        context_observation: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        nonlocal reported
+        if reported:
+            return
+        reported = True
+        _notify_terminal(terminal_callback, status, error_class, context_observation)
+
     try:
         content_type = str(getattr(response, "headers", {}).get("Content-Type", "")).lower()
         chunks = response
@@ -1405,7 +1660,15 @@ def _validated_responses_stream(response: Any) -> Iterator[bytes]:
                     value = json.loads(raw.decode("utf-8", "replace"))
                 except (UnicodeDecodeError, ValueError):
                     raise RouterError("upstream Responses stream was neither SSE nor valid JSON", 502)
+                if provider is not None:
+                    _raise_if_context_response(
+                        provider,
+                        getattr(response, "status", 400),
+                        content_type,
+                        raw,
+                    )
                 yield from _response_json_stream(value)
+                report(200)
                 return
 
         line_buffer = ""
@@ -1434,6 +1697,14 @@ def _validated_responses_stream(response: Any) -> Iterator[bytes]:
                 return
             if not isinstance(value, dict):
                 return
+            if provider is not None and is_explicit_context_error(
+                400, "application/json", data.encode("utf-8", "replace")
+            ):
+                observation = mark_explicit_failure(
+                    provider.get("_context_observation", {}),
+                    provider.get("_context_observation", {}).get("input_estimate"),
+                )
+                raise ContextLengthError(observation)
             event_type = str(value.get("type") or "")
             if event_type == "response.completed":
                 saw_terminal = True
@@ -1459,9 +1730,17 @@ def _validated_responses_stream(response: Any) -> Iterator[bytes]:
         if not saw_terminal and not saw_error:
             message = "upstream Responses stream ended before response.completed" if saw_data else "upstream Responses stream contained no SSE data"
             yield _response_failure_frame(message)
+            report(502, "stream_incomplete")
         elif not saw_terminal and saw_error:
             yield _response_failure_frame(error_message or "upstream Responses stream returned an error")
+            report(502, "stream_error")
+        else:
+            report(200)
     except RouterError as exc:
+        if isinstance(exc, ContextLengthError):
+            report(exc.status, "context_length_exceeded", exc.context_observation)
+        else:
+            report(exc.status, _route_error_class(exc.status))
         yield _response_failure_frame(str(exc), exc.status)
     finally:
         response.close()
@@ -1472,10 +1751,10 @@ def stream_chat_completion(
     body: Dict[str, Any],
     model: Dict[str, Any],
     incoming: Dict[str, str],
+    terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> Iterable[bytes]:
-    payload = responses_to_chat(
-        body, _upstream_model(provider, model, body["model"]), provider
-    )
+    payload = responses_to_chat(body, _upstream_model(provider, model, body["model"]))
     payload["stream"] = True
     response_id = "resp_" + uuid.uuid4().hex
     message_id = "msg_" + uuid.uuid4().hex
@@ -1501,7 +1780,7 @@ def stream_chat_completion(
         return _sse_frame(event, value)
 
     try:
-        upstream = _request(provider, payload, incoming, True)
+        upstream = _request(provider, payload, incoming, True, context_check=context_check)
         yield frame("response.created", {"type": "response.created", "response": response})
         yield frame(
             "response.output_item.added",
@@ -1531,6 +1810,17 @@ def stream_chat_completion(
             if not isinstance(chunk, dict):
                 continue
             if chunk.get("error"):
+                if is_explicit_context_error(
+                    400,
+                    "application/json",
+                    json.dumps(chunk, ensure_ascii=False).encode("utf-8"),
+                ):
+                    raise ContextLengthError(
+                        mark_explicit_failure(
+                            provider.get("_context_observation", {}),
+                            provider.get("_context_observation", {}).get("input_estimate"),
+                        )
+                    )
                 raise RouterError(
                     "Chat Completions upstream error: %s" % _upstream_error_text(chunk["error"]),
                     502,
@@ -1686,7 +1976,15 @@ def stream_chat_completion(
             },
         )
         yield frame("response.completed", {"type": "response.completed", "response": response})
+        _notify_terminal(terminal_callback, 200)
     except RouterError as exc:
+        terminal = _terminal_exception(exc)
+        _notify_terminal(
+            terminal_callback,
+            terminal["status"],
+            terminal["error_class"],
+            terminal.get("context_observation"),
+        )
         yield _response_failure_frame(str(exc), exc.status)
 
 
@@ -1695,10 +1993,10 @@ def stream_anthropic_completion(
     body: Dict[str, Any],
     model: Dict[str, Any],
     incoming: Dict[str, str],
+    terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> Iterable[bytes]:
-    payload = responses_to_anthropic(
-        body, _upstream_model(provider, model, body["model"]), provider
-    )
+    payload = responses_to_anthropic(body, _upstream_model(provider, model, body["model"]))
     payload["stream"] = True
     response_id = "resp_" + uuid.uuid4().hex
     message_id = "msg_" + uuid.uuid4().hex
@@ -1721,7 +2019,7 @@ def stream_anthropic_completion(
         return _sse_frame(event, value)
 
     try:
-        upstream = _request(provider, payload, incoming, True)
+        upstream = _request(provider, payload, incoming, True, context_check=context_check)
         yield frame("response.created", {"type": "response.created", "response": response})
         yield frame(
             "response.output_item.added",
@@ -1799,29 +2097,347 @@ def stream_anthropic_completion(
         )
         yield frame("response.output_item.done", {"output_index": 0, "item": output})
         yield frame("response.completed", {"type": "response.completed", "response": response})
+        _notify_terminal(terminal_callback, 200)
     except RouterError as exc:
+        terminal = _terminal_exception(exc)
+        _notify_terminal(
+            terminal_callback,
+            terminal["status"],
+            terminal["error_class"],
+            terminal.get("context_observation"),
+        )
         yield _response_failure_frame(str(exc), exc.status)
 
 
-_AUTO_PROTOCOL_REJECTION_STATUSES = {404, 405, 415, 501}
+def _observed_protocol(
+    provider: Dict[str, Any], model: Dict[str, Any]
+) -> Optional[str]:
+    """Return a resolved protocol only when every identity component matches."""
+
+    endpoint = endpoint_fingerprint(provider.get("base_url"))
+    deployment = deployment_identity(provider, model)
+    upstream = str(model.get("upstream_id") or "").strip()
+    if not upstream:
+        return None
+    for source in (model, provider):
+        protocol = source.get("resolved_protocol")
+        observation = source.get("protocol_observation")
+        if protocol not in _CONCRETE_PROTOCOLS or not isinstance(observation, dict):
+            continue
+        if observation.get("endpoint_fingerprint") != endpoint:
+            continue
+        if observation.get("deployment_identity") != deployment:
+            continue
+        if observation.get("upstream_model") != upstream:
+            continue
+        return protocol
+    return None
 
 
-def _auto_protocol_candidates(provider: Dict[str, Any]) -> Tuple[str, ...]:
+def _auto_protocol_candidates(
+    provider: Dict[str, Any], model: Optional[Dict[str, Any]] = None
+) -> Tuple[str, ...]:
     if provider.get("auth_mode") == "anthropic_api_key":
-        return ("anthropic_messages",)
-    base = str(provider.get("base_url", "")).rstrip("/")
-    if base.endswith("/chat/completions"):
-        return ("chat_completions", "responses")
-    return ("responses", "chat_completions")
+        normal = ("anthropic_messages",)
+    else:
+        base = str(provider.get("base_url", "")).rstrip("/")
+        normal = (
+            ("chat_completions", "responses")
+            if base.endswith("/chat/completions")
+            else ("responses", "chat_completions")
+        )
+    observed = _observed_protocol(provider, model or {})
+    if observed in normal:
+        return (observed,) + tuple(item for item in normal if item != observed)
+    return normal
 
 
 def _tag_route(
-    metadata: Dict[str, Any], provider: Dict[str, Any]
+    metadata: Dict[str, Any],
+    provider: Dict[str, Any],
+    model: Optional[Dict[str, Any]] = None,
+    decision: str = "explicit",
+    fallback: bool = False,
 ) -> Dict[str, Any]:
     tagged = dict(metadata)
     tagged["provider_id"] = provider.get("id")
+    tagged["model_id"] = (model or {}).get("id")
     tagged["resolved_protocol"] = provider.get("protocol")
+    tagged["protocol_decision"] = decision
+    tagged["protocol_fallback"] = bool(fallback)
     return tagged
+
+
+def _route_protocol_observation(
+    provider: Dict[str, Any], model: Dict[str, Any]
+) -> Dict[str, Any]:
+    return {
+        "source": "observed",
+        "confidence": 1.0,
+        "observed_at": observed_at_now(),
+        "endpoint_fingerprint": endpoint_fingerprint(provider.get("base_url")),
+        "deployment_identity": deployment_identity(provider, model),
+        "upstream_model": str(model.get("upstream_id") or ""),
+    }
+
+
+def _route_event(
+    metadata: Dict[str, Any],
+    provider: Dict[str, Any],
+    model: Dict[str, Any],
+    terminal: Optional[Dict[str, Any]] = None,
+    response_bytes: int = 0,
+) -> Dict[str, Any]:
+    terminal = terminal or {}
+    event = dict(metadata)
+    event["response_bytes"] = max(0, int(response_bytes or 0))
+    status = terminal.get("status", metadata.get("status"))
+    event["status"] = status
+    success = terminal.get(
+        "success",
+        isinstance(status, int) and 200 <= status < 300,
+    )
+    event["success"] = bool(success)
+    event["error_class"] = (
+        "none"
+        if event["success"]
+        else terminal.get("error_class") or _route_error_class(status)
+    )
+    event["endpoint_fingerprint"] = endpoint_fingerprint(provider.get("base_url"))
+    event["deployment_identity"] = deployment_identity(provider, model)
+    event["upstream_model"] = str(model.get("upstream_id") or "")
+    context_observation = terminal.get("context_observation") or provider.get(
+        "_context_observation"
+    )
+    if isinstance(context_observation, Mapping):
+        event["context_observation"] = dict(context_observation)
+    if event["success"]:
+        event["protocol_observation"] = _route_protocol_observation(provider, model)
+    return event
+
+
+def _emit_observation(
+    callback: Optional[Callable[[Dict[str, Any]], None]], event: Dict[str, Any]
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(event)
+    except Exception:
+        pass
+
+
+def _bind_context_check(
+    provider: Dict[str, Any],
+    model: Dict[str, Any],
+    callback: Optional[Callable[..., Mapping[str, Any]]],
+) -> Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]]:
+    if callback is None:
+        return None
+
+    def check(payload: Dict[str, Any], stream: bool, operation: str) -> Mapping[str, Any]:
+        return callback(provider, model, provider.get("protocol", "unknown"), payload, stream, operation)
+
+    return check
+
+
+def _stream_signal(chunk: Any) -> Optional[Dict[str, Any]]:
+    raw = chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8")
+    if b"response.completed" in raw:
+        return {"success": True, "status": 200, "error_class": "none"}
+    if b"response.failed" in raw:
+        match = re.search(rb"HTTP\s+(\d{3})", raw)
+        status = int(match.group(1)) if match else 502
+        return {
+            "success": False,
+            "status": status,
+            "error_class": _route_error_class(status),
+        }
+    return None
+
+
+def _observed_stream(
+    result: Any,
+    metadata: Dict[str, Any],
+    provider: Dict[str, Any],
+    model: Dict[str, Any],
+    callback: Callable[[Dict[str, Any]], None],
+    terminal: Dict[str, Any],
+) -> Iterator[bytes]:
+    response_bytes = 0
+    saw_terminal = False
+    natural_end = False
+    reported = False
+
+    def report(value: Dict[str, Any]) -> None:
+        nonlocal reported
+        if reported:
+            return
+        reported = True
+        _emit_observation(
+            callback,
+            _route_event(metadata, provider, model, value, response_bytes),
+        )
+
+    try:
+        for chunk in result:
+            response_bytes += len(chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8"))
+            signal = terminal if terminal else _stream_signal(chunk)
+            if signal:
+                terminal.update(signal)
+                saw_terminal = True
+            yield chunk
+        natural_end = True
+    except GeneratorExit:
+        raise
+    except Exception as exc:
+        if not terminal or terminal.get("success") is not True:
+            status, error_class = _stream_exception(exc)
+            terminal.update(
+                {"success": False, "status": status, "error_class": error_class}
+            )
+        raise
+    finally:
+        close = getattr(result, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+        if not reported:
+            if terminal:
+                report(terminal)
+            elif saw_terminal:
+                report({"success": True, "status": 200, "error_class": "none"})
+            elif natural_end:
+                report({"success": False, "status": 502, "error_class": "stream_incomplete"})
+            else:
+                report({"success": False, "status": None, "error_class": "client_disconnect"})
+
+
+def _auto_stream_result(
+    candidates: Tuple[str, ...],
+    provider: Dict[str, Any],
+    model: Dict[str, Any],
+    body: Dict[str, Any],
+    incoming: Dict[str, str],
+    decision: str,
+    callback: Optional[Callable[[Dict[str, Any]], None]],
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+) -> Iterator[bytes]:
+    for index, protocol in enumerate(candidates):
+        resolved = dict(provider)
+        resolved["protocol"] = protocol
+        candidate_decision = "fallback_rejection" if index else decision
+        metadata = _tag_route(
+            {"kind": "stream", "status": 200, "content_type": "text/event-stream"},
+            resolved,
+            model,
+            candidate_decision,
+            index > 0,
+        )
+        terminal: Dict[str, Any] = {}
+        result = None
+        emitted = False
+        response_bytes = 0
+        fallback = False
+        reported = False
+        closed_by_caller = False
+        try:
+            _, result = _proxy_resolved(
+                resolved,
+                model,
+                body,
+                incoming,
+                candidate_decision,
+                index > 0,
+                terminal_callback=lambda value: terminal.update(value),
+                context_check=_bind_context_check(resolved, model, context_check),
+            )
+            for chunk in result:
+                response_bytes += len(chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8"))
+                signal = terminal if terminal else _stream_signal(chunk)
+                if signal:
+                    terminal.update(signal)
+                if (
+                    not emitted
+                    and not terminal.get("success", True)
+                    and terminal.get("status") in _PROTOCOL_REJECTION_STATUSES
+                    and index + 1 < len(candidates)
+                ):
+                    fallback = True
+                    break
+                emitted = True
+                yield chunk
+            if fallback:
+                continue
+            if not terminal:
+                terminal.update(
+                    {"success": False, "status": 502, "error_class": "stream_incomplete"}
+                )
+            if callback is not None:
+                _emit_observation(
+                    callback,
+                    _route_event(metadata, resolved, model, terminal, response_bytes),
+                )
+                reported = True
+            return
+        except GeneratorExit:
+            closed_by_caller = True
+            raise
+        except RouterError as exc:
+            if index + 1 < len(candidates) and exc.status in _PROTOCOL_REJECTION_STATUSES:
+                continue
+            if callback is not None and not reported:
+                _emit_observation(
+                    callback,
+                    _route_event(
+                        metadata,
+                        resolved,
+                        model,
+                        _terminal_exception(exc),
+                        response_bytes,
+                    ),
+                )
+                reported = True
+            raise
+        except Exception as exc:
+            if callback is not None and not reported:
+                status, error_class = _stream_exception(exc)
+                _emit_observation(
+                    callback,
+                    _route_event(
+                        metadata,
+                        resolved,
+                        model,
+                        {
+                            "success": False,
+                            "status": status,
+                            "error_class": error_class,
+                        },
+                        response_bytes,
+                    ),
+                )
+                reported = True
+            raise
+        finally:
+            close = getattr(result, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+            if closed_by_caller and callback is not None and not reported:
+                _emit_observation(
+                    callback,
+                    _route_event(
+                        metadata,
+                        resolved,
+                        model,
+                        {"success": False, "status": None, "error_class": "client_disconnect"},
+                        response_bytes,
+                    ),
+                )
 
 
 def _proxy_resolved(
@@ -1829,10 +2445,14 @@ def _proxy_resolved(
     model: Dict[str, Any],
     body: Dict[str, Any],
     incoming: Dict[str, str],
+    decision: str = "explicit",
+    fallback: bool = False,
+    terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> Tuple[Dict[str, Any], Any]:
     if _is_compaction_trigger(body) and provider["protocol"] != "responses":
         response = _compaction_response(
-            body["model"], _summarize(provider, body, model, incoming)
+            body["model"], _summarize(provider, body, model, incoming, context_check)
         )
         if body.get("stream"):
             return _tag_route(
@@ -1842,6 +2462,9 @@ def _proxy_resolved(
                     "content_type": "text/event-stream",
                 },
                 provider,
+                model,
+                decision,
+                fallback,
             ), _response_json_stream(response)
         return _tag_route(
             {
@@ -1850,18 +2473,35 @@ def _proxy_resolved(
                 "content_type": "application/json",
             },
             provider,
+            model,
+            decision,
+            fallback,
         ), json.dumps(response, ensure_ascii=False).encode("utf-8")
     if body.get("stream") and provider["protocol"] == "chat_completions":
         return _tag_route(
-            {"kind": "stream", "content_type": "text/event-stream"}, provider
-        ), stream_chat_completion(provider, body, model, incoming)
+            {"kind": "stream", "status": 200, "content_type": "text/event-stream"},
+            provider,
+            model,
+            decision,
+            fallback,
+        ), stream_chat_completion(
+            provider, body, model, incoming, terminal_callback, context_check
+        )
     if body.get("stream") and provider["protocol"] == "anthropic_messages":
         return _tag_route(
-            {"kind": "stream", "content_type": "text/event-stream"}, provider
-        ), stream_anthropic_completion(provider, body, model, incoming)
+            {"kind": "stream", "status": 200, "content_type": "text/event-stream"},
+            provider,
+            model,
+            decision,
+            fallback,
+        ), stream_anthropic_completion(
+            provider, body, model, incoming, terminal_callback, context_check
+        )
     if provider["protocol"] == "responses":
         if body.get("stream"):
-            upstream = forward_responses_stream(provider, body, model, incoming)
+            upstream = forward_responses_stream(
+                provider, body, model, incoming, terminal_callback, context_check
+            )
             return _tag_route(
                 {
                     "kind": "stream",
@@ -1869,42 +2509,156 @@ def _proxy_resolved(
                     "content_type": "text/event-stream",
                 },
                 provider,
+                model,
+                decision,
+                fallback,
             ), upstream
-        status, content_type, raw = forward_responses(provider, body, model, incoming)
+        status, content_type, raw = forward_responses(
+            provider, body, model, incoming, context_check
+        )
     elif provider["protocol"] == "chat_completions":
-        status, content_type, raw = chat_completion(provider, body, model, incoming)
+        status, content_type, raw = chat_completion(
+            provider, body, model, incoming, context_check
+        )
     else:
-        status, content_type, raw = anthropic_completion(provider, body, model, incoming)
+        status, content_type, raw = anthropic_completion(
+            provider, body, model, incoming, context_check
+        )
     return _tag_route(
-        {"kind": "body", "status": status, "content_type": content_type}, provider
+        {"kind": "body", "status": status, "content_type": content_type},
+        provider,
+        model,
+        decision,
+        fallback,
     ), raw
+
+
+def _finish_nonstream(
+    callback: Optional[Callable[[Dict[str, Any]], None]],
+    metadata: Dict[str, Any],
+    provider: Dict[str, Any],
+    model: Dict[str, Any],
+    result: Any,
+) -> None:
+    if callback is None:
+        return
+    response_bytes = len(result) if isinstance(result, (bytes, bytearray)) else 0
+    _emit_observation(
+        callback,
+        _route_event(metadata, provider, model, response_bytes=response_bytes),
+    )
 
 
 def proxy(
     config: Dict[str, Any],
     body: Dict[str, Any],
     incoming: Dict[str, str],
+    on_observation: Optional[Callable[[Dict[str, Any]], None]] = None,
+    on_context: Optional[Callable[..., Mapping[str, Any]]] = None,
 ) -> Tuple[Dict[str, Any], Any]:
     model_id = body.get("model")
     if not isinstance(model_id, str) or not model_id:
         raise RouterError("request.model is required")
     provider, model = find_route(config, model_id)
     if provider.get("protocol") != "auto":
-        return _proxy_resolved(provider, model, body, incoming)
+        terminal: Dict[str, Any] = {}
+        try:
+            metadata, result = _proxy_resolved(
+                provider,
+                model,
+                body,
+                incoming,
+                terminal_callback=terminal.update if on_observation and body.get("stream") else None,
+                context_check=_bind_context_check(provider, model, on_context),
+            )
+        except RouterError as exc:
+            _emit_observation(
+                on_observation,
+                _route_event(
+                    _tag_route(
+                        {"kind": "body", "status": exc.status},
+                        provider,
+                        model,
+                    ),
+                    provider,
+                    model,
+                    _terminal_exception(exc),
+                ),
+            )
+            raise
+        if body.get("stream") and on_observation:
+            result = _observed_stream(result, metadata, provider, model, on_observation, terminal)
+            metadata["observation_attached"] = True
+        else:
+            _finish_nonstream(on_observation, metadata, provider, model, result)
+        return metadata, result
 
-    candidates = _auto_protocol_candidates(provider)
+    observed = _observed_protocol(provider, model)
+    candidates = _auto_protocol_candidates(provider, model)
+    decision = "observed_priority" if observed and candidates[0] == observed else "normal_order"
+    if body.get("stream"):
+        first = dict(provider)
+        first["protocol"] = candidates[0]
+        metadata = _tag_route(
+            {"kind": "stream", "status": 200, "content_type": "text/event-stream"},
+            first,
+            model,
+            decision,
+            False,
+        )
+        result = _auto_stream_result(
+            candidates,
+            provider,
+            model,
+            body,
+            incoming,
+            decision,
+            on_observation,
+            on_context,
+        )
+        metadata["observation_attached"] = bool(on_observation)
+        return metadata, result
+
     for index, protocol in enumerate(candidates):
         resolved = dict(provider)
         resolved["protocol"] = protocol
+        candidate_decision = "fallback_rejection" if index else decision
         try:
-            return _proxy_resolved(resolved, model, body, incoming)
-        except RouterError as exc:
-            can_fallback = (
-                index + 1 < len(candidates)
-                and exc.status in _AUTO_PROTOCOL_REJECTION_STATUSES
+            metadata, result = _proxy_resolved(
+                resolved,
+                model,
+                body,
+                incoming,
+                candidate_decision,
+                index > 0,
+                context_check=_bind_context_check(resolved, model, on_context),
             )
-            if not can_fallback:
-                raise
+        except RouterError as exc:
+            if index + 1 < len(candidates) and exc.status in _PROTOCOL_REJECTION_STATUSES:
+                continue
+            _emit_observation(
+                on_observation,
+                _route_event(
+                    _tag_route(
+                        {"kind": "body", "status": exc.status},
+                        resolved,
+                        model,
+                        candidate_decision,
+                        index > 0,
+                    ),
+                    resolved,
+                    model,
+                        _terminal_exception(exc),
+                ),
+            )
+            raise
+        if (
+            metadata.get("status") in _PROTOCOL_REJECTION_STATUSES
+            and index + 1 < len(candidates)
+        ):
+            continue
+        _finish_nonstream(on_observation, metadata, resolved, model, result)
+        return metadata, result
     raise RouterError("unable to resolve provider protocol", 502)
 
 
@@ -1912,26 +2666,79 @@ def proxy_compact(
     config: Dict[str, Any],
     body: Dict[str, Any],
     incoming: Dict[str, str],
+    on_observation: Optional[Callable[[Dict[str, Any]], None]] = None,
+    on_context: Optional[Callable[..., Mapping[str, Any]]] = None,
 ) -> Tuple[Dict[str, Any], bytes]:
     model_id = body.get("model")
     if not isinstance(model_id, str) or not model_id:
         raise RouterError("request.model is required")
     provider, model = find_route(config, model_id)
-    if provider.get("protocol") == "auto":
-        candidates = _auto_protocol_candidates(provider)
-        for index, protocol in enumerate(candidates):
-            resolved = dict(provider)
-            resolved["protocol"] = protocol
-            try:
-                return _proxy_compact_resolved(resolved, model, body, incoming)
-            except RouterError as exc:
-                if (
-                    index + 1 == len(candidates)
-                    or exc.status not in _AUTO_PROTOCOL_REJECTION_STATUSES
-                ):
-                    raise
-        raise RouterError("unable to resolve provider protocol", 502)
-    return _proxy_compact_resolved(provider, model, body, incoming)
+    if provider.get("protocol") != "auto":
+        try:
+            metadata, raw = _proxy_compact_resolved(
+                provider,
+                model,
+                body,
+                incoming,
+                context_check=_bind_context_check(provider, model, on_context),
+            )
+        except RouterError as exc:
+            _emit_observation(
+                on_observation,
+                _route_event(
+                    _tag_route({"kind": "body", "status": exc.status}, provider, model),
+                    provider,
+                    model,
+                    _terminal_exception(exc),
+                ),
+            )
+            raise
+        _finish_nonstream(on_observation, metadata, provider, model, raw)
+        return metadata, raw
+    observed = _observed_protocol(provider, model)
+    candidates = _auto_protocol_candidates(provider, model)
+    decision = "observed_priority" if observed and candidates[0] == observed else "normal_order"
+    for index, protocol in enumerate(candidates):
+        resolved = dict(provider)
+        resolved["protocol"] = protocol
+        candidate_decision = "fallback_rejection" if index else decision
+        try:
+            metadata, raw = _proxy_compact_resolved(
+                resolved,
+                model,
+                body,
+                incoming,
+                candidate_decision,
+                index > 0,
+                context_check=_bind_context_check(resolved, model, on_context),
+            )
+        except RouterError as exc:
+            if index + 1 < len(candidates) and exc.status in _PROTOCOL_REJECTION_STATUSES:
+                continue
+            _emit_observation(
+                on_observation,
+                _route_event(
+                    _tag_route(
+                        {"kind": "body", "status": exc.status},
+                        resolved,
+                        model,
+                        candidate_decision,
+                        index > 0,
+                    ),
+                    resolved,
+                    model,
+                        _terminal_exception(exc),
+                ),
+            )
+            raise
+        if (
+            metadata.get("status") in _PROTOCOL_REJECTION_STATUSES
+            and index + 1 < len(candidates)
+        ):
+            continue
+        _finish_nonstream(on_observation, metadata, resolved, model, raw)
+        return metadata, raw
+    raise RouterError("unable to resolve provider protocol", 502)
 
 
 def _proxy_compact_resolved(
@@ -1939,13 +2746,16 @@ def _proxy_compact_resolved(
     model: Dict[str, Any],
     body: Dict[str, Any],
     incoming: Dict[str, str],
+    decision: str = "explicit",
+    fallback: bool = False,
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> Tuple[Dict[str, Any], bytes]:
     if provider["protocol"] == "responses":
         status, content_type, raw = forward_responses_compact(
-            provider, body, model, incoming
+            provider, body, model, incoming, context_check
         )
     else:
-        summary = _summarize(provider, body, model, incoming)
+        summary = _summarize(provider, body, model, incoming, context_check)
         output = _retained_user_messages(body.get("input"))
         output.append(
             _message_item(_COMPACTION_SUMMARY_PREFIX + "\n\n" + summary)
@@ -1953,5 +2763,9 @@ def _proxy_compact_resolved(
         status, content_type = 200, "application/json"
         raw = json.dumps({"output": output}, ensure_ascii=False).encode("utf-8")
     return _tag_route(
-        {"kind": "body", "status": status, "content_type": content_type}, provider
+        {"kind": "body", "status": status, "content_type": content_type},
+        provider,
+        model,
+        decision,
+        fallback,
     ), raw

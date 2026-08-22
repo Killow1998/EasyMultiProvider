@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from tests.support import ensure_test_master_key
+from easy_multi_provider.capabilities import endpoint_fingerprint
 from easy_multi_provider.config import ConfigError, api_key, load, merge_web_update, normalize, public_config, save
 from easy_multi_provider.accounts import import_account, public_accounts
 
@@ -34,18 +35,136 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(safe["providers"][0]["api_key"], "••••••••")
         self.assertNotIn("secret-value", json.dumps(safe))
 
-    def test_provider_tool_call_mode_defaults_and_validates(self):
-        self.assertEqual(normalize({"providers": [self.provider]})["providers"][0]["tool_call_mode"], "native")
-        disabled = dict(self.provider, tool_call_mode="disabled")
-        self.assertEqual(normalize({"providers": [disabled]})["providers"][0]["tool_call_mode"], "disabled")
-        with self.assertRaises(ConfigError):
-            normalize({"providers": [dict(self.provider, tool_call_mode="text")]})
+    def test_provider_has_no_configurable_tool_call_mode(self):
+        normalized = normalize({"providers": [self.provider]})["providers"][0]
+        self.assertNotIn("tool_call_mode", normalized)
 
     def test_web_update_preserves_omitted_secret(self):
         current = normalize({"providers": [self.provider], "models": [self.model]})
         incoming = public_config(current)
         updated = merge_web_update(current, incoming)
         self.assertEqual(updated["providers"][0]["api_key"], "secret-value")
+
+    def test_protocol_observation_and_capability_sources_round_trip_safely(self):
+        value = normalize({
+            "providers": [{
+                **self.provider,
+                "protocol": "auto",
+                "resolved_protocol": "responses",
+                "protocol_observation": {
+                    "source": "observed",
+                    "confidence": 1,
+                    "observed_at": "2026-08-21T00:00:00+00:00",
+                    "endpoint_fingerprint": endpoint_fingerprint(self.provider["base_url"]),
+                    "deployment_identity": "production",
+                    "upstream_model": "deepseek-chat",
+                },
+            }],
+            "models": [{
+                **self.model,
+                "context_window": 128000,
+                "output_limit": 4096,
+                "capability_sources": {
+                    "reasoning_levels": {
+                        "source": "advertised",
+                        "confidence": 0.75,
+                        "observed_at": "2026-08-21T00:00:00+00:00",
+                    },
+                    "context_window": {
+                        "source": "manual",
+                        "confidence": 1,
+                        "observed_at": "2026-08-21T00:01:00+00:00",
+                    },
+                },
+            }],
+        })
+        safe = public_config(value)
+        provider = safe["providers"][0]
+        model = safe["models"][0]
+        self.assertEqual(provider["protocol"], "auto")
+        self.assertEqual(provider["resolved_protocol"], "responses")
+        self.assertEqual(provider["protocol_observation"]["source"], "observed")
+        self.assertEqual(model["capability_sources"]["reasoning_levels"]["source"], "advertised")
+        self.assertEqual(model["capability_sources"]["context_window"]["source"], "manual")
+        self.assertNotIn("secret-value", json.dumps(safe))
+
+    def test_old_model_values_receive_inferred_provenance(self):
+        value = normalize({"providers": [self.provider], "models": [{
+            **self.model,
+            "context_window": 128000,
+        }]})
+        sources = value["models"][0]["capability_sources"]
+        self.assertEqual(sources["reasoning_levels"]["source"], "inferred")
+        self.assertEqual(sources["context_window"]["source"], "inferred")
+
+    def test_web_changed_capability_values_receive_manual_provenance(self):
+        current = normalize({
+            "providers": [self.provider],
+            "models": [{
+                **self.model,
+                "context_window": 128000,
+                "capability_sources": {
+                    "context_window": {
+                        "source": "advertised",
+                        "confidence": 0.75,
+                        "observed_at": "2026-08-21T00:00:00+00:00",
+                    },
+                },
+            }],
+        })
+        incoming = public_config(current)
+        incoming["models"][0]["context_window"] = 256000
+        incoming["models"][0]["reasoning_levels"] = ["high"]
+        updated = merge_web_update(current, incoming)
+        sources = updated["models"][0]["capability_sources"]
+        self.assertEqual(sources["context_window"]["source"], "manual")
+        self.assertEqual(sources["reasoning_levels"]["source"], "manual")
+
+    def test_context_calibration_round_trips_as_safe_numeric_identity_and_web_cannot_overwrite(self):
+        fingerprint = endpoint_fingerprint(self.provider["base_url"])
+        current = normalize({
+            "providers": [self.provider],
+            "models": [{
+                **self.model,
+                "upstream_id": "deepseek-chat",
+                "context_calibrations": [{
+                    "endpoint_fingerprint": fingerprint,
+                    "upstream_model": "deepseek-chat",
+                    "protocol": "chat_completions",
+                    "deployment_identity": "default",
+                    "largest_success_estimate": 1000,
+                    "smallest_failure_estimate": 1200,
+                    "largest_success_source": "observed",
+                    "smallest_failure_source": "observed",
+                }],
+            }],
+        })
+        incoming = public_config(current)
+        incoming["models"][0]["context_calibrations"] = [{
+            "endpoint_fingerprint": fingerprint,
+            "upstream_model": "attacker-model",
+            "protocol": "responses",
+            "deployment_identity": "default",
+            "smallest_failure_estimate": 1,
+        }]
+        updated = merge_web_update(current, incoming)
+        calibration = updated["models"][0]["context_calibrations"][0]
+        self.assertEqual(calibration["upstream_model"], "deepseek-chat")
+        self.assertEqual(calibration["largest_success_estimate"], 1000)
+        serialized = json.dumps(public_config(updated))
+        self.assertNotIn("secret-value", serialized)
+
+    def test_protocol_observation_rejects_raw_endpoint(self):
+        with self.assertRaises(ConfigError):
+            normalize({
+                "providers": [{
+                    **self.provider,
+                    "protocol_observation": {
+                        "source": "observed",
+                        "endpoint_fingerprint": "https://example.com/v1?key=secret",
+                    },
+                }],
+            })
 
     def test_web_update_saves_account_model_visibility_and_preserves_credentials(self):
         current = normalize({

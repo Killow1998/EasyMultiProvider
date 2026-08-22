@@ -319,7 +319,7 @@ Live canary 不允许修改真实仓库。第二步失败时先判断 401/403/40
 
 - 结构化 Chat Completions `tool_calls` 被转换为 Responses function call；
 - 下一 turn 的 function call/output 历史被正确还原为 assistant/tool messages；
-- `tool_call_mode=disabled` 时不把工具定义发给上游；
+- 所有 Coding Agent 路由都保留结构化工具定义；
 - 普通中文、emoji、分片 UTF-8 不乱码；
 - 文本 `<think>`、`<tool_call>`、`<|tool_calls|>` 不被显示或执行，而是明确 502；
 - `stream=true` 但上游返回普通 JSON 时仍完成；
@@ -327,7 +327,7 @@ Live canary 不允许修改真实仓库。第二步失败时先判断 401/403/40
 - JSON error body 被保留为可读上游错误；
 - 断流没有 `response.completed`，并由 CLI 标记失败而非静默成功。
 
-如果本地回归全部通过，可对 `chen/glm` 做最多一次纯文本和一次受控工具 canary；
+如果本地回归全部通过，可对 `example/glm` 做最多一次纯文本和一次受控工具 canary；
 失败只记录为可选上游结果，不得阻断 subscription 主线，也不得切换到 Gemini。
 
 ### Phase 7：Soak，目标 4–6 小时，总运行上限 8 小时

@@ -1,9 +1,14 @@
 [project]
 name = "easy-multi-provider"
-version = "0.4.0"
+version = "0.5.0"
 description = "Web-configured local model router for Codex"
 requires-python = ">=3.8"
-dependencies = ["cryptography>=2.8,<45", "zstandard>=0.22,<1"]
+dependencies = [
+    "cryptography>=2.8,<45",
+    "psutil>=5.9,<8",
+    "tomlkit>=0.13.2,<0.14",
+    "zstandard>=0.22,<1",
+]
 license = "MIT"
 
 [project.scripts]

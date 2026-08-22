@@ -18,6 +18,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 .muted{color:#94a3b8}.pill{display:inline-block;background:#1e3a8a;border-radius:99px;padding:2px 8px;font-size:11px}.danger-text,.refresh-error{color:#fca5a5}
 #status{position:fixed;top:14px;right:18px;z-index:10;max-width:min(520px,calc(100vw - 36px));padding:8px 12px;background:#111c31;border:1px solid #3b4d70;border-radius:7px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:none}#status:empty{display:none}
 .quota{white-space:pre-line}.model-hidden{opacity:.55}.provider-model-group{background:#0d1729;border:1px solid #253552;border-radius:8px;padding:12px;margin:12px 0}.provider-model-group h3{color:#bfdbfe}.model-selection{max-height:420px;overflow:auto;border:1px solid #253552;border-radius:7px}.model-option{display:flex;gap:10px;align-items:flex-start;padding:9px;border-bottom:1px solid #253552}.model-option:last-child{border-bottom:0}.model-option input{width:auto;margin-top:4px}.model-option strong{color:#e5e7eb}.model-option small{display:block;color:#94a3b8}
+.integration-card{background:#0d1729;border:1px solid #253552;border-radius:8px;padding:14px}.integration-card-header{display:flex;align-items:center;gap:8px}.integration-card-header h3{margin:0}.integration-card[data-state="conflict"]{border-color:#b91c1c}.integration-card[data-state="active"]{border-color:#2563eb}.integration-card[data-state="prepared"],.integration-card[data-state="restoring"]{border-color:#d97706}
 .modal-backdrop{position:fixed;inset:0;background:rgba(2,6,23,.72);display:flex;align-items:center;justify-content:center;padding:18px;z-index:20}.modal-backdrop.hidden{display:none}.modal{width:min(620px,100%);max-height:90vh;overflow:auto;background:#111c31;border:1px solid #3b4d70;border-radius:12px;box-shadow:0 24px 80px rgba(0,0,0,.45);padding:20px}.modal h2{margin-top:0}.modal-status{margin-top:12px;color:#fca5a5}.modal-status:empty{display:none}.modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:16px}.modal-actions button{margin:0}.choice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.choice{display:block;text-align:left;background:#1b2a45;border:1px solid #334155;border-radius:8px;padding:13px;color:#e5e7eb}.choice:hover{border-color:#60a5fa;background:#22365a}.choice strong{display:block}.choice small{display:block;color:#aab8cf;margin-top:4px}
 @media(max-width:760px){.grid,.choice-grid{grid-template-columns:1fr}.wide{grid-column:auto}table{display:block;overflow:auto;white-space:nowrap}.modal{padding:16px}}
 </style>
@@ -33,15 +34,28 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
   <div class="wide"><label>本地服务地址</label><div id="listen_info" class="muted">当前页面地址</div></div>
   <div class="wide"><label>原生 Codex catalog 路径</label><input id="native_catalog_path"></div>
 </div>
-<div class="toolbar"><button onclick="generateIntegration()">生成 EMP 配置</button></div>
-<pre id="integration">尚未加载</pre>
+<div id="integration" class="integration-card" data-state="unknown">
+  <div class="integration-card-header"><span id="integration_badge" class="pill">加载中</span><h3 id="integration_title">Codex 集成状态</h3></div>
+  <p id="integration_summary" class="muted">正在读取集成状态。</p>
+  <div id="integration_commands"></div>
+  <div class="toolbar"><button id="integration_enable" onclick="confirmIntegrationAction('enable')">启用默认 Codex</button><button id="integration_restore" class="secondary" onclick="confirmIntegrationAction('restore')">恢复原生 Codex</button><button id="integration_reload" class="secondary" onclick="confirmIntegrationAction('reload')" hidden>应用模型变化到 Codex</button></div>
+  <p class="muted">配置文件和 Codex 当前加载状态分开显示；所有操作都在这里一次确认完成，不需要终端命令。</p>
+</div>
+</section>
+
+<section>
+<h2>最近运行状态</h2>
+<p class="muted">这里只保留少量请求状态，不保存消息内容、响应内容或凭据。</p>
+<div class="toolbar"><button class="secondary" onclick="loadDiagnostics()">刷新状态</button></div>
+<div id="diagnostics_summary" class="muted">正在读取最近运行状态。</div>
+<div id="diagnostics_records"></div>
 </section>
 
 <section>
 <h2>Codex Subscription Accounts</h2>
 <p class="muted">服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器，也不会写入 config/catalog。</p>
 <div class="toolbar"><button onclick="selectAccountFile()">导入账户</button><button id="refresh_all" class="secondary" onclick="refreshAllAccounts()">刷新全部余量</button><button class="secondary" onclick="exportMigration()">导出 EMP 数据</button><button class="secondary" onclick="selectMigrationFile()">导入 EMP 数据</button><input id="a_auth_json" type="file" hidden accept=".json,.bk1,.bk2,.bk3,.backup" onchange="accountFileChosen(this)"><input id="migration_file" type="file" hidden accept=".emp,application/octet-stream" onchange="migrationFileChosen(this)"></div>
-<p class="muted">导入时只需要填写账户 ID；显示名称和模型前缀默认使用账户 ID，可在列表中编辑。重复账户不会生成重复订阅模型，但不会自动删除加密凭据。</p>
+<p class="muted">导入时只需要填写账户 ID；显示名称和模型前缀默认使用账户 ID，可在列表中编辑。重复账户不会生成重复前缀模型；与当前 Codex 登录重复时，账户的模型显示设置将直接控制原生模型列表。</p>
 <p class="muted">EMP 迁移包包含配置、模型、Provider key 和订阅凭据；导出时设置迁移密码，导入到其他设备后会重新写入该设备自己的加密存储。</p>
 <pre>19%/7d MMDD-HHmm (UTC-7)
 99%/5h MMDD-HHmm (UTC-7)</pre>
@@ -100,7 +114,11 @@ async function api(path, options = {}) {
   const text = await response.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {error:{message:text || '服务器返回了无效响应'}}; }
-  if (!response.ok) throw new Error(data.error?.message || response.statusText || `HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(data.error?.message || response.statusText || `HTTP ${response.status}`);
+    error.payload = data;
+    throw error;
+  }
   return data;
 }
 function bytesToBase64(bytes) { let binary = ''; const chunk = 0x8000; for (let index = 0; index < bytes.length; index += chunk) binary += String.fromCharCode(...bytes.subarray(index, index + chunk)); return btoa(binary); }
@@ -146,19 +164,113 @@ function fill() {
   $('native_catalog_path').value = state.native_catalog_path;
   renderAccounts(); renderProviders(); renderModels();
 }
-async function load() { try { state = await api('/api/config'); fill(); await loadIntegration(); notice('配置已加载'); } catch (error) { notice(error.message, true); } }
-function integrationText(info) { return info.snippet + '\n\n# profile: ' + info.profile_path + '\n# run: ' + info.command + '\n# resume: ' + info.resume_command + '\n# catalog: ' + info.catalog_path; }
-async function generateIntegration() {
+async function load() { try { state = await api('/api/config'); fill(); if (await loadIntegration()) notice('配置已加载'); await loadDiagnostics(); } catch (error) { notice(error.message, true); } }
+function renderIntegration(info) {
+  const configuration = info.configuration || {};
+  const runtime = info.runtime || {};
+  const views = {
+    native: ['Native', '当前使用原生 Codex；只有明确点击启用后 EMP 才会接管。', ''],
+    emp_applied: ['EMP applied', 'EMP 已写入 Codex 的默认 endpoint 和模型 catalog。', '<p class="muted">正常使用：<code>codex</code> · 恢复会话：<code>codex resume</code> · 选择模型：<code>/model</code></p>'],
+    prepared: ['Recovery needed', '检测到未完成的集成，优先恢复原生 Codex。', ''],
+    restoring: ['Recovery needed', '集成正在恢复，优先继续恢复原生 Codex。', ''],
+    conflict: ['Conflict', '检测到配置冲突，不会覆盖当前用户配置；请先恢复原生 Codex。', ''],
+    unavailable: ['Unavailable', '集成状态暂时不可用；当前显示的配置状态已过期。', '']
+  };
+  const view = views[configuration.state] || views.unavailable;
+  const runtimeMessages = {
+    emp_loaded: 'Codex 已加载 EMP 模型目录，当前即可使用。',
+    native_loaded: 'Codex 已加载原生模型目录，当前即可使用。',
+    stopped_waiting_for_start: 'Codex 当前已停止；下次正常启动时会加载目标配置。',
+    reload_required: '模型目录有变化，需要确认一次“应用模型变化到 Codex”。',
+    stopping: '正在安全关闭旧的 Codex 运行实例。',
+    stop_failed: '无法证明旧的 Codex 已停止；目标配置已保留，可重试应用。',
+    verification_failed: 'Codex 已返回，但没有加载完整的目标模型目录。',
+    unsupported: '当前 Codex CLI 不提供 EMP 能安全使用的关闭接口。',
+    not_checked: '当前进程尚未进行实时检查；显示的是离线配置状态。'
+  };
+  const runtimeState = runtime.state || 'not_checked';
+  const runtimeMessage = runtimeMessages[runtimeState] || runtimeMessages.not_checked;
+  const runtimeDetail = runtime.detail ? `<details><summary>查看同步详情</summary><p class="muted">${esc(runtime.detail)}</p></details>` : '';
+  const requestError = info.error && info.error.message ? ` 请求失败：${info.error.message}` : '';
+  const staleMessage = configuration.stale ? ' 配置状态已过期。' : '';
+  $('integration_summary').textContent = view[1] + staleMessage + ' ' + runtimeMessage + requestError;
+  $('integration_commands').innerHTML = view[2] + runtimeDetail;
+  $('integration').dataset.state = configuration.state || 'unknown';
+  $('integration_badge').textContent = view[0];
+  $('integration_title').textContent = 'Codex 集成状态';
+  const canEnable = configuration.state === 'native';
+  const canRestore = configuration.state === 'emp_applied' || configuration.state === 'prepared' || configuration.state === 'restoring' || configuration.state === 'conflict';
+  $('integration_enable').disabled = !canEnable;
+  $('integration_restore').disabled = !canRestore;
+  $('integration_reload').hidden = !runtime.action_required;
+  $('integration_reload').disabled = !runtime.action_required || runtimeState === 'unsupported';
+}
+async function loadIntegration() {
   try {
-    state.native_catalog_path = $('native_catalog_path').value.trim();
-    state = await api('/api/config', {method:'POST', body:JSON.stringify(state)});
-    const info = await api('/api/integration/generate', {method:'POST', body:'{}'});
-    fill(); $('integration').textContent = integrationText(info);
-    openModal('EMP 配置已生成', `<p>配置文件和合并 catalog 已写入本机。</p><label>启动命令</label><pre>${esc(info.command)}</pre><label>恢复会话（原生 Codex）</label><pre>${esc(info.resume_command)}</pre><p class="muted">Profile：<code>${esc(info.profile_path)}</code><br>Catalog：<code>${esc(info.catalog_path)}</code></p>`, '', null);
-    notice('EMP 配置已生成');
+    const info = await api('/api/integration');
+    renderIntegration(info);
+    return info;
   } catch (error) {
+    renderIntegration({configuration:{state:'unavailable', stale:true},runtime:{state:'not_checked'},error:{message:error.message}});
     notice(error.message, true);
-    openModal('生成 EMP 配置失败', `<p class="danger-text">${esc(error.message)}</p>`, '', null);
+    return false;
+  }
+}
+function diagnosticsTransportLabel(value) { return ({http:'普通请求',sse:'流式请求',websocket:'WebSocket'}[value] || '请求'); }
+function diagnosticsProtocolLabel(value) { return ({responses:'Responses',chat_completions:'Chat Completions',anthropic_messages:'Anthropic Messages',unknown:'未知协议'}[value] || '未知协议'); }
+function diagnosticsContextLabel(record) { const decision = ({allowed:'上下文正常',warned:'上下文需关注',blocked:'已拦截：上下文过大',unknown:'上下文未知'}[record.context_decision] || '上下文未知'); const estimate = record.estimated_tokens == null ? '估算未知' : `估算 ${Number(record.estimated_tokens).toLocaleString()} tokens`; const limit = record.safe_input_limit == null ? '安全上限未知' : `安全上限 ${Number(record.safe_input_limit).toLocaleString()}`; return `${decision} · ${estimate} · ${limit}`; }
+function renderDiagnostics(payload) {
+  const records = Array.isArray(payload.records) ? payload.records : [];
+  $('diagnostics_summary').textContent = records.length ? `最近保留 ${records.length} 条状态（最多 ${Number(payload.capacity || records.length)} 条）` : '还没有请求状态。';
+  if (!records.length) { $('diagnostics_records').innerHTML = ''; return; }
+  $('diagnostics_records').innerHTML = `<table><tr><th>模型</th><th>结果</th><th>上下文</th><th>协议 / 通道</th><th>耗时</th></tr>${records.slice().reverse().slice(0, 8).map(record => { const success = record.error_class === 'none' && Number(record.status) >= 200 && Number(record.status) < 300; const result = success ? '成功' : (record.error_class === 'client_disconnect' ? '客户端中断' : '需要关注'); const fallback = record.fallback ? ' · 已自动切换' : ''; return `<tr><td><code>${esc(record.model_id || '未知模型')}</code></td><td>${esc(result)}${fallback}</td><td>${esc(diagnosticsContextLabel(record))}</td><td>${esc(diagnosticsProtocolLabel(record.protocol))} · ${esc(diagnosticsTransportLabel(record.transport))}</td><td>${Number(record.duration_ms || 0).toLocaleString()} ms</td></tr>`; }).join('')}</table>`;
+}
+async function loadDiagnostics() { try { renderDiagnostics(await api('/api/diagnostics')); return true; } catch (error) { $('diagnostics_summary').textContent = '运行状态暂时不可用。'; return false; } }
+function confirmIntegrationAction(action) {
+  const actions = {
+    enable: ['启用默认 Codex', 'EMP 将写入目标配置，然后安全关闭当前 Codex，使新目录在自动恢复或下次启动时生效。'],
+    restore: ['恢复原生 Codex', 'EMP 将恢复原生配置，然后安全关闭当前 Codex，使原生目录在自动恢复或下次启动时生效。'],
+    reload: ['应用模型变化到 Codex', 'EMP 已保存模型目录；本操作只会安全关闭当前 Codex，让它重新读取目录。']
+  };
+  const selected = actions[action]; if (!selected) return;
+  const body = `<p>${esc(selected[1])}</p><p class="muted">当前连接会断开，正在执行的请求可能中断。EMP 不会启动替代进程，也不会修改会话、WebSocket、压缩或认证设置。</p>`;
+  openModal(selected[0], body, selected[0], () => submitIntegrationAction(action));
+}
+function integrationOutcomeMessage(info) {
+  const runtime = info && info.runtime || {};
+  if (runtime.state === 'emp_loaded') return 'Codex 已加载 EMP 模型，当前即可使用';
+  if (runtime.state === 'native_loaded') return 'Codex 已加载原生模型，当前即可使用';
+  if (runtime.state === 'stopped_waiting_for_start') return '配置已保存；Codex 将在下次正常启动时加载';
+  return runtime.detail || '操作已完成';
+}
+async function submitIntegrationAction(action) {
+  const progress = '正在准备 · 保存目标配置 · 安全关闭 Codex · 观察是否自动恢复';
+  $('modal_status').textContent = progress;
+  notice(progress);
+  try {
+    if (action === 'enable') {
+      state.native_catalog_path = $('native_catalog_path').value.trim();
+      state = await api('/api/config', {method:'POST', body:JSON.stringify(state)});
+      await api('/api/integration/enable', {method:'POST', body:JSON.stringify({confirm_reload:true})});
+    } else if (action === 'restore') {
+      await api('/api/integration/restore', {method:'POST', body:JSON.stringify({confirm_reload:true})});
+    } else if (action === 'reload') {
+      await api('/api/integration/reload', {method:'POST', body:JSON.stringify({confirm_reload:true})});
+    } else {
+      throw new Error('未知集成操作');
+    }
+    const refreshed = await loadIntegration();
+    if (!refreshed) throw new Error('集成状态刷新失败');
+    await loadDiagnostics();
+    const message = integrationOutcomeMessage(refreshed);
+    $('modal_status').textContent = message;
+    closeModal();
+    notice(message);
+  } catch (error) {
+    if (error.payload && error.payload.configuration && error.payload.runtime) renderIntegration(error.payload);
+    $('modal_status').textContent = error.message;
+    notice(error.message, true);
+    throw error;
   }
 }
 async function persistState(message) {
@@ -172,7 +284,8 @@ function renderAccounts() {
   if (!accounts.length) { $('accounts').innerHTML = '<p class="muted">还没有 Codex subscription 账户。</p>'; return; }
   const rows = accounts.map(a => {
     const busy = refreshingAccounts.has(a.id); const error = refreshErrors[a.id];
-    return `<tr><td><code>${esc(a.id)}</code>${a.name && a.name !== a.id ? '<br>'+esc(a.name) : ''}${a.quota && a.quota.account_label ? '<br><span class="muted">'+esc(a.quota.account_label)+'</span>' : ''}</td><td><span class="pill">${esc(a.prefix)}</span></td><td><span class="quota">${esc(quotaText(a))}</span><br><span class="muted">${esc(creditText(a))}</span>${error ? '<br><span class="refresh-error">刷新失败：'+esc(error)+'</span>' : ''}</td><td>${a.credential_set ? '凭据已保存' : '未导入凭据'}${a.duplicate ? '<br><span class="danger-text">已过滤：与'+esc(a.duplicate_of)+'重复</span>' : ''}</td><td><button class="secondary" onclick="editAccount('${esc(a.id)}')">编辑</button><button class="secondary" ${busy ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? '刷新中…' : '刷新'}</button><button class="danger" onclick="removeAccount('${esc(a.id)}')">删除</button></td></tr>`;
+    const duplicateText = a.duplicate ? (a.duplicate_of === '当前 Codex 登录' ? '与当前 Codex 登录重复；模型显示设置作用于原生列表' : '与'+esc(a.duplicate_of)+'重复；不生成重复前缀模型') : '';
+    return `<tr><td><code>${esc(a.id)}</code>${a.name && a.name !== a.id ? '<br>'+esc(a.name) : ''}${a.quota && a.quota.account_label ? '<br><span class="muted">'+esc(a.quota.account_label)+'</span>' : ''}</td><td><span class="pill">${esc(a.prefix)}</span></td><td><span class="quota">${esc(quotaText(a))}</span><br><span class="muted">${esc(creditText(a))}</span>${error ? '<br><span class="refresh-error">刷新失败：'+esc(error)+'</span>' : ''}</td><td>${a.credential_set ? '凭据已保存' : '未导入凭据'}${duplicateText ? '<br><span class="muted">'+duplicateText+'</span>' : ''}</td><td><button class="secondary" onclick="editAccount('${esc(a.id)}')">编辑</button><button class="secondary" ${busy ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? '刷新中…' : '刷新'}</button><button class="danger" onclick="removeAccount('${esc(a.id)}')">删除</button></td></tr>`;
   }).join('');
   $('accounts').innerHTML = `<table><tr><th>账户</th><th>前缀</th><th>余量</th><th>状态</th><th>操作</th></tr>${rows}</table>`;
 }
@@ -199,8 +312,9 @@ async function submitAccountImport() {
 function editAccount(id) {
   const account = (state.accounts || []).find(item => item.id === id); if (!account) return;
   const options = state.subscription_models || []; const hidden = new Set(account.hidden_models || []);
+  const visibilityHint = account.duplicate && account.duplicate_of === '当前 Codex 登录' ? '<p class="muted">此账户与当前 Codex 登录重复；下方设置会控制无前缀原生模型在 Codex /model 中的显示。</p>' : '';
   const modelSelection = options.length ? `<label>在 Codex /model 中显示</label><div class="toolbar"><button type="button" class="secondary" onclick="setSubscriptionModelChecks(true)">全部显示</button><button type="button" class="secondary" onclick="setSubscriptionModelChecks(false)">全部隐藏</button></div><div class="model-selection">${options.map(model => `<label class="model-option"><input type="checkbox" name="subscription_model" value="${esc(model.id)}" ${hidden.has(model.id) ? '' : 'checked'}><span><strong>${esc(model.display_name || model.id)}</strong><small>${esc(model.id)}</small></span></label>`).join('')}</div>` : '<p class="muted">当前没有可用的原生 Coding Agent 模型；请先让 Codex 更新原生 catalog。</p>';
-  openModal('编辑账户', `<p class="muted">账户 ID：<code>${esc(id)}</code></p><label>显示名称 / 模型前缀<input id="modal_account_alias" value="${esc(account.name || id)}"></label><p class="muted">保存后这个值同时用于显示名称和模型前缀。Codex 内部隐藏模型（例如 Auto Review）不会出现在下方。</p>${modelSelection}`, '保存修改', async () => {
+  openModal('编辑账户', `<p class="muted">账户 ID：<code>${esc(id)}</code></p><label>显示名称 / 模型前缀<input id="modal_account_alias" value="${esc(account.name || id)}"></label><p class="muted">保存后这个值同时用于显示名称和模型前缀。Codex 内部隐藏模型（例如 Auto Review）不会出现在下方。</p>${visibilityHint}${modelSelection}`, '保存修改', async () => {
     const alias = $('modal_account_alias').value.trim() || id;
     const selected = new Set([...document.querySelectorAll('input[name="subscription_model"]:checked')].map(input => input.value));
     const hiddenModels = options.length ? options.filter(model => !selected.has(model.id)).map(model => model.id) : (account.hidden_models || []);
@@ -216,10 +330,9 @@ async function removeAccount(id) { if (!confirm('删除账户 '+id+' 的本地�
 function renderProviders() {
   const providers = state.providers || [];
   if (!providers.length) { $('providers').innerHTML = '<p class="muted">还没有 Provider。</p>'; return; }
-  const toolLabel = value => value === 'disabled' ? '仅文本' : '结构化 tool call';
-  $('providers').innerHTML = `<table><tr><th>ID</th><th>Endpoint</th><th>协议</th><th>认证</th><th>工具调用</th><th>操作</th></tr>${providers.map(p => {
+  $('providers').innerHTML = `<table><tr><th>ID</th><th>Endpoint</th><th>协议</th><th>认证</th><th>操作</th></tr>${providers.map(p => {
     const models = (state.models || []).filter(model => model.provider === p.id); const allHidden = models.length > 0 && models.every(model => !model.enabled);
-    return `<tr><td><code>${esc(p.id)}</code><br>${esc(p.name)}</td><td>${esc(p.base_url)}</td><td>${esc(protocolLabel(p.protocol))}</td><td>${esc(authLabel(p.auth_mode))}${p.api_key_set ? ' · key已设置' : ''}</td><td>${esc(toolLabel(p.tool_call_mode))}</td><td><button class="secondary" onclick="discoverProvider('${esc(p.id)}')">拉取模型</button><button class="secondary" onclick="editProvider('${esc(p.id)}')">编辑</button><button class="secondary" ${models.length ? '' : 'disabled'} onclick="toggleProviderModels('${esc(p.id)}', ${allHidden})">${allHidden ? '显示全部模型' : '隐藏全部模型'}</button><button class="danger" onclick="removeProvider('${esc(p.id)}')">删除</button></td></tr>`;
+    return `<tr><td><code>${esc(p.id)}</code><br>${esc(p.name)}</td><td>${esc(p.base_url)}</td><td>${esc(protocolLabel(p.protocol))}</td><td>${esc(authLabel(p.auth_mode))}${p.api_key_set ? ' · key已设置' : ''}</td><td><button class="secondary" onclick="discoverProvider('${esc(p.id)}')">拉取模型</button><button class="secondary" onclick="editProvider('${esc(p.id)}')">编辑</button><button class="secondary" ${models.length ? '' : 'disabled'} onclick="toggleProviderModels('${esc(p.id)}', ${allHidden})">${allHidden ? '显示全部模型' : '隐藏全部模型'}</button><button class="danger" onclick="removeProvider('${esc(p.id)}')">删除</button></td></tr>`;
   }).join('')}</table>`;
 }
 async function toggleProviderModels(id, enabled) {
@@ -242,12 +355,12 @@ function chooseOfficialProvider(key) {
 }
 function openCustomProviderForm(existing) {
   existing = existing || {};
-  openModal(existing.id ? '编辑自建 Provider' : '添加自建 Provider', `<div class="grid"><div><label>ID（必填）</label><input id="modal_provider_id" value="${esc(existing.id || '')}" placeholder="例如 my-provider" ${existing.id ? 'readonly' : ''}></div><div><label>显示名称（可选）</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="留空使用 ID"></div><div class="wide"><label>Base URL（必填）</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com/v1"></div><div><label>协议</label><select id="modal_provider_protocol"><option value="auto">自动检测</option><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></div><div><label>认证</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option></select></div><div><label>工具调用</label><select id="modal_provider_tools"><option value="native">结构化 tool call</option><option value="disabled">仅文本（不发送工具定义）</option></select></div><div class="wide"><label>API Key${existing.api_key_set ? '（留空保持已有值）' : '（必填）'}</label><input id="modal_provider_key" type="password"></div></div><p class="muted">自动检测不会额外生成测试内容：首次真实请求优先使用 Responses，端点明确不支持时回退 Chat Completions，并保存成功协议。Anthropic Provider 请选择 Anthropic 认证。模型必须返回标准结构化工具调用，无法做到时可切换为“仅文本”。</p>`, '保存 Provider', async () => {
+  openModal(existing.id ? '编辑自建 Provider' : '添加自建 Provider', `<div class="grid"><div><label>ID（必填）</label><input id="modal_provider_id" value="${esc(existing.id || '')}" placeholder="例如 my-provider" ${existing.id ? 'readonly' : ''}></div><div><label>显示名称（可选）</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="留空使用 ID"></div><div class="wide"><label>Base URL（必填）</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com/v1"></div><div><label>协议</label><select id="modal_provider_protocol"><option value="auto">自动检测</option><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></div><div><label>认证</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option></select></div><div class="wide"><label>API Key${existing.api_key_set ? '（留空保持已有值）' : '（必填）'}</label><input id="modal_provider_key" type="password"></div></div><p class="muted">自动检测不会额外生成测试内容：首次真实请求优先使用 Responses，端点明确不支持时回退 Chat Completions，并保存成功协议。Anthropic Provider 请选择 Anthropic 认证。</p>`, '保存 Provider', async () => {
     const id = $('modal_provider_id').value.trim(); const base = $('modal_provider_base').value.trim(); if (!id || !base) throw new Error('ID 和 Base URL 不能为空'); const keyValue = $('modal_provider_key').value.trim();
     if (!keyValue && !existing.api_key_set) throw new Error('请填写 API Key');
-    await saveProvider({id, name:$('modal_provider_name').value.trim() || id, base_url:base, protocol:$('modal_provider_protocol').value, auth_mode:$('modal_provider_auth').value, tool_call_mode:$('modal_provider_tools').value, api_key:keyValue}); closeModal();
+    await saveProvider({id, name:$('modal_provider_name').value.trim() || id, base_url:base, protocol:$('modal_provider_protocol').value, auth_mode:$('modal_provider_auth').value, api_key:keyValue}); closeModal();
   });
-  if (existing.protocol) $('modal_provider_protocol').value = existing.protocol; if (existing.auth_mode) $('modal_provider_auth').value = existing.auth_mode; if (existing.tool_call_mode) $('modal_provider_tools').value = existing.tool_call_mode;
+  if (existing.protocol) $('modal_provider_protocol').value = existing.protocol; if (existing.auth_mode) $('modal_provider_auth').value = existing.auth_mode;
 }
 function editProvider(id) { const provider = (state.providers || []).find(p => p.id === id); if (!provider) return; const officialKey = Object.keys(officialProviders).find(key => officialProviders[key].id === provider.id); const official = officialKey && officialProviders[officialKey]; if (official && provider.base_url === official.base_url) chooseOfficialProvider(officialKey); else openCustomProviderForm(provider); }
 async function saveProvider(provider) {
@@ -268,9 +381,14 @@ function renderModels() {
 async function discoverProvider(id) { try { notice('正在拉取 ' + id + ' 的模型列表 …'); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider:id})}); openModelImportModal(id, result.models || []); } catch (error) { notice('拉取失败：' + error.message, true); } }
 function openModelImportModal(provider, models) {
   const sorted = [...models].sort(modelSort);
-  const body = `<p class="muted">${esc(provider)} 发现 ${sorted.length} 个模型。默认全部勾选；取消勾选的不会写入配置。</p><div class="model-selection">${sorted.map(m => `<label class="model-option"><input type="checkbox" name="discovered_model" value="${esc(m.upstream_id)}" checked><span><strong>${esc(m.display_name || m.upstream_id)}</strong><small>${esc(m.upstream_id)} · context ${Number(m.context_window || 0).toLocaleString()}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</small></span></label>`).join('')}</div>`;
-  openModal('选择要导入的模型', body, '导入选中模型', async () => { const selected = [...document.querySelectorAll('input[name="discovered_model"]:checked')].map(input => input.value); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider, selected})}); closeModal(); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice(`${provider} 已导入 ${result.added} 个模型`); });
+  const imported = new Set((state.models || []).filter(model => model.provider === provider).map(model => model.upstream_id));
+  const body = `<p class="muted">${esc(provider)} 发现 ${sorted.length} 个模型。已导入的模型默认保留，新发现的模型默认不选。</p><div class="toolbar"><input id="discovered_search" placeholder="搜索模型名称或 ID" oninput="filterDiscoveredModels(this.value)"><button id="discovered_select_all" type="button" class="secondary" onclick="setDiscoveredChecks(true)">全选</button><button id="discovered_clear_all" type="button" class="secondary" onclick="setDiscoveredChecks(false)">全不选</button><span id="discovered_count" class="muted"></span></div><div id="discovered_models" class="model-selection">${sorted.map(m => { const id = m.upstream_id || ''; const text = (m.display_name || id) + ' ' + id; return `<label class="model-option" data-discovered-option data-search="${esc(text.toLowerCase())}"><input type="checkbox" name="discovered_model" value="${esc(id)}" ${imported.has(id) ? 'checked' : ''} onchange="updateDiscoveredCount()"><span><strong>${esc(m.display_name || id)}</strong><small>${esc(id)} · context ${Number(m.context_window || 0).toLocaleString()}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</small></span></label>`; }).join('')}</div>`;
+  openModal('选择要导入的模型', body, '导入选中模型', async () => { const selected = [...document.querySelectorAll('input[name="discovered_model"]:checked')].map(input => input.value); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider, selected})}); closeModal(); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); const integration = await loadIntegration(); notice(`${provider} 已导入 ${result.added} 个模型、隐藏 ${result.hidden || 0} 个${integration && integration.runtime && integration.runtime.action_required ? '；请应用模型变化到 Codex' : ''}`); });
+  filterDiscoveredModels('');
 }
+function filterDiscoveredModels(value) { const query = String(value || '').trim().toLowerCase(); document.querySelectorAll('[data-discovered-option]').forEach(option => { option.hidden = Boolean(query) && !String(option.dataset.search || '').includes(query); }); const select = $('discovered_select_all'); const clear = $('discovered_clear_all'); if (select) select.textContent = query ? '全选搜索结果' : '全选'; if (clear) clear.textContent = query ? '全不选搜索结果' : '全不选'; updateDiscoveredCount(); }
+function setDiscoveredChecks(checked) { document.querySelectorAll('[data-discovered-option]').forEach(option => { if (!option.hidden) { const input = option.querySelector('input[name="discovered_model"]'); if (input) input.checked = checked; } }); updateDiscoveredCount(); }
+function updateDiscoveredCount() { const options = [...document.querySelectorAll('input[name="discovered_model"]')]; const visible = options.filter(input => !input.closest('[data-discovered-option]')?.hidden); const selected = options.filter(input => input.checked).length; const count = $('discovered_count'); if (count) count.textContent = `已选 ${selected}/${options.length}（当前结果 ${visible.filter(input => input.checked).length}/${visible.length}）`; }
 function openManualModelModal(modelId = '') {
   const existing = (state.models || []).find(m => m.id === modelId) || {}; editingModelId = modelId; modalReasoningLevels = existing.reasoning_levels || null;
   const options = (state.providers || []).map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join('');
@@ -286,7 +404,6 @@ async function testModel(id) { try { notice('正在测试 ' + id + ' …'); cons
 function openModal(title, body, submitLabel, submit) { $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || '确定'; button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; button.onclick = submit ? async () => { button.disabled = true; button.textContent = '处理中…'; $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { button.disabled = false; button.textContent = label; } } : null; $('modal_backdrop').classList.remove('hidden'); }
 function closeModal() { $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 function backdropClose(event) { if (event.target === $('modal_backdrop')) closeModal(); }
-async function loadIntegration() { try { const info = await api('/api/integration'); $('integration').textContent = integrationText(info); } catch (error) { $('integration').textContent = error.message; } }
 load();
 </script>
 </body>

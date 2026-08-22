@@ -5,23 +5,23 @@ Codex as the client and exposes one local Responses endpoint that can route to
 Codex subscriptions, OpenAI-compatible APIs, Gemini AI Studio, and Anthropic
 Messages providers.
 
-The stable public baseline is `v0.1.0`; the current development line targets
-`v0.4.0`. The v0.3.0 subscription-forwarding changes are merged and locally
-validated; other platforms and the ChatGPT App path still require separate
-manual acceptance.
+The current source version is `v0.5.0`. It is covered by offline tests and has
+been accepted on the current Linux host with Codex CLI/TUI, Desktop App,
+native and prefixed subscriptions, external models, image input, and native
+resume. Cross-platform packaging and runtime checks remain future hardening.
 
-## Install a Release
+## Install
 
-Download the wheel from the GitHub Release page and install it in an isolated
-environment:
+Clone the repository and let `uv` create the isolated Python environment:
 
 ```bash
-uv venv
-uv pip install ./easy_multi_provider-0.4.0-py3-none-any.whl
+git clone git@github.com:Killow1998/EasyMultiProvider.git
+cd EasyMultiProvider
+uv sync
 ```
 
-The wheel includes the Web UI, so it does not require a source checkout at
-runtime. The source checkout remains useful for development and tests.
+The package includes the Web UI. A local wheel can be produced with `uv build`
+when a source checkout is not desired on the target machine.
 
 ## Features
 
@@ -30,12 +30,21 @@ runtime. The source checkout remains useful for development and tests.
 - Multiple encrypted Codex subscription credentials.
 - Duplicate subscription detection without deleting encrypted credentials.
 - Per-subscription model visibility without exposing native hidden models such
-  as Codex Auto Review.
+  as Codex Auto Review. Hidden native service models remain routable for Codex
+  internal features even though users cannot select them in `/model`. When an
+  imported account matches the current Codex login, its visibility choices
+  control the unprefixed native model list instead of creating duplicate aliases.
 - Chat Completions, Responses, and Anthropic Messages upstream protocols.
+- Provider-advertised text/image model capabilities in the Codex catalog, with
+  image-preserving Responses forwarding and Chat Completions conversion.
 - Browser model discovery, manual model editing, visibility toggles, and
   connection tests, including a Provider-wide hide/show action.
 - Codex quota, rate-limit, and credit snapshots when the local Codex app-server
   exposes them.
+- Recoverable default-Codex integration that preserves native session identity,
+  `codex resume`, WebSockets, request compression, remote compaction, and MCP.
+- Capability provenance, bounded privacy-safe diagnostics, and a Context Guard
+  that checks the translated upstream payload without owning conversation history.
 - Encrypted `.emp` migration bundles for moving configuration and credentials
   between machines.
 - Loopback-only management by default.
@@ -63,7 +72,7 @@ Export the same key whenever EasyMultiProvider runs:
 
 ```bash
 export EASY_MULTI_PROVIDER_MASTER_KEY='<your-existing-fernet-key>'
-uv run python -m easy_multi_provider --config config.json
+uv run python -m easy_multi_provider serve --config config.json
 ```
 
 For a local-only setup, the CLI also reads `state/master.key` when the
@@ -87,7 +96,7 @@ works. Fix or start that proxy, or test direct access with:
 ```bash
 env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
     -u http_proxy -u https_proxy -u all_proxy \
-    uv run python -m easy_multi_provider --config config.json
+    uv run python -m easy_multi_provider serve --config config.json
 ```
 
 The Web UI writes subscription credentials and provider API keys to encrypted
@@ -104,19 +113,21 @@ The dashboard provides:
   combined display-name/model-prefix value, choose which native Coding Agent
   models that subscription exposes, and remove local encrypted credentials.
   Native entries already hidden by Codex, such as Auto Review, are never
-  offered as subscription models. Export or import an encrypted `.emp` bundle
-  for migration.
+  offered as subscription models. A duplicate of the current Codex login stays
+  visible for management, does not create prefixed duplicates, and controls
+  which unprefixed native models appear in `/model`. Export or import an
+  encrypted `.emp` bundle for migration.
 - **Providers**: choose an official preset with fixed endpoint/protocol data,
   including **ChatGPT Subscription**, which forwards the Codex login carried by
-  the EMP profile, or create a custom Provider with a Base URL, protocol, and
-  API key without exposing the stored key back to the browser.
+  the incoming Codex request, or create a custom Provider with a Base URL,
+  protocol, and API key without exposing the stored key back to the browser.
 - **Models**: preview the upstream model list, select which models to import,
   edit context windows, test a model, and hide unused entries without deleting
   them. Models are grouped by Provider; visible and newer models appear first.
   A Provider row can hide or show all of its imported models at once.
-- **Codex integration**: generate the merged catalog and write one EMP profile
-  to `$CODEX_HOME/emp.config.toml` (or `~/.codex/emp.config.toml` by default),
-  then show native Codex start and resume commands.
+- **Codex integration**: explicitly enable EMP for the default Codex
+  configuration after the listener is ready, inspect recovery state, and
+  restore native Codex without a wrapper command or separate profile.
 
 Only the account ID is required during import. Display name and model prefix
 default to that ID.
@@ -163,51 +174,93 @@ use `EASY_MULTI_PROVIDER_MASTER_KEY`. Then start EMP, open its one-use browser
 URL, and choose **Import EMP Data**. The source `config.json`, `state/`, and
 planning files are not required on the destination.
 
-## Codex Profile and Shared Session History
+## Default Codex Integration and Shared Session History
 
-Click **Generate EMP Config** in the Web UI. EMP writes one profile for the
-whole router and prints the exact command to use. Start EMP in one terminal
-and the opt-in profile in another:
+Start EMP, open its one-use browser URL, and click **Enable Default Codex**.
+Activation is explicit and is available only after the listener is ready:
 
 ```bash
-uv run python -m easy_multi_provider --config config.json
-codex --profile emp
+uv run python -m easy_multi_provider serve --config config.json
 ```
 
-All accounts and Providers managed by EMP are one Provider from Codex's point
-of view. Use `/model` to switch between entries such as
-`subscription/gpt-5.6-luna`, `glm-provider/glm`, and
-`gemini/gemini-2.5-flash` within the same EMP session group.
+EMP temporarily manages only the root `openai_base_url` and
+`model_catalog_json` fields in `$CODEX_HOME/config.toml`. It records a private
+integration lease so a normal shutdown, a later EMP start, or the offline
+recovery command can compare and restore those fields without rewriting
+unrelated TOML settings or comments.
 
-The plain Codex command remains the normal subscription client:
+**Enable EMP for Codex** and **Restore native Codex** are each one confirmed
+transaction. EMP writes the target catalog and leased configuration first,
+then asks Codex Remote Control to stop gracefully. Because `stopped` and
+`notRunning` cover only its pid-managed daemon, EMP always follows either result
+with one narrowly scoped residual psutil scan. The same scan is used for the
+documented unmanaged App Server error, but not for permission or malformed
+responses. It gracefully terminates only verified same-user foreground Remote
+Control or listening App Server hosts whose effective `CODEX_HOME` matches the
+active integration manager. EMP classifies owner, executable, and semantic
+argv before reading only that candidate's `CODEX_HOME`; an absent value means
+the current user's platform-default Codex home. Different, unreadable,
+ambiguous, or changed homes are excluded and revalidated before termination.
+Official Node `bin/codex` shims must
+resolve to `@openai/codex/bin/codex.js`; Codex clients, helpers, lookalikes,
+ambiguous identities, and other users are excluded. EMP never escalates to a
+hard kill. Known value-taking Codex root options may precede the host
+subcommand; unknown options, missing values, and unrelated positional prefixes
+make the process ineligible instead of triggering a loose argv search.
+EMP never starts or restarts Codex. If an external owner brings Codex back, EMP observes
+`model/list` for at most 20 seconds and verifies the complete expected model
+set. If nothing returns, the operation succeeds as
+`stopped_waiting_for_start`; the next normal Codex start loads the target.
+
+A later catalog refresh only records `reload_required`. Use the visible
+**Sync and reconnect Codex** action once to apply that already-written catalog.
+Every interrupting action uses a custom confirmation modal and is never
+triggered by page loading, ordinary saving, `doctor`, or offline `restore`.
+Process identifiers, command lines, executable paths, and environment values
+are not returned by the API, displayed in the Web UI, logged, or persisted.
+
+After activation, use the ordinary native commands:
 
 ```bash
 codex
+codex resume
 codex resume --all
 ```
 
-The EMP profile keeps Codex's native `openai` session identity and changes only
-its `openai_base_url`. This lets the native resume picker show the same history
-as the default profile:
+Use `/model` to switch between native subscription aliases and external models
+such as `subscription/gpt-5.6-luna`, `glm-provider/glm`, or
+`gemini/gemini-2.5-flash`. When a model has a known context limit, its display
+name includes the usable size, such as `GPT-5.6-Sol [258K]`; unknown limits are
+left unlabeled. The Desktop App uses this display name, while the TUI receives
+the same value as `Context 258K` in the model description because its picker
+renders the model slug as the primary label. No `emp-resume`, `--profile emp`, alternate session directory,
+or session database migration is involved; Codex remains the only owner of
+threads, history, resume, fork, and native compaction.
+
+EMP does not disable Codex request-body compression, remote compaction,
+WebSockets, MCP, or other native features. It accepts compressed HTTP requests
+and the Responses WebSocket transport, passes native Responses compaction
+through, and supplies compatible compaction for translated Chat Completions and
+Anthropic models.
+
+If EMP was interrupted or Codex still points at a stopped listener, inspect and
+repair the leased integration without starting the server:
 
 ```bash
-codex resume --profile emp
-codex resume --all --profile emp
+uv run python -m easy_multi_provider doctor
+uv run python -m easy_multi_provider restore
 ```
 
-No helper command or session database migration is required. Without `--all`,
-Codex keeps its normal current-directory filter. Because the history is shared,
-plain `codex resume` can also display sessions created through the EMP profile;
-the profile-specific Base URL does not affect plain `codex` startup.
+Both commands support `--json`. `doctor` is read-only and reports durable
+configuration separately from stale/offline runtime accounting; it never
+probes Codex. Offline `restore` changes only EMP-owned fields that still match
+the lease and records `reload_required`; it never claims `native_loaded`
+without a live observation. Conflicting user edits are reported and preserved.
 
-The generated profile does not disable Codex request-body compression, remote
-compaction, WebSocket, or other native features. EMP accepts compressed HTTP
-requests and the Responses WebSocket transport. It passes native Responses
-compaction through and supplies compatible compaction for translated Chat
-Completions and Anthropic models.
-
-An unprefixed native model such as `gpt-5.6-luna` requires exactly one enabled
-`forward` provider. Otherwise use the account prefix or the provider prefix.
+Known unprefixed native models such as `gpt-5.6-luna` automatically use the
+current validated Codex login. No visible `forward` Provider is required.
+Imported subscriptions and external Providers continue to use their configured
+prefixes.
 
 Custom Providers can use `auto` protocol mode without first importing models.
 The first real model request prefers Responses and falls back to Chat
@@ -236,9 +289,9 @@ negotiation failure.
 Chat Completions providers preserve standard structured tool calls, including
 tool-call history on the next turn. If an upstream emits `<think>` or
 `<tool_call>` as ordinary text, EMP stops that response with a clear upstream
-error instead of exposing or executing the markup. The Provider editor also
-offers **仅文本**, which omits tool definitions for endpoints that should only
-answer conversationally.
+error instead of exposing or executing the markup. EMP always preserves Codex
+tool definitions; conversational-only endpoints are not suitable as coding-agent
+Providers.
 
 ## Provider Routing
 
@@ -261,18 +314,23 @@ appends the protocol endpoint, for example `/chat/completions`.
 
 ## ChatGPT App Compatibility Check
 
-EMP is a separate local process and does not write the default Codex config or
-change the ChatGPT App by itself. The supported workflow is to use the `emp`
-profile explicitly for EMP and leave the normal profile unchanged.
+EMP is a separate local process. It changes the default Codex configuration
+only after **Enable Default Codex** is clicked and restores the two leased fields
+on a normal shutdown. Desktop App support uses the same public Codex
+configuration path; it does not use browser automation or private App state.
 
 Before relying on the setup, verify both paths:
 
-1. Test a normal ChatGPT App conversation with EMP stopped.
-2. Start EMP and repeat a normal ChatGPT App conversation.
-3. Run `codex --profile emp`, choose `glm-provider/glm` with `/model`, and
-   confirm the request reaches EMP.
-4. Resume a normal session with plain `codex resume --all`.
-5. Stop EMP and confirm the normal App/session path still works.
+1. Test a normal Desktop App conversation with EMP stopped and native state
+   restored.
+2. Start EMP and click **Enable Default Codex**. Confirm the one operation that
+   writes the target configuration and gracefully releases any stale runtime.
+   No second synchronization action is required for initial enable.
+3. Choose one native subscription model and one external model and complete a
+   fresh request with each.
+4. Confirm plain `codex resume --all` still shows the same native history.
+5. Stop EMP normally, or run `restore`, and confirm the App and CLI return to
+   native routing.
 
 The ChatGPT App path is a manual acceptance test because its provider/config
 loading behavior depends on the installed App version.
@@ -287,8 +345,12 @@ loading behavior depends on the installed App version.
 | `/api/accounts/<id>/quota` | POST | Refresh one account's quota |
 | `/api/providers/discover` | POST | Discover provider models |
 | `/api/catalog/refresh` | POST | Regenerate the Codex model catalog |
-| `/api/integration` | GET | Return the Codex integration snippet |
-| `/api/integration/generate` | POST | Regenerate the catalog and write the EMP Codex profile |
+| `/api/integration` | GET | Read safe leased-integration status |
+| `/api/integration/enable` | POST | Enable EMP for the default Codex configuration |
+| `/api/integration/restore` | POST | Compare and restore EMP-owned Codex fields |
+| `/api/integration/reload` | POST | User-confirmed graceful stop and model-list verification after a later catalog change |
+| `/api/capabilities` | GET | Read capability provenance and safe context status |
+| `/api/diagnostics` | GET | Read the bounded privacy-safe request status ring |
 | `/api/migration/export` | POST | Download an encrypted `.emp` migration bundle |
 | `/api/migration/import` | POST | Decrypt and merge an `.emp` migration bundle |
 | `/v1/models` | GET | List enabled routed models |
@@ -326,6 +388,6 @@ curl http://127.0.0.1:4200/v1/models
 - Migration bundles are encrypted with a user-supplied password; the target
   machine re-encrypts imported credentials with its own local master key.
 - External API providers do not claim to have Codex subscription balances.
-- Run a real text request before relying on tools, reasoning, images, search,
-  or provider-specific features; protocol support varies by upstream.
-- The v0.3.0 release candidate has not been audited with Codex Security.
+- Missing modality metadata remains text-only. After importing a vision model,
+  regenerate the catalog, fully restart Codex, and verify one real image request;
+  protocol and vision support still depend on the upstream.

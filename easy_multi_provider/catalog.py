@@ -7,9 +7,10 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .accounts import duplicate_account_status
+from .capabilities import codex_input_modalities
 from .config import MAX_CONTEXT_WINDOW
 
 EFFORT_DESCRIPTIONS = {
@@ -20,6 +21,48 @@ EFFORT_DESCRIPTIONS = {
     "xhigh": "Extra high reasoning depth for hard tasks",
     "max": "Maximum reasoning depth",
 }
+
+
+def _usable_context_window(model: Dict[str, Any]) -> int:
+    try:
+        context_window = int(model.get("context_window", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    if context_window <= 0:
+        return 0
+    try:
+        percentage = float(model.get("effective_context_window_percent", 100) or 100)
+    except (TypeError, ValueError):
+        percentage = 100
+    if 0 < percentage <= 100:
+        return max(1, round(context_window * percentage / 100))
+    return context_window
+
+
+def _compact_context_window(tokens: int) -> str:
+    if tokens >= 1_000_000:
+        value = ("%.2f" % (tokens / 1_000_000)).rstrip("0").rstrip(".")
+        return value + "M"
+    if tokens >= 1_000:
+        return "%dK" % round(tokens / 1_000)
+    return str(tokens)
+
+
+def _display_name_with_context(model: Dict[str, Any]) -> str:
+    name = str(model.get("display_name") or model.get("slug") or model.get("id") or "")
+    context_window = _usable_context_window(model)
+    if not context_window:
+        return name
+    return "%s [%s]" % (name, _compact_context_window(context_window))
+
+
+def _description_with_context(model: Dict[str, Any]) -> str:
+    description = str(model.get("description") or "")
+    context_window = _usable_context_window(model)
+    if not context_window:
+        return description
+    context = "Context %s" % _compact_context_window(context_window)
+    return "%s · %s" % (description, context) if description else context
 
 
 def native_path(config: Dict[str, Any]) -> Path:
@@ -52,6 +95,13 @@ def _reasoning_levels(values: List[str]) -> List[Dict[str, str]]:
 
 def _external_entry(model: Dict[str, Any], template: Dict[str, Any]) -> Dict[str, Any]:
     entry = copy.deepcopy(template)
+    for field in (
+        "context_window",
+        "max_context_window",
+        "effective_context_window_percent",
+        "auto_compact_token_limit",
+    ):
+        entry.pop(field, None)
     levels = model.get("reasoning_levels") or ["medium"]
     entry.update(
         {
@@ -60,15 +110,18 @@ def _external_entry(model: Dict[str, Any], template: Dict[str, Any]) -> Dict[str
             "description": model.get("description") or "External provider model",
             "default_reasoning_level": levels[0],
             "supported_reasoning_levels": _reasoning_levels(levels),
-            "visibility": "list",
+            "visibility": model.get("visibility", "list"),
             "supported_in_api": True,
-            "input_modalities": ["text"],
+            "input_modalities": codex_input_modalities(model.get("input_modalities")),
             "supports_reasoning_summaries": False,
             "default_reasoning_summary": "none",
             "support_verbosity": False,
             "default_verbosity": None,
             "supports_search_tool": False,
-            "supports_image_detail_original": False,
+            "supports_image_detail_original": model.get(
+                "supports_image_detail_original", False
+            )
+            is True,
             "supports_parallel_tool_calls": False,
             "apply_patch_tool_type": None,
         }
@@ -78,6 +131,8 @@ def _external_entry(model: Dict[str, Any], template: Dict[str, Any]) -> Dict[str
         entry["context_window"] = context_window
         entry["max_context_window"] = context_window
         entry["auto_compact_token_limit"] = context_window * 4 // 5
+    entry["display_name"] = _display_name_with_context(entry)
+    entry["description"] = _description_with_context(entry)
     return entry
 
 
@@ -87,9 +142,10 @@ def _account_entry(account: Dict[str, Any], native: Dict[str, Any]) -> Dict[str,
     entry["slug"] = account["prefix"] + "/" + slug
     entry["display_name"] = "%s · %s" % (
         account.get("name") or account["prefix"],
-        native.get("display_name") or slug,
+        _display_name_with_context(native),
     )
     entry["description"] = "ChatGPT subscription: %s" % (account.get("name") or account["prefix"])
+    entry["description"] = _description_with_context(entry)
     entry["visibility"] = native.get("visibility", "list")
     entry["supported_in_api"] = native.get("supported_in_api", True)
     return entry
@@ -121,7 +177,10 @@ def subscription_model_options(config: Dict[str, Any]) -> List[Dict[str, str]]:
 
 def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
     native = load_native_catalog(config)
-    native_models = [item for item in native["models"] if isinstance(item, dict)]
+    native_models = [copy.deepcopy(item) for item in native["models"] if isinstance(item, dict)]
+    for model in native_models:
+        model["display_name"] = _display_name_with_context(model)
+        model["description"] = _description_with_context(model)
     existing = {str(item.get("slug")) for item in native_models}
     template = native_models[0] if native_models else {
         "base_instructions": "You are a helpful coding assistant.",
@@ -131,6 +190,15 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
     external = []
     account_aliases = []
     duplicate_accounts = duplicate_account_status(config.get("accounts", []))
+    native_hidden_models = {
+        model_id
+        for account in config.get("accounts", [])
+        if duplicate_accounts.get(account.get("id")) == "当前 Codex 登录"
+        for model_id in account.get("hidden_models", [])
+    }
+    for model in native_models:
+        if model.get("slug") in native_hidden_models:
+            model["visibility"] = "hide"
     subscription_models = _subscription_native_models(config)
     for account in config.get("accounts", []):
         if (
@@ -170,55 +238,12 @@ def write_catalog(config: Dict[str, Any], path: Path) -> Path:
     return path
 
 
-def generated_catalog_path() -> Path:
-    return Path("generated") / "codex-models.json"
+def generated_catalog_path(codex_home: Optional[Path] = None) -> Path:
+    """Return EMP's stable catalog location below the active Codex home."""
 
-
-def codex_profile_path() -> Path:
-    configured_home = os.environ.get("CODEX_HOME", "").strip()
-    home = Path(configured_home).expanduser() if configured_home else Path.home() / ".codex"
-    return home.resolve() / "emp.config.toml"
-
-
-def integration_info(config: Dict[str, Any], catalog_path: Path) -> Dict[str, Any]:
-    host = config.get("host", "127.0.0.1")
-    if host in ("0.0.0.0", "::"):
-        host = "127.0.0.1"
-    base_url = "http://%s:%d/v1" % (host, config["port"])
-
-    def toml_string(value: str) -> str:
-        return '"%s"' % value.replace("\\", "\\\\").replace('"', '\\"')
-
-    snippet = "\n".join(
-        [
-            'model_provider = "openai"',
-            "model_catalog_json = %s" % toml_string(str(catalog_path.resolve())),
-            "openai_base_url = %s" % toml_string(base_url),
-        ]
-    )
-    return {
-        "base_url": base_url,
-        "catalog_path": str(catalog_path.resolve()),
-        "profile_path": str(codex_profile_path()),
-        "command": "codex --profile emp",
-        "resume_command": "codex resume --profile emp",
-        "snippet": snippet,
-    }
-
-
-def write_codex_profile(config: Dict[str, Any], catalog_path: Path) -> Path:
-    info = integration_info(config, catalog_path)
-    path = codex_profile_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=".emp-profile-", dir=str(path.parent))
-    try:
-        os.chmod(temporary, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write("# Generated by EasyMultiProvider.\n")
-            handle.write(info["snippet"])
-            handle.write("\n")
-        os.replace(temporary, str(path))
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-    return path
+    if codex_home is None:
+        configured_home = os.environ.get("CODEX_HOME", "").strip()
+        home = Path(configured_home).expanduser() if configured_home else Path.home() / ".codex"
+    else:
+        home = Path(codex_home).expanduser()
+    return home.resolve() / "easy-multi-provider" / "catalog.json"
