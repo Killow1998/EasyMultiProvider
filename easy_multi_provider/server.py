@@ -69,10 +69,12 @@ from .integration import IntegrationError, IntegrationManager, IntegrationResult
 from .main import resolve_integration_paths
 from .migration import export_bundle, import_bundle
 from .quota import QuotaError, account_refresh_lock, refresh_account_quota
+from .provider_replay import ProviderReplayCache
 from .router import (
     ContextLengthError,
     RouterError,
     discover_models,
+    forward_native_search,
     model_metadata,
     proxy,
     proxy_compact,
@@ -103,8 +105,19 @@ _DIAGNOSTIC_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 _DIAGNOSTIC_PROTOCOLS = frozenset(
     {"responses", "chat_completions", "anthropic_messages", "unknown"}
 )
+_DIAGNOSTIC_DIALECTS = frozenset(
+    {
+        "codex_native",
+        "portable_responses",
+        "chat_completions",
+        "anthropic_messages",
+        "unknown",
+    }
+)
 _DIAGNOSTIC_TRANSPORTS = frozenset({"http", "sse", "websocket", "unknown"})
-_DISCOVERY_CAPABILITY_SOURCES = frozenset({"advertised", "inferred", "unknown"})
+_DISCOVERY_CAPABILITY_SOURCES = frozenset(
+    {"official", "advertised", "inferred", "unknown"}
+)
 _DIAGNOSTIC_ERRORS = frozenset(
     {
         "none",
@@ -118,6 +131,15 @@ _DIAGNOSTIC_ERRORS = frozenset(
         "stream_error",
         "stream_incomplete",
         "client_disconnect",
+        "client_cancelled",
+        "client_websocket_close",
+        "upstream_close_pre_output",
+        "upstream_close_after_output",
+        "upstream_close_after_tool",
+        "malformed_terminal",
+        "proxy_reset",
+        "output_limit",
+        "content_filter",
         "context_length_exceeded",
         "unknown",
     }
@@ -127,9 +149,21 @@ _DIAGNOSTIC_DECISIONS = frozenset(
 )
 _DIAGNOSTIC_CONTEXT_DECISIONS = frozenset({"allowed", "warned", "blocked", "unknown"})
 _DIAGNOSTIC_CONTEXT_SOURCES = frozenset(
-    {"official", "advertised", "observed", "manual", "inferred", "unknown"}
+    {
+        "official",
+        "advertised",
+        "observed",
+        "manual",
+        "inherited",
+        "inferred",
+        "unknown",
+    }
 )
 _DIAGNOSTIC_COMPLETENESS = frozenset({"high", "lost", "unknown"})
+_DIAGNOSTIC_TOOL_PAIRING = frozenset({"none", "paired", "incomplete", "invalid"})
+_DIAGNOSTIC_RECOVERY_MODES = frozenset(
+    {"none", "pre_output_retry", "reattached", "native_http_fallback"}
+)
 _WS_REPLAY_MAX_ITEMS = 256
 _WS_REPLAY_MAX_BYTES = 4 * 1024 * 1024
 
@@ -181,6 +215,18 @@ def _safe_diagnostic_float(value: Any) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _safe_diagnostic_sequence(value: Any) -> list:
+    if not isinstance(value, list):
+        return []
+    return [
+        item
+        for item in (
+            _safe_diagnostic_text(entry, _DIAGNOSTIC_ID) for entry in value[:256]
+        )
+        if item
+    ]
+
+
 def _ws_replay_size(*parts: Any) -> Optional[Tuple[int, int]]:
     """Bound connection-local replay state without retaining another payload copy."""
 
@@ -218,6 +264,8 @@ class ObservationRing:
             return
         protocol = event.get("resolved_protocol", event.get("protocol"))
         protocol = protocol if protocol in _DIAGNOSTIC_PROTOCOLS else "unknown"
+        dialect = event.get("dialect")
+        dialect = dialect if dialect in _DIAGNOSTIC_DIALECTS else "unknown"
         transport = event.get("transport", "unknown")
         transport = transport if transport in _DIAGNOSTIC_TRANSPORTS else "unknown"
         error_class = event.get("error_class", "unknown")
@@ -251,6 +299,15 @@ class ObservationRing:
         except (TypeError, ValueError):
             duration = 0
         duration = max(0, min(3_600_000, duration))
+        tool_pairing = event.get("tool_pairing_status", "none")
+        if tool_pairing not in _DIAGNOSTIC_TOOL_PAIRING:
+            tool_pairing = "invalid"
+        close_code = _safe_diagnostic_int(event.get("close_code"), 4999)
+        if close_code is not None and not 1000 <= close_code <= 4999:
+            close_code = None
+        recovery_mode = event.get("recovery_mode", "none")
+        if recovery_mode not in _DIAGNOSTIC_RECOVERY_MODES:
+            recovery_mode = "none"
         record = {
             "observed_at": observed_at_now(),
             "route": _safe_diagnostic_text(event.get("route", ""), _DIAGNOSTIC_ID)
@@ -265,7 +322,26 @@ class ObservationRing:
             )
             or "default",
             "protocol": protocol,
+            "dialect": dialect,
             "transport": transport,
+            "request_item_count": _safe_diagnostic_int(
+                event.get("request_item_count"), 256
+            ),
+            "request_item_types": _safe_diagnostic_sequence(
+                event.get("request_item_types")
+            ),
+            "content_part_types": _safe_diagnostic_sequence(
+                event.get("content_part_types")
+            ),
+            "tool_pairing_status": tool_pairing,
+            "close_code": close_code,
+            "output_emitted": bool(event.get("output_emitted", False)),
+            "tool_activity": bool(event.get("tool_activity", False)),
+            "terminal_event_observed": bool(
+                event.get("terminal_event_observed", False)
+            ),
+            "recovery_succeeded": bool(event.get("recovery_succeeded", False)),
+            "recovery_mode": recovery_mode,
             "request_bytes": _safe_diagnostic_int(event.get("request_bytes"), 64 * 1024 * 1024),
             "response_bytes": _safe_diagnostic_int(event.get("response_bytes"), 64 * 1024 * 1024),
             "duration_ms": duration,
@@ -429,6 +505,7 @@ class AppState:
         self.session_token = secrets.token_urlsafe(32)
         self.diagnostics = diagnostics if diagnostics is not None else ObservationRing()
         self.context_guard = ContextGuard()
+        self.provider_replay = ProviderReplayCache()
         self.integration_manager = integration_manager
         self.runtime_controller = runtime_controller or CodexRuntimeController(
             target_codex_home=(
@@ -982,6 +1059,7 @@ class AppState:
         transport: Optional[str] = None,
         context_completeness: str = "high",
     ) -> Tuple[Dict[str, Any], Any]:
+        body = self.provider_replay.prepare(body)
         started = time.monotonic()
         selected_transport = transport or ("sse" if body.get("stream") else "http")
         observed = False
@@ -1051,16 +1129,19 @@ class AppState:
                     selected_transport,
                     "responses",
                 )
-        elif not observed:
-            event = dict(metadata)
-            event["response_bytes"] = len(result) if isinstance(result, (bytes, bytearray)) else 0
-            self._record_route_event(
-                event,
-                body,
-                started,
-                selected_transport,
-                "responses",
-            )
+            result = self.provider_replay.observe_stream(body.get("model"), result)
+        else:
+            self.provider_replay.observe_bytes(body.get("model"), result)
+            if not observed:
+                event = dict(metadata)
+                event["response_bytes"] = len(result) if isinstance(result, (bytes, bytearray)) else 0
+                self._record_route_event(
+                    event,
+                    body,
+                    started,
+                    selected_transport,
+                    "responses",
+                )
         return metadata, result
 
     def route_compact(
@@ -1207,15 +1288,30 @@ class AppState:
                     existing = by_id.get(model_id)
                     if (
                         existing
+                        and isinstance(item.get("supports_reasoning"), bool)
+                        and _discovery_capability_source(item, "supports_reasoning")
+                        == "advertised"
+                        and _model_capability_source(existing, "supports_reasoning")
+                        in _DISCOVERY_CAPABILITY_SOURCES
+                    ):
+                        existing["supports_reasoning"] = item["supports_reasoning"]
+                        existing.setdefault("capability_sources", {})[
+                            "supports_reasoning"
+                        ] = make_provenance(
+                            "advertised", observed_at=observed_at
+                        )
+                    if (
+                        existing
                         and item.get("reasoning_levels")
-                        and existing.get("reasoning_levels") == ["medium"]
+                        and _discovery_capability_source(item, "reasoning_levels")
+                        == "advertised"
                         and _model_capability_source(existing, "reasoning_levels")
                         in _DISCOVERY_CAPABILITY_SOURCES
                     ):
-                        existing["reasoning_levels"] = item["reasoning_levels"]
-                        existing.setdefault("capability_sources", {})["reasoning_levels"] = make_provenance(
-                            "advertised", observed_at=observed_at
-                        )
+                        existing["reasoning_levels"] = list(item["reasoning_levels"])
+                        existing.setdefault("capability_sources", {})[
+                            "reasoning_levels"
+                        ] = make_provenance("advertised", observed_at=observed_at)
                     if (
                         existing
                         and item.get("context_window")
@@ -1228,7 +1324,13 @@ class AppState:
                             "advertised", observed_at=observed_at
                         )
                     output_limit = item.get("output_limit", item.get("output_token_limit"))
-                    if existing and output_limit and not existing.get("output_limit"):
+                    if (
+                        existing
+                        and output_limit
+                        and not existing.get("output_limit")
+                        and _model_capability_source(existing, "output_limit")
+                        in _DISCOVERY_CAPABILITY_SOURCES
+                    ):
                         existing["output_limit"] = int(output_limit)
                         existing.setdefault("capability_sources", {})["output_limit"] = make_provenance(
                             "advertised", observed_at=observed_at
@@ -1236,16 +1338,22 @@ class AppState:
                     if (
                         existing
                         and "input_modalities" in item
-                        and _discovery_capability_source(item, "input_modalities") == "advertised"
+                        and _discovery_capability_source(item, "input_modalities")
+                        in {"official", "advertised"}
                         and _model_capability_source(existing, "input_modalities")
                         in _DISCOVERY_CAPABILITY_SOURCES
                     ):
+                        input_modalities_source = _discovery_capability_source(
+                            item, "input_modalities"
+                        )
                         existing["input_modalities"] = normalize_input_modalities(
                             item.get("input_modalities")
                         )
                         existing.setdefault("capability_sources", {})[
                             "input_modalities"
-                        ] = make_provenance("advertised", observed_at=observed_at)
+                        ] = make_provenance(
+                            input_modalities_source, observed_at=observed_at
+                        )
                     if (
                         existing
                         and "supports_image_detail_original" in item
@@ -1269,7 +1377,12 @@ class AppState:
                     if existing and item.get("created_at") and not existing.get("created_at"):
                         existing["created_at"] = item["created_at"]
                     continue
-                reasoning_levels = item.get("reasoning_levels") or ["medium"]
+                supports_reasoning = (
+                    item.get("supports_reasoning")
+                    if isinstance(item.get("supports_reasoning"), bool)
+                    else None
+                )
+                reasoning_levels = list(item.get("reasoning_levels") or [])
                 context_window = int(item.get("context_window", 0) or 0)
                 output_limit = int(
                     item.get("output_limit", item.get("output_token_limit", 0)) or 0
@@ -1287,10 +1400,18 @@ class AppState:
                     item, "supports_image_detail_original"
                 )
                 capability_sources = {}
-                if item.get("reasoning_levels"):
-                    capability_sources["reasoning_levels"] = make_provenance(
-                        "advertised", observed_at=observed_at
-                    )
+                reasoning_support_source = _discovery_capability_source(
+                    item, "supports_reasoning"
+                )
+                reasoning_levels_source = _discovery_capability_source(
+                    item, "reasoning_levels"
+                )
+                capability_sources["supports_reasoning"] = make_provenance(
+                    reasoning_support_source, observed_at=observed_at
+                )
+                capability_sources["reasoning_levels"] = make_provenance(
+                    reasoning_levels_source, observed_at=observed_at
+                )
                 if context_window:
                     capability_sources["context_window"] = make_provenance(
                         "advertised", observed_at=observed_at
@@ -1311,6 +1432,7 @@ class AppState:
                     "upstream_id": upstream_id,
                     "display_name": item.get("display_name") or upstream_id,
                     "description": item.get("description", ""),
+                    "supports_reasoning": supports_reasoning,
                     "reasoning_levels": reasoning_levels,
                     "context_window": context_window,
                     "output_limit": output_limit,
@@ -1761,7 +1883,13 @@ def make_handler(state: AppState):
                         "output_index": index,
                         "item": item,
                     }
-            yield {"type": "response.completed", "response": response}
+            response_status = str(response.get("status") or "completed")
+            terminal_type = {
+                "completed": "response.completed",
+                "incomplete": "response.incomplete",
+                "failed": "response.failed",
+            }.get(response_status, "response.completed")
+            yield {"type": terminal_type, "response": response}
 
         def _serve_responses_websocket(self) -> None:
             if not self._proxy_allowed():
@@ -2057,7 +2185,7 @@ def make_handler(state: AppState):
             if path.startswith("/api/") and not self._management_allowed():
                 self._error(401 if self._same_origin() else 403, "management session is required")
                 return
-            if path in ("/v1/responses", "/v1/responses/compact") and not self._proxy_allowed():
+            if path in ("/v1/responses", "/v1/responses/compact", "/v1/alpha/search") and not self._proxy_allowed():
                 self._error(401 if self._same_origin() else 403, "proxy caller authentication is required")
                 return
             try:
@@ -2066,6 +2194,14 @@ def make_handler(state: AppState):
                     if path in ("/api/migration/import", "/v1/responses", "/v1/responses/compact")
                     else 5 * 1024 * 1024
                 )
+                if path == "/v1/alpha/search":
+                    status, content_type, raw = forward_native_search(
+                        state.snapshot(),
+                        body,
+                        {key: value for key, value in self.headers.items()},
+                    )
+                    self._send(status, raw, content_type)
+                    return
                 if path == "/api/integration/enable":
                     if body.get("confirm_reload") is not True:
                         summary = _integration_summary(state)

@@ -17,6 +17,7 @@ from .capabilities import (
     input_modalities_known,
     make_provenance,
     normalize_input_modalities,
+    normalize_reasoning_levels,
     observed_at_now,
 )
 from .vault import VaultError, read_encrypted_text, write_encrypted_text
@@ -44,6 +45,7 @@ _CAPABILITY_SOURCE_FIELDS = {
     "streaming",
     "structured_tools",
     "parallel_tools",
+    "supports_reasoning",
     "reasoning_levels",
     "context_window",
     "output_limit",
@@ -52,6 +54,7 @@ _CAPABILITY_SOURCE_FIELDS = {
     "supports_image_detail_original",
 }
 _EXPLICIT_CAPABILITY_FIELDS = {
+    "supports_reasoning",
     "input_modalities",
     "supports_image_detail_original",
 }
@@ -59,6 +62,7 @@ _BOOLEAN_CAPABILITIES = {
     "streaming",
     "structured_tools",
     "parallel_tools",
+    "supports_reasoning",
     "websocket",
 }
 _SAFE_CAPABILITY_ID = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
@@ -345,10 +349,20 @@ def _normalize_provider(raw: Dict[str, Any]) -> Dict[str, Any]:
 def _normalize_model(raw: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise ConfigError("each model must be an object")
-    levels = raw.get("reasoning_levels", ["medium"])
-    if not isinstance(levels, list) or not levels:
-        raise ConfigError("model.reasoning_levels must be a non-empty list")
+    levels = raw.get("reasoning_levels", [])
+    if not isinstance(levels, list):
+        raise ConfigError("model.reasoning_levels must be a list")
     levels = [_string(level, "model.reasoning_levels") for level in levels]
+    if any(not level for level in levels):
+        raise ConfigError("model.reasoning_levels entries must not be empty")
+    levels = normalize_reasoning_levels(levels)
+    raw_reasoning_support = raw.get("supports_reasoning")
+    if raw_reasoning_support is None:
+        supports_reasoning = True if levels else None
+    elif isinstance(raw_reasoning_support, bool):
+        supports_reasoning = raw_reasoning_support
+    else:
+        raise ConfigError("model.supports_reasoning must be boolean or null")
     context_window = int(raw.get("context_window", 0) or 0)
     if context_window < 0:
         raise ConfigError("model.context_window cannot be negative")
@@ -376,6 +390,7 @@ def _normalize_model(raw: Dict[str, Any]) -> Dict[str, Any]:
         "upstream_id": _string(raw.get("upstream_id")),
         "display_name": _string(raw.get("display_name")),
         "description": _string(raw.get("description")),
+        "supports_reasoning": supports_reasoning,
         "reasoning_levels": levels,
         "context_window": context_window,
         "output_limit": output_limit,
@@ -591,6 +606,7 @@ def merge_web_update(
         )
         for field in (
             "visibility",
+            "supports_reasoning",
             "input_modalities",
             "supports_image_detail_original",
         ):
@@ -598,6 +614,7 @@ def merge_web_update(
                 model[field] = copy.deepcopy(old.get(field))
         sources = copy.deepcopy(model.get("capability_sources") or {})
         for field in (
+            "supports_reasoning",
             "reasoning_levels",
             "context_window",
             "output_limit",

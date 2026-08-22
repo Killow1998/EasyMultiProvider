@@ -127,6 +127,60 @@ def _fixed_response_stream(model):
     return "".join(events).encode("utf-8")
 
 
+def _tool_response_stream(model):
+    response_id = "resp_" + uuid.uuid4().hex
+    call_id = "call_" + uuid.uuid4().hex
+    arguments = json.dumps(
+        {
+            "input": (
+                'const r = await tools.exec_command({cmd:"pwd", workdir:".", '
+                'yield_time_ms:10000, max_output_tokens:1000}); text(r.output)'
+            )
+        },
+        separators=(",", ":"),
+    )
+    item = {
+        "id": call_id,
+        "type": "function_call",
+        "status": "completed",
+        "call_id": call_id,
+        "name": "exec",
+        "arguments": arguments,
+    }
+    response = {
+        "id": response_id,
+        "object": "response",
+        "status": "completed",
+        "model": model,
+        "output": [item],
+    }
+    events = [
+        _event(
+            "response.created",
+            {"response": dict(response, status="in_progress", output=[])},
+            0,
+        ),
+        _event(
+            "response.output_item.added",
+            {"output_index": 0, "item": dict(item, status="in_progress", arguments="")},
+            1,
+        ),
+        _event(
+            "response.function_call_arguments.delta",
+            {"item_id": call_id, "output_index": 0, "delta": arguments},
+            2,
+        ),
+        _event(
+            "response.function_call_arguments.done",
+            {"item_id": call_id, "output_index": 0, "arguments": arguments},
+            3,
+        ),
+        _event("response.output_item.done", {"output_index": 0, "item": item}, 4),
+        _event("response.completed", {"response": response}, 5),
+    ]
+    return "".join(events).encode("utf-8")
+
+
 class FixedResponsesHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -146,6 +200,38 @@ class FixedResponsesHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+class ToolResponsesHandler(FixedResponsesHandler):
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(length).decode("utf-8"))
+        self.server.seen_models.append(body.get("model"))
+        source = body.get("input")
+        source = source if isinstance(source, list) else []
+        saw_tool_output = any(
+            isinstance(item, dict) and item.get("type") == "function_call_output"
+            for item in source
+        )
+        self.server.request_count += 1
+        self.server.saw_exec_tool = self.server.saw_exec_tool or any(
+            isinstance(tool, dict)
+            and tool.get("type") == "function"
+            and tool.get("name") == "exec"
+            for tool in body.get("tools", []) or []
+        )
+        self.server.saw_tool_output = self.server.saw_tool_output or saw_tool_output
+        payload = (
+            _fixed_response_stream(body.get("model", "fixed-model"))
+            if saw_tool_output
+            else _tool_response_stream(body.get("model", "fixed-model"))
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(payload)
+
+
 @unittest.skipUnless(
     os.environ.get("EASY_MP_RUN_CODEX_CLI") == "1",
     "set EASY_MP_RUN_CODEX_CLI=1 to run the real Codex CLI demo",
@@ -157,8 +243,11 @@ class CodexCliDemoTests(unittest.TestCase):
         native_catalog = Path.home() / ".codex" / "models_cache.json"
         self.assertTrue(native_catalog.exists(), "Codex native model cache is unavailable")
 
-        fake_server = ThreadingHTTPServer(("127.0.0.1", 0), FixedResponsesHandler)
+        fake_server = ThreadingHTTPServer(("127.0.0.1", 0), ToolResponsesHandler)
         fake_server.seen_models = []
+        fake_server.request_count = 0
+        fake_server.saw_exec_tool = False
+        fake_server.saw_tool_output = False
         fake_thread = threading.Thread(target=fake_server.serve_forever, daemon=True)
         fake_thread.start()
         router_server = None
@@ -258,7 +347,10 @@ class CodexCliDemoTests(unittest.TestCase):
                     % (completed.stdout, completed.stderr),
                 )
                 self.assertEqual(output_path.read_text(encoding="utf-8").strip(), FIXED_REPLY)
-                self.assertEqual(fake_server.seen_models, ["fixed-model"])
+                self.assertEqual(fake_server.seen_models, ["fixed-model", "fixed-model"])
+                self.assertEqual(fake_server.request_count, 2)
+                self.assertTrue(fake_server.saw_exec_tool)
+                self.assertTrue(fake_server.saw_tool_output)
                 self.assertGreater(router_server.websocket_upgrades, 0)
                 self.assertGreater(router_server.websocket_requests, 0)
         finally:

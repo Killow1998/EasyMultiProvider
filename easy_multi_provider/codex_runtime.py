@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Protocol, Sequence, Tuple, Union
 
+from . import __version__
 from .integration import atomic_write_text
 
 
@@ -807,7 +808,7 @@ class CodexRuntimeController:
                     "params": {
                         "clientInfo": {
                             "name": "easy-multi-provider",
-                            "version": "0.5.1",
+                            "version": __version__,
                         },
                         "capabilities": {"experimentalApi": True},
                     },

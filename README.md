@@ -6,7 +6,7 @@ EasyMultiProvider (EMP) is a local, browser-configured model router for Codex.
 It keeps the native Codex experience while adding multiple ChatGPT
 subscriptions, API providers, and external models to the same model list.
 
-The current source version is `v0.5.1`.
+The current source version is `v0.6.0`.
 
 ## Features
 
@@ -20,6 +20,8 @@ The current source version is `v0.5.1`.
   test them, and hide unused entries.
 - Preserve text, image, reasoning, and structured tool capabilities when the
   provider reports or supports them.
+- Let Codex delegate a native child task to an external catalog model by its
+  existing model slug; Codex continues to own the child task and permissions.
 - Keep credentials encrypted on the local machine.
 - Export and import password-protected `.emp` migration files.
 - Preserve native Codex sessions, `resume`, WebSockets, compression, and MCP.

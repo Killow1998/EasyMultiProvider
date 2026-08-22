@@ -288,7 +288,7 @@ class ServerAccountTests(unittest.TestCase):
                     payload_text = response.read().decode("utf-8")
                     connection.close()
 
-                self.assertEqual(response.status, 409)
+                self.assertEqual(response.status, 200)
                 payload = json.loads(payload_text)
                 self.assertEqual(payload["runtime"]["state"], STOP_FAILED)
                 runtime_path = codex_home / "easy-multi-provider" / "integration" / "runtime.json"
@@ -856,6 +856,42 @@ class ServerAccountTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_native_search_endpoint_forwards_body_and_caller_auth(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            handler = object.__new__(make_handler(state))
+            handler.path = "/v1/alpha/search"
+            handler.headers = {
+                "Authorization": "Bearer session-token",
+                "Content-Type": "application/json",
+            }
+            handler._proxy_allowed = lambda: True
+            handler._body = lambda _limit: {"query": "codex"}
+            captured = {}
+            handler._send = lambda status, body, content_type=None: captured.update(
+                status=status,
+                body=body,
+                content_type=content_type,
+            )
+
+            with patch(
+                "easy_multi_provider.server.forward_native_search",
+                return_value=(200, "application/json", b'{"data":[]}'),
+            ) as forwarded:
+                handler.do_POST()
+
+            self.assertEqual(captured["status"], 200)
+            self.assertEqual(captured["body"], b'{"data":[]}')
+            self.assertEqual(captured["content_type"], "application/json")
+            forwarded.assert_called_once()
+            self.assertEqual(forwarded.call_args.args[1], {"query": "codex"})
+            self.assertEqual(
+                forwarded.call_args.args[2]["Authorization"],
+                "Bearer session-token",
+            )
+
     def test_zstd_compressed_proxy_request_is_decoded(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
@@ -968,6 +1004,32 @@ class ServerAccountTests(unittest.TestCase):
                     client.close()
                 server.shutdown()
                 server.server_close()
+
+    def test_websocket_body_preserves_incomplete_terminal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            handler = object.__new__(make_handler(state))
+            response = {
+                "id": "resp_incomplete",
+                "object": "response",
+                "status": "incomplete",
+                "output": [],
+                "incomplete_details": {"reason": "max_output_tokens"},
+            }
+
+            events = list(
+                handler._websocket_events(
+                    {"kind": "body"}, json.dumps(response).encode("utf-8")
+                )
+            )
+
+            self.assertEqual(events[-1]["type"], "response.incomplete")
+            self.assertEqual(
+                events[-1]["response"]["incomplete_details"]["reason"],
+                "max_output_tokens",
+            )
 
     def test_system_proxy_is_imported_when_environment_has_none(self):
         proxy_keys = {
@@ -1443,7 +1505,7 @@ class ServerAccountTests(unittest.TestCase):
 
             self.assertEqual(result.action, "re_adopted")
             generated = json.loads(catalog_path.read_text(encoding="utf-8"))
-            self.assertEqual(generated["models"][0]["display_name"], "Native [258K]")
+            self.assertEqual(generated["models"][0]["display_name"], "[ 258K]  Native")
             self.assertEqual(state.runtime_sync_snapshot()["state"], "reload_required")
 
     def test_integration_status_is_safe_and_handler_is_ready(self):
@@ -1629,7 +1691,18 @@ class ServerAccountTests(unittest.TestCase):
             "endpoint_fingerprint",
             "deployment_identity",
             "protocol",
+            "dialect",
             "transport",
+            "request_item_count",
+            "request_item_types",
+            "content_part_types",
+            "tool_pairing_status",
+            "close_code",
+            "output_emitted",
+            "tool_activity",
+            "terminal_event_observed",
+            "recovery_succeeded",
+            "recovery_mode",
             "request_bytes",
             "response_bytes",
             "duration_ms",
@@ -1716,7 +1789,18 @@ class ServerAccountTests(unittest.TestCase):
                     "endpoint_fingerprint",
                     "deployment_identity",
                     "protocol",
+                    "dialect",
                     "transport",
+                    "request_item_count",
+                    "request_item_types",
+                    "content_part_types",
+                    "tool_pairing_status",
+                    "close_code",
+                    "output_emitted",
+                    "tool_activity",
+                    "terminal_event_observed",
+                    "recovery_succeeded",
+                    "recovery_mode",
                     "request_bytes",
                     "response_bytes",
                     "duration_ms",
@@ -1810,6 +1894,82 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIsNone(
             _ws_replay_size([{"text": "界" * (_WS_REPLAY_MAX_BYTES // 3 + 1)}])
         )
+
+    def test_route_replays_provider_signature_without_persisting_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            event = {
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "id": "call_fixture",
+                    "call_id": "call_fixture",
+                    "name": "exec",
+                    "arguments": "{}",
+                    "extra_content": {
+                        "google": {"thought_signature": "signature-fixture"}
+                    },
+                },
+            }
+            stream_bytes = (
+                "event: response.output_item.done\n"
+                "data: %s\n\n" % json.dumps(event)
+            ).encode()
+            stream_metadata = {
+                "kind": "stream",
+                "status": 200,
+                "content_type": "text/event-stream",
+                "observation_attached": True,
+            }
+            with patch(
+                "easy_multi_provider.server.proxy",
+                return_value=(stream_metadata, iter([stream_bytes])),
+            ):
+                _, result = state.route(
+                    {"model": "demo/model", "stream": True, "input": "prompt"},
+                    {},
+                )
+                self.assertEqual(b"".join(result), stream_bytes)
+
+            captured = {}
+
+            def proxy_request(config, body, incoming, on_observation, on_context):
+                captured["body"] = body
+                return (
+                    {"kind": "body", "status": 200, "content_type": "application/json"},
+                    b'{"output":[]}',
+                )
+
+            with patch("easy_multi_provider.server.proxy", side_effect=proxy_request):
+                state.route(
+                    {
+                        "model": "demo/model",
+                        "input": [
+                            {
+                                "type": "function_call",
+                                "call_id": "call_fixture",
+                                "name": "exec",
+                                "arguments": "{}",
+                            },
+                            {
+                                "type": "function_call_output",
+                                "call_id": "call_fixture",
+                                "output": "tool-result",
+                            },
+                        ],
+                    },
+                    {},
+                )
+
+            self.assertEqual(
+                captured["body"]["input"][0]["extra_content"],
+                {"google": {"thought_signature": "signature-fixture"}},
+            )
+            persisted = config_path.read_text(encoding="utf-8")
+            self.assertNotIn("signature-fixture", persisted)
+            self.assertNotIn("tool-result", persisted)
 
     def test_context_guard_uses_translated_payload_and_persists_only_numeric_calibration(self):
         class Response:
@@ -2573,6 +2733,10 @@ class ServerAccountTests(unittest.TestCase):
                         "upstream_id": "hidden",
                         "reasoning_levels": ["low", "high"],
                         "context_window": 123,
+                        "input_modalities": ["text", "image", "video"],
+                        "capability_sources": {
+                            "input_modalities": {"source": "official"}
+                        },
                     },
                     {
                         "upstream_id": "new-model",
@@ -2596,6 +2760,14 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(
                 models["demo/hidden"]["capability_sources"]["context_window"]["source"],
                 "advertised",
+            )
+            self.assertEqual(
+                models["demo/hidden"]["input_modalities"],
+                ["text", "image", "video"],
+            )
+            self.assertEqual(
+                models["demo/hidden"]["capability_sources"]["input_modalities"]["source"],
+                "official",
             )
             self.assertTrue(models["demo/new-model"]["enabled"])
             self.assertEqual(

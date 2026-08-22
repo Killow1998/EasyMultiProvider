@@ -59,6 +59,50 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(headers["originator"], "codex_cli_rs")
         self.assertEqual(headers["User-Agent"], "EasyMultiProvider/" + router.__version__)
 
+    def test_native_search_uses_codex_base_url_and_caller_auth(self):
+        captured = {}
+
+        class Response:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def read(self, size=-1):
+                return b'{"data":[]}' if not captured.get("read") else b""
+
+            def close(self):
+                captured["closed"] = True
+
+        def open_request(request, timeout):
+            captured["url"] = request.full_url
+            captured["authorization"] = request.get_header("Authorization")
+            captured["read"] = False
+            response = Response()
+            original_read = response.read
+
+            def read(size=-1):
+                value = original_read(size)
+                captured["read"] = True
+                return value
+
+            response.read = read
+            return response
+
+        with patch.object(router, "urlopen", side_effect=open_request):
+            status, content_type, raw = router.forward_native_search(
+                {"codex_base_url": "https://chatgpt.com/backend-api/codex"},
+                {"query": "codex"},
+                {"Authorization": "Bearer session-token"},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "application/json")
+        self.assertEqual(raw, b'{"data":[]}')
+        self.assertEqual(
+            captured["url"],
+            "https://chatgpt.com/backend-api/codex/alpha/search",
+        )
+        self.assertEqual(captured["authorization"], "Bearer session-token")
+
     def test_limited_discovery_read_stops_after_deadline(self):
         class DripResponse:
             def __init__(self):
@@ -105,6 +149,29 @@ class RouterTests(unittest.TestCase):
             response = router._DeadlineResponse(SlowBodyResponse(), 180)
             self.assertEqual(response.read(), b"complete")
         self.assertEqual(SlowBodyResponse.fp.raw._sock.timeout, 180)
+
+    def test_upstream_body_timeout_reaches_nested_urllib_tls_socket(self):
+        class Socket:
+            timeout = None
+
+            def settimeout(self, value):
+                self.timeout = value
+
+        class SocketIO:
+            _sock = Socket()
+
+        class BufferedReader:
+            raw = SocketIO()
+
+        class HTTPResponse:
+            fp = BufferedReader()
+
+        class UrlOpenResponse:
+            fp = HTTPResponse()
+
+        router._set_response_timeout(UrlOpenResponse(), 17)
+
+        self.assertEqual(SocketIO._sock.timeout, 17)
 
     def test_upstream_body_timeout_is_reported_as_gateway_timeout(self):
         class TimedOutResponse:
@@ -199,7 +266,8 @@ class RouterTests(unittest.TestCase):
 
         with patch.object(router, "urlopen", return_value=FakeResponse()):
             value = router.model_metadata(provider, "gemini-3.7-flash")
-        self.assertEqual(value["reasoning_levels"], ["low", "medium", "high"])
+        self.assertTrue(value["supports_reasoning"])
+        self.assertEqual(value["reasoning_levels"], [])
 
     def test_generic_model_discovery_reads_openai_models(self):
         provider = {
@@ -251,7 +319,7 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(provider["protocol"], "auto")
         self.assertEqual(value[0]["upstream_id"], "demo-a")
 
-    def test_auto_provider_prefers_responses_without_model_discovery(self):
+    def test_auto_provider_prefers_chat_completions_without_model_discovery(self):
         config = {
             "providers": [{
                 "id": "demo",
@@ -264,7 +332,7 @@ class RouterTests(unittest.TestCase):
         }
         with patch.object(
             router,
-            "forward_responses",
+            "chat_completion",
             return_value=(200, "application/json", b"{}"),
         ) as completion:
             metadata, result = router.proxy(
@@ -273,11 +341,11 @@ class RouterTests(unittest.TestCase):
                 {},
             )
         self.assertEqual(metadata["status"], 200)
-        self.assertEqual(metadata["resolved_protocol"], "responses")
+        self.assertEqual(metadata["resolved_protocol"], "chat_completions")
         self.assertEqual(result, b"{}")
-        self.assertEqual(completion.call_args.args[0]["protocol"], "responses")
+        self.assertEqual(completion.call_args.args[0]["protocol"], "chat_completions")
 
-    def test_auto_stream_prefers_responses(self):
+    def test_auto_stream_prefers_chat_completions(self):
         config = {
             "providers": [{
                 "id": "demo",
@@ -291,7 +359,7 @@ class RouterTests(unittest.TestCase):
         stream = iter([b'event: response.completed\ndata: {"type":"response.completed"}\n\n'])
         with patch.object(
             router,
-            "forward_responses_stream",
+            "stream_chat_completion",
             return_value=stream,
         ) as completion:
             metadata, result = router.proxy(
@@ -300,8 +368,8 @@ class RouterTests(unittest.TestCase):
                 {},
             )
             list(result)
-        self.assertEqual(metadata["resolved_protocol"], "responses")
-        self.assertEqual(completion.call_args.args[0]["protocol"], "responses")
+        self.assertEqual(metadata["resolved_protocol"], "chat_completions")
+        self.assertEqual(completion.call_args.args[0]["protocol"], "chat_completions")
 
     def test_auto_provider_prioritizes_matching_observed_protocol(self):
         provider = {
@@ -352,13 +420,13 @@ class RouterTests(unittest.TestCase):
             "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
         }
         with patch.object(
-            router, "forward_responses", return_value=(200, "application/json", b"{}")
-        ) as responses, patch.object(router, "chat_completion") as chat:
+            router, "chat_completion", return_value=(200, "application/json", b"{}")
+        ) as chat, patch.object(router, "forward_responses") as responses:
             metadata, _ = router.proxy(config, {"model": "demo/glm", "input": []}, {})
-        self.assertEqual(metadata["resolved_protocol"], "responses")
+        self.assertEqual(metadata["resolved_protocol"], "chat_completions")
         self.assertEqual(metadata["protocol_decision"], "normal_order")
-        responses.assert_called_once()
-        chat.assert_not_called()
+        chat.assert_called_once()
+        responses.assert_not_called()
 
     def test_auto_fallback_is_limited_to_protocol_rejection_statuses(self):
         config = {
@@ -374,14 +442,14 @@ class RouterTests(unittest.TestCase):
         for status in (404, 405, 415, 501):
             with self.subTest(status=status), patch.object(
                 router,
-                "forward_responses",
+                "chat_completion",
                 side_effect=RouterError("protocol rejected", status),
             ), patch.object(
-                router, "chat_completion", return_value=(200, "application/json", b"{}")
-            ) as chat:
+                router, "forward_responses", return_value=(200, "application/json", b"{}")
+            ) as responses:
                 metadata, _ = router.proxy(config, {"model": "demo/glm", "input": []}, {})
-                self.assertEqual(metadata["resolved_protocol"], "chat_completions")
-                chat.assert_called_once()
+                self.assertEqual(metadata["resolved_protocol"], "responses")
+                responses.assert_called_once()
 
     def test_auto_does_not_fallback_on_auth_waf_rate_limit_server_or_timeout(self):
         config = {
@@ -397,13 +465,13 @@ class RouterTests(unittest.TestCase):
         for status in (401, 403, 429, 500, 502, 503, 504):
             with self.subTest(status=status), patch.object(
                 router,
-                "forward_responses",
+                "chat_completion",
                 side_effect=RouterError("request failed", status),
-            ), patch.object(router, "chat_completion") as chat:
+            ), patch.object(router, "forward_responses") as responses:
                 with self.assertRaises(RouterError) as raised:
                     router.proxy(config, {"model": "demo/glm", "input": []}, {})
                 self.assertEqual(raised.exception.status, status)
-                chat.assert_not_called()
+                responses.assert_not_called()
 
     def test_auto_does_not_fallback_on_network_exception(self):
         config = {
@@ -417,11 +485,11 @@ class RouterTests(unittest.TestCase):
             "models": [{"id": "demo/glm", "provider": "demo", "upstream_id": "glm"}],
         }
         with patch.object(
-            router, "forward_responses", side_effect=OSError("network-secret")
-        ), patch.object(router, "chat_completion") as chat:
+            router, "chat_completion", side_effect=OSError("network-secret")
+        ), patch.object(router, "forward_responses") as responses:
             with self.assertRaises(OSError):
                 router.proxy(config, {"model": "demo/glm", "input": []}, {})
-            chat.assert_not_called()
+            responses.assert_not_called()
 
     def test_auto_final_failure_emits_selected_safe_observation(self):
         config = {
@@ -437,9 +505,9 @@ class RouterTests(unittest.TestCase):
         observations = []
         with patch.object(
             router,
-            "forward_responses",
+            "chat_completion",
             side_effect=RouterError("auth-secret", 401),
-        ), patch.object(router, "chat_completion") as chat:
+        ), patch.object(router, "forward_responses") as responses:
             with self.assertRaises(RouterError):
                 router.proxy(
                     config,
@@ -447,9 +515,9 @@ class RouterTests(unittest.TestCase):
                     {},
                     observations.append,
                 )
-        chat.assert_not_called()
+        responses.assert_not_called()
         self.assertEqual(len(observations), 1)
-        self.assertEqual(observations[0]["resolved_protocol"], "responses")
+        self.assertEqual(observations[0]["resolved_protocol"], "chat_completions")
         self.assertEqual(observations[0]["status"], 401)
         self.assertEqual(observations[0]["error_class"], "auth")
         self.assertEqual(observations[0]["protocol_decision"], "normal_order")
@@ -476,7 +544,7 @@ class RouterTests(unittest.TestCase):
         responses.assert_called_once()
         chat.assert_not_called()
 
-    def test_auto_stream_can_fallback_after_eager_protocol_rejection(self):
+    def test_auto_stream_can_fallback_to_responses_after_eager_protocol_rejection(self):
         config = {
             "providers": [{
                 "id": "demo",
@@ -491,9 +559,9 @@ class RouterTests(unittest.TestCase):
         stream = iter([b'event: response.completed\ndata: {"type":"response.completed"}\n\n'])
         with patch.object(
             router,
-            "forward_responses_stream",
+            "stream_chat_completion",
             side_effect=RouterError("protocol rejected", 404),
-        ), patch.object(router, "stream_chat_completion", return_value=stream) as chat:
+        ), patch.object(router, "forward_responses_stream", return_value=stream) as responses:
             metadata, result = router.proxy(
                 config,
                 {"model": "demo/glm", "input": [], "stream": True},
@@ -502,8 +570,8 @@ class RouterTests(unittest.TestCase):
             )
             output = b"".join(result)
         self.assertIn(b"response.completed", output)
-        chat.assert_called_once()
-        self.assertEqual(observations[-1]["resolved_protocol"], "chat_completions")
+        responses.assert_called_once()
+        self.assertEqual(observations[-1]["resolved_protocol"], "responses")
         self.assertTrue(observations[-1]["protocol_fallback"])
         self.assertTrue(observations[-1]["success"])
 
@@ -511,7 +579,7 @@ class RouterTests(unittest.TestCase):
         config = {
             "providers": [{
                 "id": "demo",
-                "base_url": "https://example.com/v1",
+                "base_url": "https://example.com/v1/responses",
                 "protocol": "auto",
                 "auth_mode": "api_key",
                 "api_key": "test-key",
@@ -549,13 +617,13 @@ class RouterTests(unittest.TestCase):
         }
         with patch.object(
             router,
-            "forward_responses",
+            "chat_completion",
             side_effect=RouterError("upstream returned 401", 401),
-        ), patch.object(router, "chat_completion") as completion:
+        ), patch.object(router, "forward_responses") as responses:
             with self.assertRaises(RouterError) as raised:
                 router.proxy(config, {"model": "demo/glm", "input": "hello"}, {})
         self.assertEqual(raised.exception.status, 401)
-        completion.assert_not_called()
+        responses.assert_not_called()
 
     def test_chat_request_retries_without_unsupported_reasoning_effort(self):
         provider = {
@@ -598,7 +666,7 @@ class RouterTests(unittest.TestCase):
                     "input": "hello",
                     "reasoning": {"effort": "medium"},
                 },
-                {"upstream_id": "model"},
+                {"upstream_id": "model", "reasoning_levels": ["medium"]},
                 {},
             )
         self.assertEqual(status, 200)
@@ -680,7 +748,21 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(opened.call_args_list[0].args[0].full_url, "https://generativelanguage.googleapis.com/v1beta/models")
         self.assertEqual(opened.call_args_list[1].args[0].full_url, "https://generativelanguage.googleapis.com/v1beta/models?pageToken=next-page")
         self.assertEqual([item["upstream_id"] for item in value], ["gemini-3.7-flash", "gemini-2.5-flash"])
-        self.assertEqual(value[0]["reasoning_levels"], ["low", "medium", "high"])
+        self.assertTrue(value[0]["supports_reasoning"])
+        self.assertEqual(value[0]["reasoning_levels"], [])
+        self.assertEqual(
+            value[0]["input_modalities"],
+            ["text", "image", "video", "audio", "pdf"],
+        )
+        self.assertEqual(
+            value[0]["capability_sources"]["input_modalities"]["source"],
+            "official",
+        )
+        self.assertEqual(value[1]["input_modalities"], ["text"])
+        self.assertEqual(
+            value[1]["capability_sources"]["input_modalities"]["source"],
+            "unknown",
+        )
 
     def test_unlisted_native_model_uses_unique_forward_provider(self):
         provider, model = find_route(self.config, "gpt-native")
@@ -1058,6 +1140,77 @@ class RouterTests(unittest.TestCase):
         }, "model")
         self.assertEqual(payload["tools"][0]["function"]["name"], "exec")
 
+    def test_chat_translation_preserves_codex_custom_tools_and_history(self):
+        payload = responses_to_chat({
+            "model": "demo/model",
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "tools": [{
+                        "type": "namespace",
+                        "name": "functions",
+                        "tools": [{"type": "custom", "name": "exec", "description": "Run code"}],
+                    }],
+                },
+                {
+                    "type": "custom_tool_call",
+                    "id": "ctc_fixture",
+                    "call_id": "call_fixture",
+                    "name": "exec",
+                    "input": "text('ok')",
+                },
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_fixture",
+                    "output": "ok",
+                },
+            ],
+        }, "model")
+        self.assertEqual(payload["tools"][0]["function"]["name"], "exec")
+        self.assertEqual(
+            json.loads(payload["messages"][0]["tool_calls"][0]["function"]["arguments"]),
+            {"input": "text('ok')"},
+        )
+        self.assertEqual(payload["messages"][1]["tool_call_id"], "call_fixture")
+
+    def test_chat_custom_tool_response_uses_codex_item_shape(self):
+        response = _response_from_chat(
+            {
+                "choices": [{
+                    "message": {
+                        "tool_calls": [{
+                            "id": "call_fixture",
+                            "type": "function",
+                            "function": {"name": "exec", "arguments": '{"input":"text(1)"}'},
+                        }]
+                    },
+                    "finish_reason": "tool_calls",
+                }]
+            },
+            "demo/model",
+            custom_names={"exec"},
+        )
+        item = response["output"][0]
+        self.assertEqual(item["type"], "custom_tool_call")
+        self.assertTrue(item["id"].startswith("ctc_"))
+        self.assertEqual(item["call_id"], "call_fixture")
+        self.assertEqual(item["input"], "text(1)")
+
+    def test_chat_length_finish_is_incomplete_not_completed(self):
+        response = _response_from_chat(
+            {
+                "choices": [{
+                    "message": {"content": "partial"},
+                    "finish_reason": "length",
+                }]
+            },
+            "demo/model",
+        )
+        self.assertEqual(response["status"], "incomplete")
+        self.assertEqual(
+            response["incomplete_details"], {"reason": "max_output_tokens"}
+        )
+
     def test_responses_reasoning_effort_becomes_chat_reasoning_effort(self):
         payload = responses_to_chat({
             "model": "demo/model",
@@ -1079,6 +1232,24 @@ class RouterTests(unittest.TestCase):
         self.assertIsInstance(result, FakeResponse)
         self.assertEqual(opened.call_count, 2)
         sleep.assert_called_once_with(0.5)
+
+    def test_request_uses_compact_json_for_gateway_body_limits(self):
+        provider = {
+            "id": "demo",
+            "protocol": "responses",
+            "auth_mode": "api_key",
+            "api_key": "key",
+            "base_url": "https://example.com/v1",
+        }
+
+        class FakeResponse:
+            status = 200
+
+        with patch.object(router, "urlopen", return_value=FakeResponse()) as opened:
+            router._request(provider, {"model": "demo", "input": [1, 2]}, {}, False)
+
+        request = opened.call_args.args[0]
+        self.assertEqual(request.data, b'{"model":"demo","input":[1,2]}')
 
     def test_request_retries_transient_connection_failure(self):
         provider = {"id": "demo", "protocol": "chat_completions", "auth_mode": "api_key", "api_key": "key", "base_url": "https://example.com/v1"}
@@ -1310,6 +1481,18 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(result["output_text"], "Hello")
         self.assertEqual(result["output"][0]["content"][0]["text"], "Hello")
 
+    def test_anthropic_max_tokens_is_incomplete_not_completed(self):
+        result = _response_from_anthropic({
+            "id": "msg_1",
+            "model": "claude",
+            "content": [{"type": "text", "text": "Partial"}],
+            "stop_reason": "max_tokens",
+        }, "ant/claude")
+        self.assertEqual(result["status"], "incomplete")
+        self.assertEqual(
+            result["incomplete_details"], {"reason": "max_output_tokens"}
+        )
+
     def test_anthropic_provider_uses_anthropic_auth_header(self):
         headers = router._headers(
             {
@@ -1372,6 +1555,105 @@ class RouterTests(unittest.TestCase):
         self.assertIn('"type": "function_call"', output)
         self.assertIn('"arguments": "{\\\"cmd\\\":\\\"pwd\\\"}"', output)
         self.assertIn("event: response.completed", output)
+
+    def test_stream_maps_custom_chat_tool_call_back_to_codex(self):
+        class FakeResponse:
+            def __iter__(self):
+                return iter([
+                    b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_fixture","type":"function","function":{"name":"exec","arguments":"{\\"input\\":\\"text(1)\\"}"}}]},"finish_reason":"tool_calls"}]}\n',
+                    b'\n',
+                    b'data: [DONE]\n',
+                    b'\n',
+                ])
+
+            def close(self):
+                pass
+
+        provider = {"id": "demo", "protocol": "chat_completions", "auth_mode": "api_key", "base_url": "https://example.com/v1"}
+        model = {"id": "demo/model"}
+        body = {
+            "model": "demo/model",
+            "input": "Run it",
+            "stream": True,
+            "tools": [{"type": "custom", "name": "exec", "description": "Run code"}],
+        }
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            events = list(sse_json_events(router.stream_chat_completion(provider, body, model, {})))
+        added = next(
+            event for event in events
+            if event.get("type") == "response.output_item.added"
+            and event.get("item", {}).get("type") == "custom_tool_call"
+        )
+        done = next(
+            event for event in events
+            if event.get("type") == "response.output_item.done"
+            and event.get("item", {}).get("type") == "custom_tool_call"
+        )
+        self.assertTrue(added["item"]["id"].startswith("ctc_"))
+        self.assertEqual(done["item"]["call_id"], "call_fixture")
+        self.assertEqual(done["item"]["input"], "text(1)")
+        self.assertTrue(any(event.get("type") == "response.completed" for event in events))
+
+    def test_stream_length_finish_emits_incomplete_terminal(self):
+        class FakeResponse:
+            def __iter__(self):
+                return iter([
+                    b'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}\n',
+                    b'\n',
+                    b'data: [DONE]\n',
+                    b'\n',
+                ])
+
+            def close(self):
+                pass
+
+        provider = {"id": "demo", "protocol": "chat_completions", "auth_mode": "api_key", "base_url": "https://example.com/v1"}
+        model = {"id": "demo/model"}
+        body = {"model": "demo/model", "input": "Hello", "stream": True}
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            events = list(sse_json_events(router.stream_chat_completion(provider, body, model, {})))
+        self.assertEqual(events[-1]["type"], "response.incomplete")
+        self.assertEqual(
+            events[-1]["response"]["incomplete_details"]["reason"],
+            "max_output_tokens",
+        )
+        self.assertFalse(any(event.get("type") == "response.completed" for event in events))
+
+    def test_anthropic_stream_max_tokens_emits_incomplete_terminal(self):
+        class FakeResponse:
+            def __iter__(self):
+                return iter([
+                    b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}\n',
+                    b'\n',
+                    b'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n',
+                    b'\n',
+                ])
+
+            def close(self):
+                pass
+
+        provider = {
+            "id": "demo",
+            "protocol": "anthropic_messages",
+            "auth_mode": "anthropic_api_key",
+            "base_url": "https://example.com/v1",
+        }
+        model = {"id": "demo/model"}
+        body = {"model": "demo/model", "input": "Hello", "stream": True}
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            events = list(
+                sse_json_events(
+                    router.stream_anthropic_completion(provider, body, model, {})
+                )
+            )
+        self.assertEqual(events[-1]["type"], "response.incomplete")
+        self.assertEqual(
+            events[-1]["response"]["incomplete_details"]["reason"],
+            "max_output_tokens",
+        )
+        self.assertFalse(
+            any(event.get("type") == "response.completed" for event in events)
+        )
 
     def test_stream_rejects_textual_tool_markup(self):
         class FakeResponse:

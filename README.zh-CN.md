@@ -6,7 +6,7 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 保留 Codex 原生使用体验的同时，把多个 ChatGPT Subscription、API Provider
 和外部模型加入同一个模型列表。
 
-当前源码版本为 `v0.5.1`。
+当前源码版本为 `v0.6.0`。
 
 ## 功能
 
@@ -18,6 +18,8 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 - 拉取 Provider 模型，自由选择导入模型，修改上下文窗口，执行测试并隐藏
   不常用模型。
 - Provider 报告或支持时，保留文本、图片、推理和结构化工具调用能力。
+- Codex 可以使用现有模型 slug，把原生子任务委派给外部模型；子任务及其权限仍由
+  Codex 管理。
 - 凭据只在本机加密保存。
 - 通过密码保护的 `.emp` 文件导入和导出数据。
 - 保留 Codex 原生会话、`resume`、WebSocket、压缩和 MCP 功能。

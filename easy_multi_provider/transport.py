@@ -108,6 +108,7 @@ class WebSocketConnection:
         self.reader = reader
         self.writer = writer
         self.closed = False
+        self.peer_close_code: Optional[int] = None
 
     def _send_frame(self, opcode: int, payload: bytes = b"") -> None:
         if self.closed:
@@ -164,6 +165,11 @@ class WebSocketConnection:
             encoded = _read_exact(self.reader, length)
             payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(encoded))
             if opcode == 8:
+                if len(payload) == 1:
+                    raise WebSocketProtocolError("invalid websocket close payload")
+                self.peer_close_code = (
+                    struct.unpack("!H", payload[:2])[0] if len(payload) >= 2 else 1005
+                )
                 self._send_frame(8, payload[:125])
                 self.closed = True
                 return None

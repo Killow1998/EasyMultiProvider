@@ -75,26 +75,29 @@ class CatalogTests(unittest.TestCase):
 
             models = {item["slug"]: item for item in build_catalog(config)["models"]}
 
-            self.assertEqual(models["gpt-native"]["display_name"], "Native [258K]")
+            self.assertEqual(models["gpt-native"]["display_name"], "[ 258K]  Native")
             self.assertEqual(
                 models["gpt-native"]["description"], "Native model · Context 258K"
             )
             self.assertEqual(
                 models["primary/gpt-native"]["display_name"],
-                "Primary · Native [258K]",
+                "[ 258K]  Primary · Native",
             )
             self.assertEqual(
                 models["primary/gpt-native"]["description"],
                 "ChatGPT subscription: Primary · Context 258K",
             )
-            self.assertEqual(models["demo/large"]["display_name"], "Large [1.05M]")
             self.assertEqual(
-                models["demo/large"]["description"],
-                "External provider model · Context 1.05M",
+                models["demo/large"]["display_name"], "[1.05M]  demo/large"
             )
-            self.assertEqual(models["demo/unknown"]["display_name"], "Unknown")
             self.assertEqual(
-                models["demo/unknown"]["description"], "External provider model"
+                models["demo/large"]["description"], "Large · Context 1.05M"
+            )
+            self.assertEqual(
+                models["demo/unknown"]["display_name"], "[    ?]  demo/unknown"
+            )
+            self.assertEqual(
+                models["demo/unknown"]["description"], "Unknown"
             )
             self.assertNotIn("context_window", models["demo/unknown"])
 
@@ -122,6 +125,29 @@ class CatalogTests(unittest.TestCase):
             write_catalog(config, output)
             self.assertTrue(output.exists())
             self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["models"][-1]["slug"], "demo/model")
+
+    def test_external_model_is_delegatable_without_inheriting_agent_backend(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(json.dumps({"models": [{
+                "slug": "gpt-native",
+                "display_name": "Native",
+                "base_instructions": "Be useful",
+                "model_messages": {},
+                "multi_agent_version": "disabled",
+            }]}), encoding="utf-8")
+            config = normalize({
+                "native_catalog_path": str(native_path),
+                "providers": [{"id": "demo", "base_url": "https://example.com/v1"}],
+                "models": [{"id": "demo/worker", "provider": "demo"}],
+            })
+
+            model = build_catalog(config)["models"][-1]
+
+            self.assertEqual(model["slug"], "demo/worker")
+            self.assertTrue(model["supported_in_api"])
+            self.assertIsNone(model["multi_agent_version"])
+            self.assertEqual(model["supported_reasoning_levels"], [])
 
     def test_generated_catalog_path_is_stable_below_codex_home(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -285,6 +311,31 @@ class CatalogTests(unittest.TestCase):
             "models": [{"id": "demo/hidden", "provider": "demo", "enabled": False}],
             })
             self.assertEqual(build_catalog(config)["models"], [])
+
+    def test_external_models_group_by_provider_order_and_newest_first(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text('{"models": []}', encoding="utf-8")
+            config = normalize({
+                "native_catalog_path": str(native_path),
+                "providers": [
+                    {"id": "second", "base_url": "https://second.example/v1"},
+                    {"id": "first", "base_url": "https://first.example/v1"},
+                ],
+                "models": [
+                    {"id": "first/old", "provider": "first", "created_at": 10},
+                    {"id": "second/old", "provider": "second", "created_at": 10},
+                    {"id": "first/new", "provider": "first", "created_at": 20},
+                    {"id": "second/new", "provider": "second", "created_at": 20},
+                ],
+            })
+
+            slugs = [model["slug"] for model in build_catalog(config)["models"]]
+
+        self.assertEqual(
+            slugs,
+            ["second/new", "second/old", "first/new", "first/old"],
+        )
 
 
 if __name__ == "__main__":

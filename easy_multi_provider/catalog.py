@@ -5,12 +5,13 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .accounts import duplicate_account_status
-from .capabilities import codex_input_modalities
+from .capabilities import codex_input_modalities, normalize_reasoning_levels
 from .config import MAX_CONTEXT_WINDOW
 
 EFFORT_DESCRIPTIONS = {
@@ -21,6 +22,8 @@ EFFORT_DESCRIPTIONS = {
     "xhigh": "Extra high reasoning depth for hard tasks",
     "max": "Maximum reasoning depth",
 }
+_CONTEXT_SUFFIX = re.compile(r"\s+\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]$")
+_CONTEXT_PREFIX = re.compile(r"^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+")
 
 
 def _usable_context_window(model: Dict[str, Any]) -> int:
@@ -50,10 +53,11 @@ def _compact_context_window(tokens: int) -> str:
 
 def _display_name_with_context(model: Dict[str, Any]) -> str:
     name = str(model.get("display_name") or model.get("slug") or model.get("id") or "")
+    name = _CONTEXT_PREFIX.sub("", name)
+    name = _CONTEXT_SUFFIX.sub("", name)
     context_window = _usable_context_window(model)
-    if not context_window:
-        return name
-    return "%s [%s]" % (name, _compact_context_window(context_window))
+    context = _compact_context_window(context_window) if context_window else "?"
+    return "[%5s]  %s" % (context, name)
 
 
 def _description_with_context(model: Dict[str, Any]) -> str:
@@ -102,14 +106,18 @@ def _external_entry(model: Dict[str, Any], template: Dict[str, Any]) -> Dict[str
         "auto_compact_token_limit",
     ):
         entry.pop(field, None)
-    levels = model.get("reasoning_levels") or ["medium"]
+    entry.pop("default_reasoning_level", None)
+    entry.pop("supported_reasoning_levels", None)
+    levels = normalize_reasoning_levels(model.get("reasoning_levels"))
+    friendly_name = str(model.get("display_name") or "").strip()
+    description = str(model.get("description") or "").strip()
+    if not description and friendly_name and friendly_name != model["id"]:
+        description = friendly_name
     entry.update(
         {
             "slug": model["id"],
-            "display_name": model.get("display_name") or model["id"],
-            "description": model.get("description") or "External provider model",
-            "default_reasoning_level": levels[0],
-            "supported_reasoning_levels": _reasoning_levels(levels),
+            "display_name": model["id"],
+            "description": description or "External provider model",
             "visibility": model.get("visibility", "list"),
             "supported_in_api": True,
             "input_modalities": codex_input_modalities(model.get("input_modalities")),
@@ -124,8 +132,22 @@ def _external_entry(model: Dict[str, Any], template: Dict[str, Any]) -> Dict[str
             is True,
             "supports_parallel_tool_calls": False,
             "apply_patch_tool_type": None,
+            # A routed model may be selected explicitly as a native Codex
+            # child model.  Do not inherit the native template's value here:
+            # multi_agent_version describes which collaboration backend the
+            # model can orchestrate itself, not whether it can be delegated to.
+            # None remains eligible as a child in Codex while avoiding a false
+            # claim that every external model can spawn further agents.
+            "multi_agent_version": None,
+            # Codex 0.149 requires the field even when an external provider
+            # does not advertise concrete effort levels. An empty list keeps
+            # the capability honest without fabricating a default effort.
+            "supported_reasoning_levels": [],
         }
     )
+    if levels:
+        entry["default_reasoning_level"] = levels[(len(levels) - 1) // 2]
+        entry["supported_reasoning_levels"] = _reasoning_levels(levels)
     context_window = min(MAX_CONTEXT_WINDOW, int(model.get("context_window", 0) or 0))
     if context_window:
         entry["context_window"] = context_window
@@ -140,10 +162,14 @@ def _account_entry(account: Dict[str, Any], native: Dict[str, Any]) -> Dict[str,
     entry = copy.deepcopy(native)
     slug = str(native.get("slug", ""))
     entry["slug"] = account["prefix"] + "/" + slug
+    native_name = str(native.get("display_name") or slug)
+    native_name = _CONTEXT_PREFIX.sub("", native_name)
+    native_name = _CONTEXT_SUFFIX.sub("", native_name)
     entry["display_name"] = "%s · %s" % (
         account.get("name") or account["prefix"],
-        _display_name_with_context(native),
+        native_name,
     )
+    entry["display_name"] = _display_name_with_context(entry)
     entry["description"] = "ChatGPT subscription: %s" % (account.get("name") or account["prefix"])
     entry["description"] = _description_with_context(entry)
     entry["visibility"] = native.get("visibility", "list")
@@ -187,7 +213,7 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
         "model_messages": {},
         "shell_type": "shell_command",
     }
-    external = []
+    external_by_provider = {}
     account_aliases = []
     duplicate_accounts = duplicate_account_status(config.get("accounts", []))
     native_hidden_models = {
@@ -215,10 +241,36 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
             if alias["slug"] not in existing:
                 account_aliases.append(alias)
                 existing.add(alias["slug"])
-    for model in config.get("models", []):
+    provider_order = [
+        str(provider.get("id"))
+        for provider in config.get("providers", [])
+        if isinstance(provider, dict) and provider.get("id")
+    ]
+    for model_index, model in enumerate(config.get("models", [])):
         if not model.get("enabled", True) or model["id"] in existing:
             continue
-        external.append(_external_entry(model, template))
+        entry = _external_entry(model, template)
+        entry["_emp_created_at"] = model.get("created_at") or 0
+        entry["_emp_order"] = model_index
+        external_by_provider.setdefault(str(model.get("provider") or ""), []).append(entry)
+    external = []
+    ordered_provider_ids = provider_order + sorted(
+        provider_id
+        for provider_id in external_by_provider
+        if provider_id not in provider_order
+    )
+    for provider_id in ordered_provider_ids:
+        entries = external_by_provider.get(provider_id, [])
+        entries.sort(
+            key=lambda item: (
+                -(float(item.get("_emp_created_at") or 0)),
+                int(item.get("_emp_order") or 0),
+            )
+        )
+        for entry in entries:
+            entry.pop("_emp_created_at", None)
+            entry.pop("_emp_order", None)
+            external.append(entry)
     return {"models": native_models + account_aliases + external}
 
 

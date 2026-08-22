@@ -235,10 +235,19 @@ function duplicateAccountBehavior() {
   assert.match(html, /模型显示设置作用于原生列表/);
 }
 
+function modelGroupBehavior() {
+  run("state = {providers:[{id:'provider-b',name:'Provider B'},{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/new',provider:'provider-a',enabled:true,created_at:30},{id:'provider-b/old',provider:'provider-b',enabled:true,created_at:10},{id:'provider-b/new',provider:'provider-b',enabled:true,created_at:20},{id:'provider-b/hidden',provider:'provider-b',enabled:false,created_at:40}]}; renderModels()");
+  const html = getElement("models").innerHTML;
+  assert(html.indexOf("Provider B") < html.indexOf("Provider A"), "provider config order must be preserved");
+  assert(html.indexOf("provider-b/new") < html.indexOf("provider-b/old"), "newer visible models must sort first");
+  assert(html.indexOf("provider-b/old") < html.indexOf("provider-b/hidden"), "hidden models must sort last");
+}
+
 (async () => {
   await integrationBehavior();
   pickerBehavior();
   duplicateAccountBehavior();
+  modelGroupBehavior();
   process.stdout.write("web DOM behavior: ok\n");
 })().catch(error => {
   console.error(error.stack || error);

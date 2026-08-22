@@ -13,7 +13,15 @@ from urllib.parse import quote, urlsplit
 
 
 CAPABILITY_SOURCES = frozenset(
-    {"official", "advertised", "observed", "manual", "inferred", "unknown"}
+    {
+        "official",
+        "advertised",
+        "observed",
+        "manual",
+        "inherited",
+        "inferred",
+        "unknown",
+    }
 )
 CAPABILITY_NAMES = (
     "configured_protocol",
@@ -21,6 +29,7 @@ CAPABILITY_NAMES = (
     "streaming",
     "structured_tools",
     "parallel_tools",
+    "supports_reasoning",
     "reasoning_levels",
     "context_window",
     "output_limit",
@@ -39,11 +48,25 @@ TEXT_MODALITY = "text"
 IMAGE_MODALITY = "image"
 DEFAULT_INPUT_MODALITIES = (TEXT_MODALITY,)
 CODEX_INPUT_MODALITIES = frozenset({TEXT_MODALITY, IMAGE_MODALITY})
+REASONING_EFFORT_ORDER = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+)
+_REASONING_EFFORT_RANK = {
+    effort: index for index, effort in enumerate(REASONING_EFFORT_ORDER)
+}
 _DEFAULT_CONFIDENCE = {
     "official": 0.95,
     "advertised": 0.75,
     "observed": 1.0,
     "manual": 1.0,
+    "inherited": 0.6,
     "inferred": 0.35,
     "unknown": 0.0,
 }
@@ -95,6 +118,32 @@ def codex_input_modalities(value: Any) -> list:
         if item in CODEX_INPUT_MODALITIES and item in normalized
     ]
     return projected or list(DEFAULT_INPUT_MODALITIES)
+
+
+def normalize_reasoning_levels(value: Any) -> list:
+    """Return unique effort names in Codex's intended progression order."""
+
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        effort = item.strip()
+        if not effort:
+            continue
+        known = effort.lower()
+        effort = known if known in _REASONING_EFFORT_RANK else effort
+        if effort not in result:
+            result.append(effort)
+    indexed = list(enumerate(result))
+    indexed.sort(
+        key=lambda pair: (
+            _REASONING_EFFORT_RANK.get(pair[1], len(_REASONING_EFFORT_RANK)),
+            pair[0],
+        )
+    )
+    return [effort for _, effort in indexed]
 
 
 def observed_at_now() -> str:
@@ -370,6 +419,8 @@ def capability_record(
     websocket, websocket_source = _lookup_capability(
         provider, model, ("websocket", "supports_websocket")
     )
+    supports_reasoning = model.get("supports_reasoning")
+    supports_reasoning_known = isinstance(supports_reasoning, bool)
     reasoning = model.get("reasoning_levels")
     reasoning_known = isinstance(reasoning, list) and bool(reasoning)
     if reasoning_known:
@@ -399,6 +450,12 @@ def capability_record(
             ),
             "parallel_tools": _capability(
                 parallel, parallel_source, "parallel_tools", isinstance(parallel, bool)
+            ),
+            "supports_reasoning": _capability(
+                supports_reasoning,
+                model,
+                "supports_reasoning",
+                supports_reasoning_known,
             ),
             "reasoning_levels": _capability(
                 reasoning, model, "reasoning_levels", reasoning_known

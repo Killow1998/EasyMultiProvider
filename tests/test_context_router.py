@@ -136,8 +136,8 @@ class ContextRouterTests(unittest.TestCase):
             context_check({"model": "model", "input": "x"}, False, "")
             return 200, "application/json", b"{}"
 
-        with patch.object(router, "forward_responses", side_effect=rejected), patch.object(
-            router, "chat_completion", side_effect=successful
+        with patch.object(router, "chat_completion", side_effect=rejected), patch.object(
+            router, "forward_responses", side_effect=successful
         ):
             metadata, _ = router.proxy(
                 config,
@@ -146,10 +146,10 @@ class ContextRouterTests(unittest.TestCase):
                 route_events.append,
                 context,
             )
-        self.assertEqual(metadata["resolved_protocol"], "chat_completions")
-        self.assertEqual(checks, ["responses", "chat_completions"])
+        self.assertEqual(metadata["resolved_protocol"], "responses")
+        self.assertEqual(checks, ["chat_completions", "responses"])
         self.assertEqual(len(route_events), 1)
-        self.assertEqual(route_events[0]["resolved_protocol"], "chat_completions")
+        self.assertEqual(route_events[0]["resolved_protocol"], "responses")
         self.assertTrue(route_events[0]["success"])
 
     def test_stream_terminal_success_and_incomplete_are_distinct(self):
