@@ -3,9 +3,13 @@ import unittest
 
 from easy_multi_provider.capabilities import (
     CAPABILITY_NAMES,
-    endpoint_fingerprint,
     capability_record,
+    endpoint_fingerprint,
+    normalize_output_modalities,
+    normalize_supported_protocols,
+    output_modalities_known,
     safe_capability_list,
+    supported_protocols_known,
 )
 
 
@@ -66,6 +70,8 @@ class CapabilityTests(unittest.TestCase):
             "structured_tools",
             "parallel_tools",
             "websocket",
+            "structured_output",
+            "web_search",
         ):
             self.assertNotEqual(record["capabilities"][name]["value"], True)
             self.assertEqual(record["capabilities"][name]["value"], "unknown")
@@ -142,6 +148,201 @@ class CapabilityTests(unittest.TestCase):
             }
         )
         self.assertEqual([item["model_id"] for item in records], ["enabled/model"])
+
+
+class TestOutputModalitiesNormalization(unittest.TestCase):
+    def test_valid_modalities_are_normalized(self):
+        result = normalize_output_modalities(["Text", "AUDIO", "text", "video"])
+        self.assertEqual(result, ["text", "audio", "video"])
+
+    def test_empty_returns_default_text(self):
+        self.assertEqual(normalize_output_modalities([]), ["text"])
+        self.assertEqual(normalize_output_modalities(None), ["text"])
+
+    def test_non_codex_modalities_preserved(self):
+        result = normalize_output_modalities(["text", "audio", "file", "pdf"])
+        self.assertEqual(result, ["text", "audio", "file", "pdf"])
+
+    def test_known_check(self):
+        self.assertTrue(output_modalities_known(["text", "audio"]))
+        self.assertFalse(output_modalities_known(None))
+        self.assertFalse(output_modalities_known([]))
+        self.assertFalse(output_modalities_known("text"))
+
+
+class TestSupportedProtocolsNormalization(unittest.TestCase):
+    def test_valid_protocols_retained(self):
+        result = normalize_supported_protocols(["responses", "chat_completions"])
+        self.assertEqual(result, ["responses", "chat_completions"])
+
+    def test_auto_is_excluded(self):
+        result = normalize_supported_protocols(["auto", "responses"])
+        self.assertEqual(result, ["responses"])
+
+    def test_unknown_protocols_excluded(self):
+        result = normalize_supported_protocols(["responses", "weird_protocol"])
+        self.assertEqual(result, ["responses"])
+
+    def test_empty_returns_empty(self):
+        self.assertEqual(normalize_supported_protocols([]), [])
+        self.assertEqual(normalize_supported_protocols(None), [])
+
+    def test_known_check(self):
+        self.assertTrue(supported_protocols_known(["responses"]))
+        self.assertFalse(supported_protocols_known([]))
+        self.assertFalse(supported_protocols_known(None))
+
+
+class TestNewCapabilityRecordFields(unittest.TestCase):
+    provider = {
+        "id": "demo",
+        "base_url": "https://example.com/v1",
+        "protocol": "responses",
+    }
+
+    def test_output_modalities_in_record(self):
+        record = capability_record(
+            self.provider,
+            {
+                "id": "demo/model",
+                "upstream_id": "model",
+                "output_modalities": ["text", "audio"],
+                "capability_sources": {
+                    "output_modalities": {
+                        "source": "advertised",
+                        "confidence": 0.75,
+                        "observed_at": "2026-08-22T00:00:00+00:00",
+                    }
+                },
+            },
+        ).to_dict()
+        cap = record["capabilities"]["output_modalities"]
+        self.assertEqual(cap["value"], ["text", "audio"])
+        self.assertEqual(cap["source"], "advertised")
+
+    def test_output_modalities_defaults_to_unknown(self):
+        record = capability_record(
+            self.provider,
+            {"id": "demo/model", "upstream_id": "model"},
+        ).to_dict()
+        cap = record["capabilities"]["output_modalities"]
+        self.assertEqual(cap["value"], "unknown")
+        self.assertEqual(cap["source"], "unknown")
+
+    def test_supported_protocols_in_record(self):
+        record = capability_record(
+            self.provider,
+            {
+                "id": "demo/model",
+                "upstream_id": "model",
+                "supported_protocols": ["responses", "chat_completions"],
+                "capability_sources": {
+                    "supported_protocols": {
+                        "source": "official",
+                        "confidence": 0.95,
+                        "observed_at": "2026-08-22T00:00:00+00:00",
+                    }
+                },
+            },
+        ).to_dict()
+        cap = record["capabilities"]["supported_protocols"]
+        self.assertEqual(cap["value"], ["responses", "chat_completions"])
+        self.assertEqual(cap["source"], "official")
+
+    def test_max_input_tokens_in_record(self):
+        record = capability_record(
+            self.provider,
+            {
+                "id": "demo/model",
+                "upstream_id": "model",
+                "max_input_tokens": 100000,
+                "capability_sources": {
+                    "max_input_tokens": {
+                        "source": "manual",
+                        "confidence": 1.0,
+                        "observed_at": "2026-08-22T00:00:00+00:00",
+                    }
+                },
+            },
+        ).to_dict()
+        cap = record["capabilities"]["max_input_tokens"]
+        self.assertEqual(cap["value"], 100000)
+        self.assertEqual(cap["source"], "manual")
+
+    def test_reasoning_control_in_record(self):
+        record = capability_record(
+            self.provider,
+            {
+                "id": "demo/model",
+                "upstream_id": "model",
+                "reasoning_control": "reasoning.effort enum: low, high",
+                "capability_sources": {
+                    "reasoning_control": {
+                        "source": "official",
+                        "confidence": 0.95,
+                        "observed_at": "2026-08-22T00:00:00+00:00",
+                    }
+                },
+            },
+        ).to_dict()
+        cap = record["capabilities"]["reasoning_control"]
+        self.assertEqual(cap["value"], "reasoning.effort enum: low, high")
+        self.assertEqual(cap["source"], "official")
+
+    def test_structured_output_in_record(self):
+        record = capability_record(
+            self.provider,
+            {
+                "id": "demo/model",
+                "upstream_id": "model",
+                "capabilities": {"structured_output": True},
+                "capability_sources": {
+                    "structured_output": {
+                        "source": "advertised",
+                        "confidence": 0.75,
+                        "observed_at": "2026-08-22T00:00:00+00:00",
+                    }
+                },
+            },
+        ).to_dict()
+        cap = record["capabilities"]["structured_output"]
+        self.assertEqual(cap["value"], True)
+        self.assertEqual(cap["source"], "advertised")
+
+    def test_web_search_in_record(self):
+        record = capability_record(
+            self.provider,
+            {
+                "id": "demo/model",
+                "upstream_id": "model",
+                "capabilities": {"web_search": False},
+                "capability_sources": {
+                    "web_search": {
+                        "source": "observed",
+                        "confidence": 1.0,
+                        "observed_at": "2026-08-22T00:00:00+00:00",
+                    }
+                },
+            },
+        ).to_dict()
+        cap = record["capabilities"]["web_search"]
+        self.assertEqual(cap["value"], False)
+        self.assertEqual(cap["source"], "observed")
+
+    def test_all_new_fields_present_in_record(self):
+        record = capability_record(
+            self.provider,
+            {"id": "demo/model", "upstream_id": "model"},
+        ).to_dict()
+        for name in (
+            "output_modalities",
+            "supported_protocols",
+            "max_input_tokens",
+            "reasoning_control",
+            "structured_output",
+            "web_search",
+        ):
+            self.assertIn(name, record["capabilities"])
 
 
 if __name__ == "__main__":

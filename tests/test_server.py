@@ -2962,6 +2962,122 @@ class ServerAccountTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_quota_refresh_uses_native_login_for_duplicate_current_login(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(
+                normalize(
+                    {
+                        "account_store_path": str(root / "state" / "accounts"),
+                    }
+                ),
+                config_path,
+            )
+            state = AppState(config_path)
+            state.import_account(
+                {"id": "primary", "name": "Primary", "prefix": "primary"},
+                {"auth_mode": "chatgpt", "tokens": {"access_token": "account-secret"}},
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                snapshot = {
+                    "account_label": "s***@example.com",
+                    "plan_type": "plus",
+                    "rate_limits": {"primary": {"usedPercent": 12}},
+                    "updated_at": 456,
+                }
+                with patch(
+                    "easy_multi_provider.server.duplicate_account_status",
+                    return_value={"primary": "\u5f53\u524d Codex \u767b\u5f55"},
+                ) as dup_check, patch(
+                    "easy_multi_provider.server.refresh_account_quota"
+                ) as imported_path, patch(
+                    "easy_multi_provider.server.read_native_login_quota",
+                    return_value=snapshot,
+                ) as native_path:
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request(
+                        "POST",
+                        "/api/accounts/primary/quota",
+                        b"{}",
+                        {
+                            "Content-Type": "application/json",
+                            "Cookie": "emp_session=" + state.session_token,
+                        },
+                    )
+                    response = connection.getresponse()
+                    payload = response.read().decode("utf-8")
+                    self.assertEqual(response.status, 200)
+                    self.assertIn('"usedPercent": 12', payload)
+                    connection.close()
+                imported_path.assert_not_called()
+                native_path.assert_called_once()
+                dup_check.assert_called()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_quota_refresh_uses_imported_path_for_non_duplicate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(
+                normalize(
+                    {
+                        "account_store_path": str(root / "state" / "accounts"),
+                    }
+                ),
+                config_path,
+            )
+            state = AppState(config_path)
+            state.import_account(
+                {"id": "primary", "name": "Primary", "prefix": "primary"},
+                {"auth_mode": "chatgpt", "tokens": {"access_token": "account-secret"}},
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                snapshot = {
+                    "account_label": "s***@example.com",
+                    "plan_type": "plus",
+                    "rate_limits": {"primary": {"usedPercent": 8}},
+                    "updated_at": 789,
+                }
+                with patch(
+                    "easy_multi_provider.server.duplicate_account_status",
+                    return_value={},
+                ) as dup_check, patch(
+                    "easy_multi_provider.server.refresh_account_quota",
+                    return_value=snapshot,
+                ) as imported_path, patch(
+                    "easy_multi_provider.server.read_native_login_quota"
+                ) as native_path:
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request(
+                        "POST",
+                        "/api/accounts/primary/quota",
+                        b"{}",
+                        {
+                            "Content-Type": "application/json",
+                            "Cookie": "emp_session=" + state.session_token,
+                        },
+                    )
+                    response = connection.getresponse()
+                    payload = response.read().decode("utf-8")
+                    self.assertEqual(response.status, 200)
+                    self.assertIn('"usedPercent": 8', payload)
+                    connection.close()
+                imported_path.assert_called_once()
+                native_path.assert_not_called()
+                dup_check.assert_called()
+            finally:
+                server.shutdown()
+                server.server_close()
+
     def test_management_and_proxy_require_automatic_session_or_caller_auth(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"

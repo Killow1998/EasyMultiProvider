@@ -12,6 +12,7 @@ from easy_multi_provider.quota import (
     account_refresh_lock,
     parse_app_server_output,
     read_account_quota,
+    read_native_login_quota,
 )
 from easy_multi_provider.vault import write_encrypted_json
 
@@ -187,6 +188,161 @@ class QuotaTests(unittest.TestCase):
             self.assertNotIn("secret", process.stdin.body)
             self.assertEqual(json.loads(process.stdin.body.splitlines()[1])["method"], "initialized")
             self.assertTrue(process.stdin.closed)
+
+
+class NativeLoginQuotaTests(unittest.TestCase):
+    def _fake_process_factory(self, refresh_token_value):
+        sent = []
+
+        class FakeStream:
+            def __init__(self, lines=()):
+                self.lines = iter(lines)
+
+            def readline(self):
+                return next(self.lines, "")
+
+        class FakeStdin:
+            def __init__(self):
+                self.body = ""
+                self.closed = False
+
+            def write(self, value):
+                self.body += value
+                sent.append(value)
+
+            def flush(self):
+                return None
+
+            def close(self):
+                self.closed = True
+
+        class FakeProcess:
+            def __init__(self):
+                self.returncode = 0
+                self.stdin = FakeStdin()
+                self.stdout = FakeStream(
+                    [
+                        json.dumps({"id": 1, "result": {}}) + "\n",
+                        json.dumps({"id": 2, "result": {"account": {"planType": "plus"}}}) + "\n",
+                        json.dumps({"id": 3, "result": {"rateLimits": {"primary": {"usedPercent": 0}}}}) + "\n",
+                    ]
+                )
+                self.stderr = FakeStream()
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+            def kill(self):
+                self.returncode = -9
+
+        return FakeProcess(), sent
+
+    def test_native_login_quota_uses_refresh_token_false(self):
+        process, _sent = self._fake_process_factory(False)
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            codex_home = Path(directory) / "codex-home"
+            codex_home.mkdir()
+            native_auth = codex_home / "auth.json"
+            native_auth.write_text(
+                json.dumps({"tokens": {"access_token": "native-current-secret"}}),
+                encoding="utf-8",
+            )
+            codex_file = Path(directory) / "codex"
+            codex_file.write_text("#!/bin/sh\n", encoding="utf-8")
+            codex_file.chmod(0o700)
+            with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}, clear=False), patch(
+                "easy_multi_provider.quota.subprocess.Popen", return_value=process
+            ) as started:
+                value = read_native_login_quota(codex_binary=str(codex_file))
+            self.assertEqual(value["plan_type"], "plus")
+            body_lines = process.stdin.body.splitlines()
+            account_read = json.loads(body_lines[2])
+            self.assertEqual(account_read["method"], "account/read")
+            self.assertIs(account_read["params"]["refreshToken"], False)
+            # The temporary auth file must not be persisted to an EMP vault path
+            self.assertNotEqual(started.call_args.kwargs["env"]["CODEX_HOME"], str(codex_home))
+            self.assertNotIn("native-current-secret", json.dumps(value))
+
+    def test_native_login_quota_does_not_mutate_native_auth(self):
+        process, _sent = self._fake_process_factory(False)
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            codex_home = Path(directory) / "codex-home"
+            codex_home.mkdir()
+            native_auth = codex_home / "auth.json"
+            native_payload = {"tokens": {"access_token": "native-current-secret"}}
+            native_auth.write_text(json.dumps(native_payload), encoding="utf-8")
+            before = native_auth.read_text(encoding="utf-8")
+            codex_file = Path(directory) / "codex"
+            codex_file.write_text("#!/bin/sh\n", encoding="utf-8")
+            codex_file.chmod(0o700)
+            with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}, clear=False), patch(
+                "easy_multi_provider.quota.subprocess.Popen", return_value=process
+            ), patch(
+                "easy_multi_provider.quota.write_encrypted_json"
+            ) as persisted:
+                read_native_login_quota(codex_binary=str(codex_file))
+            self.assertEqual(native_auth.read_text(encoding="utf-8"), before)
+            persisted.assert_not_called()
+
+    def test_native_login_quota_does_not_persist_temporary_state(self):
+        # Ensure the temporary codex home auth.json is NOT copied back to native auth.
+        process, _sent = self._fake_process_factory(False)
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            codex_home = Path(directory) / "codex-home"
+            codex_home.mkdir()
+            native_auth = codex_home / "auth.json"
+            native_auth.write_text(
+                json.dumps({"tokens": {"access_token": "native-current-secret"}}),
+                encoding="utf-8",
+            )
+            codex_file = Path(directory) / "codex"
+            codex_file.write_text("#!/bin/sh\n", encoding="utf-8")
+            codex_file.chmod(0o700)
+            with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}, clear=False), patch(
+                "easy_multi_provider.quota.subprocess.Popen", return_value=process
+            ), patch(
+                "easy_multi_provider.quota.write_encrypted_json"
+            ) as persisted:
+                read_native_login_quota(codex_binary=str(codex_file))
+            persisted.assert_not_called()
+
+    def test_imported_quota_still_uses_refresh_token_true_and_persists(self):
+        # Non-duplicate imported account must keep refreshToken=True and persist
+        # a validated refreshed credential back to its EMP encrypted auth file.
+        process, _sent = self._fake_process_factory(True)
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            account_dir = Path(directory) / "primary"
+            account_dir.mkdir()
+            auth_file = account_dir / "auth.json.enc"
+            write_encrypted_json(auth_file, {"tokens": {"access_token": "imported-secret"}})
+            codex_file = Path(directory) / "codex"
+            codex_file.write_text("#!/bin/sh\n", encoding="utf-8")
+            codex_file.chmod(0o700)
+            with patch(
+                "easy_multi_provider.quota.subprocess.Popen", return_value=process
+            ) as started, patch(
+                "easy_multi_provider.quota.write_encrypted_json",
+                wraps=write_encrypted_json,
+            ) as persisted:
+                value = read_account_quota(
+                    {"auth_file": str(auth_file)}, codex_binary=str(codex_file)
+                )
+            self.assertEqual(value["plan_type"], "plus")
+            body_lines = process.stdin.body.splitlines()
+            account_read = json.loads(body_lines[2])
+            self.assertEqual(account_read["method"], "account/read")
+            self.assertIs(account_read["params"]["refreshToken"], True)
+            # The imported path must persist a refreshed credential back to the
+            # target EMP auth_file, and the written value must be a validated
+            # dict (not the raw account, not a path, not None).
+            persisted.assert_called_once()
+            call_args, call_kwargs = persisted.call_args
+            persisted_path = Path(call_args[0]) if call_args else Path(call_kwargs["path"])
+            self.assertEqual(persisted_path.resolve(), auth_file.resolve())
+            written_value = call_args[1] if len(call_args) > 1 else call_kwargs["value"]
+            self.assertIsInstance(written_value, dict)
+            self.assertIn("tokens", written_value)
+            self.assertIn("access_token", written_value["tokens"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,1175 @@
+{
+  "schema_version": 1,
+  "reviewed_at": "2026-08-22",
+  "providers": [
+    {
+      "key": "openai",
+      "display_name": "OpenAI",
+      "role": [
+        "api_provider",
+        "publisher"
+      ],
+      "api_base_urls": [
+        "https://api.openai.com/v1"
+      ],
+      "auth_modes": [
+        "bearer_api_key"
+      ],
+      "supported_protocols": [
+        "responses",
+        "chat_completions"
+      ],
+      "preferred_protocol": "responses",
+      "model_list_endpoint": "https://api.openai.com/v1/models",
+      "sources": [
+        "https://developers.openai.com/api/docs/models",
+        "https://developers.openai.com/api/reference/overview"
+      ],
+      "reviewed_at": "2026-08-22",
+      "notes": "Responses API is the recommended default. Chat Completions remains supported. /v1/models lists IDs only (no capability fields)."
+    },
+    {
+      "key": "google_gemini",
+      "display_name": "Google Gemini",
+      "role": [
+        "api_provider",
+        "publisher"
+      ],
+      "api_base_urls": [
+        "https://generativelanguage.googleapis.com/v1beta",
+        "https://generativelanguage.googleapis.com/v1beta/openai"
+      ],
+      "auth_modes": [
+        "bearer_api_key",
+        "x-goog-api-key"
+      ],
+      "supported_protocols": [
+        "chat_completions",
+        "gemini_native"
+      ],
+      "preferred_protocol": "chat_completions",
+      "model_list_endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/models",
+        "https://ai.google.dev/gemini-api/docs/openai",
+        "https://ai.google.dev/gemini-api/docs/thinking"
+      ],
+      "reviewed_at": "2026-08-22",
+      "notes": "Native Gemini API uses x-goog-api-key header. OpenAI-compatible endpoint uses Bearer auth. EMP prefers Chat Completions (OpenAI-compatible) as a compatibility choice; Google recommends the native Gemini API for full feature access."
+    },
+    {
+      "key": "openrouter",
+      "display_name": "OpenRouter",
+      "role": [
+        "aggregator"
+      ],
+      "api_base_urls": [
+        "https://openrouter.ai/api/v1"
+      ],
+      "auth_modes": [
+        "bearer_api_key"
+      ],
+      "supported_protocols": [
+        "chat_completions",
+        "responses",
+        "anthropic_messages"
+      ],
+      "preferred_protocol": "chat_completions",
+      "model_list_endpoint": "https://openrouter.ai/api/v1/models",
+      "sources": [
+        "https://openrouter.ai/docs/quickstart",
+        "https://openrouter.ai/docs/api/api-reference/models/get-models",
+        "https://openrouter.ai/docs/guides/overview/models",
+        "https://openrouter.ai/docs/guides/features/router-metadata",
+        "https://openrouter.ai/docs/guides/features/tool-calling",
+        "https://openrouter.ai/docs/faq"
+      ],
+      "reviewed_at": "2026-08-22",
+      "notes": "OpenRouter is a live aggregator. It exposes OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages skins over the same base URL. GET /api/v1/models returns rich per-model metadata including supported_parameters (tools, reasoning, structured_outputs, response_format, etc.). Model capabilities are inherited from upstream providers; OpenRouter standardizes the interface. parallel_tool_calls defaults true. reasoning_effort enum: xhigh, high, medium, low, minimal, none."
+    },
+    {
+      "key": "anthropic",
+      "display_name": "Anthropic",
+      "role": [
+        "api_provider",
+        "publisher"
+      ],
+      "api_base_urls": [
+        "https://api.anthropic.com/v1"
+      ],
+      "auth_modes": [
+        "x-api-key",
+        "bearer_oauth"
+      ],
+      "supported_protocols": [
+        "anthropic_messages"
+      ],
+      "preferred_protocol": "anthropic_messages",
+      "model_list_endpoint": "https://api.anthropic.com/v1/models",
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/models/overview",
+        "https://platform.claude.com/docs/en/api/overview"
+      ],
+      "reviewed_at": "2026-08-22",
+      "notes": "Messages API at POST /v1/messages. Auth via x-api-key or Bearer token (Workload Identity Federation). anthropic-version header required. Models API returns capabilities object including max_input_tokens, max_tokens. Effort parameter defaults to high on Opus 5 and Sonnet 5."
+    },
+    {
+      "key": "xai",
+      "display_name": "xAI / Grok",
+      "role": [
+        "api_provider",
+        "publisher"
+      ],
+      "api_base_urls": [
+        "https://api.x.ai/v1"
+      ],
+      "auth_modes": [
+        "bearer_api_key"
+      ],
+      "supported_protocols": [
+        "responses",
+        "chat_completions"
+      ],
+      "preferred_protocol": "responses",
+      "model_list_endpoint": "https://api.x.ai/v1/models",
+      "sources": [
+        "https://docs.x.ai/developers/grok-4-6",
+        "https://docs.x.ai/developers/models/grok-4.6",
+        "https://docs.x.ai/developers/model-capabilities/text/reasoning",
+        "https://docs.x.ai/developers/rest-api-reference/inference/models",
+        "https://docs.x.ai/developers/pricing"
+      ],
+      "reviewed_at": "2026-08-22",
+      "notes": "OpenAI-compatible REST API at https://api.x.ai. Also gRPC API. Responses API and Chat Completions both supported. Reasoning cannot be disabled."
+    },
+    {
+      "key": "meta",
+      "display_name": "Meta / Llama",
+      "role": [
+        "publisher"
+      ],
+      "api_base_urls": [],
+      "auth_modes": [],
+      "supported_protocols": [
+        "chat_completions"
+      ],
+      "preferred_protocol": "chat_completions",
+      "model_list_endpoint": null,
+      "sources": [
+        "https://ai.meta.com/llama/get-started/",
+        "https://github.com/meta-llama/llama-models"
+      ],
+      "reviewed_at": "2026-08-22",
+      "notes": "Meta publishes model weights and reference code. Official hosted API docs are login-gated; no public API root is registered."
+    },
+    {
+      "key": "moonshot",
+      "display_name": "Moonshot AI / Kimi",
+      "role": [
+        "api_provider",
+        "publisher"
+      ],
+      "api_base_urls": [
+        "https://api.moonshot.ai/v1"
+      ],
+      "auth_modes": [
+        "bearer_api_key"
+      ],
+      "supported_protocols": [
+        "chat_completions"
+      ],
+      "preferred_protocol": "chat_completions",
+      "model_list_endpoint": "https://api.moonshot.ai/v1/models",
+      "sources": [
+        "https://platform.kimi.ai/docs/models",
+        "https://platform.kimi.ai/docs/api/list-models",
+        "https://platform.kimi.ai/docs/api/chat",
+        "https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart",
+        "https://platform.kimi.ai/docs/api/models-overview"
+      ],
+      "reviewed_at": "2026-08-22",
+      "notes": "OpenAI-compatible API at api.moonshot.ai. List Models returns supports_image_in, supports_video_in, supports_reasoning fields. kimi-k2 series discontinued May 25, 2026; use kimi-k2.6+. thinking param {type: enabled|disabled}. kimi-k3 uses reasoning_effort field."
+    },
+    {
+      "key": "deepseek",
+      "display_name": "DeepSeek",
+      "role": [
+        "api_provider",
+        "publisher"
+      ],
+      "api_base_urls": [
+        "https://api.deepseek.com",
+        "https://api.deepseek.com/anthropic"
+      ],
+      "auth_modes": [
+        "bearer_api_key"
+      ],
+      "supported_protocols": [
+        "chat_completions",
+        "anthropic_messages"
+      ],
+      "preferred_protocol": "chat_completions",
+      "model_list_endpoint": "https://api.deepseek.com/models",
+      "sources": [
+        "https://api-docs.deepseek.com/api/list-models/",
+        "https://api-docs.deepseek.com/quick_start/pricing/",
+        "https://api-docs.deepseek.com/api/create-chat-completion",
+        "https://api-docs.deepseek.com/guides/function_calling",
+        "https://api-docs.deepseek.com/guides/anthropic_api/",
+        "https://api-docs.deepseek.com/updates/"
+      ],
+      "reviewed_at": "2026-08-22",
+      "notes": "OpenAI-compatible Chat Completions API + Anthropic-compatible API. Thinking mode controlled via thinking param (enabled/disabled). reasoning_effort: high, max (low/medium mapped to high, xhigh mapped to max). deepseek-chat and deepseek-reasoner deprecated 2026-07-24, mapped to v4-flash non-thinking/thinking modes."
+    },
+    {
+      "key": "zhipu_glm",
+      "display_name": "Zhipu AI / GLM",
+      "role": [
+        "api_provider",
+        "publisher"
+      ],
+      "api_base_urls": [
+        "https://open.bigmodel.cn/api/paas/v4",
+        "https://api.z.ai/api/paas/v4"
+      ],
+      "auth_modes": [
+        "bearer_api_key"
+      ],
+      "supported_protocols": [
+        "chat_completions"
+      ],
+      "preferred_protocol": "chat_completions",
+      "model_list_endpoint": null,
+      "sources": [
+        "https://docs.z.ai/guides/overview/overview",
+        "https://docs.z.ai/guides/overview/concept-param",
+        "https://docs.z.ai/guides/llm/glm-4.6",
+        "https://docs.z.ai/api-reference/llm/chat-completion",
+        "https://docs.z.ai/guides/llm/glm-5.1",
+        "https://docs.bigmodel.cn/cn/api/introduction"
+      ],
+      "reviewed_at": "2026-08-22",
+      "notes": "OpenAI-compatible Chat Completions API. International endpoint: https://api.z.ai/api/paas/v4 (documented at docs.z.ai). China endpoint: https://open.bigmodel.cn/api/paas/v4 (documented at https://docs.bigmodel.cn/cn/api/introduction). No documented GET /models endpoint; models are enumerated in the API reference enum field."
+    }
+  ],
+  "models": [
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.6-sol",
+      "display_name": "GPT-5.6 Sol",
+      "context_window": 1050000,
+      "max_input_tokens": null,
+      "max_output_tokens": 128000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoning_control": "reasoning.effort enum: none, low, medium (default), high, xhigh, max",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "responses",
+        "chat_completions"
+      ],
+      "aliases": [
+        "gpt-5.6"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+        ]
+      }
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.6-luna",
+      "display_name": "GPT-5.6 Luna",
+      "context_window": 1050000,
+      "max_input_tokens": null,
+      "max_output_tokens": 128000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoning_control": "reasoning.effort enum: none, low, medium (default), high, xhigh, max",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "responses",
+        "chat_completions"
+      ],
+      "aliases": [],
+      "sources_by_field": {
+        "all": [
+          "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+        ]
+      }
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.5",
+      "display_name": "GPT-5.5",
+      "context_window": 1050000,
+      "max_input_tokens": null,
+      "max_output_tokens": 128000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoning_control": "reasoning.effort enum: none, low, medium (default), high, xhigh",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "responses",
+        "chat_completions"
+      ],
+      "aliases": [
+        "gpt-5.5-2026-04-23"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://developers.openai.com/api/docs/models/gpt-5.5"
+        ]
+      }
+    },
+    {
+      "provider_key": "openai",
+      "model_id": "gpt-5.4",
+      "display_name": "GPT-5.4",
+      "context_window": 1050000,
+      "max_input_tokens": null,
+      "max_output_tokens": 128000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoning_control": "reasoning.effort enum: none (default), low, medium, high, xhigh",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "responses",
+        "chat_completions"
+      ],
+      "aliases": [
+        "gpt-5.4-2026-03-05"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://developers.openai.com/api/docs/models/gpt-5.4"
+        ]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-fable-5",
+      "display_name": "Claude Fable 5",
+      "context_window": 1000000,
+      "max_input_tokens": null,
+      "max_output_tokens": 128000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": null,
+      "reasoning_control": "effort parameter (adaptive thinking, always on); extended thinking not supported (thinking.type enabled = No)",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "anthropic_messages"
+      ],
+      "aliases": [],
+      "sources_by_field": {
+        "all": [
+          "https://platform.claude.com/docs/en/about-claude/models/overview"
+        ]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-opus-5",
+      "display_name": "Claude Opus 5",
+      "context_window": 1000000,
+      "max_input_tokens": null,
+      "max_output_tokens": 128000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": null,
+      "reasoning_control": "effort parameter, defaults to high on Claude API and Claude Code",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "anthropic_messages"
+      ],
+      "aliases": [],
+      "sources_by_field": {
+        "all": [
+          "https://platform.claude.com/docs/en/about-claude/models/overview"
+        ]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-sonnet-5",
+      "display_name": "Claude Sonnet 5",
+      "context_window": 1000000,
+      "max_input_tokens": null,
+      "max_output_tokens": 128000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": null,
+      "reasoning_control": "effort parameter, defaults to high on Claude API and Claude Code",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "anthropic_messages"
+      ],
+      "aliases": [],
+      "sources_by_field": {
+        "all": [
+          "https://platform.claude.com/docs/en/about-claude/models/overview"
+        ]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-haiku-4-5-20251001",
+      "display_name": "Claude Haiku 4.5",
+      "context_window": 200000,
+      "max_input_tokens": null,
+      "max_output_tokens": 64000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": null,
+      "reasoning_control": "extended thinking (thinking.type enabled = Yes)",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "anthropic_messages"
+      ],
+      "aliases": [
+        "claude-haiku-4-5"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://platform.claude.com/docs/en/about-claude/models/overview"
+        ]
+      }
+    },
+    {
+      "provider_key": "xai",
+      "model_id": "grok-4.6",
+      "display_name": "Grok 4.6",
+      "context_window": 500000,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoning_control": "reasoning.effort enum: low, medium, high (default), xhigh; cannot be disabled",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "responses",
+        "chat_completions"
+      ],
+      "aliases": [],
+      "sources_by_field": {
+        "all": [
+          "https://docs.x.ai/developers/grok-4-6",
+          "https://docs.x.ai/developers/models/grok-4.6",
+          "https://docs.x.ai/developers/model-capabilities/text/reasoning"
+        ]
+      }
+    },
+    {
+      "provider_key": "xai",
+      "model_id": "grok-4.5",
+      "display_name": "Grok 4.5",
+      "context_window": 500000,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "input_modalities": null,
+      "output_modalities": null,
+      "supports_reasoning": null,
+      "reasoning_levels": null,
+      "reasoning_control": null,
+      "tool_calling": null,
+      "parallel_tool_calling": null,
+      "structured_output": null,
+      "streaming": true,
+      "web_search": null,
+      "protocols": null,
+      "aliases": [],
+      "sources_by_field": {
+        "context_window": [
+          "https://docs.x.ai/developers/pricing"
+        ],
+        "reasoning": [
+          "https://docs.x.ai/developers/model-capabilities/text/reasoning"
+        ],
+        "streaming": [
+          "https://docs.x.ai/developers/pricing"
+        ]
+      }
+    },
+    {
+      "provider_key": "xai",
+      "model_id": "grok-build-0.1",
+      "display_name": "Grok Build 0.1",
+      "context_window": 256000,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": null,
+      "supports_reasoning": null,
+      "reasoning_levels": null,
+      "reasoning_control": null,
+      "tool_calling": null,
+      "parallel_tool_calling": null,
+      "structured_output": null,
+      "streaming": null,
+      "web_search": null,
+      "protocols": null,
+      "aliases": [
+        "grok-code-fast-1",
+        "grok-code-fast",
+        "grok-code-fast-1-0825"
+      ],
+      "sources_by_field": {
+        "context_window": [
+          "https://docs.x.ai/developers/pricing"
+        ],
+        "input_modalities": [
+          "https://docs.x.ai/developers/models/grok-build-0.1"
+        ],
+        "all": [
+          "https://docs.x.ai/developers/models/grok-build-0.1"
+        ]
+      }
+    },
+    {
+      "provider_key": "moonshot",
+      "model_id": "kimi-k3",
+      "display_name": "Kimi K3",
+      "context_window": 1048576,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "input_modalities": null,
+      "output_modalities": null,
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "low",
+        "high",
+        "max"
+      ],
+      "reasoning_control": "reasoning_effort enum: low, high, max (always reasons)",
+      "tool_calling": null,
+      "parallel_tool_calling": null,
+      "structured_output": null,
+      "streaming": null,
+      "web_search": null,
+      "protocols": null,
+      "aliases": [],
+      "sources_by_field": {
+        "context_window": [
+          "https://platform.kimi.ai/docs/pricing/chat"
+        ],
+        "reasoning": [
+          "https://platform.kimi.ai/docs/api/chat"
+        ],
+        "reasoning_levels": [
+          "https://platform.kimi.ai/docs/api/chat"
+        ],
+        "supports_reasoning": [
+          "https://platform.kimi.ai/docs/api/chat"
+        ],
+        "reasoning_control": [
+          "https://platform.kimi.ai/docs/api/chat"
+        ]
+      }
+    },
+    {
+      "provider_key": "moonshot",
+      "model_id": "kimi-k2.6",
+      "display_name": "Kimi K2.6",
+      "context_window": 262144,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": null,
+      "supports_reasoning": null,
+      "reasoning_levels": null,
+      "reasoning_control": null,
+      "tool_calling": null,
+      "parallel_tool_calling": null,
+      "structured_output": null,
+      "streaming": null,
+      "web_search": null,
+      "protocols": null,
+      "aliases": [],
+      "sources_by_field": {
+        "context_window": [
+          "https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart",
+          "https://platform.kimi.ai/docs/models"
+        ],
+        "reasoning": [
+          "https://platform.kimi.ai/docs/api/models-overview"
+        ],
+        "input_modalities": [
+          "https://platform.kimi.ai/docs/models",
+          "https://platform.kimi.ai/docs/api/list-models",
+          "https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart"
+        ]
+      }
+    },
+    {
+      "provider_key": "moonshot",
+      "model_id": "kimi-k2.7-code",
+      "display_name": "Kimi K2.7 Code",
+      "context_window": 262144,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "input_modalities": null,
+      "output_modalities": null,
+      "supports_reasoning": null,
+      "reasoning_levels": null,
+      "reasoning_control": null,
+      "tool_calling": null,
+      "parallel_tool_calling": null,
+      "structured_output": null,
+      "streaming": null,
+      "web_search": null,
+      "protocols": null,
+      "aliases": [],
+      "sources_by_field": {
+        "context_window": [
+          "https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart"
+        ],
+        "reasoning": [
+          "https://platform.kimi.ai/docs/api/chat"
+        ]
+      }
+    },
+    {
+      "provider_key": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "display_name": "DeepSeek V4 Pro",
+      "context_window": 1000000,
+      "max_input_tokens": null,
+      "max_output_tokens": 393216,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "high",
+        "max"
+      ],
+      "reasoning_control": "thinking param {type: enabled|disabled} (default enabled); reasoning_effort enum: high (default), max",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": null,
+      "protocols": [
+        "chat_completions",
+        "anthropic_messages"
+      ],
+      "aliases": [],
+      "sources_by_field": {
+        "all": [
+          "https://api-docs.deepseek.com/quick_start/pricing/",
+          "https://api-docs.deepseek.com/api/create-chat-completion",
+          "https://api-docs.deepseek.com/updates/"
+        ]
+      }
+    },
+    {
+      "provider_key": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "display_name": "DeepSeek V4 Flash",
+      "context_window": 1000000,
+      "max_input_tokens": null,
+      "max_output_tokens": 393216,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "high",
+        "max"
+      ],
+      "reasoning_control": "thinking param {type: enabled|disabled} (default enabled); reasoning_effort enum: high (default), max",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": null,
+      "protocols": [
+        "chat_completions",
+        "anthropic_messages"
+      ],
+      "aliases": [
+        "deepseek-chat",
+        "deepseek-reasoner"
+      ],
+      "sources_by_field": {
+        "all": [
+          "https://api-docs.deepseek.com/quick_start/pricing/",
+          "https://api-docs.deepseek.com/api/create-chat-completion",
+          "https://api-docs.deepseek.com/updates/"
+        ]
+      }
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-5.1",
+      "display_name": "GLM-5.1",
+      "context_window": 200000,
+      "max_input_tokens": null,
+      "max_output_tokens": 131072,
+      "input_modalities": null,
+      "output_modalities": null,
+      "supports_reasoning": true,
+      "reasoning_levels": null,
+      "reasoning_control": "thinking param {type: enabled|disabled}",
+      "tool_calling": null,
+      "parallel_tool_calling": null,
+      "structured_output": null,
+      "streaming": null,
+      "web_search": null,
+      "protocols": null,
+      "aliases": [],
+      "sources_by_field": {
+        "context_window": [
+          "https://docs.z.ai/guides/overview/overview"
+        ],
+        "max_output_tokens": [
+          "https://docs.z.ai/guides/overview/concept-param"
+        ],
+        "reasoning": [
+          "https://docs.z.ai/guides/llm/glm-5.1"
+        ],
+        "supports_reasoning": [
+          "https://docs.z.ai/guides/llm/glm-5.1"
+        ],
+        "reasoning_control": [
+          "https://docs.z.ai/guides/llm/glm-5.1"
+        ]
+      }
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.7",
+      "display_name": "GLM-4.7",
+      "context_window": 200000,
+      "max_input_tokens": null,
+      "max_output_tokens": 131072,
+      "input_modalities": null,
+      "output_modalities": null,
+      "supports_reasoning": null,
+      "reasoning_levels": null,
+      "reasoning_control": null,
+      "tool_calling": null,
+      "parallel_tool_calling": null,
+      "structured_output": null,
+      "streaming": null,
+      "web_search": null,
+      "protocols": null,
+      "aliases": [],
+      "sources_by_field": {
+        "context_window": [
+          "https://docs.z.ai/guides/overview/overview"
+        ],
+        "max_output_tokens": [
+          "https://docs.z.ai/guides/overview/concept-param"
+        ]
+      }
+    },
+    {
+      "provider_key": "zhipu_glm",
+      "model_id": "glm-4.6",
+      "display_name": "GLM-4.6",
+      "context_window": 200000,
+      "max_input_tokens": null,
+      "max_output_tokens": 131072,
+      "input_modalities": null,
+      "output_modalities": null,
+      "supports_reasoning": null,
+      "reasoning_levels": null,
+      "reasoning_control": null,
+      "tool_calling": null,
+      "parallel_tool_calling": null,
+      "structured_output": null,
+      "streaming": null,
+      "web_search": null,
+      "protocols": null,
+      "aliases": [],
+      "sources_by_field": {
+        "context_window": [
+          "https://docs.z.ai/guides/llm/glm-4.6"
+        ],
+        "max_output_tokens": [
+          "https://docs.z.ai/guides/overview/concept-param"
+        ]
+      }
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-3.7-flash",
+      "display_name": "Gemini 3.7 Flash",
+      "context_window": 1000000,
+      "max_input_tokens": null,
+      "max_output_tokens": 65536,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_control": "thinkingLevel param: minimal, low, medium, high",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "chat_completions"
+      ],
+      "aliases": [],
+      "sources_by_field": {
+        "all": [
+          "https://ai.google.dev/gemini-api/docs/models"
+        ],
+        "reasoning_levels": [
+          "https://ai.google.dev/gemini-api/docs/thinking"
+        ],
+        "protocols": [
+          "https://ai.google.dev/gemini-api/docs/openai"
+        ]
+      }
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-3.6-flash",
+      "display_name": "Gemini 3.6 Flash",
+      "context_window": 1000000,
+      "max_input_tokens": null,
+      "max_output_tokens": 65536,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_control": "thinkingLevel param: minimal, low, medium, high",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "chat_completions"
+      ],
+      "aliases": [],
+      "sources_by_field": {
+        "all": [
+          "https://ai.google.dev/gemini-api/docs/models"
+        ],
+        "reasoning_levels": [
+          "https://ai.google.dev/gemini-api/docs/thinking"
+        ],
+        "protocols": [
+          "https://ai.google.dev/gemini-api/docs/openai"
+        ]
+      }
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-2.5-flash",
+      "display_name": "Gemini 2.5 Flash",
+      "context_window": 1000000,
+      "max_input_tokens": null,
+      "max_output_tokens": 65536,
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": null,
+      "reasoning_control": "thinkingBudget param (integer token budget 0..24576; 0 disables thinking, -1 enables dynamic thinking)",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "chat_completions"
+      ],
+      "aliases": [],
+      "sources_by_field": {
+        "all": [
+          "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash"
+        ],
+        "protocols": [
+          "https://ai.google.dev/gemini-api/docs/openai"
+        ],
+        "reasoning": [
+          "https://ai.google.dev/gemini-api/docs/thinking"
+        ],
+        "input_modalities": [
+          "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash"
+        ]
+      }
+    },
+    {
+      "provider_key": "google_gemini",
+      "model_id": "gemini-2.5-pro",
+      "display_name": "Gemini 2.5 Pro",
+      "context_window": 1000000,
+      "max_input_tokens": null,
+      "max_output_tokens": 65536,
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": null,
+      "reasoning_control": "thinkingBudget param (integer token budget 128..32768; thinking cannot be disabled, -1 enables dynamic thinking)",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": [
+        "chat_completions"
+      ],
+      "aliases": [],
+      "sources_by_field": {
+        "all": [
+          "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro"
+        ],
+        "protocols": [
+          "https://ai.google.dev/gemini-api/docs/openai"
+        ],
+        "reasoning": [
+          "https://ai.google.dev/gemini-api/docs/thinking"
+        ],
+        "input_modalities": [
+          "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro"
+        ]
+      }
+    },
+    {
+      "provider_key": "meta",
+      "model_id": "llama-4-scout",
+      "display_name": "Llama 4 Scout",
+      "context_window": 10485760,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": null,
+      "supports_reasoning": null,
+      "reasoning_levels": null,
+      "reasoning_control": null,
+      "tool_calling": null,
+      "parallel_tool_calling": null,
+      "structured_output": null,
+      "streaming": null,
+      "web_search": null,
+      "protocols": null,
+      "aliases": [],
+      "sources_by_field": {
+        "context_window": [
+          "https://github.com/meta-llama/llama-models",
+          "https://ai.meta.com/llama/get-started/"
+        ],
+        "input_modalities": [
+          "https://github.com/meta-llama/llama-models",
+          "https://ai.meta.com/llama/get-started/"
+        ]
+      }
+    },
+    {
+      "provider_key": "meta",
+      "model_id": "llama-4-maverick",
+      "display_name": "Llama 4 Maverick",
+      "context_window": 1048576,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": null,
+      "supports_reasoning": null,
+      "reasoning_levels": null,
+      "reasoning_control": null,
+      "tool_calling": null,
+      "parallel_tool_calling": null,
+      "structured_output": null,
+      "streaming": null,
+      "web_search": null,
+      "protocols": null,
+      "aliases": [],
+      "sources_by_field": {
+        "context_window": [
+          "https://github.com/meta-llama/llama-models",
+          "https://ai.meta.com/llama/get-started/"
+        ],
+        "input_modalities": [
+          "https://github.com/meta-llama/llama-models",
+          "https://ai.meta.com/llama/get-started/"
+        ]
+      }
+    }
+  ]
+}

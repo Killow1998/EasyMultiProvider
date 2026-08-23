@@ -6,6 +6,7 @@ import base64
 import json
 import re
 import time
+from datetime import datetime, timezone
 import uuid
 from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Optional, Tuple
 from urllib.error import HTTPError, URLError
@@ -19,9 +20,13 @@ from .capabilities import (
     endpoint_fingerprint,
     input_modalities_metadata_source,
     normalize_input_modalities,
+    normalize_output_modalities,
     normalize_reasoning_levels,
+    normalize_supported_protocols,
     observed_at_now,
+    output_modalities_metadata_source,
 )
+from .official_registry import enrich_discovered_models
 from .catalog import load_native_catalog
 from .config import MAX_CONTEXT_WINDOW, api_key
 from .context_guard import (
@@ -122,11 +127,6 @@ _CONCRETE_PROTOCOLS = frozenset(
     {"responses", "chat_completions", "anthropic_messages"}
 )
 _REASONING_LEVEL_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-_OFFICIAL_GEMINI_INPUT_MODALITIES = {
-    "gemini-3.7-flash": ["text", "image", "video", "audio", "pdf"],
-}
-
-
 def _route_error_class(status: Any) -> str:
     if status in (401, 403):
         return "auth"
@@ -736,29 +736,29 @@ def _gemini_models(provider: Dict[str, Any]) -> list:
             if not model_id:
                 continue
             supports_reasoning, reasoning_levels = _advertised_reasoning(item)
-            raw_modalities = item.get("inputModalities")
-            if raw_modalities is None:
-                raw_modalities = item.get("supportedInputModalities")
-            if input_modalities_metadata_source(raw_modalities) == "advertised":
-                input_modalities = normalize_input_modalities(raw_modalities)
-                input_modalities_source = "advertised"
-            elif model_id in _OFFICIAL_GEMINI_INPUT_MODALITIES:
-                input_modalities = list(_OFFICIAL_GEMINI_INPUT_MODALITIES[model_id])
-                input_modalities_source = "official"
-            else:
-                input_modalities = ["text"]
-                input_modalities_source = "unknown"
+            raw_input_modalities = item.get("inputModalities")
+            if raw_input_modalities is None:
+                raw_input_modalities = item.get("supportedInputModalities")
+            raw_output_modalities = item.get("outputModalities")
+            if raw_output_modalities is None:
+                raw_output_modalities = item.get("supportedOutputModalities")
+            input_modalities = normalize_input_modalities(raw_input_modalities)
+            input_modalities_source = input_modalities_metadata_source(raw_input_modalities)
+            output_modalities = normalize_output_modalities(raw_output_modalities)
+            output_modalities_source = output_modalities_metadata_source(raw_output_modalities)
+            output_limit = _positive_int(item.get("outputTokenLimit"))
             result.append(
                 {
                     "upstream_id": model_id,
                     "display_name": _model_text(item.get("displayName"), model_id, "显示名称"),
                     "description": _model_text(item.get("description"), "", "描述"),
                     "context_window": _positive_int(item.get("inputTokenLimit")),
-                    "input_token_limit": _positive_int(item.get("inputTokenLimit")),
-                    "output_token_limit": _positive_int(item.get("outputTokenLimit")),
+                    "max_input_tokens": _positive_int(item.get("inputTokenLimit")),
+                    "output_limit": output_limit,
                     "supports_reasoning": supports_reasoning,
                     "reasoning_levels": reasoning_levels,
                     "input_modalities": input_modalities,
+                    "output_modalities": output_modalities,
                     "supports_image_detail_original": False,
                     "capability_sources": {
                         "supports_reasoning": {
@@ -770,7 +770,21 @@ def _gemini_models(provider: Dict[str, Any]) -> list:
                             "source": "advertised" if reasoning_levels else "unknown"
                         },
                         "input_modalities": {"source": input_modalities_source},
+                        "output_modalities": {"source": output_modalities_source},
                         "supports_image_detail_original": {"source": "unknown"},
+                        "context_window": {
+                            "source": "advertised"
+                            if _positive_int(item.get("inputTokenLimit"))
+                            else "unknown"
+                        },
+                        "max_input_tokens": {
+                            "source": "advertised"
+                            if _positive_int(item.get("inputTokenLimit"))
+                            else "unknown"
+                        },
+                        "output_limit": {
+                            "source": "advertised" if output_limit else "unknown"
+                        },
                     },
                     "created_at": _positive_int(
                         item.get("created") or item.get("created_at") or item.get("updated_at")
@@ -782,7 +796,7 @@ def _gemini_models(provider: Dict[str, Any]) -> list:
             raise RouterError("上游分页标记过大", 502)
         if not page_token:
             break
-    return result
+    return enrich_discovered_models(provider, result)
 
 
 def _generic_models(provider: Dict[str, Any]) -> list:
@@ -813,7 +827,8 @@ def _generic_models(provider: Dict[str, Any]) -> list:
         )
         architecture = item.get("architecture")
         architecture = architecture if isinstance(architecture, dict) else {}
-        raw_modalities = architecture.get("input_modalities")
+        raw_input_modalities = architecture.get("input_modalities")
+        raw_output_modalities = architecture.get("output_modalities")
         raw_image_detail = item.get(
             "supports_image_detail_original", architecture.get("supports_image_detail_original")
         )
@@ -825,36 +840,81 @@ def _generic_models(provider: Dict[str, Any]) -> list:
             "advertised" if supports_reasoning is not None else "unknown"
         )
         reasoning_levels_source = "advertised" if reasoning_levels else "unknown"
-        result.append(
-            {
-                "upstream_id": model_id,
-                "display_name": _model_text(
-                    item.get("display_name") or item.get("name"), model_id, "显示名称"
-                ),
-                "description": _model_text(item.get("description"), "", "描述"),
-                "context_window": context,
-                "supports_reasoning": supports_reasoning,
-                "reasoning_levels": reasoning_levels,
-                "input_modalities": normalize_input_modalities(raw_modalities),
-                "supports_image_detail_original": supports_image_detail_original,
-                "capability_sources": {
-                    "supports_reasoning": {"source": reasoning_support_source},
-                    "reasoning_levels": {"source": reasoning_levels_source},
-                    "input_modalities": {
-                        "source": input_modalities_metadata_source(raw_modalities)
-                    },
-                    "supports_image_detail_original": {
-                        "source": "advertised"
-                        if isinstance(raw_image_detail, bool)
-                        else "unknown"
-                    },
+        parameters = item.get("supported_parameters")
+        parameter_set = set()
+        if isinstance(parameters, list):
+            for param in parameters:
+                if isinstance(param, str):
+                    parameter_set.add(param.strip().lower())
+        capabilities = {}
+        capability_sources = {}
+        if "tools" in parameter_set:
+            capabilities["structured_tools"] = True
+            capability_sources["structured_tools"] = {"source": "advertised"}
+        if "parallel_tool_calls" in parameter_set:
+            capabilities["parallel_tools"] = True
+            capability_sources["parallel_tools"] = {"source": "advertised"}
+        if "structured_outputs" in parameter_set or "response_format" in parameter_set:
+            capabilities["structured_output"] = True
+            capability_sources["structured_output"] = {"source": "advertised"}
+        raw_streaming = item.get("streaming")
+        if isinstance(raw_streaming, bool):
+            capabilities["streaming"] = raw_streaming
+            capability_sources["streaming"] = {"source": "advertised"}
+        output_limit = 0
+        for output_key in ("output_limit", "max_tokens", "max_output_tokens"):
+            output_limit = _positive_int(item.get(output_key))
+            if output_limit:
+                break
+        if not output_limit:
+            top_provider = item.get("top_provider")
+            if isinstance(top_provider, dict):
+                output_limit = _positive_int(top_provider.get("max_completion_tokens"))
+        context_source = "advertised" if context else "unknown"
+        output_limit_source = "advertised" if output_limit else "unknown"
+        max_input_tokens = _positive_int(item.get("max_input_tokens"))
+        max_input_source = "advertised" if max_input_tokens else "unknown"
+        entry = {
+            "upstream_id": model_id,
+            "display_name": _model_text(
+                item.get("display_name") or item.get("name"), model_id, "显示名称"
+            ),
+            "description": _model_text(item.get("description"), "", "描述"),
+            "context_window": context,
+            "max_input_tokens": max_input_tokens,
+            "output_limit": output_limit,
+            "supports_reasoning": supports_reasoning,
+            "reasoning_levels": reasoning_levels,
+            "input_modalities": normalize_input_modalities(raw_input_modalities),
+            "output_modalities": normalize_output_modalities(raw_output_modalities),
+            "supports_image_detail_original": supports_image_detail_original,
+            "capability_sources": {
+                "supports_reasoning": {"source": reasoning_support_source},
+                "reasoning_levels": {"source": reasoning_levels_source},
+                "input_modalities": {
+                    "source": input_modalities_metadata_source(raw_input_modalities)
                 },
-                "created_at": _positive_int(
-                    item.get("created") or item.get("created_at") or item.get("updated_at")
-                ),
-            }
-        )
-    return result
+                "output_modalities": {
+                    "source": output_modalities_metadata_source(raw_output_modalities)
+                },
+                "supports_image_detail_original": {
+                    "source": "advertised"
+                    if isinstance(raw_image_detail, bool)
+                    else "unknown"
+                },
+                "context_window": {"source": context_source},
+                "max_input_tokens": {"source": max_input_source},
+                "output_limit": {"source": output_limit_source},
+            },
+            "created_at": _positive_int(
+                item.get("created") or item.get("created_at") or item.get("updated_at")
+            ),
+        }
+        if capabilities:
+            entry["capabilities"] = capabilities
+        entry["capability_sources"].update(capability_sources)
+        result.append(entry)
+    return enrich_discovered_models(provider, result)
 
 
 def resolve_provider_protocol(
@@ -872,13 +932,178 @@ def resolve_provider_protocol(
     return resolved
 
 
+def _nested_supported(container: Mapping[str, Any], field: str) -> Optional[bool]:
+    """Read a nested CapabilitySupport boolean at container[field].supported.
+
+    Anthropic Models API capability children are objects with a ``supported``
+    boolean, not bare booleans.  Returns the boolean when explicitly present,
+    otherwise None.
+    """
+    value = container.get(field)
+    if isinstance(value, Mapping):
+        supported = value.get("supported")
+        return supported if isinstance(supported, bool) else None
+    return None
+
+
+def _anthropic_discovery_headers(provider: Dict[str, Any]) -> Dict[str, str]:
+    key = api_key(provider)
+    if not key:
+        raise RouterError("API key is not configured for provider: %s" % provider["id"], 503)
+    return {
+        "Accept": "application/json",
+        "User-Agent": "EasyMultiProvider/%s" % __version__,
+        "x-api-key": key,
+        "anthropic-version": provider.get("anthropic_version", "2023-06-01"),
+    }
+
+
+def _anthropic_models(provider: Dict[str, Any]) -> list:
+    """Fetch model metadata from Anthropic GET /v1/models. Never calls /messages."""
+    base = provider["base_url"].rstrip("/")
+    for suffix in ("/messages", "/chat/completions", "/responses"):
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+            break
+    headers = _anthropic_discovery_headers(provider)
+    result = []
+    budget = {"bytes": 0, "deadline": time.monotonic() + MAX_DISCOVERY_SECONDS}
+    url = base + "/models?limit=1000"
+    for _ in range(20):
+        value = _get_json(Request(url, headers=headers), "Anthropic 模型列表查询", budget)
+        for item in value.get("data", []):
+            if len(result) >= MAX_DISCOVERED_MODELS:
+                raise RouterError("上游模型列表超过安全上限", 502)
+            if not isinstance(item, dict):
+                continue
+            model_id = _model_id(item.get("id"))
+            if not model_id:
+                continue
+            caps = item.get("capabilities")
+            caps = caps if isinstance(caps, dict) else {}
+            # Anthropic Models API capability children are CapabilitySupport
+            # objects: capabilities.<name>.supported (boolean) and
+            # effort.<level>.supported (boolean).  Parse only documented fields;
+            # do not invent generic tool_use, streaming, web_search, or
+            # parallel_tool_use fields not present in the schema.
+            thinking_supported = _nested_supported(caps, "thinking")
+            effort_supported = _nested_supported(caps, "effort")
+            image_supported = _nested_supported(caps, "image_input")
+            pdf_supported = _nested_supported(caps, "pdf_input")
+            structured_output_supported = _nested_supported(caps, "structured_outputs")
+
+            # supports_reasoning is the logical union of any explicitly present
+            # thinking.supported and effort.supported; if no evidence exists it
+            # remains unknown (None).
+            explicit_reasoning = []
+            if thinking_supported is not None:
+                explicit_reasoning.append(thinking_supported)
+            if effort_supported is not None:
+                explicit_reasoning.append(effort_supported)
+            supports_reasoning = any(explicit_reasoning) if explicit_reasoning else None
+
+            reasoning_levels = []
+            if effort_supported:
+                effort_obj = caps.get("effort")
+                effort_obj = effort_obj if isinstance(effort_obj, Mapping) else {}
+                for _level in ("low", "medium", "high", "xhigh", "max"):
+                    if _nested_supported(effort_obj, _level):
+                        reasoning_levels.append(_level)
+
+            capabilities = {}
+            capability_sources = {}
+            if structured_output_supported is not None:
+                capabilities["structured_output"] = structured_output_supported
+                capability_sources["structured_output"] = {"source": "advertised"}
+
+            # Build input modalities from documented capability objects.
+            # With no modality evidence (neither image_input.supported nor
+            # pdf_input.supported present), normalize to text but keep
+            # provenance unknown.  If one or both capability objects explicitly
+            # expose supported, construct text plus the supported extras and
+            # mark the list advertised.
+            modality_evidence = (
+                image_supported is not None or pdf_supported is not None
+            )
+            _input_mods = ["text"]
+            if image_supported:
+                _input_mods.append("image")
+            if pdf_supported:
+                _input_mods.append("pdf")
+            raw_input_modalities = _input_mods
+            raw_output_modalities = None
+            max_input = _positive_int(item.get("max_input_tokens"))
+            max_output = _positive_int(item.get("max_tokens"))
+            # Parse RFC3339 created_at into an integer Unix timestamp.
+            created_at = 0
+            raw_created = item.get("created_at")
+            if isinstance(raw_created, str) and raw_created:
+                try:
+                    parsed_dt = datetime.fromisoformat(raw_created.replace("Z", "+00:00"))
+                    created_at = int(parsed_dt.timestamp())
+                except ValueError:
+                    created_at = 0
+            elif isinstance(raw_created, (int, float)) and not isinstance(raw_created, bool):
+                created_at = _positive_int(raw_created)
+            entry = {
+                "upstream_id": model_id,
+                "display_name": _model_text(item.get("display_name"), model_id, "显示名称"),
+                "description": "",
+                "context_window": max_input,
+                "max_input_tokens": max_input,
+                "output_limit": max_output,
+                "supports_reasoning": supports_reasoning,
+                "reasoning_levels": reasoning_levels,
+                "input_modalities": normalize_input_modalities(raw_input_modalities),
+                "output_modalities": normalize_output_modalities(raw_output_modalities),
+                "supports_image_detail_original": False,
+                "capability_sources": {
+                    "supports_reasoning": {
+                        "source": "advertised"
+                        if supports_reasoning is not None
+                        else "unknown"
+                    },
+                    "reasoning_levels": {
+                        "source": "advertised" if reasoning_levels else "unknown"
+                    },
+                    "input_modalities": {
+                        "source": "advertised" if modality_evidence else "unknown"
+                    },
+                    "output_modalities": {
+                        "source": output_modalities_metadata_source(raw_output_modalities)
+                    },
+                    "supports_image_detail_original": {"source": "unknown"},
+                    "context_window": {
+                        "source": "advertised" if max_input else "unknown"
+                    },
+                    "max_input_tokens": {
+                        "source": "advertised" if max_input else "unknown"
+                    },
+                    "output_limit": {
+                        "source": "advertised" if max_output else "unknown"
+                    },
+                },
+                "created_at": created_at,
+            }
+            if capabilities:
+                entry["capabilities"] = capabilities
+                entry["capability_sources"].update(capability_sources)
+            result.append(entry)
+        after_id = value.get("last_id")
+        has_more = value.get("has_more")
+        if not has_more or not after_id:
+            break
+        url = base + "/models?limit=1000&after_id=" + quote(str(after_id), safe="")
+    return enrich_discovered_models(provider, result)
+
+
 def discover_models(provider: Dict[str, Any]) -> list:
     """Fetch safe model metadata without making one request per model."""
     if provider.get("protocol") == "anthropic_messages" or (
         provider.get("protocol") == "auto"
         and provider.get("auth_mode") == "anthropic_api_key"
     ):
-        raise RouterError("Anthropic Messages 没有统一的模型列表接口，请手动添加", 400)
+        return _anthropic_models(provider)
     parsed = urlparse(provider.get("base_url", ""))
     if parsed.hostname == "generativelanguage.googleapis.com":
         return _gemini_models(provider)

@@ -230,6 +230,26 @@ def codex_auth_path() -> Path:
     return (Path(root).expanduser() if root else Path.home() / ".codex") / "auth.json"
 
 
+def load_native_auth() -> Dict[str, Any]:
+    """Read and validate the current native Codex login auth.json (read-only).
+
+    This is used for quota queries on accounts that duplicate the current
+    native Codex login. The native credential may rotate independently of any
+    EMP encrypted snapshot, so the authoritative source for a duplicate account
+    is always the live native file. This function never writes, rotates, or
+    mutates the native auth file.
+    """
+    path = codex_auth_path()
+    try:
+        if path.is_symlink():
+            raise AccountError("native auth.json cannot be a symlink")
+        with path.open("r", encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise AccountError("native auth.json is unavailable") from exc
+    return _validate_auth(value)
+
+
 def valid_caller_authorization(value: str) -> bool:
     """Accept only the bearer token from the current Codex login."""
     if not isinstance(value, str) or not value.startswith("Bearer "):

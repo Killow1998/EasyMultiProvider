@@ -22,4 +22,4 @@ build-backend = "setuptools.build_meta"
 include = ["easy_multi_provider*"]
 
 [tool.setuptools.package-data]
-easy_multi_provider = ["web/index.html"]
+easy_multi_provider = ["web/index.html", "data/*.json"]

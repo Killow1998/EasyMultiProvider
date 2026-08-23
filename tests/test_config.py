@@ -360,5 +360,275 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(public_accounts([account])[0]["hidden_models"], account["hidden_models"])
 
 
+class TestNewCapabilityFieldsConfigRoundTrip(ConfigTests):
+    """Regression tests for output_modalities, supported_protocols, max_input_tokens, reasoning_control."""
+
+    def setUp(self):
+        super().setUp()
+        self.rich_model = {
+            **self.model,
+            "context_window": 128000,
+            "max_input_tokens": 100000,
+            "output_limit": 4096,
+            "reasoning_control": "reasoning.effort enum: low, high",
+            "input_modalities": ["text", "image"],
+            "output_modalities": ["text", "audio"],
+            "supported_protocols": ["responses", "chat_completions"],
+            "capabilities": {
+                "streaming": True,
+                "structured_output": True,
+                "web_search": False,
+            },
+        }
+
+    def test_output_modalities_round_trip(self):
+        value = normalize({"providers": [self.provider], "models": [self.rich_model]})
+        model = value["models"][0]
+        self.assertEqual(model["output_modalities"], ["text", "audio"])
+        self.assertIn("output_modalities", model["capability_sources"])
+        self.assertEqual(model["capability_sources"]["output_modalities"]["source"], "manual")
+
+    def test_output_modalities_defaults_to_text(self):
+        value = normalize({"providers": [self.provider], "models": [self.model]})
+        self.assertEqual(value["models"][0]["output_modalities"], ["text"])
+
+    def test_output_modalities_preserves_non_codex_types(self):
+        value = normalize({"providers": [self.provider], "models": [{
+            **self.model,
+            "output_modalities": ["text", "audio", "video", "file", "pdf"],
+        }]})
+        self.assertEqual(
+            value["models"][0]["output_modalities"],
+            ["text", "audio", "video", "file", "pdf"],
+        )
+
+    def test_supported_protocols_round_trip(self):
+        value = normalize({"providers": [self.provider], "models": [self.rich_model]})
+        model = value["models"][0]
+        self.assertEqual(model["supported_protocols"], ["responses", "chat_completions"])
+        self.assertIn("supported_protocols", model["capability_sources"])
+
+    def test_supported_protocols_empty_when_absent(self):
+        value = normalize({"providers": [self.provider], "models": [self.model]})
+        self.assertEqual(value["models"][0]["supported_protocols"], [])
+
+    def test_supported_protocols_excludes_auto(self):
+        value = normalize({"providers": [self.provider], "models": [{
+            **self.model,
+            "supported_protocols": ["auto", "responses"],
+        }]})
+        self.assertEqual(value["models"][0]["supported_protocols"], ["responses"])
+
+    def test_max_input_tokens_round_trip(self):
+        value = normalize({"providers": [self.provider], "models": [self.rich_model]})
+        self.assertEqual(value["models"][0]["max_input_tokens"], 100000)
+        self.assertIn("max_input_tokens", value["models"][0]["capability_sources"])
+
+    def test_reasoning_control_round_trip(self):
+        value = normalize({"providers": [self.provider], "models": [self.rich_model]})
+        self.assertEqual(
+            value["models"][0]["reasoning_control"],
+            "reasoning.effort enum: low, high",
+        )
+        self.assertIn("reasoning_control", value["models"][0]["capability_sources"])
+
+    def test_structured_output_and_web_search_in_capabilities(self):
+        value = normalize({"providers": [self.provider], "models": [self.rich_model]})
+        caps = value["models"][0]["capabilities"]
+        self.assertEqual(caps["structured_output"], True)
+        self.assertEqual(caps["web_search"], False)
+
+    def test_web_update_gives_manual_provenance_to_changed_new_fields(self):
+        current = normalize({"providers": [self.provider], "models": [self.rich_model]})
+        incoming = public_config(current)
+        incoming["models"][0]["output_modalities"] = ["text"]
+        incoming["models"][0]["supported_protocols"] = ["chat_completions"]
+        incoming["models"][0]["max_input_tokens"] = 50000
+        incoming["models"][0]["reasoning_control"] = "new control"
+        updated = merge_web_update(current, incoming)
+        sources = updated["models"][0]["capability_sources"]
+        self.assertEqual(sources["output_modalities"]["source"], "manual")
+        self.assertEqual(sources["supported_protocols"]["source"], "manual")
+        self.assertEqual(sources["max_input_tokens"]["source"], "manual")
+        self.assertEqual(sources["reasoning_control"]["source"], "manual")
+
+    def test_web_update_preserves_unchanged_new_fields(self):
+        current = normalize({"providers": [self.provider], "models": [self.rich_model]})
+        incoming = public_config(current)
+        updated = merge_web_update(current, incoming)
+        model = updated["models"][0]
+        self.assertEqual(model["output_modalities"], ["text", "audio"])
+        self.assertEqual(model["supported_protocols"], ["responses", "chat_completions"])
+        self.assertEqual(model["max_input_tokens"], 100000)
+        self.assertEqual(model["reasoning_control"], "reasoning.effort enum: low, high")
+
+    def test_web_update_preserves_new_fields_when_omitted(self):
+        current = normalize({"providers": [self.provider], "models": [self.rich_model]})
+        incoming = public_config(current)
+        del incoming["models"][0]["output_modalities"]
+        del incoming["models"][0]["supported_protocols"]
+        del incoming["models"][0]["max_input_tokens"]
+        del incoming["models"][0]["reasoning_control"]
+        updated = merge_web_update(current, incoming)
+        model = updated["models"][0]
+        self.assertEqual(model["output_modalities"], ["text", "audio"])
+        self.assertEqual(model["supported_protocols"], ["responses", "chat_completions"])
+        self.assertEqual(model["max_input_tokens"], 100000)
+
+    def test_save_load_round_trips_new_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            value = normalize({"providers": [self.provider], "models": [self.rich_model]})
+            save(value, path)
+            loaded = load(path)
+            model = loaded["models"][0]
+            self.assertEqual(model["output_modalities"], ["text", "audio"])
+            self.assertEqual(model["supported_protocols"], ["responses", "chat_completions"])
+            self.assertEqual(model["max_input_tokens"], 100000)
+            self.assertEqual(model["reasoning_control"], "reasoning.effort enum: low, high")
+            self.assertEqual(model["capabilities"]["structured_output"], True)
+            self.assertEqual(model["capabilities"]["web_search"], False)
+
+    def test_negative_max_input_tokens_rejected(self):
+        with self.assertRaises(ConfigError):
+            normalize({
+                "providers": [self.provider],
+                "models": [{**self.model, "max_input_tokens": -1}],
+            })
+
+
+class TestNestedCapabilityDataFlow(ConfigTests):
+    """Tests for nested capabilities under model['capabilities']."""
+
+    def setUp(self):
+        super().setUp()
+        self.cap_model = {
+            **self.model,
+            "capabilities": {
+                "streaming": True,
+                "structured_output": True,
+                "web_search": False,
+            },
+        }
+
+    def test_nested_capabilities_get_capability_sources(self):
+        value = normalize({"providers": [self.provider], "models": [self.cap_model]})
+        sources = value["models"][0]["capability_sources"]
+        self.assertIn("structured_output", sources)
+        self.assertIn("web_search", sources)
+        self.assertEqual(sources["structured_output"]["source"], "manual")
+        self.assertEqual(sources["web_search"]["source"], "manual")
+
+    def test_nested_capabilities_not_duplicated_at_top_level(self):
+        value = normalize({"providers": [self.provider], "models": [self.cap_model]})
+        model = value["models"][0]
+        self.assertNotIn("structured_output", model)
+        self.assertNotIn("web_search", model)
+        self.assertIn("structured_output", model["capabilities"])
+        self.assertIn("web_search", model["capabilities"])
+
+    def test_merge_preserves_omitted_capabilities_object(self):
+        current = normalize({"providers": [self.provider], "models": [self.cap_model]})
+        incoming = public_config(current)
+        del incoming["models"][0]["capabilities"]
+        updated = merge_web_update(current, incoming)
+        caps = updated["models"][0]["capabilities"]
+        self.assertEqual(caps["streaming"], True)
+        self.assertEqual(caps["structured_output"], True)
+        self.assertEqual(caps["web_search"], False)
+
+    def test_merge_preserves_individual_omitted_nested_capability(self):
+        current = normalize({"providers": [self.provider], "models": [{
+            **self.cap_model,
+            "capabilities": {
+                "streaming": True,
+                "structured_output": True,
+                "web_search": False,
+            },
+        }]})
+        incoming = public_config(current)
+        del incoming["models"][0]["capabilities"]["web_search"]
+        updated = merge_web_update(current, incoming)
+        caps = updated["models"][0]["capabilities"]
+        self.assertIn("web_search", caps)
+        self.assertEqual(caps["web_search"], False)
+
+    def test_changed_nested_capability_gets_fresh_manual_provenance(self):
+        current = normalize({"providers": [self.provider], "models": [self.cap_model]})
+        incoming = public_config(current)
+        incoming["models"][0]["capabilities"]["structured_output"] = False
+        updated = merge_web_update(current, incoming)
+        sources = updated["models"][0]["capability_sources"]
+        self.assertEqual(sources["structured_output"]["source"], "manual")
+        self.assertEqual(updated["models"][0]["capabilities"]["structured_output"], False)
+
+    def test_unchanged_nested_capability_retains_prior_provenance(self):
+        current = normalize({
+            "providers": [self.provider],
+            "models": [{
+                **self.model,
+                "capabilities": {"structured_output": True, "web_search": False},
+                "capability_sources": {
+                    "structured_output": {
+                        "source": "official",
+                        "confidence": 0.95,
+                        "observed_at": "2026-08-22T00:00:00+00:00",
+                    },
+                    "web_search": {
+                        "source": "advertised",
+                        "confidence": 0.75,
+                        "observed_at": "2026-08-22T00:00:00+00:00",
+                    },
+                },
+            }],
+        })
+        incoming = public_config(current)
+        incoming["models"][0]["capabilities"]["structured_output"] = False
+        updated = merge_web_update(current, incoming)
+        sources = updated["models"][0]["capability_sources"]
+        self.assertEqual(sources["structured_output"]["source"], "manual")
+        self.assertEqual(sources["web_search"]["source"], "advertised")
+
+    def test_official_provenance_survives_normalize(self):
+        value = normalize({
+            "providers": [self.provider],
+            "models": [{
+                **self.model,
+                "capabilities": {"structured_output": True},
+                "capability_sources": {
+                    "structured_output": {
+                        "source": "official",
+                        "confidence": 0.95,
+                        "observed_at": "2026-08-22T00:00:00+00:00",
+                    },
+                },
+            }],
+        })
+        sources = value["models"][0]["capability_sources"]
+        self.assertEqual(sources["structured_output"]["source"], "official")
+        self.assertEqual(sources["structured_output"]["confidence"], 0.95)
+        self.assertEqual(
+            sources["structured_output"]["observed_at"],
+            "2026-08-22T00:00:00+00:00",
+        )
+
+    def test_output_modalities_absent_yields_unknown_capability_value(self):
+        from easy_multi_provider.capabilities import capability_record
+
+        value = normalize({"providers": [self.provider], "models": [self.model]})
+        model = value["models"][0]
+        self.assertEqual(model["output_modalities"], ["text"])
+        self.assertEqual(
+            model["capability_sources"]["output_modalities"]["source"],
+            "unknown",
+        )
+        record = capability_record(
+            value["providers"][0], model
+        ).to_dict()
+        cap = record["capabilities"]["output_modalities"]
+        self.assertEqual(cap["value"], "unknown")
+        self.assertEqual(cap["source"], "unknown")
+
+
 if __name__ == "__main__":
     unittest.main()

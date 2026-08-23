@@ -17,8 +17,12 @@ from .capabilities import (
     input_modalities_known,
     make_provenance,
     normalize_input_modalities,
+    normalize_output_modalities,
     normalize_reasoning_levels,
+    normalize_supported_protocols,
     observed_at_now,
+    output_modalities_known,
+    supported_protocols_known,
 )
 from .vault import VaultError, read_encrypted_text, write_encrypted_text
 
@@ -45,23 +49,37 @@ _CAPABILITY_SOURCE_FIELDS = {
     "streaming",
     "structured_tools",
     "parallel_tools",
+    "structured_output",
+    "web_search",
     "supports_reasoning",
     "reasoning_levels",
+    "reasoning_control",
     "context_window",
+    "max_input_tokens",
     "output_limit",
     "websocket",
     "input_modalities",
+    "output_modalities",
+    "supported_protocols",
     "supports_image_detail_original",
 }
 _EXPLICIT_CAPABILITY_FIELDS = {
     "supports_reasoning",
     "input_modalities",
+    "output_modalities",
+    "supported_protocols",
+    "reasoning_control",
+    "max_input_tokens",
+    "structured_output",
+    "web_search",
     "supports_image_detail_original",
 }
 _BOOLEAN_CAPABILITIES = {
     "streaming",
     "structured_tools",
     "parallel_tools",
+    "structured_output",
+    "web_search",
     "supports_reasoning",
     "websocket",
 }
@@ -147,11 +165,27 @@ def _capability_known(field: str, value: Any) -> bool:
         return isinstance(value, bool)
     if field == "reasoning_levels":
         return isinstance(value, list) and bool(value)
+    if field == "reasoning_control":
+        return isinstance(value, str) and bool(value.strip())
     if field == "input_modalities":
         return input_modalities_known(value)
+    if field == "output_modalities":
+        return output_modalities_known(value)
+    if field == "supported_protocols":
+        return supported_protocols_known(value)
     if field == "supports_image_detail_original":
         return isinstance(value, bool)
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _effective_capability_value(values: Dict[str, Any], field: str) -> Any:
+    """Return the value for a capability field from top-level or nested capabilities."""
+    if field in values:
+        return values[field]
+    caps = values.get("capabilities")
+    if isinstance(caps, dict) and field in caps:
+        return caps[field]
+    return None
 
 
 def _default_capability_source(
@@ -159,7 +193,8 @@ def _default_capability_source(
 ) -> str:
     if field in _EXPLICIT_CAPABILITY_FIELDS:
         return "manual" if field in explicit_fields else "unknown"
-    return "inferred" if _capability_known(field, values.get(field)) else "unknown"
+    effective = _effective_capability_value(values, field)
+    return "inferred" if _capability_known(field, effective) else "unknown"
 
 
 def _normalize_capability_sources(
@@ -173,7 +208,8 @@ def _normalize_capability_sources(
     result: Dict[str, Dict[str, Any]] = {}
     for field in _CAPABILITY_SOURCE_FIELDS:
         if field not in raw:
-            if field in values and _capability_known(field, values[field]):
+            effective = _effective_capability_value(values, field)
+            if _capability_known(field, effective):
                 result[field] = make_provenance(
                     _default_capability_source(field, values, explicit_fields)
                 )
@@ -384,6 +420,14 @@ def _normalize_model(raw: Dict[str, Any]) -> Dict[str, Any]:
     supports_image_detail_original = raw.get("supports_image_detail_original", False)
     if not isinstance(supports_image_detail_original, bool):
         supports_image_detail_original = False
+    max_input_tokens = int(raw.get("max_input_tokens", 0) or 0)
+    if max_input_tokens < 0:
+        raise ConfigError("model.max_input_tokens cannot be negative")
+    if max_input_tokens > MAX_CONTEXT_WINDOW:
+        raise ConfigError("model.max_input_tokens is too large")
+    reasoning_control = _string(raw.get("reasoning_control"))
+    output_modalities = normalize_output_modalities(raw.get("output_modalities"))
+    supported_protocols = normalize_supported_protocols(raw.get("supported_protocols"))
     model = {
         "id": _validate_id(raw.get("id"), "model.id"),
         "provider": _validate_id(raw.get("provider"), "model.provider"),
@@ -392,12 +436,16 @@ def _normalize_model(raw: Dict[str, Any]) -> Dict[str, Any]:
         "description": _string(raw.get("description")),
         "supports_reasoning": supports_reasoning,
         "reasoning_levels": levels,
+        "reasoning_control": reasoning_control,
         "context_window": context_window,
+        "max_input_tokens": max_input_tokens,
         "output_limit": output_limit,
         "created_at": created_at,
         "enabled": bool(raw.get("enabled", True)),
         "visibility": visibility,
         "input_modalities": normalize_input_modalities(raw.get("input_modalities")),
+        "output_modalities": output_modalities,
+        "supported_protocols": supported_protocols,
         "supports_image_detail_original": supports_image_detail_original,
         "deployment_identity": _safe_capability_identity(
             raw.get("deployment_identity"), "model.deployment_identity"
@@ -413,8 +461,12 @@ def _normalize_model(raw: Dict[str, Any]) -> Dict[str, Any]:
             raw.get("capabilities"), "model.capabilities"
         ),
     }
+    raw_caps = raw.get("capabilities")
+    explicit_fields = set(raw)
+    if isinstance(raw_caps, dict):
+        explicit_fields |= set(raw_caps)
     model["capability_sources"] = _normalize_capability_sources(
-        raw.get("capability_sources"), model, set(raw)
+        raw.get("capability_sources"), model, explicit_fields
     )
     return model
 
@@ -608,28 +660,49 @@ def merge_web_update(
             "visibility",
             "supports_reasoning",
             "input_modalities",
+            "output_modalities",
+            "supported_protocols",
+            "reasoning_control",
+            "max_input_tokens",
             "supports_image_detail_original",
         ):
             if old and field not in model:
                 model[field] = copy.deepcopy(old.get(field))
+        old_caps = old.get("capabilities") if old else {}
+        incoming_caps = model.get("capabilities")
+        if old_caps and not isinstance(incoming_caps, dict):
+            model["capabilities"] = copy.deepcopy(old_caps)
+        elif old_caps and isinstance(incoming_caps, dict):
+            for cap_field in _BOOLEAN_CAPABILITIES:
+                if cap_field not in incoming_caps and cap_field in old_caps:
+                    incoming_caps[cap_field] = copy.deepcopy(old_caps[cap_field])
         sources = copy.deepcopy(model.get("capability_sources") or {})
-        for field in (
+        _TOP_LEVEL_PROVENANCE_FIELDS = (
             "supports_reasoning",
             "reasoning_levels",
+            "reasoning_control",
             "context_window",
+            "max_input_tokens",
             "output_limit",
-            "streaming",
-            "structured_tools",
-            "parallel_tools",
-            "websocket",
             "input_modalities",
+            "output_modalities",
+            "supported_protocols",
             "supports_image_detail_original",
-        ):
+        )
+        for field in _TOP_LEVEL_PROVENANCE_FIELDS:
             if field not in model:
                 continue
             previous = old.get(field) if old else None
             if old is None or model.get(field) != previous:
                 sources[field] = make_provenance("manual", observed_at=observed_at_now())
+        current_caps = model.get("capabilities")
+        if isinstance(current_caps, dict):
+            for cap_field in _BOOLEAN_CAPABILITIES:
+                if cap_field not in current_caps:
+                    continue
+                previous_cap = old_caps.get(cap_field) if old_caps else None
+                if old is None or current_caps.get(cap_field) != previous_cap:
+                    sources[cap_field] = make_provenance("manual", observed_at=observed_at_now())
         if sources:
             model["capability_sources"] = sources
         if old and any(

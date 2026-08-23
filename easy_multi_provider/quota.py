@@ -13,10 +13,10 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from . import __version__
-from .accounts import AccountError, load_auth
+from .accounts import AccountError, load_auth, load_native_auth
 from .vault import VaultError, write_encrypted_json
 
 class QuotaError(ValueError):
@@ -300,15 +300,22 @@ def parse_app_server_output(output: str) -> Dict[str, Any]:
     }
 
 
-def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", timeout: int = 45) -> Dict[str, Any]:
-    auth_file = account.get("auth_file", "")
-    if not auth_file:
-        raise QuotaError("account credentials are not configured")
+def _run_quota_query(
+    auth: Dict[str, Any],
+    codex_binary: str,
+    timeout: int,
+    allow_refresh: bool,
+    persist_path: Optional[Path],
+) -> Dict[str, Any]:
+    """Run the isolated app-server quota query against a validated auth object.
+
+    Policy flags keep the imported-account and native-login callers explicit:
+    - allow_refresh: whether account/read may request token rotation.
+    - persist_path: when set and allow_refresh is True, a refreshed credential
+      is persisted to this encrypted EMP path; when None, temporary refreshed
+      state is discarded and the native auth file is never mutated.
+    """
     binary, identity = _trusted_codex_binary(codex_binary)
-    try:
-        auth = load_auth(account)
-    except (AccountError, VaultError) as exc:
-        raise QuotaError(str(exc)) from exc
     requests = [
         {
             "id": 1,
@@ -323,7 +330,7 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
             },
         },
         {"method": "initialized"},
-        {"id": 2, "method": "account/read", "params": {"refreshToken": True}},
+        {"id": 2, "method": "account/read", "params": {"refreshToken": allow_refresh}},
         {"id": 3, "method": "account/rateLimits/read"},
     ]
     with tempfile.TemporaryDirectory(prefix="easy-mp-codex-account-") as temporary:
@@ -388,12 +395,57 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
             raise QuotaError("Codex account quota check failed") from exc
         if process.returncode not in (0, None):
             raise QuotaError("Codex account quota check failed")
-        try:
-            refreshed_auth = json.loads(plain_auth.read_text(encoding="utf-8"))
-            write_encrypted_json(Path(auth_file), _validate_refreshed_auth(refreshed_auth))
-        except (OSError, ValueError, VaultError) as exc:
-            raise QuotaError("Codex returned invalid account credentials") from exc
+        if allow_refresh and persist_path is not None:
+            try:
+                refreshed_auth = json.loads(plain_auth.read_text(encoding="utf-8"))
+                write_encrypted_json(Path(persist_path), _validate_refreshed_auth(refreshed_auth))
+            except (OSError, ValueError, VaultError) as exc:
+                raise QuotaError("Codex returned invalid account credentials") from exc
         return parse_app_server_output(stdout)
+
+
+def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", timeout: int = 45) -> Dict[str, Any]:
+    """Query quota for a normal imported EMP account.
+
+    Uses the account's encrypted EMP credential snapshot, may request token
+    refresh, and persists a validated refreshed credential back into the EMP
+    encrypted vault.
+    """
+    auth_file = account.get("auth_file", "")
+    if not auth_file:
+        raise QuotaError("account credentials are not configured")
+    try:
+        auth = load_auth(account)
+    except (AccountError, VaultError) as exc:
+        raise QuotaError(str(exc)) from exc
+    return _run_quota_query(
+        auth,
+        codex_binary,
+        timeout,
+        allow_refresh=True,
+        persist_path=Path(auth_file),
+    )
+
+
+def read_native_login_quota(codex_binary: str = "codex", timeout: int = 45) -> Dict[str, Any]:
+    """Query quota for an account that duplicates the current native Codex login.
+
+    Uses the live native auth.json (the authoritative source when tokens have
+    rotated away from a stale EMP snapshot). Does not request token rotation
+    (refreshToken: False) and never writes, persists, or mutates the native
+    auth file or any EMP encrypted credential.
+    """
+    try:
+        auth = load_native_auth()
+    except AccountError as exc:
+        raise QuotaError(str(exc)) from exc
+    return _run_quota_query(
+        auth,
+        codex_binary,
+        timeout,
+        allow_refresh=False,
+        persist_path=None,
+    )
 
 
 def _validate_refreshed_auth(value: Any) -> Dict[str, Any]:

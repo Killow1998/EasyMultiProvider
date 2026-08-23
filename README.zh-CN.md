@@ -21,6 +21,7 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 - Codex 可以使用现有模型 slug，把原生子任务委派给外部模型；子任务及其权限仍由
   Codex 管理。
 - 凭据只在本机加密保存。
+- 保存私有且有容量上限的诊断日志，便于后续排查问题。
 - 通过密码保护的 `.emp` 文件导入和导出数据。
 - 保留 Codex 原生会话、`resume`、WebSocket、压缩和 MCP 功能。
 
@@ -58,6 +59,11 @@ uv run python -m easy_multi_provider serve --config config.json
 
 EMP 默认监听 `http://127.0.0.1:4200`。只有端口被占用时才需要使用
 `--port` 修改端口。
+
+每次启动还会输出 `Diagnostic log: ...`。EMP 会在该文件中保存结构化运行元数据，
+后续遇到问题时无需再依赖用户复述整个过程。日志位于 `state/logs/`；总量超过
+10 MiB 后会自动删除最老的分片。日志不会保存提示词、模型回复、工具参数或结果、
+HTTP 正文、请求头、Cookie 和凭据。
 
 ## Web UI
 

@@ -749,19 +749,25 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(opened.call_args_list[1].args[0].full_url, "https://generativelanguage.googleapis.com/v1beta/models?pageToken=next-page")
         self.assertEqual([item["upstream_id"] for item in value], ["gemini-3.7-flash", "gemini-2.5-flash"])
         self.assertTrue(value[0]["supports_reasoning"])
-        self.assertEqual(value[0]["reasoning_levels"], [])
+        # Registry enriches gemini-3.7-flash with reasoning levels
+        self.assertEqual(
+            value[0]["reasoning_levels"],
+            ["minimal", "low", "medium", "high"],
+        )
+        # Registry enriches with official input modalities (no hardcoded fallback)
         self.assertEqual(
             value[0]["input_modalities"],
-            ["text", "image", "video", "audio", "pdf"],
+            ["text", "image"],
         )
         self.assertEqual(
             value[0]["capability_sources"]["input_modalities"]["source"],
             "official",
         )
-        self.assertEqual(value[1]["input_modalities"], ["text"])
+        # gemini-2.5-flash is in the registry with confirmed audio/video input
+        self.assertEqual(value[1]["input_modalities"], ["text", "image", "audio", "video"])
         self.assertEqual(
             value[1]["capability_sources"]["input_modalities"]["source"],
-            "unknown",
+            "official",
         )
 
     def test_unlisted_native_model_uses_unique_forward_provider(self):

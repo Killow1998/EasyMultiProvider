@@ -23,6 +23,7 @@ The current source version is `v0.6.0`.
 - Let Codex delegate a native child task to an external catalog model by its
   existing model slug; Codex continues to own the child task and permissions.
 - Keep credentials encrypted on the local machine.
+- Keep a private, bounded diagnostic journal for later troubleshooting.
 - Export and import password-protected `.emp` migration files.
 - Preserve native Codex sessions, `resume`, WebSockets, compression, and MCP.
 
@@ -61,6 +62,13 @@ The terminal prints a one-use browser URL. Open it and:
 
 EMP listens on `http://127.0.0.1:4200` by default. Use `--port` only when that
 port is already occupied.
+
+Each start also prints `Diagnostic log: ...`. EMP stores structured runtime
+metadata in that file so later bugs can be diagnosed without reconstructing
+the session from memory. Managed logs are kept under `state/logs/`; the oldest
+parts are removed automatically when they exceed 10 MiB in total. Prompts,
+responses, tool payloads, HTTP bodies, headers, cookies, and credentials are
+not recorded.
 
 ## Web UI
 

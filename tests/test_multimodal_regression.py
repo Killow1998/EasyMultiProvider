@@ -297,6 +297,18 @@ class MultimodalRegressionTests(unittest.TestCase):
                         "input_modalities": ["text", "image"],
                         "context_window": 77777,
                         "visibility": "hide",
+                        "capability_sources": {
+                            "context_window": {
+                                "source": "manual",
+                                "confidence": 1.0,
+                                "observed_at": "2026-08-22T00:00:00+00:00",
+                            },
+                            "input_modalities": {
+                                "source": "manual",
+                                "confidence": 1.0,
+                                "observed_at": "2026-08-22T00:00:00+00:00",
+                            },
+                        },
                     }
                 ],
             )

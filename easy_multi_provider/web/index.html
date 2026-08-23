@@ -106,8 +106,32 @@ const officialProviders = {
   openai: {id:'openai', name:'OpenAI', base_url:'https://api.openai.com/v1', protocol:'responses', auth_mode:'api_key', hint:'OpenAI Responses API'},
   gemini: {id:'gemini', name:'Gemini AI Studio', base_url:'https://generativelanguage.googleapis.com/v1beta/openai', protocol:'chat_completions', auth_mode:'api_key', hint:'Google OpenAI-compatible API'},
   anthropic: {id:'anthropic', name:'Anthropic', base_url:'https://api.anthropic.com/v1', protocol:'anthropic_messages', auth_mode:'anthropic_api_key', hint:'Anthropic Messages API'},
-  deepseek: {id:'deepseek', name:'DeepSeek', base_url:'https://api.deepseek.com/v1', protocol:'chat_completions', auth_mode:'api_key', hint:'DeepSeek OpenAI-compatible API'}
+  deepseek: {id:'deepseek', name:'DeepSeek', base_url:'https://api.deepseek.com', protocol:'chat_completions', auth_mode:'api_key', hint:'DeepSeek OpenAI-compatible API'},
+  openrouter: {id:'openrouter', name:'OpenRouter', base_url:'https://openrouter.ai/api/v1', protocol:'responses', auth_mode:'api_key', hint:'OpenRouter OpenAI-compatible API'},
+  xai: {id:'xai', name:'xAI', base_url:'https://api.x.ai/v1', protocol:'responses', auth_mode:'api_key', hint:'xAI Grok Responses API'},
+  moonshot: {id:'moonshot-kimi', name:'Moonshot/Kimi', base_url:'https://api.moonshot.ai/v1', protocol:'chat_completions', auth_mode:'api_key', hint:'Kimi OpenAI-compatible API'},
+  zhipu: {id:'zhipu-glm', name:'Zhipu/GLM', base_url:'https://api.z.ai/api/paas/v4', protocol:'chat_completions', auth_mode:'api_key', hint:'GLM OpenAI-compatible API'}
 };
+
+const confirmedCapabilitySources = new Set(['manual','observed','advertised','official']);
+function confirmedField(model, field) {
+  const source = model?.capability_sources?.[field]?.source;
+  if (!confirmedCapabilitySources.has(source)) return null;
+  return model[field] ?? null;
+}
+function modalityLabel(value) {
+  return ({text:'文本', image:'图像', audio:'音频', video:'视频'})[value] || value;
+}
+function capabilitySummary(model) {
+  const parts = [];
+  const inputs = Array.isArray(confirmedField(model, 'input_modalities')) ? confirmedField(model, 'input_modalities') : [];
+  if (inputs.length) parts.push('输入 ' + inputs.map(modalityLabel).map(esc).join('/'));
+  const outputs = Array.isArray(confirmedField(model, 'output_modalities')) ? confirmedField(model, 'output_modalities') : [];
+  if (outputs.length) parts.push('输出 ' + outputs.map(modalityLabel).map(esc).join('/'));
+  const protocols = Array.isArray(confirmedField(model, 'supported_protocols')) ? confirmedField(model, 'supported_protocols') : [];
+  if (protocols.length) parts.push(protocols.map(protocolLabel).map(esc).join('/'));
+  return parts.join(' · ');
+}
 
 async function api(path, options = {}) {
   options.headers = Object.assign({'Content-Type':'application/json'}, options.headers || {});
@@ -378,13 +402,13 @@ function renderModels() {
   const providerNames = Object.fromEntries((state.providers || []).map(p => [p.id, p.name || p.id])); const groups = {};
   models.forEach(model => { (groups[model.provider] ||= []).push(model); });
   const configuredOrder = (state.providers || []).map(provider => provider.id); const groupOrder = [...configuredOrder.filter(provider => groups[provider]), ...Object.keys(groups).filter(provider => !configuredOrder.includes(provider))];
-  $('models').innerHTML = groupOrder.map(provider => { const items = groups[provider]; return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><table><tr><th>模型</th><th>显示</th><th>操作</th></tr>${items.map(m => { const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : []; const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? '支持推理，档位未知' : '无推理档位控制'); return `<tr class="${m.enabled ? '' : 'model-hidden'}"><td><code>${esc(m.id)}</code><br><span class="muted">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</span></td><td><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? '已显示' : '已隐藏'}</td><td><button class="secondary" onclick="openManualModelModal('${esc(m.id)}')">编辑</button><button class="secondary" onclick="testModel('${esc(m.id)}')">测试</button><button class="danger" onclick="removeModel('${esc(m.id)}')">删除</button></td></tr>`; }).join('')}</table></div>`; }).join('');
+  $('models').innerHTML = groupOrder.map(provider => { const items = groups[provider]; return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><table><tr><th>模型</th><th>显示</th><th>操作</th></tr>${items.map(m => { const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : []; const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? '支持推理，档位未知' : '无推理档位控制'); const capabilities = capabilitySummary(m); return `<tr class="${m.enabled ? '' : 'model-hidden'}"><td><code>${esc(m.id)}</code><br><span class="muted">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? '<br>' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</span></td><td><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? '已显示' : '已隐藏'}</td><td><button class="secondary" onclick="openManualModelModal('${esc(m.id)}')">编辑</button><button class="secondary" onclick="testModel('${esc(m.id)}')">测试</button><button class="danger" onclick="removeModel('${esc(m.id)}')">删除</button></td></tr>`; }).join('')}</table></div>`; }).join('');
 }
 async function discoverProvider(id) { try { notice('正在拉取 ' + id + ' 的模型列表 …'); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider:id})}); openModelImportModal(id, result.models || []); } catch (error) { notice('拉取失败：' + error.message, true); } }
 function openModelImportModal(provider, models) {
   const sorted = [...models].sort(modelSort);
   const imported = new Set((state.models || []).filter(model => model.provider === provider).map(model => model.upstream_id));
-  const body = `<p class="muted">${esc(provider)} 发现 ${sorted.length} 个模型。已导入的模型默认保留，新发现的模型默认不选。</p><div class="toolbar"><input id="discovered_search" placeholder="搜索模型名称或 ID" oninput="filterDiscoveredModels(this.value)"><button id="discovered_select_all" type="button" class="secondary" onclick="setDiscoveredChecks(true)">全选</button><button id="discovered_clear_all" type="button" class="secondary" onclick="setDiscoveredChecks(false)">全不选</button><span id="discovered_count" class="muted"></span></div><div id="discovered_models" class="model-selection">${sorted.map(m => { const id = m.upstream_id || ''; const text = (m.display_name || id) + ' ' + id; return `<label class="model-option" data-discovered-option data-search="${esc(text.toLowerCase())}"><input type="checkbox" name="discovered_model" value="${esc(id)}" ${imported.has(id) ? 'checked' : ''} onchange="updateDiscoveredCount()"><span><strong>${esc(m.display_name || id)}</strong><small>${esc(id)} · context ${Number(m.context_window || 0).toLocaleString()}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</small></span></label>`; }).join('')}</div>`;
+  const body = `<p class="muted">${esc(provider)} 发现 ${sorted.length} 个模型。已导入的模型默认保留，新发现的模型默认不选。</p><div class="toolbar"><input id="discovered_search" placeholder="搜索模型名称或 ID" oninput="filterDiscoveredModels(this.value)"><button id="discovered_select_all" type="button" class="secondary" onclick="setDiscoveredChecks(true)">全选</button><button id="discovered_clear_all" type="button" class="secondary" onclick="setDiscoveredChecks(false)">全不选</button><span id="discovered_count" class="muted"></span></div><div id="discovered_models" class="model-selection">${sorted.map(m => { const id = m.upstream_id || ''; const text = (m.display_name || id) + ' ' + id; const capabilities = capabilitySummary(m); return `<label class="model-option" data-discovered-option data-search="${esc(text.toLowerCase())}"><input type="checkbox" name="discovered_model" value="${esc(id)}" ${imported.has(id) ? 'checked' : ''} onchange="updateDiscoveredCount()"><span><strong>${esc(m.display_name || id)}</strong><small>${esc(id)} · context ${Number(m.context_window || 0).toLocaleString()}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</small></span></label>`; }).join('')}</div>`;
   openModal('选择要导入的模型', body, '导入选中模型', async () => { const selected = [...document.querySelectorAll('input[name="discovered_model"]:checked')].map(input => input.value); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider, selected})}); closeModal(); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); const integration = await loadIntegration(); notice(`${provider} 已导入 ${result.added} 个模型、隐藏 ${result.hidden || 0} 个${integration && integration.runtime && integration.runtime.action_required ? '；请应用模型变化到 Codex' : ''}`); });
   filterDiscoveredModels('');
 }

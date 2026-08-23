@@ -31,10 +31,16 @@ CAPABILITY_NAMES = (
     "parallel_tools",
     "supports_reasoning",
     "reasoning_levels",
+    "reasoning_control",
     "context_window",
+    "max_input_tokens",
     "output_limit",
     "websocket",
     "input_modalities",
+    "output_modalities",
+    "supported_protocols",
+    "structured_output",
+    "web_search",
     "supports_image_detail_original",
 )
 KNOWN_PROTOCOLS = frozenset(
@@ -48,6 +54,7 @@ TEXT_MODALITY = "text"
 IMAGE_MODALITY = "image"
 DEFAULT_INPUT_MODALITIES = (TEXT_MODALITY,)
 CODEX_INPUT_MODALITIES = frozenset({TEXT_MODALITY, IMAGE_MODALITY})
+DEFAULT_OUTPUT_MODALITIES = (TEXT_MODALITY,)
 REASONING_EFFORT_ORDER = (
     "none",
     "minimal",
@@ -118,6 +125,74 @@ def codex_input_modalities(value: Any) -> list:
         if item in CODEX_INPUT_MODALITIES and item in normalized
     ]
     return projected or list(DEFAULT_INPUT_MODALITIES)
+
+
+def _parse_output_modalities(value: Any) -> Optional[list]:
+    """Parse and validate output modality identifiers.
+
+    Output modalities are independent from input modalities and may include
+    non-Codex types such as audio, video, file, and pdf.  Validation is
+    identical to input modalities: lowercase, unique, bounded.
+    """
+    if not isinstance(value, list) or not value or len(value) > MAX_INPUT_MODALITIES:
+        return None
+    result = []
+    for item in value:
+        if not isinstance(item, str):
+            return None
+        identifier = item.strip().lower()
+        if (
+            not identifier
+            or len(identifier.encode("utf-8")) > MAX_INPUT_MODALITY_ID_BYTES
+            or not _INPUT_MODALITY_ID.fullmatch(identifier)
+        ):
+            return None
+        if identifier not in result:
+            result.append(identifier)
+    return result or None
+
+
+def normalize_output_modalities(value: Any) -> list:
+    """Return bounded internal output modality identifiers with a text fallback."""
+
+    parsed = _parse_output_modalities(value)
+    return parsed if parsed is not None else list(DEFAULT_OUTPUT_MODALITIES)
+
+
+def output_modalities_known(value: Any) -> bool:
+    return _parse_output_modalities(value) is not None
+
+
+def output_modalities_metadata_source(value: Any) -> str:
+    """Classify whether a discovery payload advertised a valid output modality list."""
+
+    return "advertised" if _parse_output_modalities(value) is not None else "unknown"
+
+
+def normalize_supported_protocols(value: Any) -> list:
+    """Return normalized unique concrete protocol strings when present.
+
+    Only known concrete protocols (excluding auto) are retained.  An empty
+    list is returned for missing or invalid input; no inference is performed.
+    """
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        protocol = item.strip().lower()
+        if protocol in (KNOWN_PROTOCOLS - {"auto"}) and protocol not in result:
+            result.append(protocol)
+    return result
+
+
+def supported_protocols_known(value: Any) -> bool:
+    """Return True when a valid non-empty protocol list is present."""
+
+    if not isinstance(value, list):
+        return False
+    return bool(normalize_supported_protocols(value))
 
 
 def normalize_reasoning_levels(value: Any) -> list:
@@ -440,6 +515,30 @@ def capability_record(
     supports_image_detail_original_known = isinstance(
         supports_image_detail_original, bool
     )
+    structured_output_value, structured_output_source = _lookup_capability(
+        provider, model, ("structured_output", "supports_structured_output")
+    )
+    web_search_value, web_search_source = _lookup_capability(
+        provider, model, ("web_search", "supports_web_search")
+    )
+    output_modalities = model.get("output_modalities")
+    output_modalities_known = _parse_output_modalities(output_modalities) is not None
+    if output_modalities_known:
+        output_modalities = normalize_output_modalities(output_modalities)
+    supported_protocols = model.get("supported_protocols")
+    supported_protocols_known_val = supported_protocols_known(supported_protocols)
+    if supported_protocols_known_val:
+        supported_protocols = normalize_supported_protocols(supported_protocols)
+    max_input_tokens = model.get("max_input_tokens")
+    max_input_tokens_known = (
+        isinstance(max_input_tokens, int)
+        and not isinstance(max_input_tokens, bool)
+        and max_input_tokens > 0
+    )
+    reasoning_control = model.get("reasoning_control")
+    reasoning_control_known = (
+        isinstance(reasoning_control, str) and bool(reasoning_control.strip())
+    )
     capabilities.update(
         {
             "streaming": _capability(
@@ -460,8 +559,17 @@ def capability_record(
             "reasoning_levels": _capability(
                 reasoning, model, "reasoning_levels", reasoning_known
             ),
+            "reasoning_control": _capability(
+                reasoning_control,
+                model,
+                "reasoning_control",
+                reasoning_control_known,
+            ),
             "context_window": _capability(
                 context, model, "context_window", context_known
+            ),
+            "max_input_tokens": _capability(
+                max_input_tokens, model, "max_input_tokens", max_input_tokens_known
             ),
             "output_limit": _capability(
                 output_limit, model, "output_limit", output_known
@@ -474,6 +582,30 @@ def capability_record(
                 model,
                 "input_modalities",
                 input_modalities_known,
+            ),
+            "output_modalities": _capability(
+                output_modalities,
+                model,
+                "output_modalities",
+                output_modalities_known,
+            ),
+            "supported_protocols": _capability(
+                supported_protocols,
+                model,
+                "supported_protocols",
+                supported_protocols_known_val,
+            ),
+            "structured_output": _capability(
+                structured_output_value,
+                structured_output_source,
+                "structured_output",
+                isinstance(structured_output_value, bool),
+            ),
+            "web_search": _capability(
+                web_search_value,
+                web_search_source,
+                "web_search",
+                isinstance(web_search_value, bool),
             ),
             "supports_image_detail_original": _capability(
                 supports_image_detail_original,

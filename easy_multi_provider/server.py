@@ -8,6 +8,7 @@ from collections import deque
 import json
 import hmac
 import os
+import platform
 import re
 import secrets
 import signal
@@ -24,7 +25,13 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import getproxies
 
 from . import __version__
-from .accounts import account_root, import_account, public_accounts, valid_caller_authorization
+from .accounts import (
+    account_root,
+    duplicate_account_status,
+    import_account,
+    public_accounts,
+    valid_caller_authorization,
+)
 from .catalog import (
     build_catalog,
     generated_catalog_path,
@@ -37,7 +44,10 @@ from .capabilities import (
     input_modalities_metadata_source,
     make_provenance,
     normalize_input_modalities,
+    normalize_output_modalities,
+    normalize_supported_protocols,
     observed_at_now,
+    output_modalities_metadata_source,
     safe_capability_list,
 )
 from .config import (
@@ -65,10 +75,11 @@ from .codex_runtime import (
     offline_runtime_snapshot,
 )
 from .context_guard import ContextGuard, ContextGuardBlocked
+from .diagnostic_journal import NullJournal, create_journal
 from .integration import IntegrationError, IntegrationManager, IntegrationResult, IntegrationStatus, ServiceNotReady
 from .main import resolve_integration_paths
 from .migration import export_bundle, import_bundle
-from .quota import QuotaError, account_refresh_lock, refresh_account_quota
+from .quota import QuotaError, account_refresh_lock, read_native_login_quota, refresh_account_quota
 from .provider_replay import ProviderReplayCache
 from .router import (
     ContextLengthError,
@@ -166,6 +177,10 @@ _DIAGNOSTIC_RECOVERY_MODES = frozenset(
 )
 _WS_REPLAY_MAX_ITEMS = 256
 _WS_REPLAY_MAX_BYTES = 4 * 1024 * 1024
+_HTTP_REQUEST_BYTES_MAX = 64 * 1024 * 1024
+_HTTP_HANDLER_STAGE = "http_handler"
+_MANAGEMENT_COUNT_MAX = 1_000_000
+_MANAGEMENT_SCALAR_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
 
 class EmptyEmpCatalog(IntegrationError):
@@ -188,6 +203,221 @@ def _model_capability_source(model: Mapping[str, Any], field: str) -> str:
     entry = sources.get(field) if isinstance(sources, Mapping) else None
     source = entry.get("source") if isinstance(entry, Mapping) else None
     return source if source in _DIAGNOSTIC_CONTEXT_SOURCES else "unknown"
+
+
+_SOURCE_ORDER = (
+    "manual",
+    "observed",
+    "advertised",
+    "official",
+    "inferred",
+    "inherited",
+    "unknown",
+)
+_SOURCE_RANK = {
+    source: len(_SOURCE_ORDER) - index - 1
+    for index, source in enumerate(_SOURCE_ORDER)
+}
+
+_MERGE_SCALAR_FIELDS = (
+    "supports_reasoning",
+    "reasoning_control",
+    "context_window",
+    "max_input_tokens",
+    "output_limit",
+    "supports_image_detail_original",
+)
+
+_MERGE_LIST_FIELDS = (
+    "reasoning_levels",
+    "input_modalities",
+    "output_modalities",
+    "supported_protocols",
+)
+
+_MERGE_NESTED_BOOL_FIELDS = (
+    "streaming",
+    "structured_tools",
+    "parallel_tools",
+    "structured_output",
+    "web_search",
+    "websocket",
+)
+
+
+def _field_source(model: Mapping[str, Any], field: str) -> str:
+    sources = model.get("capability_sources")
+    if not isinstance(sources, Mapping):
+        return "unknown"
+    entry = sources.get(field)
+    if isinstance(entry, Mapping):
+        source = entry.get("source")
+        return source if source in _SOURCE_RANK else "unknown"
+    if isinstance(entry, str) and entry in _SOURCE_RANK:
+        return entry
+    return "unknown"
+
+
+def _has_provenance_entry(model: Mapping[str, Any], field: str) -> bool:
+    """Return True when an explicit provenance entry exists for field.
+
+    Distinguishes 'no entry at all' from an explicit {source: 'unknown'} entry.
+    When an entry is absent, discovery may derive advertised provenance for
+    genuinely live metadata.  When an explicit unknown entry exists, it must
+    be preserved rather than reclassified as advertised.
+    """
+    sources = model.get("capability_sources")
+    if not isinstance(sources, Mapping):
+        return False
+    return field in sources
+
+
+def _incoming_can_refresh(incoming_source: str, existing_source: str) -> bool:
+    """Return True when incoming_source may replace existing_source."""
+    return _SOURCE_RANK.get(incoming_source, 0) >= _SOURCE_RANK.get(existing_source, 0)
+
+
+def _merge_discovered_field(
+    existing: Dict[str, Any],
+    item: Mapping[str, Any],
+    field: str,
+    incoming_source: str,
+    observed_at: str,
+) -> None:
+    """Merge one scalar or list capability field by provenance priority."""
+    if field not in item:
+        return
+    incoming_value = item.get(field)
+    if incoming_value is None:
+        return
+    has_entry = _has_provenance_entry(item, field)
+    if isinstance(incoming_value, (list, str)) and not incoming_value:
+        # An explicitly-provenanced empty list is meaningful and must be
+        # persisted; without an explicit entry it must not erase an
+        # existing useful value.
+        if not (isinstance(incoming_value, list) and has_entry):
+            return
+    existing_source = _field_source(existing, field)
+    if not _incoming_can_refresh(incoming_source, existing_source):
+        return
+    if field in _MERGE_LIST_FIELDS:
+        if field == "input_modalities":
+            existing[field] = normalize_input_modalities(incoming_value)
+        elif field == "output_modalities":
+            existing[field] = normalize_output_modalities(incoming_value)
+        elif field == "supported_protocols":
+            existing[field] = normalize_supported_protocols(incoming_value)
+        else:
+            existing[field] = list(incoming_value)
+    else:
+        existing[field] = incoming_value
+    existing.setdefault("capability_sources", {})[field] = make_provenance(
+        incoming_source, observed_at=observed_at
+    )
+
+
+def _merge_discovered_nested_bool(
+    existing: Dict[str, Any],
+    item: Mapping[str, Any],
+    field: str,
+    incoming_source: str,
+    observed_at: str,
+) -> None:
+    """Merge one nested capability boolean by provenance priority."""
+    incoming_caps = item.get("capabilities")
+    if not isinstance(incoming_caps, Mapping) or field not in incoming_caps:
+        return
+    incoming_value = incoming_caps.get(field)
+    if not isinstance(incoming_value, bool):
+        return
+    existing_source = _field_source(existing, field)
+    if not _incoming_can_refresh(incoming_source, existing_source):
+        return
+    caps = existing.get("capabilities")
+    if not isinstance(caps, dict):
+        caps = {}
+    caps[field] = incoming_value
+    existing["capabilities"] = caps
+    existing.setdefault("capability_sources", {})[field] = make_provenance(
+        incoming_source, observed_at=observed_at
+    )
+
+
+def _build_new_model_from_discovery(
+    item: Mapping[str, Any], provider_id: str, observed_at: str
+) -> Dict[str, Any]:
+    """Build a new model dict from discovery data with actual incoming sources."""
+    upstream_id = item.get("upstream_id", "")
+    model_id = provider_id + "/" + upstream_id
+    capabilities = {}
+    capability_sources = {}
+    incoming_caps = item.get("capabilities")
+    if isinstance(incoming_caps, Mapping):
+        for field in _MERGE_NESTED_BOOL_FIELDS:
+            if field in incoming_caps and isinstance(incoming_caps[field], bool):
+                capabilities[field] = incoming_caps[field]
+                has_entry = _has_provenance_entry(item, field)
+                source = _field_source(item, field)
+                if not has_entry:
+                    source = "advertised"
+                capability_sources[field] = make_provenance(
+                    source,
+                    observed_at=observed_at,
+                )
+    for field in _MERGE_SCALAR_FIELDS + _MERGE_LIST_FIELDS:
+        if field not in item:
+            continue
+        value = item.get(field)
+        if value is None:
+            continue
+        has_entry = _has_provenance_entry(item, field)
+        if isinstance(value, (list, str)) and not value:
+            # An explicitly-provenanced empty list is meaningful for a new
+            # model; without an explicit entry it must not erase an
+            # existing useful value.
+            if not (isinstance(value, list) and has_entry):
+                continue
+        source = _field_source(item, field)
+        if not has_entry:
+            if field in ("context_window", "output_limit", "max_input_tokens"):
+                source = "advertised" if value else "unknown"
+            elif field == "input_modalities":
+                source = input_modalities_metadata_source(value)
+            elif field == "output_modalities":
+                source = output_modalities_metadata_source(value)
+            elif field in ("reasoning_levels", "supported_protocols"):
+                source = "advertised" if value else "unknown"
+        capability_sources[field] = make_provenance(source, observed_at=observed_at)
+    model = {
+        "id": model_id,
+        "provider": provider_id,
+        "upstream_id": upstream_id,
+        "display_name": item.get("display_name") or upstream_id,
+        "description": item.get("description", ""),
+        "supports_reasoning": item.get("supports_reasoning")
+        if isinstance(item.get("supports_reasoning"), bool)
+        else None,
+        "reasoning_levels": list(item.get("reasoning_levels") or []),
+        "reasoning_control": item.get("reasoning_control", ""),
+        "context_window": int(item.get("context_window", 0) or 0),
+        "max_input_tokens": int(item.get("max_input_tokens", 0) or 0),
+        "output_limit": int(
+            item.get("output_limit", item.get("output_token_limit", 0)) or 0
+        ),
+        "created_at": int(item.get("created_at", 0) or 0),
+        "enabled": True,
+        "visibility": "list",
+        "input_modalities": normalize_input_modalities(item.get("input_modalities")),
+        "output_modalities": normalize_output_modalities(item.get("output_modalities")),
+        "supported_protocols": normalize_supported_protocols(item.get("supported_protocols")),
+        "supports_image_detail_original": item.get("supports_image_detail_original", False)
+        if isinstance(item.get("supports_image_detail_original"), bool)
+        else False,
+        "capability_sources": capability_sources,
+    }
+    if capabilities:
+        model["capabilities"] = capabilities
+    return model
 
 
 def _safe_diagnostic_text(value: Any, pattern: re.Pattern[str]) -> str:
@@ -227,6 +457,25 @@ def _safe_diagnostic_sequence(value: Any) -> list:
     ]
 
 
+def _diagnostic_http_path(raw_target: Any) -> str:
+    """Return a query-free path with account route parameters removed."""
+
+    target = raw_target if isinstance(raw_target, str) else ""
+    path = urlparse(target).path
+    prefix = "/api/accounts/"
+    if not path.startswith(prefix):
+        return path
+    suffix = path[len(prefix) :]
+    if suffix == "import":
+        return path
+    if suffix and "/" not in suffix:
+        return prefix + "{account}"
+    account, separator, operation = suffix.partition("/")
+    if account and separator and operation == "quota":
+        return prefix + "{account}/quota"
+    return path
+
+
 def _ws_replay_size(*parts: Any) -> Optional[Tuple[int, int]]:
     """Bound connection-local replay state without retaining another payload copy."""
 
@@ -254,10 +503,11 @@ def _ws_replay_size(*parts: Any) -> Optional[Tuple[int, int]]:
 class ObservationRing:
     """Small process-local diagnostics ring containing only safe route facts."""
 
-    def __init__(self, capacity: int = _DIAGNOSTIC_CAPACITY):
+    def __init__(self, capacity: int = _DIAGNOSTIC_CAPACITY, sink=None):
         self.capacity = max(1, min(_DIAGNOSTIC_CAPACITY, int(capacity)))
         self._records = deque(maxlen=self.capacity)
         self._lock = threading.RLock()
+        self._sink = sink
 
     def record(self, event: Mapping[str, Any]) -> None:
         if not isinstance(event, Mapping):
@@ -372,6 +622,11 @@ class ObservationRing:
         }
         with self._lock:
             self._records.append(record)
+        if self._sink is not None:
+            try:
+                self._sink(dict(record))
+            except Exception:
+                pass
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -497,13 +752,19 @@ class AppState:
         catalog_path: Optional[Path] = None,
         diagnostics: Optional[ObservationRing] = None,
         runtime_controller: Optional[CodexRuntimeController] = None,
+        journal=None,
     ):
         self.path = Path(path or config_path())
         self.lock = threading.RLock()
         self.bootstrap_token = secrets.token_urlsafe(32)
         self.bootstrap_used = False
         self.session_token = secrets.token_urlsafe(32)
-        self.diagnostics = diagnostics if diagnostics is not None else ObservationRing()
+        self.journal = journal if journal is not None else NullJournal()
+        self.diagnostics = (
+            diagnostics
+            if diagnostics is not None
+            else ObservationRing(sink=self._persist_route_observation)
+        )
         self.context_guard = ContextGuard()
         self.provider_replay = ProviderReplayCache()
         self.integration_manager = integration_manager
@@ -556,6 +817,9 @@ class AppState:
         ):
             save(self.config, self.path)
             self.config = load(self.path)
+
+    def _persist_route_observation(self, record: Mapping[str, Any]) -> None:
+        self.journal.event("info", "route_observation", **record)
 
     def snapshot(self) -> Dict[str, Any]:
         with self.lock:
@@ -1286,163 +1550,39 @@ class AppState:
                 model_id = provider_id + "/" + upstream_id
                 if not upstream_id or model_id in by_id:
                     existing = by_id.get(model_id)
-                    if (
-                        existing
-                        and isinstance(item.get("supports_reasoning"), bool)
-                        and _discovery_capability_source(item, "supports_reasoning")
-                        == "advertised"
-                        and _model_capability_source(existing, "supports_reasoning")
-                        in _DISCOVERY_CAPABILITY_SOURCES
-                    ):
-                        existing["supports_reasoning"] = item["supports_reasoning"]
-                        existing.setdefault("capability_sources", {})[
-                            "supports_reasoning"
-                        ] = make_provenance(
-                            "advertised", observed_at=observed_at
-                        )
-                    if (
-                        existing
-                        and item.get("reasoning_levels")
-                        and _discovery_capability_source(item, "reasoning_levels")
-                        == "advertised"
-                        and _model_capability_source(existing, "reasoning_levels")
-                        in _DISCOVERY_CAPABILITY_SOURCES
-                    ):
-                        existing["reasoning_levels"] = list(item["reasoning_levels"])
-                        existing.setdefault("capability_sources", {})[
-                            "reasoning_levels"
-                        ] = make_provenance("advertised", observed_at=observed_at)
-                    if (
-                        existing
-                        and item.get("context_window")
-                        and not existing.get("context_window")
-                        and _model_capability_source(existing, "context_window")
-                        in _DISCOVERY_CAPABILITY_SOURCES
-                    ):
-                        existing["context_window"] = int(item["context_window"])
-                        existing.setdefault("capability_sources", {})["context_window"] = make_provenance(
-                            "advertised", observed_at=observed_at
-                        )
-                    output_limit = item.get("output_limit", item.get("output_token_limit"))
-                    if (
-                        existing
-                        and output_limit
-                        and not existing.get("output_limit")
-                        and _model_capability_source(existing, "output_limit")
-                        in _DISCOVERY_CAPABILITY_SOURCES
-                    ):
-                        existing["output_limit"] = int(output_limit)
-                        existing.setdefault("capability_sources", {})["output_limit"] = make_provenance(
-                            "advertised", observed_at=observed_at
-                        )
-                    if (
-                        existing
-                        and "input_modalities" in item
-                        and _discovery_capability_source(item, "input_modalities")
-                        in {"official", "advertised"}
-                        and _model_capability_source(existing, "input_modalities")
-                        in _DISCOVERY_CAPABILITY_SOURCES
-                    ):
-                        input_modalities_source = _discovery_capability_source(
-                            item, "input_modalities"
-                        )
-                        existing["input_modalities"] = normalize_input_modalities(
-                            item.get("input_modalities")
-                        )
-                        existing.setdefault("capability_sources", {})[
-                            "input_modalities"
-                        ] = make_provenance(
-                            input_modalities_source, observed_at=observed_at
-                        )
-                    if (
-                        existing
-                        and "supports_image_detail_original" in item
-                        and _discovery_capability_source(
-                            item, "supports_image_detail_original"
-                        )
-                        == "advertised"
-                        and _model_capability_source(
-                            existing, "supports_image_detail_original"
-                        )
-                        in _DISCOVERY_CAPABILITY_SOURCES
-                    ):
-                        existing["supports_image_detail_original"] = (
-                            item.get("supports_image_detail_original")
-                            if isinstance(item.get("supports_image_detail_original"), bool)
-                            else False
-                        )
-                        existing.setdefault("capability_sources", {})[
-                            "supports_image_detail_original"
-                        ] = make_provenance("advertised", observed_at=observed_at)
-                    if existing and item.get("created_at") and not existing.get("created_at"):
-                        existing["created_at"] = item["created_at"]
+                    if existing:
+                        for field in _MERGE_SCALAR_FIELDS + _MERGE_LIST_FIELDS:
+                            has_entry = _has_provenance_entry(item, field)
+                            incoming_source = _field_source(item, field)
+                            if not has_entry:
+                                raw_val = item.get(field)
+                                if field in (
+                                    "context_window",
+                                    "output_limit",
+                                    "max_input_tokens",
+                                ):
+                                    incoming_source = "advertised" if raw_val else "unknown"
+                                elif field == "input_modalities":
+                                    incoming_source = input_modalities_metadata_source(raw_val)
+                                elif field == "output_modalities":
+                                    incoming_source = output_modalities_metadata_source(raw_val)
+                                elif field in ("reasoning_levels", "supported_protocols"):
+                                    incoming_source = "advertised" if raw_val else "unknown"
+                            _merge_discovered_field(
+                                existing, item, field, incoming_source, observed_at
+                            )
+                        for field in _MERGE_NESTED_BOOL_FIELDS:
+                            has_entry = _has_provenance_entry(item, field)
+                            incoming_source = _field_source(item, field)
+                            if not has_entry:
+                                incoming_source = "advertised"
+                            _merge_discovered_nested_bool(
+                                existing, item, field, incoming_source, observed_at
+                            )
+                        if item.get("created_at") and not existing.get("created_at"):
+                            existing["created_at"] = item["created_at"]
                     continue
-                supports_reasoning = (
-                    item.get("supports_reasoning")
-                    if isinstance(item.get("supports_reasoning"), bool)
-                    else None
-                )
-                reasoning_levels = list(item.get("reasoning_levels") or [])
-                context_window = int(item.get("context_window", 0) or 0)
-                output_limit = int(
-                    item.get("output_limit", item.get("output_token_limit", 0)) or 0
-                )
-                input_modalities = normalize_input_modalities(item.get("input_modalities"))
-                input_modalities_source = _discovery_capability_source(
-                    item, "input_modalities"
-                )
-                supports_image_detail_original = (
-                    item.get("supports_image_detail_original")
-                    if isinstance(item.get("supports_image_detail_original"), bool)
-                    else False
-                )
-                image_detail_source = _discovery_capability_source(
-                    item, "supports_image_detail_original"
-                )
-                capability_sources = {}
-                reasoning_support_source = _discovery_capability_source(
-                    item, "supports_reasoning"
-                )
-                reasoning_levels_source = _discovery_capability_source(
-                    item, "reasoning_levels"
-                )
-                capability_sources["supports_reasoning"] = make_provenance(
-                    reasoning_support_source, observed_at=observed_at
-                )
-                capability_sources["reasoning_levels"] = make_provenance(
-                    reasoning_levels_source, observed_at=observed_at
-                )
-                if context_window:
-                    capability_sources["context_window"] = make_provenance(
-                        "advertised", observed_at=observed_at
-                    )
-                if output_limit:
-                    capability_sources["output_limit"] = make_provenance(
-                        "advertised", observed_at=observed_at
-                    )
-                capability_sources["input_modalities"] = make_provenance(
-                    input_modalities_source, observed_at=observed_at
-                )
-                capability_sources["supports_image_detail_original"] = make_provenance(
-                    image_detail_source, observed_at=observed_at
-                )
-                model = {
-                    "id": model_id,
-                    "provider": provider_id,
-                    "upstream_id": upstream_id,
-                    "display_name": item.get("display_name") or upstream_id,
-                    "description": item.get("description", ""),
-                    "supports_reasoning": supports_reasoning,
-                    "reasoning_levels": reasoning_levels,
-                    "context_window": context_window,
-                    "output_limit": output_limit,
-                    "created_at": int(item.get("created_at", 0) or 0),
-                    "enabled": True,
-                    "visibility": "list",
-                    "input_modalities": input_modalities,
-                    "supports_image_detail_original": supports_image_detail_original,
-                    "capability_sources": capability_sources,
-                }
+                model = _build_new_model_from_discovery(item, provider_id, observed_at)
                 models.append(model)
                 by_id[model_id] = model
                 added += 1
@@ -1493,7 +1633,16 @@ class AppState:
                 if account is None:
                     raise QuotaError("unknown account: %s" % account_id)
                 target = dict(account)
-            quota = refresh_account_quota(target)
+            # An imported account that duplicates the current native Codex
+            # login has an EMP snapshot that can become stale after Codex
+            # rotates tokens. Query the live native credential instead of the
+            # stale snapshot; do not request token rotation and never persist
+            # back to the EMP vault or mutate the native auth file.
+            duplicates = duplicate_account_status([target])
+            if account_id in duplicates:
+                quota = read_native_login_quota()
+            else:
+                quota = refresh_account_quota(target)
             with self.lock:
                 for item in self.config.get("accounts", []):
                     if item.get("id") == account_id and item.get("auth_file") == target.get("auth_file"):
@@ -1717,10 +1866,204 @@ def make_handler(state: AppState):
 
         def setup(self) -> None:
             super().setup()
+            self._request_started_at = time.monotonic()
+            self._response_status = None
+            self._http_request_logged = False
+            self._unexpected_exception_logged = False
             self.connection.settimeout(30)
             # Reaching a handler means the listener is bound and accepting
             # requests; this is the readiness proof used by enable.
             state.mark_service_ready()
+
+        def _begin_http_request(self) -> None:
+            self._request_started_at = time.monotonic()
+            self._response_status = None
+            self._http_request_logged = False
+            self._unexpected_exception_logged = False
+            self.command = ""
+            self.path = ""
+            self.raw_requestline = b""
+
+        def _declared_request_bytes(self) -> int:
+            headers = getattr(self, "headers", None)
+            raw_value = headers.get("Content-Length", "0") if headers else "0"
+            try:
+                value = int(raw_value)
+            except (TypeError, ValueError):
+                return 0
+            if value < 0:
+                return 0
+            return min(value, _HTTP_REQUEST_BYTES_MAX)
+
+        def _record_http_request_once(self) -> None:
+            if self._http_request_logged:
+                return
+            self._http_request_logged = True
+            if not getattr(self, "raw_requestline", b""):
+                return
+            try:
+                method = self.command if isinstance(self.command, str) else ""
+                raw_path = self.path if isinstance(self.path, str) else ""
+                path = _diagnostic_http_path(raw_path)
+                status = self._response_status
+                elapsed = max(0.0, time.monotonic() - self._request_started_at)
+                duration_ms = min(3_600_000, int(round(elapsed * 1000)))
+                state.journal.event(
+                    "info",
+                    "http_request",
+                    method=method,
+                    path=path,
+                    status=status,
+                    request_bytes=self._declared_request_bytes(),
+                    duration_ms=duration_ms,
+                )
+            except Exception:
+                pass
+
+        def _record_unexpected_exception(self, exception: BaseException) -> None:
+            if self._unexpected_exception_logged:
+                return
+            self._unexpected_exception_logged = True
+            try:
+                state.journal.exception_event(
+                    "error",
+                    "internal_error",
+                    _HTTP_HANDLER_STAGE,
+                    exception,
+                )
+            except Exception:
+                pass
+
+        def _record_management_event(
+            self,
+            event_name: str,
+            started: float,
+            result_class: str,
+            **fields: Any,
+        ) -> None:
+            try:
+                elapsed = max(0.0, time.monotonic() - started)
+                state.journal.event(
+                    "info",
+                    event_name,
+                    duration_ms=min(3_600_000, int(round(elapsed * 1000))),
+                    result_class=result_class,
+                    **fields,
+                )
+            except Exception:
+                pass
+
+        def _management_count(self, value: Any) -> int:
+            result = _safe_diagnostic_int(value, _MANAGEMENT_COUNT_MAX)
+            return result if result is not None else 0
+
+        def _management_failure_class(self, exception: BaseException) -> str:
+            if isinstance(exception, EmptyEmpCatalog):
+                return "empty_catalog"
+            if isinstance(exception, IntegrationError):
+                return "integration_error"
+            if isinstance(exception, QuotaError):
+                return "quota_error"
+            if isinstance(exception, RouterError):
+                return "router_error"
+            if isinstance(exception, ConfigError):
+                return "config_error"
+            if isinstance(exception, ValueError):
+                return "value_error"
+            if isinstance(exception, OSError):
+                return "io_error"
+            return "internal_error"
+
+        def _account_ref(self, account_id: Any) -> str:
+            if not isinstance(account_id, str) or not account_id:
+                return ""
+            try:
+                value = state.journal.pseudonym(account_id)
+                return value if isinstance(value, str) else ""
+            except Exception:
+                return ""
+
+        def _integration_operation_fields(
+            self,
+            operation: str,
+            summary: Optional[Mapping[str, Any]],
+        ) -> Dict[str, Any]:
+            configuration = (
+                summary.get("configuration", {})
+                if isinstance(summary, Mapping)
+                else {}
+            )
+            if not isinstance(configuration, Mapping):
+                configuration = {}
+            return {
+                "operation": operation,
+                "state": _safe_diagnostic_text(
+                    configuration.get("state"), _DIAGNOSTIC_ID
+                )
+                or "unknown",
+                "relation": _safe_diagnostic_text(
+                    configuration.get("relation"), _DIAGNOSTIC_ID
+                )
+                or "unknown",
+                "conflicts": _safe_diagnostic_sequence(
+                    configuration.get("conflicts")
+                ),
+            }
+
+        def _migration_numeric_fields(
+            self, summary: Optional[Mapping[str, Any]]
+        ) -> Dict[str, Any]:
+            fields = {}
+            if not isinstance(summary, Mapping):
+                return fields
+            forbidden_fragments = (
+                "auth",
+                "bundle",
+                "credential",
+                "key",
+                "password",
+                "path",
+                "secret",
+                "token",
+            )
+            for raw_key, value in summary.items():
+                key = raw_key if isinstance(raw_key, str) else ""
+                lowered = key.lower()
+                if (
+                    not _MANAGEMENT_SCALAR_KEY.fullmatch(key)
+                    or key in {"duration_ms", "operation", "result_class"}
+                    or any(fragment in lowered for fragment in forbidden_fragments)
+                ):
+                    continue
+                if isinstance(value, bool):
+                    fields[key] = value
+                elif isinstance(value, int):
+                    fields[key] = self._management_count(value)
+            return fields
+
+        def handle_one_request(self) -> None:
+            self._begin_http_request()
+            try:
+                super().handle_one_request()
+            except Exception as exc:
+                self._record_unexpected_exception(exc)
+                raise
+            finally:
+                self._record_http_request_once()
+
+        def finish(self) -> None:
+            try:
+                super().finish()
+            finally:
+                self._record_http_request_once()
+
+        def send_response(self, code: int, message: Optional[str] = None) -> None:
+            try:
+                status = int(code)
+            except (TypeError, ValueError):
+                status = None
+            self._response_status = status if status is not None and 100 <= status <= 599 else None
+            super().send_response(code, message)
 
         def log_message(self, format: str, *args: Any) -> None:
             # The bootstrap URL contains a one-time secret; never log its query.
@@ -1922,6 +2265,7 @@ def make_handler(state: AppState):
                     "Sec-WebSocket-Accept: %s\r\n\r\n" % accept
                 ).encode("ascii")
             )
+            self._response_status = 101
             self.wfile.flush()
             self.close_connection = True
             self.connection.settimeout(180)
@@ -2082,7 +2426,8 @@ def make_handler(state: AppState):
                 return
             except WebSocketProtocolError as exc:
                 websocket.close(exc.code, str(exc))
-            except Exception:
+            except Exception as exc:
+                self._record_unexpected_exception(exc)
                 websocket.close(1011, "internal server error")
             finally:
                 last_response_id = None
@@ -2188,6 +2533,79 @@ def make_handler(state: AppState):
             if path in ("/v1/responses", "/v1/responses/compact", "/v1/alpha/search") and not self._proxy_allowed():
                 self._error(401 if self._same_origin() else 403, "proxy caller authentication is required")
                 return
+            operation_started = time.monotonic()
+            operation_logged = False
+            body: Dict[str, Any] = {}
+
+            def emit_operation(
+                event_name: str, result_class: str, **fields: Any
+            ) -> None:
+                nonlocal operation_logged
+                if operation_logged:
+                    return
+                operation_logged = True
+                self._record_management_event(
+                    event_name,
+                    operation_started,
+                    result_class,
+                    **fields,
+                )
+
+            def emit_operation_failure(exception: BaseException) -> None:
+                result_class = self._management_failure_class(exception)
+                if path == "/api/providers/discover":
+                    selected = body.get("selected")
+                    emit_operation(
+                        "provider_discovery",
+                        result_class,
+                        provider_id=_safe_diagnostic_text(
+                            body.get("provider"), _DIAGNOSTIC_ID
+                        ),
+                        available=0,
+                        selected=self._management_count(
+                            len(selected) if isinstance(selected, list) else 0
+                        ),
+                        added=0,
+                        hidden=0,
+                        model_count=0,
+                    )
+                elif path == "/api/catalog/refresh":
+                    emit_operation(
+                        "catalog_refresh",
+                        result_class,
+                        visible_model_count=0,
+                    )
+                elif path.startswith("/api/integration/"):
+                    operation = path.rsplit("/", 1)[-1]
+                    if operation in {"enable", "restore", "reload"}:
+                        emit_operation(
+                            "integration_operation",
+                            result_class,
+                            **self._integration_operation_fields(operation, None),
+                        )
+                elif path == "/api/accounts/import":
+                    emit_operation(
+                        "account_operation",
+                        result_class,
+                        operation="import",
+                        account_ref=self._account_ref(body.get("id")),
+                    )
+                elif path.startswith("/api/accounts/") and path.endswith("/quota"):
+                    account_id = unquote(
+                        path[len("/api/accounts/") : -len("/quota")].rstrip("/")
+                    )
+                    emit_operation(
+                        "account_operation",
+                        result_class,
+                        operation="quota_refresh",
+                        account_ref=self._account_ref(account_id),
+                    )
+                elif path in {"/api/migration/import", "/api/migration/export"}:
+                    emit_operation(
+                        "migration_operation",
+                        result_class,
+                        operation=path.rsplit("/", 1)[-1],
+                    )
             try:
                 body = self._body(
                     32 * 1024 * 1024
@@ -2208,6 +2626,11 @@ def make_handler(state: AppState):
                         summary["error"] = {
                             "message": "Confirmation is required before reconnecting Codex"
                         }
+                        emit_operation(
+                            "integration_operation",
+                            "confirmation_required",
+                            **self._integration_operation_fields("enable", summary),
+                        )
                         self._send(409, _json_bytes(summary))
                         return
                     try:
@@ -2220,6 +2643,11 @@ def make_handler(state: AppState):
                             confirm_reload=True,
                         )
                         summary = _integration_summary(state, result)
+                        emit_operation(
+                            "integration_operation",
+                            "success" if result.ok else "conflict",
+                            **self._integration_operation_fields("enable", summary),
+                        )
                         self._send(
                             200 if result.ok else 409,
                             _json_bytes(summary),
@@ -2230,8 +2658,18 @@ def make_handler(state: AppState):
                             "code": "empty_emp_catalog",
                             "message": "Add or show at least one EMP model before enabling Codex",
                         }
+                        emit_operation(
+                            "integration_operation",
+                            "empty_catalog",
+                            **self._integration_operation_fields("enable", summary),
+                        )
                         self._send(409, _json_bytes(summary))
                     except (IntegrationError, OSError) as exc:
+                        emit_operation(
+                            "integration_operation",
+                            "integration_error",
+                            **self._integration_operation_fields("enable", None),
+                        )
                         self._error(409, _integration_error_message(exc))
                     return
                 if path == "/api/integration/restore":
@@ -2240,16 +2678,31 @@ def make_handler(state: AppState):
                         summary["error"] = {
                             "message": "Confirmation is required before reconnecting Codex"
                         }
+                        emit_operation(
+                            "integration_operation",
+                            "confirmation_required",
+                            **self._integration_operation_fields("restore", summary),
+                        )
                         self._send(409, _json_bytes(summary))
                         return
                     try:
                         result = state.restore_integration(confirm_reload=True)
                         summary = _integration_summary(state, result)
+                        emit_operation(
+                            "integration_operation",
+                            "success" if result.ok else "conflict",
+                            **self._integration_operation_fields("restore", summary),
+                        )
                         self._send(
                             200 if result.ok else 409,
                             _json_bytes(summary),
                         )
                     except (IntegrationError, OSError) as exc:
+                        emit_operation(
+                            "integration_operation",
+                            "integration_error",
+                            **self._integration_operation_fields("restore", None),
+                        )
                         self._error(409, _integration_error_message(exc))
                     return
                 if path == "/api/integration/reload":
@@ -2263,6 +2716,11 @@ def make_handler(state: AppState):
                     }
                     if not successful:
                         summary["error"] = {"message": result.detail}
+                    emit_operation(
+                        "integration_operation",
+                        "success" if successful else "runtime_failure",
+                        **self._integration_operation_fields("reload", summary),
+                    )
                     self._send(
                         200 if successful else 409,
                         _json_bytes(summary),
@@ -2278,15 +2736,57 @@ def make_handler(state: AppState):
                         raise ConfigError("provider is required")
                     selected = body.get("selected") if "selected" in body else None
                     result = state.discover_provider_models(provider_id, selected)
+                    discovered_models = result.get("models")
+                    emit_operation(
+                        "provider_discovery",
+                        "success",
+                        provider_id=_safe_diagnostic_text(
+                            provider_id, _DIAGNOSTIC_ID
+                        ),
+                        available=self._management_count(result.get("available")),
+                        selected=self._management_count(
+                            len(selected) if isinstance(selected, list) else 0
+                        ),
+                        added=self._management_count(result.get("added")),
+                        hidden=self._management_count(result.get("hidden")),
+                        model_count=self._management_count(
+                            result.get("model_count")
+                            if "model_count" in result
+                            else len(discovered_models)
+                            if isinstance(discovered_models, list)
+                            else 0
+                        ),
+                    )
                     self._send(200, _json_bytes(result))
                     return
                 if path == "/api/accounts/import":
                     auth_json = body.pop("auth_json", None)
                     account = state.import_account(body, auth_json)
+                    emit_operation(
+                        "account_operation",
+                        "success",
+                        operation="import",
+                        account_ref=self._account_ref(account.get("id")),
+                    )
                     self._send(200, _json_bytes({"account": public_accounts([account])[0]}))
                     return
                 if path == "/api/migration/export":
                     bundle = state.export_migration(body.get("password"))
+                    migration_snapshot = state.snapshot()
+                    emit_operation(
+                        "migration_operation",
+                        "success",
+                        operation="export",
+                        accounts=self._management_count(
+                            len(migration_snapshot.get("accounts", []))
+                        ),
+                        providers=self._management_count(
+                            len(migration_snapshot.get("providers", []))
+                        ),
+                        models=self._management_count(
+                            len(migration_snapshot.get("models", []))
+                        ),
+                    )
                     self._send(
                         200,
                         bundle,
@@ -2306,22 +2806,42 @@ def make_handler(state: AppState):
                     except (UnicodeEncodeError, ValueError) as exc:
                         raise ConfigError("migration bundle is not valid base64") from exc
                     summary = state.import_migration(bundle, body.get("password"))
+                    emit_operation(
+                        "migration_operation",
+                        "success",
+                        operation="import",
+                        **self._migration_numeric_fields(summary),
+                    )
                     self._send(200, _json_bytes({"status": "ok", **summary}))
                     return
                 if path.startswith("/api/accounts/") and path.endswith("/quota"):
                     account_id = unquote(path[len("/api/accounts/") : -len("/quota")].rstrip("/"))
                     account = state.refresh_account(account_id)
+                    emit_operation(
+                        "account_operation",
+                        "success",
+                        operation="quota_refresh",
+                        account_ref=self._account_ref(account_id),
+                    )
                     self._send(200, _json_bytes({"account": public_accounts([account])[0]}))
                     return
                 if path == "/api/catalog/refresh":
                     catalog_path = state.refresh_catalog()
+                    visible_model_count = len(build_catalog(state.snapshot())["models"])
+                    emit_operation(
+                        "catalog_refresh",
+                        "success",
+                        visible_model_count=self._management_count(
+                            visible_model_count
+                        ),
+                    )
                     self._send(
                         200,
                         _json_bytes(
                             {
                                 "status": "ok",
                                 "catalog_path": str(catalog_path.resolve()),
-                                "model_count": len(build_catalog(state.snapshot())["models"]),
+                                "model_count": visible_model_count,
                             }
                         ),
                     )
@@ -2410,11 +2930,14 @@ def make_handler(state: AppState):
                     return
                 self._error(404, "not found")
             except (ConfigError, RouterError, QuotaError, ValueError) as exc:
+                emit_operation_failure(exc)
                 status = exc.status if isinstance(exc, RouterError) else 400
                 if isinstance(exc, QuotaError):
                     status = 503
                 self._error(status, str(exc))
             except Exception as exc:  # Keep server alive and avoid leaking request details.
+                emit_operation_failure(exc)
+                self._record_unexpected_exception(exc)
                 self._error(500, "internal server error: %s" % exc)
 
         def do_DELETE(self) -> None:
@@ -2422,16 +2945,36 @@ def make_handler(state: AppState):
             if path.startswith("/api/") and not self._management_allowed():
                 self._error(401 if self._same_origin() else 403, "management session is required")
                 return
+            operation_started = time.monotonic()
+            operation_logged = False
+            account_id = ""
+
+            def emit_account_operation(result_class: str) -> None:
+                nonlocal operation_logged
+                if operation_logged or not path.startswith("/api/accounts/"):
+                    return
+                operation_logged = True
+                self._record_management_event(
+                    "account_operation",
+                    operation_started,
+                    result_class,
+                    operation="delete",
+                    account_ref=self._account_ref(account_id),
+                )
             try:
                 if path.startswith("/api/accounts/"):
                     account_id = unquote(path[len("/api/accounts/") :].rstrip("/"))
                     state.delete_account(account_id)
+                    emit_account_operation("success")
                     self._send(200, _json_bytes({"status": "ok"}))
                     return
                 self._error(404, "not found")
             except (ConfigError, QuotaError, ValueError) as exc:
+                emit_account_operation(self._management_failure_class(exc))
                 self._error(400, str(exc))
             except Exception as exc:  # Keep server alive and avoid leaking request details.
+                emit_account_operation(self._management_failure_class(exc))
+                self._record_unexpected_exception(exc)
                 self._error(500, "internal server error: %s" % exc)
 
     return Handler
@@ -2511,45 +3054,235 @@ def startup_reconcile(state: AppState, server: BoundedThreadingHTTPServer) -> In
     return result
 
 
-def serve(path: Optional[Path] = None, host: Optional[str] = None, port: Optional[int] = None) -> None:
-    if host and host != "127.0.0.1":
-        raise ConfigError("host must be 127.0.0.1 for local-only management")
-    ensure_master_key()
-    proxy_source = configure_proxy_environment()
-    paths = resolve_integration_paths()
-    manager = IntegrationManager(
-        paths.config_path,
-        paths.lease_path,
-        lock_path=paths.lock_path,
-    )
-    state = AppState(
-        path,
-        integration_manager=manager,
-        catalog_path=generated_catalog_path(paths.codex_home),
-    )
-    if host:
-        state.config["host"] = host
-    if port is not None:
-        state.config["port"] = port
-    config = state.snapshot()
-    bind_host = host or config["host"]
-    bind_port = port if port is not None else config["port"]
-    server = BoundedThreadingHTTPServer((bind_host, bind_port), make_handler(state))
-    base_url = _bound_base_url(server.server_address).rsplit("/v1", 1)[0]
-    previous_sigterm = _install_sigterm_handler()
+def _journal_event(journal: Any, level: str, event_name: str, **fields: Any) -> None:
     try:
-        startup_reconcile(state, server)
-        print("EasyMultiProvider listening on %s" % base_url, flush=True)
-        print("Network proxy: %s" % proxy_source, flush=True)
-        print("Open in browser: %s/?bootstrap=%s" % (base_url, state.bootstrap_token), flush=True)
-        server.serve_forever()
-    except (KeyboardInterrupt, _GracefulShutdown):
+        journal.event(level, event_name, **fields)
+    except Exception:
         pass
+
+
+def _journal_exception(
+    journal: Any,
+    level: str,
+    event_name: str,
+    stage: str,
+    exception: BaseException,
+) -> None:
+    try:
+        journal.exception_event(level, event_name, stage, exception)
+    except Exception:
+        pass
+
+
+def _lifecycle_result_fields(result: Any) -> Dict[str, Any]:
+    try:
+        conflicts = getattr(result, "conflicts", ())
+        return {
+            "action": _safe_diagnostic_text(
+                getattr(result, "action", ""), _DIAGNOSTIC_ID
+            ),
+            "state": _safe_diagnostic_text(
+                getattr(result, "state", ""), _DIAGNOSTIC_ID
+            ),
+            "relation": _safe_diagnostic_text(
+                getattr(result, "relation", ""), _DIAGNOSTIC_ID
+            ),
+            "conflicts": _safe_diagnostic_sequence(
+                list(conflicts) if isinstance(conflicts, (list, tuple)) else []
+            ),
+            "result_class": (
+                "success" if bool(getattr(result, "ok", False)) else "conflict"
+            ),
+        }
+    except Exception:
+        return {
+            "action": "",
+            "state": "",
+            "relation": "",
+            "conflicts": [],
+            "result_class": "unknown",
+        }
+
+
+def serve(path: Optional[Path] = None, host: Optional[str] = None, port: Optional[int] = None) -> None:
+    effective_config_path = Path(path or config_path())
+    try:
+        journal = create_journal(effective_config_path.parent)
+    except Exception:
+        journal = NullJournal()
+
+    state = None
+    server = None
+    previous_sigterm = None
+    shutdown_reason = "startup_failure"
+    stage = "host_validation"
+    try:
+        try:
+            if host and host != "127.0.0.1":
+                raise ConfigError("host must be 127.0.0.1 for local-only management")
+
+            stage = "ensure_master_key"
+            ensure_master_key()
+            stage = "proxy_config"
+            proxy_source = configure_proxy_environment()
+            stage = "integration_paths"
+            paths = resolve_integration_paths()
+            stage = "integration_manager"
+            manager = IntegrationManager(
+                paths.config_path,
+                paths.lease_path,
+                lock_path=paths.lock_path,
+            )
+            stage = "app_state"
+            state = AppState(
+                effective_config_path,
+                integration_manager=manager,
+                catalog_path=generated_catalog_path(paths.codex_home),
+                journal=journal,
+            )
+            if host:
+                state.config["host"] = host
+            if port is not None:
+                state.config["port"] = port
+            config = state.snapshot()
+            bind_host = host or config["host"]
+            bind_port = port if port is not None else config["port"]
+            stage = "listener_bind"
+            server = BoundedThreadingHTTPServer((bind_host, bind_port), make_handler(state))
+            base_url = _bound_base_url(server.server_address).rsplit("/v1", 1)[0]
+            previous_sigterm = _install_sigterm_handler()
+
+            _journal_event(
+                journal,
+                "info",
+                "process_start",
+                emp_version=__version__,
+                python_version=platform.python_version(),
+                platform_family=(platform.system() or "unknown").lower(),
+                pid=os.getpid(),
+                host=bind_host,
+                port=bind_port,
+                account_count=len(config.get("accounts", [])),
+                provider_count=len(config.get("providers", [])),
+                model_count=len(config.get("models", [])),
+            )
+            safe_proxy_source = (
+                proxy_source
+                if proxy_source in ("environment", "system", "direct")
+                else "unknown"
+            )
+            _journal_event(
+                journal,
+                "info",
+                "proxy_selected",
+                source=safe_proxy_source,
+            )
+
+            stage = "startup_reconcile"
+            reconcile_started = time.monotonic()
+            reconcile_result = startup_reconcile(state, server)
+            reconcile_fields = _lifecycle_result_fields(reconcile_result)
+            reconcile_fields["duration_ms"] = max(
+                0, int((time.monotonic() - reconcile_started) * 1000)
+            )
+            _journal_event(
+                journal,
+                "info",
+                "startup_reconcile",
+                **reconcile_fields,
+            )
+            listening_host, listening_port = server.server_address[:2]
+            _journal_event(
+                journal,
+                "info",
+                "service_listening",
+                host=str(listening_host),
+                port=int(listening_port),
+            )
+
+            print("EasyMultiProvider listening on %s" % base_url, flush=True)
+            print("Network proxy: %s" % proxy_source, flush=True)
+            print(
+                "Open in browser: %s/?bootstrap=%s" % (base_url, state.bootstrap_token),
+                flush=True,
+            )
+            try:
+                if journal.enabled and journal.current_path is not None:
+                    print("Diagnostic log: %s" % journal.current_path, flush=True)
+            except Exception:
+                pass
+        except Exception as exc:
+            _journal_exception(journal, "error", "startup_failure", stage, exc)
+            raise
+
+        try:
+            shutdown_reason = "server_stopped"
+            server.serve_forever()
+        except KeyboardInterrupt:
+            shutdown_reason = "keyboard_interrupt"
+        except _GracefulShutdown:
+            shutdown_reason = "sigterm"
+        except Exception as exc:
+            shutdown_reason = "internal_error"
+            _journal_exception(journal, "error", "internal_error", "serve_forever", exc)
+            raise
     finally:
+        active_exception = sys.exc_info()[1] is not None
+        _journal_event(
+            journal,
+            "info",
+            "shutdown_start",
+            reason=shutdown_reason,
+        )
+        restore_result = None
+        restore_error = None
+        close_error = None
         try:
             _restore_sigterm_handler(previous_sigterm)
         finally:
             try:
-                state.shutdown_restore()
+                if state is not None:
+                    restore_result = state.shutdown_restore()
+            except Exception as exc:
+                restore_error = exc
             finally:
-                server.server_close()
+                try:
+                    if server is not None:
+                        server.server_close()
+                except Exception as exc:
+                    close_error = exc
+
+        if restore_result is not None:
+            restore_fields = _lifecycle_result_fields(restore_result)
+        elif restore_error is not None:
+            restore_fields = {
+                "action": "",
+                "state": "",
+                "relation": "",
+                "result_class": restore_error.__class__.__name__,
+            }
+        else:
+            restore_fields = {
+                "action": "",
+                "state": "",
+                "relation": "",
+                "result_class": "not_started",
+            }
+        restore_fields.pop("conflicts", None)
+        restore_fields["reason"] = shutdown_reason
+        _journal_event(
+            journal,
+            "info",
+            "shutdown_complete",
+            **restore_fields,
+        )
+        try:
+            journal.close()
+        except Exception:
+            pass
+
+        if not active_exception:
+            if close_error is not None:
+                raise close_error
+            if restore_error is not None:
+                raise restore_error

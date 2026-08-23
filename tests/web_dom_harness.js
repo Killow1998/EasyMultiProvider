@@ -243,11 +243,59 @@ function modelGroupBehavior() {
   assert(html.indexOf("provider-b/old") < html.indexOf("provider-b/hidden"), "hidden models must sort last");
 }
 
+function officialPresetBehavior() {
+  const presets = run("officialProviders");
+  assert.strictEqual(presets.openrouter.base_url, "https://openrouter.ai/api/v1");
+  assert.strictEqual(presets.openrouter.protocol, "responses");
+  assert.strictEqual(presets.openrouter.auth_mode, "api_key");
+  assert.strictEqual(presets.xai.base_url, "https://api.x.ai/v1");
+  assert.strictEqual(presets.xai.protocol, "responses");
+  assert.strictEqual(presets.xai.auth_mode, "api_key");
+  assert.strictEqual(presets.moonshot.base_url, "https://api.moonshot.ai/v1");
+  assert.strictEqual(presets.moonshot.protocol, "chat_completions");
+  assert.strictEqual(presets.moonshot.auth_mode, "api_key");
+  assert.strictEqual(presets.zhipu.base_url, "https://api.z.ai/api/paas/v4");
+  assert.strictEqual(presets.zhipu.protocol, "chat_completions");
+  assert.strictEqual(presets.zhipu.auth_mode, "api_key");
+  assert.strictEqual(presets.deepseek.base_url, "https://api.deepseek.com");
+  assert(!("meta" in presets), "Meta must not be an official preset");
+}
+
+function capabilityMetadataBehavior() {
+  context.__testMultimodal = [{id:'provider-a/multimodal',provider:'provider-a',upstream_id:'multimodal',enabled:true,input_modalities:['text','image'],output_modalities:['text','audio'],supported_protocols:['responses','chat_completions'],capability_sources:{input_modalities:{source:'official'},output_modalities:{source:'advertised'},supported_protocols:{source:'observed'}}}];
+  context.__testUnconfirmed = [{id:'provider-a/unconfirmed',provider:'provider-a',upstream_id:'unconfirmed',enabled:true,input_modalities:['text','image'],capability_sources:{input_modalities:{source:'unknown'}}}];
+  run("__testState = {providers:[{id:'provider-a',name:'Provider A'}],models:[]}");
+  run("state.models.push(...__testMultimodal); state.models.push(...__testUnconfirmed); renderModels()");
+  const html = getElement("models").innerHTML;
+  assert.match(html, /输入 文本\/图像/, "confirmed input modalities must display");
+  assert.match(html, /输出 文本\/音频/, "confirmed output modalities must display");
+  assert.match(html, /Responses\/Chat Completions/, "confirmed protocols must display");
+  const unconfirmedStart = html.indexOf("unconfirmed");
+  const unconfirmedEnd = html.indexOf("</tr>", unconfirmedStart);
+  const unconfirmedCell = unconfirmedEnd > unconfirmedStart ? html.substring(unconfirmedStart, unconfirmedEnd) : "";
+  assert.doesNotMatch(unconfirmedCell, /输入 文本/, "unknown provenance must not display as confirmed support");
+
+  context.__testPickerModels = [
+    {upstream_id:'multimodal',display_name:'Multimodal Model',input_modalities:['text','image'],output_modalities:['text','audio'],supported_protocols:['responses','chat_completions'],capability_sources:{input_modalities:{source:'official'},output_modalities:{source:'advertised'},supported_protocols:{source:'observed'}}},
+    {upstream_id:'unconfirmed',display_name:'Unconfirmed Model',input_modalities:['text','image'],capability_sources:{input_modalities:{source:'unknown'}}}
+  ];
+  run("__testState2 = {providers:[{id:'provider-a',name:'Provider A'}],models:[]}; state = __testState2; openModelImportModal('provider-a', __testPickerModels)");
+  const pickerHtml = getElement("modal_body").innerHTML;
+  assert.match(pickerHtml, /输入 文本\/图像/, "confirmed input modalities must show in picker");
+  assert.match(pickerHtml, /输出 文本\/音频/, "confirmed output modalities must show in picker");
+  assert.match(pickerHtml, /Responses\/Chat Completions/, "confirmed protocols must show in picker");
+  const pickerSplit = getElement("modal_body").innerHTML.split("Unconfirmed Model")[1];
+  const pickerUnconfirmedHtml = pickerSplit ? pickerSplit.split("</label>")[0] : "";
+  assert.doesNotMatch(pickerUnconfirmedHtml, /输入 文本/, "unknown provenance must not display as confirmed support in picker");
+}
+
 (async () => {
   await integrationBehavior();
   pickerBehavior();
   duplicateAccountBehavior();
   modelGroupBehavior();
+  officialPresetBehavior();
+  capabilityMetadataBehavior();
   process.stdout.write("web DOM behavior: ok\n");
 })().catch(error => {
   console.error(error.stack || error);
