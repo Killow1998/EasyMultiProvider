@@ -28,6 +28,13 @@ class WebSocketProtocolError(TransportError):
         self.code = code
 
 
+def zstd_encode(value: bytes) -> bytes:
+    try:
+        return zstandard.ZstdCompressor().compress(value)
+    except zstandard.ZstdError as exc:
+        raise TransportError("zstd request compression failed") from exc
+
+
 def _zlib_decode(value: bytes, wbits: int, max_length: int) -> bytes:
     decoder = zlib.decompressobj(wbits)
     decoded = bytearray()

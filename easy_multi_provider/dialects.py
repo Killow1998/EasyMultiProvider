@@ -346,7 +346,39 @@ def _native_input(source: Any) -> Any:
     if not isinstance(source, list):
         return copy.deepcopy(source)
     result = []
-    for item in source:
+    for index, item in enumerate(source):
+        if isinstance(item, Mapping) and item.get("type") == "compaction":
+            encoded = item.get("encrypted_content")
+            if isinstance(encoded, str) and encoded.startswith(_COMPACTION_PREFIX):
+                try:
+                    summary = base64.b64decode(
+                        encoded[len(_COMPACTION_PREFIX) :],
+                        altchars=b"-_",
+                        validate=True,
+                    ).decode("utf-8")
+                except (UnicodeDecodeError, ValueError):
+                    raise ProjectionError(
+                        index, "compaction", (), "invalid_compaction"
+                    ) from None
+                if not summary:
+                    raise ProjectionError(
+                        index, "compaction", (), "invalid_compaction"
+                    )
+                result.append(
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": _COMPACTION_SUMMARY_PREFIX
+                                + "\n\n"
+                                + summary,
+                            }
+                        ],
+                    }
+                )
+                continue
         if not isinstance(item, Mapping) or item.get("type") != "reasoning":
             result.append(copy.deepcopy(item))
             continue
@@ -460,9 +492,17 @@ def project_response(
         projected.pop(field, None)
     output = []
     custom_names = custom_names or set()
-    for item in projected.get("output", []) if isinstance(projected.get("output"), list) else []:
+    for index, item in enumerate(
+        projected.get("output", [])
+        if isinstance(projected.get("output"), list)
+        else []
+    ):
         if not isinstance(item, Mapping) or item.get("type") == "reasoning":
             continue
+        if item.get("type") == "compaction":
+            raise ProjectionError(
+                index, "compaction", (), "external_compaction"
+            )
         clean = copy.deepcopy(dict(item))
         for field in ("reasoning", "reasoning_text", "reasoning_content", "thinking"):
             clean.pop(field, None)
@@ -571,6 +611,14 @@ def project_stream_event(
         return projected
     event_type = str(projected.get("type") or "").lower()
     item = projected.get("item")
+    if isinstance(item, Mapping) and item.get("type") == "compaction":
+        output_index = projected.get("output_index")
+        index = (
+            output_index
+            if isinstance(output_index, int) and not isinstance(output_index, bool)
+            else 0
+        )
+        raise ProjectionError(index, "compaction", (), "external_compaction")
     if isinstance(item, Mapping) and item.get("type") == "reasoning":
         item_id = item.get("id")
         if isinstance(item_id, str) and item_id:

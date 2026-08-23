@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.6.0 (2026-08-23)
+
+### Product
+
+- Unified native-login, imported-subscription, and external Provider models in
+  one stable catalog with compact context labels, deterministic grouping, and
+  provider-qualified external slugs across the CLI, TUI, and desktop app.
+- Added capability-aware Responses dialect projection for text, image,
+  reasoning, structured tools, and external Codex child workers without making
+  EMP the owner of tasks, permissions, or persisted history.
+- Made external compaction EMP-owned and portable, while rejecting unknown or
+  unexpected Provider-owned opaque state instead of silently dropping history.
+- Added encrypted, content-free native compaction bindings and exact-source
+  handoff so model switches among the current login, imported subscriptions,
+  and external Providers can preserve compacted task context without storing a
+  second conversation history.
+- Added protocol-specific recoverable handoff failures: structured HTTP 409,
+  one terminal SSE failure, and one request-scoped WebSocket failure that leaves
+  the connection usable for the next request.
+- Preserved native Codex Zstandard request compression and added one bounded
+  pre-header retry using identical encoded bytes, while leaving external routes
+  uncompressed unless explicitly supported.
+- Added request-local compression diagnostics and bounded concurrency evidence
+  without recording prompts, responses, tool payloads, opaque state, headers,
+  endpoints, account IDs, or credentials.
+
+### Verification
+
+- Passed the seven focused v0.6 modules with 278 tests and the bounded complete
+  suite with 731 tests; the two existing opt-in live Provider/Codex checks
+  remained skipped.
+- Proved six simultaneous mixed native/external, streaming/non-streaming
+  requests overlap without slot rejection or cross-request diagnostic state,
+  including exact native zstd round-trip equality.
+- Passed compile, lock consistency, whitespace, ignored-local-state, and
+  secret/private-data checks using offline fixtures and temporary loopback
+  servers only.
+
 ## 0.5.0 (2026-08-22)
 
 ### Product

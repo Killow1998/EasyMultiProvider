@@ -30,6 +30,12 @@ from easy_multi_provider.codex_runtime import (
     RuntimeSyncResult,
     TargetedCodexHostStopper,
 )
+from easy_multi_provider.continuity import (
+    BindingMissing,
+    CompactionBindingStore,
+    binding_for_opaque,
+    derive_native_route_identity,
+)
 from easy_multi_provider.integration import IntegrationManager, ServiceNotReady
 from easy_multi_provider.vault import MASTER_KEY_ENV, MASTER_KEY_FILE_ENV
 from easy_multi_provider.server import (
@@ -1077,7 +1083,7 @@ class ServerAccountTests(unittest.TestCase):
             entered_upstream = threading.Barrier(2, timeout=2)
             statuses = []
 
-            def fake_proxy(*args):
+            def fake_proxy(*args, **kwargs):
                 entered_upstream.wait()
                 return {"kind": "json", "status": 200, "content_type": "application/json"}, b"{}"
 
@@ -1704,6 +1710,9 @@ class ServerAccountTests(unittest.TestCase):
             "recovery_succeeded",
             "recovery_mode",
             "request_bytes",
+            "decoded_request_bytes",
+            "upstream_request_bytes",
+            "upstream_content_encoding",
             "response_bytes",
             "duration_ms",
             "status",
@@ -1719,6 +1728,13 @@ class ServerAccountTests(unittest.TestCase):
             "context_estimate_method",
             "context_reserves",
             "context_completeness",
+            "source_binding_result",
+            "same_domain",
+            "handoff_attempted",
+            "handoff_succeeded",
+            "item_index",
+            "item_type",
+            "continuity_reason",
         }
         for record in snapshot["records"]:
             self.assertEqual(set(record), expected)
@@ -1802,6 +1818,9 @@ class ServerAccountTests(unittest.TestCase):
                     "recovery_succeeded",
                     "recovery_mode",
                     "request_bytes",
+                    "decoded_request_bytes",
+                    "upstream_request_bytes",
+                    "upstream_content_encoding",
                     "response_bytes",
                     "duration_ms",
                     "status",
@@ -1817,6 +1836,13 @@ class ServerAccountTests(unittest.TestCase):
                     "context_estimate_method",
                     "context_reserves",
                     "context_completeness",
+                    "source_binding_result",
+                    "same_domain",
+                    "handoff_attempted",
+                    "handoff_succeeded",
+                    "item_index",
+                    "item_type",
+                    "continuity_reason",
                 })
                 serialized = json.dumps(payload)
                 self.assertNotIn("secret", serialized)
@@ -1935,7 +1961,7 @@ class ServerAccountTests(unittest.TestCase):
 
             captured = {}
 
-            def proxy_request(config, body, incoming, on_observation, on_context):
+            def proxy_request(config, body, incoming, on_observation, on_context, **kwargs):
                 captured["body"] = body
                 return (
                     {"kind": "body", "status": 200, "content_type": "application/json"},
@@ -3149,6 +3175,402 @@ class ServerAccountTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+
+
+class ContinuityAppStateTests(unittest.TestCase):
+    def _write_config(self, config_path: Path) -> None:
+        save(
+            normalize(
+                {
+                    "providers": [
+                        {
+                            "id": "native",
+                            "enabled": True,
+                            "auth_mode": "forward",
+                            "protocol": "responses",
+                            "base_url": "https://native.example/backend-api/codex",
+                        }
+                    ],
+                    "models": [
+                        {
+                            "id": "native/model-a",
+                            "provider": "native",
+                            "upstream_id": "model-a",
+                            "enabled": True,
+                        }
+                    ],
+                }
+            ),
+            config_path,
+        )
+
+    def test_app_state_owns_single_binding_store_with_persistence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            self._write_config(config_path)
+
+            state = AppState(config_path)
+            store = state.compaction_bindings
+            expected = root / "state" / "continuity-bindings.enc"
+            self.assertIsInstance(store, CompactionBindingStore)
+            self.assertIs(state.compaction_bindings, store)
+
+            identity = derive_native_route_identity(
+                {"chatgpt-account-id": "account-1"},
+                "https://native.example/backend-api/codex",
+                "deployment-1",
+                "model-a-upstream",
+                "native/model-a",
+            )
+            opaque = "opaque-restart-secret"
+            store.register(binding_for_opaque(identity, opaque))
+
+            fresh = AppState(config_path)
+            binding = fresh.compaction_bindings.lookup(opaque)
+            self.assertEqual(
+                binding.trust_domain.auth_identity,
+                identity.trust_domain.auth_identity,
+            )
+            self.assertNotIn(opaque, repr(binding))
+
+    def test_route_passes_binding_store_and_registers_native_json_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path)
+            response_bytes = json.dumps(
+                {
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "compaction",
+                            "encrypted_content": "opaque-json-success-secret",
+                        }
+                    ],
+                }
+            ).encode("utf-8")
+            captured = {}
+
+            def fake_proxy(config, body, incoming, on_observation=None, on_context=None, binding_store=None, on_native_response=None, on_stream_event=None, **kwargs):
+                captured["binding_store"] = binding_store
+                captured["on_native_response"] = on_native_response
+                captured["incoming"] = incoming
+                return (
+                    {"kind": "body", "status": 200, "content_type": "application/json"},
+                    response_bytes,
+                )
+
+            with patch("easy_multi_provider.server.proxy", side_effect=fake_proxy):
+                metadata, result = state.route(
+                    {"model": "native/model-a", "input": "hello"},
+                    {"ChatGPT-Account-ID": "account-1"},
+                )
+            self.assertEqual(metadata["status"], 200)
+            self.assertIs(captured["binding_store"], state.compaction_bindings)
+            self.assertIsNotNone(captured["on_native_response"])
+            identity = derive_native_route_identity(
+                {"chatgpt-account-id": "account-1"},
+                "https://native.example/backend-api/codex",
+                "deployment-1",
+                "model-a",
+                "native/model-a",
+            )
+            captured["on_native_response"](
+                {"id": "native", "auth_mode": "forward"},
+                {"id": "native/model-a", "upstream_id": "model-a"},
+                "native/model-a",
+                dict(captured["incoming"]),
+                identity,
+                response_bytes,
+                True,
+            )
+            binding = state.compaction_bindings.lookup("opaque-json-success-secret")
+            self.assertTrue(binding.fingerprint.startswith("sha256:"))
+
+    def test_http_handoff_failure_returns_structured_409_without_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                from easy_multi_provider.router import ContextHandoffRequiredError
+
+                def raise_handoff(*args, **kwargs):
+                    raise ContextHandoffRequiredError(3, "compaction", "binding_missing")
+
+                with patch("easy_multi_provider.server.proxy", side_effect=raise_handoff):
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request(
+                        "POST",
+                        "/v1/responses",
+                        json.dumps({"model": "native/model-a", "input": "hello"}),
+                        {
+                            "Content-Type": "application/json",
+                            "Cookie": "emp_session=" + state.session_token,
+                        },
+                    )
+                    response = connection.getresponse()
+                    payload = json.loads(response.read())
+                    connection.close()
+                self.assertEqual(response.status, 409)
+                error = payload.get("error") or payload
+                self.assertEqual(error.get("error_class"), "context_handoff_required")
+                self.assertEqual(error.get("reason"), "binding_missing")
+                self.assertEqual(error.get("item_index"), 3)
+                self.assertEqual(error.get("item_type"), "compaction")
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_handoff_failure_records_one_private_terminal_route_observation(self):
+        from easy_multi_provider.router import ContextHandoffRequiredError
+
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path)
+            with self.assertRaises(ContextHandoffRequiredError):
+                state.route(
+                    {
+                        "model": "native/model-a",
+                        "input": [{
+                            "type": "compaction",
+                            "encrypted_content": "opaque-private-content",
+                        }],
+                    },
+                    {
+                        "Authorization": "Bearer private-token",
+                        "ChatGPT-Account-ID": "private-account",
+                    },
+                )
+            records = state.diagnostics.snapshot()["records"]
+            terminal_records = [
+                record for record in records
+                if record["terminal_event_observed"] or record["status"] is not None
+            ]
+            self.assertEqual(len(terminal_records), 1)
+            record = terminal_records[0]
+            self.assertEqual(record["route"], "responses")
+            self.assertEqual(record["transport"], "http")
+            self.assertEqual(record["status"], 409)
+            self.assertEqual(record["error_class"], "context_handoff_required")
+            self.assertTrue(record["terminal_event_observed"])
+            self.assertEqual(record["provider_id"], "")
+            self.assertEqual(record["model_id"], "")
+            self.assertEqual(record["endpoint_fingerprint"], "")
+            self.assertEqual(record["deployment_identity"], "default")
+            serialized = json.dumps(records, ensure_ascii=False)
+            for secret in (
+                "native/model-a",
+                "native.example",
+                "model-a",
+                "opaque-private-content",
+                "private-token",
+                "private-account",
+            ):
+                self.assertNotIn(secret, serialized)
+
+    def test_sse_preparation_failure_is_200_with_one_failed_event_then_close(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                from easy_multi_provider.router import ContextHandoffRequiredError
+
+                def raise_handoff(*args, **kwargs):
+                    raise ContextHandoffRequiredError(1, "compaction", "source_unavailable")
+
+                with patch("easy_multi_provider.server.proxy", side_effect=raise_handoff):
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request(
+                        "POST",
+                        "/v1/responses",
+                        json.dumps({"model": "native/model-a", "stream": True, "input": "hello"}),
+                        {
+                            "Content-Type": "application/json",
+                            "Cookie": "emp_session=" + state.session_token,
+                        },
+                    )
+                    response = connection.getresponse()
+                    raw = response.read()
+                    connection.close()
+                self.assertEqual(response.status, 200)
+                text = raw.decode("utf-8")
+                event_count = text.count("event: response.failed")
+                self.assertEqual(event_count, 1)
+                self.assertIn("context_handoff_required", text)
+                self.assertIn("source_unavailable", text)
+                self.assertNotIn("opaque", text.lower().replace("response", ""))
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_websocket_handoff_failure_sends_one_failed_event_and_keeps_socket_usable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            client = None
+            stream = None
+            try:
+                from easy_multi_provider.router import ContextHandoffRequiredError
+
+                calls = []
+
+                def fake_proxy(
+                    config,
+                    body,
+                    incoming,
+                    on_observation=None,
+                    on_context=None,
+                    **kwargs,
+                ):
+                    calls.append(dict(body))
+                    if len(calls) == 1:
+                        raise ContextHandoffRequiredError(0, "compaction", "binding_missing")
+                    return (
+                        {
+                            "kind": "body",
+                            "status": 200,
+                            "content_type": "application/json",
+                        },
+                        json.dumps(
+                            {
+                                "id": "resp_ok",
+                                "object": "response",
+                                "status": "completed",
+                                "output": [],
+                            }
+                        ).encode("utf-8"),
+                    )
+
+                with patch("easy_multi_provider.server.proxy", side_effect=fake_proxy):
+                    client = socket.create_connection(server.server_address, timeout=5)
+                    stream = client.makefile("rb")
+                    port = server.server_address[1]
+                    client.sendall((
+                        (
+                            "GET /v1/responses HTTP/1.1\r\n"
+                            "Host: 127.0.0.1:%d\r\n"
+                            "Upgrade: websocket\r\n"
+                            "Connection: Upgrade\r\n"
+                            "Sec-WebSocket-Version: 13\r\n"
+                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                            "Cookie: emp_session=%s\r\n\r\n"
+                        )
+                        % (port, state.session_token)
+                    ).encode("ascii"))
+                    self.assertIn(b" 101 ", stream.readline())
+                    while stream.readline() not in (b"\r\n", b"\n", b""):
+                        pass
+
+                    def send_request(model="native/model-a", input_value="hello"):
+                        client.sendall(
+                            _masked_text_frame(
+                                json.dumps(
+                                    {
+                                        "type": "response.create",
+                                        "model": model,
+                                        "input": input_value,
+                                    }
+                                )
+                            )
+                        )
+
+                    send_request(input_value="first-fails")
+                    received = []
+                    while not any(item.get("type") == "response.failed" for item in received):
+                        opcode, text_frame = _read_text_frame(stream)
+                        received.append(json.loads(text_frame))
+                    failures = [item for item in received if item.get("type") == "response.failed"]
+                    self.assertEqual(len(received), 1)
+                    self.assertEqual(len(failures), 1)
+                    failure = failures[0]
+                    response = failure.get("response") or {}
+                    error = response.get("error") or failure.get("error") or {}
+                    fields = {**response, **error}
+                    self.assertEqual(fields.get("error_class"), "context_handoff_required")
+                    self.assertEqual(fields.get("reason"), "binding_missing")
+
+                    send_request(input_value="second-ok")
+                    second = []
+                    while not any(item.get("type") == "response.completed" for item in second):
+                        opcode, text_frame = _read_text_frame(stream)
+                        second.append(json.loads(text_frame))
+                    self.assertTrue(second)
+            finally:
+                if stream is not None:
+                    stream.close()
+                if client is not None:
+                    client.close()
+                server.shutdown()
+                server.server_close()
+
+    def test_stream_observer_registers_only_on_completed_through_real_router(self):
+        cases = {
+            "completed": "response.completed",
+            "failed": "response.failed",
+            "incomplete": "response.incomplete",
+            "close": None,
+        }
+        for name, terminal_type in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                config_path = Path(directory) / "config.json"
+                self._write_config(config_path)
+                state = AppState(config_path)
+                opaque = "opaque-stream-" + name
+                events = [
+                    {
+                        "type": "response.output_item.done",
+                        "item": {"type": "compaction", "encrypted_content": opaque},
+                    }
+                ]
+                if terminal_type is not None:
+                    events.append(
+                        {
+                            "type": terminal_type,
+                            "response": {"id": "resp_1", "status": name, "output": []},
+                        }
+                    )
+                raw = b"".join(
+                    ("event: %s\ndata: %s\n\n" % (event["type"], json.dumps(event))).encode()
+                    for event in events
+                )
+
+                class FakeResponse(io.BytesIO):
+                    status = 200
+                    headers = {"Content-Type": "text/event-stream"}
+
+                with patch("easy_multi_provider.router.urlopen", return_value=FakeResponse(raw)):
+                    metadata, result = state.route(
+                        {"model": "native/model-a", "stream": True, "input": "hello"},
+                        {
+                            "Authorization": "Bearer fixture-token",
+                            "ChatGPT-Account-ID": "account-1",
+                        },
+                    )
+                    list(result)
+                self.assertEqual(metadata["kind"], "stream")
+                if name == "completed":
+                    self.assertTrue(state.compaction_bindings.lookup(opaque).fingerprint.startswith("sha256:"))
+                else:
+                    with self.assertRaises(BindingMissing):
+                        state.compaction_bindings.lookup(opaque)
 
 if __name__ == "__main__":
     unittest.main()

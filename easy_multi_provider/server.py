@@ -81,7 +81,15 @@ from .main import resolve_integration_paths
 from .migration import export_bundle, import_bundle
 from .quota import QuotaError, account_refresh_lock, read_native_login_quota, refresh_account_quota
 from .provider_replay import ProviderReplayCache
+from .continuity import (
+    CompactionBindingStore,
+    NativeCompactionObserver,
+    ContinuityError,
+    derive_native_route_identity,
+    register_native_json,
+)
 from .router import (
+    ContextHandoffRequiredError,
     ContextLengthError,
     RouterError,
     discover_models,
@@ -152,6 +160,7 @@ _DIAGNOSTIC_ERRORS = frozenset(
         "output_limit",
         "content_filter",
         "context_length_exceeded",
+        "context_handoff_required",
         "unknown",
     }
 )
@@ -175,6 +184,29 @@ _DIAGNOSTIC_TOOL_PAIRING = frozenset({"none", "paired", "incomplete", "invalid"}
 _DIAGNOSTIC_RECOVERY_MODES = frozenset(
     {"none", "pre_output_retry", "reattached", "native_http_fallback"}
 )
+_DIAGNOSTIC_BINDING_RESULTS = frozenset({
+    "registered",
+    "registration_failed",
+    "hit",
+    "missing",
+    "stale",
+    "unknown",
+})
+_DIAGNOSTIC_CONTINUITY_REASONS = frozenset({
+    "none",
+    "same_domain",
+    "binding_missing",
+    "binding_stale",
+    "source_unavailable",
+    "summary_invalid",
+    "handoff_succeeded",
+    "handoff_failed",
+    "registration_failed",
+})
+_DIAGNOSTIC_CONTINUITY_ITEM_TYPES = frozenset({
+    "compaction",
+    "unknown",
+})
 _WS_REPLAY_MAX_ITEMS = 256
 _WS_REPLAY_MAX_BYTES = 4 * 1024 * 1024
 _HTTP_REQUEST_BYTES_MAX = 64 * 1024 * 1024
@@ -445,6 +477,18 @@ def _safe_diagnostic_float(value: Any) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _safe_transport_ratio(value: Any, decoded_bytes: Optional[int]) -> Optional[float]:
+    if decoded_bytes == 0 or isinstance(value, bool):
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if value != value or value in (float("inf"), float("-inf")):
+        return None
+    return value if 0.0 <= value <= 64.0 else None
+
+
 def _safe_diagnostic_sequence(value: Any) -> list:
     if not isinstance(value, list):
         return []
@@ -558,6 +602,18 @@ class ObservationRing:
         recovery_mode = event.get("recovery_mode", "none")
         if recovery_mode not in _DIAGNOSTIC_RECOVERY_MODES:
             recovery_mode = "none"
+        decoded_request_bytes = _safe_diagnostic_int(
+            event.get("decoded_request_bytes"), 64 * 1024 * 1024
+        )
+        upstream_request_bytes = _safe_diagnostic_int(
+            event.get("upstream_request_bytes"), 64 * 1024 * 1024
+        )
+        upstream_content_encoding = event.get("upstream_content_encoding")
+        if upstream_content_encoding not in ("zstd", "identity"):
+            upstream_content_encoding = "unknown"
+        compression_ratio = _safe_transport_ratio(
+            event.get("compression_ratio"), decoded_request_bytes
+        )
         record = {
             "observed_at": observed_at_now(),
             "route": _safe_diagnostic_text(event.get("route", ""), _DIAGNOSTIC_ID)
@@ -593,6 +649,9 @@ class ObservationRing:
             "recovery_succeeded": bool(event.get("recovery_succeeded", False)),
             "recovery_mode": recovery_mode,
             "request_bytes": _safe_diagnostic_int(event.get("request_bytes"), 64 * 1024 * 1024),
+            "decoded_request_bytes": decoded_request_bytes,
+            "upstream_request_bytes": upstream_request_bytes,
+            "upstream_content_encoding": upstream_content_encoding,
             "response_bytes": _safe_diagnostic_int(event.get("response_bytes"), 64 * 1024 * 1024),
             "duration_ms": duration,
             "status": status,
@@ -619,7 +678,28 @@ class ObservationRing:
                 context.get("reserves"), MAX_CONTEXT_WINDOW
             ),
             "context_completeness": completeness,
+            "source_binding_result": (
+                event.get("source_binding_result")
+                if event.get("source_binding_result") in _DIAGNOSTIC_BINDING_RESULTS
+                else "unknown"
+            ),
+            "same_domain": bool(event.get("same_domain", False)),
+            "handoff_attempted": bool(event.get("handoff_attempted", False)),
+            "handoff_succeeded": bool(event.get("handoff_succeeded", False)),
+            "item_index": _safe_diagnostic_int(event.get("item_index"), 9999),
+            "item_type": (
+                event.get("item_type")
+                if event.get("item_type") in _DIAGNOSTIC_CONTINUITY_ITEM_TYPES
+                else "unknown"
+            ),
+            "continuity_reason": (
+                event.get("reason")
+                if event.get("reason") in _DIAGNOSTIC_CONTINUITY_REASONS
+                else "none"
+            ),
         }
+        if compression_ratio is not None:
+            record["compression_ratio"] = compression_ratio
         with self._lock:
             self._records.append(record)
         if self._sink is not None:
@@ -743,6 +823,62 @@ def configure_proxy_environment() -> str:
         return "system"
     return "direct"
 
+def _handoff_error_body(exc) -> Dict[str, Any]:
+    """Build a structured 409 body for ContextHandoffRequiredError.
+
+    Carries only error_class, reason, item_index, item_type in addition
+    to the safe public recovery message. No opaque/checkpoint/content.
+    """
+    return {
+        "error": {
+            "code": "context_handoff_required",
+            "message": str(exc),
+            "error_class": getattr(exc, "error_class", "context_handoff_required"),
+            "reason": getattr(exc, "reason", "binding_missing"),
+            "item_index": getattr(exc, "item_index", 0),
+            "item_type": getattr(exc, "item_type", "compaction"),
+        }
+    }
+
+
+def _handoff_sse_frame(exc) -> bytes:
+    """Build exactly one response.failed SSE event for a handoff failure."""
+    response = {
+        "id": "resp_" + uuid.uuid4().hex,
+        "object": "response",
+        "status": "failed",
+        "error": {
+            "code": "context_handoff_required",
+            "message": str(exc),
+            "error_class": getattr(exc, "error_class", "context_handoff_required"),
+            "reason": getattr(exc, "reason", "binding_missing"),
+            "item_index": getattr(exc, "item_index", 0),
+            "item_type": getattr(exc, "item_type", "compaction"),
+        },
+    }
+    payload = {"type": "response.failed", "response": response}
+    data = json.dumps(payload, ensure_ascii=False)
+    frame = "event: response.failed" + chr(10) + "data: " + data + chr(10) + chr(10)
+    return frame.encode("utf-8")
+
+
+def _handoff_ws_event(exc) -> Dict[str, Any]:
+    """Build one request-scoped response.failed event for WS handoff failure."""
+    response = {
+        "id": "resp_" + uuid.uuid4().hex,
+        "object": "response",
+        "status": "failed",
+        "error": {
+            "code": "context_handoff_required",
+            "message": str(exc),
+            "error_class": getattr(exc, "error_class", "context_handoff_required"),
+            "reason": getattr(exc, "reason", "binding_missing"),
+            "item_index": getattr(exc, "item_index", 0),
+            "item_type": getattr(exc, "item_type", "compaction"),
+        },
+    }
+    return {"type": "response.failed", "response": response}
+
 
 class AppState:
     def __init__(
@@ -811,6 +947,16 @@ class AppState:
         # retaining attacker-controlled provider IDs in process state.
         self.discovery_lock = threading.Lock()
         self.config = load(self.path)
+        state_dir = self.path.parent / "state"
+        self._compaction_bindings_path = state_dir / "continuity-bindings.enc"
+        try:
+            self.compaction_bindings = CompactionBindingStore(
+                self._compaction_bindings_path
+            )
+        except Exception:
+            # A corrupt or unusable vault fails closed at lookup time; the
+            # server itself must still start for management endpoints.
+            self.compaction_bindings = None
         self._load_runtime_recovery()
         if any(
             provider.get("api_key") for provider in self.config.get("providers", [])
@@ -1316,6 +1462,102 @@ class AppState:
             event["response_bytes"] = response_bytes
             self._record_route_event(event, body, started, transport, route)
 
+    def _continuity_diagnostic(
+        self,
+        transport: str,
+        source_binding_result: str,
+        same_domain: bool = False,
+        handoff_attempted: bool = False,
+        handoff_succeeded: bool = False,
+        item_index: Optional[int] = None,
+        item_type: Optional[str] = None,
+        reason: Optional[str] = None,
+        error_class: Optional[str] = None,
+    ) -> None:
+        """Record a content-free continuity outcome using strict safe fields.
+
+        Only the allowed continuity result flags from spec section 7 are
+        recorded: source_binding_result, same_domain, handoff_attempted,
+        handoff_succeeded, item_index, item_type, reason, error_class,
+        transport, and status. No provider/model/account/URL/opaque/
+        checkpoint/prompt content is ever placed in the diagnostic.
+        """
+        fields: Dict[str, Any] = {
+            "route": "responses",
+            "transport": transport,
+            "source_binding_result": source_binding_result,
+            "same_domain": bool(same_domain),
+            "handoff_attempted": bool(handoff_attempted),
+            "handoff_succeeded": bool(handoff_succeeded),
+        }
+        if isinstance(item_index, int) and not isinstance(item_index, bool):
+            fields["item_index"] = max(0, item_index)
+        if isinstance(item_type, str) and item_type:
+            fields["item_type"] = item_type[:64]
+        if isinstance(reason, str) and reason:
+            fields["reason"] = reason[:64]
+        if isinstance(error_class, str) and error_class:
+            fields["error_class"] = error_class[:64]
+        try:
+            self.diagnostics.record(fields)
+        except Exception:
+            pass
+
+    def _register_native_compaction(
+        self,
+        provider: Dict[str, Any],
+        model: Dict[str, Any],
+        requested_slug: str,
+        incoming: Dict[str, str],
+        identity,
+        result: bytes,
+        success: bool,
+    ) -> None:
+        """Content-free native JSON compaction registration callback.
+
+        The identity is the already-verified NativeRouteIdentity resolved
+        by the router from the actual native route (forward or account
+        auth mode). It is never re-derived from destination or incoming
+        headers here.
+        """
+        store = self.compaction_bindings
+        if store is None:
+            return
+        if identity is None or not success:
+            return
+        try:
+            count = register_native_json(store, identity, json.loads(result.decode("utf-8")), success)
+            if count:
+                self._continuity_diagnostic(
+                    "http", "registered"
+                )
+        except Exception:
+            self._continuity_diagnostic(
+                "http", "registration_failed", error_class="observer_error"
+            )
+
+    def _native_observer_stream(self, result, observer):
+        """Wrap a stream so observer.abandon() runs in the finally path.
+
+        Client disconnect, iterator close, and parse failure all reach the
+        finally, ensuring pending opaque values are discarded rather than
+        leaked across concurrent SSE/WS requests.
+        """
+        try:
+            for chunk in result:
+                yield chunk
+        finally:
+            try:
+                observer.abandon()
+            except Exception:
+                pass
+            closer = getattr(result, "close", None)
+            if callable(closer):
+                try:
+                    closer()
+                except Exception:
+                    pass
+
     def route(
         self,
         body: Dict[str, Any],
@@ -1359,9 +1601,67 @@ class AppState:
                 "responses",
             )
 
+        observer_box = []
+
+        def on_native_stream_start(identity):
+            if self.compaction_bindings is None or identity is None:
+                return None
+            try:
+                observer = NativeCompactionObserver(
+                    self.compaction_bindings, identity
+                )
+                observer_box.append(observer)
+
+                def safe_observe(event):
+                    try:
+                        count = observer.observe(event)
+                        if count:
+                            self._continuity_diagnostic(
+                                "sse", "registered"
+                            )
+                    except Exception:
+                        self._continuity_diagnostic(
+                            "sse", "registration_failed",
+                            error_class="observer_error"
+                        )
+
+                return safe_observe
+            except Exception:
+                return None
+
+        def on_native_response(provider, model, slug, transient, identity, raw, success):
+            self._register_native_compaction(
+                dict(provider), dict(model), slug, dict(transient),
+                identity, raw, success
+            )
+
+        def on_continuity(
+            source_binding_result, same_domain,
+            handoff_attempted, handoff_succeeded,
+            item_index, item_type, reason
+        ):
+            self._continuity_diagnostic(
+                selected_transport,
+                source_binding_result,
+                same_domain=same_domain,
+                handoff_attempted=handoff_attempted,
+                handoff_succeeded=handoff_succeeded,
+                item_index=item_index,
+                item_type=item_type,
+                reason=reason,
+            )
+
         try:
             metadata, result = proxy(
-                self.snapshot(), body, incoming, on_observation, on_context
+                self.snapshot(),
+                body,
+                incoming,
+                on_observation,
+                on_context,
+                binding_store=self.compaction_bindings,
+                on_native_response=on_native_response,
+                on_native_stream_start=on_native_stream_start,
+                on_continuity=on_continuity,
             )
         except RouterError as exc:
             if not observed:
@@ -1393,6 +1693,8 @@ class AppState:
                     selected_transport,
                     "responses",
                 )
+            if observer_box:
+                result = self._native_observer_stream(result, observer_box[0])
             result = self.provider_replay.observe_stream(body.get("model"), result)
         else:
             self.provider_replay.observe_bytes(body.get("model"), result)
@@ -1450,9 +1752,34 @@ class AppState:
                 "compact",
             )
 
+        def on_native_response_compact(provider, model, slug, transient, identity, raw, success):
+            self._register_native_compaction(
+                dict(provider), dict(model), slug, dict(transient),
+                identity, raw, success
+            )
+
+        def on_continuity_compact(
+            source_binding_result, same_domain,
+            handoff_attempted, handoff_succeeded,
+            item_index, item_type, reason
+        ):
+            self._continuity_diagnostic(
+                selected_transport,
+                source_binding_result,
+                same_domain=same_domain,
+                handoff_attempted=handoff_attempted,
+                handoff_succeeded=handoff_succeeded,
+                item_index=item_index,
+                item_type=item_type,
+                reason=reason,
+            )
+
         try:
             metadata, result = proxy_compact(
-                self.snapshot(), body, incoming, on_observation, on_context
+                self.snapshot(), body, incoming, on_observation, on_context,
+                binding_store=self.compaction_bindings,
+                on_native_response=on_native_response_compact,
+                on_continuity=on_continuity_compact,
             )
         except RouterError as exc:
             if not observed:
@@ -2411,6 +2738,9 @@ def make_handler(state: AppState):
                                 else:
                                     last_response_id = completed_id
                                     last_input = base_input + output_items
+                    except ContextHandoffRequiredError as exc:
+                        websocket.send_json(_handoff_ws_event(exc))
+                        continue
                     except ContextLengthError as exc:
                         self._websocket_error(
                             websocket,
@@ -2929,6 +3259,23 @@ def make_handler(state: AppState):
                         )
                     return
                 self._error(404, "not found")
+            except ContextHandoffRequiredError as exc:
+                emit_operation_failure(exc)
+                if body.get("stream"):
+                    frame = _handoff_sse_frame(exc)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    try:
+                        self.wfile.write(frame)
+                        self.wfile.flush()
+                    except Exception:
+                        pass
+                    self.close_connection = True
+                else:
+                    self._send(409, _json_bytes(_handoff_error_body(exc)))
             except (ConfigError, RouterError, QuotaError, ValueError) as exc:
                 emit_operation_failure(exc)
                 status = exc.status if isinstance(exc, RouterError) else 400

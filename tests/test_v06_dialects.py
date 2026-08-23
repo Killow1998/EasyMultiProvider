@@ -200,6 +200,67 @@ class ResponsesDialectTests(unittest.TestCase):
         )
         self.assertIn("portable summary", projected["input"][0]["content"][0]["text"])
 
+    def test_native_projection_decodes_emp_compaction_and_preserves_surrounding_history(self):
+        summary = base64.urlsafe_b64encode(b"portable checkpoint").decode("ascii")
+        body = {
+            "model": "gpt-native",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "visible"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,AA==",
+                        },
+                    ],
+                },
+                {"type": "compaction", "encrypted_content": "emp1:" + summary},
+                {
+                    "type": "function_call",
+                    "call_id": "call_fixture",
+                    "name": "fixture_tool",
+                    "arguments": "{}",
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_fixture",
+                    "output": "fixture-result",
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done"}],
+                },
+            ],
+        }
+
+        projected = project_request(
+            {"protocol": "responses", "auth_mode": "forward"}, body
+        )
+
+        self.assertEqual(
+            [item["type"] for item in projected["input"]],
+            [
+                "message",
+                "message",
+                "function_call",
+                "function_call_output",
+                "message",
+            ],
+        )
+        checkpoint = projected["input"][1]
+        self.assertEqual(checkpoint["role"], "user")
+        self.assertIn("portable checkpoint", checkpoint["content"][0]["text"])
+        self.assertNotIn("emp1:", json.dumps(projected))
+        self.assertEqual(
+            projected["input"][0]["content"][1]["image_url"],
+            "data:image/png;base64,AA==",
+        )
+        self.assertEqual(projected["input"][2]["call_id"], "call_fixture")
+        self.assertEqual(projected["input"][3]["call_id"], "call_fixture")
+
     def test_portable_projection_rejects_opaque_compaction_without_content(self):
         body = {
             "model": "provider/model",

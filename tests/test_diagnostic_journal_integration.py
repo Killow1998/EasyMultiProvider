@@ -43,6 +43,10 @@ def unsafe_route_event():
         "status": 200,
         "error_class": "none",
         "decision": "normal_order",
+        "decoded_request_bytes": 100,
+        "upstream_request_bytes": 25,
+        "upstream_content_encoding": "zstd",
+        "compression_ratio": 0.25,
         "prompt": "prompt-secret",
         "api_key": "api-key-secret",
         "path": "/private/config.json",
@@ -314,6 +318,29 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
                 "/private/config.json",
             ):
                 self.assertNotIn(unsafe_value, repr(persisted))
+            self.assertEqual(persisted["decoded_request_bytes"], 100)
+            self.assertEqual(persisted["upstream_request_bytes"], 25)
+            self.assertEqual(persisted["upstream_content_encoding"], "zstd")
+            self.assertEqual(persisted["compression_ratio"], 0.25)
+
+    def test_transport_metadata_sanitizer_rejects_nonfinite_unbounded_and_content(self):
+        ring = ObservationRing()
+        ring.record(
+            {
+                **unsafe_route_event(),
+                "decoded_request_bytes": "body-secret",
+                "upstream_request_bytes": -1,
+                "upstream_content_encoding": "header-secret",
+                "compression_ratio": float("inf"),
+                "opaque": "opaque-secret",
+            }
+        )
+        record = ring.snapshot()["records"][0]
+        self.assertIsNone(record["decoded_request_bytes"])
+        self.assertEqual(record["upstream_request_bytes"], 0)
+        self.assertEqual(record["upstream_content_encoding"], "unknown")
+        self.assertNotIn("compression_ratio", record)
+        self.assertNotIn("secret", repr(record))
 
     def test_observation_sink_receives_a_copy_of_the_normalized_record(self):
         received = []
@@ -1242,6 +1269,114 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
                 failure_order.index("event:shutdown_complete"),
                 failure_order.index("journal_close"),
             )
+
+
+
+
+class ContinuityDiagnosticFieldsTests(unittest.TestCase):
+    """Verify continuity diagnostics use strict safe fields only."""
+
+    def test_observation_ring_preserves_strict_continuity_fields(self):
+        ring = ObservationRing()
+        ring.record({
+            "route": "responses",
+            "transport": "http",
+            "source_binding_result": "hit",
+            "same_domain": True,
+            "handoff_attempted": False,
+            "handoff_succeeded": True,
+            "item_index": 3,
+            "item_type": "compaction",
+            "reason": "binding_missing",
+            "error_class": "none",
+        })
+        record = ring.snapshot()["records"][-1]
+        self.assertEqual(record["source_binding_result"], "hit")
+        self.assertTrue(record["same_domain"])
+        self.assertFalse(record["handoff_attempted"])
+        self.assertTrue(record["handoff_succeeded"])
+        self.assertEqual(record["item_index"], 3)
+        self.assertEqual(record["item_type"], "compaction")
+        self.assertEqual(record["continuity_reason"], "binding_missing")
+        self.assertEqual(record["error_class"], "none")
+
+    def test_continuity_diagnostic_has_no_forbidden_content(self):
+        ring = ObservationRing()
+        ring.record({
+            "route": "responses",
+            "transport": "sse",
+            "source_binding_result": "missing",
+            "same_domain": False,
+            "handoff_attempted": True,
+            "handoff_succeeded": False,
+            "item_index": 0,
+            "item_type": "compaction",
+            "reason": "source_unavailable",
+            "error_class": "context_handoff_required",
+        })
+        record = ring.snapshot()["records"][-1]
+        serialized = json.dumps(record, ensure_ascii=False)
+        for fragment in ["opaque", "checkpoint", "prompt", "api_key", "bearer", "credential", "https://", "chatgpt-account-id", "emp1:"]:
+            self.assertNotIn(fragment, serialized.lower(), "Forbidden fragment %r found" % fragment)
+        self.assertEqual(record["source_binding_result"], "missing")
+        self.assertFalse(record["same_domain"])
+        self.assertTrue(record["handoff_attempted"])
+        self.assertFalse(record["handoff_succeeded"])
+
+    def test_continuity_diagnostic_does_not_use_fake_field_aliases(self):
+        ring = ObservationRing()
+        ring.record({
+            "route": "responses",
+            "transport": "http",
+            "source_binding_result": "hit",
+            "same_domain": True,
+            "handoff_attempted": False,
+            "handoff_succeeded": True,
+            "item_index": 1,
+            "item_type": "compaction",
+            "reason": "binding_missing",
+            "error_class": "none",
+        })
+        record = ring.snapshot()["records"][-1]
+        self.assertEqual(record["item_index"], 1)
+        self.assertEqual(record["item_type"], "compaction")
+        self.assertEqual(record["continuity_reason"], "binding_missing")
+        self.assertEqual(record.get("dialect", "unknown"), "unknown")
+
+    def test_multiple_continuity_diagnostics_are_isolated(self):
+        ring = ObservationRing()
+        ring.record({
+            "route": "responses",
+            "transport": "sse",
+            "source_binding_result": "hit",
+            "same_domain": True,
+            "handoff_succeeded": True,
+            "item_index": 0,
+            "item_type": "compaction",
+        })
+        ring.record({
+            "route": "responses",
+            "transport": "websocket",
+            "source_binding_result": "missing",
+            "same_domain": False,
+            "handoff_attempted": True,
+            "handoff_succeeded": False,
+            "item_index": 2,
+            "item_type": "compaction",
+            "reason": "source_unavailable",
+        })
+        records = ring.snapshot()["records"]
+        self.assertEqual(len(records), 2)
+        sse_rec = records[0]
+        ws_rec = records[1]
+        self.assertEqual(sse_rec["transport"], "sse")
+        self.assertEqual(ws_rec["transport"], "websocket")
+        self.assertEqual(sse_rec["source_binding_result"], "hit")
+        self.assertEqual(ws_rec["source_binding_result"], "missing")
+        self.assertTrue(sse_rec["same_domain"])
+        self.assertFalse(ws_rec["same_domain"])
+        self.assertTrue(sse_rec["handoff_succeeded"])
+        self.assertFalse(ws_rec["handoff_succeeded"])
 
 
 if __name__ == "__main__":
