@@ -134,7 +134,11 @@ class ContextRouterTests(unittest.TestCase):
 
         def successful(provider, body, model, incoming, context_check=None):
             context_check({"model": "model", "input": "x"}, False, "")
-            return 200, "application/json", b"{}"
+            return (
+                200,
+                "application/json",
+                b'{"status":"completed","output":[]}',
+            )
 
         with patch.object(router, "chat_completion", side_effect=rejected), patch.object(
             router, "forward_responses", side_effect=successful

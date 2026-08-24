@@ -233,7 +233,9 @@ def portable_tool_definitions(body: Mapping[str, Any]) -> list:
     return _portable_tools(raw) if raw else []
 
 
-def _portable_input(source: Any) -> tuple[Any, list[str]]:
+def _portable_input(
+    source: Any, preserve_reasoning_state: bool = False
+) -> tuple[Any, list[str]]:
     if isinstance(source, (str, type(None))):
         return source, []
     if isinstance(source, Mapping):
@@ -248,7 +250,16 @@ def _portable_input(source: Any) -> tuple[Any, list[str]]:
         if not isinstance(item, Mapping):
             raise ProjectionError(index, "unknown", (), "invalid_item")
         item_type = str(item.get("type") or "message")
-        if item_type in {"reasoning", "additional_tools"}:
+        if item_type == "reasoning":
+            opaque = item.get("encrypted_content")
+            if preserve_reasoning_state and isinstance(opaque, str) and opaque:
+                clean = {"type": "reasoning", "encrypted_content": opaque}
+                for field in ("id", "status"):
+                    if field in item:
+                        clean[field] = copy.deepcopy(item[field])
+                result.append(clean)
+            continue
+        if item_type == "additional_tools":
             continue
         if item_type == "item_reference":
             raise ProjectionError(index, item_type, (), "opaque_item_reference")
@@ -430,7 +441,11 @@ def _portable_tools(source: Any) -> list:
     return result
 
 
-def project_request(provider: Mapping[str, Any], body: Mapping[str, Any]) -> Dict[str, Any]:
+def project_request(
+    provider: Mapping[str, Any],
+    body: Mapping[str, Any],
+    preserve_reasoning_state: bool = False,
+) -> Dict[str, Any]:
     """Build an ephemeral destination view without retaining request content."""
 
     dialect = classify_dialect(provider)
@@ -440,12 +455,21 @@ def project_request(provider: Mapping[str, Any], body: Mapping[str, Any]) -> Dic
         return projected
     if dialect != PORTABLE_RESPONSES:
         return copy.deepcopy(dict(body))
+    if "previous_response_id" in body:
+        raise ProjectionError(
+            0,
+            "previous_response_id",
+            (),
+            "stateful_response_unsupported",
+        )
     projected = {
         key: copy.deepcopy(value)
         for key, value in body.items()
         if key in _PORTABLE_TOP_LEVEL
     }
-    projected_input, hoisted_instructions = _portable_input(body.get("input"))
+    projected_input, hoisted_instructions = _portable_input(
+        body.get("input"), preserve_reasoning_state=preserve_reasoning_state
+    )
     projected["input"] = projected_input
     existing_instructions = projected.get("instructions")
     if existing_instructions is not None and not isinstance(
@@ -478,10 +502,45 @@ def project_request(provider: Mapping[str, Any], body: Mapping[str, Any]) -> Dic
     return projected
 
 
+def _project_reasoning_item(
+    item: Mapping[str, Any],
+    preserve_summary: bool,
+    preserve_state: bool,
+) -> Dict[str, Any] | None:
+    clean: Dict[str, Any] = {"type": "reasoning"}
+    for field in ("id", "status"):
+        if field in item:
+            clean[field] = copy.deepcopy(item[field])
+    if preserve_state:
+        opaque = item.get("encrypted_content")
+        if isinstance(opaque, str) and opaque:
+            clean["encrypted_content"] = opaque
+    if preserve_summary:
+        summary = []
+        source = item.get("summary")
+        if isinstance(source, list):
+            for part in source:
+                if (
+                    isinstance(part, Mapping)
+                    and part.get("type") == "summary_text"
+                    and isinstance(part.get("text"), str)
+                ):
+                    summary.append(
+                        {"type": "summary_text", "text": part["text"]}
+                    )
+        if summary:
+            clean["summary"] = summary
+    if not preserve_state and not preserve_summary:
+        return None
+    return clean
+
+
 def project_response(
     provider: Mapping[str, Any],
     response: Mapping[str, Any],
     custom_names: set = None,
+    preserve_reasoning_summary: bool = False,
+    preserve_reasoning_state: bool = False,
 ) -> Dict[str, Any]:
     """Remove external plaintext reasoning while preserving final output items."""
 
@@ -490,14 +549,24 @@ def project_response(
         return projected
     for field in ("reasoning", "reasoning_text", "reasoning_content", "thinking"):
         projected.pop(field, None)
+    raw_output = projected.get("output")
+    if raw_output is not None and not isinstance(raw_output, list):
+        raise ProjectionError(-1, "output", (), "invalid_response_output")
     output = []
     custom_names = custom_names or set()
-    for index, item in enumerate(
-        projected.get("output", [])
-        if isinstance(projected.get("output"), list)
-        else []
-    ):
-        if not isinstance(item, Mapping) or item.get("type") == "reasoning":
+    for index, item in enumerate(raw_output or []):
+        if not isinstance(item, Mapping):
+            raise ProjectionError(
+                index, "output", (), "invalid_response_output"
+            )
+        if item.get("type") == "reasoning":
+            clean_reasoning = _project_reasoning_item(
+                item,
+                preserve_reasoning_summary,
+                preserve_reasoning_state,
+            )
+            if clean_reasoning is not None:
+                output.append(clean_reasoning)
             continue
         if item.get("type") == "compaction":
             raise ProjectionError(
@@ -525,7 +594,7 @@ def project_response(
             clean["type"] = "custom_tool_call"
             clean["input"] = custom_tool_input(clean.pop("arguments", ""))
         output.append(clean)
-    if isinstance(projected.get("output"), list):
+    if isinstance(raw_output, list):
         projected["output"] = output
     return projected
 
@@ -601,6 +670,8 @@ def project_stream_event(
     suppressed_item_ids: set,
     custom_names: set = None,
     custom_state: Dict[str, Dict[str, Any]] = None,
+    preserve_reasoning_summary: bool = False,
+    preserve_reasoning_state: bool = False,
 ) -> Dict[str, Any] | None:
     """Project one Responses stream event without retaining reasoning text."""
 
@@ -621,9 +692,16 @@ def project_stream_event(
         raise ProjectionError(index, "compaction", (), "external_compaction")
     if isinstance(item, Mapping) and item.get("type") == "reasoning":
         item_id = item.get("id")
-        if isinstance(item_id, str) and item_id:
-            suppressed_item_ids.add(item_id)
-        return None
+        clean_reasoning = _project_reasoning_item(
+            item,
+            preserve_reasoning_summary,
+            preserve_reasoning_state,
+        )
+        if clean_reasoning is None:
+            if isinstance(item_id, str) and item_id:
+                suppressed_item_ids.add(item_id)
+            return None
+        projected["item"] = clean_reasoning
     if (
         isinstance(item, Mapping)
         and item.get("type") == "function_call"
@@ -669,7 +747,10 @@ def project_stream_event(
     item_id = projected.get("item_id")
     if isinstance(item_id, str) and item_id in suppressed_item_ids:
         return None
-    if "reasoning" in event_type or "thinking" in event_type:
+    summary_event = event_type.startswith("response.reasoning_summary_")
+    if summary_event and not preserve_reasoning_summary:
+        return None
+    if not summary_event and ("reasoning" in event_type or "thinking" in event_type):
         return None
     part = projected.get("part")
     if isinstance(part, Mapping) and str(part.get("type") or "").lower() in {
@@ -682,6 +763,10 @@ def project_stream_event(
     response = projected.get("response")
     if isinstance(response, Mapping):
         projected["response"] = project_response(
-            provider, response, custom_names=custom_names
+            provider,
+            response,
+            custom_names=custom_names,
+            preserve_reasoning_summary=preserve_reasoning_summary,
+            preserve_reasoning_state=preserve_reasoning_state,
         )
     return projected

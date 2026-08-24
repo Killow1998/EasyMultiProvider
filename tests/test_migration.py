@@ -30,6 +30,13 @@ class MigrationTests(unittest.TestCase):
                         }
                     ],
                     "models": [{"id": "demo/model", "provider": "demo"}],
+                    "catalog_presentations": {
+                        "demo/model": {
+                            "catalog_alias": "Portable Worker",
+                            "show_context": False,
+                            "reasoning_summary": "hide",
+                        }
+                    },
                 }
             )
             source_key = Fernet.generate_key().decode("ascii")
@@ -82,6 +89,14 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(imported["codex_base_url"], "http://127.0.0.1:4299/v1")
                 self.assertEqual(api_key(imported["providers"][0]), "provider-secret")
                 loaded = load(target_config_path)
+                self.assertEqual(
+                    loaded["catalog_presentations"]["demo/model"],
+                    {
+                        "catalog_alias": "Portable Worker",
+                        "show_context": False,
+                        "reasoning_summary": "hide",
+                    },
+                )
                 self.assertEqual(api_key(loaded["providers"][0]), "provider-secret")
                 self.assertEqual(load_auth(loaded["accounts"][0])["tokens"]["access_token"], "account-access-secret")
                 auth_path = Path(loaded["accounts"][0]["auth_file"])

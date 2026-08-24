@@ -220,7 +220,9 @@ class CapabilityTruthTests(unittest.TestCase):
         def request(provider, payload, incoming, stream=False, operation="", context_check=None):
             captured.append(payload)
             if provider["protocol"] == "chat_completions":
-                return Response(b'{"choices":[{"message":{"content":"ok"}}]}')
+                return Response(
+                    b'{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+                )
             return Response(b'{"status":"completed","output":[]}')
 
         model = {

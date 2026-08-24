@@ -49,6 +49,19 @@ class ResponsesDialectTests(unittest.TestCase):
 
         self.assertIn("class=invalid_stream", str(raised.exception))
 
+    def test_portable_projection_rejects_unbound_previous_response_id(self):
+        with self.assertRaises(ProjectionError) as raised:
+            project_request(
+                {"protocol": "responses", "auth_mode": "api_key"},
+                {
+                    "model": "provider/model",
+                    "input": "continue",
+                    "previous_response_id": "resp_previous",
+                },
+            )
+
+        self.assertIn("class=stateful_response_unsupported", str(raised.exception))
+
     def test_portable_projection_preserves_visible_content_and_paired_tools(self):
         provider = {"protocol": "responses", "auth_mode": "api_key"}
         body = {
@@ -591,6 +604,120 @@ class ResponsesDialectTests(unittest.TestCase):
         self.assertEqual(
             [item["type"] for item in projected_completed["response"]["output"]],
             ["message"],
+        )
+
+    def test_structured_reasoning_summary_and_opaque_state_are_opt_in(self):
+        provider = {"protocol": "responses", "auth_mode": "api_key"}
+        response = {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "reasoning_fixture",
+                    "status": "completed",
+                    "encrypted_content": "opaque-fixture",
+                    "summary": [
+                        {"type": "summary_text", "text": "bounded summary"},
+                        {"type": "reasoning_text", "text": "private chain"},
+                    ],
+                    "content": [
+                        {"type": "reasoning_text", "text": "private chain"}
+                    ],
+                }
+            ],
+        }
+
+        self.assertEqual(project_response(provider, response)["output"], [])
+        projected = project_response(
+            provider,
+            response,
+            preserve_reasoning_summary=True,
+            preserve_reasoning_state=True,
+        )
+
+        self.assertEqual(
+            projected["output"],
+            [
+                {
+                    "type": "reasoning",
+                    "id": "reasoning_fixture",
+                    "status": "completed",
+                    "encrypted_content": "opaque-fixture",
+                    "summary": [
+                        {"type": "summary_text", "text": "bounded summary"}
+                    ],
+                }
+            ],
+        )
+        self.assertNotIn("private chain", json.dumps(projected))
+
+    def test_portable_response_rejects_invalid_output_items(self):
+        provider = {"protocol": "responses", "auth_mode": "api_key"}
+        with self.assertRaises(ProjectionError):
+            project_response(
+                provider,
+                {"status": "completed", "output": ["not-an-item"]},
+            )
+
+        request = {
+            "model": "provider/model",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": "reasoning_fixture",
+                    "status": "completed",
+                    "encrypted_content": "opaque-fixture",
+                    "content": [
+                        {"type": "reasoning_text", "text": "private chain"}
+                    ],
+                }
+            ],
+        }
+        projected_request = project_request(
+            provider, request, preserve_reasoning_state=True
+        )
+        self.assertEqual(
+            projected_request["input"],
+            [
+                {
+                    "type": "reasoning",
+                    "id": "reasoning_fixture",
+                    "status": "completed",
+                    "encrypted_content": "opaque-fixture",
+                }
+            ],
+        )
+
+    def test_reasoning_summary_stream_is_forwarded_only_when_enabled(self):
+        provider = {"protocol": "responses", "auth_mode": "api_key"}
+        summary = {
+            "type": "response.reasoning_summary_text.delta",
+            "item_id": "reasoning_fixture",
+            "delta": "bounded summary",
+        }
+        raw_reasoning = {
+            "type": "response.reasoning_text.delta",
+            "item_id": "reasoning_fixture",
+            "delta": "private chain",
+        }
+
+        self.assertIsNone(project_stream_event(provider, summary, set()))
+        self.assertEqual(
+            project_stream_event(
+                provider,
+                summary,
+                set(),
+                preserve_reasoning_summary=True,
+            ),
+            summary,
+        )
+        self.assertIsNone(
+            project_stream_event(
+                provider,
+                raw_reasoning,
+                set(),
+                preserve_reasoning_summary=True,
+            )
         )
 
     def test_forward_responses_stream_projects_reasoning_before_codex(self):

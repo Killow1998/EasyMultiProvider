@@ -6,6 +6,8 @@ import json
 import os
 import stat
 import tempfile
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -16,6 +18,8 @@ MASTER_KEY_ENV = "EASY_MULTI_PROVIDER_MASTER_KEY"
 MASTER_KEY_FILE_ENV = "EASY_MULTI_PROVIDER_MASTER_KEY_FILE"
 DEFAULT_MASTER_KEY_FILE = Path("state") / "master.key"
 _FORMAT = b"easy-multi-provider-v1\n"
+_default_master_key_file = DEFAULT_MASTER_KEY_FILE
+_default_master_key_lock = threading.RLock()
 
 
 class VaultError(ValueError):
@@ -23,9 +27,52 @@ class VaultError(ValueError):
 
 
 def _key_path() -> Path:
-    return Path(
-        os.environ.get(MASTER_KEY_FILE_ENV, "").strip() or DEFAULT_MASTER_KEY_FILE
+    return _safe_key_path(
+        Path(
+            os.environ.get(MASTER_KEY_FILE_ENV, "").strip()
+            or _default_master_key_file
+        )
     )
+
+
+def _safe_key_path(path: Path) -> Path:
+    """Return an absolute key path without following any symlink component."""
+
+    candidate = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+    for parent in reversed(candidate.parents):
+        try:
+            info = parent.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise VaultError("master key directory is unavailable") from exc
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise VaultError("master key directory is not a regular directory")
+    try:
+        info = candidate.lstat()
+    except FileNotFoundError:
+        return candidate
+    except OSError as exc:
+        raise VaultError("master key file is unavailable") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise VaultError("master key file is not a regular file")
+    return candidate
+
+
+@contextmanager
+def default_master_key_file(path: Path):
+    """Use one process-local implicit key path for a bounded service lifetime."""
+
+    global _default_master_key_file
+    resolved = _safe_key_path(path)
+    with _default_master_key_lock:
+        previous = _default_master_key_file
+        _default_master_key_file = resolved
+    try:
+        yield resolved
+    finally:
+        with _default_master_key_lock:
+            _default_master_key_file = previous
 
 
 def _validate_key(raw: str, source: str) -> str:
@@ -37,6 +84,7 @@ def _validate_key(raw: str, source: str) -> str:
 
 
 def _read_key_file(key_path: Path) -> str:
+    key_path = _safe_key_path(key_path)
     try:
         info = key_path.lstat()
         if key_path.is_symlink() or not stat.S_ISREG(info.st_mode):
@@ -56,12 +104,12 @@ def _read_key_file(key_path: Path) -> str:
 
 
 def _create_key_file(key_path: Path) -> None:
+    key_path = _safe_key_path(key_path)
     parent_existed = key_path.parent.exists()
     try:
         key_path.parent.mkdir(parents=True, exist_ok=True)
-        if os.name != "nt" and (
-            not parent_existed or key_path == DEFAULT_MASTER_KEY_FILE
-        ):
+        _safe_key_path(key_path)
+        if os.name != "nt" and not parent_existed:
             os.chmod(str(key_path.parent), 0o700)
     except OSError as exc:
         raise VaultError("master key directory is unavailable") from exc

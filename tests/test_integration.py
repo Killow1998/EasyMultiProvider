@@ -404,6 +404,21 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(target.read_text(encoding="utf-8"), 'openai_base_url = "native"\n')
         self.assertFalse(self.lease_path.exists())
 
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    def test_file_lock_rejects_symlinked_parent_before_chmod_or_create(self):
+        victim = self.root / "victim"
+        victim.mkdir(mode=0o755)
+        original_mode = stat.S_IMODE(victim.stat().st_mode)
+        linked_state = self.root / "linked-state"
+        linked_state.symlink_to(victim, target_is_directory=True)
+
+        with self.assertRaises(SymlinkConfigError):
+            with integration._FileLock(linked_state / "service.lock", timeout=0):
+                pass
+
+        self.assertEqual(stat.S_IMODE(victim.stat().st_mode), original_mode)
+        self.assertFalse((victim / "service.lock").exists())
+
     def test_config_and_lease_use_strict_permissions(self):
         self.write_config('openai_base_url = "native"\n', mode=0o644)
         self.enable()

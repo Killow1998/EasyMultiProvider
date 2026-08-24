@@ -289,6 +289,109 @@ function capabilityMetadataBehavior() {
   assert.doesNotMatch(pickerUnconfirmedHtml, /输入 文本/, "unknown provenance must not display as confirmed support in picker");
 }
 
+function presentationBehavior() {
+  run("state = {catalog_presentations:{'provider-a/other':{catalog_alias:'General',show_context:true,reasoning_summary:'auto'}},subscription_models:[{id:'native-model',display_name:'Native Model',context_window:258000}],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',display_name:'Model',context_window:258000,enabled:true}]} ");
+  run("openManualModelModal('provider-a/model')");
+  assert.match(getElement("modal_body").innerHTML, /Codex 显示名称/);
+  assert.match(getElement("modal_body").innerHTML, /Reasoning summary/);
+  getElement("modal_model_provider").value = "provider-a";
+  getElement("modal_model_upstream").value = "model";
+  getElement("modal_model_context").value = "258000";
+  getElement("modal_catalog_alias").value = "General";
+  getElement("modal_show_context").checked = false;
+  getElement("modal_reasoning_summary").value = "hide";
+  run("updateManualModelPresentationPreview()");
+  assert.strictEqual(getElement("modal_catalog_preview").textContent, "General");
+  assert.match(getElement("modal_catalog_warning").textContent, /可能无法区分/);
+  run("savePresentation('provider-a/model')");
+  const saved = run("state.catalog_presentations['provider-a/model']");
+  assert.strictEqual(saved.catalog_alias, "General");
+  assert.strictEqual(saved.show_context, false);
+  assert.strictEqual(saved.reasoning_summary, "hide");
+  run("openNativePresentationModal()");
+  assert.match(getElement("modal_body").innerHTML, /native-model/);
+  assert.match(getElement("modal_body").innerHTML, /显示设置/);
+}
+
+function presentationMigrationBehavior() {
+  run("state = {catalog_presentations:{'old/model-a':{catalog_alias:'General',show_context:false,reasoning_summary:'hide'},'old/model-b':{catalog_alias:'Builder',show_context:true,reasoning_summary:'auto'},'native-model':{catalog_alias:'Native',show_context:true,reasoning_summary:'show'}}}");
+  run("movePresentationPrefix('old', 'new')");
+  assert.strictEqual(run("state.catalog_presentations['old/model-a']"), undefined);
+  assert.strictEqual(run("state.catalog_presentations['new/model-a'].catalog_alias"), "General");
+  assert.strictEqual(run("state.catalog_presentations['new/model-a'].show_context"), false);
+  assert.strictEqual(run("state.catalog_presentations['new/model-b'].catalog_alias"), "Builder");
+  assert.strictEqual(run("state.catalog_presentations['native-model'].catalog_alias"), "Native");
+
+  run("movePresentation('new/model-a', 'provider/model-a')");
+  assert.strictEqual(run("state.catalog_presentations['new/model-a']"), undefined);
+  assert.strictEqual(run("state.catalog_presentations['provider/model-a'].reasoning_summary"), "hide");
+
+  run("state.emp_version = '0.6.0'");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.6.0.emp");
+  run("state.emp_version = '../../unsafe'");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.6.0.emp");
+}
+
+function nestedModalBehavior() {
+  run("openModal('Parent editor', '<p>parent marker</p>', 'Save parent', () => {}); openNestedModal('Child editor', '<p>child marker</p>', 'Save child', () => {})");
+  assert.strictEqual(getElement("modal_title").textContent, "Child editor");
+  assert.match(getElement("modal_body").innerHTML, /child marker/);
+  run("closeModal()");
+  assert.strictEqual(getElement("modal_title").textContent, "Parent editor");
+  assert.match(getElement("modal_body").innerHTML, /parent marker/);
+  assert.strictEqual(getElement("modal_submit").textContent, "Save parent");
+  assert(!getElement("modal_backdrop").classList.contains("hidden"));
+  run("closeModal()");
+  assert(getElement("modal_backdrop").classList.contains("hidden"));
+}
+
+async function atomicStateBehavior() {
+  run("state = {native_catalog_path:'',catalog_presentations:{},accounts:[{id:'account-a',prefix:'old'}],providers:[],models:[]}; __candidate = cloneState(); __candidate.accounts[0].prefix = 'new'");
+  context.__apiStub = async path => { if (path === "/api/config") throw new Error("save rejected"); throw new Error("unexpected API " + path); };
+  run("api = __apiStub");
+  await assert.rejects(run("persistState('save', __candidate)"), /save rejected/);
+  assert.strictEqual(run("state.accounts[0].prefix"), "old", "failed save must not mutate live UI state");
+
+  run("state = {native_catalog_path:'',catalog_presentations:{},accounts:[],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/model',provider:'provider-a',enabled:true}]}");
+  context.__apiStub = async path => { if (path === "/api/config") throw new Error("save rejected"); throw new Error("unexpected API " + path); };
+  run("api = __apiStub");
+  await run("toggleProviderModels('provider-a', false)");
+  assert.strictEqual(run("state.models[0].enabled"), true, "failed provider visibility save must not mutate live UI state");
+
+  run("state = {native_catalog_path:'',catalog_presentations:{},accounts:[{id:'account-a',prefix:'old'}],providers:[],models:[]}; __candidate = cloneState(); __candidate.accounts[0].prefix = 'saved'");
+  context.__apiStub = async path => {
+    if (path === "/api/config") return context.__candidate;
+    if (path === "/api/catalog/refresh") throw new Error("refresh rejected");
+    if (path === "/api/integration") return {};
+    throw new Error("unexpected API " + path);
+  };
+  run("api = __apiStub");
+  await assert.rejects(run("persistState('save', __candidate)"), /refresh rejected/);
+  assert.strictEqual(run("state.accounts[0].prefix"), "saved", "a persisted save remains authoritative when catalog refresh fails");
+
+  run("state = {catalog_presentations:{},accounts:[],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',supports_reasoning_summaries:false}]}; openManualModelModal('provider-a/model')");
+  getElement("modal_model_provider").value = "provider-a";
+  getElement("modal_model_upstream").value = "model";
+  context.__apiStub = async path => {
+    if (path === "/api/models/metadata") return {context_window:1000,input_token_limit:1000,output_token_limit:100,reasoning_levels:["high"],supports_reasoning:true,supports_reasoning_summaries:true};
+    throw new Error("unexpected API " + path);
+  };
+  run("api = __apiStub");
+  await run("inspectModalModel()");
+  assert.strictEqual(run("modalReasoningSummarySupport"), true, "metadata inspection must retain summary capability");
+
+  run("state = {native_catalog_path:'',catalog_presentations:{'provider-a/a':{catalog_alias:'A'},'provider-a/b':{catalog_alias:'B'}},accounts:[],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/a',provider:'provider-a',upstream_id:'a',enabled:true},{id:'provider-a/b',provider:'provider-a',upstream_id:'b',enabled:true}]}; openManualModelModal('provider-a/a')");
+  getElement("modal_model_provider").value = "provider-a";
+  getElement("modal_model_upstream").value = "b";
+  await assert.rejects(run("saveManualModel()"), /模型路由已存在/);
+  assert.deepStrictEqual(
+    Array.from(run("state.models.map(model => model.id)")),
+    ["provider-a/a", "provider-a/b"],
+    "a colliding model rename must preserve both routes",
+  );
+  assert.strictEqual(run("state.catalog_presentations['provider-a/b'].catalog_alias"), "B");
+}
+
 (async () => {
   await integrationBehavior();
   pickerBehavior();
@@ -296,6 +399,10 @@ function capabilityMetadataBehavior() {
   modelGroupBehavior();
   officialPresetBehavior();
   capabilityMetadataBehavior();
+  presentationBehavior();
+  presentationMigrationBehavior();
+  nestedModalBehavior();
+  await atomicStateBehavior();
   process.stdout.write("web DOM behavior: ok\n");
 })().catch(error => {
   console.error(error.stack || error);

@@ -198,7 +198,11 @@ class MultimodalRegressionTests(unittest.TestCase):
         }
         model = {"id": "openrouter/vision-model", "upstream_id": "vision-model"}
 
-        with patch.object(router, "_request", return_value=_JsonResponse({})) as request:
+        with patch.object(
+            router,
+            "_request",
+            return_value=_JsonResponse({"status": "completed", "output": []}),
+        ) as request:
             forward_responses(self._provider(), body, model, {})
 
         sent = request.call_args.args[1]

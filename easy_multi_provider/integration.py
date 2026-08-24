@@ -11,6 +11,7 @@ import contextlib
 import errno
 import json
 import os
+import stat
 import tempfile
 import time
 import uuid
@@ -189,6 +190,22 @@ def _reject_symlink(path: Path, label: str) -> None:
         raise SymlinkConfigError("%s must not be a symlink" % label)
 
 
+def _reject_symlink_directory_components(path: Path, label: str) -> Path:
+    """Return an absolute directory path whose existing components are real."""
+
+    candidate = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+    for component in list(reversed(candidate.parents)) + [candidate]:
+        try:
+            info = component.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise IntegrationError("unable to inspect %s" % label) from exc
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise SymlinkConfigError("%s must not contain a symlink" % label)
+    return candidate
+
+
 def _fsync_directory(directory: Path) -> None:
     """Best-effort directory durability after the name replacement."""
 
@@ -215,7 +232,9 @@ def atomic_write_text(path: Path, text: str, mode: int = 0o600) -> Path:
 
     path = Path(path)
     _reject_symlink(path, "target path")
+    _reject_symlink_directory_components(path.parent, "target directory")
     path.parent.mkdir(parents=True, exist_ok=True)
+    _reject_symlink_directory_components(path.parent, "target directory")
     fd, temporary = tempfile.mkstemp(prefix=".emp-integration-", dir=str(path.parent))
     try:
         try:
@@ -283,16 +302,48 @@ class _FileLock:
 
     def __enter__(self) -> "_FileLock":
         _reject_symlink(self.path, "integration lock")
+        parent = _reject_symlink_directory_components(
+            self.path.parent, "integration lock directory"
+        )
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(str(self.path.parent), 0o700)
+        parent = _reject_symlink_directory_components(
+            self.path.parent, "integration lock directory"
+        )
+        parent_fd = -1
         try:
-            self._fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT, 0o600)
-            os.chmod(str(self.path), 0o600)
+            if os.name != "nt" and hasattr(os, "O_DIRECTORY"):
+                directory_flags = os.O_RDONLY | os.O_DIRECTORY
+                if hasattr(os, "O_NOFOLLOW"):
+                    directory_flags |= os.O_NOFOLLOW
+                parent_fd = os.open(str(parent), directory_flags)
+                if hasattr(os, "fchmod"):
+                    os.fchmod(parent_fd, 0o700)
+                file_flags = os.O_RDWR | os.O_CREAT
+                if hasattr(os, "O_NOFOLLOW"):
+                    file_flags |= os.O_NOFOLLOW
+                self._fd = os.open(
+                    self.path.name,
+                    file_flags,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+            else:  # pragma: no cover - Windows exercises this path
+                os.chmod(str(parent), 0o700)
+                self._fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT, 0o600)
+            if not stat.S_ISREG(os.fstat(self._fd).st_mode):
+                raise OSError("integration lock is not a regular file")
+            if hasattr(os, "fchmod"):
+                os.fchmod(self._fd, 0o600)
+            else:  # pragma: no cover - Windows without fchmod
+                os.chmod(str(self.path), 0o600)
         except OSError as exc:
             if self._fd >= 0:
                 os.close(self._fd)
                 self._fd = -1
             raise LockTimeout("unable to open integration lock") from exc
+        finally:
+            if parent_fd >= 0:
+                os.close(parent_fd)
         deadline = time.monotonic() + self.timeout
         try:
             while True:

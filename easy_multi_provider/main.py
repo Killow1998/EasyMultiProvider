@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
+from .config import ConfigError
 from .codex_runtime import (
     RELOAD_REQUIRED,
     RuntimeRecoveryStore,
@@ -262,6 +263,10 @@ def _safe_error_message(error: BaseException) -> str:
         return "symlink paths are not supported for Codex config or EMP state"
     if name == "LockTimeout":
         return "EMP integration lock is unavailable"
+    if isinstance(error, ConfigError):
+        if str(error) == "another EMP service owns this configuration":
+            return str(error)
+        return "EMP configuration is invalid"
     if isinstance(error, OSError):
         return "EMP integration state is not readable or writable"
     return "EMP integration operation failed"
@@ -275,7 +280,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
     args = parser.parse_args(raw_args)
     if args.command == "serve":
-        return _run_serve(args)
+        try:
+            return _run_serve(args)
+        except (ConfigError, OSError) as error:
+            print(_safe_error_message(error), file=sys.stderr)
+            return 1
     if args.command == "doctor":
         try:
             return _run_doctor(args)

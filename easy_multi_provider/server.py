@@ -76,16 +76,27 @@ from .codex_runtime import (
 )
 from .context_guard import ContextGuard, ContextGuardBlocked
 from .diagnostic_journal import NullJournal, create_journal
-from .integration import IntegrationError, IntegrationManager, IntegrationResult, IntegrationStatus, ServiceNotReady
+from .integration import (
+    IntegrationError,
+    IntegrationManager,
+    IntegrationResult,
+    IntegrationStatus,
+    LockTimeout,
+    ServiceNotReady,
+    _FileLock,
+)
 from .main import resolve_integration_paths
 from .migration import export_bundle, import_bundle
+from .native_websocket import (
+    NativeWebSocketBridge,
+    NativeWebSocketError,
+    terminal_observation as native_websocket_terminal,
+)
 from .quota import QuotaError, account_refresh_lock, read_native_login_quota, refresh_account_quota
 from .provider_replay import ProviderReplayCache
 from .continuity import (
     CompactionBindingStore,
     NativeCompactionObserver,
-    ContinuityError,
-    derive_native_route_identity,
     register_native_json,
 )
 from .router import (
@@ -95,6 +106,7 @@ from .router import (
     discover_models,
     forward_native_search,
     model_metadata,
+    prepare_native_websocket_request,
     proxy,
     proxy_compact,
 )
@@ -106,10 +118,12 @@ from .transport import (
     sse_json_events,
     websocket_accept,
 )
-from .vault import ensure_master_key
+from .stream_adapters import _response_json_stream
+from .vault import default_master_key_file, ensure_master_key
 
 
 WEB_FILE = Path(__file__).with_name("web").joinpath("index.html")
+_PROCESS_SERVICE_LOCK = threading.Lock()
 PROXY_ENV_KEYS = (
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -253,6 +267,7 @@ _SOURCE_RANK = {
 
 _MERGE_SCALAR_FIELDS = (
     "supports_reasoning",
+    "supports_reasoning_summaries",
     "reasoning_control",
     "context_window",
     "max_input_tokens",
@@ -424,10 +439,14 @@ def _build_new_model_from_discovery(
         "id": model_id,
         "provider": provider_id,
         "upstream_id": upstream_id,
+        "family_id": item.get("family_id", ""),
         "display_name": item.get("display_name") or upstream_id,
         "description": item.get("description", ""),
         "supports_reasoning": item.get("supports_reasoning")
         if isinstance(item.get("supports_reasoning"), bool)
+        else None,
+        "supports_reasoning_summaries": item.get("supports_reasoning_summaries")
+        if isinstance(item.get("supports_reasoning_summaries"), bool)
         else None,
         "reasoning_levels": list(item.get("reasoning_levels") or []),
         "reasoning_control": item.get("reasoning_control", ""),
@@ -593,6 +612,10 @@ class ObservationRing:
         except (TypeError, ValueError):
             duration = 0
         duration = max(0, min(3_600_000, duration))
+        local_prepare_ms = _safe_diagnostic_int(event.get("local_prepare_ms"), 60_000)
+        upstream_first_event_ms = _safe_diagnostic_int(
+            event.get("upstream_first_event_ms"), 3_600_000
+        )
         tool_pairing = event.get("tool_pairing_status", "none")
         if tool_pairing not in _DIAGNOSTIC_TOOL_PAIRING:
             tool_pairing = "invalid"
@@ -654,6 +677,9 @@ class ObservationRing:
             "upstream_content_encoding": upstream_content_encoding,
             "response_bytes": _safe_diagnostic_int(event.get("response_bytes"), 64 * 1024 * 1024),
             "duration_ms": duration,
+            "local_prepare_ms": local_prepare_ms,
+            "upstream_first_event_ms": upstream_first_event_ms,
+            "connection_reused": bool(event.get("connection_reused", False)),
             "status": status,
             "error_class": error_class,
             "fallback": bool(event.get("protocol_fallback", event.get("fallback", False))),
@@ -946,6 +972,8 @@ class AppState:
         # Discovery is low-frequency and upstream-bound; one fixed lock avoids
         # retaining attacker-controlled provider IDs in process state.
         self.discovery_lock = threading.Lock()
+        self._native_websocket_lock = threading.Lock()
+        self._native_websocket_cooldowns: Dict[str, float] = {}
         self.config = load(self.path)
         state_dir = self.path.parent / "state"
         self._compaction_bindings_path = state_dir / "continuity-bindings.enc"
@@ -1558,6 +1586,176 @@ class AppState:
                 except Exception:
                     pass
 
+    def prepare_native_websocket(
+        self,
+        body: Dict[str, Any],
+        incoming: Dict[str, str],
+        context_completeness: str,
+    ):
+        """Resolve a transient native WS plan without retaining request content."""
+
+        started = time.monotonic()
+
+        def on_context(provider, model, protocol, payload, stream, operation):
+            assessment = self.context_guard.assess(
+                provider,
+                model,
+                protocol,
+                payload,
+                context_completeness,
+            )
+            observation = assessment.to_safe_dict()
+            if assessment.decision == "block":
+                raise ContextGuardBlocked(assessment)
+            return observation
+
+        def on_continuity(
+            source_binding_result,
+            same_domain,
+            handoff_attempted,
+            handoff_succeeded,
+            item_index,
+            item_type,
+            reason,
+        ):
+            self._continuity_diagnostic(
+                "websocket",
+                source_binding_result,
+                same_domain=same_domain,
+                handoff_attempted=handoff_attempted,
+                handoff_succeeded=handoff_succeeded,
+                item_index=item_index,
+                item_type=item_type,
+                reason=reason,
+            )
+
+        try:
+            plan = prepare_native_websocket_request(
+                self.snapshot(),
+                body,
+                incoming,
+                on_context=on_context,
+                binding_store=self.compaction_bindings,
+                on_continuity=on_continuity,
+            )
+        except RouterError as exc:
+            self._record_route_failure(
+                body,
+                started,
+                "websocket",
+                "responses",
+                exc.status,
+                getattr(exc, "context_observation", None),
+                "context_length_exceeded"
+                if isinstance(exc, ContextLengthError)
+                else None,
+            )
+            raise
+        prepare_ms = max(0, int(round((time.monotonic() - started) * 1000)))
+        return plan, started, prepare_ms
+
+    def native_websocket_allowed(self, connection_key: str) -> bool:
+        now = time.monotonic()
+        with self._native_websocket_lock:
+            stale = [
+                key
+                for key, deadline in self._native_websocket_cooldowns.items()
+                if deadline <= now
+            ]
+            for key in stale:
+                self._native_websocket_cooldowns.pop(key, None)
+            return self._native_websocket_cooldowns.get(connection_key, 0.0) <= now
+
+    def mark_native_websocket_unavailable(
+        self, connection_key: str, seconds: float = 30.0
+    ) -> None:
+        deadline = time.monotonic() + max(1.0, min(300.0, float(seconds)))
+        with self._native_websocket_lock:
+            if len(self._native_websocket_cooldowns) >= 32:
+                oldest = min(
+                    self._native_websocket_cooldowns,
+                    key=self._native_websocket_cooldowns.get,
+                )
+                self._native_websocket_cooldowns.pop(oldest, None)
+            self._native_websocket_cooldowns[connection_key] = deadline
+
+    def mark_native_websocket_available(self, connection_key: str) -> None:
+        with self._native_websocket_lock:
+            self._native_websocket_cooldowns.pop(connection_key, None)
+
+    def native_websocket_observer(self, identity):
+        if self.compaction_bindings is None or identity is None:
+            return None
+        try:
+            observer = NativeCompactionObserver(self.compaction_bindings, identity)
+        except Exception:
+            return None
+
+        def safe_observe(event):
+            try:
+                count = observer.observe(event)
+                if count:
+                    self._continuity_diagnostic("websocket", "registered")
+            except Exception:
+                self._continuity_diagnostic(
+                    "websocket", "registration_failed", error_class="observer_error"
+                )
+
+        return observer, safe_observe
+
+    def record_native_websocket(
+        self,
+        plan,
+        body: Dict[str, Any],
+        started: float,
+        prepare_ms: int,
+        first_event_ms: Optional[int],
+        response_bytes: int,
+        terminal: Mapping[str, Any],
+        connection_reused: bool,
+        output_emitted: bool,
+        tool_activity: bool,
+        terminal_event_observed: bool = True,
+        recovery_mode: str = "none",
+        recovery_succeeded: bool = False,
+        protocol_fallback: bool = False,
+    ) -> None:
+        try:
+            upstream_request_bytes = len(
+                json.dumps(
+                    plan.payload, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+            )
+        except (TypeError, ValueError, OverflowError):
+            upstream_request_bytes = 0
+        event = {
+            "provider_id": plan.provider.get("id", ""),
+            "model_id": plan.requested_slug,
+            "endpoint_fingerprint": plan.identity.endpoint_fingerprint,
+            "deployment_identity": deployment_identity(plan.provider, plan.model),
+            "resolved_protocol": "responses",
+            "dialect": "codex_native",
+            "protocol_decision": "explicit",
+            "protocol_fallback": protocol_fallback,
+            "decoded_request_bytes": upstream_request_bytes,
+            "upstream_request_bytes": upstream_request_bytes,
+            "upstream_content_encoding": "identity",
+            "response_bytes": response_bytes,
+            "context_observation": plan.context_observation,
+            "terminal_event_observed": terminal_event_observed,
+            "recovery_mode": recovery_mode,
+            "recovery_succeeded": recovery_succeeded,
+            "local_prepare_ms": prepare_ms,
+            "upstream_first_event_ms": first_event_ms,
+            "connection_reused": connection_reused,
+            "output_emitted": output_emitted,
+            "tool_activity": tool_activity,
+        }
+        event.update(dict(terminal))
+        self._record_route_event(
+            event, body, started, "websocket", "responses"
+        )
+
     def route(
         self,
         body: Dict[str, Any],
@@ -1908,6 +2106,8 @@ class AppState:
                             )
                         if item.get("created_at") and not existing.get("created_at"):
                             existing["created_at"] = item["created_at"]
+                        if item.get("family_id") and not existing.get("family_id"):
+                            existing["family_id"] = item["family_id"]
                     continue
                 model = _build_new_model_from_discovery(item, provider_id, observed_at)
                 models.append(model)
@@ -2029,6 +2229,7 @@ def _json_bytes(value: Any) -> bytes:
 
 def _management_config(config: Dict[str, Any]) -> Dict[str, Any]:
     result = public_config(config)
+    result["emp_version"] = __version__
     result["subscription_models"] = subscription_model_options(config)
     return result
 
@@ -2543,23 +2744,12 @@ def make_handler(state: AppState):
                 raise TransportError("upstream response is not valid JSON") from exc
             if not isinstance(response, dict):
                 raise TransportError("upstream response must be a JSON object")
-            response_id = response.get("id") or "resp_" + uuid.uuid4().hex
-            response["id"] = response_id
-            yield {"type": "response.created", "response": {"id": response_id}}
-            for index, item in enumerate(response.get("output", []) or []):
-                if isinstance(item, dict):
-                    yield {
-                        "type": "response.output_item.done",
-                        "output_index": index,
-                        "item": item,
-                    }
-            response_status = str(response.get("status") or "completed")
-            terminal_type = {
-                "completed": "response.completed",
-                "incomplete": "response.incomplete",
-                "failed": "response.failed",
-            }.get(response_status, "response.completed")
-            yield {"type": terminal_type, "response": response}
+            yield from sse_json_events(
+                _response_json_stream(
+                    response,
+                    metadata.get("dialect") != "codex_native",
+                )
+            )
 
         def _serve_responses_websocket(self) -> None:
             if not self._proxy_allowed():
@@ -2597,6 +2787,7 @@ def make_handler(state: AppState):
             self.close_connection = True
             self.connection.settimeout(180)
             websocket = WebSocketConnection(self.rfile, self.wfile)
+            native_upstream = NativeWebSocketBridge()
             last_response_id = None
             last_input = None
             try:
@@ -2610,6 +2801,255 @@ def make_handler(state: AppState):
                             raise TransportError("websocket request must be a JSON object")
                         if request.pop("type", None) != "response.create":
                             raise TransportError("websocket request.type must be response.create")
+                        incoming_headers = {
+                            key: value for key, value in self.headers.items()
+                        }
+                        previous_hint = request.get("previous_response_id")
+                        plan, native_started, native_prepare_ms = (
+                            state.prepare_native_websocket(
+                                request,
+                                incoming_headers,
+                                "unknown" if previous_hint is not None else "high",
+                            )
+                        )
+                        if (
+                            plan is not None
+                            and state.native_websocket_allowed(
+                                plan.target.connection_key
+                            )
+                        ):
+                            if (
+                                previous_hint is not None
+                                and native_upstream.connection_key
+                                != plan.target.connection_key
+                            ):
+                                self._websocket_error(
+                                    websocket,
+                                    "Previous response was not found. Retrying the full request.",
+                                    404,
+                                    "previous_response_not_found",
+                                    {
+                                        "context_decision": "warned",
+                                        "confidence": 0.0,
+                                        "source": "unknown",
+                                        "completeness": "lost",
+                                        "next_action": "retry the full native request",
+                                    },
+                                )
+                                continue
+                            observer_pair = state.native_websocket_observer(
+                                plan.identity
+                            )
+                            observer = observer_pair[0] if observer_pair else None
+                            observe = observer_pair[1] if observer_pair else None
+                            response_bytes = 0
+                            first_event_ms = None
+                            terminal = None
+                            output_emitted = False
+                            tool_activity = False
+                            pending_lifecycle_events = []
+                            native_upstream_started = time.monotonic()
+                            try:
+                                for event in native_upstream.events(
+                                    plan.target, plan.payload
+                                ):
+                                    if first_event_ms is None:
+                                        first_event_ms = max(
+                                            0,
+                                            int(
+                                                round(
+                                                    (
+                                                        time.monotonic()
+                                                        - native_upstream_started
+                                                    )
+                                                    * 1000
+                                                )
+                                            ),
+                                        )
+                                    encoded_event = json.dumps(
+                                        event,
+                                        ensure_ascii=False,
+                                        separators=(",", ":"),
+                                    ).encode("utf-8")
+                                    response_bytes += len(encoded_event)
+                                    event_type = str(event.get("type") or "")
+                                    item = event.get("item")
+                                    item_type = (
+                                        str(item.get("type") or "")
+                                        if isinstance(item, Mapping)
+                                        else ""
+                                    )
+                                    message_content = (
+                                        item.get("content")
+                                        if isinstance(item, Mapping)
+                                        and item_type == "message"
+                                        else None
+                                    )
+                                    event_output = (
+                                        "output_text" in event_type
+                                        or "output_image" in event_type
+                                        or (
+                                            isinstance(message_content, list)
+                                            and bool(message_content)
+                                        )
+                                        or "reasoning" in event_type
+                                        or item_type == "reasoning"
+                                    )
+                                    event_tool = (
+                                        "function_call" in event_type
+                                        or "custom_tool_call" in event_type
+                                        or item_type
+                                        in {"function_call", "custom_tool_call"}
+                                    )
+                                    output_emitted = output_emitted or event_output
+                                    tool_activity = tool_activity or event_tool
+                                    if observe is not None:
+                                        observe(event)
+                                    terminal = native_websocket_terminal(event)
+                                    if event_output or event_tool or terminal is not None:
+                                        for pending_event in pending_lifecycle_events:
+                                            websocket.send_json(pending_event)
+                                        pending_lifecycle_events = []
+                                        websocket.send_json(event)
+                                    else:
+                                        pending_lifecycle_events.append(event)
+                                if terminal is None:
+                                    raise NativeWebSocketError(
+                                        "native upstream websocket ended without a terminal event"
+                                    )
+                            except NativeWebSocketError as exc:
+                                if exc.retryable:
+                                    state.mark_native_websocket_unavailable(
+                                        plan.target.connection_key
+                                    )
+                                if output_emitted or tool_activity:
+                                    terminal = {
+                                        "status": exc.status,
+                                        "success": False,
+                                        "error_class": "upstream_close_after_output"
+                                        if output_emitted or tool_activity
+                                        else "upstream_close_pre_output",
+                                    }
+                                    failed_id = "resp_" + uuid.uuid4().hex
+                                    websocket.send_json(
+                                        {
+                                            "type": "response.failed",
+                                            "response": {
+                                                "id": failed_id,
+                                                "object": "response",
+                                                "status": "failed",
+                                                "output": [],
+                                                "error": {
+                                                    "code": terminal["error_class"],
+                                                    "message": str(exc),
+                                                },
+                                            },
+                                        }
+                                    )
+                                    state.record_native_websocket(
+                                        plan,
+                                        request,
+                                        native_started,
+                                        native_prepare_ms,
+                                        first_event_ms,
+                                        response_bytes,
+                                        terminal,
+                                        native_upstream.last_connection_reused,
+                                        output_emitted,
+                                        tool_activity,
+                                    )
+                                    continue
+                                if not exc.retryable:
+                                    error_class = state._diagnostic_error_class(
+                                        exc.status
+                                    )
+                                    terminal = {
+                                        "status": exc.status,
+                                        "success": False,
+                                        "error_class": error_class,
+                                    }
+                                    self._websocket_error(
+                                        websocket,
+                                        "Native upstream WebSocket request failed.",
+                                        exc.status,
+                                        error_class,
+                                    )
+                                    state.record_native_websocket(
+                                        plan,
+                                        request,
+                                        native_started,
+                                        native_prepare_ms,
+                                        first_event_ms,
+                                        response_bytes,
+                                        terminal,
+                                        native_upstream.last_connection_reused,
+                                        output_emitted,
+                                        tool_activity,
+                                        terminal_event_observed=False,
+                                    )
+                                    continue
+                                if previous_hint is not None:
+                                    self._websocket_error(
+                                        websocket,
+                                        "Previous response was not found. Retrying the full request.",
+                                        404,
+                                        "previous_response_not_found",
+                                        {
+                                            "context_decision": "warned",
+                                            "confidence": 0.0,
+                                            "source": "unknown",
+                                            "completeness": "lost",
+                                            "next_action": "retry the full native request",
+                                        },
+                                    )
+                                    continue
+                                # A full request can safely use the established
+                                # HTTP compatibility path when the upstream WS
+                                # handshake failed before any event was emitted.
+                                state.record_native_websocket(
+                                    plan,
+                                    request,
+                                    native_started,
+                                    native_prepare_ms,
+                                    first_event_ms,
+                                    response_bytes,
+                                    {
+                                        "status": exc.status,
+                                        "success": False,
+                                        "error_class": state._diagnostic_error_class(
+                                            exc.status
+                                        ),
+                                    },
+                                    native_upstream.last_connection_reused,
+                                    output_emitted,
+                                    tool_activity,
+                                    terminal_event_observed=False,
+                                    recovery_mode="native_http_fallback",
+                                    protocol_fallback=True,
+                                )
+                            else:
+                                state.mark_native_websocket_available(
+                                    plan.target.connection_key
+                                )
+                                state.record_native_websocket(
+                                    plan,
+                                    request,
+                                    native_started,
+                                    native_prepare_ms,
+                                    first_event_ms,
+                                    response_bytes,
+                                    terminal,
+                                    native_upstream.last_connection_reused,
+                                    output_emitted,
+                                    tool_activity,
+                                )
+                                continue
+                            finally:
+                                if observer is not None:
+                                    try:
+                                        observer.abandon()
+                                    except Exception:
+                                        pass
                         previous_response_id = request.pop("previous_response_id", None)
                         generate = request.pop("generate", None)
                         current_input = request.get("input", [])
@@ -2762,6 +3202,7 @@ def make_handler(state: AppState):
             finally:
                 last_response_id = None
                 last_input = None
+                native_upstream.close()
                 websocket.close()
 
         def do_GET(self) -> None:
@@ -2833,6 +3274,13 @@ def make_handler(state: AppState):
                 return
             if path == "/v1/models":
                 catalog = build_catalog(state.snapshot())
+                query = parse_qs(urlparse(self.path).query)
+                if "client_version" in query:
+                    # Codex's models manager uses its own rich ModelsResponse
+                    # schema at this endpoint. Other OpenAI-compatible clients
+                    # still receive the conventional object/data model list.
+                    self._send(200, _json_bytes(catalog))
+                    return
                 data = [
                     {
                         "id": model.get("slug"),
@@ -3285,7 +3733,7 @@ def make_handler(state: AppState):
             except Exception as exc:  # Keep server alive and avoid leaking request details.
                 emit_operation_failure(exc)
                 self._record_unexpected_exception(exc)
-                self._error(500, "internal server error: %s" % exc)
+                self._error(500, "internal server error")
 
         def do_DELETE(self) -> None:
             path = urlparse(self.path).path
@@ -3322,7 +3770,7 @@ def make_handler(state: AppState):
             except Exception as exc:  # Keep server alive and avoid leaking request details.
                 emit_account_operation(self._management_failure_class(exc))
                 self._record_unexpected_exception(exc)
-                self._error(500, "internal server error: %s" % exc)
+                self._error(500, "internal server error")
 
     return Handler
 
@@ -3452,7 +3900,39 @@ def _lifecycle_result_fields(result: Any) -> Dict[str, Any]:
 
 
 def serve(path: Optional[Path] = None, host: Optional[str] = None, port: Optional[int] = None) -> None:
-    effective_config_path = Path(path or config_path())
+    configured_path = Path(path or config_path()).expanduser()
+    effective_config_path = configured_path.resolve()
+    service_lock_path = effective_config_path.parent / "state" / "service.lock"
+    if not _PROCESS_SERVICE_LOCK.acquire(blocking=False):
+        raise ConfigError("another EMP service is already running in this process")
+    owner = None
+    try:
+        owner = _FileLock(service_lock_path, timeout=0.0)
+        owner.__enter__()
+    except LockTimeout as exc:
+        _PROCESS_SERVICE_LOCK.release()
+        raise ConfigError(
+            "another EMP service owns this configuration"
+        ) from exc
+    except BaseException:
+        _PROCESS_SERVICE_LOCK.release()
+        raise
+    try:
+        with default_master_key_file(
+            effective_config_path.parent / "state" / "master.key"
+        ):
+            _serve_owned(effective_config_path, host, port)
+    finally:
+        if owner is not None:
+            owner.__exit__(None, None, None)
+        _PROCESS_SERVICE_LOCK.release()
+
+
+def _serve_owned(
+    effective_config_path: Path,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+) -> None:
     try:
         journal = create_journal(effective_config_path.parent)
     except Exception:

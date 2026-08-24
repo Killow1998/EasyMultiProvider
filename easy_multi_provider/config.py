@@ -37,6 +37,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "accounts": [],
     "providers": [],
     "models": [],
+    "catalog_presentations": {},
 }
 
 _ID = re.compile(r"^[A-Za-z0-9._/-]+$")
@@ -52,6 +53,7 @@ _CAPABILITY_SOURCE_FIELDS = {
     "structured_output",
     "web_search",
     "supports_reasoning",
+    "supports_reasoning_summaries",
     "reasoning_levels",
     "reasoning_control",
     "context_window",
@@ -65,6 +67,7 @@ _CAPABILITY_SOURCE_FIELDS = {
 }
 _EXPLICIT_CAPABILITY_FIELDS = {
     "supports_reasoning",
+    "supports_reasoning_summaries",
     "input_modalities",
     "output_modalities",
     "supported_protocols",
@@ -81,11 +84,14 @@ _BOOLEAN_CAPABILITIES = {
     "structured_output",
     "web_search",
     "supports_reasoning",
+    "supports_reasoning_summaries",
     "websocket",
 }
 _SAFE_CAPABILITY_ID = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
 _ENDPOINT_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CONCRETE_PROTOCOLS = {"responses", "chat_completions", "anthropic_messages"}
+_REASONING_SUMMARY_POLICIES = {"auto", "show", "hide"}
+_MAX_CATALOG_ALIAS_BYTES = 512
 
 
 class ConfigError(ValueError):
@@ -123,6 +129,40 @@ def _validate_provider_id(value: Any) -> str:
     if not _PROVIDER_ID.fullmatch(value):
         raise ConfigError("provider.id must be a safe single path segment")
     return value
+
+
+def _normalize_catalog_presentations(raw: Any) -> Dict[str, Dict[str, Any]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigError("catalog_presentations must be an object")
+    result: Dict[str, Dict[str, Any]] = {}
+    for raw_route, raw_value in raw.items():
+        route = _validate_id(raw_route, "catalog_presentations route")
+        if not isinstance(raw_value, dict):
+            raise ConfigError("catalog presentation must be an object")
+        alias = raw_value.get("catalog_alias", "")
+        if not isinstance(alias, str):
+            raise ConfigError("catalog_alias must be a string")
+        if len(alias.encode("utf-8")) > _MAX_CATALOG_ALIAS_BYTES:
+            raise ConfigError("catalog_alias is too long")
+        if any(ord(character) < 32 or ord(character) == 127 for character in alias):
+            raise ConfigError("catalog_alias contains unsupported characters")
+        show_context = raw_value.get("show_context", True)
+        if not isinstance(show_context, bool):
+            raise ConfigError("show_context must be boolean")
+        reasoning_summary = raw_value.get("reasoning_summary", "auto")
+        if not isinstance(reasoning_summary, str):
+            raise ConfigError("reasoning_summary must be a string")
+        reasoning_summary = reasoning_summary.strip().lower()
+        if reasoning_summary not in _REASONING_SUMMARY_POLICIES:
+            raise ConfigError("reasoning_summary must be auto, show, or hide")
+        result[route] = {
+            "catalog_alias": alias,
+            "show_context": show_context,
+            "reasoning_summary": reasoning_summary,
+        }
+    return result
 
 
 def _validate_url(value: Any, field: str) -> str:
@@ -399,6 +439,15 @@ def _normalize_model(raw: Dict[str, Any]) -> Dict[str, Any]:
         supports_reasoning = raw_reasoning_support
     else:
         raise ConfigError("model.supports_reasoning must be boolean or null")
+    raw_summary_support = raw.get("supports_reasoning_summaries")
+    if raw_summary_support is None:
+        supports_reasoning_summaries = None
+    elif isinstance(raw_summary_support, bool):
+        supports_reasoning_summaries = raw_summary_support
+    else:
+        raise ConfigError(
+            "model.supports_reasoning_summaries must be boolean or null"
+        )
     context_window = int(raw.get("context_window", 0) or 0)
     if context_window < 0:
         raise ConfigError("model.context_window cannot be negative")
@@ -432,9 +481,13 @@ def _normalize_model(raw: Dict[str, Any]) -> Dict[str, Any]:
         "id": _validate_id(raw.get("id"), "model.id"),
         "provider": _validate_id(raw.get("provider"), "model.provider"),
         "upstream_id": _string(raw.get("upstream_id")),
+        "family_id": _safe_capability_identity(
+            raw.get("family_id"), "model.family_id"
+        ),
         "display_name": _string(raw.get("display_name")),
         "description": _string(raw.get("description")),
         "supports_reasoning": supports_reasoning,
+        "supports_reasoning_summaries": supports_reasoning_summaries,
         "reasoning_levels": levels,
         "reasoning_control": reasoning_control,
         "context_window": context_window,
@@ -521,6 +574,9 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     result["providers"] = providers
     result["models"] = models
     result["accounts"] = accounts
+    result["catalog_presentations"] = _normalize_catalog_presentations(
+        raw.get("catalog_presentations")
+    )
     return result
 
 
@@ -659,12 +715,17 @@ def merge_web_update(
         for field in (
             "visibility",
             "supports_reasoning",
+            "supports_reasoning_summaries",
             "input_modalities",
             "output_modalities",
             "supported_protocols",
             "reasoning_control",
             "max_input_tokens",
+            "output_limit",
             "supports_image_detail_original",
+            "deployment_identity",
+            "resolved_protocol",
+            "protocol_observation",
         ):
             if old and field not in model:
                 model[field] = copy.deepcopy(old.get(field))
@@ -676,9 +737,13 @@ def merge_web_update(
             for cap_field in _BOOLEAN_CAPABILITIES:
                 if cap_field not in incoming_caps and cap_field in old_caps:
                     incoming_caps[cap_field] = copy.deepcopy(old_caps[cap_field])
-        sources = copy.deepcopy(model.get("capability_sources") or {})
+        sources = copy.deepcopy(old.get("capability_sources", {}) if old else {})
+        incoming_sources = model.get("capability_sources")
+        if isinstance(incoming_sources, dict):
+            sources.update(copy.deepcopy(incoming_sources))
         _TOP_LEVEL_PROVENANCE_FIELDS = (
             "supports_reasoning",
+            "supports_reasoning_summaries",
             "reasoning_levels",
             "reasoning_control",
             "context_window",

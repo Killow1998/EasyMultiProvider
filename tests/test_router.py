@@ -31,6 +31,7 @@ from easy_multi_provider.router import (
     responses_to_anthropic,
     responses_to_chat,
 )
+from easy_multi_provider.router_errors import ExternalProtocolError
 from easy_multi_provider.transport import sse_json_events
 from easy_multi_provider.vault import write_encrypted_json
 
@@ -162,6 +163,140 @@ class RouterTests(unittest.TestCase):
         provider, model = find_route(self.config, "demo/model")
         self.assertEqual(provider["id"], "demo")
         self.assertEqual(model["id"], "demo/model")
+
+    def test_reasoning_summary_route_policy_preserves_effort_and_native_payload(self):
+        external = {
+            "id": "external",
+            "protocol": "responses",
+            "auth_mode": "api_key",
+        }
+        body = {
+            "model": "external/model",
+            "input": "hello",
+            "reasoning": {"effort": "high", "summary": "detailed"},
+        }
+
+        show_model = {"supports_reasoning_summaries": True}
+        shown = router._prepare_reasoning_summary_route(
+            {
+                "catalog_presentations": {
+                    "external/model": {"reasoning_summary": "show"}
+                }
+            },
+            external,
+            show_model,
+            "external/model",
+            body,
+        )
+        self.assertEqual(shown["reasoning"], {"effort": "high", "summary": "auto"})
+        self.assertTrue(show_model["_emp_preserve_reasoning_summary"])
+
+        hidden_model = {"supports_reasoning_summaries": True}
+        hidden = router._prepare_reasoning_summary_route(
+            {
+                "catalog_presentations": {
+                    "external/model": {"reasoning_summary": "hide"}
+                }
+            },
+            external,
+            hidden_model,
+            "external/model",
+            body,
+        )
+        self.assertEqual(hidden["reasoning"], {"effort": "high"})
+        self.assertFalse(hidden_model["_emp_preserve_reasoning_summary"])
+
+        chat_model = {"supports_reasoning_summaries": True}
+        chat_body = router._prepare_reasoning_summary_route(
+            {},
+            {
+                "id": "chat",
+                "protocol": "chat_completions",
+                "auth_mode": "api_key",
+            },
+            chat_model,
+            "chat/model",
+            body,
+        )
+        self.assertEqual(chat_body["reasoning"], {"effort": "high"})
+        self.assertFalse(chat_model["_emp_preserve_reasoning_summary"])
+
+        native_model = {}
+        native_body = router._prepare_reasoning_summary_route(
+            {},
+            {"protocol": "responses", "auth_mode": "forward"},
+            native_model,
+            "gpt-native",
+            body,
+        )
+        self.assertEqual(native_body, body)
+        self.assertEqual(native_model, {})
+
+    def test_reasoning_summary_discovery_requires_explicit_contract(self):
+        self.assertTrue(
+            router._advertised_reasoning_summaries(
+                {"supports_reasoning_summary_parameter": True}
+            )
+        )
+        self.assertTrue(
+            router._advertised_reasoning_summaries(
+                {"supported_parameters": ["reasoning.summary"]}
+            )
+        )
+        self.assertIsNone(
+            router._advertised_reasoning_summaries(
+                {"supports_reasoning": True, "supported_parameters": ["reasoning"]}
+            )
+        )
+
+    def test_handoff_failure_reports_binding_hit_independently(self):
+        config = _continuity_config()
+        source_provider, source_model = find_route(
+            config, "native/current-source"
+        )
+        opaque = "opaque-handoff-failure-private"
+        observations = []
+        with tempfile.TemporaryDirectory() as directory:
+            store = _register_router_binding(
+                directory,
+                opaque,
+                source_provider,
+                source_model,
+                "native/current-source",
+                "current-account-private",
+            )
+            provider, model = find_route(config, "external/destination")
+            with patch.object(
+                router,
+                "_source_handoff_summary",
+                side_effect=router.ContextHandoffRequiredError(
+                    0, "compaction", "source_unavailable"
+                ),
+            ):
+                with self.assertRaises(router.ContextHandoffRequiredError):
+                    router._prepare_continuity_body(
+                        config,
+                        provider,
+                        model,
+                        "external/destination",
+                        {
+                            "model": "external/destination",
+                            "input": {
+                                "type": "compaction",
+                                "encrypted_content": opaque,
+                            },
+                        },
+                        {},
+                        store,
+                        lambda *values: observations.append(values),
+                    )
+
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0][0], "hit")
+        self.assertFalse(observations[0][1])
+        self.assertTrue(observations[0][2])
+        self.assertFalse(observations[0][3])
+        self.assertEqual(observations[0][-1], "source_unavailable")
 
     def test_forward_provider_uses_codex_session_auth(self):
         headers = router._headers(
@@ -891,7 +1026,7 @@ class RouterTests(unittest.TestCase):
                 if self.sent:
                     return b""
                 self.sent = True
-                return b'{"choices":[{"message":{"content":"ok"}}]}'
+                return b'{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
 
             def __enter__(self):
                 return self
@@ -1537,7 +1672,14 @@ class RouterTests(unittest.TestCase):
                         )
                     if request.full_url.endswith("/chat/completions"):
                         return _ContinuityResponse(
-                            {"choices": [{"message": {"content": "destination"}}]}
+                            {
+                                "choices": [
+                                    {
+                                        "message": {"content": "destination"},
+                                        "finish_reason": "stop",
+                                    }
+                                ]
+                            }
                         )
                     return _ContinuityResponse(
                         {"status": "completed", "output": []}
@@ -2053,7 +2195,10 @@ class RouterTests(unittest.TestCase):
                     return _ContinuityResponse(
                         {
                             "choices": [
-                                {"message": {"content": "portable-summary"}}
+                                {
+                                    "message": {"content": "portable-summary"},
+                                    "finish_reason": "stop",
+                                }
                             ]
                         }
                     )
@@ -2870,6 +3015,32 @@ class RouterTests(unittest.TestCase):
             "content": " /tmp",
         })
 
+    def test_chat_projection_rejects_history_it_cannot_represent(self):
+        fixtures = [
+            [{"type": "message", "role": "user", "content": [{"type": "input_audio"}]}],
+            [{"type": "unknown_history_item", "value": "private"}],
+            [{"type": "function_call_output", "call_id": "", "output": "result"}],
+        ]
+        for source in fixtures:
+            with self.subTest(source=source[0]["type"]):
+                with self.assertRaises(RouterError) as raised:
+                    responses_to_chat({"model": "demo/model", "input": source}, "model")
+                self.assertEqual(raised.exception.status, 422)
+
+    def test_anthropic_projection_rejects_history_it_cannot_represent(self):
+        fixtures = [
+            [{"type": "message", "role": "developer", "content": "private"}],
+            [{"type": "unknown_history_item", "value": "private"}],
+            [{"type": "custom_tool_call_output", "call_id": "", "output": "result"}],
+        ]
+        for source in fixtures:
+            with self.subTest(source=source[0]["type"]):
+                with self.assertRaises(RouterError) as raised:
+                    responses_to_anthropic(
+                        {"model": "demo/model", "input": source}, "model"
+                    )
+                self.assertEqual(raised.exception.status, 422)
+
     def test_chat_translation_preserves_structured_tools(self):
         payload = responses_to_chat({
             "model": "demo/model",
@@ -2882,6 +3053,37 @@ class RouterTests(unittest.TestCase):
             }],
         }, "model")
         self.assertEqual(payload["tools"][0]["function"]["name"], "exec")
+
+    def test_chat_translation_preserves_tool_policy_and_parallelism(self):
+        body = {
+            "model": "demo/model",
+            "input": "Hello",
+            "tools": [{
+                "type": "function",
+                "name": "lookup",
+                "parameters": {"type": "object"},
+            }],
+            "tool_choice": {"type": "function", "name": "lookup"},
+            "parallel_tool_calls": False,
+        }
+
+        payload = responses_to_chat(body, "model")
+
+        self.assertEqual(
+            payload["tool_choice"],
+            {"type": "function", "function": {"name": "lookup"}},
+        )
+        self.assertIs(payload["parallel_tool_calls"], False)
+
+        for choice in ("auto", "none", "required"):
+            with self.subTest(choice=choice):
+                self.assertEqual(
+                    responses_to_chat(
+                        {"model": "demo/model", "input": "Hello", "tool_choice": choice},
+                        "model",
+                    )["tool_choice"],
+                    choice,
+                )
 
     def test_chat_translation_preserves_codex_custom_tools_and_history(self):
         payload = responses_to_chat({
@@ -2939,6 +3141,141 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(item["call_id"], "call_fixture")
         self.assertEqual(item["input"], "text(1)")
 
+    def test_chat_response_rejects_unpairable_tool_calls(self):
+        fixtures = [
+            {
+                "id": "",
+                "type": "function",
+                "function": {"name": "exec", "arguments": "{}"},
+            },
+            {
+                "id": "call_fixture",
+                "type": "function",
+                "function": {"name": "", "arguments": "{}"},
+            },
+        ]
+        for tool_call in fixtures:
+            with self.subTest(tool_call=tool_call):
+                with self.assertRaises(RouterError) as raised:
+                    _response_from_chat(
+                        {
+                            "choices": [
+                                {
+                                    "message": {"tool_calls": [tool_call]},
+                                    "finish_reason": "tool_calls",
+                                }
+                            ]
+                        },
+                        "demo/model",
+                    )
+                self.assertEqual(raised.exception.status, 502)
+
+    def test_chat_response_rejects_non_object_tool_arguments(self):
+        for arguments in ('not-json', '[]', {"cmd": "pwd"}):
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(RouterError) as raised:
+                    _response_from_chat(
+                        {
+                            "choices": [{
+                                "message": {
+                                    "tool_calls": [{
+                                        "id": "call_fixture",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "exec",
+                                            "arguments": arguments,
+                                        },
+                                    }]
+                                },
+                                "finish_reason": "tool_calls",
+                            }]
+                        },
+                        "demo/model",
+                    )
+                self.assertEqual(raised.exception.status, 502)
+
+    def test_upstream_nonstream_responses_reject_duplicate_tool_call_ids(self):
+        chat = {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_same",
+                                "type": "function",
+                                "function": {"name": "first", "arguments": "{}"},
+                            },
+                            {
+                                "id": "call_same",
+                                "type": "function",
+                                "function": {"name": "second", "arguments": "{}"},
+                            },
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        }
+        anthropic = {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "call_same",
+                    "name": "first",
+                    "input": {},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "call_same",
+                    "name": "second",
+                    "input": {},
+                },
+            ],
+            "stop_reason": "tool_use",
+        }
+
+        with self.assertRaises(ExternalProtocolError):
+            _response_from_chat(chat, "demo/model")
+        with self.assertRaises(ExternalProtocolError):
+            _response_from_anthropic(anthropic, "demo/model")
+
+    def test_anthropic_response_rejects_tool_call_without_name(self):
+        with self.assertRaises(RouterError) as raised:
+            _response_from_anthropic(
+                {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "call_fixture",
+                            "name": "",
+                            "input": {},
+                        }
+                    ]
+                },
+                "demo/model",
+            )
+
+        self.assertEqual(raised.exception.status, 502)
+
+    def test_anthropic_response_rejects_malformed_content_and_tool_input(self):
+        fixtures = [
+            {"content": ["not-a-block"]},
+            {"content": [{"type": "citation", "text": "hidden"}]},
+            {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "call_fixture",
+                    "name": "exec",
+                    "input": "not-an-object",
+                }]
+            },
+        ]
+        for value in fixtures:
+            with self.subTest(value=value):
+                with self.assertRaises(RouterError) as raised:
+                    _response_from_anthropic(value, "demo/model")
+                self.assertEqual(raised.exception.status, 502)
+
     def test_chat_length_finish_is_incomplete_not_completed(self):
         response = _response_from_chat(
             {
@@ -2975,6 +3312,30 @@ class RouterTests(unittest.TestCase):
         self.assertIsInstance(result, FakeResponse)
         self.assertEqual(opened.call_count, 2)
         sleep.assert_called_once_with(0.5)
+
+    def test_request_does_not_immediately_retry_rate_limit(self):
+        provider = {
+            "id": "demo",
+            "protocol": "chat_completions",
+            "auth_mode": "api_key",
+            "api_key": "key",
+            "base_url": "https://example.com/v1",
+        }
+        failure = HTTPError(
+            "https://example.com/v1/chat/completions",
+            429,
+            "rate limited",
+            {"Content-Type": "application/json"},
+            BytesIO(b'{"error":{"message":"rate limited"}}'),
+        )
+        with patch.object(router, "urlopen", side_effect=failure) as opened:
+            with patch.object(router.time, "sleep") as sleep:
+                with self.assertRaises(RouterError) as raised:
+                    router._request(provider, {}, {}, False)
+
+        self.assertEqual(raised.exception.status, 429)
+        self.assertEqual(opened.call_count, 1)
+        sleep.assert_not_called()
 
     def test_request_uses_compact_json_for_gateway_body_limits(self):
         provider = {
@@ -3508,6 +3869,42 @@ class RouterTests(unittest.TestCase):
         self.assertNotIn("base64", message)
         self.assertLess(len(message), 240)
 
+    def test_request_does_not_echo_json_error_secrets(self):
+        provider = {
+            "id": "demo",
+            "protocol": "responses",
+            "auth_mode": "api_key",
+            "api_key": "provider-secret",
+            "base_url": "https://example.com/v1",
+        }
+        failure = HTTPError(
+            "https://example.com/v1/responses",
+            400,
+            "Bad Request",
+            {"Content-Type": "application/json"},
+            BytesIO(
+                json.dumps(
+                    {
+                        "error": {
+                            "message": (
+                                "Bearer echoed-secret at "
+                                "https://private.example/v1"
+                            )
+                        }
+                    }
+                ).encode("utf-8")
+            ),
+        )
+
+        with patch.object(router, "urlopen", side_effect=failure):
+            with self.assertRaises(RouterError) as raised:
+                router._request(provider, {"model": "demo"}, {}, False)
+
+        message = str(raised.exception)
+        self.assertEqual(message, "upstream returned 400 (application/json)")
+        self.assertNotIn("echoed-secret", message)
+        self.assertNotIn("private.example", message)
+
     def test_subscription_request_uses_only_selected_account_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
             auth_path = Path(directory) / "auth.json.enc"
@@ -3568,7 +3965,7 @@ class RouterTests(unittest.TestCase):
                 if self.sent:
                     return b""
                 self.sent = True
-                return b"{}"
+                return b'{"status":"completed","output":[]}'
 
             def __enter__(self):
                 return self
@@ -3648,7 +4045,14 @@ class RouterTests(unittest.TestCase):
             refreshed.assert_called_once_with(provider["account"])
 
     def test_chat_response_becomes_responses_response(self):
-        result = _response_from_chat({"choices": [{"message": {"content": "Hello"}}]}, "demo/model")
+        result = _response_from_chat(
+            {
+                "choices": [
+                    {"message": {"content": "Hello"}, "finish_reason": "stop"}
+                ]
+            },
+            "demo/model",
+        )
         self.assertEqual(result["object"], "response")
         self.assertEqual(result["output_text"], "Hello")
         self.assertEqual(result["output"][0]["content"][0]["text"], "Hello")
@@ -3662,8 +4066,15 @@ class RouterTests(unittest.TestCase):
 
     def test_chat_response_surfaces_json_error(self):
         with self.assertRaises(RouterError) as raised:
-            _response_from_chat({"error": {"message": "invalid model"}}, "demo/model")
-        self.assertEqual(str(raised.exception), "Chat Completions upstream error: invalid model")
+            _response_from_chat(
+                {"error": {"message": "invalid model: Bearer private-token"}},
+                "demo/model",
+            )
+        self.assertEqual(
+            str(raised.exception),
+            "Chat Completions upstream returned an error",
+        )
+        self.assertNotIn("private-token", str(raised.exception))
 
     def test_responses_request_becomes_anthropic_messages(self):
         payload = responses_to_anthropic({
@@ -3683,15 +4094,168 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(payload["tools"][0]["name"], "exec")
         self.assertEqual(payload["max_tokens"], 32)
 
+    def test_anthropic_request_preserves_images_tool_history_and_policy(self):
+        payload = responses_to_anthropic({
+            "model": "ant/claude",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "before"},
+                        {
+                            "type": "input_image",
+                            "image_url": "https://image.test/sample.png",
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,aW1hZ2U=",
+                        },
+                        {"type": "input_text", "text": "after"},
+                    ],
+                },
+                {
+                    "type": "function_call",
+                    "id": "call_function",
+                    "call_id": "call_function",
+                    "name": "lookup",
+                    "arguments": '{"key":"value"}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_function",
+                    "output": "function result",
+                },
+                {
+                    "type": "custom_tool_call",
+                    "id": "call_custom",
+                    "call_id": "call_custom",
+                    "name": "render",
+                    "input": "custom input",
+                },
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_custom",
+                    "output": "custom result",
+                },
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "parameters": {"type": "object"},
+                },
+                {"type": "custom", "name": "render"},
+            ],
+            "tool_choice": {"type": "custom", "name": "render"},
+            "parallel_tool_calls": False,
+        }, "claude")
+
+        content = payload["messages"][0]["content"]
+        self.assertEqual(content[0], {"type": "text", "text": "before"})
+        self.assertEqual(
+            content[1],
+            {
+                "type": "image",
+                "source": {"type": "url", "url": "https://image.test/sample.png"},
+            },
+        )
+        self.assertEqual(
+            content[2],
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "aW1hZ2U=",
+                },
+            },
+        )
+        self.assertEqual(content[3], {"type": "text", "text": "after"})
+        self.assertEqual(
+            payload["messages"][1]["content"][0],
+            {
+                "type": "tool_use",
+                "id": "call_function",
+                "name": "lookup",
+                "input": {"key": "value"},
+            },
+        )
+        self.assertEqual(
+            payload["messages"][2],
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "call_function",
+                    "content": "function result",
+                }],
+            },
+        )
+        self.assertEqual(
+            payload["messages"][3]["content"][0],
+            {
+                "type": "tool_use",
+                "id": "call_custom",
+                "name": "render",
+                "input": {"input": "custom input"},
+            },
+        )
+        self.assertEqual(
+            payload["messages"][4]["content"][0]["tool_use_id"],
+            "call_custom",
+        )
+        self.assertEqual(
+            payload["tool_choice"],
+            {"type": "tool", "name": "render", "disable_parallel_tool_use": True},
+        )
+
     def test_anthropic_response_becomes_responses_response(self):
         result = _response_from_anthropic({
             "id": "msg_1",
             "model": "claude",
             "content": [{"type": "text", "text": "Hello"}],
+            "stop_reason": "end_turn",
             "usage": {"input_tokens": 2, "output_tokens": 1},
         }, "ant/claude")
         self.assertEqual(result["output_text"], "Hello")
         self.assertEqual(result["output"][0]["content"][0]["text"], "Hello")
+
+    def test_anthropic_tool_use_round_trips_function_and_custom_items(self):
+        result = _response_from_anthropic({
+            "id": "msg_1",
+            "model": "claude",
+            "content": [
+                {"type": "text", "text": "before"},
+                {
+                    "type": "tool_use",
+                    "id": "call_function",
+                    "name": "lookup",
+                    "input": {"key": "value"},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "call_custom",
+                    "name": "render",
+                    "input": {"input": "custom input"},
+                },
+                {"type": "text", "text": "after"},
+            ],
+            "stop_reason": "tool_use",
+        }, "ant/claude", custom_names={"render"})
+
+        self.assertEqual(
+            [item["type"] for item in result["output"]],
+            ["message", "function_call", "custom_tool_call", "message"],
+        )
+        self.assertEqual(result["output"][1]["call_id"], "call_function")
+        self.assertEqual(
+            json.loads(result["output"][1]["arguments"]),
+            {"key": "value"},
+        )
+        self.assertEqual(result["output"][2]["call_id"], "call_custom")
+        self.assertEqual(result["output"][2]["input"], "custom input")
+        self.assertEqual(result["output_text"], "beforeafter")
 
     def test_anthropic_max_tokens_is_incomplete_not_completed(self):
         result = _response_from_anthropic({
@@ -3726,6 +4290,8 @@ class RouterTests(unittest.TestCase):
                 return iter([
                     b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n',
                     b'\n',
+                    b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n',
+                    b'\n',
                     b'data: [DONE]\n',
                     b'\n',
                 ])
@@ -3750,6 +4316,8 @@ class RouterTests(unittest.TestCase):
                     b'\n',
                     b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"pwd\\"}"}}]}}]}\n',
                     b'\n',
+                    b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n',
+                    b'\n',
                     b'data: [DONE]\n',
                     b'\n',
                 ])
@@ -3767,6 +4335,83 @@ class RouterTests(unittest.TestCase):
         self.assertIn('"type": "function_call"', output)
         self.assertIn('"arguments": "{\\\"cmd\\\":\\\"pwd\\\"}"', output)
         self.assertIn("event: response.completed", output)
+
+    def test_stream_rejects_tool_call_without_upstream_id(self):
+        class FakeResponse:
+            def __iter__(self):
+                return iter(
+                    [
+                        b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function","function":{"name":"exec","arguments":"{}"}}]}}]}\n',
+                        b'\n',
+                        b'data: [DONE]\n',
+                        b'\n',
+                    ]
+                )
+
+            def close(self):
+                pass
+
+        provider = {
+            "id": "demo",
+            "protocol": "chat_completions",
+            "auth_mode": "api_key",
+            "base_url": "https://example.com/v1",
+        }
+        model = {"id": "demo/model"}
+        body = {"model": "demo/model", "input": "Run it", "stream": True}
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            events = list(
+                sse_json_events(
+                    router.stream_chat_completion(provider, body, model, {})
+                )
+            )
+
+        self.assertEqual(events[-1]["type"], "response.failed")
+        self.assertNotIn("call_", json.dumps(events))
+
+    def test_chat_stream_rejects_malformed_frames_and_tool_arguments(self):
+        fixtures = [
+            [b'data: {not-json}\n', b'\n'],
+            [b'data: []\n', b'\n'],
+            [
+                b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_bad","type":"function","function":{"name":"exec","arguments":"[]"}}]},"finish_reason":"tool_calls"}]}\n',
+                b'\n',
+                b'data: [DONE]\n',
+                b'\n',
+            ],
+        ]
+        provider = {
+            "id": "demo",
+            "protocol": "chat_completions",
+            "auth_mode": "api_key",
+            "base_url": "https://example.com/v1",
+        }
+        model = {"id": "demo/model"}
+        body = {"model": "demo/model", "input": "Run it", "stream": True}
+
+        for chunks in fixtures:
+            with self.subTest(chunks=chunks[0]):
+                class FakeResponse:
+                    def __iter__(self):
+                        return iter(chunks)
+
+                    def close(self):
+                        pass
+
+                with patch.object(router, "_request", return_value=FakeResponse()):
+                    events = list(
+                        sse_json_events(
+                            router.stream_chat_completion(provider, body, model, {})
+                        )
+                    )
+
+                terminals = [
+                    event["type"]
+                    for event in events
+                    if event.get("type")
+                    in {"response.completed", "response.incomplete", "response.failed"}
+                ]
+                self.assertEqual(terminals, ["response.failed"])
 
     def test_stream_maps_custom_chat_tool_call_back_to_codex(self):
         class FakeResponse:
@@ -3839,6 +4484,8 @@ class RouterTests(unittest.TestCase):
                     b'\n',
                     b'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n',
                     b'\n',
+                    b'data: {"type":"message_stop"}\n',
+                    b'\n',
                 ])
 
             def close(self):
@@ -3867,6 +4514,230 @@ class RouterTests(unittest.TestCase):
             any(event.get("type") == "response.completed" for event in events)
         )
 
+    def test_anthropic_stream_preserves_mixed_text_function_and_custom_tools(self):
+        upstream_events = [
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "before"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "call_lookup",
+                    "name": "lookup",
+                    "input": {},
+                },
+            },
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": '{"key":"value"}',
+                },
+            },
+            {"type": "content_block_stop", "index": 1},
+            {
+                "type": "content_block_start",
+                "index": 2,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "call_render",
+                    "name": "render",
+                    "input": {},
+                },
+            },
+            {
+                "type": "content_block_delta",
+                "index": 2,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": '{"input":"draw"}',
+                },
+            },
+            {"type": "content_block_stop", "index": 2},
+            {
+                "type": "content_block_start",
+                "index": 3,
+                "content_block": {"type": "text", "text": ""},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 3,
+                "delta": {"type": "text_delta", "text": "after"},
+            },
+            {"type": "content_block_stop", "index": 3},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use"},
+            },
+            {"type": "message_stop"},
+        ]
+
+        class FakeResponse:
+            def __iter__(self):
+                chunks = []
+                for event in upstream_events:
+                    chunks.extend(
+                        [
+                            ("data: " + json.dumps(event) + "\n").encode(),
+                            b"\n",
+                        ]
+                    )
+                return iter(chunks)
+
+            def close(self):
+                pass
+
+        provider = {
+            "id": "demo",
+            "protocol": "anthropic_messages",
+            "auth_mode": "anthropic_api_key",
+            "base_url": "https://example.com/v1",
+        }
+        model = {"id": "demo/model"}
+        body = {
+            "model": "demo/model",
+            "input": "Use tools",
+            "stream": True,
+            "tools": [
+                {"type": "function", "name": "lookup", "parameters": {}},
+                {"type": "custom", "name": "render"},
+            ],
+        }
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            events = list(
+                sse_json_events(
+                    router.stream_anthropic_completion(provider, body, model, {})
+                )
+            )
+
+        added_types = [
+            event["item"]["type"]
+            for event in events
+            if event.get("type") == "response.output_item.added"
+        ]
+        self.assertEqual(
+            added_types,
+            ["message", "function_call", "custom_tool_call", "message"],
+        )
+        function_done = next(
+            event
+            for event in events
+            if event.get("type") == "response.function_call_arguments.done"
+        )
+        self.assertEqual(json.loads(function_done["arguments"]), {"key": "value"})
+        custom_done = next(
+            event
+            for event in events
+            if event.get("type") == "response.output_item.done"
+            and event.get("item", {}).get("type") == "custom_tool_call"
+        )
+        self.assertEqual(custom_done["item"]["call_id"], "call_render")
+        self.assertEqual(custom_done["item"]["input"], "draw")
+        terminal = [
+            event
+            for event in events
+            if event.get("type")
+            in {"response.completed", "response.incomplete", "response.failed"}
+        ]
+        self.assertEqual([event["type"] for event in terminal], ["response.completed"])
+        self.assertEqual(
+            [item["type"] for item in terminal[0]["response"]["output"]],
+            ["message", "function_call", "custom_tool_call", "message"],
+        )
+
+    def test_anthropic_stream_rejects_malformed_or_unfinished_tool_json_once(self):
+        cases = (
+            [
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "call_bad",
+                        "name": "lookup",
+                        "input": {},
+                    },
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": '{"key":',
+                    },
+                },
+                {"type": "content_block_stop", "index": 0},
+            ],
+            [
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "call_open",
+                        "name": "lookup",
+                        "input": {},
+                    },
+                },
+                {"type": "message_stop"},
+            ],
+        )
+        provider = {
+            "id": "demo",
+            "protocol": "anthropic_messages",
+            "auth_mode": "anthropic_api_key",
+            "base_url": "https://example.com/v1",
+        }
+        body = {
+            "model": "demo/model",
+            "input": "Use tool",
+            "stream": True,
+            "tools": [{"type": "function", "name": "lookup", "parameters": {}}],
+        }
+        for upstream_events in cases:
+            with self.subTest(case=upstream_events[-1]["type"]):
+                class FakeResponse:
+                    def __iter__(self):
+                        chunks = []
+                        for event in upstream_events:
+                            chunks.extend(
+                                [
+                                    ("data: " + json.dumps(event) + "\n").encode(),
+                                    b"\n",
+                                ]
+                            )
+                        return iter(chunks)
+
+                    def close(self):
+                        pass
+
+                with patch.object(router, "_request", return_value=FakeResponse()):
+                    events = list(
+                        sse_json_events(
+                            router.stream_anthropic_completion(
+                                provider, body, {"id": "demo/model"}, {}
+                            )
+                        )
+                    )
+                terminals = [
+                    event["type"]
+                    for event in events
+                    if event.get("type")
+                    in {"response.completed", "response.incomplete", "response.failed"}
+                ]
+                self.assertEqual(terminals, ["response.failed"])
+
     def test_stream_rejects_textual_tool_markup(self):
         class FakeResponse:
             def __iter__(self):
@@ -3888,7 +4759,7 @@ class RouterTests(unittest.TestCase):
     def test_stream_accepts_non_sse_chat_response(self):
         class FakeResponse:
             def __iter__(self):
-                return iter([b'{"choices":[{"message":{"content":"Hello"}}]}'])
+                return iter([b'{"choices":[{"message":{"content":"Hello"},"finish_reason":"stop"}]}'])
 
             def close(self):
                 pass
@@ -4022,6 +4893,9 @@ class RouterTests(unittest.TestCase):
                     b'event: content_block_delta\n',
                     b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}\n',
                     b'\n',
+                    b'event: message_delta\n',
+                    b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n',
+                    b'\n',
                     b'event: message_stop\n',
                     b'data: {"type":"message_stop"}\n',
                     b'\n',
@@ -4044,6 +4918,109 @@ class RouterTests(unittest.TestCase):
         self.assertIn("event: response.output_text.delta", output)
         self.assertIn("event: response.completed", output)
 
+    def test_native_websocket_plan_preserves_incremental_payload_and_maps_model(self):
+        config = {
+            "providers": [
+                {
+                    "id": "native-account",
+                    "enabled": True,
+                    "base_url": "https://native.example/backend-api/codex",
+                    "protocol": "responses",
+                    "auth_mode": "account",
+                    "account": {"id": "account-fixture"},
+                }
+            ],
+            "models": [
+                {
+                    "id": "account/model-a",
+                    "provider": "native-account",
+                    "upstream_id": "model-a",
+                    "enabled": True,
+                }
+            ],
+        }
+        observations = []
+
+        def on_context(provider, model, protocol, payload, stream, operation):
+            observations.append((provider, model, protocol, payload, stream, operation))
+            return {"decision": "allow", "completeness": "unknown"}
+
+        body = {
+            "model": "account/model-a",
+            "input": [{"type": "message", "role": "user", "content": "delta"}],
+            "stream": True,
+            "generate": False,
+            "previous_response_id": "resp_previous",
+            "client_metadata": {"turn_id": "turn-fixture"},
+        }
+        with patch.object(
+            router,
+            "auth_headers",
+            return_value={
+                "Authorization": "Bearer test-only",
+                "chatgpt-account-id": "account-fixture",
+            },
+        ):
+            plan = router.prepare_native_websocket_request(
+                config,
+                body,
+                {
+                    "OpenAI-Beta": "responses_websockets=test",
+                    "session-id": "session-fixture",
+                    "thread-id": "thread-fixture",
+                    "x-codex-turn-state": "sticky-fixture",
+                    "x-oai-attestation": "attestation-fixture",
+                    "x-openai-internal-codex-responses-lite": "true",
+                },
+                on_context=on_context,
+            )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.target.url, "wss://native.example/backend-api/codex/responses")
+        self.assertEqual(plan.payload["type"], "response.create")
+        self.assertEqual(plan.payload["model"], "model-a")
+        self.assertIs(plan.payload["generate"], False)
+        self.assertEqual(plan.payload["previous_response_id"], "resp_previous")
+        self.assertEqual(plan.payload["input"], body["input"])
+        self.assertEqual(plan.target.headers["OpenAI-Beta"], "responses_websockets=test")
+        self.assertEqual(plan.target.headers["session-id"], "session-fixture")
+        self.assertEqual(plan.target.headers["thread-id"], "thread-fixture")
+        self.assertEqual(plan.target.headers["x-codex-turn-state"], "sticky-fixture")
+        self.assertEqual(plan.target.headers["x-oai-attestation"], "attestation-fixture")
+        self.assertEqual(
+            plan.target.headers["x-openai-internal-codex-responses-lite"], "true"
+        )
+        self.assertNotIn("test-only", plan.target.connection_key)
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0][2], "responses")
+
+    def test_external_route_has_no_native_websocket_plan(self):
+        config = {
+            "providers": [
+                {
+                    "id": "external",
+                    "enabled": True,
+                    "base_url": "https://external.example/v1",
+                    "protocol": "responses",
+                    "auth_mode": "api_key",
+                }
+            ],
+            "models": [
+                {
+                    "id": "external/model-a",
+                    "provider": "external",
+                    "upstream_id": "model-a",
+                    "enabled": True,
+                }
+            ],
+        }
+        self.assertIsNone(
+            router.prepare_native_websocket_request(
+                config,
+                {"model": "external/model-a", "input": [], "stream": True},
+                {},
+            )
+        )
 
 if __name__ == "__main__":
     unittest.main()

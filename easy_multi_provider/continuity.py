@@ -14,7 +14,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
 from . import capabilities
 from .vault import VaultError, read_encrypted_json, write_encrypted_json
@@ -418,6 +418,11 @@ class NativeCompactionObserver:
                 if not isinstance(response, Mapping) or not isinstance(
                     response.get("output"), list
                 ):
+                    self._discard()
+                    return 0
+                if response.get("status") not in (None, "", "completed") or response.get(
+                    "error"
+                ) not in (None, {}):
                     self._discard()
                     return 0
                 self._harvest_completed(response)

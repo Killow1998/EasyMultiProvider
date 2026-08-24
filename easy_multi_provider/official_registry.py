@@ -12,10 +12,8 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlsplit
 
 from .capabilities import make_provenance
@@ -29,6 +27,7 @@ _TOP_LEVEL_FIELDS = (
     "input_modalities",
     "output_modalities",
     "supports_reasoning",
+    "supports_reasoning_summaries",
     "reasoning_levels",
     "reasoning_control",
     "web_search",

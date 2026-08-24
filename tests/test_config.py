@@ -88,6 +88,76 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model["capability_sources"]["context_window"]["source"], "manual")
         self.assertNotIn("secret-value", json.dumps(safe))
 
+    def test_route_keyed_catalog_presentations_normalize_without_changing_models(self):
+        value = normalize({
+            "providers": [self.provider],
+            "models": [{**self.model, "family_id": "deepseek-chat"}],
+            "catalog_presentations": {
+                "gpt-native": {
+                    "catalog_alias": "General",
+                    "show_context": False,
+                    "reasoning_summary": "hide",
+                },
+                "deepseek/deepseek-chat": {
+                    "catalog_alias": "Worker",
+                    "show_context": True,
+                    "reasoning_summary": "show",
+                },
+            },
+        })
+
+        self.assertEqual(
+            value["catalog_presentations"]["gpt-native"],
+            {
+                "catalog_alias": "General",
+                "show_context": False,
+                "reasoning_summary": "hide",
+            },
+        )
+        self.assertEqual(value["models"][0]["id"], "deepseek/deepseek-chat")
+        self.assertEqual(value["models"][0]["family_id"], "deepseek-chat")
+        self.assertEqual(value["models"][0]["display_name"], "")
+
+        with self.assertRaises(ConfigError):
+            normalize({"catalog_presentations": {"bad route": {}}})
+        with self.assertRaises(ConfigError):
+            normalize({
+                "catalog_presentations": {
+                    "gpt-native": {"reasoning_summary": "raw-chain"}
+                }
+            })
+
+    def test_reasoning_summary_capability_is_explicit_and_persisted(self):
+        for value in (True, False, None):
+            with self.subTest(value=value):
+                config = normalize(
+                    {
+                        "providers": [self.provider],
+                        "models": [
+                            {
+                                **self.model,
+                                "supports_reasoning_summaries": value,
+                            }
+                        ],
+                    }
+                )
+                self.assertIs(
+                    config["models"][0]["supports_reasoning_summaries"], value
+                )
+
+        with self.assertRaises(ConfigError):
+            normalize(
+                {
+                    "providers": [self.provider],
+                    "models": [
+                        {
+                            **self.model,
+                            "supports_reasoning_summaries": "yes",
+                        }
+                    ],
+                }
+            )
+
     def test_old_model_values_receive_inferred_provenance(self):
         value = normalize({"providers": [self.provider], "models": [{
             **self.model,
@@ -474,6 +544,68 @@ class TestNewCapabilityFieldsConfigRoundTrip(ConfigTests):
         self.assertEqual(model["output_modalities"], ["text", "audio"])
         self.assertEqual(model["supported_protocols"], ["responses", "chat_completions"])
         self.assertEqual(model["max_input_tokens"], 100000)
+
+    def test_web_partial_model_edit_preserves_discovery_metadata_and_provenance(self):
+        observed_at = "2026-08-22T00:00:00+00:00"
+        current = normalize({
+            "providers": [self.provider],
+            "models": [{
+                **self.rich_model,
+                "deployment_identity": "production",
+                "resolved_protocol": "responses",
+                "protocol_observation": {
+                    "source": "observed",
+                    "confidence": 1,
+                    "observed_at": observed_at,
+                    "endpoint_fingerprint": endpoint_fingerprint(
+                        self.provider["base_url"]
+                    ),
+                    "deployment_identity": "production",
+                    "upstream_model": "deepseek-chat",
+                },
+                "capability_sources": {
+                    "output_limit": {
+                        "source": "advertised",
+                        "confidence": 0.75,
+                        "observed_at": observed_at,
+                    },
+                    "structured_output": {
+                        "source": "observed",
+                        "confidence": 1,
+                        "observed_at": observed_at,
+                    },
+                },
+            }],
+        })
+        model = current["models"][0]
+        incoming = public_config(current)
+        incoming["models"] = [{
+            "id": model["id"],
+            "provider": model["provider"],
+            "upstream_id": model["upstream_id"],
+            "display_name": "Edited name",
+            "context_window": model["context_window"],
+            "reasoning_levels": model["reasoning_levels"],
+            "enabled": model["enabled"],
+        }]
+
+        updated = merge_web_update(current, incoming)
+        updated_model = updated["models"][0]
+
+        self.assertEqual(updated_model["output_limit"], 4096)
+        self.assertEqual(updated_model["deployment_identity"], "production")
+        self.assertEqual(updated_model["resolved_protocol"], "responses")
+        self.assertEqual(
+            updated_model["protocol_observation"], model["protocol_observation"]
+        )
+        self.assertEqual(
+            updated_model["capability_sources"]["output_limit"]["source"],
+            "advertised",
+        )
+        self.assertEqual(
+            updated_model["capability_sources"]["structured_output"]["source"],
+            "observed",
+        )
 
     def test_save_load_round_trips_new_fields(self):
         with tempfile.TemporaryDirectory() as directory:

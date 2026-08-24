@@ -72,7 +72,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 <section>
 <h2>Models / 路由</h2>
 <p class="muted">模型只会在 Provider 的“拉取模型”中选择导入；导入后按 Provider 分组，最新模型优先，隐藏模型排在最后。</p>
-<div class="toolbar"><button onclick="openManualModelModal()">手动添加模型</button></div>
+<div class="toolbar"><button onclick="openManualModelModal()">手动添加模型</button><button class="secondary" onclick="openNativePresentationModal()">编辑原生模型显示</button></div>
 <div id="models"></div>
 </section>
 
@@ -95,7 +95,9 @@ let pendingAccountAuth = null;
 let pendingMigrationFile = null;
 let modalReasoningLevels = null;
 let modalReasoningSupport = null;
+let modalReasoningSummarySupport = null;
 let editingModelId = '';
+const modalStack = [];
 const refreshErrors = {};
 const refreshingAccounts = new Set();
 const $ = id => document.getElementById(id);
@@ -153,9 +155,10 @@ async function exportMigration() {
     if (password !== confirmPassword) throw new Error('两次迁移密码不一致'); if (new TextEncoder().encode(password).length < 8) throw new Error('迁移密码至少需要 8 个字节');
     const response = await fetch('/api/migration/export', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password})});
     if (!response.ok) { let data = {}; try { data = await response.json(); } catch (_) {} throw new Error(data.error?.message || response.statusText); }
-    const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'easy-multi-provider-0.3.0.emp'; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); closeModal(); notice('EMP 迁移包已下载');
+    const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = migrationFilename(); document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); closeModal(); notice('EMP 迁移包已下载');
   });
 }
+function migrationFilename() { const version = String(state?.emp_version || '0.6.0'); return `easy-multi-provider-${/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version) ? version : '0.6.0'}.emp`; }
 function selectMigrationFile() { $('migration_file').click(); }
 async function migrationFileChosen(input) {
   const file = input.files[0]; if (!file) return; if (file.size > 32 * 1024 * 1024) { input.value = ''; return notice('EMP 文件不能超过 32 MB', true); }
@@ -182,6 +185,75 @@ function modelSort(left, right) {
   if (visibility) return visibility;
   const release = Number(right.created_at || 0) - Number(left.created_at || 0);
   return release || String(left.id).localeCompare(String(right.id));
+}
+
+function presentationFor(route) {
+  const all = state.catalog_presentations || (state.catalog_presentations = {});
+  return all[route] || {catalog_alias:'', show_context:true, reasoning_summary:'auto'};
+}
+function compactContext(value) {
+  const tokens = Number(value || 0); if (!(tokens > 0)) return '?';
+  if (tokens >= 1000000) return (tokens / 1000000).toFixed(2).replace(/0+$/, '').replace(/\.$/, '') + 'M';
+  if (tokens >= 1000) return Math.round(tokens / 1000) + 'K';
+  return String(Math.round(tokens));
+}
+function canonicalDisplayName(value) { return String(value || '').replace(/^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+/, '').replace(/\s+\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]$/, ''); }
+function presentationPreview(route, fallback, context, alias, showContext) {
+  const saved = presentationFor(route); const label = alias === undefined ? saved.catalog_alias : alias;
+  const visible = label || canonicalDisplayName(fallback) || route;
+  const withContext = showContext === undefined ? saved.show_context !== false : Boolean(showContext);
+  return withContext ? `[${String(compactContext(context)).padStart(5, ' ')}]  ${visible}` : visible;
+}
+function presentationDuplicateWarning(route, alias) {
+  const value = String(alias || ''); if (!value) return '';
+  const duplicate = Object.entries(state.catalog_presentations || {}).find(([key, item]) => key !== route && item && item.catalog_alias === value);
+  return duplicate ? `提示：显示名称“${value}”也用于 ${duplicate[0]}，Codex 中可能无法区分。` : '';
+}
+function routePresentationMetadata(route) {
+  const external = (state.models || []).find(model => model.id === route); if (external) { const provider = (state.providers || []).find(item => item.id === external.provider) || {}; const resolved = external.resolved_protocol || provider.resolved_protocol || ''; const responsesCapable = provider.protocol === 'responses' || (provider.protocol === 'auto' && resolved === 'responses'); return {fallback:external.display_name || external.upstream_id || route, context:external.context_window || 0, supportsSummary:external.supports_reasoning_summaries === true && responsesCapable}; }
+  const nativeId = (state.subscription_models || []).some(model => model.id === route) ? route : String(route).split('/').slice(1).join('/');
+  const native = (state.subscription_models || []).find(model => model.id === nativeId); return {fallback:native?.display_name || nativeId || route, context:native?.context_window || 0, supportsSummary:native?.supports_reasoning_summaries === true};
+}
+function updatePresentationPreview(route) {
+  const metadata = routePresentationMetadata(route);
+  const alias = $('modal_catalog_alias')?.value || ''; const show = $('modal_show_context')?.checked !== false;
+  if ($('modal_catalog_preview')) $('modal_catalog_preview').textContent = presentationPreview(route, metadata.fallback, metadata.context, alias, show);
+  if ($('modal_catalog_warning')) $('modal_catalog_warning').textContent = presentationDuplicateWarning(route, alias);
+}
+function presentationFields(route, fallback, context, supportsSummary) {
+  const value = presentationFor(route); const unsupported = supportsSummary === false ? '<p class="muted">该路由未确认支持结构化推理摘要；“显示”不会伪造摘要。</p>' : '';
+  return `<p class="muted">不可变路由：<code>${esc(route)}</code></p><label>Codex 显示名称<input id="modal_catalog_alias" value="${esc(value.catalog_alias || '')}" placeholder="留空使用默认名称" oninput="updatePresentationPreview('${esc(route)}')"></label><label><input id="modal_show_context" type="checkbox" ${value.show_context === false ? '' : 'checked'} onchange="updatePresentationPreview('${esc(route)}')"> 显示上下文大小</label><label>Reasoning summary<select id="modal_reasoning_summary"><option value="auto">Auto</option><option value="show">Show</option><option value="hide">Hide</option></select></label>${unsupported}<label>预览</label><pre id="modal_catalog_preview"></pre><p id="modal_catalog_warning" class="danger-text"></p>`;
+}
+function cloneState() { return JSON.parse(JSON.stringify(state)); }
+function savePresentation(route, target = state) {
+  target.catalog_presentations ||= {};
+  target.catalog_presentations[route] = {catalog_alias:$('modal_catalog_alias').value, show_context:$('modal_show_context').checked, reasoning_summary:$('modal_reasoning_summary').value};
+}
+function movePresentation(oldRoute, newRoute, target = state) {
+  if (!oldRoute || !newRoute || oldRoute === newRoute) return;
+  const all = target.catalog_presentations || (target.catalog_presentations = {});
+  if (Object.prototype.hasOwnProperty.call(all, oldRoute)) {
+    all[newRoute] = all[oldRoute];
+    delete all[oldRoute];
+  }
+}
+function movePresentationPrefix(oldPrefix, newPrefix, target = state) {
+  if (!oldPrefix || !newPrefix || oldPrefix === newPrefix) return;
+  const all = target.catalog_presentations || (target.catalog_presentations = {});
+  const oldRoutePrefix = oldPrefix + '/'; const newRoutePrefix = newPrefix + '/';
+  Object.keys(all).filter(route => route.startsWith(oldRoutePrefix)).forEach(route => {
+    movePresentation(route, newRoutePrefix + route.slice(oldRoutePrefix.length), target);
+  });
+}
+function openRoutePresentationModal(route, nested = false) {
+  const metadata = routePresentationMetadata(route);
+  const opener = nested ? openNestedModal : openModal;
+  opener('模型显示设置', presentationFields(route, metadata.fallback, metadata.context, metadata.supportsSummary), '保存显示设置', async () => { const candidate = cloneState(); savePresentation(route, candidate); await persistState('模型显示设置已保存', candidate); closeModal(); });
+  $('modal_reasoning_summary').value = presentationFor(route).reasoning_summary || 'auto'; updatePresentationPreview(route);
+}
+function openNativePresentationModal() {
+  const options = state.subscription_models || []; const body = options.length ? `<p class="muted">当前登录 subscription 的模型。别名同时用于 App 和 TUI。</p><div class="model-selection">${options.map(model => `<div class="model-option"><span><strong>${esc(presentationPreview(model.id, model.display_name || model.id, model.context_window))}</strong><small><code>${esc(model.id)}</code></small></span><button type="button" class="secondary" onclick="openRoutePresentationModal('${esc(model.id)}', true)">显示设置</button></div>`).join('')}</div>` : '<p class="muted">当前没有可编辑的原生 Coding Agent 模型。</p>';
+  openModal('编辑原生模型显示', body, '', null);
 }
 
 function fill() {
@@ -298,9 +370,11 @@ async function submitIntegrationAction(action) {
     throw error;
   }
 }
-async function persistState(message) {
-  state = await api('/api/config', {method:'POST', body:JSON.stringify(state)});
-  await api('/api/catalog/refresh', {method:'POST', body:'{}'});
+async function persistState(message, candidate = state) {
+  const saved = await api('/api/config', {method:'POST', body:JSON.stringify(candidate)});
+  state = saved;
+  try { await api('/api/catalog/refresh', {method:'POST', body:'{}'}); }
+  catch (error) { fill(); await loadIntegration(); throw error; }
   fill(); await loadIntegration(); if (message) notice(message);
 }
 
@@ -338,13 +412,15 @@ function editAccount(id) {
   const account = (state.accounts || []).find(item => item.id === id); if (!account) return;
   const options = state.subscription_models || []; const hidden = new Set(account.hidden_models || []);
   const visibilityHint = account.duplicate && account.duplicate_of === '当前 Codex 登录' ? '<p class="muted">此账户与当前 Codex 登录重复；下方设置会控制无前缀原生模型在 Codex /model 中的显示。</p>' : '';
-  const modelSelection = options.length ? `<label>在 Codex /model 中显示</label><div class="toolbar"><button type="button" class="secondary" onclick="setSubscriptionModelChecks(true)">全部显示</button><button type="button" class="secondary" onclick="setSubscriptionModelChecks(false)">全部隐藏</button></div><div class="model-selection">${options.map(model => `<label class="model-option"><input type="checkbox" name="subscription_model" value="${esc(model.id)}" ${hidden.has(model.id) ? '' : 'checked'}><span><strong>${esc(model.display_name || model.id)}</strong><small>${esc(model.id)}</small></span></label>`).join('')}</div>` : '<p class="muted">当前没有可用的原生 Coding Agent 模型；请先让 Codex 更新原生 catalog。</p>';
+  const modelSelection = options.length ? `<label>在 Codex /model 中显示</label><div class="toolbar"><button type="button" class="secondary" onclick="setSubscriptionModelChecks(true)">全部显示</button><button type="button" class="secondary" onclick="setSubscriptionModelChecks(false)">全部隐藏</button></div><div class="model-selection">${options.map(model => { const route = account.duplicate && account.duplicate_of === '当前 Codex 登录' ? model.id : account.prefix + '/' + model.id; return `<label class="model-option"><input type="checkbox" name="subscription_model" value="${esc(model.id)}" ${hidden.has(model.id) ? '' : 'checked'}><span><strong>${esc(presentationPreview(route, model.display_name || model.id, model.context_window))}</strong><small>${esc(route)}</small></span><button type="button" class="secondary" onclick="event.preventDefault();event.stopPropagation();openRoutePresentationModal('${esc(route)}', true)">显示设置</button></label>`; }).join('')}</div>` : '<p class="muted">当前没有可用的原生 Coding Agent 模型；请先让 Codex 更新原生 catalog。</p>';
   openModal('编辑账户', `<p class="muted">账户 ID：<code>${esc(id)}</code></p><label>显示名称 / 模型前缀<input id="modal_account_alias" value="${esc(account.name || id)}"></label><p class="muted">保存后这个值同时用于显示名称和模型前缀。Codex 内部隐藏模型（例如 Auto Review）不会出现在下方。</p>${visibilityHint}${modelSelection}`, '保存修改', async () => {
     const alias = $('modal_account_alias').value.trim() || id;
     const selected = new Set([...document.querySelectorAll('input[name="subscription_model"]:checked')].map(input => input.value));
     const hiddenModels = options.length ? options.filter(model => !selected.has(model.id)).map(model => model.id) : (account.hidden_models || []);
-    state.accounts = state.accounts.map(item => item.id === id ? Object.assign({}, item, {name:alias, prefix:alias, hidden_models:hiddenModels}) : item);
-    await persistState('账户信息已保存'); closeModal();
+    const candidate = cloneState();
+    if (!(account.duplicate && account.duplicate_of === '当前 Codex 登录')) movePresentationPrefix(account.prefix, alias, candidate);
+    candidate.accounts = candidate.accounts.map(item => item.id === id ? Object.assign({}, item, {name:alias, prefix:alias, hidden_models:hiddenModels}) : item);
+    await persistState('账户信息已保存', candidate); closeModal();
   });
 }
 function setSubscriptionModelChecks(checked) { document.querySelectorAll('input[name="subscription_model"]').forEach(input => { input.checked = checked; }); }
@@ -361,10 +437,11 @@ function renderProviders() {
   }).join('')}</table>`;
 }
 async function toggleProviderModels(id, enabled) {
-  const models = (state.models || []).filter(model => model.provider === id); if (!models.length) return notice('该 Provider 还没有已导入模型', true);
-  const previous = models.map(model => model.enabled); models.forEach(model => { model.enabled = enabled; });
-  try { await persistState(enabled ? `${id} 的模型已全部显示` : `${id} 的模型已全部隐藏`); }
-  catch (error) { models.forEach((model, index) => { model.enabled = previous[index]; }); fill(); notice(error.message, true); }
+  const candidate = cloneState();
+  const models = (candidate.models || []).filter(model => model.provider === id); if (!models.length) return notice('该 Provider 还没有已导入模型', true);
+  models.forEach(model => { model.enabled = enabled; });
+  try { await persistState(enabled ? `${id} 的模型已全部显示` : `${id} 的模型已全部隐藏`, candidate); }
+  catch (error) { notice(error.message, true); }
 }
 function openProviderChooser() {
   openModal('添加 Provider', '<p class="muted">官方 Provider 使用固定的 Base URL、协议和认证方式。自建 Provider 可选择自动检测。</p><div class="choice-grid">' + Object.entries(officialProviders).map(([key,p]) => `<button class="choice" onclick="chooseOfficialProvider('${key}')"><strong>${esc(p.name)}</strong><small>${esc(p.hint)}</small></button>`).join('') + '<button class="choice" onclick="openCustomProviderForm()"><strong>自建 Provider</strong><small>填写 Base URL、API Key 和协议</small></button></div>', '', null);
@@ -390,19 +467,19 @@ function openCustomProviderForm(existing) {
 function editProvider(id) { const provider = (state.providers || []).find(p => p.id === id); if (!provider) return; const officialKey = Object.keys(officialProviders).find(key => officialProviders[key].id === provider.id); const official = officialKey && officialProviders[officialKey]; if (official && provider.base_url === official.base_url) chooseOfficialProvider(officialKey); else openCustomProviderForm(provider); }
 async function saveProvider(provider) {
   const old = (state.providers || []).find(p => p.id === provider.id); const apiKey = provider.api_key || (old && old.api_key_set ? '••••••••' : '');
-  const next = Object.assign({}, provider, {api_key:apiKey, enabled:true}); const index = state.providers.findIndex(p => p.id === next.id); if (index >= 0) state.providers[index] = next; else state.providers.push(next); await persistState();
+  const candidate = cloneState(); const next = Object.assign({}, provider, {api_key:apiKey, enabled:true}); const index = candidate.providers.findIndex(p => p.id === next.id); if (index >= 0) candidate.providers[index] = next; else candidate.providers.push(next); await persistState('', candidate);
   const saved = (state.providers || []).find(p => p.id === provider.id);
   if (!saved || (saved.auth_mode !== 'forward' && !saved.api_key_set)) throw new Error('API Key 未保存，请重新输入');
   notice('Provider 已保存');
 }
-async function removeProvider(id) { if (!confirm('删除 Provider '+id+' 及其模型？')) return; state.providers = state.providers.filter(p => p.id !== id); state.models = state.models.filter(m => m.provider !== id); try { await persistState('Provider 已删除'); } catch (error) { notice(error.message, true); } }
+async function removeProvider(id) { if (!confirm('删除 Provider '+id+' 及其模型？')) return; const candidate = cloneState(); candidate.providers = candidate.providers.filter(p => p.id !== id); candidate.models = candidate.models.filter(m => m.provider !== id); try { await persistState('Provider 已删除', candidate); } catch (error) { notice(error.message, true); } }
 
 function renderModels() {
   const models = [...(state.models || [])].sort(modelSort); if (!models.length) { $('models').innerHTML = '<p class="muted">还没有外部模型；点击 Provider 的“拉取模型”开始选择。</p>'; return; }
   const providerNames = Object.fromEntries((state.providers || []).map(p => [p.id, p.name || p.id])); const groups = {};
   models.forEach(model => { (groups[model.provider] ||= []).push(model); });
   const configuredOrder = (state.providers || []).map(provider => provider.id); const groupOrder = [...configuredOrder.filter(provider => groups[provider]), ...Object.keys(groups).filter(provider => !configuredOrder.includes(provider))];
-  $('models').innerHTML = groupOrder.map(provider => { const items = groups[provider]; return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><table><tr><th>模型</th><th>显示</th><th>操作</th></tr>${items.map(m => { const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : []; const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? '支持推理，档位未知' : '无推理档位控制'); const capabilities = capabilitySummary(m); return `<tr class="${m.enabled ? '' : 'model-hidden'}"><td><code>${esc(m.id)}</code><br><span class="muted">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? '<br>' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</span></td><td><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? '已显示' : '已隐藏'}</td><td><button class="secondary" onclick="openManualModelModal('${esc(m.id)}')">编辑</button><button class="secondary" onclick="testModel('${esc(m.id)}')">测试</button><button class="danger" onclick="removeModel('${esc(m.id)}')">删除</button></td></tr>`; }).join('')}</table></div>`; }).join('');
+  $('models').innerHTML = groupOrder.map(provider => { const items = groups[provider]; return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><table><tr><th>模型</th><th>显示</th><th>操作</th></tr>${items.map(m => { const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : []; const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? '支持推理，档位未知' : '无推理档位控制'); const capabilities = capabilitySummary(m); return `<tr class="${m.enabled ? '' : 'model-hidden'}"><td><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, m.context_window))}</strong><br><code>${esc(m.id)}</code><br><span class="muted">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? '<br>' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</span></td><td><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? '已显示' : '已隐藏'}</td><td><button class="secondary" onclick="openManualModelModal('${esc(m.id)}')">编辑</button><button class="secondary" onclick="testModel('${esc(m.id)}')">测试</button><button class="danger" onclick="removeModel('${esc(m.id)}')">删除</button></td></tr>`; }).join('')}</table></div>`; }).join('');
 }
 async function discoverProvider(id) { try { notice('正在拉取 ' + id + ' 的模型列表 …'); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider:id})}); openModelImportModal(id, result.models || []); } catch (error) { notice('拉取失败：' + error.message, true); } }
 function openModelImportModal(provider, models) {
@@ -416,19 +493,26 @@ function filterDiscoveredModels(value) { const query = String(value || '').trim(
 function setDiscoveredChecks(checked) { document.querySelectorAll('[data-discovered-option]').forEach(option => { if (!option.hidden) { const input = option.querySelector('input[name="discovered_model"]'); if (input) input.checked = checked; } }); updateDiscoveredCount(); }
 function updateDiscoveredCount() { const options = [...document.querySelectorAll('input[name="discovered_model"]')]; const visible = options.filter(input => !input.closest('[data-discovered-option]')?.hidden); const selected = options.filter(input => input.checked).length; const count = $('discovered_count'); if (count) count.textContent = `已选 ${selected}/${options.length}（当前结果 ${visible.filter(input => input.checked).length}/${visible.length}）`; }
 function openManualModelModal(modelId = '') {
-  const existing = (state.models || []).find(m => m.id === modelId) || {}; editingModelId = modelId; modalReasoningLevels = Array.isArray(existing.reasoning_levels) ? existing.reasoning_levels : null; modalReasoningSupport = typeof existing.supports_reasoning === 'boolean' ? existing.supports_reasoning : null;
+  const existing = (state.models || []).find(m => m.id === modelId) || {}; editingModelId = modelId; modalReasoningLevels = Array.isArray(existing.reasoning_levels) ? existing.reasoning_levels : null; modalReasoningSupport = typeof existing.supports_reasoning === 'boolean' ? existing.supports_reasoning : null; modalReasoningSummarySupport = typeof existing.supports_reasoning_summaries === 'boolean' ? existing.supports_reasoning_summaries : null;
   const options = (state.providers || []).map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join('');
-  openModal(modelId ? '编辑模型' : '手动添加模型', `<div class="grid"><div><label>Provider</label><select id="modal_model_provider">${options}</select></div><div><label>上游模型名</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="例如 glm"></div><div><label>上下文窗口（可选）</label><input id="modal_model_context" type="number" min="0" value="${Number(existing.context_window || 0)}"></div><div><label>自动获取</label><button class="secondary" onclick="inspectModalModel()">获取上游最大值</button></div></div><p class="muted">仅在上游明确公布时保存推理档位；否则保持未知。</p>`, '保存模型', async () => { await saveManualModel(); closeModal(); });
+  const presentation = presentationFor(modelId);
+  openModal(modelId ? '编辑模型' : '手动添加模型', `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelPresentationPreview()">${options}</select></div><div><label>上游模型名</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="例如 glm" oninput="updateManualModelPresentationPreview()"></div><div><label>上下文窗口（可选）</label><input id="modal_model_context" type="number" min="0" value="${Number(existing.context_window || 0)}" oninput="updateManualModelPresentationPreview()"></div><div><label>自动获取</label><button class="secondary" onclick="inspectModalModel()">获取上游最大值</button></div><div class="wide"><p class="muted">不可变路由：<code id="modal_model_route"></code></p><label>Codex 显示名称<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="留空使用默认名称" oninput="updateManualModelPresentationPreview()"></label><label><input id="modal_show_context" type="checkbox" ${presentation.show_context === false ? '' : 'checked'} onchange="updateManualModelPresentationPreview()"> 显示上下文大小</label><label>Reasoning summary<select id="modal_reasoning_summary"><option value="auto">Auto</option><option value="show">Show</option><option value="hide">Hide</option></select></label><label>预览</label><pre id="modal_catalog_preview"></pre><p id="modal_catalog_warning" class="danger-text"></p></div></div><p class="muted">仅在上游明确公布时保存推理档位；Reasoning summary 不会从普通文本或 &lt;think&gt; 内容中伪造。</p>`, '保存模型', async () => { await saveManualModel(); closeModal(); });
   if (existing.provider) $('modal_model_provider').value = existing.provider;
+  $('modal_reasoning_summary').value = presentation.reasoning_summary || 'auto'; updateManualModelPresentationPreview();
 }
-async function inspectModalModel() { const provider = $('modal_model_provider').value; const upstream = $('modal_model_upstream').value.trim(); if (!provider || !upstream) return notice('请填写 Provider 和上游模型名', true); try { const result = await api('/api/models/metadata', {method:'POST', body:JSON.stringify({provider, model:upstream})}); $('modal_model_context').value = result.context_window; modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : []; modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null; notice(`已获取上限：输入 ${Number(result.input_token_limit).toLocaleString()} · 输出 ${Number(result.output_token_limit).toLocaleString()}`); } catch (error) { notice('获取失败：' + error.message, true); } }
-async function saveManualModel() { const provider = $('modal_model_provider').value; const entered = $('modal_model_upstream').value.trim(); if (!provider || !entered) throw new Error('Provider 和上游模型名不能为空'); const prefix = provider + '/'; const upstream = entered.startsWith(prefix) ? entered.slice(prefix.length) : entered; const id = prefix + upstream; const previous = state.models.find(m => m.id === editingModelId); const levels = Array.isArray(modalReasoningLevels) ? modalReasoningLevels : (Array.isArray(previous?.reasoning_levels) ? previous.reasoning_levels : []); const support = typeof modalReasoningSupport === 'boolean' ? modalReasoningSupport : (typeof previous?.supports_reasoning === 'boolean' ? previous.supports_reasoning : (levels.length ? true : null)); const model = {id, provider, display_name:previous?.display_name || upstream, description:previous?.description || '', upstream_id:upstream, supports_reasoning:support, reasoning_levels:levels, context_window:Number($('modal_model_context').value) || 0, created_at:previous?.created_at || 0, enabled:previous ? previous.enabled : true}; if (editingModelId && editingModelId !== id) state.models = state.models.filter(m => m.id !== editingModelId); const index = state.models.findIndex(m => m.id === id); if (index >= 0) state.models[index] = model; else state.models.push(model); await persistState(previous ? '模型已修改' : '模型已添加'); editingModelId = ''; modalReasoningLevels = null; modalReasoningSupport = null; }
-async function toggleModel(id, enabled) { const model = state.models.find(item => item.id === id); if (!model) return; const previous = model.enabled; model.enabled = enabled; try { await persistState(enabled ? '模型已显示' : '模型已隐藏；已从 Codex /model 目录移除'); } catch (error) { model.enabled = previous; fill(); notice(error.message, true); } }
-async function removeModel(id) { state.models = state.models.filter(m => m.id !== id); try { await persistState('模型已删除'); } catch (error) { notice(error.message, true); } }
+function manualModelRoute() { const provider = $('modal_model_provider')?.value || ''; const entered = $('modal_model_upstream')?.value.trim() || ''; const prefix = provider + '/'; return provider && entered ? prefix + (entered.startsWith(prefix) ? entered.slice(prefix.length) : entered) : ''; }
+function updateManualModelPresentationPreview() { const route = manualModelRoute(); const upstream = $('modal_model_upstream')?.value.trim() || route; const context = Number($('modal_model_context')?.value || 0); if ($('modal_model_route')) $('modal_model_route').textContent = route || '保存后生成'; if ($('modal_catalog_preview')) $('modal_catalog_preview').textContent = presentationPreview(route, upstream, context, $('modal_catalog_alias')?.value || '', $('modal_show_context')?.checked !== false); if ($('modal_catalog_warning')) $('modal_catalog_warning').textContent = route ? presentationDuplicateWarning(route, $('modal_catalog_alias')?.value || '') : ''; }
+async function inspectModalModel() { const provider = $('modal_model_provider').value; const upstream = $('modal_model_upstream').value.trim(); if (!provider || !upstream) return notice('请填写 Provider 和上游模型名', true); try { const result = await api('/api/models/metadata', {method:'POST', body:JSON.stringify({provider, model:upstream})}); $('modal_model_context').value = result.context_window; modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : []; modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null; modalReasoningSummarySupport = typeof result.supports_reasoning_summaries === 'boolean' ? result.supports_reasoning_summaries : null; updateManualModelPresentationPreview(); notice(`已获取上限：输入 ${Number(result.input_token_limit).toLocaleString()} · 输出 ${Number(result.output_token_limit).toLocaleString()}`); } catch (error) { notice('获取失败：' + error.message, true); } }
+async function saveManualModel() { const provider = $('modal_model_provider').value; const entered = $('modal_model_upstream').value.trim(); if (!provider || !entered) throw new Error('Provider 和上游模型名不能为空'); const prefix = provider + '/'; const upstream = entered.startsWith(prefix) ? entered.slice(prefix.length) : entered; const id = prefix + upstream; const previous = state.models.find(m => m.id === editingModelId); const collision = state.models.find(m => m.id === id && m.id !== editingModelId); if (collision) throw new Error('模型路由已存在，不能覆盖另一个模型'); const levels = Array.isArray(modalReasoningLevels) ? modalReasoningLevels : (Array.isArray(previous?.reasoning_levels) ? previous.reasoning_levels : []); const support = typeof modalReasoningSupport === 'boolean' ? modalReasoningSupport : (typeof previous?.supports_reasoning === 'boolean' ? previous.supports_reasoning : (levels.length ? true : null)); const summarySupport = typeof modalReasoningSummarySupport === 'boolean' ? modalReasoningSummarySupport : (previous?.supports_reasoning_summaries ?? null); const model = {id, provider, display_name:previous?.display_name || upstream, description:previous?.description || '', upstream_id:upstream, family_id:previous?.family_id || '', supports_reasoning:support, supports_reasoning_summaries:summarySupport, reasoning_levels:levels, context_window:Number($('modal_model_context').value) || 0, created_at:previous?.created_at || 0, enabled:previous ? previous.enabled : true}; const candidate = cloneState(); if (editingModelId && editingModelId !== id) { candidate.models = candidate.models.filter(m => m.id !== editingModelId); movePresentation(editingModelId, id, candidate); } const index = candidate.models.findIndex(m => m.id === id); if (index >= 0) candidate.models[index] = model; else candidate.models.push(model); savePresentation(id, candidate); await persistState(previous ? '模型已修改' : '模型已添加', candidate); editingModelId = ''; modalReasoningLevels = null; modalReasoningSupport = null; modalReasoningSummarySupport = null; }
+async function toggleModel(id, enabled) { const candidate = cloneState(); const model = candidate.models.find(item => item.id === id); if (!model) return; model.enabled = enabled; try { await persistState(enabled ? '模型已显示' : '模型已隐藏；已从 Codex /model 目录移除', candidate); } catch (error) { notice(error.message, true); } }
+async function removeModel(id) { const candidate = cloneState(); candidate.models = candidate.models.filter(m => m.id !== id); try { await persistState('模型已删除', candidate); } catch (error) { notice(error.message, true); } }
 async function testModel(id) { try { notice('正在测试 ' + id + ' …'); const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice('测试成功：' + (result.output_text || '已收到模型响应')); } catch (error) { notice('测试失败：' + error.message, true); } }
 
+function modalSnapshot() { const body = $('modal_body'); const controls = typeof body.querySelectorAll === 'function' ? [...body.querySelectorAll('input, select, textarea')].map(control => ({value:control.value, checked:control.checked})) : []; const button = $('modal_submit'); return {title:$('modal_title').textContent, body:body.innerHTML, status:$('modal_status').textContent, controls, submitText:button.textContent, submitDisplay:button.style.display, submitDisabled:button.disabled, submit:button.onclick}; }
+function restoreModal(snapshot) { $('modal_title').textContent = snapshot.title; $('modal_body').innerHTML = snapshot.body; $('modal_status').textContent = snapshot.status; const controls = typeof $('modal_body').querySelectorAll === 'function' ? [...$('modal_body').querySelectorAll('input, select, textarea')] : []; controls.forEach((control, index) => { const saved = snapshot.controls[index]; if (!saved) return; control.value = saved.value; control.checked = saved.checked; }); const button = $('modal_submit'); button.textContent = snapshot.submitText; button.style.display = snapshot.submitDisplay; button.disabled = snapshot.submitDisabled; button.onclick = snapshot.submit; $('modal_backdrop').classList.remove('hidden'); }
+function openNestedModal(title, body, submitLabel, submit) { modalStack.push(modalSnapshot()); openModal(title, body, submitLabel, submit); }
 function openModal(title, body, submitLabel, submit) { $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || '确定'; button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; button.onclick = submit ? async () => { button.disabled = true; button.textContent = '处理中…'; $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { button.disabled = false; button.textContent = label; } } : null; $('modal_backdrop').classList.remove('hidden'); }
-function closeModal() { $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
+function closeModal() { if (modalStack.length) { restoreModal(modalStack.pop()); return; } $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 function backdropClose(event) { if (event.target === $('modal_backdrop')) closeModal(); }
 load();
 </script>

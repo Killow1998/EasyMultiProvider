@@ -30,6 +30,7 @@ CAPABILITY_NAMES = (
     "structured_tools",
     "parallel_tools",
     "supports_reasoning",
+    "supports_reasoning_summaries",
     "reasoning_levels",
     "reasoning_control",
     "context_window",
@@ -496,6 +497,10 @@ def capability_record(
     )
     supports_reasoning = model.get("supports_reasoning")
     supports_reasoning_known = isinstance(supports_reasoning, bool)
+    supports_reasoning_summaries = model.get("supports_reasoning_summaries")
+    supports_reasoning_summaries_known = isinstance(
+        supports_reasoning_summaries, bool
+    )
     reasoning = model.get("reasoning_levels")
     reasoning_known = isinstance(reasoning, list) and bool(reasoning)
     if reasoning_known:
@@ -555,6 +560,12 @@ def capability_record(
                 model,
                 "supports_reasoning",
                 supports_reasoning_known,
+            ),
+            "supports_reasoning_summaries": _capability(
+                supports_reasoning_summaries,
+                model,
+                "supports_reasoning_summaries",
+                supports_reasoning_summaries_known,
             ),
             "reasoning_levels": _capability(
                 reasoning, model, "reasoning_levels", reasoning_known

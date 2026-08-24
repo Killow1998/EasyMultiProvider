@@ -21,6 +21,167 @@ ensure_test_master_key()
 
 
 class CatalogTests(unittest.TestCase):
+    def test_reasoning_summary_policy_never_fabricates_support(self):
+        config = normalize(
+            {
+                "providers": [
+                    {
+                        "id": "api",
+                        "base_url": "https://example.com/v1",
+                        "protocol": "responses",
+                    },
+                    {
+                        "id": "chat",
+                        "base_url": "https://chat.example.com/v1",
+                        "protocol": "chat_completions",
+                    },
+                ],
+                "models": [
+                    {
+                        "id": "api/auto",
+                        "provider": "api",
+                        "upstream_id": "auto",
+                        "supports_reasoning_summaries": True,
+                    },
+                    {
+                        "id": "api/show",
+                        "provider": "api",
+                        "upstream_id": "show",
+                        "supports_reasoning_summaries": True,
+                    },
+                    {
+                        "id": "api/hide",
+                        "provider": "api",
+                        "upstream_id": "hide",
+                        "supports_reasoning_summaries": True,
+                    },
+                    {
+                        "id": "api/unsupported",
+                        "provider": "api",
+                        "upstream_id": "unsupported",
+                        "supports_reasoning_summaries": False,
+                    },
+                    {
+                        "id": "chat/claimed",
+                        "provider": "chat",
+                        "upstream_id": "claimed",
+                        "supports_reasoning_summaries": True,
+                    },
+                ],
+                "catalog_presentations": {
+                    "api/show": {"reasoning_summary": "show"},
+                    "api/hide": {"reasoning_summary": "hide"},
+                    "api/unsupported": {"reasoning_summary": "show"},
+                },
+            }
+        )
+
+        by_slug = {
+            model["slug"]: model for model in build_catalog(config)["models"]
+        }
+
+        self.assertTrue(by_slug["api/auto"]["supports_reasoning_summary_parameter"])
+        self.assertEqual(by_slug["api/auto"]["default_reasoning_summary"], "auto")
+        self.assertEqual(by_slug["api/show"]["default_reasoning_summary"], "auto")
+        self.assertEqual(by_slug["api/hide"]["default_reasoning_summary"], "none")
+        self.assertFalse(
+            by_slug["api/unsupported"]["supports_reasoning_summary_parameter"]
+        )
+        self.assertEqual(
+            by_slug["api/unsupported"]["default_reasoning_summary"], "none"
+        )
+        self.assertFalse(
+            by_slug["chat/claimed"]["supports_reasoning_summary_parameter"]
+        )
+        self.assertEqual(
+            by_slug["chat/claimed"]["default_reasoning_summary"], "none"
+        )
+
+    def test_route_presentations_apply_alias_and_context_without_changing_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(json.dumps({"models": [{
+                "slug": "gpt-native",
+                "display_name": "Native Model",
+                "context_window": 258000,
+                "base_instructions": "Be useful",
+                "model_messages": {},
+            }]}), encoding="utf-8")
+            config = normalize({
+                "native_catalog_path": str(native_path),
+                "accounts": [{
+                    "id": "account-a",
+                    "prefix": "account-a",
+                    "auth_file": "/tmp/account-a.enc",
+                }],
+                "providers": [{"id": "api", "base_url": "https://example.com/v1"}],
+                "models": [{
+                    "id": "api/gpt-native",
+                    "provider": "api",
+                    "upstream_id": "gpt-native",
+                    "display_name": "Discovered Name",
+                    "context_window": 258000,
+                }],
+                "catalog_presentations": {
+                    "gpt-native": {
+                        "catalog_alias": "General",
+                        "show_context": False,
+                    },
+                    "account-a/gpt-native": {
+                        "catalog_alias": "Reserve",
+                        "show_context": True,
+                    },
+                    "api/gpt-native": {
+                        "catalog_alias": "Worker",
+                        "show_context": False,
+                    },
+                },
+            })
+
+            models = build_catalog(config)["models"]
+
+        by_slug = {item["slug"]: item for item in models}
+        self.assertEqual(by_slug["gpt-native"]["display_name"], "General")
+        self.assertEqual(
+            by_slug["account-a/gpt-native"]["display_name"], "[ 258K]  Reserve"
+        )
+        self.assertEqual(by_slug["api/gpt-native"]["display_name"], "Worker")
+        self.assertEqual(by_slug["api/gpt-native"]["slug"], "api/gpt-native")
+        self.assertEqual(config["models"][0]["upstream_id"], "gpt-native")
+
+    def test_user_alias_is_preserved_exactly_when_context_is_hidden(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "gpt-native",
+                                "display_name": "Native Model [258K]",
+                                "context_window": 258000,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = normalize(
+                {
+                    "native_catalog_path": str(native_path),
+                    "catalog_presentations": {
+                        "gpt-native": {
+                            "catalog_alias": "[258K] General",
+                            "show_context": False,
+                        }
+                    },
+                }
+            )
+
+            model = build_catalog(config)["models"][0]
+
+        self.assertEqual(model["display_name"], "[258K] General")
+
     def test_catalog_display_names_include_only_known_usable_context(self):
         with tempfile.TemporaryDirectory() as directory:
             native_path = Path(directory) / "native.json"
@@ -148,6 +309,27 @@ class CatalogTests(unittest.TestCase):
             self.assertTrue(model["supported_in_api"])
             self.assertIsNone(model["multi_agent_version"])
             self.assertEqual(model["supported_reasoning_levels"], [])
+
+    def test_external_model_preserves_confirmed_parallel_tool_capability(self):
+        config = normalize(
+            {
+                "native_catalog_path": "/nonexistent",
+                "providers": [
+                    {"id": "demo", "base_url": "https://example.com/v1"}
+                ],
+                "models": [
+                    {
+                        "id": "demo/model",
+                        "provider": "demo",
+                        "capabilities": {"parallel_tools": True},
+                    }
+                ],
+            }
+        )
+
+        model = build_catalog(config)["models"][0]
+
+        self.assertTrue(model["supports_parallel_tool_calls"])
 
     def test_generated_catalog_path_is_stable_below_codex_home(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -283,10 +465,10 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(
                 [item["slug"] for item in catalog["models"]],
                 [
-                    "gpt-native",
                     "gpt-hidden-by-current-login",
-                    "unique/gpt-native",
                     "unique/gpt-hidden-by-current-login",
+                    "gpt-native",
+                    "unique/gpt-native",
                 ],
             )
             by_slug = {item["slug"]: item for item in catalog["models"]}
@@ -334,7 +516,100 @@ class CatalogTests(unittest.TestCase):
 
         self.assertEqual(
             slugs,
-            ["second/new", "second/old", "first/new", "first/old"],
+            ["second/new", "first/new", "second/old", "first/old"],
+        )
+
+    def test_unknown_cross_provider_suffixes_are_not_one_family(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text('{"models": []}', encoding="utf-8")
+            config = normalize(
+                {
+                    "native_catalog_path": str(native_path),
+                    "providers": [
+                        {"id": "first", "base_url": "https://first.example/v1"},
+                        {"id": "second", "base_url": "https://second.example/v1"},
+                    ],
+                    "models": [
+                        {
+                            "id": "first/shared",
+                            "provider": "first",
+                            "created_at": 10,
+                        },
+                        {
+                            "id": "second/shared",
+                            "provider": "second",
+                            "created_at": 20,
+                        },
+                    ],
+                }
+            )
+
+            slugs = [model["slug"] for model in build_catalog(config)["models"]]
+
+        self.assertEqual(slugs, ["second/shared", "first/shared"])
+
+    def test_family_first_order_uses_exact_identity_and_source_priority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(json.dumps({"models": [
+                {
+                    "slug": "model-new",
+                    "display_name": "New",
+                    "created_at": 20,
+                },
+                {
+                    "slug": "model-old",
+                    "display_name": "Old",
+                    "created_at": 10,
+                },
+            ]}), encoding="utf-8")
+            config = normalize({
+                "native_catalog_path": str(native_path),
+                "accounts": [{
+                    "id": "account-a",
+                    "prefix": "account-a",
+                    "auth_file": "/tmp/account-a.enc",
+                }],
+                "providers": [
+                    {"id": "provider-a", "base_url": "https://a.example/v1"},
+                    {"id": "provider-b", "base_url": "https://b.example/v1"},
+                ],
+                "models": [
+                    {
+                        "id": "provider-b/model-new",
+                        "provider": "provider-b",
+                        "upstream_id": "model-new",
+                        "created_at": 20,
+                    },
+                    {
+                        "id": "provider-a/model-new",
+                        "provider": "provider-a",
+                        "upstream_id": "model-new",
+                        "created_at": 20,
+                    },
+                    {
+                        "id": "provider-a/model-new-preview",
+                        "provider": "provider-a",
+                        "upstream_id": "model-new-preview",
+                        "created_at": 30,
+                    },
+                ],
+            })
+
+            slugs = [item["slug"] for item in build_catalog(config)["models"]]
+
+        self.assertEqual(
+            slugs,
+            [
+                "provider-a/model-new-preview",
+                "model-new",
+                "account-a/model-new",
+                "provider-a/model-new",
+                "provider-b/model-new",
+                "model-old",
+                "account-a/model-old",
+            ],
         )
 
 

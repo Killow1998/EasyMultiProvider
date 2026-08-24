@@ -237,6 +237,10 @@ def import_bundle(
         models[model["id"]] = copy.deepcopy(model)
     target["models"] = list(models.values())
 
+    presentations = copy.deepcopy(target.get("catalog_presentations", {}))
+    presentations.update(copy.deepcopy(source.get("catalog_presentations", {})))
+    target["catalog_presentations"] = presentations
+
     accounts = {item["id"]: item for item in target.get("accounts", [])}
     imported_auth = {}
     for record in payload["accounts"]:

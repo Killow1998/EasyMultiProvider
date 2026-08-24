@@ -20,7 +20,7 @@ from cryptography.fernet import Fernet
 
 from tests.support import ensure_test_master_key
 from easy_multi_provider import __version__
-from easy_multi_provider.config import api_key, load, normalize, save
+from easy_multi_provider.config import ConfigError, api_key, load, normalize, save
 from easy_multi_provider.codex_runtime import (
     HostStopResult,
     ProcessIdentity,
@@ -36,7 +36,14 @@ from easy_multi_provider.continuity import (
     binding_for_opaque,
     derive_native_route_identity,
 )
-from easy_multi_provider.integration import IntegrationManager, ServiceNotReady
+from easy_multi_provider.integration import (
+    IntegrationManager,
+    IntegrationResult,
+    ServiceNotReady,
+    _FileLock,
+)
+from easy_multi_provider.native_websocket import NativeWebSocketError
+from easy_multi_provider.router import RouterError
 from easy_multi_provider.vault import MASTER_KEY_ENV, MASTER_KEY_FILE_ENV
 from easy_multi_provider.server import (
     AppState,
@@ -773,6 +780,64 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("discovered_search", html)
         self.assertIn("discovered_count", html)
 
+    def test_models_endpoint_serves_codex_and_openai_schemas_by_caller(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            native_catalog = root / "native-models.json"
+            native_catalog.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "native-model",
+                                "display_name": "Native Model",
+                                "context_window": 258000,
+                                "visibility": "list",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config_path = root / "config.json"
+            save(
+                normalize({"native_catalog_path": str(native_catalog)}),
+                config_path,
+            )
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(
+                ("127.0.0.1", 0), make_handler(state)
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = HTTPConnection(*server.server_address)
+                connection.request("GET", "/v1/models?client_version=0.149.0")
+                codex_response = connection.getresponse()
+                codex_payload = json.loads(codex_response.read().decode("utf-8"))
+                connection.close()
+
+                self.assertEqual(codex_response.status, 200)
+                self.assertNotIn("data", codex_payload)
+                self.assertEqual(codex_payload["models"][0]["slug"], "native-model")
+                self.assertEqual(
+                    codex_payload["models"][0]["context_window"], 258000
+                )
+
+                connection = HTTPConnection(*server.server_address)
+                connection.request("GET", "/v1/models")
+                openai_response = connection.getresponse()
+                openai_payload = json.loads(openai_response.read().decode("utf-8"))
+                connection.close()
+
+                self.assertEqual(openai_response.status, 200)
+                self.assertNotIn("models", openai_payload)
+                self.assertEqual(openai_payload["object"], "list")
+                self.assertEqual(openai_payload["data"][0]["id"], "native-model")
+            finally:
+                server.shutdown()
+                server.server_close()
+
     def test_web_exposes_subscription_and_provider_visibility_controls(self):
         html = WEB_FILE.read_text(encoding="utf-8")
         self.assertIn('name="subscription_model"', html)
@@ -780,6 +845,15 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("模型显示设置作用于原生列表", html)
         self.assertIn("toggleProviderModels", html)
         self.assertIn("隐藏全部模型", html)
+
+    def test_web_exposes_route_presentation_controls_and_live_preview(self):
+        html = WEB_FILE.read_text(encoding="utf-8")
+        self.assertIn("Codex 显示名称", html)
+        self.assertIn("显示上下文大小", html)
+        self.assertIn("Reasoning summary", html)
+        self.assertIn("presentationPreview", html)
+        self.assertIn("presentationDuplicateWarning", html)
+        self.assertIn("编辑原生模型显示", html)
 
     def test_web_does_not_expose_internal_tool_call_mode(self):
         html = WEB_FILE.read_text(encoding="utf-8")
@@ -939,7 +1013,30 @@ class ServerAccountTests(unittest.TestCase):
     def test_responses_websocket_routes_response_create(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
-            save(normalize({}), config_path)
+            save(
+                normalize(
+                    {
+                        "providers": [
+                            {
+                                "id": "demo",
+                                "enabled": True,
+                                "base_url": "https://example.invalid/v1",
+                                "protocol": "responses",
+                                "auth_mode": "api_key",
+                            }
+                        ],
+                        "models": [
+                            {
+                                "id": "demo/fixed",
+                                "provider": "demo",
+                                "upstream_id": "fixed",
+                                "enabled": True,
+                            }
+                        ],
+                    }
+                ),
+                config_path,
+            )
             state = AppState(config_path)
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1036,6 +1133,26 @@ class ServerAccountTests(unittest.TestCase):
                 events[-1]["response"]["incomplete_details"]["reason"],
                 "max_output_tokens",
             )
+
+    def test_websocket_body_rejects_missing_or_unknown_terminal_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            handler = object.__new__(make_handler(AppState(config_path)))
+
+            for response in (
+                {"output": []},
+                {"status": "cancelled", "output": []},
+                {"status": "completed", "output": ["bad"]},
+                {"status": "completed", "output": [], "error": {"message": "bad"}},
+            ):
+                with self.subTest(response=response), self.assertRaises(RouterError):
+                    list(
+                        handler._websocket_events(
+                            {"kind": "body"},
+                            json.dumps(response).encode("utf-8"),
+                        )
+                    )
 
     def test_system_proxy_is_imported_when_environment_has_none(self):
         proxy_keys = {
@@ -1162,7 +1279,8 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("catch (error) { $('modal_status').textContent = error.message; }", html)
         self.assertIn("position:fixed", html)
         self.assertIn("/api/migration/export", html)
-        self.assertIn("easy-multi-provider-0.3.0.emp", html)
+        self.assertIn("migrationFilename()", html)
+        self.assertNotIn("easy-multi-provider-0.3.0.emp", html)
 
     def test_web_codex_integration_uses_safe_state_actions(self):
         html = WEB_FILE.read_text(encoding="utf-8")
@@ -1235,6 +1353,36 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(payload["error"]["code"], "integration_unavailable")
             self.assertEqual(payload["error"]["message"], "integration operation failed")
             self.assertNotIn("private-path-marker", json.dumps(payload))
+
+    def test_unexpected_handler_error_is_not_returned_to_client(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            handler = object.__new__(make_handler(state))
+            handler.path = "/api/accounts/demo"
+            handler.headers = {}
+            handler._management_allowed = lambda: True
+            handler._record_management_event = lambda *args, **kwargs: None
+            handler._record_unexpected_exception = lambda exc: None
+            captured = {}
+            handler._error = lambda status, message: captured.update(
+                status=status, message=message
+            )
+
+            with patch.object(
+                state,
+                "delete_account",
+                side_effect=RuntimeError(
+                    "Bearer private-token at /private/local/config.json"
+                ),
+            ):
+                handler.do_DELETE()
+
+            self.assertEqual(
+                captured,
+                {"status": 500, "message": "internal server error"},
+            )
 
     def test_successful_enable_clears_stale_startup_mismatch_with_runtime_warning(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1715,6 +1863,9 @@ class ServerAccountTests(unittest.TestCase):
             "upstream_content_encoding",
             "response_bytes",
             "duration_ms",
+            "local_prepare_ms",
+            "upstream_first_event_ms",
+            "connection_reused",
             "status",
             "error_class",
             "fallback",
@@ -1823,6 +1974,9 @@ class ServerAccountTests(unittest.TestCase):
                     "upstream_content_encoding",
                     "response_bytes",
                     "duration_ms",
+                    "local_prepare_ms",
+                    "upstream_first_event_ms",
+                    "connection_reused",
                     "status",
                     "error_class",
                     "fallback",
@@ -2009,7 +2163,7 @@ class ServerAccountTests(unittest.TestCase):
                 if self.done:
                     return b""
                 self.done = True
-                return b'{"output":[]}'
+                return b'{"status":"completed","output":[]}'
 
             def close(self):
                 pass
@@ -2047,7 +2201,7 @@ class ServerAccountTests(unittest.TestCase):
                     "tools": [{"type": "function", "name": "tool-secret"}],
                     "max_output_tokens": 128,
                 }, {})
-                self.assertEqual(result, b'{"output":[]}')
+                self.assertEqual(result, b'{"status":"completed","output":[]}')
             records = state.diagnostics.snapshot()["records"]
             self.assertEqual(records[-1]["context_decision"], "allowed")
             self.assertGreater(records[-1]["estimated_tokens"], 0)
@@ -2665,6 +2819,115 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(first.status().state, "restored")
             Fernet(master_key_path.read_text(encoding="utf-8").strip().encode("ascii"))
 
+    def test_serve_roots_implicit_master_key_at_absolute_config_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "deployment" / "config.json"
+            config_path.parent.mkdir()
+            save(normalize({}), config_path)
+            codex_home = root / "codex"
+            codex_home.mkdir()
+            invocation_one = root / "one"
+            invocation_two = root / "two"
+            invocation_one.mkdir()
+            invocation_two.mkdir()
+
+            class FakeServer:
+                server_address = ("127.0.0.1", 45678)
+
+                def __init__(self, _address, _handler):
+                    pass
+
+                def fileno(self):
+                    return 7
+
+                def serve_forever(self):
+                    raise _GracefulShutdown()
+
+                def server_close(self):
+                    pass
+
+            environment = {
+                "CODEX_HOME": str(codex_home),
+                MASTER_KEY_ENV: "",
+                MASTER_KEY_FILE_ENV: "",
+            }
+            previous_cwd = Path.cwd()
+            try:
+                with patch.dict(os.environ, environment, clear=False), patch(
+                    "easy_multi_provider.server.BoundedThreadingHTTPServer", FakeServer
+                ), patch(
+                    "easy_multi_provider.server.configure_proxy_environment",
+                    return_value="direct",
+                ), patch(
+                    "easy_multi_provider.server.startup_reconcile",
+                    return_value=IntegrationResult(
+                        "none", "native", "original", True, None, ()
+                    ),
+                ):
+                    os.chdir(invocation_one)
+                    serve(config_path, port=0)
+                    key_path = config_path.parent / "state" / "master.key"
+                    first_key = key_path.read_text(encoding="utf-8")
+                    os.chdir(invocation_two)
+                    serve(config_path, port=0)
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertEqual(key_path.read_text(encoding="utf-8"), first_key)
+            self.assertFalse((invocation_one / "state" / "master.key").exists())
+            self.assertFalse((invocation_two / "state" / "master.key").exists())
+
+    def test_second_serve_owner_is_rejected_before_journal_or_integration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(normalize({}), config_path)
+            service_lock = root / "state" / "service.lock"
+
+            with _FileLock(service_lock, timeout=0.0), patch(
+                "easy_multi_provider.server.create_journal"
+            ) as create_journal_mock, patch(
+                "easy_multi_provider.server.ensure_master_key"
+            ) as ensure_key_mock, patch(
+                "easy_multi_provider.server.IntegrationManager"
+            ) as integration_mock:
+                with self.assertRaisesRegex(
+                    ConfigError, "another EMP service owns this configuration"
+                ):
+                    serve(config_path, port=0)
+
+            create_journal_mock.assert_not_called()
+            ensure_key_mock.assert_not_called()
+            integration_mock.assert_not_called()
+
+    def test_same_process_rejects_a_second_service_with_another_config(self):
+        import easy_multi_provider.server as server_module
+
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "first" / "config.json"
+            second = Path(directory) / "second" / "config.json"
+            first.parent.mkdir()
+            second.parent.mkdir()
+            save(normalize({}), first)
+            save(normalize({}), second)
+
+            self.assertTrue(server_module._PROCESS_SERVICE_LOCK.acquire(False))
+            try:
+                with patch(
+                    "easy_multi_provider.server._serve_owned"
+                ) as serve_owned_mock:
+                    with self.assertRaisesRegex(
+                        ConfigError,
+                        "another EMP service is already running in this process",
+                    ):
+                        serve(second, port=0)
+            finally:
+                server_module._PROCESS_SERVICE_LOCK.release()
+
+            serve_owned_mock.assert_not_called()
+            self.assertFalse((second.parent / "state" / "service.lock").exists())
+
     def test_migration_endpoints_export_and_import_emp_bundle(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2748,6 +3011,13 @@ class ServerAccountTests(unittest.TestCase):
                         "provider": "demo",
                         "enabled": False,
                     }],
+                    "catalog_presentations": {
+                        "demo/hidden": {
+                            "catalog_alias": "Hidden Worker",
+                            "show_context": False,
+                            "reasoning_summary": "auto",
+                        }
+                    },
                 }),
                 config_path,
             )
@@ -2799,6 +3069,10 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(
                 models["demo/new-model"]["capability_sources"]["reasoning_levels"]["source"],
                 "advertised",
+            )
+            self.assertEqual(
+                state.config["catalog_presentations"]["demo/hidden"]["catalog_alias"],
+                "Hidden Worker",
             )
 
     def test_provider_discovery_deselect_hides_model_without_losing_overrides(self):
@@ -3233,6 +3507,256 @@ class ContinuityAppStateTests(unittest.TestCase):
                 identity.trust_domain.auth_identity,
             )
             self.assertNotIn(opaque, repr(binding))
+
+    def test_native_websocket_forwards_incremental_input_without_history_replay(self):
+        class FakeNativeBridge:
+            def __init__(self):
+                self.connection_key = None
+                self.last_connection_reused = False
+                self.requests = []
+                self.closed = False
+
+            def events(self, target, payload):
+                self.last_connection_reused = self.connection_key == target.connection_key
+                self.connection_key = target.connection_key
+                self.requests.append(dict(payload))
+                response_id = "resp_native_%d" % len(self.requests)
+                yield {"type": "response.created", "response": {"id": response_id}}
+                yield {
+                    "type": "response.completed",
+                    "response": {
+                        "id": response_id,
+                        "object": "response",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {
+                            "input_tokens": 1,
+                            "output_tokens": 0,
+                            "total_tokens": 1,
+                        },
+                    },
+                }
+
+            def close(self):
+                self.closed = True
+                self.connection_key = None
+
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path)
+            fake_bridge = FakeNativeBridge()
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            client = None
+            stream = None
+            try:
+                with patch(
+                    "easy_multi_provider.server.NativeWebSocketBridge",
+                    return_value=fake_bridge,
+                ):
+                    client = socket.create_connection(server.server_address, timeout=5)
+                    stream = client.makefile("rb")
+                    port = server.server_address[1]
+                    client.sendall((
+                        (
+                            "GET /v1/responses HTTP/1.1\r\n"
+                            "Host: 127.0.0.1:%d\r\n"
+                            "Upgrade: websocket\r\n"
+                            "Connection: Upgrade\r\n"
+                            "Sec-WebSocket-Version: 13\r\n"
+                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                            "Authorization: Bearer test-only\r\n"
+                            "chatgpt-account-id: account-fixture\r\n"
+                            "OpenAI-Beta: responses_websockets=test\r\n"
+                            "Cookie: emp_session=%s\r\n\r\n"
+                        )
+                        % (port, state.session_token)
+                    ).encode("ascii"))
+                    self.assertIn(b" 101 ", stream.readline())
+                    while stream.readline() not in (b"\r\n", b"\n", b""):
+                        pass
+
+                    first_input = [
+                        {"type": "message", "role": "user", "content": "first"}
+                    ]
+                    client.sendall(
+                        _masked_text_frame(
+                            json.dumps(
+                                {
+                                    "type": "response.create",
+                                    "model": "native/model-a",
+                                    "input": first_input,
+                                    "stream": True,
+                                }
+                            )
+                        )
+                    )
+                    first_events = []
+                    while not any(
+                        item.get("type") == "response.completed"
+                        for item in first_events
+                    ):
+                        _, raw = _read_text_frame(stream)
+                        first_events.append(json.loads(raw))
+                    first_id = first_events[-1]["response"]["id"]
+
+                    delta = [
+                        {"type": "message", "role": "user", "content": "delta"}
+                    ]
+                    client.sendall(
+                        _masked_text_frame(
+                            json.dumps(
+                                {
+                                    "type": "response.create",
+                                    "model": "native/model-a",
+                                    "previous_response_id": first_id,
+                                    "input": delta,
+                                    "stream": True,
+                                }
+                            )
+                        )
+                    )
+                    second_events = []
+                    while not any(
+                        item.get("type") == "response.completed"
+                        for item in second_events
+                    ):
+                        _, raw = _read_text_frame(stream)
+                        second_events.append(json.loads(raw))
+
+                self.assertEqual(len(fake_bridge.requests), 2)
+                self.assertEqual(fake_bridge.requests[0]["input"], first_input)
+                self.assertEqual(fake_bridge.requests[1]["input"], delta)
+                self.assertEqual(
+                    fake_bridge.requests[1]["previous_response_id"], first_id
+                )
+            finally:
+                if stream is not None:
+                    stream.close()
+                if client is not None:
+                    client.close()
+                server.shutdown()
+                server.server_close()
+
+    def test_native_websocket_pre_output_failure_falls_back_to_http_once(self):
+        class FailingNativeBridge:
+            connection_key = None
+            last_connection_reused = False
+
+            def events(self, target, payload):
+                yield {
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_native_started",
+                        "object": "response",
+                        "status": "in_progress",
+                        "output": [],
+                    },
+                }
+                raise NativeWebSocketError("native websocket unavailable")
+
+            def close(self):
+                return None
+
+        completed = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_http_fallback",
+                "object": "response",
+                "status": "completed",
+                "output": [],
+            },
+        }
+        fallback_calls = []
+
+        def fake_proxy(config, body, incoming, *args, **kwargs):
+            fallback_calls.append(dict(body))
+            chunk = (
+                "event: response.completed\ndata: "
+                + json.dumps(completed, separators=(",", ":"))
+                + "\n\n"
+            ).encode("utf-8")
+            return (
+                {
+                    "kind": "stream",
+                    "status": 200,
+                    "content_type": "text/event-stream",
+                    "provider_id": "native",
+                    "model_id": "native/model-a",
+                    "resolved_protocol": "responses",
+                    "dialect": "codex_native",
+                    "protocol_decision": "explicit",
+                    "protocol_fallback": False,
+                },
+                iter((chunk,)),
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            client = None
+            stream = None
+            try:
+                with patch(
+                    "easy_multi_provider.server.NativeWebSocketBridge",
+                    FailingNativeBridge,
+                ), patch("easy_multi_provider.server.proxy", side_effect=fake_proxy):
+                    client = socket.create_connection(server.server_address, timeout=5)
+                    stream = client.makefile("rb")
+                    port = server.server_address[1]
+                    client.sendall((
+                        (
+                            "GET /v1/responses HTTP/1.1\r\n"
+                            "Host: 127.0.0.1:%d\r\n"
+                            "Upgrade: websocket\r\n"
+                            "Connection: Upgrade\r\n"
+                            "Sec-WebSocket-Version: 13\r\n"
+                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                            "Authorization: Bearer test-only\r\n"
+                            "chatgpt-account-id: account-fixture\r\n"
+                            "Cookie: emp_session=%s\r\n\r\n"
+                        )
+                        % (port, state.session_token)
+                    ).encode("ascii"))
+                    self.assertIn(b" 101 ", stream.readline())
+                    while stream.readline() not in (b"\r\n", b"\n", b""):
+                        pass
+                    request = {
+                        "type": "response.create",
+                        "model": "native/model-a",
+                        "input": [
+                            {"type": "message", "role": "user", "content": "hello"}
+                        ],
+                        "stream": True,
+                    }
+                    client.sendall(_masked_text_frame(json.dumps(request)))
+                    _, raw = _read_text_frame(stream)
+                    event = json.loads(raw)
+                    self.assertEqual(event["type"], "response.completed")
+                    self.assertEqual(event["response"]["id"], "resp_http_fallback")
+                self.assertEqual(len(fallback_calls), 1)
+                self.assertEqual(fallback_calls[0]["input"], request["input"])
+                fallback_records = [
+                    item
+                    for item in state.diagnostics.snapshot()["records"]
+                    if item["recovery_mode"] == "native_http_fallback"
+                ]
+                self.assertEqual(len(fallback_records), 1)
+                self.assertTrue(fallback_records[0]["fallback"])
+                self.assertFalse(fallback_records[0]["terminal_event_observed"])
+            finally:
+                if stream is not None:
+                    stream.close()
+                if client is not None:
+                    client.close()
+                server.shutdown()
+                server.server_close()
 
     def test_route_passes_binding_store_and_registers_native_json_success(self):
         with tempfile.TemporaryDirectory() as directory:

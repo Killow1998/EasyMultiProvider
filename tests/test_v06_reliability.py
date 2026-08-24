@@ -163,6 +163,34 @@ class StreamReliabilityTests(unittest.TestCase):
         self.assertEqual(sum(event["type"] == "response.completed" for event in events), 1)
         self.assertEqual(len(terminals), 1)
 
+    def test_completed_event_with_contradictory_nested_terminal_never_succeeds(self):
+        cases = (
+            ({"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}, "output_limit"),
+            ({"status": "failed"}, "stream_error"),
+            ({"status": "completed", "error": {"status": 429}}, "rate_limit"),
+            ({"status": "unexpected"}, "malformed_terminal"),
+        )
+        for response, expected_class in cases:
+            with self.subTest(response=response):
+                terminals = []
+
+                def factory():
+                    return iter([_event("response.completed", response=response)])
+
+                events = list(
+                    sse_json_events(
+                        _reliable_responses_stream(
+                            factory, terminal_callback=terminals.append
+                        )
+                    )
+                )
+
+                self.assertFalse(any(event["type"] == "response.completed" for event in events))
+                self.assertEqual(sum(event["type"] == "response.failed" for event in events), 1)
+                self.assertEqual(len(terminals), 1)
+                self.assertFalse(terminals[0]["success"])
+                self.assertEqual(terminals[0]["error_class"], expected_class)
+
     def test_pre_output_recovery_is_attempted_at_most_once(self):
         attempts = []
         terminals = []

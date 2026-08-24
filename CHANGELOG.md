@@ -25,12 +25,19 @@
 - Added request-local compression diagnostics and bounded concurrency evidence
   without recording prompts, responses, tool payloads, opaque state, headers,
   endpoints, account IDs, or credentials.
+- Made translated Chat and Anthropic streams require formal terminal markers,
+  reject unknown finish states, preserve parallel tool turns, and keep
+  fragmented or sparse tool calls type- and index-stable.
+- Bound native upstream WebSockets by absolute time and cumulative bytes, made
+  authentication/rate-limit failures terminal, and measured first-event latency
+  from the actual upstream attempt rather than local preparation.
+- Rejected symlinked credential-key paths and made Web UI account/model edits
+  commit atomically so a failed save cannot corrupt browser-side state.
 
 ### Verification
 
-- Passed the seven focused v0.6 modules with 278 tests and the bounded complete
-  suite with 731 tests; the two existing opt-in live Provider/Codex checks
-  remained skipped.
+- Passed the focused v0.6 modules and the bounded complete suite with 813 tests;
+  the two existing opt-in live Provider/Codex checks remained skipped.
 - Proved six simultaneous mixed native/external, streaming/non-streaming
   requests overlap without slot rejection or cross-request diagnostic state,
   including exact native zstd round-trip equality.

@@ -51,13 +51,80 @@ def _compact_context_window(tokens: int) -> str:
     return str(tokens)
 
 
-def _display_name_with_context(model: Dict[str, Any]) -> str:
-    name = str(model.get("display_name") or model.get("slug") or model.get("id") or "")
-    name = _CONTEXT_PREFIX.sub("", name)
-    name = _CONTEXT_SUFFIX.sub("", name)
+def _display_name_with_context(
+    model: Dict[str, Any], presentation: Optional[Dict[str, Any]] = None
+) -> str:
+    presentation = presentation or {}
+    alias = presentation.get("catalog_alias", "")
+    if isinstance(alias, str) and alias:
+        # A user alias is exact presentation data. Do not reinterpret a
+        # context-looking prefix or suffix that was entered deliberately.
+        name = alias
+    else:
+        name = str(
+            model.get("display_name")
+            or model.get("slug")
+            or model.get("id")
+            or ""
+        )
+        name = _CONTEXT_PREFIX.sub("", name)
+        name = _CONTEXT_SUFFIX.sub("", name)
+    if presentation.get("show_context", True) is False:
+        return name
     context_window = _usable_context_window(model)
     context = _compact_context_window(context_window) if context_window else "?"
     return "[%5s]  %s" % (context, name)
+
+
+def _presentation(config: Dict[str, Any], route: str) -> Dict[str, Any]:
+    presentations = config.get("catalog_presentations")
+    if not isinstance(presentations, dict):
+        return {}
+    value = presentations.get(route)
+    return value if isinstance(value, dict) else {}
+
+
+def _apply_presentation(config: Dict[str, Any], entry: Dict[str, Any]) -> None:
+    route = str(entry.get("slug") or "")
+    presentation = _presentation(config, route)
+    entry["display_name"] = _display_name_with_context(
+        entry, presentation
+    )
+    policy = presentation.get("reasoning_summary", "auto")
+    supports_summary = entry.get("supports_reasoning_summary_parameter")
+    if not isinstance(supports_summary, bool):
+        supports_summary = entry.get("supports_reasoning_summaries") is True
+    if policy == "hide" or (policy == "show" and not supports_summary):
+        entry["default_reasoning_summary"] = "none"
+    elif policy == "show" and supports_summary:
+        entry["default_reasoning_summary"] = "auto"
+
+
+def _family_identity(model: Dict[str, Any], fallback: str) -> str:
+    explicit = model.get("family_id")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    upstream = model.get("upstream_id")
+    if isinstance(upstream, str) and upstream.strip():
+        return upstream.strip()
+    # A matching route suffix is not proof that independent providers expose
+    # the same family. Only explicit capability metadata may join sources.
+    return fallback
+
+
+def _has_explicit_family_identity(model: Dict[str, Any]) -> bool:
+    return any(
+        isinstance(model.get(field), str) and bool(model.get(field).strip())
+        for field in ("family_id", "upstream_id")
+    )
+
+
+def _release_value(model: Dict[str, Any]) -> int:
+    try:
+        value = int(model.get("created_at", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, value)
 
 
 def _description_with_context(model: Dict[str, Any]) -> str:
@@ -97,7 +164,35 @@ def _reasoning_levels(values: List[str]) -> List[Dict[str, str]]:
     ]
 
 
-def _external_entry(model: Dict[str, Any], template: Dict[str, Any]) -> Dict[str, Any]:
+def _boolean_capability(
+    model: Dict[str, Any], provider: Dict[str, Any], field: str
+) -> bool:
+    for source in (model, provider):
+        if isinstance(source.get(field), bool):
+            return source[field]
+        nested = source.get("capabilities")
+        if isinstance(nested, dict) and isinstance(nested.get(field), bool):
+            return nested[field]
+    return False
+
+
+def _supports_reasoning_summary_route(
+    model: Dict[str, Any], provider: Dict[str, Any]
+) -> bool:
+    if model.get("supports_reasoning_summaries") is not True:
+        return False
+    protocol = provider.get("protocol")
+    if protocol == "responses":
+        return True
+    if protocol != "auto":
+        return False
+    resolved = model.get("resolved_protocol") or provider.get("resolved_protocol")
+    return resolved == "responses"
+
+
+def _external_entry(
+    model: Dict[str, Any], template: Dict[str, Any], provider: Dict[str, Any]
+) -> Dict[str, Any]:
     entry = copy.deepcopy(template)
     for field in (
         "context_window",
@@ -111,6 +206,9 @@ def _external_entry(model: Dict[str, Any], template: Dict[str, Any]) -> Dict[str
     levels = normalize_reasoning_levels(model.get("reasoning_levels"))
     friendly_name = str(model.get("display_name") or "").strip()
     description = str(model.get("description") or "").strip()
+    supports_reasoning_summaries = _supports_reasoning_summary_route(
+        model, provider
+    )
     if not description and friendly_name and friendly_name != model["id"]:
         description = friendly_name
     entry.update(
@@ -121,8 +219,11 @@ def _external_entry(model: Dict[str, Any], template: Dict[str, Any]) -> Dict[str
             "visibility": model.get("visibility", "list"),
             "supported_in_api": True,
             "input_modalities": codex_input_modalities(model.get("input_modalities")),
-            "supports_reasoning_summaries": False,
-            "default_reasoning_summary": "none",
+            "supports_reasoning_summaries": supports_reasoning_summaries,
+            "supports_reasoning_summary_parameter": supports_reasoning_summaries,
+            "default_reasoning_summary": (
+                "auto" if supports_reasoning_summaries else "none"
+            ),
             "support_verbosity": False,
             "default_verbosity": None,
             "supports_search_tool": False,
@@ -130,7 +231,9 @@ def _external_entry(model: Dict[str, Any], template: Dict[str, Any]) -> Dict[str
                 "supports_image_detail_original", False
             )
             is True,
-            "supports_parallel_tool_calls": False,
+            "supports_parallel_tool_calls": _boolean_capability(
+                model, provider, "parallel_tools"
+            ),
             "apply_patch_tool_type": None,
             # A routed model may be selected explicitly as a native Codex
             # child model.  Do not inherit the native template's value here:
@@ -196,6 +299,11 @@ def subscription_model_options(config: Dict[str, Any]) -> List[Dict[str, str]]:
             "id": str(model["slug"]),
             "display_name": str(model.get("display_name") or model["slug"]),
             "description": str(model.get("description") or ""),
+            "context_window": _usable_context_window(model),
+            "supports_reasoning_summaries": (
+                model.get("supports_reasoning_summary_parameter") is True
+                or model.get("supports_reasoning_summaries") is True
+            ),
         }
         for model in _subscription_native_models(config)
     ]
@@ -204,9 +312,15 @@ def subscription_model_options(config: Dict[str, Any]) -> List[Dict[str, str]]:
 def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
     native = load_native_catalog(config)
     native_models = [copy.deepcopy(item) for item in native["models"] if isinstance(item, dict)]
-    for model in native_models:
-        model["display_name"] = _display_name_with_context(model)
+    for model_index, model in enumerate(native_models):
+        _apply_presentation(config, model)
         model["description"] = _description_with_context(model)
+        slug = str(model.get("slug") or "")
+        model["_emp_family"] = _family_identity(model, slug)
+        model["_emp_family_verified"] = True
+        model["_emp_release"] = _release_value(model)
+        model["_emp_source_rank"] = 0
+        model["_emp_source_order"] = model_index
     existing = {str(item.get("slug")) for item in native_models}
     template = native_models[0] if native_models else {
         "base_instructions": "You are a helpful coding assistant.",
@@ -226,7 +340,7 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
         if model.get("slug") in native_hidden_models:
             model["visibility"] = "hide"
     subscription_models = _subscription_native_models(config)
-    for account in config.get("accounts", []):
+    for account_index, account in enumerate(config.get("accounts", [])):
         if (
             not account.get("enabled", True)
             or not account.get("auth_file")
@@ -239,8 +353,19 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             alias = _account_entry(account, model)
             if alias["slug"] not in existing:
+                native_slug = str(model.get("slug") or "")
+                alias["_emp_family"] = _family_identity(model, native_slug)
+                alias["_emp_family_verified"] = True
+                alias["_emp_release"] = _release_value(model)
+                alias["_emp_source_rank"] = 1
+                alias["_emp_source_order"] = account_index
                 account_aliases.append(alias)
                 existing.add(alias["slug"])
+    providers_by_id = {
+        str(provider.get("id")): provider
+        for provider in config.get("providers", [])
+        if isinstance(provider, dict) and provider.get("id")
+    }
     provider_order = [
         str(provider.get("id"))
         for provider in config.get("providers", [])
@@ -249,8 +374,20 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
     for model_index, model in enumerate(config.get("models", [])):
         if not model.get("enabled", True) or model["id"] in existing:
             continue
-        entry = _external_entry(model, template)
-        entry["_emp_created_at"] = model.get("created_at") or 0
+        entry = _external_entry(
+            model,
+            template,
+            providers_by_id.get(str(model.get("provider") or ""), {}),
+        )
+        entry["_emp_family"] = _family_identity(model, model["id"])
+        entry["_emp_family_verified"] = _has_explicit_family_identity(model)
+        entry["_emp_release"] = _release_value(model)
+        entry["_emp_source_rank"] = 2
+        entry["_emp_source_order"] = (
+            provider_order.index(str(model.get("provider") or ""))
+            if str(model.get("provider") or "") in provider_order
+            else len(provider_order)
+        )
         entry["_emp_order"] = model_index
         external_by_provider.setdefault(str(model.get("provider") or ""), []).append(entry)
     external = []
@@ -263,15 +400,64 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
         entries = external_by_provider.get(provider_id, [])
         entries.sort(
             key=lambda item: (
-                -(float(item.get("_emp_created_at") or 0)),
+                -(float(item.get("_emp_release") or 0)),
                 int(item.get("_emp_order") or 0),
             )
         )
         for entry in entries:
-            entry.pop("_emp_created_at", None)
-            entry.pop("_emp_order", None)
             external.append(entry)
-    return {"models": native_models + account_aliases + external}
+    result = native_models + account_aliases + external
+    family_release: Dict[str, int] = {}
+    family_order: Dict[str, int] = {}
+    family_verified: Dict[str, bool] = {}
+    for entry in result:
+        family = str(entry.get("_emp_family") or entry.get("slug") or "")
+        family_order.setdefault(family, len(family_order))
+        family_verified[family] = bool(
+            family_verified.get(family, False)
+            or entry.get("_emp_family_verified") is True
+        )
+        family_release[family] = max(
+            family_release.get(family, 0), int(entry.get("_emp_release") or 0)
+        )
+    result.sort(
+        key=lambda entry: (
+            -family_release.get(
+                str(entry.get("_emp_family") or entry.get("slug") or ""), 0
+            ),
+            (
+                0,
+                str(entry.get("_emp_family") or entry.get("slug") or ""),
+            )
+            if family_verified.get(
+                str(entry.get("_emp_family") or entry.get("slug") or ""),
+                False,
+            )
+            else (
+                1,
+                family_order.get(
+                    str(entry.get("_emp_family") or entry.get("slug") or ""),
+                    len(family_order),
+                ),
+            ),
+            int(entry.get("_emp_source_rank") or 0),
+            int(entry.get("_emp_source_order") or 0),
+            int(entry.get("_emp_order") or 0),
+            str(entry.get("slug") or ""),
+        )
+    )
+    for entry in result:
+        _apply_presentation(config, entry)
+        for field in (
+            "_emp_family",
+            "_emp_family_verified",
+            "_emp_release",
+            "_emp_source_rank",
+            "_emp_source_order",
+            "_emp_order",
+        ):
+            entry.pop(field, None)
+    return {"models": result}
 
 
 def write_catalog(config: Dict[str, Any], path: Path) -> Path:

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from easy_multi_provider import main as cli
+from easy_multi_provider.config import ConfigError
 from easy_multi_provider.integration import (
     IntegrationManager,
     IntegrationResult,
@@ -142,6 +143,24 @@ class IntegrationCliTests(unittest.TestCase):
             "127.0.0.1",
             43123,
         )
+
+    def test_serve_reports_existing_owner_without_traceback(self):
+        with patch(
+            "easy_multi_provider.server.serve",
+            side_effect=ConfigError(
+                "another EMP service owns this configuration"
+            ),
+        ):
+            code, stdout, stderr = self.invoke(
+                "serve", "--config", str(self.root / "emp.json")
+            )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout, "")
+        self.assertEqual(
+            stderr.strip(), "another EMP service owns this configuration"
+        )
+        self.assertNotIn("Traceback", stderr)
 
     def test_explicit_subcommand_is_required_and_legacy_options_never_serve(self):
         with patch("easy_multi_provider.server.serve") as serve:

@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import base64
 import copy
+from dataclasses import dataclass
 import json
 import re
 import time
-from datetime import datetime, timezone
 import uuid
 from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Optional, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import __version__
@@ -19,20 +18,13 @@ from .accounts import AccountError, auth_headers
 from .capabilities import (
     deployment_identity,
     endpoint_fingerprint,
-    input_modalities_metadata_source,
-    normalize_input_modalities,
-    normalize_output_modalities,
-    normalize_reasoning_levels,
     normalize_supported_protocols,
     observed_at_now,
-    output_modalities_metadata_source,
 )
-from .official_registry import enrich_discovered_models
 from .catalog import load_native_catalog
-from .config import MAX_CONTEXT_WINDOW, api_key
+from .config import api_key
 from .context_guard import (
     ContextGuardBlocked,
-    format_context_error,
     is_explicit_context_error,
     mark_explicit_failure,
 )
@@ -61,6 +53,67 @@ from .dialects import (
     request_shape,
 )
 from .quota import QuotaError, refresh_account_quota
+from .native_websocket import NativeWebSocketTarget
+from .model_discovery import (
+    DiscoveryIO,
+    advertised_reasoning as _discovery_advertised_reasoning,
+    advertised_reasoning_summaries as _discovery_advertised_reasoning_summaries,
+    anthropic_discovery_headers as _owned_anthropic_discovery_headers,
+    discover_models as _owned_discover_models,
+    discovery_headers as _owned_discovery_headers,
+    model_metadata as _owned_model_metadata,
+)
+from .protocol_projection import (
+    _anthropic_content,
+    _anthropic_incomplete_reason,
+    _anthropic_messages,
+    _anthropic_tool_arguments,
+    _anthropic_tool_choice,
+    _anthropic_tool_input,
+    _anthropic_tools,
+    _chat_content,
+    _chat_incomplete_reason,
+    _chat_tool_choice,
+    _content_text,
+    _decode_compaction,
+    _encode_compaction,
+    _message_item,
+    _messages,
+    _normalize_compaction_input,
+    _response_from_anthropic,
+    _response_from_chat,
+    _tools,
+    _upstream_error_text,
+    _validate_textual_protocol,
+    responses_terminal_observation,
+    responses_to_anthropic,
+    responses_to_chat,
+    validate_responses_body,
+)
+from .router_errors import (
+    ContextHandoffRequiredError,
+    ContextLengthError,
+    ExternalProtocolError,
+    RouterError,
+    StreamBoundaryError,
+)
+from .stream_adapters import (
+    StreamAdapterIO,
+    _notify_terminal,
+    _reliable_responses_stream,
+    _response_failure_frame,
+    _response_json_stream,
+    _route_error_class,
+    _sse_data,
+    _sse_frame,
+    _stream_event_activity,
+    _stream_exception,
+    _stream_terminal,
+    _terminal_exception,
+    _validated_responses_stream as _owned_validated_responses_stream,
+    stream_anthropic_completion as _owned_stream_anthropic_completion,
+    stream_chat_completion as _owned_stream_chat_completion,
+)
 from .transport import TransportError, sse_json_events, zstd_encode
 
 
@@ -79,6 +132,19 @@ ContinuityHandoffCallback = Callable[
 ]
 
 
+@dataclass(frozen=True)
+class NativeWebSocketPlan:
+    """Transient native WebSocket route data; never persist this object."""
+
+    target: NativeWebSocketTarget
+    provider: Dict[str, Any]
+    model: Dict[str, Any]
+    requested_slug: str
+    payload: Dict[str, Any]
+    identity: NativeRouteIdentity
+    context_observation: Dict[str, Any]
+
+
 class _NoRedirectHandler(HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, msg, headers, newurl):
         raise URLError("upstream redirects are disabled")
@@ -88,64 +154,6 @@ class _NoRedirectHandler(HTTPRedirectHandler):
 def urlopen(request: Request, timeout: float):
     """Build after startup so automatically imported system proxies are used."""
     return build_opener(_NoRedirectHandler()).open(request, timeout=timeout)
-
-
-class RouterError(Exception):
-    def __init__(self, message: str, status: int = 400):
-        super().__init__(message)
-        self.status = status
-
-
-class ExternalProtocolError(RouterError):
-    """A bounded external response violation that must not enter history."""
-
-    def __init__(self, message: str):
-        self.error_class = "protocol_error"
-        super().__init__(message, 502)
-
-
-class ContextHandoffRequiredError(RouterError):
-    """A content-free, recoverable failure for unprojectable opaque history."""
-
-    def __init__(
-        self,
-        index: int,
-        item_type: str = "compaction",
-        reason: str = "binding_missing",
-    ):
-        self.error_class = "context_handoff_required"
-        self.reason = str(reason or "binding_missing")[:64]
-        self.item_index = max(0, int(index))
-        self.item_type = str(item_type or "unknown")[:64]
-        super().__init__(
-            "context_handoff_required: reason=%s index=%d type=%s; "
-            "switch back to the source model, continue or compact once while EMP "
-            "is active, then retry"
-            % (self.reason, self.item_index, self.item_type),
-            409,
-        )
-
-
-class ContextLengthError(RouterError):
-    """Normalized, non-retryable context-length failure."""
-
-    def __init__(
-        self,
-        observation: Optional[Dict[str, Any]] = None,
-        status: int = 413,
-        preflight: bool = False,
-    ):
-        self.context_observation = dict(observation or {})
-        self.preflight = bool(preflight)
-        super().__init__(format_context_error(self.context_observation), status)
-
-
-class StreamBoundaryError(RouterError):
-    """A content-free stream lifecycle failure with a normalized class."""
-
-    def __init__(self, message: str, error_class: str, status: int = 502):
-        self.error_class = error_class
-        super().__init__(message, status)
 
 
 MAX_UPSTREAM_BODY_BYTES = 16 * 1024 * 1024
@@ -161,14 +169,6 @@ MAX_STREAM_TEXT_BYTES = 16 * 1024 * 1024
 MAX_DISCOVERED_MODELS = 1000
 MAX_UPSTREAM_SECONDS = 180
 UPSTREAM_SOCKET_TIMEOUT = 30
-_TEXTUAL_PROTOCOL_MARKERS = (
-    "<think>",
-    "</think>",
-    "<tool_call>",
-    "</tool_call>",
-    "<|tool_call|>",
-    "<|tool_calls|>",
-)
 _COMPACTION_PROMPT = """You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another language model that will resume the task.
 
 Include current progress, key decisions, constraints, user preferences, remaining steps, and critical data or references. Be concise, structured, and focused on seamless continuation."""
@@ -190,74 +190,6 @@ _CONCRETE_PROTOCOLS = frozenset(
     {"responses", "chat_completions", "anthropic_messages"}
 )
 _REASONING_LEVEL_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-def _route_error_class(status: Any) -> str:
-    if status in (401, 403):
-        return "auth"
-    if status == 429:
-        return "rate_limit"
-    if status in _PROTOCOL_REJECTION_STATUSES:
-        return "protocol_rejection"
-    if status in (408, 504):
-        return "timeout"
-    if isinstance(status, int) and 500 <= status <= 599:
-        return "upstream_5xx"
-    if status is None:
-        return "network"
-    return "router_error"
-
-
-def _stream_exception(exc: BaseException) -> Tuple[Optional[int], str]:
-    """Map a stream exception to safe terminal metadata without its text."""
-
-    if isinstance(exc, ContextLengthError):
-        return exc.status, "context_length_exceeded"
-    if isinstance(exc, StreamBoundaryError):
-        return exc.status, exc.error_class
-    if isinstance(exc, RouterError):
-        return exc.status, str(
-            getattr(exc, "error_class", None) or _route_error_class(exc.status)
-        )
-    if isinstance(exc, TimeoutError):
-        return 504, "timeout"
-    if isinstance(exc, (OSError, URLError)):
-        return 502, "network"
-    return 502, "stream_error"
-
-
-def _terminal_exception(exc: BaseException) -> Dict[str, Any]:
-    if isinstance(exc, ContextLengthError):
-        return {
-            "success": False,
-            "status": exc.status,
-            "error_class": "context_length_exceeded",
-            "context_observation": dict(exc.context_observation),
-        }
-    status, error_class = _stream_exception(exc)
-    return {"success": False, "status": status, "error_class": error_class}
-
-
-def _notify_terminal(
-    callback: Optional[Callable[[Dict[str, Any]], None]],
-    status: Any,
-    error_class: str = "none",
-    context_observation: Optional[Mapping[str, Any]] = None,
-) -> None:
-    if callback is None:
-        return
-    try:
-        value = {
-            "success": error_class == "none" and isinstance(status, int) and 200 <= status < 300,
-            "status": status,
-            "error_class": error_class,
-        }
-        if isinstance(context_observation, Mapping):
-            value["context_observation"] = dict(context_observation)
-        callback(value)
-    except Exception:
-        # Diagnostics and persistence must never change the proxy result.
-        pass
-
-
 def _http_error_detail(exc: HTTPError, raw: Optional[bytes] = None) -> Tuple[str, str]:
     """Return a bounded diagnostic without echoing an upstream HTML page."""
     headers = getattr(exc, "headers", {}) or {}
@@ -294,7 +226,9 @@ def _http_error_detail(exc: HTTPError, raw: Optional[bytes] = None) -> Tuple[str
 
 def _http_error_message(prefix: str, exc: HTTPError) -> str:
     content_type, detail = _http_error_detail(exc)
-    return "%s %d (%s): %s" % (prefix, exc.code, content_type, detail)
+    if content_type in {"text/html", "application/xhtml+xml"}:
+        return "%s %d (%s): %s" % (prefix, exc.code, content_type, detail)
+    return "%s %d (%s)" % (prefix, exc.code, content_type)
 
 
 def _set_response_timeout(response: Any, timeout: float) -> None:
@@ -493,50 +427,8 @@ def _bounded_stream_response(response: Any) -> _LimitedResponse:
     return _LimitedResponse(response, MAX_UPSTREAM_BODY_BYTES)
 
 
-def _advertised_reasoning(metadata: Mapping[str, Any]) -> Tuple[Optional[bool], list]:
-    """Read generic advertised reasoning support without fabricating effort levels."""
-
-    parameters = metadata.get("supported_parameters")
-    parameter_support = bool(
-        isinstance(parameters, list)
-        and any(
-            isinstance(item, str)
-            and item.strip().lower() in {"reasoning", "reasoning_effort", "thinking"}
-            for item in parameters
-        )
-    )
-    nested = metadata.get("reasoning")
-    nested = nested if isinstance(nested, Mapping) else {}
-    raw_support = metadata.get(
-        "supports_reasoning",
-        metadata.get("reasoning_supported", nested.get("supported")),
-    )
-    if isinstance(raw_support, bool):
-        support: Optional[bool] = raw_support
-    elif metadata.get("thinking") is True or parameter_support:
-        support = True
-    else:
-        support = None
-    raw_levels = metadata.get(
-        "reasoning_levels",
-        metadata.get(
-            "supported_reasoning_levels",
-            nested.get("effort_levels", nested.get("supported_efforts")),
-        ),
-    )
-    levels = []
-    if isinstance(raw_levels, list) and len(raw_levels) <= 16:
-        for raw in raw_levels:
-            value = str(raw or "").strip()
-            if not _REASONING_LEVEL_ID.fullmatch(value):
-                levels = []
-                break
-            if value not in levels:
-                levels.append(value)
-    if levels:
-        support = True
-    return support, normalize_reasoning_levels(levels)
-
+_advertised_reasoning = _discovery_advertised_reasoning
+_advertised_reasoning_summaries = _discovery_advertised_reasoning_summaries
 
 def _implicit_native_route(
     config: Dict[str, Any], model_id: str
@@ -664,322 +556,32 @@ def forward_native_search(
         return response.status, content_type, raw
 
 
+def _discovery_headers(
+    provider: Dict[str, Any], native_gemini: bool
+) -> Dict[str, str]:
+    return _owned_discovery_headers(provider, native_gemini, __version__)
+
+
+def _anthropic_discovery_headers(provider: Dict[str, Any]) -> Dict[str, str]:
+    return _owned_anthropic_discovery_headers(provider, __version__)
+
+
+def _discovery_io() -> DiscoveryIO:
+    return DiscoveryIO(
+        open_url=urlopen,
+        read_limited=_read_limited,
+        http_error_message=_http_error_message,
+        discovery_headers=_discovery_headers,
+        anthropic_headers=_anthropic_discovery_headers,
+    )
+
+
 def model_metadata(provider: Dict[str, Any], upstream_model: str) -> Dict[str, Any]:
-    """Read model limits where the upstream exposes a standard metadata API."""
-    parsed = urlparse(provider.get("base_url", ""))
-    if parsed.hostname != "generativelanguage.googleapis.com":
-        raise RouterError("该 Provider 没有可自动读取的模型上限，请手动填写", 400)
-    key = api_key(provider)
-    if not key:
-        raise RouterError("API key is not configured for provider: %s" % provider["id"], 503)
-    base = provider["base_url"].rstrip("/")
-    if base.endswith("/openai"):
-        base = base[:-len("/openai")]
-    request = Request(
-        base + "/models/" + quote(upstream_model, safe=""),
-        headers={"x-goog-api-key": key},
-    )
-    try:
-        with urlopen(request, timeout=30) as response:
-            value = json.loads(
-                _read_limited(response, MAX_DISCOVERY_BODY_BYTES, "模型信息响应").decode("utf-8")
-            )
-    except HTTPError as exc:
-        raise RouterError(_http_error_message("上游模型信息查询失败", exc), exc.code) from exc
-    except (OSError, ValueError) as exc:
-        raise RouterError("上游模型信息查询失败: %s" % exc, 502) from exc
-    input_limit = value.get("inputTokenLimit")
-    output_limit = value.get("outputTokenLimit")
-    if (
-        not _positive_int(input_limit)
-        or not _positive_int(output_limit)
-    ):
-        raise RouterError("上游未返回有效的上下文上限，请手动填写", 502)
-    supports_reasoning, reasoning_levels = _advertised_reasoning(value)
-    return {
-        "model": upstream_model,
-        "context_window": _positive_int(input_limit),
-        "input_token_limit": _positive_int(input_limit),
-        "output_token_limit": _positive_int(output_limit),
-        "supports_reasoning": supports_reasoning,
-        "reasoning_levels": reasoning_levels,
-    }
+    return _owned_model_metadata(_discovery_io(), provider, upstream_model)
 
 
-_DISCOVERABLE_MODEL_ID = re.compile(r"^[A-Za-z0-9._/-]+$")
-
-
-def _get_json(request: Request, purpose: str, budget: Dict[str, Any] = None) -> Dict[str, Any]:
-    if budget and time.monotonic() > budget["deadline"]:
-        raise RouterError("上游%s超时" % purpose, 504)
-    try:
-        with urlopen(request, timeout=30) as response:
-            raw = _read_limited(
-                response,
-                MAX_DISCOVERY_BODY_BYTES,
-                purpose,
-                budget["deadline"] if budget else None,
-            )
-            if budget:
-                budget["bytes"] += len(raw)
-                if budget["bytes"] > MAX_DISCOVERY_TOTAL_BYTES:
-                    raise RouterError("上游%s超过安全总大小" % purpose, 502)
-            value = json.loads(raw.decode("utf-8"))
-    except HTTPError as exc:
-        raise RouterError(_http_error_message("上游%s失败" % purpose, exc), exc.code) from exc
-    except (OSError, ValueError) as exc:
-        raise RouterError("上游%s失败: %s" % (purpose, exc), 502) from exc
-    if not isinstance(value, dict):
-        raise RouterError("上游%s返回格式无效" % purpose, 502)
-    return value
-
-
-def _discovery_headers(provider: Dict[str, Any], native_gemini: bool) -> Dict[str, str]:
-    if provider.get("auth_mode") != "api_key":
-        raise RouterError("该 Provider 没有可自动读取模型列表的 API Key，请手动添加", 400)
-    key = api_key(provider)
-    if not key:
-        raise RouterError("API key is not configured for provider: %s" % provider["id"], 503)
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "EasyMultiProvider/%s" % __version__,
-    }
-    headers["x-goog-api-key" if native_gemini else "Authorization"] = (
-        key if native_gemini else "Bearer " + key
-    )
-    return headers
-
-
-def _positive_int(value: Any) -> int:
-    return (
-        value
-        if isinstance(value, int)
-        and not isinstance(value, bool)
-        and 0 < value <= MAX_CONTEXT_WINDOW
-        else 0
-    )
-
-
-def _model_id(value: Any) -> str:
-    model_id = str(value or "").strip()
-    if len(model_id.encode("utf-8")) > MAX_DISCOVERY_FIELD_BYTES:
-        return ""
-    if model_id.startswith("models/"):
-        model_id = model_id[len("models/"):]
-    return model_id if _DISCOVERABLE_MODEL_ID.fullmatch(model_id or "") else ""
-
-
-def _model_text(value: Any, fallback: str, field: str) -> str:
-    text = str(value or fallback)
-    if len(text.encode("utf-8")) > MAX_DISCOVERY_FIELD_BYTES:
-        raise RouterError("上游模型%s过大" % field, 502)
-    return text
-
-
-def _gemini_models(provider: Dict[str, Any]) -> list:
-    base = provider["base_url"].rstrip("/")
-    if base.endswith("/openai"):
-        base = base[:-len("/openai")]
-    headers = _discovery_headers(provider, True)
-    result = []
-    page_token = ""
-    budget = {"bytes": 0, "deadline": time.monotonic() + MAX_DISCOVERY_SECONDS}
-    for _ in range(20):
-        url = base + "/models"
-        if page_token:
-            url += "?pageToken=" + quote(page_token, safe="")
-        value = _get_json(Request(url, headers=headers), "Gemini 模型列表查询", budget)
-        for item in value.get("models", []):
-            if len(result) >= MAX_DISCOVERED_MODELS:
-                raise RouterError("上游模型列表超过安全上限", 502)
-            if not isinstance(item, dict):
-                continue
-            methods = item.get("supportedGenerationMethods")
-            if isinstance(methods, list) and methods and "generateContent" not in methods:
-                continue
-            model_id = _model_id(item.get("name"))
-            if not model_id:
-                continue
-            supports_reasoning, reasoning_levels = _advertised_reasoning(item)
-            raw_input_modalities = item.get("inputModalities")
-            if raw_input_modalities is None:
-                raw_input_modalities = item.get("supportedInputModalities")
-            raw_output_modalities = item.get("outputModalities")
-            if raw_output_modalities is None:
-                raw_output_modalities = item.get("supportedOutputModalities")
-            input_modalities = normalize_input_modalities(raw_input_modalities)
-            input_modalities_source = input_modalities_metadata_source(raw_input_modalities)
-            output_modalities = normalize_output_modalities(raw_output_modalities)
-            output_modalities_source = output_modalities_metadata_source(raw_output_modalities)
-            output_limit = _positive_int(item.get("outputTokenLimit"))
-            result.append(
-                {
-                    "upstream_id": model_id,
-                    "display_name": _model_text(item.get("displayName"), model_id, "显示名称"),
-                    "description": _model_text(item.get("description"), "", "描述"),
-                    "context_window": _positive_int(item.get("inputTokenLimit")),
-                    "max_input_tokens": _positive_int(item.get("inputTokenLimit")),
-                    "output_limit": output_limit,
-                    "supports_reasoning": supports_reasoning,
-                    "reasoning_levels": reasoning_levels,
-                    "input_modalities": input_modalities,
-                    "output_modalities": output_modalities,
-                    "supports_image_detail_original": False,
-                    "capability_sources": {
-                        "supports_reasoning": {
-                            "source": "advertised"
-                            if supports_reasoning is not None
-                            else "unknown"
-                        },
-                        "reasoning_levels": {
-                            "source": "advertised" if reasoning_levels else "unknown"
-                        },
-                        "input_modalities": {"source": input_modalities_source},
-                        "output_modalities": {"source": output_modalities_source},
-                        "supports_image_detail_original": {"source": "unknown"},
-                        "context_window": {
-                            "source": "advertised"
-                            if _positive_int(item.get("inputTokenLimit"))
-                            else "unknown"
-                        },
-                        "max_input_tokens": {
-                            "source": "advertised"
-                            if _positive_int(item.get("inputTokenLimit"))
-                            else "unknown"
-                        },
-                        "output_limit": {
-                            "source": "advertised" if output_limit else "unknown"
-                        },
-                    },
-                    "created_at": _positive_int(
-                        item.get("created") or item.get("created_at") or item.get("updated_at")
-                    ),
-                }
-            )
-        page_token = value.get("nextPageToken") or ""
-        if not isinstance(page_token, str) or len(page_token.encode("utf-8")) > MAX_DISCOVERY_TOKEN_BYTES:
-            raise RouterError("上游分页标记过大", 502)
-        if not page_token:
-            break
-    return enrich_discovered_models(provider, result)
-
-
-def _generic_models(provider: Dict[str, Any]) -> list:
-    base = provider["base_url"].rstrip("/")
-    for suffix in ("/chat/completions", "/responses"):
-        if base.endswith(suffix):
-            base = base[:-len(suffix)]
-            break
-    budget = {"bytes": 0, "deadline": time.monotonic() + MAX_DISCOVERY_SECONDS}
-    value = _get_json(
-        Request(base + "/models", headers=_discovery_headers(provider, False)),
-        "模型列表查询",
-        budget,
-    )
-    result = []
-    for item in value.get("data", []):
-        if len(result) >= MAX_DISCOVERED_MODELS:
-            raise RouterError("上游模型列表超过安全上限", 502)
-        if not isinstance(item, dict):
-            continue
-        model_id = _model_id(item.get("id"))
-        if not model_id:
-            continue
-        context = _positive_int(
-            item.get("context_window")
-            or item.get("context_length")
-            or item.get("inputTokenLimit")
-        )
-        architecture = item.get("architecture")
-        architecture = architecture if isinstance(architecture, dict) else {}
-        raw_input_modalities = architecture.get("input_modalities")
-        raw_output_modalities = architecture.get("output_modalities")
-        raw_image_detail = item.get(
-            "supports_image_detail_original", architecture.get("supports_image_detail_original")
-        )
-        supports_image_detail_original = (
-            raw_image_detail if isinstance(raw_image_detail, bool) else False
-        )
-        supports_reasoning, reasoning_levels = _advertised_reasoning(item)
-        reasoning_support_source = (
-            "advertised" if supports_reasoning is not None else "unknown"
-        )
-        reasoning_levels_source = "advertised" if reasoning_levels else "unknown"
-        parameters = item.get("supported_parameters")
-        parameter_set = set()
-        if isinstance(parameters, list):
-            for param in parameters:
-                if isinstance(param, str):
-                    parameter_set.add(param.strip().lower())
-        capabilities = {}
-        capability_sources = {}
-        if "tools" in parameter_set:
-            capabilities["structured_tools"] = True
-            capability_sources["structured_tools"] = {"source": "advertised"}
-        if "parallel_tool_calls" in parameter_set:
-            capabilities["parallel_tools"] = True
-            capability_sources["parallel_tools"] = {"source": "advertised"}
-        if "structured_outputs" in parameter_set or "response_format" in parameter_set:
-            capabilities["structured_output"] = True
-            capability_sources["structured_output"] = {"source": "advertised"}
-        raw_streaming = item.get("streaming")
-        if isinstance(raw_streaming, bool):
-            capabilities["streaming"] = raw_streaming
-            capability_sources["streaming"] = {"source": "advertised"}
-        output_limit = 0
-        for output_key in ("output_limit", "max_tokens", "max_output_tokens"):
-            output_limit = _positive_int(item.get(output_key))
-            if output_limit:
-                break
-        if not output_limit:
-            top_provider = item.get("top_provider")
-            if isinstance(top_provider, dict):
-                output_limit = _positive_int(top_provider.get("max_completion_tokens"))
-        context_source = "advertised" if context else "unknown"
-        output_limit_source = "advertised" if output_limit else "unknown"
-        max_input_tokens = _positive_int(item.get("max_input_tokens"))
-        max_input_source = "advertised" if max_input_tokens else "unknown"
-        entry = {
-            "upstream_id": model_id,
-            "display_name": _model_text(
-                item.get("display_name") or item.get("name"), model_id, "显示名称"
-            ),
-            "description": _model_text(item.get("description"), "", "描述"),
-            "context_window": context,
-            "max_input_tokens": max_input_tokens,
-            "output_limit": output_limit,
-            "supports_reasoning": supports_reasoning,
-            "reasoning_levels": reasoning_levels,
-            "input_modalities": normalize_input_modalities(raw_input_modalities),
-            "output_modalities": normalize_output_modalities(raw_output_modalities),
-            "supports_image_detail_original": supports_image_detail_original,
-            "capability_sources": {
-                "supports_reasoning": {"source": reasoning_support_source},
-                "reasoning_levels": {"source": reasoning_levels_source},
-                "input_modalities": {
-                    "source": input_modalities_metadata_source(raw_input_modalities)
-                },
-                "output_modalities": {
-                    "source": output_modalities_metadata_source(raw_output_modalities)
-                },
-                "supports_image_detail_original": {
-                    "source": "advertised"
-                    if isinstance(raw_image_detail, bool)
-                    else "unknown"
-                },
-                "context_window": {"source": context_source},
-                "max_input_tokens": {"source": max_input_source},
-                "output_limit": {"source": output_limit_source},
-            },
-            "created_at": _positive_int(
-                item.get("created") or item.get("created_at") or item.get("updated_at")
-            ),
-        }
-        if capabilities:
-            entry["capabilities"] = capabilities
-        entry["capability_sources"].update(capability_sources)
-        result.append(entry)
-    return enrich_discovered_models(provider, result)
+def discover_models(provider: Dict[str, Any]) -> list:
+    return _owned_discover_models(_discovery_io(), provider)
 
 
 def resolve_provider_protocol(
@@ -995,184 +597,6 @@ def resolve_provider_protocol(
         else preferred
     )
     return resolved
-
-
-def _nested_supported(container: Mapping[str, Any], field: str) -> Optional[bool]:
-    """Read a nested CapabilitySupport boolean at container[field].supported.
-
-    Anthropic Models API capability children are objects with a ``supported``
-    boolean, not bare booleans.  Returns the boolean when explicitly present,
-    otherwise None.
-    """
-    value = container.get(field)
-    if isinstance(value, Mapping):
-        supported = value.get("supported")
-        return supported if isinstance(supported, bool) else None
-    return None
-
-
-def _anthropic_discovery_headers(provider: Dict[str, Any]) -> Dict[str, str]:
-    key = api_key(provider)
-    if not key:
-        raise RouterError("API key is not configured for provider: %s" % provider["id"], 503)
-    return {
-        "Accept": "application/json",
-        "User-Agent": "EasyMultiProvider/%s" % __version__,
-        "x-api-key": key,
-        "anthropic-version": provider.get("anthropic_version", "2023-06-01"),
-    }
-
-
-def _anthropic_models(provider: Dict[str, Any]) -> list:
-    """Fetch model metadata from Anthropic GET /v1/models. Never calls /messages."""
-    base = provider["base_url"].rstrip("/")
-    for suffix in ("/messages", "/chat/completions", "/responses"):
-        if base.endswith(suffix):
-            base = base[:-len(suffix)]
-            break
-    headers = _anthropic_discovery_headers(provider)
-    result = []
-    budget = {"bytes": 0, "deadline": time.monotonic() + MAX_DISCOVERY_SECONDS}
-    url = base + "/models?limit=1000"
-    for _ in range(20):
-        value = _get_json(Request(url, headers=headers), "Anthropic 模型列表查询", budget)
-        for item in value.get("data", []):
-            if len(result) >= MAX_DISCOVERED_MODELS:
-                raise RouterError("上游模型列表超过安全上限", 502)
-            if not isinstance(item, dict):
-                continue
-            model_id = _model_id(item.get("id"))
-            if not model_id:
-                continue
-            caps = item.get("capabilities")
-            caps = caps if isinstance(caps, dict) else {}
-            # Anthropic Models API capability children are CapabilitySupport
-            # objects: capabilities.<name>.supported (boolean) and
-            # effort.<level>.supported (boolean).  Parse only documented fields;
-            # do not invent generic tool_use, streaming, web_search, or
-            # parallel_tool_use fields not present in the schema.
-            thinking_supported = _nested_supported(caps, "thinking")
-            effort_supported = _nested_supported(caps, "effort")
-            image_supported = _nested_supported(caps, "image_input")
-            pdf_supported = _nested_supported(caps, "pdf_input")
-            structured_output_supported = _nested_supported(caps, "structured_outputs")
-
-            # supports_reasoning is the logical union of any explicitly present
-            # thinking.supported and effort.supported; if no evidence exists it
-            # remains unknown (None).
-            explicit_reasoning = []
-            if thinking_supported is not None:
-                explicit_reasoning.append(thinking_supported)
-            if effort_supported is not None:
-                explicit_reasoning.append(effort_supported)
-            supports_reasoning = any(explicit_reasoning) if explicit_reasoning else None
-
-            reasoning_levels = []
-            if effort_supported:
-                effort_obj = caps.get("effort")
-                effort_obj = effort_obj if isinstance(effort_obj, Mapping) else {}
-                for _level in ("low", "medium", "high", "xhigh", "max"):
-                    if _nested_supported(effort_obj, _level):
-                        reasoning_levels.append(_level)
-
-            capabilities = {}
-            capability_sources = {}
-            if structured_output_supported is not None:
-                capabilities["structured_output"] = structured_output_supported
-                capability_sources["structured_output"] = {"source": "advertised"}
-
-            # Build input modalities from documented capability objects.
-            # With no modality evidence (neither image_input.supported nor
-            # pdf_input.supported present), normalize to text but keep
-            # provenance unknown.  If one or both capability objects explicitly
-            # expose supported, construct text plus the supported extras and
-            # mark the list advertised.
-            modality_evidence = (
-                image_supported is not None or pdf_supported is not None
-            )
-            _input_mods = ["text"]
-            if image_supported:
-                _input_mods.append("image")
-            if pdf_supported:
-                _input_mods.append("pdf")
-            raw_input_modalities = _input_mods
-            raw_output_modalities = None
-            max_input = _positive_int(item.get("max_input_tokens"))
-            max_output = _positive_int(item.get("max_tokens"))
-            # Parse RFC3339 created_at into an integer Unix timestamp.
-            created_at = 0
-            raw_created = item.get("created_at")
-            if isinstance(raw_created, str) and raw_created:
-                try:
-                    parsed_dt = datetime.fromisoformat(raw_created.replace("Z", "+00:00"))
-                    created_at = int(parsed_dt.timestamp())
-                except ValueError:
-                    created_at = 0
-            elif isinstance(raw_created, (int, float)) and not isinstance(raw_created, bool):
-                created_at = _positive_int(raw_created)
-            entry = {
-                "upstream_id": model_id,
-                "display_name": _model_text(item.get("display_name"), model_id, "显示名称"),
-                "description": "",
-                "context_window": max_input,
-                "max_input_tokens": max_input,
-                "output_limit": max_output,
-                "supports_reasoning": supports_reasoning,
-                "reasoning_levels": reasoning_levels,
-                "input_modalities": normalize_input_modalities(raw_input_modalities),
-                "output_modalities": normalize_output_modalities(raw_output_modalities),
-                "supports_image_detail_original": False,
-                "capability_sources": {
-                    "supports_reasoning": {
-                        "source": "advertised"
-                        if supports_reasoning is not None
-                        else "unknown"
-                    },
-                    "reasoning_levels": {
-                        "source": "advertised" if reasoning_levels else "unknown"
-                    },
-                    "input_modalities": {
-                        "source": "advertised" if modality_evidence else "unknown"
-                    },
-                    "output_modalities": {
-                        "source": output_modalities_metadata_source(raw_output_modalities)
-                    },
-                    "supports_image_detail_original": {"source": "unknown"},
-                    "context_window": {
-                        "source": "advertised" if max_input else "unknown"
-                    },
-                    "max_input_tokens": {
-                        "source": "advertised" if max_input else "unknown"
-                    },
-                    "output_limit": {
-                        "source": "advertised" if max_output else "unknown"
-                    },
-                },
-                "created_at": created_at,
-            }
-            if capabilities:
-                entry["capabilities"] = capabilities
-                entry["capability_sources"].update(capability_sources)
-            result.append(entry)
-        after_id = value.get("last_id")
-        has_more = value.get("has_more")
-        if not has_more or not after_id:
-            break
-        url = base + "/models?limit=1000&after_id=" + quote(str(after_id), safe="")
-    return enrich_discovered_models(provider, result)
-
-
-def discover_models(provider: Dict[str, Any]) -> list:
-    """Fetch safe model metadata without making one request per model."""
-    if provider.get("protocol") == "anthropic_messages" or (
-        provider.get("protocol") == "auto"
-        and provider.get("auth_mode") == "anthropic_api_key"
-    ):
-        return _anthropic_models(provider)
-    parsed = urlparse(provider.get("base_url", ""))
-    if parsed.hostname == "generativelanguage.googleapis.com":
-        return _gemini_models(provider)
-    return _generic_models(provider)
 
 
 def _headers(provider: Dict[str, Any], incoming: Dict[str, str], stream: bool) -> Dict[str, str]:
@@ -1211,6 +635,35 @@ def _headers(provider: Dict[str, Any], incoming: Dict[str, str], stream: bool) -
                 headers[target] = lower[source]
         if "Authorization" not in headers:
             raise RouterError("forward provider requires an incoming Authorization header", 401)
+    if provider.get("auth_mode") in {"account", "forward"}:
+        lower = {key.lower(): value for key, value in incoming.items()}
+        native_headers = {
+            "openai-beta": "OpenAI-Beta",
+            "originator": "originator",
+            "session-id": "session-id",
+            "thread-id": "thread-id",
+            "x-client-request-id": "x-client-request-id",
+            "x-codex-beta-features": "x-codex-beta-features",
+            "x-codex-installation-id": "x-codex-installation-id",
+            "x-codex-parent-thread-id": "x-codex-parent-thread-id",
+            "x-codex-routing-hint": "x-codex-routing-hint",
+            "x-codex-turn-state": "x-codex-turn-state",
+            "x-codex-turn-metadata": "x-codex-turn-metadata",
+            "x-codex-window-id": "x-codex-window-id",
+            "x-oai-attestation": "x-oai-attestation",
+            "x-openai-memgen-request": "x-openai-memgen-request",
+            "x-openai-internal-codex-responses-lite": (
+                "x-openai-internal-codex-responses-lite"
+            ),
+            "x-openai-subagent": "x-openai-subagent",
+            "x-responsesapi-include-timing-metrics": (
+                "x-responsesapi-include-timing-metrics"
+            ),
+        }
+        for source, target in native_headers.items():
+            value = lower.get(source)
+            if isinstance(value, str) and value:
+                headers[target] = value
     return headers
 
 
@@ -1336,7 +789,7 @@ def _request(
                 else:
                     headers = None
                     continue
-            if allow_retries and attempt == 0 and exc.code in (429, 500, 502, 503, 504):
+            if allow_retries and attempt == 0 and exc.code in (500, 502, 503, 504):
                 time.sleep(0.5)
                 continue
             content_type, detail = _http_error_detail(exc, raw)
@@ -1353,10 +806,13 @@ def _request(
                 provider["_transport_metadata"] = transport_metadata
                 headers = None
                 continue
-            raise RouterError(
-                "upstream returned %d (%s): %s" % (exc.code, content_type, detail),
+            public_message = "upstream returned %d (%s)" % (
                 exc.code,
+                content_type,
             )
+            if content_type in {"text/html", "application/xhtml+xml"}:
+                public_message += ": " + detail
+            raise RouterError(public_message, exc.code)
         except URLError as exc:
             if (
                 isinstance(exc.reason, TimeoutError)
@@ -1389,452 +845,6 @@ def _raise_if_context_response(
     raise ContextLengthError(observation)
 
 
-def _content_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return ""
-    parts = []
-    for item in content:
-        if isinstance(item, str):
-            parts.append(item)
-        elif isinstance(item, dict) and item.get("type") in ("input_text", "output_text", "text"):
-            parts.append(str(item.get("text", "")))
-    return "".join(parts)
-
-
-def _chat_content(content: Any) -> Any:
-    """Translate Responses message parts without losing image order."""
-
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return ""
-    result = []
-    has_image = False
-    for item in content:
-        if isinstance(item, str):
-            result.append({"type": "text", "text": item})
-            continue
-        if not isinstance(item, dict):
-            continue
-        item_type = item.get("type")
-        if item_type in ("input_text", "output_text", "text"):
-            result.append({"type": "text", "text": str(item.get("text", ""))})
-            continue
-        if item_type != "input_image":
-            continue
-        image_url = item.get("image_url")
-        if isinstance(image_url, dict):
-            image_url = image_url.get("url")
-        if isinstance(image_url, str):
-            result.append({"type": "image_url", "image_url": {"url": image_url}})
-            has_image = True
-    if has_image:
-        return result
-    return "".join(item["text"] for item in result if item["type"] == "text")
-
-
-def _message_item(text: str) -> Dict[str, Any]:
-    return {
-        "type": "message",
-        "role": "user",
-        "content": [{"type": "input_text", "text": text}],
-    }
-
-
-def _encode_compaction(summary: str) -> str:
-    encoded = base64.urlsafe_b64encode(summary.encode("utf-8")).decode("ascii")
-    return _COMPACTION_PREFIX + encoded
-
-
-def _decode_compaction(item: Dict[str, Any]) -> str:
-    value = item.get("encrypted_content")
-    if not isinstance(value, str) or not value.startswith(_COMPACTION_PREFIX):
-        return ""
-    encoded = value[len(_COMPACTION_PREFIX):]
-    try:
-        return base64.b64decode(encoded, altchars=b"-_", validate=True).decode("utf-8")
-    except (UnicodeDecodeError, ValueError):
-        return ""
-
-
-def _normalize_compaction_input(
-    source: Any,
-    drop_trigger: bool = False,
-    opaque_placeholder: Optional[bool] = None,
-) -> Any:
-    # Keep the old optional argument callable, but opaque history is never
-    # replaced with a generic message.
-    _ = opaque_placeholder
-    if not isinstance(source, list):
-        return source
-    result = []
-    for index, item in enumerate(source):
-        if not isinstance(item, dict):
-            result.append(item)
-            continue
-        if drop_trigger and item.get("type") == "compaction_trigger":
-            continue
-        if item.get("type") == "compaction":
-            summary = _decode_compaction(item)
-            if summary:
-                result.append(_message_item(_COMPACTION_SUMMARY_PREFIX + "\n\n" + summary))
-                continue
-            encoded = item.get("encrypted_content")
-            if isinstance(encoded, str) and encoded.startswith(_COMPACTION_PREFIX):
-                raise RouterError(
-                    "request projection failed: index=%d type=compaction "
-                    "parts=none class=invalid_compaction" % index,
-                    422,
-                )
-            raise ContextHandoffRequiredError(index, "compaction")
-        result.append(item)
-    return result
-
-
-def _messages(body: Dict[str, Any]) -> list:
-    messages = []
-    instructions = body.get("instructions")
-    if instructions:
-        messages.append({"role": "system", "content": _content_text(instructions)})
-    source = body.get("input", "")
-    if isinstance(source, str):
-        messages.append({"role": "user", "content": source})
-        return messages
-    if isinstance(source, dict):
-        source = [source]
-    if not isinstance(source, list):
-        return messages
-    source = _normalize_compaction_input(source)
-    for item in source:
-        if not isinstance(item, dict):
-            continue
-        item_type = item.get("type", "message")
-        if item_type == "message":
-            role = item.get("role", "user")
-            messages.append({"role": role, "content": _chat_content(item.get("content", ""))})
-        elif item_type in {"function_call", "custom_tool_call"}:
-            arguments = (
-                custom_tool_arguments(item.get("input", ""))
-                if item_type == "custom_tool_call"
-                else item.get("arguments", "{}")
-            )
-            if not isinstance(arguments, str):
-                arguments = json.dumps(arguments, ensure_ascii=False)
-            call_id = item.get("call_id") or item.get("id") or "tool_call"
-            call = {
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": item.get("name", "tool"),
-                    "arguments": arguments,
-                },
-            }
-            if isinstance(item.get("extra_content"), Mapping):
-                call["extra_content"] = dict(item["extra_content"])
-            messages.append({"role": "assistant", "content": None, "tool_calls": [call]})
-        elif item_type in {"function_call_output", "custom_tool_call_output"}:
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": item.get("call_id", ""),
-                    "content": _content_text(item.get("output", "")),
-                }
-            )
-    return messages
-
-
-def _tools(body: Dict[str, Any]) -> list:
-    result = []
-    for function in portable_tool_definitions(body):
-        result.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": function.get("name", "tool"),
-                    "description": function.get("description", ""),
-                    "parameters": function.get("parameters", {}),
-                },
-            }
-        )
-    return result
-
-
-def responses_to_chat(body: Dict[str, Any], upstream_model: str) -> Dict[str, Any]:
-    payload = {"model": upstream_model, "messages": _messages(body), "stream": bool(body.get("stream"))}
-    tools = _tools(body)
-    if tools:
-        payload["tools"] = tools
-    for source, target in (
-        ("temperature", "temperature"),
-        ("top_p", "top_p"),
-        ("stop", "stop"),
-        ("max_output_tokens", "max_tokens"),
-    ):
-        if source in body:
-            payload[target] = body[source]
-    reasoning = body.get("reasoning")
-    if isinstance(reasoning, dict) and isinstance(reasoning.get("effort"), str):
-        payload["reasoning_effort"] = reasoning["effort"]
-    return payload
-
-
-def _anthropic_content(content: Any) -> list:
-    if isinstance(content, str):
-        return [{"type": "text", "text": content}]
-    if not isinstance(content, list):
-        return []
-    result = []
-    for item in content:
-        if isinstance(item, str):
-            result.append({"type": "text", "text": item})
-        elif isinstance(item, dict) and item.get("type") in ("input_text", "output_text", "text"):
-            result.append({"type": "text", "text": str(item.get("text", ""))})
-    return result
-
-
-def _anthropic_messages(body: Dict[str, Any]) -> list:
-    source = body.get("input", "")
-    if isinstance(source, str):
-        source = [{"type": "message", "role": "user", "content": source}]
-    elif isinstance(source, dict):
-        source = [source]
-    if not isinstance(source, list):
-        source = []
-    source = _normalize_compaction_input(source)
-    messages = []
-    for item in source:
-        if not isinstance(item, dict):
-            continue
-        item_type = item.get("type", "message")
-        if item_type == "message":
-            role = item.get("role", "user")
-            if role not in ("user", "assistant"):
-                role = "user"
-            content = _anthropic_content(item.get("content", ""))
-            if content:
-                messages.append({"role": role, "content": content})
-        elif item_type == "function_call":
-            arguments = item.get("arguments", "{}")
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except ValueError:
-                    arguments = {}
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": [{
-                        "type": "tool_use",
-                        "id": item.get("call_id") or item.get("id", "tool_call"),
-                        "name": item.get("name", "tool"),
-                        "input": arguments if isinstance(arguments, dict) else {},
-                    }],
-                }
-            )
-        elif item_type == "function_call_output":
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": item.get("call_id", ""),
-                        "content": _content_text(item.get("output", "")),
-                    }],
-                }
-            )
-    return messages
-
-
-def _anthropic_tools(body: Dict[str, Any]) -> list:
-    result = []
-    for item in _tools(body):
-        function = item["function"]
-        result.append(
-            {
-                "name": function["name"],
-                "description": function.get("description", ""),
-                "input_schema": function.get("parameters", {}),
-            }
-        )
-    return result
-
-
-def responses_to_anthropic(body: Dict[str, Any], upstream_model: str) -> Dict[str, Any]:
-    payload = {
-        "model": upstream_model,
-        "max_tokens": int(body.get("max_output_tokens", 4096) or 4096),
-        "messages": _anthropic_messages(body),
-        "stream": bool(body.get("stream")),
-    }
-    instructions = body.get("instructions")
-    if instructions:
-        payload["system"] = _content_text(instructions)
-    tools = _anthropic_tools(body)
-    if tools:
-        payload["tools"] = tools
-    for source, target in (("temperature", "temperature"), ("top_p", "top_p")):
-        if source in body:
-            payload[target] = body[source]
-    if "stop" in body:
-        payload["stop_sequences"] = body["stop"] if isinstance(body["stop"], list) else [body["stop"]]
-    return payload
-
-
-def _chat_incomplete_reason(finish_reason: Any) -> Optional[str]:
-    reason = str(finish_reason or "").lower()
-    if reason in {"length", "max_tokens", "max_output_tokens"}:
-        return "max_output_tokens"
-    if reason in {"content_filter", "content_filtered", "safety"}:
-        return "content_filter"
-    return None
-
-
-def _anthropic_incomplete_reason(stop_reason: Any) -> Optional[str]:
-    reason = str(stop_reason or "").lower()
-    if reason in {"max_tokens", "max_output_tokens"}:
-        return "max_output_tokens"
-    if reason in {"content_filter", "content_filtered", "safety", "refusal"}:
-        return "content_filter"
-    return None
-
-
-def _response_from_chat(
-    value: Dict[str, Any],
-    requested_model: str,
-    custom_names: set = None,
-) -> Dict[str, Any]:
-    error = value.get("error")
-    if error:
-        raise RouterError("Chat Completions upstream error: %s" % _upstream_error_text(error), 502)
-    choices = value.get("choices") or [{}]
-    choice = choices[0] if isinstance(choices[0], dict) else {}
-    message = choice.get("message") or {}
-    custom_names = custom_names or set()
-    output = []
-    text = message.get("content") or ""
-    _validate_textual_protocol(text)
-    if text:
-        output.append(
-            {
-                "id": "msg_" + uuid.uuid4().hex,
-                "type": "message",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": text, "annotations": []}],
-            }
-        )
-    for call in message.get("tool_calls", []) or []:
-        function = call.get("function", {})
-        name = function.get("name", "")
-        raw_call_id = call.get("id", "")
-        if name in custom_names:
-            item_id, call_id = custom_tool_ids(raw_call_id, raw_call_id)
-            item = {
-                "id": item_id,
-                "type": "custom_tool_call",
-                "status": "completed",
-                "call_id": call_id,
-                "name": name,
-                "input": custom_tool_input(function.get("arguments", "")),
-            }
-        else:
-            item = {
-                "id": raw_call_id or "fc_" + uuid.uuid4().hex,
-                "type": "function_call",
-                "status": "completed",
-                "call_id": raw_call_id,
-                "name": name,
-                "arguments": function.get("arguments", "{}"),
-            }
-        if isinstance(call.get("extra_content"), Mapping):
-            item["extra_content"] = dict(call["extra_content"])
-        output.append(item)
-    incomplete_reason = _chat_incomplete_reason(choice.get("finish_reason"))
-    response = {
-        "id": "resp_" + uuid.uuid4().hex,
-        "object": "response",
-        "status": "incomplete" if incomplete_reason else "completed",
-        "model": requested_model,
-        "output": output,
-        "output_text": text,
-    }
-    if incomplete_reason:
-        response["incomplete_details"] = {"reason": incomplete_reason}
-    if value.get("usage") is not None:
-        response["usage"] = value["usage"]
-    return response
-
-
-def _upstream_error_text(error: Any) -> str:
-    if isinstance(error, dict):
-        return str(error.get("message") or error.get("type") or error.get("code") or error)
-    return str(error)
-
-
-def _validate_textual_protocol(value: Any) -> None:
-    text = str(value or "")
-    if any(marker in text for marker in _TEXTUAL_PROTOCOL_MARKERS):
-        raise RouterError(
-            "upstream returned textual reasoning/tool-call markup; "
-            "this endpoint must return structured tool calls for Codex",
-            502,
-        )
-
-
-def _response_from_anthropic(value: Dict[str, Any], requested_model: str) -> Dict[str, Any]:
-    output = []
-    text = []
-    for block in value.get("content", []) or []:
-        if not isinstance(block, dict):
-            continue
-        if block.get("type") == "text":
-            text.append(str(block.get("text", "")))
-        elif block.get("type") == "tool_use":
-            output.append(
-                {
-                    "id": block.get("id", "fc_" + uuid.uuid4().hex),
-                    "type": "function_call",
-                    "status": "completed",
-                    "call_id": block.get("id", ""),
-                    "name": block.get("name", ""),
-                    "arguments": json.dumps(block.get("input", {}), ensure_ascii=False),
-                }
-            )
-    final_text = "".join(text)
-    if final_text:
-        output.insert(
-            0,
-            {
-                "id": "msg_" + uuid.uuid4().hex,
-                "type": "message",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": final_text, "annotations": []}],
-            },
-        )
-    incomplete_reason = _anthropic_incomplete_reason(value.get("stop_reason"))
-    response = {
-        "id": "resp_" + uuid.uuid4().hex,
-        "object": "response",
-        "status": "incomplete" if incomplete_reason else "completed",
-        "model": requested_model,
-        "output": output,
-        "output_text": final_text,
-    }
-    if incomplete_reason:
-        response["incomplete_details"] = {"reason": incomplete_reason}
-    usage = value.get("usage")
-    if isinstance(usage, dict):
-        response["usage"] = {
-            "input_tokens": usage.get("input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
-            "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
-        }
-    return response
-
-
 def forward_responses(
     provider: Dict[str, Any],
     body: Dict[str, Any],
@@ -1856,9 +866,20 @@ def forward_responses(
                 raise RouterError("upstream Responses response is not valid JSON", 502) from exc
             if not isinstance(value, dict):
                 raise RouterError("upstream Responses response must be a JSON object", 502)
+            validate_responses_body(value)
             try:
                 projected = project_response(
-                    provider, value, custom_names=custom_tool_names(body)
+                    provider,
+                    value,
+                    custom_names=custom_tool_names(body),
+                    preserve_reasoning_summary=model.get(
+                        "_emp_preserve_reasoning_summary"
+                    )
+                    is True,
+                    preserve_reasoning_state=model.get(
+                        "_emp_preserve_reasoning_state"
+                    )
+                    is True,
                 )
             except ProjectionError as exc:
                 if exc.failure_class == "external_compaction":
@@ -1868,6 +889,7 @@ def forward_responses(
                 raise ExternalProtocolError(
                     "external upstream response projection failed"
                 ) from exc
+            validate_responses_body(projected)
             raw = json.dumps(
                 projected,
                 ensure_ascii=False,
@@ -1907,7 +929,15 @@ def forward_responses_stream(
         validated = _observing_stream(validated, effective_callback)
     if classify_dialect(provider) == PORTABLE_RESPONSES:
         return _project_responses_stream(
-            provider, validated, custom_names=custom_tool_names(body)
+            provider,
+            validated,
+            custom_names=custom_tool_names(body),
+            preserve_reasoning_summary=model.get(
+                "_emp_preserve_reasoning_summary"
+            )
+            is True,
+            preserve_reasoning_state=model.get("_emp_preserve_reasoning_state")
+            is True,
         )
     return validated
 
@@ -1977,6 +1007,8 @@ def _project_responses_stream(
     provider: Dict[str, Any],
     chunks: Iterable[bytes],
     custom_names: set = None,
+    preserve_reasoning_summary: bool = False,
+    preserve_reasoning_state: bool = False,
 ) -> Iterator[bytes]:
     suppressed_item_ids = set()
     custom_state = {}
@@ -1988,6 +1020,8 @@ def _project_responses_stream(
                 suppressed_item_ids,
                 custom_names=custom_names,
                 custom_state=custom_state,
+                preserve_reasoning_summary=preserve_reasoning_summary,
+                preserve_reasoning_state=preserve_reasoning_state,
             )
             if projected is not None:
                 event_type = str(projected.get("type") or "message")
@@ -2049,12 +1083,66 @@ def _body_with_supported_effort(
     return projected
 
 
+def _reasoning_summary_policy(
+    config: Mapping[str, Any], route: str
+) -> str:
+    presentations = config.get("catalog_presentations")
+    value = presentations.get(route) if isinstance(presentations, Mapping) else None
+    policy = value.get("reasoning_summary") if isinstance(value, Mapping) else "auto"
+    return policy if policy in {"auto", "show", "hide"} else "auto"
+
+
+def _prepare_reasoning_summary_route(
+    config: Mapping[str, Any],
+    provider: Mapping[str, Any],
+    model: Dict[str, Any],
+    route: str,
+    body: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Apply a structured-summary policy without touching native requests."""
+
+    if classify_dialect(provider) == CODEX_NATIVE:
+        return dict(body)
+    policy = _reasoning_summary_policy(config, route)
+    supported = model.get("supports_reasoning_summaries") is True
+    configured_protocol = provider.get("protocol")
+    responses_capable = configured_protocol == "responses" or (
+        configured_protocol == "auto"
+        and _observed_protocol(provider, model) == "responses"
+    )
+    model["_emp_reasoning_summary_policy"] = policy
+    model["_emp_preserve_reasoning_summary"] = bool(
+        supported and responses_capable and policy != "hide"
+    )
+    # Opaque reasoning state is scoped to the upstream that created it.  EMP
+    # currently has no portable source binding for external Responses routes,
+    # so forwarding it across a model/provider switch would leak private state
+    # and can make the destination reject the request.  Native Codex requests
+    # return above and remain byte-for-byte untouched.
+    model["_emp_preserve_reasoning_state"] = False
+    projected = dict(body)
+    reasoning = projected.get("reasoning")
+    reasoning = dict(reasoning) if isinstance(reasoning, Mapping) else {}
+    if not responses_capable or not supported or policy == "hide":
+        reasoning.pop("summary", None)
+    elif policy == "show":
+        reasoning["summary"] = "auto"
+    if reasoning:
+        projected["reasoning"] = reasoning
+    else:
+        projected.pop("reasoning", None)
+    return projected
+
+
 def _responses_payload(
     provider: Dict[str, Any], body: Dict[str, Any], model: Dict[str, Any]
 ) -> Dict[str, Any]:
     try:
         payload = project_request(
-            provider, _body_with_supported_effort(provider, body, model)
+            provider,
+            _body_with_supported_effort(provider, body, model),
+            preserve_reasoning_state=model.get("_emp_preserve_reasoning_state")
+            is True,
         )
     except ProjectionError as exc:
         if exc.failure_class == "opaque_compaction":
@@ -2062,6 +1150,93 @@ def _responses_payload(
         raise RouterError(str(exc), 422) from exc
     payload["model"] = _upstream_model(provider, model, body["model"])
     return payload
+
+
+def prepare_native_websocket_request(
+    config: Dict[str, Any],
+    body: Dict[str, Any],
+    incoming: Dict[str, str],
+    on_context: Optional[Callable[..., Mapping[str, Any]]] = None,
+    binding_store: Optional[CompactionBindingStore] = None,
+    on_continuity: Optional[ContinuityHandoffCallback] = None,
+) -> Optional[NativeWebSocketPlan]:
+    """Prepare one native Responses WebSocket request without sending it.
+
+    Returning ``None`` means the selected route is not a native Responses
+    destination and must use the ordinary protocol adapter.  Credential-bearing
+    headers and request content remain transient on the returned plan.
+    """
+
+    model_id = body.get("model")
+    if not isinstance(model_id, str) or not model_id:
+        raise RouterError("request.model is required")
+    provider, model = find_route(config, model_id)
+    provider = dict(provider)
+    model = dict(model)
+    if provider.get("protocol") != "responses" or classify_dialect(provider) != CODEX_NATIVE:
+        return None
+    prepared = _prepare_reasoning_summary_route(
+        config, provider, model, model_id, body
+    )
+    prepared = _prepare_continuity_body(
+        config,
+        provider,
+        model,
+        model_id,
+        prepared,
+        incoming,
+        binding_store,
+        on_continuity,
+    )
+    payload = _responses_payload(provider, prepared, model)
+    context_observation: Dict[str, Any] = {}
+    context_check = _bind_context_check(provider, model, on_context)
+    if context_check is not None:
+        try:
+            observed = context_check(payload, True, "")
+        except ContextGuardBlocked as exc:
+            raise ContextLengthError(exc.assessment.to_safe_dict(), preflight=True) from exc
+        if isinstance(observed, Mapping):
+            context_observation = dict(observed)
+    try:
+        full_headers, identity_headers = _native_route_headers(provider, incoming)
+        identity = _native_route_identity(
+            provider, model, model_id, identity_headers
+        )
+    except (AccountError, ContinuityError, KeyError, TypeError):
+        # HTTP forwarding remains the compatibility path when a stable native
+        # connection identity cannot be proven.
+        return None
+    endpoint = _endpoint(provider)
+    parsed = urlparse(endpoint)
+    if parsed.scheme not in {"http", "https", "ws", "wss"} or not parsed.netloc:
+        raise RouterError("native upstream websocket endpoint is invalid", 502)
+    websocket_url = parsed._replace(
+        scheme={"http": "ws", "https": "wss"}.get(parsed.scheme, parsed.scheme)
+    ).geturl()
+    headers = _headers(provider, incoming, True)
+    # _native_route_headers performs stricter identity validation; use the same
+    # resolved credentials for the actual handshake.
+    for key, value in full_headers.items():
+        if key.lower() in {"authorization", "chatgpt-account-id"}:
+            headers[key] = value
+    payload["type"] = "response.create"
+    connection_key = ":".join(
+        (
+            identity.trust_domain.auth_identity,
+            identity.endpoint_fingerprint,
+            identity.deployment_fingerprint,
+        )
+    )
+    return NativeWebSocketPlan(
+        target=NativeWebSocketTarget(websocket_url, headers, connection_key),
+        provider=provider,
+        model=model,
+        requested_slug=model_id,
+        payload=payload,
+        identity=identity,
+        context_observation=context_observation,
+    )
 
 
 def chat_completion(
@@ -2106,7 +1281,11 @@ def anthropic_completion(
         value = json.loads(raw.decode("utf-8"))
     except ValueError:
         raise RouterError("Anthropic upstream returned invalid JSON", 502)
-    return 200, "application/json", json.dumps(_response_from_anthropic(value, body["model"])).encode("utf-8")
+    return 200, "application/json", json.dumps(
+        _response_from_anthropic(
+            value, body["model"], custom_names=custom_tool_names(body)
+        )
+    ).encode("utf-8")
 
 
 def _response_text(raw: bytes) -> str:
@@ -2219,412 +1398,13 @@ def _is_compaction_trigger(body: Dict[str, Any]) -> bool:
     )
 
 
-def _sse_frame(event: str, value: Dict[str, Any]) -> bytes:
-    return ("event: %s\ndata: %s\n\n" % (event, json.dumps(value, ensure_ascii=False))).encode("utf-8")
-
-
-def _response_failure_frame(
-    message: str,
-    status: int = 502,
-    error_class: Optional[str] = None,
-) -> bytes:
-    display_message = "HTTP %d: %s" % (status, message)
-    response = {
-        "id": "resp_" + uuid.uuid4().hex,
-        "object": "response",
-        "status": "failed",
-        "error": {
-            "code": "upstream_error",
-            "message": display_message,
-            "error_class": error_class or _route_error_class(status),
-        },
-    }
-    return _sse_frame("response.failed", {"type": "response.failed", "response": response})
-
-
-_PRE_OUTPUT_RECOVERY_ERRORS = frozenset(
-    {"network", "stream_incomplete", "upstream_close_pre_output", "proxy_reset"}
-)
-_TERMINAL_EVENT_TYPES = frozenset(
-    {"response.completed", "response.incomplete", "response.failed", "error"}
-)
-
-
-def _stream_event_activity(event: Mapping[str, Any]) -> Tuple[bool, bool]:
-    """Return visible-output and tool-activity flags without retaining content."""
-
-    event_type = str(event.get("type") or "")
-    item = event.get("item")
-    item_type = str(item.get("type") or "") if isinstance(item, Mapping) else ""
-    tool_activity = item_type in {
-        "function_call",
-        "custom_tool_call",
-        "tool_call",
-    } or "function_call" in event_type or "tool_call" in event_type
-    output_emitted = tool_activity
-    if event_type.endswith((".delta", ".done")):
-        output_emitted = output_emitted or any(
-            marker in event_type
-            for marker in ("output_text", "output_image", "image_generation", "reasoning")
-        )
-    elif any(marker in event_type for marker in ("output_image", "image_generation")):
-        output_emitted = True
-    part = event.get("part")
-    if isinstance(part, Mapping) and part.get("type") in {
-        "output_text",
-        "output_image",
-        "reasoning_text",
-        "summary_text",
-    }:
-        output_emitted = True
-    if isinstance(item, Mapping):
-        content = item.get("content")
-        if isinstance(content, list) and any(
-            isinstance(part, Mapping)
-            and part.get("type")
-            in {"output_text", "output_image", "image", "image_url", "reasoning_text"}
-            for part in content
-        ):
-            output_emitted = True
-    return output_emitted, tool_activity
-
-
-def _stream_terminal(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-    event_type = str(event.get("type") or "")
-    if event_type not in _TERMINAL_EVENT_TYPES:
-        return None
-    if event_type == "response.completed":
-        return {"success": True, "status": 200, "error_class": "none"}
-    response = event.get("response")
-    if event_type == "response.incomplete":
-        details = response.get("incomplete_details") if isinstance(response, Mapping) else None
-        reason = str(details.get("reason") or "") if isinstance(details, Mapping) else ""
-        error_class = {
-            "max_output_tokens": "output_limit",
-            "content_filter": "content_filter",
-        }.get(reason, "stream_incomplete")
-        return {"success": False, "status": 200, "error_class": error_class}
-    error = response.get("error") if isinstance(response, Mapping) else None
-    if not isinstance(error, Mapping):
-        error = event.get("error")
-    error = error if isinstance(error, Mapping) else {}
-    status = error.get("status")
-    if not isinstance(status, int):
-        message = str(error.get("message") or event.get("message") or "")
-        match = re.search(r"HTTP\s+(\d{3})", message)
-        status = int(match.group(1)) if match else 502
-    error_class = str(error.get("error_class") or _route_error_class(status))
-    close_code = error.get("close_code")
-    terminal = {
-        "success": False,
-        "status": status,
-        "error_class": error_class,
-    }
-    if isinstance(close_code, int) and not isinstance(close_code, bool):
-        terminal["close_code"] = close_code
-    return terminal
-
-
-def _reliable_responses_stream(
-    factory: Callable[[], Iterable[bytes]],
-    terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-    replay_safe: bool = False,
-) -> Iterator[bytes]:
-    """Enforce one terminal event; replay only an explicitly safe factory."""
-
-    output_emitted = False
-    tool_activity = False
-    recovery_attempted = False
-    terminal_event_observed = False
-    reported = False
-
-    def report(terminal: Mapping[str, Any], terminal_observed: bool) -> None:
-        nonlocal reported
-        if reported:
-            return
-        reported = True
-        value = dict(terminal)
-        value.update(
-            {
-                "output_emitted": output_emitted,
-                "tool_activity": tool_activity,
-                "terminal_event_observed": bool(
-                    terminal_event_observed or terminal_observed
-                ),
-                "recovery_succeeded": bool(
-                    recovery_attempted and terminal.get("success") is True
-                ),
-                "recovery_mode": "pre_output_retry" if recovery_attempted else "none",
-            }
-        )
-        if terminal_callback is not None:
-            try:
-                terminal_callback(value)
-            except Exception:
-                pass
-
-    try:
-        for attempt in range(2 if replay_safe else 1):
-            pending = []
-            iterator = None
-            retry = False
-            try:
-                iterator = iter(factory())
-                for event in sse_json_events(iterator):
-                    visible, tool = _stream_event_activity(event)
-                    output_emitted = output_emitted or visible
-                    tool_activity = tool_activity or tool
-                    terminal = _stream_terminal(event)
-                    if terminal is not None:
-                        terminal_event_observed = True
-                        error_class = terminal.get("error_class")
-                        if (
-                            replay_safe
-                            and
-                            terminal.get("success") is not True
-                            and attempt == 0
-                            and not output_emitted
-                            and not tool_activity
-                            and error_class in _PRE_OUTPUT_RECOVERY_ERRORS
-                        ):
-                            recovery_attempted = True
-                            retry = True
-                            break
-                        for buffered in pending:
-                            yield _sse_frame(str(buffered.get("type") or "message"), buffered)
-                        report(terminal, True)
-                        if terminal.get("success") is True:
-                            yield _sse_frame("response.completed", dict(event))
-                        elif str(event.get("type") or "") == "response.incomplete":
-                            yield _sse_frame("response.incomplete", dict(event))
-                        else:
-                            yield _response_failure_frame(
-                                "upstream stream failed",
-                                int(terminal.get("status") or 502),
-                                str(terminal.get("error_class") or "stream_error"),
-                            )
-                        return
-                    if output_emitted or tool_activity:
-                        for buffered in pending:
-                            yield _sse_frame(str(buffered.get("type") or "message"), buffered)
-                        pending = []
-                        yield _sse_frame(str(event.get("type") or "message"), dict(event))
-                    else:
-                        pending.append(dict(event))
-                if retry:
-                    continue
-                if tool_activity:
-                    error_class = "upstream_close_after_tool"
-                elif output_emitted:
-                    error_class = "upstream_close_after_output"
-                else:
-                    error_class = "upstream_close_pre_output"
-                if (
-                    replay_safe
-                    and attempt == 0
-                    and not output_emitted
-                    and not tool_activity
-                ):
-                    recovery_attempted = True
-                    continue
-                for buffered in pending:
-                    yield _sse_frame(str(buffered.get("type") or "message"), buffered)
-                terminal = {
-                    "success": False,
-                    "status": 502,
-                    "error_class": error_class,
-                }
-                report(terminal, False)
-                yield _response_failure_frame(
-                    "upstream stream ended without a terminal event",
-                    502,
-                    error_class,
-                )
-                return
-            except GeneratorExit:
-                raise
-            except Exception as exc:
-                status, failure_class = _stream_exception(exc)
-                if isinstance(exc, TransportError):
-                    failure_class = "malformed_terminal"
-                if (
-                    replay_safe
-                    and attempt == 0
-                    and not output_emitted
-                    and not tool_activity
-                    and failure_class == "network"
-                ):
-                    recovery_attempted = True
-                    continue
-                error_class = (
-                    "upstream_close_after_tool"
-                    if tool_activity
-                    else "upstream_close_after_output"
-                    if output_emitted
-                    else "proxy_reset"
-                    if failure_class == "network"
-                    else failure_class
-                )
-                for buffered in pending:
-                    yield _sse_frame(str(buffered.get("type") or "message"), buffered)
-                terminal = {
-                    "success": False,
-                    "status": status or 502,
-                    "error_class": error_class,
-                }
-                report(terminal, False)
-                failure_message = (
-                    str(exc)
-                    if isinstance(exc, RouterError)
-                    and isinstance(exc.__cause__, ProjectionError)
-                    else "upstream stream failed"
-                )
-                yield _response_failure_frame(
-                    failure_message,
-                    int(status or 502),
-                    error_class,
-                )
-                return
-            finally:
-                close = getattr(iterator, "close", None)
-                if callable(close):
-                    try:
-                        close()
-                    except Exception:
-                        pass
-    except GeneratorExit:
-        report(
-            {
-                "success": False,
-                "status": None,
-                "error_class": "client_disconnect",
-            },
-            False,
-        )
-        raise
-
-
-def _sse_data(response: Any) -> Iterator[str]:
-    pending = []
-    pending_bytes = 0
-    stream_bytes = 0
-    raw_body = bytearray()
-    saw_sse_data = False
-    try:
-        for raw in response:
-            stream_bytes += len(raw)
-            if stream_bytes > MAX_UPSTREAM_BODY_BYTES:
-                raise RouterError("upstream SSE stream is too large", 502)
-            if len(raw) > MAX_SSE_FRAME_BYTES:
-                raise RouterError("upstream SSE frame is too large", 502)
-            raw_body.extend(raw)
-            line = raw.decode("utf-8", "replace").rstrip("\r\n")
-            if line.startswith("data:"):
-                saw_sse_data = True
-                value = line[5:].lstrip()
-                pending_bytes += len(value.encode("utf-8"))
-                if pending_bytes > MAX_SSE_FRAME_BYTES:
-                    raise RouterError("upstream SSE frame is too large", 502)
-                pending.append(value)
-            elif not line and pending:
-                yield "\n".join(pending)
-                pending = []
-                pending_bytes = 0
-        if pending:
-            yield "\n".join(pending)
-        if not saw_sse_data and raw_body:
-            body = bytes(raw_body).decode("utf-8", "replace").strip()
-            try:
-                json.loads(body)
-            except ValueError:
-                raise RouterError("upstream returned neither SSE nor JSON data", 502)
-            yield body
-    finally:
-        response.close()
-
-
-def _response_json_stream(value: Dict[str, Any]) -> Iterator[bytes]:
-    """Convert one complete Responses JSON body to a finite SSE stream."""
-    if not isinstance(value, dict):
-        raise RouterError("upstream Responses JSON is not an object", 502)
-    if value.get("error"):
-        raise RouterError("upstream Responses error: %s" % _upstream_error_text(value["error"]), 502)
-    output = value.get("output")
-    if not isinstance(output, list):
-        raise RouterError("upstream Responses JSON has no valid output", 502)
-    response = dict(value)
-    response.setdefault("id", "resp_" + uuid.uuid4().hex)
-    response.setdefault("object", "response")
-    final_status = str(response.get("status") or "completed")
-    if final_status not in {"completed", "incomplete", "failed"}:
-        final_status = "completed"
-    response["status"] = final_status
-    output = [dict(item) for item in output if isinstance(item, dict)]
-    if not output and response.get("output_text"):
-        output = [{
-            "id": "msg_" + uuid.uuid4().hex,
-            "type": "message",
-            "status": "completed",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": str(response["output_text"]), "annotations": []}],
-        }]
-    response["output"] = output
-    base = dict(response)
-    base["status"] = "in_progress"
-    base["output"] = []
-    yield _sse_frame("response.created", {"type": "response.created", "response": base})
-    for index, source_item in enumerate(output):
-        item = dict(source_item)
-        item.setdefault("id", "item_" + uuid.uuid4().hex)
-        item_type = item.get("type", "message")
-        added = dict(item)
-        if item_type != "compaction":
-            added["status"] = "in_progress"
-        yield _sse_frame(
-            "response.output_item.added",
-            {"type": "response.output_item.added", "output_index": index, "item": added},
-        )
-        if item_type == "message":
-            text = _content_text(item.get("content", ""))
-            _validate_textual_protocol(text)
-            if text:
-                content_part = {"type": "output_text", "text": text, "annotations": []}
-                yield _sse_frame(
-                    "response.content_part.added",
-                    {"type": "response.content_part.added", "item_id": item["id"], "output_index": index, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}},
-                )
-                yield _sse_frame(
-                    "response.output_text.delta",
-                    {"type": "response.output_text.delta", "item_id": item["id"], "output_index": index, "content_index": 0, "delta": text},
-                )
-                yield _sse_frame(
-                    "response.output_text.done",
-                    {"type": "response.output_text.done", "item_id": item["id"], "output_index": index, "content_index": 0, "text": text},
-                )
-                yield _sse_frame(
-                    "response.content_part.done",
-                    {"type": "response.content_part.done", "item_id": item["id"], "output_index": index, "content_index": 0, "part": content_part},
-                )
-        elif item_type == "function_call":
-            arguments = item.get("arguments", "{}")
-            if not isinstance(arguments, str):
-                arguments = json.dumps(arguments, ensure_ascii=False)
-            yield _sse_frame(
-                "response.function_call_arguments.done",
-                {"type": "response.function_call_arguments.done", "item_id": item["id"], "output_index": index, "arguments": arguments},
-            )
-        done = dict(item)
-        if item_type != "compaction":
-            done["status"] = "completed"
-        yield _sse_frame("response.output_item.done", {"type": "response.output_item.done", "output_index": index, "item": done})
-    terminal_event = {
-        "completed": "response.completed",
-        "incomplete": "response.incomplete",
-        "failed": "response.failed",
-    }[final_status]
-    yield _sse_frame(
-        terminal_event,
-        {"type": terminal_event, "response": response},
+def _stream_adapter_io() -> StreamAdapterIO:
+    return StreamAdapterIO(
+        request=_request,
+        read_limited=_read_limited,
+        raise_if_context_response=_raise_if_context_response,
+        body_with_supported_effort=_body_with_supported_effort,
+        upstream_model=_upstream_model,
     )
 
 
@@ -2633,150 +1413,9 @@ def _validated_responses_stream(
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     provider: Optional[Dict[str, Any]] = None,
 ) -> Iterator[bytes]:
-    """Pass through valid Responses SSE and terminate malformed streams explicitly."""
-    reported = False
-
-    def report(
-        status: Any,
-        error_class: str = "none",
-        context_observation: Optional[Mapping[str, Any]] = None,
-    ) -> None:
-        nonlocal reported
-        if reported:
-            return
-        reported = True
-        _notify_terminal(terminal_callback, status, error_class, context_observation)
-
-    try:
-        content_type = str(getattr(response, "headers", {}).get("Content-Type", "")).lower()
-        chunks = response
-        if "text/event-stream" not in content_type:
-            raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses stream")
-            stripped = raw.lstrip()
-            if stripped.startswith((b"event:", b"data:", b":")):
-                chunks = (raw,)
-            else:
-                try:
-                    value = json.loads(raw.decode("utf-8", "replace"))
-                except (UnicodeDecodeError, ValueError):
-                    raise RouterError("upstream Responses stream was neither SSE nor valid JSON", 502)
-                if provider is not None:
-                    _raise_if_context_response(
-                        provider,
-                        getattr(response, "status", 400),
-                        content_type,
-                        raw,
-                    )
-                yield from _response_json_stream(value)
-                if str(value.get("status") or "completed") == "incomplete":
-                    details = value.get("incomplete_details")
-                    reason = str(details.get("reason") or "") if isinstance(details, Mapping) else ""
-                    report(
-                        200,
-                        {
-                            "max_output_tokens": "output_limit",
-                            "content_filter": "content_filter",
-                        }.get(reason, "stream_incomplete"),
-                    )
-                else:
-                    report(200)
-                return
-
-        line_buffer = ""
-        pending_data = []
-        saw_data = False
-        saw_terminal = False
-        saw_error = False
-        error_message = ""
-        incomplete_reason = ""
-
-        def consume_line(line: str) -> None:
-            nonlocal saw_data, saw_terminal, saw_error, error_message, pending_data, incomplete_reason
-            line = line.rstrip("\r")
-            if line.startswith("data:"):
-                saw_data = True
-                pending_data.append(line[5:].lstrip())
-                return
-            if line or not pending_data:
-                return
-            data = "\n".join(pending_data)
-            pending_data = []
-            if data == "[DONE]":
-                return
-            try:
-                value = json.loads(data)
-            except ValueError:
-                return
-            if not isinstance(value, dict):
-                return
-            if provider is not None and is_explicit_context_error(
-                400, "application/json", data.encode("utf-8", "replace")
-            ):
-                observation = mark_explicit_failure(
-                    provider.get("_context_observation", {}),
-                    provider.get("_context_observation", {}).get("input_estimate"),
-                )
-                raise ContextLengthError(observation)
-            event_type = str(value.get("type") or "")
-            if event_type == "response.completed":
-                saw_terminal = True
-            elif event_type == "response.incomplete":
-                saw_terminal = True
-                response_value = value.get("response")
-                details = response_value.get("incomplete_details") if isinstance(response_value, Mapping) else None
-                incomplete_reason = str(details.get("reason") or "") if isinstance(details, Mapping) else ""
-            elif event_type in ("error", "response.failed"):
-                saw_error = True
-                error_message = str(value.get("message") or value.get("error") or "upstream Responses stream returned an error")
-
-        for raw in chunks:
-            raw_bytes = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
-            text = raw_bytes.decode("utf-8", "replace")
-            line_buffer += text
-            while "\n" in line_buffer:
-                line, line_buffer = line_buffer.split("\n", 1)
-                consume_line(line)
-            lines = raw_bytes.splitlines(keepends=True)
-            filtered = b"".join(line for line in lines if line.strip() != b"data: [DONE]")
-            if filtered:
-                yield filtered
-        if line_buffer:
-            consume_line(line_buffer)
-        if pending_data:
-            consume_line("")
-        if not saw_terminal and not saw_error:
-            message = "upstream Responses stream ended before response.completed" if saw_data else "upstream Responses stream contained no SSE data"
-            yield _response_failure_frame(message, 502, "stream_incomplete")
-            report(502, "stream_incomplete")
-        elif not saw_terminal and saw_error:
-            yield _response_failure_frame(
-                error_message or "upstream Responses stream returned an error",
-                502,
-                "stream_error",
-            )
-            report(502, "stream_error")
-        else:
-            report(
-                200,
-                {
-                    "max_output_tokens": "output_limit",
-                    "content_filter": "content_filter",
-                }.get(incomplete_reason, "none"),
-            )
-    except RouterError as exc:
-        if isinstance(exc, ContextLengthError):
-            report(exc.status, "context_length_exceeded", exc.context_observation)
-        else:
-            report(exc.status, _route_error_class(exc.status))
-        yield _response_failure_frame(
-            str(exc),
-            exc.status,
-            "context_length_exceeded"
-            if isinstance(exc, ContextLengthError)
-            else _route_error_class(exc.status),
-        )
-    finally:
-        response.close()
+    return _owned_validated_responses_stream(
+        _stream_adapter_io(), response, terminal_callback, provider
+    )
 
 
 def stream_chat_completion(
@@ -2785,323 +1424,19 @@ def stream_chat_completion(
     model: Dict[str, Any],
     incoming: Dict[str, str],
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+    context_check: Optional[
+        Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]
+    ] = None,
 ) -> Iterable[bytes]:
-    body = _body_with_supported_effort(provider, body, model)
-    payload = responses_to_chat(body, _upstream_model(provider, model, body["model"]))
-    payload["stream"] = True
-    response_id = "resp_" + uuid.uuid4().hex
-    message_id = "msg_" + uuid.uuid4().hex
-    text = []
-    text_bytes = 0
-    protocol_probe = ""
-    tool_calls = {}
-    custom_names = custom_tool_names(body)
-    finish_reason = None
-    saw_output = False
-    response = {
-        "id": response_id,
-        "object": "response",
-        "status": "in_progress",
-        "model": body["model"],
-        "output": [],
-    }
-    sequence = 0
-
-    def frame(event: str, value: Dict[str, Any]) -> bytes:
-        nonlocal sequence
-        sequence += 1
-        value = dict(value)
-        value.setdefault("sequence_number", sequence)
-        return _sse_frame(event, value)
-
-    try:
-        upstream = _request(provider, payload, incoming, True, context_check=context_check)
-        yield frame("response.created", {"type": "response.created", "response": response})
-        yield frame(
-            "response.output_item.added",
-            {
-                "type": "response.output_item.added",
-                "output_index": 0,
-                "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []},
-            },
-        )
-        yield frame(
-            "response.content_part.added",
-            {
-                "type": "response.content_part.added",
-                "item_id": message_id,
-                "output_index": 0,
-                "content_index": 0,
-                "part": {"type": "output_text", "text": "", "annotations": []},
-            },
-        )
-        for data in _sse_data(upstream):
-            if data == "[DONE]":
-                break
-            try:
-                chunk = json.loads(data)
-            except ValueError:
-                continue
-            if not isinstance(chunk, dict):
-                continue
-            if chunk.get("error"):
-                if is_explicit_context_error(
-                    400,
-                    "application/json",
-                    json.dumps(chunk, ensure_ascii=False).encode("utf-8"),
-                ):
-                    raise ContextLengthError(
-                        mark_explicit_failure(
-                            provider.get("_context_observation", {}),
-                            provider.get("_context_observation", {}).get("input_estimate"),
-                        )
-                    )
-                raise RouterError(
-                    "Chat Completions upstream error: %s" % _upstream_error_text(chunk["error"]),
-                    502,
-                )
-            choices = chunk.get("choices") or []
-            choice = choices[0] if choices and isinstance(choices[0], dict) else {}
-            if choice.get("finish_reason") is not None:
-                finish_reason = choice.get("finish_reason")
-            delta = choice.get("delta") or {}
-            if not delta and isinstance(choice.get("message"), dict):
-                # Some OpenAI-compatible gateways ignore stream=true and return
-                # one ordinary Chat Completions response instead of SSE deltas.
-                delta = choice["message"]
-            piece = delta.get("content") or ""
-            if piece:
-                saw_output = True
-                piece = piece if isinstance(piece, str) else _content_text(piece)
-                protocol_probe = (protocol_probe + piece)[-128:]
-                _validate_textual_protocol(protocol_probe)
-                piece_bytes = len(str(piece).encode("utf-8"))
-                if text_bytes + piece_bytes > MAX_STREAM_TEXT_BYTES:
-                    raise RouterError("upstream streamed text is too large", 502)
-                text_bytes += piece_bytes
-                text.append(piece)
-                yield frame(
-                    "response.output_text.delta",
-                    {
-                        "type": "response.output_text.delta",
-                        "item_id": message_id,
-                        "output_index": 0,
-                        "content_index": 0,
-                        "delta": piece,
-                    },
-                )
-            for raw_call in delta.get("tool_calls", []) or []:
-                if not isinstance(raw_call, dict):
-                    continue
-                raw_index = raw_call.get("index", len(tool_calls))
-                try:
-                    index = int(raw_index)
-                except (TypeError, ValueError):
-                    index = len(tool_calls)
-                function = raw_call.get("function") or {}
-                if not isinstance(function, dict):
-                    function = {}
-                state = tool_calls.get(index)
-                if state is None:
-                    saw_output = True
-                    call_id = str(raw_call.get("id") or "call_" + uuid.uuid4().hex)
-                    state = {
-                        "id": call_id,
-                        "call_id": call_id,
-                        "name": "",
-                        "arguments": "",
-                        "custom": False,
-                        "added": False,
-                    }
-                    tool_calls[index] = state
-                elif raw_call.get("id"):
-                    state["call_id"] = str(raw_call["id"])
-                    state["id"] = state["call_id"]
-                if function.get("name"):
-                    state["name"] += str(function["name"])
-                if isinstance(raw_call.get("extra_content"), Mapping):
-                    state["extra_content"] = dict(raw_call["extra_content"])
-                state["custom"] = state["name"] in custom_names
-                if state["custom"]:
-                    state["id"], state["call_id"] = custom_tool_ids(
-                        state["id"], state["call_id"]
-                    )
-                if state["name"] and not state["added"]:
-                    added_item = {
-                        "id": state["id"],
-                        "type": "custom_tool_call" if state["custom"] else "function_call",
-                        "status": "in_progress",
-                        "call_id": state["call_id"],
-                        "name": state["name"],
-                    }
-                    added_item["input" if state["custom"] else "arguments"] = ""
-                    if "extra_content" in state:
-                        added_item["extra_content"] = state["extra_content"]
-                    state["added"] = True
-                    yield frame(
-                        "response.output_item.added",
-                        {
-                            "type": "response.output_item.added",
-                            "output_index": index + 1,
-                            "item": added_item,
-                        },
-                    )
-                arguments = function.get("arguments") or ""
-                if arguments:
-                    saw_output = True
-                    arguments = str(arguments)
-                    state["arguments"] += arguments
-                    if not state["custom"]:
-                        yield frame(
-                            "response.function_call_arguments.delta",
-                            {
-                                "type": "response.function_call_arguments.delta",
-                                "item_id": state["id"],
-                                "output_index": index + 1,
-                                "delta": arguments,
-                            },
-                        )
-        if not saw_output:
-            raise StreamBoundaryError(
-                "upstream returned an empty Chat Completions response",
-                "stream_incomplete",
-            )
-        final_text = "".join(text)
-        output = {
-            "id": message_id,
-            "type": "message",
-            "status": "completed",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": final_text, "annotations": []}],
-        }
-        function_outputs = []
-        for index in sorted(tool_calls):
-            state = tool_calls[index]
-            if not state["name"]:
-                raise RouterError("upstream returned a tool call without a name", 502)
-            if not state["added"]:
-                state["custom"] = state["name"] in custom_names
-                if state["custom"]:
-                    state["id"], state["call_id"] = custom_tool_ids(
-                        state["id"], state["call_id"]
-                    )
-                added_item = {
-                    "id": state["id"],
-                    "type": "custom_tool_call" if state["custom"] else "function_call",
-                    "status": "in_progress",
-                    "call_id": state["call_id"],
-                    "name": state["name"],
-                }
-                added_item["input" if state["custom"] else "arguments"] = ""
-                yield frame(
-                    "response.output_item.added",
-                    {
-                        "type": "response.output_item.added",
-                        "output_index": index + 1,
-                        "item": added_item,
-                    },
-                )
-            function_output = {
-                "id": state["id"],
-                "type": "custom_tool_call" if state["custom"] else "function_call",
-                "status": "completed",
-                "call_id": state["call_id"],
-                "name": state["name"],
-            }
-            function_output[
-                "input" if state["custom"] else "arguments"
-            ] = (
-                custom_tool_input(state["arguments"])
-                if state["custom"]
-                else state["arguments"]
-            )
-            if "extra_content" in state:
-                function_output["extra_content"] = state["extra_content"]
-            function_outputs.append(function_output)
-            if state["custom"]:
-                yield frame(
-                    "response.custom_tool_call_input.delta",
-                    {
-                        "type": "response.custom_tool_call_input.delta",
-                        "item_id": state["id"],
-                        "output_index": index + 1,
-                        "delta": function_output["input"],
-                    },
-                )
-            else:
-                yield frame(
-                    "response.function_call_arguments.done",
-                    {
-                        "type": "response.function_call_arguments.done",
-                        "item_id": state["id"],
-                        "output_index": index + 1,
-                        "arguments": state["arguments"],
-                    },
-                )
-            yield frame(
-                "response.output_item.done",
-                {
-                    "type": "response.output_item.done",
-                    "output_index": index + 1,
-                    "item": function_output,
-                },
-            )
-        incomplete_reason = _chat_incomplete_reason(finish_reason)
-        response["status"] = "incomplete" if incomplete_reason else "completed"
-        response["output"] = [output] + function_outputs
-        response["output_text"] = final_text
-        if incomplete_reason:
-            response["incomplete_details"] = {"reason": incomplete_reason}
-        yield frame(
-            "response.output_text.done",
-            {
-                "type": "response.output_text.done",
-                "item_id": message_id,
-                "output_index": 0,
-                "content_index": 0,
-                "text": final_text,
-            },
-        )
-        yield frame(
-            "response.content_part.done",
-            {
-                "type": "response.content_part.done",
-                "item_id": message_id,
-                "output_index": 0,
-                "content_index": 0,
-                "part": {"type": "output_text", "text": final_text, "annotations": []},
-            },
-        )
-        yield frame(
-            "response.output_item.done",
-            {
-                "type": "response.output_item.done",
-                "output_index": 0,
-                "item": output,
-            },
-        )
-        terminal_event = "response.incomplete" if incomplete_reason else "response.completed"
-        yield frame(terminal_event, {"type": terminal_event, "response": response})
-        _notify_terminal(
-            terminal_callback,
-            200,
-            {
-                "max_output_tokens": "output_limit",
-                "content_filter": "content_filter",
-            }.get(incomplete_reason, "none"),
-        )
-    except RouterError as exc:
-        terminal = _terminal_exception(exc)
-        _notify_terminal(
-            terminal_callback,
-            terminal["status"],
-            terminal["error_class"],
-            terminal.get("context_observation"),
-        )
-        yield _response_failure_frame(
-            str(exc), exc.status, terminal.get("error_class")
-        )
+    return _owned_stream_chat_completion(
+        _stream_adapter_io(),
+        provider,
+        body,
+        model,
+        incoming,
+        terminal_callback,
+        context_check,
+    )
 
 
 def stream_anthropic_completion(
@@ -3110,143 +1445,19 @@ def stream_anthropic_completion(
     model: Dict[str, Any],
     incoming: Dict[str, str],
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+    context_check: Optional[
+        Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]
+    ] = None,
 ) -> Iterable[bytes]:
-    payload = responses_to_anthropic(body, _upstream_model(provider, model, body["model"]))
-    payload["stream"] = True
-    response_id = "resp_" + uuid.uuid4().hex
-    message_id = "msg_" + uuid.uuid4().hex
-    text = []
-    text_bytes = 0
-    stop_reason = None
-    response = {
-        "id": response_id,
-        "object": "response",
-        "status": "in_progress",
-        "model": body["model"],
-        "output": [],
-    }
-    sequence = 0
-
-    def frame(event: str, value: Dict[str, Any]) -> bytes:
-        nonlocal sequence
-        sequence += 1
-        value = dict(value)
-        value.setdefault("sequence_number", sequence)
-        return _sse_frame(event, value)
-
-    try:
-        upstream = _request(provider, payload, incoming, True, context_check=context_check)
-        yield frame("response.created", {"type": "response.created", "response": response})
-        yield frame(
-            "response.output_item.added",
-            {
-                "type": "response.output_item.added",
-                "output_index": 0,
-                "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []},
-            },
-        )
-        yield frame(
-            "response.content_part.added",
-            {
-                "type": "response.content_part.added",
-                "item_id": message_id,
-                "output_index": 0,
-                "content_index": 0,
-                "part": {"type": "output_text", "text": "", "annotations": []},
-            },
-        )
-        for data in _sse_data(upstream):
-            try:
-                event = json.loads(data)
-            except ValueError:
-                continue
-            delta = event.get("delta") or {}
-            if event.get("type") == "message_delta" and delta.get("stop_reason"):
-                stop_reason = delta["stop_reason"]
-            if delta.get("type") != "text_delta":
-                continue
-            piece = delta.get("text") or ""
-            if piece:
-                piece_bytes = len(str(piece).encode("utf-8"))
-                if text_bytes + piece_bytes > MAX_STREAM_TEXT_BYTES:
-                    raise RouterError("upstream streamed text is too large", 502)
-                text_bytes += piece_bytes
-                text.append(piece)
-                yield frame(
-                    "response.output_text.delta",
-                    {
-                        "type": "response.output_text.delta",
-                        "item_id": message_id,
-                        "output_index": 0,
-                        "content_index": 0,
-                        "delta": piece,
-                    },
-                )
-        final_text = "".join(text)
-        if not final_text:
-            raise StreamBoundaryError(
-                "upstream returned an empty Anthropic Messages response",
-                "stream_incomplete",
-            )
-        output = {
-            "id": message_id,
-            "type": "message",
-            "status": "completed",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": final_text, "annotations": []}],
-        }
-        incomplete_reason = _anthropic_incomplete_reason(stop_reason)
-        response["status"] = "incomplete" if incomplete_reason else "completed"
-        response["output"] = [output]
-        response["output_text"] = final_text
-        if incomplete_reason:
-            response["incomplete_details"] = {"reason": incomplete_reason}
-        yield frame(
-            "response.output_text.done",
-            {
-                "type": "response.output_text.done",
-                "item_id": message_id,
-                "output_index": 0,
-                "content_index": 0,
-                "text": final_text,
-            },
-        )
-        yield frame(
-            "response.content_part.done",
-            {
-                "type": "response.content_part.done",
-                "item_id": message_id,
-                "output_index": 0,
-                "content_index": 0,
-                "part": {"type": "output_text", "text": final_text, "annotations": []},
-            },
-        )
-        yield frame(
-            "response.output_item.done",
-            {"type": "response.output_item.done", "output_index": 0, "item": output},
-        )
-        terminal_event = "response.incomplete" if incomplete_reason else "response.completed"
-        yield frame(terminal_event, {"type": terminal_event, "response": response})
-        _notify_terminal(
-            terminal_callback,
-            200,
-            {
-                "max_output_tokens": "output_limit",
-                "content_filter": "content_filter",
-            }.get(incomplete_reason, "none"),
-        )
-    except RouterError as exc:
-        terminal = _terminal_exception(exc)
-        _notify_terminal(
-            terminal_callback,
-            terminal["status"],
-            terminal["error_class"],
-            terminal.get("context_observation"),
-        )
-        yield _response_failure_frame(
-            str(exc), exc.status, terminal.get("error_class")
-        )
+    return _owned_stream_anthropic_completion(
+        _stream_adapter_io(),
+        provider,
+        body,
+        model,
+        incoming,
+        terminal_callback,
+        context_check,
+    )
 
 
 def _observed_protocol(
@@ -3397,25 +1608,44 @@ def _bind_context_check(
 
 
 def _stream_signal(chunk: Any) -> Optional[Dict[str, Any]]:
-    raw = chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8")
-    if b"response.completed" in raw:
-        return {"success": True, "status": 200, "error_class": "none"}
-    if b"response.incomplete" in raw:
-        if b"max_output_tokens" in raw:
-            error_class = "output_limit"
-        elif b"content_filter" in raw:
-            error_class = "content_filter"
-        else:
-            error_class = "stream_incomplete"
-        return {"success": False, "status": 200, "error_class": error_class}
-    if b"response.failed" in raw:
-        match = re.search(rb"HTTP\s+(\d{3})", raw)
-        status = int(match.group(1)) if match else 502
-        return {
-            "success": False,
-            "status": status,
-            "error_class": _route_error_class(status),
-        }
+    raw = chunk.decode("utf-8", "replace") if isinstance(chunk, bytes) else str(chunk)
+    for block in re.split(r"\r?\n\r?\n", raw):
+        data = []
+        for line in block.splitlines():
+            if line.startswith("data:"):
+                data.append(line[5:].lstrip())
+        if not data or data == ["[DONE]"]:
+            continue
+        try:
+            event = json.loads("\n".join(data))
+        except ValueError:
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        event_type = event.get("type")
+        response = event.get("response")
+        response = response if isinstance(response, Mapping) else {}
+        if event_type == "response.completed":
+            return {"success": True, "status": 200, "error_class": "none"}
+        if event_type == "response.incomplete":
+            details = response.get("incomplete_details")
+            reason = details.get("reason") if isinstance(details, Mapping) else None
+            error_class = {
+                "max_output_tokens": "output_limit",
+                "content_filter": "content_filter",
+            }.get(reason, "stream_incomplete")
+            return {"success": False, "status": 200, "error_class": error_class}
+        if event_type == "response.failed":
+            error = response.get("error")
+            error = error if isinstance(error, Mapping) else {}
+            status = error.get("status")
+            if not isinstance(status, int) or isinstance(status, bool):
+                status = 502
+            return {
+                "success": False,
+                "status": status,
+                "error_class": _route_error_class(status),
+            }
     return None
 
 
@@ -3853,7 +2083,7 @@ def _prepare_continuity_body(
     binding_store: Optional[CompactionBindingStore],
     on_continuity: Optional[ContinuityHandoffCallback] = None,
 ) -> Dict[str, Any]:
-    prepared = copy.deepcopy(dict(body))
+    prepared = dict(body)
     source = prepared.get("input")
     single_item = isinstance(source, Mapping)
     if single_item:
@@ -3947,7 +2177,7 @@ def _prepare_continuity_body(
                 try:
                     failure_reason = getattr(handoff_exc, 'reason', 'source_unavailable')
                     on_continuity(
-                        "stale", False, True, False, index, "compaction", failure_reason
+                        "hit", False, True, False, index, "compaction", failure_reason
                     )
                 except Exception:
                     pass
@@ -4139,9 +2369,29 @@ def _finish_nonstream(
     if callback is None:
         return
     response_bytes = len(result) if isinstance(result, (bytes, bytearray)) else 0
+    terminal: Dict[str, Any] = {}
+    if classify_dialect(provider) != CODEX_NATIVE and isinstance(
+        result, (bytes, bytearray)
+    ):
+        try:
+            terminal = responses_terminal_observation(
+                json.loads(bytes(result).decode("utf-8", errors="strict"))
+            )
+        except (UnicodeDecodeError, ValueError, RouterError):
+            terminal = {
+                "status": 502,
+                "success": False,
+                "error_class": "stream_error",
+            }
     _emit_observation(
         callback,
-        _route_event(metadata, provider, model, response_bytes=response_bytes),
+        _route_event(
+            metadata,
+            provider,
+            model,
+            terminal=terminal,
+            response_bytes=response_bytes,
+        ),
     )
 
 
@@ -4163,6 +2413,9 @@ def proxy(
     provider, model = find_route(config, model_id)
     provider = dict(provider)
     model = dict(model)
+    body = _prepare_reasoning_summary_route(
+        config, provider, model, model_id, body
+    )
     try:
         body = _prepare_continuity_body(
             config,

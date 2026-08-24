@@ -864,6 +864,32 @@ class NativeCompactionObserverTests(unittest.TestCase):
             with self.assertRaises(BindingMissing):
                 store.lookup(_OPAQUE_JSON_A)
 
+    def test_stream_completed_with_nested_failure_discards(self):
+        cases = (
+            {"status": "failed", "output": []},
+            {"status": "incomplete", "output": []},
+            {"status": "completed", "error": {"message": "failed"}, "output": []},
+        )
+        for response in cases:
+            with self.subTest(response=response), tempfile.TemporaryDirectory() as directory:
+                store = self._store(directory)
+                observer = NativeCompactionObserver(store, _identity())
+                observer.observe(
+                    {
+                        "type": "response.output_item.done",
+                        "item": _compaction_output(_OPAQUE_JSON_A),
+                    }
+                )
+
+                self.assertEqual(
+                    observer.observe(
+                        {"type": "response.completed", "response": response}
+                    ),
+                    0,
+                )
+                with self.assertRaises(BindingMissing):
+                    store.lookup(_OPAQUE_JSON_A)
+
     def test_stream_malformed_event_discards_and_closes_observer(self):
         with tempfile.TemporaryDirectory() as directory:
             store = self._store(directory)
