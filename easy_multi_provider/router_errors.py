@@ -13,6 +13,31 @@ class RouterError(Exception):
         self.status = status
 
 
+class UpstreamHTTPError(RouterError):
+    """An upstream rejection with a content-free diagnostic category."""
+
+    _REASONS = frozenset(
+        {
+            "auth_rejected",
+            "context_length_exceeded",
+            "quota_exhausted",
+            "rate_limited",
+            "request_too_large",
+            "upstream_capacity",
+            "upstream_rejected",
+            "upstream_unavailable",
+        }
+    )
+
+    def __init__(self, message: str, status: int, failure_reason: str):
+        self.failure_reason = (
+            failure_reason
+            if failure_reason in self._REASONS
+            else "upstream_rejected"
+        )
+        super().__init__(message, status)
+
+
 class ExternalProtocolError(RouterError):
     """A bounded external response violation that must not enter history."""
 
@@ -21,24 +46,33 @@ class ExternalProtocolError(RouterError):
         super().__init__(message, 502)
 
 
-class ContextHandoffRequiredError(RouterError):
-    """A content-free, recoverable failure for unprojectable opaque history."""
+class ExternalCompactionError(RouterError):
+    """A content-free failure of external model-owned summarization."""
 
-    def __init__(
-        self,
-        index: int,
-        item_type: str = "compaction",
-        reason: str = "binding_missing",
-    ):
-        self.error_class = "context_handoff_required"
-        self.reason = str(reason or "binding_missing")[:64]
-        self.item_index = max(0, int(index))
-        self.item_type = str(item_type or "unknown")[:64]
+    _REASONS = frozenset(
+        {"invalid_response", "summary_empty", "summary_too_large"}
+    )
+
+    def __init__(self, reason: str):
+        self.error_class = "external_compaction_failed"
+        self.failure_reason = reason if reason in self._REASONS else "invalid_response"
         super().__init__(
-            "context_handoff_required: reason=%s index=%d type=%s; "
-            "switch back to the source model, continue or compact once while EMP "
-            "is active, then retry"
-            % (self.reason, self.item_index, self.item_type),
+            "external_compaction_failed: reason=%s" % self.failure_reason,
+            502,
+        )
+
+
+class HistoryReconstructionError(RouterError):
+    """A deterministic, content-free visible-history reconstruction failure."""
+
+    def __init__(self, reason: str = "history_unavailable"):
+        safe = str(reason or "history_unavailable").strip().lower()
+        safe = "".join(character if character.isalnum() or character == "_" else "_" for character in safe)
+        self.reason = (safe or "history_unavailable")[:64]
+        self.error_class = "history_reconstruction_failed"
+        super().__init__(
+            "history_reconstruction_failed: reason=%s; Codex history was not modified"
+            % self.reason,
             409,
         )
 

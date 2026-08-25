@@ -94,7 +94,11 @@ def _terminal_exception(exc: BaseException) -> Dict[str, Any]:
             "context_observation": dict(exc.context_observation),
         }
     status, error_class = _stream_exception(exc)
-    return {"success": False, "status": status, "error_class": error_class}
+    terminal = {"success": False, "status": status, "error_class": error_class}
+    failure_reason = getattr(exc, "failure_reason", None)
+    if isinstance(failure_reason, str) and failure_reason:
+        terminal["failure_reason"] = failure_reason
+    return terminal
 
 
 def _notify_terminal(
@@ -132,14 +136,20 @@ def _response_failure_frame(
     error_class: Optional[str] = None,
 ) -> bytes:
     display_message = "HTTP %d: %s" % (status, message)
+    failure_class = error_class or _route_error_class(status)
+    error_code = {
+        "context_length_exceeded": "context_length_exceeded",
+        "rate_limit": "rate_limit_exceeded",
+    }.get(failure_class, "upstream_error")
     response = {
         "id": "resp_" + uuid.uuid4().hex,
         "object": "response",
         "status": "failed",
         "error": {
-            "code": "upstream_error",
+            "code": error_code,
             "message": display_message,
-            "error_class": error_class or _route_error_class(status),
+            "status": status,
+            "error_class": failure_class,
         },
     }
     return _sse_frame("response.failed", {"type": "response.failed", "response": response})
@@ -335,12 +345,18 @@ def _reliable_responses_stream(
                             recovery_attempted = True
                             retry = True
                             break
-                        for buffered in pending:
-                            yield _sse_frame(str(buffered.get("type") or "message"), buffered)
                         report(terminal, True)
                         if terminal.get("success") is True:
+                            for buffered in pending:
+                                yield _sse_frame(
+                                    str(buffered.get("type") or "message"), buffered
+                                )
                             yield _sse_frame("response.completed", dict(event))
                         elif str(event.get("type") or "") == "response.incomplete":
+                            for buffered in pending:
+                                yield _sse_frame(
+                                    str(buffered.get("type") or "message"), buffered
+                                )
                             yield _sse_frame("response.incomplete", dict(event))
                         else:
                             yield _response_failure_frame(
@@ -372,8 +388,6 @@ def _reliable_responses_stream(
                 ):
                     recovery_attempted = True
                     continue
-                for buffered in pending:
-                    yield _sse_frame(str(buffered.get("type") or "message"), buffered)
                 terminal = {
                     "success": False,
                     "status": 502,
@@ -410,8 +424,6 @@ def _reliable_responses_stream(
                     if failure_class == "network"
                     else failure_class
                 )
-                for buffered in pending:
-                    yield _sse_frame(str(buffered.get("type") or "message"), buffered)
                 terminal = {
                     "success": False,
                     "status": status or 502,

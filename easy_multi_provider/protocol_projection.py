@@ -17,8 +17,8 @@ from .dialects import (
     portable_tool_definitions,
 )
 from .router_errors import (
-    ContextHandoffRequiredError,
     ExternalProtocolError,
+    HistoryReconstructionError,
     RouterError,
 )
 
@@ -336,15 +336,11 @@ def _decode_compaction(item: Dict[str, Any]) -> str:
 def _normalize_compaction_input(
     source: Any,
     drop_trigger: bool = False,
-    opaque_placeholder: Optional[bool] = None,
 ) -> Any:
-    # Keep the old optional argument callable, but opaque history is never
-    # replaced with a generic message.
-    _ = opaque_placeholder
     if not isinstance(source, list):
         return source
     result = []
-    for index, item in enumerate(source):
+    for item in source:
         if not isinstance(item, dict):
             result.append(item)
             continue
@@ -355,14 +351,7 @@ def _normalize_compaction_input(
             if summary:
                 result.append(_message_item(_COMPACTION_SUMMARY_PREFIX + "\n\n" + summary))
                 continue
-            encoded = item.get("encrypted_content")
-            if isinstance(encoded, str) and encoded.startswith(_COMPACTION_PREFIX):
-                raise RouterError(
-                    "request projection failed: index=%d type=compaction "
-                    "parts=none class=invalid_compaction" % index,
-                    422,
-                )
-            raise ContextHandoffRequiredError(index, "compaction")
+            raise HistoryReconstructionError("history_projection_incomplete")
         result.append(item)
     return result
 

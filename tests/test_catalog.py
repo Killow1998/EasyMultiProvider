@@ -143,11 +143,61 @@ class CatalogTests(unittest.TestCase):
         by_slug = {item["slug"]: item for item in models}
         self.assertEqual(by_slug["gpt-native"]["display_name"], "General")
         self.assertEqual(
+            by_slug["gpt-native"]["description"], "General"
+        )
+        self.assertEqual(
             by_slug["account-a/gpt-native"]["display_name"], "[ 258K]  Reserve"
         )
+        self.assertEqual(
+            by_slug["account-a/gpt-native"]["description"],
+            "Reserve · ChatGPT subscription: account-a · Context 258K",
+        )
         self.assertEqual(by_slug["api/gpt-native"]["display_name"], "Worker")
+        self.assertEqual(
+            by_slug["api/gpt-native"]["description"],
+            "Worker · Discovered Name",
+        )
         self.assertEqual(by_slug["api/gpt-native"]["slug"], "api/gpt-native")
         self.assertEqual(config["models"][0]["upstream_id"], "gpt-native")
+
+    def test_route_presentation_is_stable_when_applied_more_than_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "gpt-native",
+                                "display_name": "Native",
+                                "description": "Native model",
+                                "context_window": 258000,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = normalize(
+                {
+                    "native_catalog_path": str(native_path),
+                    "catalog_presentations": {
+                        "gpt-native": {
+                            "catalog_alias": "General",
+                            "show_context": True,
+                        }
+                    },
+                }
+            )
+
+            first = build_catalog(config)["models"][0]
+            second = build_catalog(config)["models"][0]
+
+        self.assertEqual(first["slug"], "gpt-native")
+        self.assertEqual(first["description"], "General · Native model · Context 258K")
+        self.assertEqual(second["description"], first["description"])
+        self.assertEqual(first["description"].count("General"), 1)
+        self.assertEqual(first["description"].count("Context 258K"), 1)
 
     def test_user_alias_is_preserved_exactly_when_context_is_hidden(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -415,6 +465,29 @@ class CatalogTests(unittest.TestCase):
                 [item["id"] for item in subscription_model_options(config)],
                 ["gpt-current", "gpt-optional"],
             )
+
+    def test_generated_catalog_omits_native_models_not_supported_in_api(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(json.dumps({"models": [
+                {
+                    "slug": "gpt-supported",
+                    "display_name": "Supported",
+                    "visibility": "list",
+                    "supported_in_api": True,
+                },
+                {
+                    "slug": "gpt-picker-only",
+                    "display_name": "Picker only",
+                    "visibility": "list",
+                    "supported_in_api": False,
+                },
+            ]}), encoding="utf-8")
+            config = normalize({"native_catalog_path": str(native_path)})
+
+            slugs = [item["slug"] for item in build_catalog(config)["models"]]
+
+            self.assertEqual(slugs, ["gpt-supported"])
 
     def test_duplicate_subscription_is_marked_and_filtered_from_catalog(self):
         with tempfile.TemporaryDirectory() as directory:

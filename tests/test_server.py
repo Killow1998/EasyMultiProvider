@@ -30,11 +30,11 @@ from easy_multi_provider.codex_runtime import (
     RuntimeSyncResult,
     TargetedCodexHostStopper,
 )
-from easy_multi_provider.continuity import (
-    BindingMissing,
-    CompactionBindingStore,
-    binding_for_opaque,
-    derive_native_route_identity,
+from easy_multi_provider.codex_history import (
+    HistoryAnchor,
+    HistoryCursor,
+    HistorySnapshot,
+    VisibleItem,
 )
 from easy_multi_provider.integration import (
     IntegrationManager,
@@ -52,6 +52,7 @@ from easy_multi_provider.server import (
     ObservationRing,
     _GracefulShutdown,
     _install_sigterm_handler,
+    _management_config,
     _restore_sigterm_handler,
     _integration_summary,
     _ws_replay_size,
@@ -193,6 +194,60 @@ def _read_text_frame(stream):
         length = struct.unpack("!Q", _read_exact(stream, 8))[0]
     payload = _read_exact(stream, length)
     return first & 0x0F, payload.decode("utf-8")
+
+
+class _CountingHistoryReader:
+    def __init__(self):
+        self.calls = []
+
+    def read_visible_history(self, anchor):
+        self.calls.append(anchor)
+        return HistorySnapshot(
+            anchor=anchor,
+            items=(
+                VisibleItem(
+                    "compaction_summary",
+                    content="visible task state",
+                    turn_id="turn-old",
+                    ordinal=10,
+                ),
+                VisibleItem(
+                    "assistant_message",
+                    content=[{"type": "output_text", "text": "visible tail"}],
+                    turn_id="turn-old",
+                    ordinal=11,
+                ),
+            ),
+            cursor=HistoryCursor(
+                kind="paginated",
+                thread_id=anchor.thread_id,
+                highest_ordinal=11,
+            ),
+            source="rollout",
+            source_model="native/model-a",
+        )
+
+
+class _FailingHistoryReader:
+    def read_visible_history(self, _anchor):
+        raise RuntimeError("reader detail must not reach the protocol")
+
+
+class _CompletedResponse:
+    status = 200
+    headers = {"Content-Type": "application/json"}
+
+    def __init__(self):
+        self._read = False
+
+    def read(self, size=-1):
+        if self._read:
+            return b""
+        self._read = True
+        return b'{"status":"completed","output":[]}'
+
+    def close(self):
+        return None
 
 
 class ServerAccountTests(unittest.TestCase):
@@ -773,8 +828,8 @@ class ServerAccountTests(unittest.TestCase):
         html = WEB_FILE.read_text(encoding="utf-8")
         self.assertIn("应用模型变化到 Codex", html)
         self.assertIn("/api/integration/reload", html)
-        self.assertIn(">全选</button>", html)
-        self.assertIn(">全不选</button>", html)
+        self.assertIn('id="discovered_select_all"', html)
+        self.assertIn('id="discovered_clear_all"', html)
         self.assertIn("全选搜索结果", html)
         self.assertIn("全不选搜索结果", html)
         self.assertIn("discovered_search", html)
@@ -842,18 +897,20 @@ class ServerAccountTests(unittest.TestCase):
         html = WEB_FILE.read_text(encoding="utf-8")
         self.assertIn('name="subscription_model"', html)
         self.assertIn("hidden_models", html)
-        self.assertIn("模型显示设置作用于原生列表", html)
+        self.assertIn("可见性设置作用于原生列表", html)
         self.assertIn("toggleProviderModels", html)
         self.assertIn("隐藏全部模型", html)
 
     def test_web_exposes_route_presentation_controls_and_live_preview(self):
         html = WEB_FILE.read_text(encoding="utf-8")
-        self.assertIn("Codex 显示名称", html)
-        self.assertIn("显示上下文大小", html)
-        self.assertIn("Reasoning summary", html)
+        self.assertIn("模型列表显示", html)
+        self.assertIn("data-catalog-alias", html)
+        self.assertIn("data-catalog-context", html)
+        self.assertIn("data-catalog-summary", html)
         self.assertIn("presentationPreview", html)
-        self.assertIn("presentationDuplicateWarning", html)
-        self.assertIn("编辑原生模型显示", html)
+        self.assertIn("renderCatalogDisplay", html)
+        self.assertNotIn("openNativePresentationModal", html)
+        self.assertNotIn("openRoutePresentationModal", html)
 
     def test_web_does_not_expose_internal_tool_call_mode(self):
         html = WEB_FILE.read_text(encoding="utf-8")
@@ -900,6 +957,107 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(provider["protocol_observation"]["source"], "observed")
             self.assertEqual(model["resolved_protocol"], "responses")
             self.assertEqual(api_key(provider), "test-key")
+
+    def test_native_auth_path_is_available_only_to_router_calls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(normalize({}), config_path)
+            codex_home = root / "codex"
+            manager = IntegrationManager(
+                codex_home / "config.toml",
+                codex_home / "easy-multi-provider" / "integration" / "lease.json",
+                instance_id="private-native-auth-path",
+            )
+            state = AppState(config_path, integration_manager=manager)
+
+            with patch(
+                "easy_multi_provider.server.proxy",
+                return_value=(
+                    {
+                        "kind": "body",
+                        "status": 200,
+                        "content_type": "application/json",
+                    },
+                    b"{}",
+                ),
+            ) as routed:
+                state.route({"model": "gpt-native", "input": []}, {})
+
+            public_snapshot = state.snapshot()
+            routing_snapshot = routed.call_args.args[0]
+            self.assertNotIn("_native_auth_path", public_snapshot)
+            self.assertNotIn("_native_auth_path", _management_config(public_snapshot))
+            self.assertEqual(
+                routing_snapshot["_native_auth_path"],
+                str(codex_home / "auth.json"),
+            )
+
+    def test_management_config_exposes_only_safe_catalog_display_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            native_path = root / "native.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "gpt-native",
+                                "display_name": "Native model",
+                                "description": "Native description",
+                                "context_window": 272000,
+                                "effective_context_window_percent": 95,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = normalize(
+                {
+                    "native_catalog_path": str(native_path),
+                    "providers": [
+                        {
+                            "id": "demo",
+                            "name": "Demo",
+                            "base_url": "https://example.com/v1",
+                            "api_key": "test-only-secret",
+                        }
+                    ],
+                    "models": [
+                        {
+                            "id": "demo/worker",
+                            "provider": "demo",
+                            "upstream_id": "worker",
+                            "display_name": "Worker",
+                            "context_window": 100000,
+                        },
+                        {
+                            "id": "demo/hidden",
+                            "provider": "demo",
+                            "upstream_id": "hidden",
+                            "enabled": False,
+                        },
+                    ],
+                    "catalog_presentations": {
+                        "demo/worker": {
+                            "catalog_alias": "Builder",
+                            "show_context": False,
+                        }
+                    },
+                }
+            )
+
+            result = _management_config(config)
+
+        rows = {row["id"]: row for row in result["catalog_models"]}
+        self.assertEqual(set(rows), {"gpt-native", "demo/worker"})
+        self.assertEqual(rows["gpt-native"]["context_window"], 258400)
+        self.assertEqual(rows["demo/worker"]["default_display_name"], "demo/worker")
+        self.assertEqual(rows["demo/worker"]["display_name"], "Builder")
+        self.assertEqual(rows["demo/worker"]["source_type"], "provider")
+        self.assertEqual(rows["demo/worker"]["source_id"], "demo")
+        self.assertNotIn("api_key", json.dumps(result["catalog_models"]))
 
     def test_compact_endpoint_routes_remote_compaction(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1284,16 +1442,14 @@ class ServerAccountTests(unittest.TestCase):
 
     def test_web_codex_integration_uses_safe_state_actions(self):
         html = WEB_FILE.read_text(encoding="utf-8")
-        for label in ("Native", "EMP applied", "Recovery needed", "Conflict"):
+        for label in ("Native", "Recovery needed", "Conflict"):
             self.assertIn(label, html)
-        self.assertIn('id="native_catalog_path"', html)
+        self.assertNotIn('id="native_catalog_path"', html)
+        self.assertNotIn('id="listen_info"', html)
         self.assertIn("confirmIntegrationAction('enable')", html)
         self.assertIn("confirmIntegrationAction('restore')", html)
         self.assertIn("/api/integration/enable", html)
         self.assertIn("/api/integration/restore", html)
-        self.assertIn("codex", html)
-        self.assertIn("codex resume", html)
-        self.assertIn("/model", html)
         self.assertIn("应用模型变化到 Codex", html)
         self.assertIn("/api/integration/reload", html)
         self.assertIn("await loadIntegration()", html)
@@ -1311,8 +1467,9 @@ class ServerAccountTests(unittest.TestCase):
 
     def test_web_includes_compact_safe_diagnostics_status(self):
         html = WEB_FILE.read_text(encoding="utf-8")
-        self.assertIn("最近运行状态", html)
+        self.assertNotIn("<h2>最近运行状态</h2>", html)
         self.assertIn("/api/diagnostics", html)
+        self.assertIn("openDiagnostics", html)
         self.assertIn("loadDiagnostics", html)
         self.assertIn("不保存消息内容、响应内容或凭据", html)
         self.assertIn("diagnosticsContextLabel", html)
@@ -1320,6 +1477,24 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("safe_input_limit", html)
         self.assertNotIn("prompt", html[html.find("function renderDiagnostics"):html.find("function confirmIntegrationAction")])
         self.assertNotIn("response_text", html[html.find("function renderDiagnostics"):html.find("function confirmIntegrationAction")])
+
+    def test_web_has_i18n_theme_and_collapsible_model_groups(self):
+        html = WEB_FILE.read_text(encoding="utf-8")
+        self.assertIn('id="language_select"', html)
+        self.assertIn('id="theme_select"', html)
+        self.assertIn('data-theme="light"', html)
+        self.assertIn("setLanguage", html)
+        self.assertIn("setTheme", html)
+        self.assertIn("toggleModelGroup", html)
+        self.assertIn("items.slice(0, 6)", html)
+
+    def test_web_modal_does_not_close_when_backdrop_is_clicked(self):
+        html = WEB_FILE.read_text(encoding="utf-8")
+        self.assertIn('class="modal-close"', html)
+        self.assertIn("handleModalKeydown", html)
+        self.assertIn("event.key === 'Escape'", html)
+        self.assertNotIn('onclick="backdropClose(event)"', html)
+        self.assertNotIn("function backdropClose", html)
 
     def test_integration_api_failure_is_unavailable_without_configuration_state(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1879,13 +2054,6 @@ class ServerAccountTests(unittest.TestCase):
             "context_estimate_method",
             "context_reserves",
             "context_completeness",
-            "source_binding_result",
-            "same_domain",
-            "handoff_attempted",
-            "handoff_succeeded",
-            "item_index",
-            "item_type",
-            "continuity_reason",
         }
         for record in snapshot["records"]:
             self.assertEqual(set(record), expected)
@@ -1990,13 +2158,6 @@ class ServerAccountTests(unittest.TestCase):
                     "context_estimate_method",
                     "context_reserves",
                     "context_completeness",
-                    "source_binding_result",
-                    "same_domain",
-                    "handoff_attempted",
-                    "handoff_succeeded",
-                    "item_index",
-                    "item_type",
-                    "continuity_reason",
                 })
                 serialized = json.dumps(payload)
                 self.assertNotIn("secret", serialized)
@@ -3451,6 +3612,284 @@ class ServerAccountTests(unittest.TestCase):
 
 
 
+class HistoryContinuityWiringTests(unittest.TestCase):
+    def _write_config(self, config_path: Path) -> None:
+        save(
+            normalize(
+                {
+                    "providers": [
+                        {
+                            "id": "native",
+                            "enabled": True,
+                            "auth_mode": "forward",
+                            "protocol": "responses",
+                            "base_url": "https://native.example/backend-api/codex",
+                        },
+                        {
+                            "id": "external",
+                            "enabled": True,
+                            "auth_mode": "api_key",
+                            "api_key": "test-only-key",
+                            "protocol": "responses",
+                            "base_url": "https://external.example/v1",
+                        },
+                    ],
+                    "models": [
+                        {
+                            "id": "native/model-a",
+                            "provider": "native",
+                            "upstream_id": "model-a",
+                            "enabled": True,
+                        },
+                        {
+                            "id": "external/model-b",
+                            "provider": "external",
+                            "upstream_id": "model-b",
+                            "context_window": 4096,
+                            "output_limit": 512,
+                            "enabled": True,
+                        },
+                    ],
+                }
+            ),
+            config_path,
+        )
+
+    @staticmethod
+    def _headers(thread_id):
+        return {
+            "thread-id": thread_id,
+            "x-codex-turn-metadata": json.dumps(
+                {"thread_id": thread_id, "turn_id": "turn-" + thread_id}
+            ),
+            "Authorization": "Bearer test-only",
+            "chatgpt-account-id": "account-fixture",
+        }
+
+    def test_route_wires_history_and_preserves_portable_compaction_fast_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            self._write_config(config_path)
+            reader = _CountingHistoryReader()
+            state = AppState(config_path, history_reader=reader)
+            captured_payloads = []
+
+            def open_request(request, timeout):
+                captured_payloads.append(request.data)
+                return _CompletedResponse()
+
+            opaque = {
+                "type": "compaction",
+                "encrypted_content": "opaque-native-state",
+            }
+            visible = {
+                "type": "compaction",
+                "encrypted_content": "emp1:" + base64.b64encode(
+                    b"visible checkpoint"
+                ).decode("ascii"),
+            }
+            message = {
+                "type": "message",
+                "role": "user",
+                "content": "continue",
+            }
+            with patch("easy_multi_provider.router.urlopen", side_effect=open_request):
+                state.route(
+                    {
+                        "model": "external/model-b",
+                        "input": [visible, message],
+                    },
+                    self._headers("thread-visible"),
+                )
+                self.assertEqual(reader.calls, [])
+
+                state.route(
+                    {
+                        "model": "external/model-b",
+                        "input": [opaque, message],
+                    },
+                    self._headers("thread-cross"),
+                )
+
+            self.assertEqual(len(reader.calls), 1)
+            self.assertEqual(reader.calls[0].thread_id, "thread-cross")
+            self.assertEqual(len(captured_payloads), 2)
+
+    def test_http_history_failure_is_structured_and_content_free(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path, history_reader=_FailingHistoryReader())
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = HTTPConnection(*server.server_address)
+                connection.request(
+                    "POST",
+                    "/v1/responses",
+                    json.dumps(
+                        {
+                            "model": "native/model-a",
+                            "input": [
+                                {
+                                    "type": "compaction",
+                                    "encrypted_content": "opaque-client-state",
+                                }
+                            ],
+                        }
+                    ),
+                    {
+                        "Content-Type": "application/json",
+                        "Cookie": "emp_session=" + state.session_token,
+                        "thread-id": "thread-http",
+                        "x-codex-turn-metadata": json.dumps(
+                            {"thread_id": "thread-http", "turn_id": "turn-http"}
+                        ),
+                    },
+                )
+                response = connection.getresponse()
+                raw = response.read()
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(response.status, 409)
+        self.assertEqual(payload["error"]["code"], "history_reconstruction_failed")
+        self.assertEqual(
+            payload["error"]["error_class"], "history_reconstruction_failed"
+        )
+        self.assertEqual(payload["error"]["reason"], "history_unavailable")
+        self.assertNotIn("opaque-client-state", raw.decode("utf-8"))
+        self.assertNotIn("reader detail", raw.decode("utf-8"))
+
+    def test_sse_history_failure_is_one_non_retryable_frame(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path, history_reader=_FailingHistoryReader())
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = HTTPConnection(*server.server_address)
+                connection.request(
+                    "POST",
+                    "/v1/responses",
+                    json.dumps(
+                        {
+                            "model": "native/model-a",
+                            "stream": True,
+                            "input": [
+                                {
+                                    "type": "compaction",
+                                    "encrypted_content": "opaque-client-state",
+                                }
+                            ],
+                        }
+                    ),
+                    {
+                        "Content-Type": "application/json",
+                        "Cookie": "emp_session=" + state.session_token,
+                        "thread-id": "thread-sse",
+                        "x-codex-turn-metadata": json.dumps(
+                            {"thread_id": "thread-sse", "turn_id": "turn-sse"}
+                        ),
+                    },
+                )
+                response = connection.getresponse()
+                raw = response.read()
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        text = raw.decode("utf-8")
+        data_lines = [line[6:] for line in text.splitlines() if line.startswith("data: ")]
+        self.assertEqual(response.status, 200)
+        self.assertEqual(len(data_lines), 1)
+        event = json.loads(data_lines[0])
+        self.assertEqual(event["type"], "response.failed")
+        self.assertEqual(event["response"]["error"]["code"], "invalid_prompt")
+        self.assertEqual(
+            event["response"]["error"]["error_class"],
+            "history_reconstruction_failed",
+        )
+        self.assertNotIn("retry", text.lower())
+        self.assertNotIn("opaque-client-state", text)
+        self.assertNotIn("reader detail", text)
+
+    def test_websocket_history_failure_is_one_non_retryable_frame(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path, history_reader=_FailingHistoryReader())
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            client = None
+            stream = None
+            try:
+                client = socket.create_connection(server.server_address, timeout=5)
+                stream = client.makefile("rb")
+                port = server.server_address[1]
+                client.sendall((
+                    "GET /v1/responses HTTP/1.1\r\n"
+                    "Host: 127.0.0.1:%d\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                    "Authorization: Bearer test-only\r\n"
+                    "chatgpt-account-id: account-fixture\r\n"
+                    "thread-id: thread-ws\r\n"
+                    "x-codex-turn-metadata: {\"thread_id\":\"thread-ws\",\"turn_id\":\"turn-ws\"}\r\n"
+                    "Cookie: emp_session=%s\r\n\r\n"
+                    % (port, state.session_token)
+                ).encode("ascii"))
+                self.assertIn(b" 101 ", stream.readline())
+                while stream.readline() not in (b"\r\n", b"\n", b""):
+                    pass
+                client.sendall(
+                    _masked_text_frame(
+                        json.dumps(
+                            {
+                                "type": "response.create",
+                                "model": "native/model-a",
+                                "input": [
+                                    {
+                                        "type": "compaction",
+                                        "encrypted_content": "opaque-client-state",
+                                    }
+                                ],
+                            }
+                        )
+                    )
+                )
+                _, raw = _read_text_frame(stream)
+            finally:
+                if stream is not None:
+                    stream.close()
+                if client is not None:
+                    client.close()
+                server.shutdown()
+                server.server_close()
+
+        text = raw
+        event = json.loads(text)
+        self.assertEqual(event["type"], "response.failed")
+        self.assertEqual(event["response"]["error"]["code"], "invalid_prompt")
+        self.assertEqual(
+            event["response"]["error"]["error_class"],
+            "history_reconstruction_failed",
+        )
+        self.assertNotIn("retry", text.lower())
+        self.assertNotIn("opaque-client-state", text)
+        self.assertNotIn("reader detail", text)
+
+
 class ContinuityAppStateTests(unittest.TestCase):
     def _write_config(self, config_path: Path) -> None:
         save(
@@ -3477,36 +3916,6 @@ class ContinuityAppStateTests(unittest.TestCase):
             ),
             config_path,
         )
-
-    def test_app_state_owns_single_binding_store_with_persistence(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config_path = root / "config.json"
-            self._write_config(config_path)
-
-            state = AppState(config_path)
-            store = state.compaction_bindings
-            expected = root / "state" / "continuity-bindings.enc"
-            self.assertIsInstance(store, CompactionBindingStore)
-            self.assertIs(state.compaction_bindings, store)
-
-            identity = derive_native_route_identity(
-                {"chatgpt-account-id": "account-1"},
-                "https://native.example/backend-api/codex",
-                "deployment-1",
-                "model-a-upstream",
-                "native/model-a",
-            )
-            opaque = "opaque-restart-secret"
-            store.register(binding_for_opaque(identity, opaque))
-
-            fresh = AppState(config_path)
-            binding = fresh.compaction_bindings.lookup(opaque)
-            self.assertEqual(
-                binding.trust_domain.auth_identity,
-                identity.trust_domain.auth_identity,
-            )
-            self.assertNotIn(opaque, repr(binding))
 
     def test_native_websocket_forwards_incremental_input_without_history_replay(self):
         class FakeNativeBridge:
@@ -3758,232 +4167,57 @@ class ContinuityAppStateTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
-    def test_route_passes_binding_store_and_registers_native_json_success(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config_path = root / "config.json"
-            self._write_config(config_path)
-            state = AppState(config_path)
-            response_bytes = json.dumps(
-                {
-                    "status": "completed",
-                    "output": [
-                        {
-                            "type": "compaction",
-                            "encrypted_content": "opaque-json-success-secret",
-                        }
-                    ],
+    def test_native_incremental_transport_loss_requests_codex_full_retry(self):
+        class RejectingHistoryReader:
+            calls = 0
+
+            def read_visible_history(self, _anchor):
+                self.calls += 1
+                raise AssertionError("native recovery must not read local history")
+
+        class FailingSecondNativeBridge:
+            def __init__(self):
+                self.connection_key = None
+                self.last_connection_reused = False
+                self.requests = 0
+
+            def events(self, target, payload):
+                self.last_connection_reused = self.connection_key == target.connection_key
+                self.connection_key = target.connection_key
+                self.requests += 1
+                response_id = "resp_native_%d" % self.requests
+                yield {"type": "response.created", "response": {"id": response_id}}
+                if self.requests == 2:
+                    raise NativeWebSocketError("native websocket unavailable")
+                yield {
+                    "type": "response.completed",
+                    "response": {
+                        "id": response_id,
+                        "object": "response",
+                        "status": "completed",
+                        "output": [],
+                    },
                 }
-            ).encode("utf-8")
-            captured = {}
 
-            def fake_proxy(config, body, incoming, on_observation=None, on_context=None, binding_store=None, on_native_response=None, on_stream_event=None, **kwargs):
-                captured["binding_store"] = binding_store
-                captured["on_native_response"] = on_native_response
-                captured["incoming"] = incoming
-                return (
-                    {"kind": "body", "status": 200, "content_type": "application/json"},
-                    response_bytes,
-                )
-
-            with patch("easy_multi_provider.server.proxy", side_effect=fake_proxy):
-                metadata, result = state.route(
-                    {"model": "native/model-a", "input": "hello"},
-                    {"ChatGPT-Account-ID": "account-1"},
-                )
-            self.assertEqual(metadata["status"], 200)
-            self.assertIs(captured["binding_store"], state.compaction_bindings)
-            self.assertIsNotNone(captured["on_native_response"])
-            identity = derive_native_route_identity(
-                {"chatgpt-account-id": "account-1"},
-                "https://native.example/backend-api/codex",
-                "deployment-1",
-                "model-a",
-                "native/model-a",
-            )
-            captured["on_native_response"](
-                {"id": "native", "auth_mode": "forward"},
-                {"id": "native/model-a", "upstream_id": "model-a"},
-                "native/model-a",
-                dict(captured["incoming"]),
-                identity,
-                response_bytes,
-                True,
-            )
-            binding = state.compaction_bindings.lookup("opaque-json-success-secret")
-            self.assertTrue(binding.fingerprint.startswith("sha256:"))
-
-    def test_http_handoff_failure_returns_structured_409_without_content(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config_path = root / "config.json"
-            self._write_config(config_path)
-            state = AppState(config_path)
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                from easy_multi_provider.router import ContextHandoffRequiredError
-
-                def raise_handoff(*args, **kwargs):
-                    raise ContextHandoffRequiredError(3, "compaction", "binding_missing")
-
-                with patch("easy_multi_provider.server.proxy", side_effect=raise_handoff):
-                    connection = HTTPConnection(*server.server_address)
-                    connection.request(
-                        "POST",
-                        "/v1/responses",
-                        json.dumps({"model": "native/model-a", "input": "hello"}),
-                        {
-                            "Content-Type": "application/json",
-                            "Cookie": "emp_session=" + state.session_token,
-                        },
-                    )
-                    response = connection.getresponse()
-                    payload = json.loads(response.read())
-                    connection.close()
-                self.assertEqual(response.status, 409)
-                error = payload.get("error") or payload
-                self.assertEqual(error.get("error_class"), "context_handoff_required")
-                self.assertEqual(error.get("reason"), "binding_missing")
-                self.assertEqual(error.get("item_index"), 3)
-                self.assertEqual(error.get("item_type"), "compaction")
-            finally:
-                server.shutdown()
-                server.server_close()
-
-    def test_handoff_failure_records_one_private_terminal_route_observation(self):
-        from easy_multi_provider.router import ContextHandoffRequiredError
+            def close(self):
+                self.connection_key = None
 
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             self._write_config(config_path)
-            state = AppState(config_path)
-            with self.assertRaises(ContextHandoffRequiredError):
-                state.route(
-                    {
-                        "model": "native/model-a",
-                        "input": [{
-                            "type": "compaction",
-                            "encrypted_content": "opaque-private-content",
-                        }],
-                    },
-                    {
-                        "Authorization": "Bearer private-token",
-                        "ChatGPT-Account-ID": "private-account",
-                    },
-                )
-            records = state.diagnostics.snapshot()["records"]
-            terminal_records = [
-                record for record in records
-                if record["terminal_event_observed"] or record["status"] is not None
-            ]
-            self.assertEqual(len(terminal_records), 1)
-            record = terminal_records[0]
-            self.assertEqual(record["route"], "responses")
-            self.assertEqual(record["transport"], "http")
-            self.assertEqual(record["status"], 409)
-            self.assertEqual(record["error_class"], "context_handoff_required")
-            self.assertTrue(record["terminal_event_observed"])
-            self.assertEqual(record["provider_id"], "")
-            self.assertEqual(record["model_id"], "")
-            self.assertEqual(record["endpoint_fingerprint"], "")
-            self.assertEqual(record["deployment_identity"], "default")
-            serialized = json.dumps(records, ensure_ascii=False)
-            for secret in (
-                "native/model-a",
-                "native.example",
-                "model-a",
-                "opaque-private-content",
-                "private-token",
-                "private-account",
-            ):
-                self.assertNotIn(secret, serialized)
-
-    def test_sse_preparation_failure_is_200_with_one_failed_event_then_close(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config_path = root / "config.json"
-            self._write_config(config_path)
-            state = AppState(config_path)
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                from easy_multi_provider.router import ContextHandoffRequiredError
-
-                def raise_handoff(*args, **kwargs):
-                    raise ContextHandoffRequiredError(1, "compaction", "source_unavailable")
-
-                with patch("easy_multi_provider.server.proxy", side_effect=raise_handoff):
-                    connection = HTTPConnection(*server.server_address)
-                    connection.request(
-                        "POST",
-                        "/v1/responses",
-                        json.dumps({"model": "native/model-a", "stream": True, "input": "hello"}),
-                        {
-                            "Content-Type": "application/json",
-                            "Cookie": "emp_session=" + state.session_token,
-                        },
-                    )
-                    response = connection.getresponse()
-                    raw = response.read()
-                    connection.close()
-                self.assertEqual(response.status, 200)
-                text = raw.decode("utf-8")
-                event_count = text.count("event: response.failed")
-                self.assertEqual(event_count, 1)
-                self.assertIn("context_handoff_required", text)
-                self.assertIn("source_unavailable", text)
-                self.assertNotIn("opaque", text.lower().replace("response", ""))
-            finally:
-                server.shutdown()
-                server.server_close()
-
-    def test_websocket_handoff_failure_sends_one_failed_event_and_keeps_socket_usable(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config_path = root / "config.json"
-            self._write_config(config_path)
-            state = AppState(config_path)
+            reader = RejectingHistoryReader()
+            state = AppState(config_path, history_reader=reader)
+            fake_bridge = FailingSecondNativeBridge()
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             client = None
             stream = None
             try:
-                from easy_multi_provider.router import ContextHandoffRequiredError
-
-                calls = []
-
-                def fake_proxy(
-                    config,
-                    body,
-                    incoming,
-                    on_observation=None,
-                    on_context=None,
-                    **kwargs,
+                with patch(
+                    "easy_multi_provider.server.NativeWebSocketBridge",
+                    return_value=fake_bridge,
                 ):
-                    calls.append(dict(body))
-                    if len(calls) == 1:
-                        raise ContextHandoffRequiredError(0, "compaction", "binding_missing")
-                    return (
-                        {
-                            "kind": "body",
-                            "status": 200,
-                            "content_type": "application/json",
-                        },
-                        json.dumps(
-                            {
-                                "id": "resp_ok",
-                                "object": "response",
-                                "status": "completed",
-                                "output": [],
-                            }
-                        ).encode("utf-8"),
-                    )
-
-                with patch("easy_multi_provider.server.proxy", side_effect=fake_proxy):
                     client = socket.create_connection(server.server_address, timeout=5)
                     stream = client.makefile("rb")
                     port = server.server_address[1]
@@ -3995,6 +4229,8 @@ class ContinuityAppStateTests(unittest.TestCase):
                             "Connection: Upgrade\r\n"
                             "Sec-WebSocket-Version: 13\r\n"
                             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                            "Authorization: Bearer test-only\r\n"
+                            "chatgpt-account-id: account-fixture\r\n"
                             "Cookie: emp_session=%s\r\n\r\n"
                         )
                         % (port, state.session_token)
@@ -4003,40 +4239,34 @@ class ContinuityAppStateTests(unittest.TestCase):
                     while stream.readline() not in (b"\r\n", b"\n", b""):
                         pass
 
-                    def send_request(model="native/model-a", input_value="hello"):
-                        client.sendall(
-                            _masked_text_frame(
-                                json.dumps(
-                                    {
-                                        "type": "response.create",
-                                        "model": model,
-                                        "input": input_value,
-                                    }
-                                )
-                            )
-                        )
+                    client.sendall(_masked_text_frame(json.dumps({
+                        "type": "response.create",
+                        "model": "native/model-a",
+                        "input": [{"type": "message", "role": "user", "content": "first"}],
+                        "stream": True,
+                    })))
+                    first_events = []
+                    while not any(
+                        item.get("type") == "response.completed" for item in first_events
+                    ):
+                        _, raw = _read_text_frame(stream)
+                        first_events.append(json.loads(raw))
+                    first_id = first_events[-1]["response"]["id"]
 
-                    send_request(input_value="first-fails")
-                    received = []
-                    while not any(item.get("type") == "response.failed" for item in received):
-                        opcode, text_frame = _read_text_frame(stream)
-                        received.append(json.loads(text_frame))
-                    failures = [item for item in received if item.get("type") == "response.failed"]
-                    self.assertEqual(len(received), 1)
-                    self.assertEqual(len(failures), 1)
-                    failure = failures[0]
-                    response = failure.get("response") or {}
-                    error = response.get("error") or failure.get("error") or {}
-                    fields = {**response, **error}
-                    self.assertEqual(fields.get("error_class"), "context_handoff_required")
-                    self.assertEqual(fields.get("reason"), "binding_missing")
+                    client.sendall(_masked_text_frame(json.dumps({
+                        "type": "response.create",
+                        "model": "native/model-a",
+                        "previous_response_id": first_id,
+                        "input": [{"type": "message", "role": "user", "content": "next"}],
+                        "stream": True,
+                    })))
+                    _, raw = _read_text_frame(stream)
+                    event = json.loads(raw)
 
-                    send_request(input_value="second-ok")
-                    second = []
-                    while not any(item.get("type") == "response.completed" for item in second):
-                        opcode, text_frame = _read_text_frame(stream)
-                        second.append(json.loads(text_frame))
-                    self.assertTrue(second)
+                self.assertEqual(event["type"], "error")
+                self.assertEqual(event["status"], 404)
+                self.assertEqual(event["error"]["code"], "previous_response_not_found")
+                self.assertEqual(reader.calls, 0)
             finally:
                 if stream is not None:
                     stream.close()
@@ -4044,57 +4274,6 @@ class ContinuityAppStateTests(unittest.TestCase):
                     client.close()
                 server.shutdown()
                 server.server_close()
-
-    def test_stream_observer_registers_only_on_completed_through_real_router(self):
-        cases = {
-            "completed": "response.completed",
-            "failed": "response.failed",
-            "incomplete": "response.incomplete",
-            "close": None,
-        }
-        for name, terminal_type in cases.items():
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
-                config_path = Path(directory) / "config.json"
-                self._write_config(config_path)
-                state = AppState(config_path)
-                opaque = "opaque-stream-" + name
-                events = [
-                    {
-                        "type": "response.output_item.done",
-                        "item": {"type": "compaction", "encrypted_content": opaque},
-                    }
-                ]
-                if terminal_type is not None:
-                    events.append(
-                        {
-                            "type": terminal_type,
-                            "response": {"id": "resp_1", "status": name, "output": []},
-                        }
-                    )
-                raw = b"".join(
-                    ("event: %s\ndata: %s\n\n" % (event["type"], json.dumps(event))).encode()
-                    for event in events
-                )
-
-                class FakeResponse(io.BytesIO):
-                    status = 200
-                    headers = {"Content-Type": "text/event-stream"}
-
-                with patch("easy_multi_provider.router.urlopen", return_value=FakeResponse(raw)):
-                    metadata, result = state.route(
-                        {"model": "native/model-a", "stream": True, "input": "hello"},
-                        {
-                            "Authorization": "Bearer fixture-token",
-                            "ChatGPT-Account-ID": "account-1",
-                        },
-                    )
-                    list(result)
-                self.assertEqual(metadata["kind"], "stream")
-                if name == "completed":
-                    self.assertTrue(state.compaction_bindings.lookup(opaque).fingerprint.startswith("sha256:"))
-                else:
-                    with self.assertRaises(BindingMissing):
-                        state.compaction_bindings.lookup(opaque)
 
 if __name__ == "__main__":
     unittest.main()

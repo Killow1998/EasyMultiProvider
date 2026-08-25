@@ -201,6 +201,20 @@ class NativeWebSocketTests(unittest.TestCase):
                     )
                 self.assertFalse(raised.exception.retryable)
 
+    def test_bad_request_upgrade_can_fall_back_to_http_before_output(self):
+        connection = _FakeConnection([], status=400)
+        bridge = NativeWebSocketBridge(lambda _target: connection)
+
+        with self.assertRaises(NativeWebSocketError) as raised:
+            bridge.connect(
+                NativeWebSocketTarget(
+                    "wss://example.invalid/responses", {}, "route-a"
+                )
+            )
+
+        self.assertEqual(raised.exception.status, 400)
+        self.assertTrue(raised.exception.retryable)
+
     def test_absolute_request_deadline_is_bounded(self):
         connection = _FakeConnection(
             [{"type": "response.completed", "response": {"status": "completed"}}]

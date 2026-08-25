@@ -94,14 +94,14 @@ from .native_websocket import (
 )
 from .quota import QuotaError, account_refresh_lock, read_native_login_quota, refresh_account_quota
 from .provider_replay import ProviderReplayCache
-from .continuity import (
-    CompactionBindingStore,
-    NativeCompactionObserver,
-    register_native_json,
+from .history_continuity import (
+    CodexHomeHistoryReader,
+    HISTORY_REBUILD_MARKER,
+    HistoryContinuityEngine,
 )
 from .router import (
-    ContextHandoffRequiredError,
     ContextLengthError,
+    HistoryReconstructionError,
     RouterError,
     discover_models,
     forward_native_search,
@@ -174,10 +174,37 @@ _DIAGNOSTIC_ERRORS = frozenset(
         "output_limit",
         "content_filter",
         "context_length_exceeded",
-        "context_handoff_required",
+        "external_compaction_failed",
+        "history_reconstruction_failed",
         "unknown",
     }
 )
+
+
+def _pre_output_http_failure(event: Any) -> Optional[Tuple[int, Dict[str, Any]]]:
+    """Map a terminal pre-output Responses failure back to its HTTP boundary."""
+
+    if not isinstance(event, Mapping) or event.get("type") != "response.failed":
+        return None
+    response = event.get("response")
+    response = response if isinstance(response, Mapping) else {}
+    error = response.get("error")
+    error = error if isinstance(error, Mapping) else {}
+    status = error.get("status")
+    if isinstance(status, bool) or not isinstance(status, int):
+        match = re.search(r"HTTP\s+(\d{3})", str(error.get("message") or ""))
+        status = int(match.group(1)) if match else None
+    if not isinstance(status, int) or status < 400 or status > 599:
+        return None
+    error_class = str(error.get("error_class") or "upstream_error")
+    code = str(error.get("code") or "upstream_error")
+    return status, {
+        "error": {
+            "type": error_class,
+            "code": code,
+            "message": "Upstream request failed before producing output.",
+        }
+    }
 _DIAGNOSTIC_DECISIONS = frozenset(
     {"explicit", "normal_order", "observed_priority", "fallback_rejection", "unknown"}
 )
@@ -198,29 +225,6 @@ _DIAGNOSTIC_TOOL_PAIRING = frozenset({"none", "paired", "incomplete", "invalid"}
 _DIAGNOSTIC_RECOVERY_MODES = frozenset(
     {"none", "pre_output_retry", "reattached", "native_http_fallback"}
 )
-_DIAGNOSTIC_BINDING_RESULTS = frozenset({
-    "registered",
-    "registration_failed",
-    "hit",
-    "missing",
-    "stale",
-    "unknown",
-})
-_DIAGNOSTIC_CONTINUITY_REASONS = frozenset({
-    "none",
-    "same_domain",
-    "binding_missing",
-    "binding_stale",
-    "source_unavailable",
-    "summary_invalid",
-    "handoff_succeeded",
-    "handoff_failed",
-    "registration_failed",
-})
-_DIAGNOSTIC_CONTINUITY_ITEM_TYPES = frozenset({
-    "compaction",
-    "unknown",
-})
 _WS_REPLAY_MAX_ITEMS = 256
 _WS_REPLAY_MAX_BYTES = 4 * 1024 * 1024
 _HTTP_REQUEST_BYTES_MAX = 64 * 1024 * 1024
@@ -563,6 +567,24 @@ def _ws_replay_size(*parts: Any) -> Optional[Tuple[int, int]]:
     return item_count, byte_count
 
 
+def _ws_history_rebuild_request(request: Mapping[str, Any]) -> Dict[str, Any]:
+    """Replace an unavailable WS predecessor with a read-only history anchor."""
+
+    current_input = request.get("input", [])
+    if not isinstance(current_input, list) or _ws_replay_size(current_input) is None:
+        raise TransportError("incremental websocket input is invalid or too large")
+    rebuilt = dict(request)
+    rebuilt.pop("previous_response_id", None)
+    rebuilt["input"] = [
+        {
+            "type": "compaction",
+            "encrypted_content": HISTORY_REBUILD_MARKER,
+        },
+        *current_input,
+    ]
+    return rebuilt
+
+
 class ObservationRing:
     """Small process-local diagnostics ring containing only safe route facts."""
 
@@ -682,6 +704,9 @@ class ObservationRing:
             "connection_reused": bool(event.get("connection_reused", False)),
             "status": status,
             "error_class": error_class,
+            "failure_reason": _safe_diagnostic_text(
+                event.get("failure_reason"), _DIAGNOSTIC_ID
+            ),
             "fallback": bool(event.get("protocol_fallback", event.get("fallback", False))),
             "decision": decision,
             "context_decision": context_decision,
@@ -704,25 +729,6 @@ class ObservationRing:
                 context.get("reserves"), MAX_CONTEXT_WINDOW
             ),
             "context_completeness": completeness,
-            "source_binding_result": (
-                event.get("source_binding_result")
-                if event.get("source_binding_result") in _DIAGNOSTIC_BINDING_RESULTS
-                else "unknown"
-            ),
-            "same_domain": bool(event.get("same_domain", False)),
-            "handoff_attempted": bool(event.get("handoff_attempted", False)),
-            "handoff_succeeded": bool(event.get("handoff_succeeded", False)),
-            "item_index": _safe_diagnostic_int(event.get("item_index"), 9999),
-            "item_type": (
-                event.get("item_type")
-                if event.get("item_type") in _DIAGNOSTIC_CONTINUITY_ITEM_TYPES
-                else "unknown"
-            ),
-            "continuity_reason": (
-                event.get("reason")
-                if event.get("reason") in _DIAGNOSTIC_CONTINUITY_REASONS
-                else "none"
-            ),
         }
         if compression_ratio is not None:
             record["compression_ratio"] = compression_ratio
@@ -849,38 +855,25 @@ def configure_proxy_environment() -> str:
         return "system"
     return "direct"
 
-def _handoff_error_body(exc) -> Dict[str, Any]:
-    """Build a structured 409 body for ContextHandoffRequiredError.
-
-    Carries only error_class, reason, item_index, item_type in addition
-    to the safe public recovery message. No opaque/checkpoint/content.
-    """
+def _history_error_body(exc) -> Dict[str, Any]:
+    """Build one content-free structured history reconstruction error."""
     return {
         "error": {
-            "code": "context_handoff_required",
-            "message": str(exc),
-            "error_class": getattr(exc, "error_class", "context_handoff_required"),
-            "reason": getattr(exc, "reason", "binding_missing"),
-            "item_index": getattr(exc, "item_index", 0),
-            "item_type": getattr(exc, "item_type", "compaction"),
+            "code": "history_reconstruction_failed",
+            "message": "History reconstruction failed.",
+            "error_class": getattr(exc, "error_class", "history_reconstruction_failed"),
+            "reason": getattr(exc, "reason", "history_unavailable"),
         }
     }
 
 
-def _handoff_sse_frame(exc) -> bytes:
-    """Build exactly one response.failed SSE event for a handoff failure."""
+def _history_sse_frame(exc) -> bytes:
+    """Build exactly one non-retryable response.failed SSE event."""
     response = {
         "id": "resp_" + uuid.uuid4().hex,
         "object": "response",
         "status": "failed",
-        "error": {
-            "code": "context_handoff_required",
-            "message": str(exc),
-            "error_class": getattr(exc, "error_class", "context_handoff_required"),
-            "reason": getattr(exc, "reason", "binding_missing"),
-            "item_index": getattr(exc, "item_index", 0),
-            "item_type": getattr(exc, "item_type", "compaction"),
-        },
+        "error": _history_stream_error(exc),
     }
     payload = {"type": "response.failed", "response": response}
     data = json.dumps(payload, ensure_ascii=False)
@@ -888,22 +881,32 @@ def _handoff_sse_frame(exc) -> bytes:
     return frame.encode("utf-8")
 
 
-def _handoff_ws_event(exc) -> Dict[str, Any]:
-    """Build one request-scoped response.failed event for WS handoff failure."""
+def _history_ws_event(exc) -> Dict[str, Any]:
+    """Build one request-scoped response.failed event for WS history failure."""
     response = {
         "id": "resp_" + uuid.uuid4().hex,
         "object": "response",
         "status": "failed",
-        "error": {
-            "code": "context_handoff_required",
-            "message": str(exc),
-            "error_class": getattr(exc, "error_class", "context_handoff_required"),
-            "reason": getattr(exc, "reason", "binding_missing"),
-            "item_index": getattr(exc, "item_index", 0),
-            "item_type": getattr(exc, "item_type", "compaction"),
-        },
+        "error": _history_stream_error(exc),
     }
     return {"type": "response.failed", "response": response}
+
+
+def _history_stream_error(exc) -> Dict[str, Any]:
+    """Map deterministic history rejection to a non-retryable API error.
+
+    Codex treats unknown ``response.failed`` codes as transient.  ``invalid_prompt``
+    is the standard non-retryable classification; the EMP-specific class and
+    recovery reason remain available as structured extension fields.
+    """
+
+    return {
+        "type": "invalid_request_error",
+        "code": "invalid_prompt",
+        "message": "History reconstruction failed.",
+        "error_class": getattr(exc, "error_class", "history_reconstruction_failed"),
+        "reason": getattr(exc, "reason", "history_unavailable"),
+    }
 
 
 class AppState:
@@ -914,6 +917,7 @@ class AppState:
         catalog_path: Optional[Path] = None,
         diagnostics: Optional[ObservationRing] = None,
         runtime_controller: Optional[CodexRuntimeController] = None,
+        history_reader=None,
         journal=None,
     ):
         self.path = Path(path or config_path())
@@ -930,6 +934,14 @@ class AppState:
         self.context_guard = ContextGuard()
         self.provider_replay = ProviderReplayCache()
         self.integration_manager = integration_manager
+        codex_home = (
+            integration_manager.config_path.parent
+            if integration_manager is not None
+            else resolve_integration_paths().codex_home
+        )
+        self.history_continuity = HistoryContinuityEngine(
+            history_reader or CodexHomeHistoryReader(codex_home)
+        )
         self.runtime_controller = runtime_controller or CodexRuntimeController(
             target_codex_home=(
                 integration_manager.config_path.parent
@@ -975,16 +987,6 @@ class AppState:
         self._native_websocket_lock = threading.Lock()
         self._native_websocket_cooldowns: Dict[str, float] = {}
         self.config = load(self.path)
-        state_dir = self.path.parent / "state"
-        self._compaction_bindings_path = state_dir / "continuity-bindings.enc"
-        try:
-            self.compaction_bindings = CompactionBindingStore(
-                self._compaction_bindings_path
-            )
-        except Exception:
-            # A corrupt or unusable vault fails closed at lookup time; the
-            # server itself must still start for management endpoints.
-            self.compaction_bindings = None
         self._load_runtime_recovery()
         if any(
             provider.get("api_key") for provider in self.config.get("providers", [])
@@ -998,6 +1000,18 @@ class AppState:
     def snapshot(self) -> Dict[str, Any]:
         with self.lock:
             return json.loads(json.dumps(self.config))
+
+    def _routing_snapshot(self) -> Dict[str, Any]:
+        """Return transient route context without exposing it as Web config."""
+
+        with self.lock:
+            snapshot = json.loads(json.dumps(self.config))
+            manager = self.integration_manager
+        if manager is not None:
+            snapshot["_native_auth_path"] = str(
+                manager.config_path.parent / "auth.json"
+            )
+        return snapshot
 
     def ensure_integration_manager(self) -> IntegrationManager:
         with self.lock:
@@ -1392,6 +1406,7 @@ class AppState:
         status: Any,
         context_observation: Optional[Mapping[str, Any]] = None,
         error_class: Optional[str] = None,
+        failure_reason: Optional[str] = None,
     ) -> None:
         model_id = body.get("model") if isinstance(body.get("model"), str) else ""
         provider_id = ""
@@ -1430,6 +1445,7 @@ class AppState:
                 "status": status,
                 "success": False,
                 "error_class": error_class or self._diagnostic_error_class(status),
+                "failure_reason": failure_reason or "",
                 "protocol_decision": "explicit" if protocol != "auto" else "normal_order",
                 "protocol_fallback": False,
                 "response_bytes": 0,
@@ -1490,102 +1506,6 @@ class AppState:
             event["response_bytes"] = response_bytes
             self._record_route_event(event, body, started, transport, route)
 
-    def _continuity_diagnostic(
-        self,
-        transport: str,
-        source_binding_result: str,
-        same_domain: bool = False,
-        handoff_attempted: bool = False,
-        handoff_succeeded: bool = False,
-        item_index: Optional[int] = None,
-        item_type: Optional[str] = None,
-        reason: Optional[str] = None,
-        error_class: Optional[str] = None,
-    ) -> None:
-        """Record a content-free continuity outcome using strict safe fields.
-
-        Only the allowed continuity result flags from spec section 7 are
-        recorded: source_binding_result, same_domain, handoff_attempted,
-        handoff_succeeded, item_index, item_type, reason, error_class,
-        transport, and status. No provider/model/account/URL/opaque/
-        checkpoint/prompt content is ever placed in the diagnostic.
-        """
-        fields: Dict[str, Any] = {
-            "route": "responses",
-            "transport": transport,
-            "source_binding_result": source_binding_result,
-            "same_domain": bool(same_domain),
-            "handoff_attempted": bool(handoff_attempted),
-            "handoff_succeeded": bool(handoff_succeeded),
-        }
-        if isinstance(item_index, int) and not isinstance(item_index, bool):
-            fields["item_index"] = max(0, item_index)
-        if isinstance(item_type, str) and item_type:
-            fields["item_type"] = item_type[:64]
-        if isinstance(reason, str) and reason:
-            fields["reason"] = reason[:64]
-        if isinstance(error_class, str) and error_class:
-            fields["error_class"] = error_class[:64]
-        try:
-            self.diagnostics.record(fields)
-        except Exception:
-            pass
-
-    def _register_native_compaction(
-        self,
-        provider: Dict[str, Any],
-        model: Dict[str, Any],
-        requested_slug: str,
-        incoming: Dict[str, str],
-        identity,
-        result: bytes,
-        success: bool,
-    ) -> None:
-        """Content-free native JSON compaction registration callback.
-
-        The identity is the already-verified NativeRouteIdentity resolved
-        by the router from the actual native route (forward or account
-        auth mode). It is never re-derived from destination or incoming
-        headers here.
-        """
-        store = self.compaction_bindings
-        if store is None:
-            return
-        if identity is None or not success:
-            return
-        try:
-            count = register_native_json(store, identity, json.loads(result.decode("utf-8")), success)
-            if count:
-                self._continuity_diagnostic(
-                    "http", "registered"
-                )
-        except Exception:
-            self._continuity_diagnostic(
-                "http", "registration_failed", error_class="observer_error"
-            )
-
-    def _native_observer_stream(self, result, observer):
-        """Wrap a stream so observer.abandon() runs in the finally path.
-
-        Client disconnect, iterator close, and parse failure all reach the
-        finally, ensuring pending opaque values are discarded rather than
-        leaked across concurrent SSE/WS requests.
-        """
-        try:
-            for chunk in result:
-                yield chunk
-        finally:
-            try:
-                observer.abandon()
-            except Exception:
-                pass
-            closer = getattr(result, "close", None)
-            if callable(closer):
-                try:
-                    closer()
-                except Exception:
-                    pass
-
     def prepare_native_websocket(
         self,
         body: Dict[str, Any],
@@ -1609,34 +1529,13 @@ class AppState:
                 raise ContextGuardBlocked(assessment)
             return observation
 
-        def on_continuity(
-            source_binding_result,
-            same_domain,
-            handoff_attempted,
-            handoff_succeeded,
-            item_index,
-            item_type,
-            reason,
-        ):
-            self._continuity_diagnostic(
-                "websocket",
-                source_binding_result,
-                same_domain=same_domain,
-                handoff_attempted=handoff_attempted,
-                handoff_succeeded=handoff_succeeded,
-                item_index=item_index,
-                item_type=item_type,
-                reason=reason,
-            )
-
         try:
             plan = prepare_native_websocket_request(
-                self.snapshot(),
+                self._routing_snapshot(),
                 body,
                 incoming,
                 on_context=on_context,
-                binding_store=self.compaction_bindings,
-                on_continuity=on_continuity,
+                history_preparer=self.history_continuity.prepare,
             )
         except RouterError as exc:
             self._record_route_failure(
@@ -1646,9 +1545,17 @@ class AppState:
                 "responses",
                 exc.status,
                 getattr(exc, "context_observation", None),
-                "context_length_exceeded"
-                if isinstance(exc, ContextLengthError)
-                else None,
+                (
+                    "history_reconstruction_failed"
+                    if isinstance(exc, HistoryReconstructionError)
+                    else "context_length_exceeded"
+                    if isinstance(exc, ContextLengthError)
+                    else None
+                ),
+                failure_reason=(
+                    getattr(exc, "reason", None)
+                    or getattr(exc, "failure_reason", None)
+                ),
             )
             raise
         prepare_ms = max(0, int(round((time.monotonic() - started) * 1000)))
@@ -1682,26 +1589,6 @@ class AppState:
     def mark_native_websocket_available(self, connection_key: str) -> None:
         with self._native_websocket_lock:
             self._native_websocket_cooldowns.pop(connection_key, None)
-
-    def native_websocket_observer(self, identity):
-        if self.compaction_bindings is None or identity is None:
-            return None
-        try:
-            observer = NativeCompactionObserver(self.compaction_bindings, identity)
-        except Exception:
-            return None
-
-        def safe_observe(event):
-            try:
-                count = observer.observe(event)
-                if count:
-                    self._continuity_diagnostic("websocket", "registered")
-            except Exception:
-                self._continuity_diagnostic(
-                    "websocket", "registration_failed", error_class="observer_error"
-                )
-
-        return observer, safe_observe
 
     def record_native_websocket(
         self,
@@ -1799,67 +1686,14 @@ class AppState:
                 "responses",
             )
 
-        observer_box = []
-
-        def on_native_stream_start(identity):
-            if self.compaction_bindings is None or identity is None:
-                return None
-            try:
-                observer = NativeCompactionObserver(
-                    self.compaction_bindings, identity
-                )
-                observer_box.append(observer)
-
-                def safe_observe(event):
-                    try:
-                        count = observer.observe(event)
-                        if count:
-                            self._continuity_diagnostic(
-                                "sse", "registered"
-                            )
-                    except Exception:
-                        self._continuity_diagnostic(
-                            "sse", "registration_failed",
-                            error_class="observer_error"
-                        )
-
-                return safe_observe
-            except Exception:
-                return None
-
-        def on_native_response(provider, model, slug, transient, identity, raw, success):
-            self._register_native_compaction(
-                dict(provider), dict(model), slug, dict(transient),
-                identity, raw, success
-            )
-
-        def on_continuity(
-            source_binding_result, same_domain,
-            handoff_attempted, handoff_succeeded,
-            item_index, item_type, reason
-        ):
-            self._continuity_diagnostic(
-                selected_transport,
-                source_binding_result,
-                same_domain=same_domain,
-                handoff_attempted=handoff_attempted,
-                handoff_succeeded=handoff_succeeded,
-                item_index=item_index,
-                item_type=item_type,
-                reason=reason,
-            )
-
         try:
             metadata, result = proxy(
-                self.snapshot(),
+                self._routing_snapshot(),
                 body,
                 incoming,
                 on_observation,
                 on_context,
-                binding_store=self.compaction_bindings,
-                on_native_response=on_native_response,
-                on_native_stream_start=on_native_stream_start,
-                on_continuity=on_continuity,
+                history_preparer=self.history_continuity.prepare,
             )
         except RouterError as exc:
             if not observed:
@@ -1870,9 +1704,17 @@ class AppState:
                     "responses",
                     exc.status,
                     getattr(exc, "context_observation", None),
-                    "context_length_exceeded"
-                    if isinstance(exc, ContextLengthError)
-                    else None,
+                    (
+                        "history_reconstruction_failed"
+                        if isinstance(exc, HistoryReconstructionError)
+                        else "context_length_exceeded"
+                        if isinstance(exc, ContextLengthError)
+                        else None
+                    ),
+                    failure_reason=(
+                        getattr(exc, "reason", None)
+                        or getattr(exc, "failure_reason", None)
+                    ),
                 )
             raise
         except Exception:
@@ -1891,8 +1733,6 @@ class AppState:
                     selected_transport,
                     "responses",
                 )
-            if observer_box:
-                result = self._native_observer_stream(result, observer_box[0])
             result = self.provider_replay.observe_stream(body.get("model"), result)
         else:
             self.provider_replay.observe_bytes(body.get("model"), result)
@@ -1950,34 +1790,10 @@ class AppState:
                 "compact",
             )
 
-        def on_native_response_compact(provider, model, slug, transient, identity, raw, success):
-            self._register_native_compaction(
-                dict(provider), dict(model), slug, dict(transient),
-                identity, raw, success
-            )
-
-        def on_continuity_compact(
-            source_binding_result, same_domain,
-            handoff_attempted, handoff_succeeded,
-            item_index, item_type, reason
-        ):
-            self._continuity_diagnostic(
-                selected_transport,
-                source_binding_result,
-                same_domain=same_domain,
-                handoff_attempted=handoff_attempted,
-                handoff_succeeded=handoff_succeeded,
-                item_index=item_index,
-                item_type=item_type,
-                reason=reason,
-            )
-
         try:
             metadata, result = proxy_compact(
-                self.snapshot(), body, incoming, on_observation, on_context,
-                binding_store=self.compaction_bindings,
-                on_native_response=on_native_response_compact,
-                on_continuity=on_continuity_compact,
+                self._routing_snapshot(), body, incoming, on_observation, on_context,
+                history_preparer=self.history_continuity.prepare,
             )
         except RouterError as exc:
             if not observed:
@@ -1988,9 +1804,17 @@ class AppState:
                     "compact",
                     exc.status,
                     getattr(exc, "context_observation", None),
-                    "context_length_exceeded"
-                    if isinstance(exc, ContextLengthError)
-                    else None,
+                    (
+                        "history_reconstruction_failed"
+                        if isinstance(exc, HistoryReconstructionError)
+                        else "context_length_exceeded"
+                        if isinstance(exc, ContextLengthError)
+                        else None
+                    ),
+                    failure_reason=(
+                        getattr(exc, "reason", None)
+                        or getattr(exc, "failure_reason", None)
+                    ),
                 )
             raise
         except Exception:
@@ -2231,7 +2055,84 @@ def _management_config(config: Dict[str, Any]) -> Dict[str, Any]:
     result = public_config(config)
     result["emp_version"] = __version__
     result["subscription_models"] = subscription_model_options(config)
+    result["catalog_models"] = _management_catalog_models(config)
     return result
+
+
+def _management_catalog_models(config: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Return the small, credential-free model view used by display settings."""
+    baseline_config = dict(config)
+    baseline_config["catalog_presentations"] = {}
+    baseline = {
+        str(item.get("slug") or ""): item
+        for item in build_catalog(baseline_config).get("models", [])
+        if isinstance(item, Mapping)
+    }
+    external_sources = {
+        str(item.get("id") or ""): str(item.get("provider") or "")
+        for item in config.get("models", [])
+        if isinstance(item, Mapping)
+    }
+    account_prefixes = [
+        (str(item.get("prefix") or ""), str(item.get("id") or ""))
+        for item in config.get("accounts", [])
+        if isinstance(item, Mapping) and item.get("prefix") and item.get("id")
+    ]
+    rows = []
+    for item in build_catalog(config).get("models", []):
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("visibility", "list") != "list":
+            continue
+        if item.get("supported_in_api", True) is False:
+            continue
+        route = str(item.get("slug") or "")
+        if not route:
+            continue
+        source_type = "native"
+        source_id = ""
+        if route in external_sources:
+            source_type = "provider"
+            source_id = external_sources[route]
+        else:
+            for prefix, account_id in account_prefixes:
+                if route.startswith(prefix + "/"):
+                    source_type = "account"
+                    source_id = account_id
+                    break
+        raw_context = item.get("context_window", 0)
+        try:
+            context_window = int(raw_context or 0)
+        except (TypeError, ValueError):
+            context_window = 0
+        try:
+            percentage = float(
+                item.get("effective_context_window_percent", 100) or 100
+            )
+        except (TypeError, ValueError):
+            percentage = 100
+        if context_window > 0 and 0 < percentage <= 100:
+            context_window = max(1, round(context_window * percentage / 100))
+        default_name = str(
+            baseline.get(route, {}).get("display_name") or route
+        )
+        default_name = re.sub(
+            r"^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+", "", default_name
+        )
+        rows.append(
+            {
+                "id": route,
+                "display_name": str(item.get("display_name") or route),
+                "default_display_name": default_name,
+                "context_window": max(0, context_window),
+                "source_type": source_type,
+                "source_id": source_id,
+                "supports_reasoning_summaries": (
+                    item.get("supports_reasoning_summary_parameter") is True
+                ),
+            }
+        )
+    return rows
 
 
 def _management_capabilities(state: AppState) -> Dict[str, Any]:
@@ -2785,7 +2686,10 @@ def make_handler(state: AppState):
             self._response_status = 101
             self.wfile.flush()
             self.close_connection = True
-            self.connection.settimeout(180)
+            # Codex keeps one local control connection open between turns.
+            # A fixed idle read timeout turns normal inactivity into a 1011
+            # server failure and forces a visible client reconnect.
+            self.connection.settimeout(None)
             websocket = WebSocketConnection(self.rfile, self.wfile)
             native_upstream = NativeWebSocketBridge()
             last_response_id = None
@@ -2837,11 +2741,6 @@ def make_handler(state: AppState):
                                     },
                                 )
                                 continue
-                            observer_pair = state.native_websocket_observer(
-                                plan.identity
-                            )
-                            observer = observer_pair[0] if observer_pair else None
-                            observe = observer_pair[1] if observer_pair else None
                             response_bytes = 0
                             first_event_ms = None
                             terminal = None
@@ -2903,8 +2802,6 @@ def make_handler(state: AppState):
                                     )
                                     output_emitted = output_emitted or event_output
                                     tool_activity = tool_activity or event_tool
-                                    if observe is not None:
-                                        observe(event)
                                     terminal = native_websocket_terminal(event)
                                     if event_output or event_tool or terminal is not None:
                                         for pending_event in pending_lifecycle_events:
@@ -2988,21 +2885,6 @@ def make_handler(state: AppState):
                                         terminal_event_observed=False,
                                     )
                                     continue
-                                if previous_hint is not None:
-                                    self._websocket_error(
-                                        websocket,
-                                        "Previous response was not found. Retrying the full request.",
-                                        404,
-                                        "previous_response_not_found",
-                                        {
-                                            "context_decision": "warned",
-                                            "confidence": 0.0,
-                                            "source": "unknown",
-                                            "completeness": "lost",
-                                            "next_action": "retry the full native request",
-                                        },
-                                    )
-                                    continue
                                 # A full request can safely use the established
                                 # HTTP compatibility path when the upstream WS
                                 # handshake failed before any event was emitted.
@@ -3027,6 +2909,25 @@ def make_handler(state: AppState):
                                     recovery_mode="native_http_fallback",
                                     protocol_fallback=True,
                                 )
+                                if previous_hint is not None:
+                                    # Codex recognizes this code and retries the
+                                    # same turn as a full request.  Native routes
+                                    # therefore keep Codex as their sole history
+                                    # owner instead of invoking EMP projection.
+                                    self._websocket_error(
+                                        websocket,
+                                        "Previous response was not found. Retrying the full request.",
+                                        404,
+                                        "previous_response_not_found",
+                                        {
+                                            "context_decision": "warned",
+                                            "confidence": 0.0,
+                                            "source": "unknown",
+                                            "completeness": "lost",
+                                            "next_action": "retry the full native request",
+                                        },
+                                    )
+                                    continue
                             else:
                                 state.mark_native_websocket_available(
                                     plan.target.connection_key
@@ -3043,35 +2944,21 @@ def make_handler(state: AppState):
                                     output_emitted,
                                     tool_activity,
                                 )
+                                last_response_id = None
+                                last_input = None
                                 continue
-                            finally:
-                                if observer is not None:
-                                    try:
-                                        observer.abandon()
-                                    except Exception:
-                                        pass
                         previous_response_id = request.pop("previous_response_id", None)
                         generate = request.pop("generate", None)
                         current_input = request.get("input", [])
                         if previous_response_id is not None:
                             if previous_response_id != last_response_id or last_input is None:
-                                self._websocket_error(
-                                    websocket,
-                                    "Previous response was not found. Retrying the full request.",
-                                    404,
-                                    "previous_response_not_found",
-                                    {
-                                        "context_decision": "warned",
-                                        "confidence": 0.0,
-                                        "source": "unknown",
-                                        "completeness": "lost",
-                                        "next_action": "start a new native session",
-                                    },
+                                request = _ws_history_rebuild_request(
+                                    dict(request, previous_response_id=previous_response_id)
                                 )
-                                continue
-                            if not isinstance(last_input, list) or not isinstance(current_input, list):
+                                current_input = request["input"]
+                            elif not isinstance(last_input, list) or not isinstance(current_input, list):
                                 raise TransportError("incremental websocket input must be a list")
-                            if _ws_replay_size(last_input, current_input) is None:
+                            elif _ws_replay_size(last_input, current_input) is None:
                                 self._websocket_error(
                                     websocket,
                                     "WebSocket context state is too large; start a new native session.",
@@ -3088,7 +2975,8 @@ def make_handler(state: AppState):
                                 last_response_id = None
                                 last_input = None
                                 continue
-                            request["input"] = last_input + current_input
+                            else:
+                                request["input"] = last_input + current_input
                         if generate is False:
                             response_id = "resp_" + uuid.uuid4().hex
                             candidate_input = request.get("input", [])
@@ -3142,7 +3030,21 @@ def make_handler(state: AppState):
                         )
                         output_items = []
                         completed_id = None
+                        first_event = True
                         for event in self._websocket_events(metadata, result):
+                            if first_event:
+                                failure = _pre_output_http_failure(event)
+                                if failure is not None:
+                                    status, payload = failure
+                                    websocket.send_json(
+                                        {
+                                            "type": "error",
+                                            "status": status,
+                                            "error": payload["error"],
+                                        }
+                                    )
+                                    break
+                            first_event = False
                             websocket.send_json(event)
                             if event.get("type") == "response.output_item.done":
                                 item = event.get("item")
@@ -3178,8 +3080,8 @@ def make_handler(state: AppState):
                                 else:
                                     last_response_id = completed_id
                                     last_input = base_input + output_items
-                    except ContextHandoffRequiredError as exc:
-                        websocket.send_json(_handoff_ws_event(exc))
+                    except HistoryReconstructionError as exc:
+                        websocket.send_json(_history_ws_event(exc))
                         continue
                     except ContextLengthError as exc:
                         self._websocket_error(
@@ -3392,7 +3294,7 @@ def make_handler(state: AppState):
                 )
                 if path == "/v1/alpha/search":
                     status, content_type, raw = forward_native_search(
-                        state.snapshot(),
+                        state._routing_snapshot(),
                         body,
                         {key: value for key, value in self.headers.items()},
                     )
@@ -3661,6 +3563,21 @@ def make_handler(state: AppState):
                     if metadata["kind"] == "stream":
                         iterator = iter(result)
                         first_chunk = next(iterator, b"")
+                        first_event = next(sse_json_events([first_chunk]), None)
+                        failure = _pre_output_http_failure(first_event)
+                        if failure is not None:
+                            close_iterator = getattr(iterator, "close", None)
+                            if callable(close_iterator):
+                                close_iterator()
+                            status, payload = failure
+                            self._send(
+                                status,
+                                _json_bytes(payload),
+                                "application/json",
+                                {"Connection": "close"},
+                            )
+                            self.close_connection = True
+                            return
                         close_after_stream = b'"type": "response.failed"' in first_chunk
                         self.send_response(200)
                         self.send_header("Content-Type", metadata["content_type"])
@@ -3707,10 +3624,10 @@ def make_handler(state: AppState):
                         )
                     return
                 self._error(404, "not found")
-            except ContextHandoffRequiredError as exc:
+            except HistoryReconstructionError as exc:
                 emit_operation_failure(exc)
                 if body.get("stream"):
-                    frame = _handoff_sse_frame(exc)
+                    frame = _history_sse_frame(exc)
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
                     self.send_header("Cache-Control", "no-cache")
@@ -3723,7 +3640,7 @@ def make_handler(state: AppState):
                         pass
                     self.close_connection = True
                 else:
-                    self._send(409, _json_bytes(_handoff_error_body(exc)))
+                    self._send(409, _json_bytes(_history_error_body(exc)))
             except (ConfigError, RouterError, QuotaError, ValueError) as exc:
                 emit_operation_failure(exc)
                 status = exc.status if isinstance(exc, RouterError) else 400

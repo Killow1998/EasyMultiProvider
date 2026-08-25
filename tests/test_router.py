@@ -1,5 +1,4 @@
 import base64
-import copy
 import unittest
 import json
 import tempfile
@@ -14,14 +13,6 @@ from tests.support import ensure_test_master_key
 import easy_multi_provider.router as router
 from easy_multi_provider.capabilities import endpoint_fingerprint
 from easy_multi_provider.config import normalize
-from easy_multi_provider.continuity import (
-    BindingMissing,
-    CompactionBindingStore,
-    NativeCompactionObserver,
-    binding_for_opaque,
-    derive_native_route_identity,
-    register_native_json,
-)
 from easy_multi_provider.router import (
     RouterError,
     _response_from_anthropic,
@@ -31,122 +22,15 @@ from easy_multi_provider.router import (
     responses_to_anthropic,
     responses_to_chat,
 )
-from easy_multi_provider.router_errors import ExternalProtocolError
+from easy_multi_provider.router_errors import (
+    ExternalProtocolError,
+    HistoryReconstructionError,
+)
 from easy_multi_provider.transport import sse_json_events
 from easy_multi_provider.vault import write_encrypted_json
 
 
 ensure_test_master_key()
-
-
-class _ContinuityResponse:
-    def __init__(self, value, status=200, content_type="application/json"):
-        self.status = status
-        self.headers = {"Content-Type": content_type}
-        self._raw = value if isinstance(value, bytes) else json.dumps(value).encode("utf-8")
-        self._sent = False
-        self.closed = False
-
-    def read(self, size=-1):
-        if self._sent:
-            return b""
-        self._sent = True
-        return self._raw
-
-    def close(self):
-        self.closed = True
-
-
-def _continuity_request_json(request):
-    raw = request.data
-    headers = {key.lower(): value for key, value in request.header_items()}
-    if headers.get("content-encoding") == "zstd":
-        raw = zstandard.ZstdDecompressor().decompress(raw)
-    return json.loads(raw.decode("utf-8"))
-
-
-def _register_router_binding(
-    directory,
-    opaque,
-    source_provider,
-    source_model,
-    source_slug,
-    account_id,
-):
-    store = CompactionBindingStore(Path(directory) / "bindings.enc")
-    identity = derive_native_route_identity(
-        {"chatgpt-account-id": account_id},
-        source_provider["base_url"],
-        router.deployment_identity(source_provider, source_model),
-        router._upstream_model(source_provider, source_model, source_slug),
-        source_slug,
-    )
-    store.register(binding_for_opaque(identity, opaque))
-    return store
-
-
-def _continuity_config():
-    return {
-        "providers": [
-            {
-                "id": "native-current",
-                "enabled": True,
-                "auth_mode": "forward",
-                "protocol": "responses",
-                "base_url": "https://native-current.example/backend-api/codex",
-                "deployment_identity": "current-deployment",
-            },
-            {
-                "id": "native-selected",
-                "enabled": True,
-                "auth_mode": "account",
-                "account": {"id": "selected-account", "name": "Private Selected"},
-                "protocol": "responses",
-                "base_url": "https://native-selected.example/backend-api/codex",
-                "deployment_identity": "selected-deployment",
-            },
-            {
-                "id": "external",
-                "enabled": True,
-                "auth_mode": "api_key",
-                "api_key": "external-key",
-                "protocol": "chat_completions",
-                "base_url": "https://external.example/v1/responses",
-            },
-        ],
-        "models": [
-            {
-                "id": "native/current-source",
-                "provider": "native-current",
-                "upstream_id": "current-source-upstream",
-                "enabled": True,
-            },
-            {
-                "id": "native/current-destination",
-                "provider": "native-current",
-                "upstream_id": "current-destination-upstream",
-                "enabled": True,
-            },
-            {
-                "id": "native/selected-source",
-                "provider": "native-selected",
-                "upstream_id": "selected-source-upstream",
-                "enabled": True,
-            },
-            {
-                "id": "native/selected-destination",
-                "provider": "native-selected",
-                "upstream_id": "selected-destination-upstream",
-                "enabled": True,
-            },
-            {
-                "id": "external/destination",
-                "provider": "external",
-                "upstream_id": "external-upstream",
-                "enabled": True,
-            },
-        ],
-    }
 
 
 class RouterTests(unittest.TestCase):
@@ -248,55 +132,6 @@ class RouterTests(unittest.TestCase):
                 {"supports_reasoning": True, "supported_parameters": ["reasoning"]}
             )
         )
-
-    def test_handoff_failure_reports_binding_hit_independently(self):
-        config = _continuity_config()
-        source_provider, source_model = find_route(
-            config, "native/current-source"
-        )
-        opaque = "opaque-handoff-failure-private"
-        observations = []
-        with tempfile.TemporaryDirectory() as directory:
-            store = _register_router_binding(
-                directory,
-                opaque,
-                source_provider,
-                source_model,
-                "native/current-source",
-                "current-account-private",
-            )
-            provider, model = find_route(config, "external/destination")
-            with patch.object(
-                router,
-                "_source_handoff_summary",
-                side_effect=router.ContextHandoffRequiredError(
-                    0, "compaction", "source_unavailable"
-                ),
-            ):
-                with self.assertRaises(router.ContextHandoffRequiredError):
-                    router._prepare_continuity_body(
-                        config,
-                        provider,
-                        model,
-                        "external/destination",
-                        {
-                            "model": "external/destination",
-                            "input": {
-                                "type": "compaction",
-                                "encrypted_content": opaque,
-                            },
-                        },
-                        {},
-                        store,
-                        lambda *values: observations.append(values),
-                    )
-
-        self.assertEqual(len(observations), 1)
-        self.assertEqual(observations[0][0], "hit")
-        self.assertFalse(observations[0][1])
-        self.assertTrue(observations[0][2])
-        self.assertFalse(observations[0][3])
-        self.assertEqual(observations[0][-1], "source_unavailable")
 
     def test_forward_provider_uses_codex_session_auth(self):
         headers = router._headers(
@@ -859,7 +694,6 @@ class RouterTests(unittest.TestCase):
         }
         raw = b'event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n'
         events = []
-        native_starts = []
 
         class FakeResponse(BytesIO):
             status = 200
@@ -871,34 +705,9 @@ class RouterTests(unittest.TestCase):
                 {"model": "external/model-a", "input": [], "stream": True},
                 {},
                 on_stream_event=events.append,
-                on_native_stream_start=lambda identity: native_starts.append(identity),
             )
             list(result)
         self.assertEqual([event["type"] for event in events], ["response.completed"])
-        self.assertEqual(native_starts, [])
-
-    def test_proxy_resolved_passes_native_stream_factory_to_responses_helper(self):
-        provider = {
-            "id": "native",
-            "base_url": "https://native.example/backend-api/codex",
-            "protocol": "responses",
-            "auth_mode": "forward",
-        }
-        model = {"id": "native/model-a", "upstream_id": "model-a"}
-        factory = object()
-        event_callback = object()
-        with patch.object(router, "forward_responses_stream", return_value=iter([])) as forward:
-            _, result = router._proxy_resolved(
-                provider,
-                model,
-                {"model": "native/model-a", "input": [], "stream": True},
-                {},
-                on_stream_event=event_callback,
-                on_native_stream_start=factory,
-            )
-            list(result)
-        self.assertIs(forward.call_args.kwargs["on_stream_event"], event_callback)
-        self.assertIs(forward.call_args.kwargs["on_native_stream_start"], factory)
 
     def test_normalized_forward_native_provider_is_fixed_to_responses(self):
         config = normalize({
@@ -912,44 +721,6 @@ class RouterTests(unittest.TestCase):
         })
         provider, _ = find_route(config, "native/model-a")
         self.assertEqual(provider["protocol"], "responses")
-
-    def test_handoff_failure_observation_is_minimal_and_private(self):
-        configured = {
-            "providers": [{
-                "id": "private-provider",
-                "base_url": "https://private.example/backend-api/codex",
-                "protocol": "responses",
-                "auth_mode": "forward",
-                "deployment_identity": "private-deployment",
-            }],
-            "models": [{
-                "id": "private-provider/private-model",
-                "provider": "private-provider",
-                "upstream_id": "private-upstream",
-            }],
-        }
-        observations = []
-        with self.assertRaises(router.ContextHandoffRequiredError):
-            router.proxy(
-                configured,
-                {
-                    "model": "private-provider/private-model",
-                    "input": [{"type": "compaction", "encrypted_content": "private-content"}],
-                },
-                {},
-                on_observation=observations.append,
-            )
-        self.assertEqual(len(observations), 1)
-        self.assertEqual(
-            set(observations[0]),
-            {"route", "transport", "status", "success", "error_class", "terminal_event_observed"},
-        )
-        serialized = json.dumps(observations[0])
-        for secret in (
-            "private-provider", "private-model", "private-deployment",
-            "private-upstream", "private.example", "private-content",
-        ):
-            self.assertNotIn(secret, serialized)
 
     def test_auto_provider_falls_back_when_responses_endpoint_is_unavailable(self):
         config = {
@@ -1186,7 +957,7 @@ class RouterTests(unittest.TestCase):
             self.assertEqual(model["upstream_id"], "gpt-native")
             self.assertEqual(config["providers"], [])
 
-    def test_implicit_native_route_forwards_current_login_and_account_headers(self):
+    def test_implicit_native_route_uses_complete_live_login_headers(self):
         with tempfile.TemporaryDirectory() as directory:
             native_path = Path(directory) / "native.json"
             native_path.write_text(
@@ -1195,6 +966,7 @@ class RouterTests(unittest.TestCase):
             )
             config = {
                 "native_catalog_path": str(native_path),
+                "_native_auth_path": str(Path(directory) / "auth.json"),
                 "codex_base_url": "https://chatgpt.com/backend-api/codex",
                 "providers": [],
                 "models": [],
@@ -1220,7 +992,17 @@ class RouterTests(unittest.TestCase):
                 def close(self):
                     pass
 
-            with patch.object(router, "urlopen", return_value=FakeResponse()) as opened:
+            with (
+                patch.object(
+                    router,
+                    "native_auth_headers",
+                    return_value={
+                        "Authorization": "Bearer live-native",
+                        "chatgpt-account-id": "live-account",
+                    },
+                ),
+                patch.object(router, "urlopen", return_value=FakeResponse()) as opened,
+            ):
                 metadata, raw = router.proxy(
                     config,
                     {"model": "gpt-native", "input": "hello"},
@@ -1230,8 +1012,8 @@ class RouterTests(unittest.TestCase):
             request = opened.call_args.args[0]
             self.assertEqual(metadata["provider_id"], "codex-native")
             self.assertEqual(request.full_url, "https://chatgpt.com/backend-api/codex/responses")
-            self.assertEqual(request.get_header("Authorization"), "Bearer current-login")
-            self.assertEqual(request.get_header("Chatgpt-account-id"), "current-account")
+            self.assertEqual(request.get_header("Authorization"), "Bearer live-native")
+            self.assertEqual(request.get_header("Chatgpt-account-id"), "live-account")
             self.assertEqual(raw, b"{}")
 
     def test_subscription_prefix_selects_account_and_strips_prefix(self):
@@ -1419,1090 +1201,6 @@ class RouterTests(unittest.TestCase):
             self.assertEqual(prefixed_provider["auth_mode"], "account")
             self.assertEqual(prefixed_model["upstream_id"], "gpt-native")
 
-    def test_unknown_opaque_compaction_to_translated_external_requires_handoff_before_upstream(self):
-        opaque = "private-opaque-state"
-        for protocol in ("chat_completions", "anthropic_messages"):
-            with self.subTest(protocol=protocol):
-                config = {
-                    "providers": [
-                        {
-                            "id": "external",
-                            "enabled": True,
-                            "auth_mode": "api_key",
-                            "api_key": "key",
-                            "protocol": protocol,
-                            "base_url": "https://example.com/v1",
-                        }
-                    ],
-                    "models": [
-                        {
-                            "id": "external/model",
-                            "provider": "external",
-                            "enabled": True,
-                        }
-                    ],
-                }
-                with patch.object(
-                    router,
-                    "urlopen",
-                    side_effect=AssertionError("destination contacted"),
-                ) as opened:
-                    with self.assertRaises(RouterError) as raised:
-                        router.proxy(
-                            config,
-                            {
-                                "model": "external/model",
-                                "input": [
-                                    {
-                                        "type": "compaction",
-                                        "encrypted_content": opaque,
-                                    }
-                                ],
-                            },
-                            {},
-                        )
-
-                opened.assert_not_called()
-                self.assertEqual(raised.exception.status, 409)
-                self.assertEqual(
-                    getattr(raised.exception, "error_class", None),
-                    "context_handoff_required",
-                )
-                self.assertEqual(
-                    getattr(raised.exception, "reason", None), "binding_missing"
-                )
-                message = str(raised.exception)
-                self.assertIn("context_handoff_required", message)
-                self.assertIn("index=0", message)
-                self.assertNotIn(opaque, message)
-
-    def test_unknown_opaque_compaction_to_portable_responses_requires_handoff(self):
-        config = {
-            "providers": [
-                {
-                    "id": "external",
-                    "enabled": True,
-                    "auth_mode": "api_key",
-                    "api_key": "key",
-                    "protocol": "responses",
-                    "base_url": "https://example.com/v1",
-                }
-            ],
-            "models": [
-                {"id": "external/model", "provider": "external", "enabled": True}
-            ],
-        }
-        opaque = "private-opaque-state"
-
-        with patch.object(router, "urlopen") as opened:
-            with self.assertRaises(RouterError) as raised:
-                router.proxy(
-                    config,
-                    {
-                        "model": "external/model",
-                        "input": [
-                            {"type": "compaction", "encrypted_content": opaque}
-                        ],
-                    },
-                    {},
-                )
-
-        opened.assert_not_called()
-        self.assertEqual(raised.exception.status, 409)
-        self.assertEqual(
-            getattr(raised.exception, "error_class", None),
-            "context_handoff_required",
-        )
-        self.assertNotIn(opaque, str(raised.exception))
-
-    def test_continuity_same_domain_preserves_opaque_without_bridge_or_mutation(self):
-        opaque = "opaque-same-domain-private"
-        config = _continuity_config()
-        source_provider, source_model = find_route(
-            config, "native/current-source"
-        )
-        body = {
-            "model": "native/current-destination",
-            "input": [
-                {"type": "message", "role": "user", "content": "before"},
-                {
-                    "id": "cmp_same",
-                    "type": "compaction",
-                    "encrypted_content": opaque,
-                },
-                {"type": "message", "role": "user", "content": "after"},
-            ],
-        }
-        body_before = copy.deepcopy(body)
-        config_before = copy.deepcopy(config)
-        incoming = {
-            "Authorization": "Bearer current-token-private",
-            "ChatGPT-Account-ID": "current-account-private",
-        }
-        observations = []
-
-        with tempfile.TemporaryDirectory() as directory:
-            store = _register_router_binding(
-                directory,
-                opaque,
-                source_provider,
-                source_model,
-                "native/current-source",
-                "current-account-private",
-            )
-            with patch.object(
-                router,
-                "urlopen",
-                return_value=_ContinuityResponse(
-                    {"status": "completed", "output": []}
-                ),
-            ) as opened:
-                metadata, _ = router.proxy(
-                    config,
-                    body,
-                    incoming,
-                    on_observation=observations.append,
-                    on_context=lambda *args: {"input_estimate": 3},
-                    binding_store=store,
-                )
-
-        self.assertEqual(opened.call_count, 1)
-        payload = _continuity_request_json(opened.call_args.args[0])
-        self.assertEqual(payload["input"][1], body["input"][1])
-        self.assertEqual(
-            payload["input"][1]["encrypted_content"].encode("utf-8"),
-            opaque.encode("utf-8"),
-        )
-        self.assertEqual(body, body_before)
-        self.assertEqual(config, config_before)
-        self.assertFalse(
-            any("_context_observation" in provider for provider in config["providers"])
-        )
-        diagnostic = json.dumps(
-            {"metadata": metadata, "observations": observations},
-            ensure_ascii=False,
-        )
-        for private in (
-            opaque,
-            "current-account-private",
-            "current-token-private",
-            "https://native-current.example",
-        ):
-            self.assertNotIn(private, diagnostic)
-
-    def test_continuity_cross_domain_matrix_uses_exact_source_route_and_auth(self):
-        transitions = (
-            (
-                "N-to-S",
-                "native/current-source",
-                "native/selected-destination",
-                "current-account-private",
-                "https://native-current.example/backend-api/codex/responses",
-                "Bearer current-token-private",
-            ),
-            (
-                "S-to-N",
-                "native/selected-source",
-                "native/current-destination",
-                "selected-account-private",
-                "https://native-selected.example/backend-api/codex/responses",
-                "Bearer selected-token-private",
-            ),
-            (
-                "N-to-E",
-                "native/current-source",
-                "external/destination",
-                "current-account-private",
-                "https://native-current.example/backend-api/codex/responses",
-                "Bearer current-token-private",
-            ),
-            (
-                "S-to-E",
-                "native/selected-source",
-                "external/destination",
-                "selected-account-private",
-                "https://native-selected.example/backend-api/codex/responses",
-                "Bearer selected-token-private",
-            ),
-        )
-        incoming = {
-            "Authorization": "Bearer current-token-private",
-            "ChatGPT-Account-ID": "current-account-private",
-        }
-
-        for (
-            name,
-            source_slug,
-            destination_slug,
-            source_account_id,
-            source_url,
-            source_authorization,
-        ) in transitions:
-            with self.subTest(transition=name), tempfile.TemporaryDirectory() as directory:
-                config = _continuity_config()
-                source_provider, source_model = find_route(config, source_slug)
-                opaque = "opaque-%s-private" % name
-                store = _register_router_binding(
-                    directory,
-                    opaque,
-                    source_provider,
-                    source_model,
-                    source_slug,
-                    source_account_id,
-                )
-                requests = []
-                observations = []
-
-                def selected_headers(account):
-                    self.assertEqual(account["id"], "selected-account")
-                    return {
-                        "Authorization": "Bearer selected-token-private",
-                        "chatgpt-account-id": "selected-account-private",
-                    }
-
-                def open_request(request, timeout):
-                    requests.append(request)
-                    if request.full_url == source_url:
-                        return _ContinuityResponse(
-                            {
-                                "status": "completed",
-                                "output_text": "checkpoint-%s" % name,
-                                "output": [],
-                            }
-                        )
-                    if request.full_url.endswith("/chat/completions"):
-                        return _ContinuityResponse(
-                            {
-                                "choices": [
-                                    {
-                                        "message": {"content": "destination"},
-                                        "finish_reason": "stop",
-                                    }
-                                ]
-                            }
-                        )
-                    return _ContinuityResponse(
-                        {"status": "completed", "output": []}
-                    )
-
-                with patch.object(
-                    router, "auth_headers", side_effect=selected_headers
-                ), patch.object(
-                    router, "refresh_account_quota"
-                ) as refreshed, patch.object(
-                    router, "urlopen", side_effect=open_request
-                ):
-                    metadata, _ = router.proxy(
-                        config,
-                        {
-                            "model": destination_slug,
-                            "input": [
-                                {
-                                    "type": "compaction",
-                                    "encrypted_content": opaque,
-                                }
-                            ],
-                        },
-                        incoming,
-                        on_observation=observations.append,
-                        binding_store=store,
-                    )
-
-                self.assertEqual(len(requests), 2)
-                self.assertEqual(requests[0].full_url, source_url)
-                self.assertEqual(
-                    requests[0].get_header("Authorization"), source_authorization
-                )
-                refreshed.assert_not_called()
-                bridge = _continuity_request_json(requests[0])
-                self.assertEqual(
-                    bridge["model"], source_model["upstream_id"]
-                )
-                self.assertEqual(len(bridge["input"]), 2)
-                self.assertEqual(
-                    bridge["input"][0]["encrypted_content"], opaque
-                )
-                self.assertEqual(bridge["input"][1]["role"], "user")
-                self.assertFalse(bridge["stream"])
-                self.assertEqual(bridge["tools"], [])
-                self.assertGreater(bridge["max_output_tokens"], 0)
-                self.assertLessEqual(bridge["max_output_tokens"], 4096)
-                for forbidden in (
-                    "previous_response_id",
-                    "mcp_servers",
-                    "web_search",
-                    "tool_choice",
-                ):
-                    self.assertNotIn(forbidden, bridge)
-                destination = _continuity_request_json(requests[1])
-                destination_json = json.dumps(destination, ensure_ascii=False)
-                self.assertIn("checkpoint-%s" % name, destination_json)
-                self.assertNotIn(opaque, destination_json)
-                self.assertEqual(metadata["status"], 200)
-                diagnostics = json.dumps(
-                    {"metadata": metadata, "observations": observations},
-                    ensure_ascii=False,
-                )
-                for private in (
-                    opaque,
-                    "checkpoint-%s" % name,
-                    router._CONTINUITY_BRIDGE_PROMPT,
-                    source_account_id,
-                    source_url,
-                ):
-                    self.assertNotIn(private, diagnostics)
-
-    def test_continuity_binding_drift_fails_before_any_upstream(self):
-        drifts = ("trust", "endpoint", "deployment")
-        for drift in drifts:
-            with self.subTest(drift=drift), tempfile.TemporaryDirectory() as directory:
-                config = _continuity_config()
-                source_slug = "native/selected-source"
-                source_provider, source_model = find_route(config, source_slug)
-                opaque = "opaque-drift-%s-private" % drift
-                store = _register_router_binding(
-                    directory,
-                    opaque,
-                    copy.deepcopy(source_provider),
-                    copy.deepcopy(source_model),
-                    source_slug,
-                    "selected-account-private",
-                )
-                selected_account = "selected-account-private"
-                if drift == "trust":
-                    selected_account = "different-selected-account-private"
-                elif drift == "endpoint":
-                    source_provider["base_url"] = (
-                        "https://drifted-source.example/backend-api/codex"
-                    )
-                else:
-                    source_provider["deployment_identity"] = "drifted-deployment"
-
-                with patch.object(
-                    router,
-                    "auth_headers",
-                    return_value={
-                        "Authorization": "Bearer selected-token-private",
-                        "chatgpt-account-id": selected_account,
-                    },
-                ), patch.object(router, "urlopen") as opened:
-                    with self.assertRaises(RouterError) as raised:
-                        router.proxy(
-                            config,
-                            {
-                                "model": "external/destination",
-                                "input": [
-                                    {
-                                        "type": "compaction",
-                                        "encrypted_content": opaque,
-                                    }
-                                ],
-                            },
-                            {
-                                "Authorization": "Bearer current-token-private",
-                                "ChatGPT-Account-ID": "current-account-private",
-                            },
-                            binding_store=store,
-                        )
-
-                opened.assert_not_called()
-                self.assertEqual(raised.exception.status, 409)
-                self.assertEqual(raised.exception.reason, "binding_stale")
-                error = str(raised.exception)
-                for private in (
-                    opaque,
-                    selected_account,
-                    "selected-token-private",
-                    "drifted-source.example",
-                    "drifted-deployment",
-                ):
-                    self.assertNotIn(private, error)
-
-    def test_continuity_missing_or_unavailable_source_fails_before_destination(self):
-        incoming = {
-            "Authorization": "Bearer current-token-private",
-            "ChatGPT-Account-ID": "current-account-private",
-        }
-        cases = (
-            "lookup_missing",
-            "source_non_native",
-            "source_auth_missing",
-            "source_disabled",
-        )
-        for case in cases:
-            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
-                config = _continuity_config()
-                opaque = "opaque-unavailable-%s-private" % case
-                store = CompactionBindingStore(Path(directory) / "bindings.enc")
-                if case == "source_non_native":
-                    external_provider, external_model = find_route(
-                        config, "external/destination"
-                    )
-                    identity = derive_native_route_identity(
-                        {"chatgpt-account-id": "selected-account-private"},
-                        "https://former-native.example/backend-api/codex",
-                        "former-deployment",
-                        "former-upstream",
-                        "external/destination",
-                    )
-                    store.register(binding_for_opaque(identity, opaque))
-                elif case in {"source_auth_missing", "source_disabled"}:
-                    source_provider, source_model = find_route(
-                        config, "native/selected-source"
-                    )
-                    store = _register_router_binding(
-                        directory,
-                        opaque,
-                        source_provider,
-                        source_model,
-                        "native/selected-source",
-                        "selected-account-private",
-                    )
-                    if case == "source_disabled":
-                        source_model["enabled"] = False
-
-                auth = (
-                    {"Authorization": "Bearer selected-token-private"}
-                    if case == "source_auth_missing"
-                    else {
-                        "Authorization": "Bearer selected-token-private",
-                        "chatgpt-account-id": "selected-account-private",
-                    }
-                )
-                with patch.object(
-                    router, "auth_headers", return_value=auth
-                ), patch.object(router, "urlopen") as opened:
-                    with self.assertRaises(RouterError) as raised:
-                        router.proxy(
-                            config,
-                            {
-                                "model": "external/destination",
-                                "input": [
-                                    {
-                                        "type": "compaction",
-                                        "encrypted_content": opaque,
-                                    }
-                                ],
-                            },
-                            incoming,
-                            binding_store=store,
-                        )
-
-                opened.assert_not_called()
-                expected = (
-                    "binding_missing"
-                    if case == "lookup_missing"
-                    else "source_unavailable"
-                )
-                self.assertEqual(raised.exception.reason, expected)
-                self.assertNotIn(opaque, str(raised.exception))
-
-    def test_continuity_bridge_http_failures_are_single_attempt_without_refresh(self):
-        incoming = {
-            "Authorization": "Bearer current-token-private",
-            "ChatGPT-Account-ID": "current-account-private",
-        }
-        for status in (401, 404, 429, 500, 502, 503):
-            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
-                config = _continuity_config()
-                source_provider, source_model = find_route(
-                    config, "native/selected-source"
-                )
-                opaque = "opaque-http-%d-private" % status
-                store = _register_router_binding(
-                    directory,
-                    opaque,
-                    source_provider,
-                    source_model,
-                    "native/selected-source",
-                    "selected-account-private",
-                )
-
-                def fail(request, timeout):
-                    raise HTTPError(
-                        request.full_url,
-                        status,
-                        "private bridge failure",
-                        {"Content-Type": "text/plain"},
-                        BytesIO(b"private bridge body"),
-                    )
-
-                with patch.object(
-                    router,
-                    "auth_headers",
-                    return_value={
-                        "Authorization": "Bearer selected-token-private",
-                        "chatgpt-account-id": "selected-account-private",
-                    },
-                ), patch.object(
-                    router, "refresh_account_quota"
-                ) as refreshed, patch.object(
-                    router, "urlopen", side_effect=fail
-                ) as opened, patch.object(router.time, "sleep") as sleep:
-                    with self.assertRaises(RouterError) as raised:
-                        router.proxy(
-                            config,
-                            {
-                                "model": "external/destination",
-                                "input": [
-                                    {
-                                        "type": "compaction",
-                                        "encrypted_content": opaque,
-                                    }
-                                ],
-                            },
-                            incoming,
-                            binding_store=store,
-                        )
-
-                self.assertEqual(opened.call_count, 1)
-                self.assertEqual(
-                    opened.call_args.args[0].full_url,
-                    "https://native-selected.example/backend-api/codex/responses",
-                )
-                refreshed.assert_not_called()
-                sleep.assert_not_called()
-                self.assertEqual(raised.exception.reason, "source_unavailable")
-                error = str(raised.exception)
-                for private in (
-                    opaque,
-                    "private bridge failure",
-                    "private bridge body",
-                    "selected-account-private",
-                    "selected-token-private",
-                    "native-selected.example",
-                ):
-                    self.assertNotIn(private, error)
-
-    def test_continuity_invalid_bridge_summary_fails_before_destination(self):
-        invalid_responses = (
-            {"status": "completed", "output_text": "", "output": []},
-            {"status": "failed", "output_text": "private checkpoint", "output": []},
-            {
-                "status": "completed",
-                "output_text": "x" * (128 * 1024 + 1),
-                "output": [],
-            },
-            b"not-json-private-checkpoint",
-        )
-        for index, response in enumerate(invalid_responses):
-            with self.subTest(case=index), tempfile.TemporaryDirectory() as directory:
-                config = _continuity_config()
-                source_provider, source_model = find_route(
-                    config, "native/current-source"
-                )
-                opaque = "opaque-invalid-summary-%d-private" % index
-                store = _register_router_binding(
-                    directory,
-                    opaque,
-                    source_provider,
-                    source_model,
-                    "native/current-source",
-                    "current-account-private",
-                )
-                with patch.object(
-                    router,
-                    "urlopen",
-                    return_value=_ContinuityResponse(response),
-                ) as opened:
-                    with self.assertRaises(RouterError) as raised:
-                        router.proxy(
-                            config,
-                            {
-                                "model": "external/destination",
-                                "input": [
-                                    {
-                                        "type": "compaction",
-                                        "encrypted_content": opaque,
-                                    }
-                                ],
-                            },
-                            {
-                                "Authorization": "Bearer current-token-private",
-                                "ChatGPT-Account-ID": "current-account-private",
-                            },
-                            binding_store=store,
-                        )
-
-                self.assertEqual(opened.call_count, 1)
-                self.assertEqual(raised.exception.reason, "summary_invalid")
-                self.assertNotIn(opaque, str(raised.exception))
-                self.assertNotIn("private checkpoint", str(raised.exception))
-
-    def test_continuity_multiple_opaque_preserves_images_visible_and_tool_order(self):
-        config = _continuity_config()
-        source_provider, source_model = find_route(
-            config, "native/selected-source"
-        )
-        opaques = ("opaque-first-private", "opaque-second-private")
-        input_items = [
-            {
-                "type": "message",
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": "visible-before"},
-                    {
-                        "type": "input_image",
-                        "image_url": "data:image/png;base64,aW1hZ2U=",
-                        "detail": "high",
-                    },
-                ],
-            },
-            {
-                "type": "function_call",
-                "call_id": "call_function",
-                "name": "read_state",
-                "arguments": "{}",
-            },
-            {
-                "type": "function_call_output",
-                "call_id": "call_function",
-                "output": "function-result",
-            },
-            {"type": "compaction", "encrypted_content": opaques[0]},
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "visible-middle"}],
-            },
-            {
-                "type": "custom_tool_call",
-                "call_id": "call_custom",
-                "name": "custom_state",
-                "input": "custom-input",
-            },
-            {
-                "type": "custom_tool_call_output",
-                "call_id": "call_custom",
-                "output": "custom-result",
-            },
-            {"type": "compaction", "encrypted_content": opaques[1]},
-            {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": "visible-after"}],
-            },
-        ]
-        body = {"model": "native/current-destination", "input": input_items}
-        body_before = copy.deepcopy(body)
-
-        with tempfile.TemporaryDirectory() as directory:
-            store = CompactionBindingStore(Path(directory) / "bindings.enc")
-            source_identity = derive_native_route_identity(
-                {"chatgpt-account-id": "selected-account-private"},
-                source_provider["base_url"],
-                router.deployment_identity(source_provider, source_model),
-                source_model["upstream_id"],
-                "native/selected-source",
-            )
-            for opaque in opaques:
-                store.register(binding_for_opaque(source_identity, opaque))
-            requests = []
-
-            def open_request(request, timeout):
-                requests.append(request)
-                if len(requests) <= 2:
-                    return _ContinuityResponse(
-                        {
-                            "status": "completed",
-                            "output_text": "checkpoint-%d" % len(requests),
-                            "output": [],
-                        }
-                    )
-                return _ContinuityResponse({"status": "completed", "output": []})
-
-            with patch.object(
-                router,
-                "auth_headers",
-                return_value={
-                    "Authorization": "Bearer selected-token-private",
-                    "chatgpt-account-id": "selected-account-private",
-                },
-            ), patch.object(router, "urlopen", side_effect=open_request):
-                router.proxy(
-                    config,
-                    body,
-                    {
-                        "Authorization": "Bearer current-token-private",
-                        "ChatGPT-Account-ID": "current-account-private",
-                    },
-                    binding_store=store,
-                )
-
-        self.assertEqual(len(requests), 3)
-        self.assertEqual(
-            [
-                _continuity_request_json(request)["input"][0]["encrypted_content"]
-                for request in requests[:2]
-            ],
-            list(opaques),
-        )
-        destination = _continuity_request_json(requests[2])
-        projected = destination["input"]
-        self.assertEqual(
-            [item.get("type") for item in projected],
-            [
-                "message",
-                "function_call",
-                "function_call_output",
-                "message",
-                "message",
-                "custom_tool_call",
-                "custom_tool_call_output",
-                "message",
-                "message",
-            ],
-        )
-        for index in (0, 1, 2, 4, 5, 6, 8):
-            self.assertEqual(projected[index], input_items[index])
-        self.assertIn("checkpoint-1", json.dumps(projected[3]))
-        self.assertIn("checkpoint-2", json.dumps(projected[7]))
-        self.assertNotIn(opaques[0], json.dumps(destination))
-        self.assertNotIn(opaques[1], json.dumps(destination))
-        self.assertEqual(body, body_before)
-
-    def test_continuity_preparation_applies_to_compact_and_compaction_trigger(self):
-        operations = ("compact", "trigger_nonstream", "trigger_stream")
-        for operation in operations:
-            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
-                config = _continuity_config()
-                source_provider, source_model = find_route(
-                    config, "native/current-source"
-                )
-                opaque = "opaque-%s-private" % operation
-                store = _register_router_binding(
-                    directory,
-                    opaque,
-                    source_provider,
-                    source_model,
-                    "native/current-source",
-                    "current-account-private",
-                )
-                requests = []
-
-                def open_request(request, timeout):
-                    requests.append(request)
-                    if request.full_url.startswith(
-                        "https://native-current.example/"
-                    ):
-                        return _ContinuityResponse(
-                            {
-                                "status": "completed",
-                                "output_text": "handoff-checkpoint",
-                                "output": [],
-                            }
-                        )
-                    return _ContinuityResponse(
-                        {
-                            "choices": [
-                                {
-                                    "message": {"content": "portable-summary"},
-                                    "finish_reason": "stop",
-                                }
-                            ]
-                        }
-                    )
-
-                body = {
-                    "model": "external/destination",
-                    "input": [
-                        {"type": "compaction", "encrypted_content": opaque}
-                    ],
-                }
-                if operation.startswith("trigger"):
-                    body["input"].append({"type": "compaction_trigger"})
-                    body["stream"] = operation == "trigger_stream"
-
-                with patch.object(router, "urlopen", side_effect=open_request):
-                    if operation == "compact":
-                        metadata, result = router.proxy_compact(
-                            config,
-                            body,
-                            {
-                                "Authorization": "Bearer current-token-private",
-                                "ChatGPT-Account-ID": "current-account-private",
-                            },
-                            binding_store=store,
-                        )
-                        response = json.loads(result)
-                    else:
-                        metadata, result = router.proxy(
-                            config,
-                            body,
-                            {
-                                "Authorization": "Bearer current-token-private",
-                                "ChatGPT-Account-ID": "current-account-private",
-                            },
-                            binding_store=store,
-                        )
-                        if body["stream"]:
-                            events = list(sse_json_events(result))
-                            response = next(
-                                event["response"]
-                                for event in events
-                                if event.get("type") == "response.completed"
-                            )
-                        else:
-                            response = json.loads(result)
-
-                self.assertEqual(len(requests), 2)
-                summary_payload = _continuity_request_json(requests[1])
-                self.assertIn("handoff-checkpoint", json.dumps(summary_payload))
-                self.assertNotIn(opaque, json.dumps(summary_payload))
-                self.assertEqual(metadata["status"], 200)
-                self.assertEqual(len(response["output"]), 1)
-                self.assertEqual(response["output"][0]["type"], "compaction")
-                self.assertTrue(
-                    response["output"][0]["encrypted_content"].startswith("emp1:")
-                )
-
-    def test_successful_native_json_exposes_narrow_observation_seam(self):
-        incoming = {
-            "Authorization": "Bearer current-token-private",
-            "ChatGPT-Account-ID": "current-account-private",
-        }
-        response = {"status": "completed", "output": []}
-        for operation in ("generation", "compact"):
-            with self.subTest(operation=operation):
-                config = _continuity_config()
-                body = {
-                    "model": "native/current-destination",
-                    "input": "hello",
-                }
-                observed = []
-                with patch.object(
-                    router, "urlopen", return_value=_ContinuityResponse(response)
-                ):
-                    entrypoint = (
-                        router.proxy_compact
-                        if operation == "compact"
-                        else router.proxy
-                    )
-                    entrypoint(
-                        config,
-                        body,
-                        incoming,
-                        on_native_response=lambda *args: observed.append(args),
-                    )
-
-                self.assertEqual(len(observed), 1)
-                (
-                    provider,
-                    model,
-                    requested_slug,
-                    transient,
-                    identity,
-                    result,
-                    success,
-                ) = observed[0]
-                self.assertEqual(provider["id"], "native-current")
-                self.assertEqual(model["id"], "native/current-destination")
-                self.assertEqual(requested_slug, "native/current-destination")
-                self.assertEqual(dict(transient), dict(incoming))
-                self.assertIsNotNone(identity)
-                self.assertEqual(json.loads(result), response)
-                self.assertTrue(success)
-
-    def test_imported_account_native_json_registers_compaction_for_actual_route(self):
-        config = _continuity_config()
-        opaque = "opaque-imported-account-json-private"
-        raw_token = "Bearer imported-account-token-private"
-        raw_account = "imported-account-id-private"
-        response = {
-            "status": "completed",
-            "output": [
-                {
-                    "type": "compaction",
-                    "encrypted_content": opaque,
-                }
-            ],
-        }
-
-        with tempfile.TemporaryDirectory() as directory:
-            store = CompactionBindingStore(Path(directory) / "bindings.enc")
-            observed_identities = []
-
-            def selected_headers(account):
-                self.assertEqual(account["id"], "selected-account")
-                return {
-                    "Authorization": raw_token,
-                    "chatgpt-account-id": raw_account,
-                }
-
-            def register_response(
-                provider, model, slug, transient, identity, raw, success
-            ):
-                observed_identities.append(identity)
-                register_native_json(store, identity, json.loads(raw), success)
-
-            with patch.object(
-                router, "auth_headers", side_effect=selected_headers
-            ) as auth, patch.object(
-                router,
-                "urlopen",
-                return_value=_ContinuityResponse(response),
-            ):
-                metadata, raw = router.proxy(
-                    config,
-                    {
-                        "model": "native/selected-destination",
-                        "input": "hello",
-                    },
-                    {},
-                    on_native_response=register_response,
-                )
-
-            provider, model = find_route(
-                config, "native/selected-destination"
-            )
-            expected_identity = router._native_route_identity(
-                provider,
-                model,
-                "native/selected-destination",
-                {"chatgpt-account-id": raw_account},
-            )
-            binding = store.lookup(opaque)
-
-            self.assertEqual(metadata["status"], 200)
-            self.assertEqual(json.loads(raw), response)
-            self.assertEqual(auth.call_count, 2)
-            self.assertEqual(observed_identities, [expected_identity])
-            self.assertEqual(
-                binding.trust_domain.auth_identity,
-                expected_identity.trust_domain.auth_identity,
-            )
-            self.assertEqual(
-                binding.source_model_slug, "native/selected-destination"
-            )
-            persisted = (Path(directory) / "bindings.enc").read_bytes()
-            diagnostic = json.dumps(metadata, ensure_ascii=False).encode("utf-8")
-            for secret in (opaque, raw_token, raw_account):
-                self.assertNotIn(secret.encode("utf-8"), persisted)
-                self.assertNotIn(secret.encode("utf-8"), diagnostic)
-
-    def test_imported_account_native_sse_registers_only_after_completed(self):
-        config = _continuity_config()
-        raw_token = "Bearer imported-stream-token-private"
-        raw_account = "imported-stream-account-private"
-
-        def selected_headers(account):
-            self.assertEqual(account["id"], "selected-account")
-            return {
-                "Authorization": raw_token,
-                "chatgpt-account-id": raw_account,
-            }
-
-        cases = (
-            ("completed", "response.completed", True, False),
-            ("failed", "response.failed", False, False),
-            ("incomplete", "response.incomplete", False, False),
-            ("early-close", "response.completed", False, True),
-        )
-        for name, terminal_type, should_register, close_early in cases:
-            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
-                opaque = "opaque-imported-account-sse-%s-private" % name
-                item = {
-                    "type": "compaction",
-                    "encrypted_content": opaque,
-                }
-                frames = [
-                    {
-                        "type": "response.output_item.done",
-                        "item": item,
-                    },
-                    {
-                        "type": terminal_type,
-                        "response": {
-                            "status": terminal_type.split(".", 1)[1],
-                            "output": [item],
-                        },
-                    },
-                ]
-
-                class FakeResponse:
-                    status = 200
-                    headers = {"Content-Type": "text/event-stream"}
-
-                    def __init__(self):
-                        self._chunks = iter(
-                            (
-                                "event: %s\ndata: %s\n\n"
-                                % (frame["type"], json.dumps(frame))
-                            ).encode("utf-8")
-                            for frame in frames
-                        )
-
-                    def __iter__(self):
-                        return self
-
-                    def __next__(self):
-                        return next(self._chunks)
-
-                    def close(self):
-                        pass
-
-                store = CompactionBindingStore(
-                    Path(directory) / "bindings.enc"
-                )
-                observed_identities = []
-                diagnostics = []
-
-                def start_observer(identity):
-                    observed_identities.append(identity)
-                    return NativeCompactionObserver(store, identity).observe
-
-                with patch.object(
-                    router, "auth_headers", side_effect=selected_headers
-                ), patch.object(
-                    router, "urlopen", return_value=FakeResponse()
-                ):
-                    provider, model = find_route(
-                        config, "native/selected-destination"
-                    )
-                    stream = router.forward_responses_stream(
-                        provider,
-                        {
-                            "model": "native/selected-destination",
-                            "stream": True,
-                            "input": "hello",
-                        },
-                        model,
-                        {},
-                        terminal_callback=diagnostics.append,
-                        on_native_stream_start=start_observer,
-                    )
-                    if close_early:
-                        next(iter(stream))
-                        stream.close()
-                    else:
-                        list(stream)
-
-                expected_identity = router._native_route_identity(
-                    provider,
-                    model,
-                    "native/selected-destination",
-                    {"chatgpt-account-id": raw_account},
-                )
-                self.assertEqual(observed_identities, [expected_identity])
-                if should_register:
-                    binding = store.lookup(opaque)
-                    self.assertEqual(
-                        binding.trust_domain.auth_identity,
-                        expected_identity.trust_domain.auth_identity,
-                    )
-                else:
-                    with self.assertRaises(BindingMissing):
-                        store.lookup(opaque)
-
-                store_path = Path(directory) / "bindings.enc"
-                persisted = store_path.read_bytes() if store_path.exists() else b""
-                diagnostic = json.dumps(diagnostics, ensure_ascii=False).encode(
-                    "utf-8"
-                )
-                for secret in (opaque, raw_token, raw_account):
-                    self.assertNotIn(secret.encode("utf-8"), persisted)
-                    self.assertNotIn(secret.encode("utf-8"), diagnostic)
-
     def test_chat_provider_supports_v1_and_v2_remote_compaction(self):
         summary_response = json.dumps({
             "id": "resp_summary",
@@ -2559,7 +1257,7 @@ class RouterTests(unittest.TestCase):
             "model",
         )
         self.assertIn("continue from the saved state", replay["messages"][0]["content"])
-        with self.assertRaises(RouterError) as raised:
+        with self.assertRaises(HistoryReconstructionError) as raised:
             responses_to_chat(
                 {
                     "model": "demo/model",
@@ -2573,10 +1271,59 @@ class RouterTests(unittest.TestCase):
                 "model",
             )
         self.assertEqual(raised.exception.status, 409)
-        self.assertIn("context_handoff_required", str(raised.exception))
+        self.assertEqual(
+            raised.exception.error_class, "history_reconstruction_failed"
+        )
+        self.assertEqual(raised.exception.reason, "history_projection_incomplete")
         self.assertNotIn("provider-secret", str(raised.exception))
         summary_request = completion.call_args.args[1]
         self.assertNotIn("compaction_trigger", json.dumps(summary_request))
+
+    def test_router_normalizes_invalid_visible_compaction_to_history_failure(self):
+        with self.assertRaises(HistoryReconstructionError) as raised:
+            router._responses_payload(
+                {
+                    "protocol": "responses",
+                    "auth_mode": "api_key",
+                },
+                {
+                    "model": "external/model",
+                    "input": [
+                        {
+                            "type": "compaction",
+                            "encrypted_content": "emp1:not-valid-base64",
+                        }
+                    ],
+                },
+                {},
+            )
+        self.assertEqual(raised.exception.status, 409)
+        self.assertEqual(
+            raised.exception.error_class, "history_reconstruction_failed"
+        )
+        self.assertEqual(raised.exception.reason, "history_projection_incomplete")
+        self.assertNotIn("not-valid-base64", str(raised.exception))
+
+    def test_stream_history_failure_is_raised_before_lazy_adapter(self):
+        with patch.object(router, "urlopen") as urlopen:
+            with self.assertRaises(HistoryReconstructionError) as raised:
+                router.proxy(
+                    self.config,
+                    {
+                        "model": "demo/model",
+                        "stream": True,
+                        "input": [
+                            {
+                                "type": "compaction",
+                                "encrypted_content": "emp1:not-valid-base64",
+                            }
+                        ],
+                    },
+                    {},
+                )
+        self.assertEqual(raised.exception.error_class, "history_reconstruction_failed")
+        self.assertEqual(raised.exception.reason, "history_projection_incomplete")
+        urlopen.assert_not_called()
 
     def test_external_compact_endpoint_returns_one_emp_compaction_for_every_protocol(self):
         cases = {
@@ -2816,6 +1563,207 @@ class RouterTests(unittest.TestCase):
                     self.assertNotIn(
                         "compaction_trigger", json.dumps(summary_request)
                     )
+
+    def test_external_compaction_empty_summary_fails_with_one_clear_category(self):
+        config = {
+            "providers": [
+                {
+                    "id": "external",
+                    "enabled": True,
+                    "auth_mode": "api_key",
+                    "api_key": "key",
+                    "protocol": "chat_completions",
+                    "base_url": "https://example.com/v1",
+                }
+            ],
+            "models": [
+                {"id": "external/model", "provider": "external", "enabled": True}
+            ],
+        }
+        empty = json.dumps(
+            {
+                "id": "resp_empty",
+                "object": "response",
+                "status": "completed",
+                "output": [],
+                "output_text": "",
+            }
+        ).encode()
+
+        with patch.object(
+            router,
+            "chat_completion",
+            return_value=(200, "application/json", empty),
+        ):
+            with self.assertRaises(RouterError) as raised:
+                router.proxy(
+                    config,
+                    {
+                        "model": "external/model",
+                        "stream": True,
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "history"}],
+                            },
+                            {"type": "compaction_trigger"},
+                        ],
+                    },
+                    {},
+                )
+
+        self.assertEqual(raised.exception.error_class, "external_compaction_failed")
+        self.assertEqual(raised.exception.failure_reason, "summary_empty")
+
+    def test_external_compaction_upstream_failure_is_not_retried(self):
+        config = {
+            "providers": [
+                {
+                    "id": "external",
+                    "enabled": True,
+                    "auth_mode": "api_key",
+                    "api_key": "key",
+                    "protocol": "chat_completions",
+                    "base_url": "https://example.com/v1",
+                }
+            ],
+            "models": [
+                {"id": "external/model", "provider": "external", "enabled": True}
+            ],
+        }
+        failures = [
+            HTTPError(
+                "https://example.com/v1/chat/completions",
+                503,
+                "Unavailable",
+                {"Content-Type": "application/json"},
+                BytesIO(b'{"error":{"message":"temporarily unavailable"}}'),
+            ),
+            AssertionError("external compaction retried"),
+        ]
+
+        with patch.object(router, "urlopen", side_effect=failures) as opened:
+            with self.assertRaises(RouterError) as raised:
+                router.proxy(
+                    config,
+                    {
+                        "model": "external/model",
+                        "stream": True,
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "history"}],
+                            },
+                            {"type": "compaction_trigger"},
+                        ],
+                    },
+                    {},
+                )
+
+        self.assertEqual(raised.exception.status, 503)
+        self.assertEqual(opened.call_count, 1)
+
+    def test_external_compaction_does_not_forward_reasoning_controls(self):
+        config = {
+            "providers": [
+                {
+                    "id": "external",
+                    "enabled": True,
+                    "auth_mode": "api_key",
+                    "api_key": "key",
+                    "protocol": "chat_completions",
+                    "base_url": "https://example.com/v1",
+                }
+            ],
+            "models": [
+                {
+                    "id": "external/model",
+                    "provider": "external",
+                    "enabled": True,
+                    "reasoning_levels": ["low", "medium", "high"],
+                }
+            ],
+        }
+
+        class FakeResponse:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __init__(self):
+                self.sent = False
+
+            def read(self, size=-1):
+                if self.sent:
+                    return b""
+                self.sent = True
+                return json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "message": {"content": "portable checkpoint"},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    }
+                ).encode()
+
+            def close(self):
+                pass
+
+        def rejecting_reasoning_controls(request, **_kwargs):
+            payload = json.loads(request.data)
+            if "reasoning_effort" in payload:
+                raise HTTPError(
+                    request.full_url,
+                    400,
+                    "Bad Request",
+                    {"Content-Type": "application/json"},
+                    BytesIO(
+                        b'{"error":{"message":"unsupported reasoning_effort"}}'
+                    ),
+                )
+            return FakeResponse()
+
+        body = {
+            "model": "external/model",
+            "stream": True,
+            "reasoning": {"effort": "medium", "summary": "auto"},
+            "metadata": {"client": "codex"},
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "history"}],
+                },
+                {"type": "compaction_trigger"},
+            ],
+        }
+
+        with patch.object(
+            router, "urlopen", side_effect=rejecting_reasoning_controls
+        ) as opened:
+            metadata, stream = router.proxy(config, body, {})
+            events = list(sse_json_events(stream))
+
+        self.assertEqual(metadata["status"], 200)
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(
+            len(
+                [
+                    event
+                    for event in events
+                    if event.get("type") == "response.output_item.done"
+                    and event.get("item", {}).get("type") == "compaction"
+                ]
+            ),
+            1,
+        )
+        upstream = json.loads(opened.call_args.args[0].data)
+        self.assertFalse(upstream["stream"])
+        self.assertNotIn("reasoning_effort", upstream)
+        self.assertNotIn("metadata", upstream)
 
     def test_external_ordinary_response_with_compaction_fails_closed(self):
         config = {
@@ -3905,6 +2853,49 @@ class RouterTests(unittest.TestCase):
         self.assertNotIn("echoed-secret", message)
         self.assertNotIn("private.example", message)
 
+    def test_request_classifies_bounded_upstream_rate_limit_reason(self):
+        provider = {
+            "id": "demo",
+            "protocol": "responses",
+            "auth_mode": "api_key",
+            "api_key": "provider-secret",
+            "base_url": "https://example.com/v1",
+        }
+        failure = HTTPError(
+            "https://example.com/v1/responses",
+            429,
+            "Too Many Requests",
+            {"Content-Type": "application/json"},
+            BytesIO(json.dumps({"error": {"message": "Free provider capacity exhausted"}}).encode()),
+        )
+
+        config = {
+            "providers": [provider],
+            "models": [
+                {
+                    "id": "demo/model",
+                    "provider": "demo",
+                    "upstream_id": "model",
+                    "enabled": True,
+                }
+            ],
+        }
+        observations = []
+        with patch.object(router, "urlopen", side_effect=failure):
+            with self.assertRaises(RouterError) as raised:
+                router.proxy(
+                    config,
+                    {"model": "demo/model", "input": []},
+                    {},
+                    on_observation=observations.append,
+                )
+
+        self.assertEqual(str(raised.exception), "upstream returned 429 (application/json)")
+        self.assertEqual(raised.exception.failure_reason, "upstream_capacity")
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0]["error_class"], "rate_limit")
+        self.assertEqual(observations[0]["failure_reason"], "upstream_capacity")
+
     def test_subscription_request_uses_only_selected_account_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
             auth_path = Path(directory) / "auth.json.enc"
@@ -4993,6 +3984,56 @@ class RouterTests(unittest.TestCase):
         self.assertNotIn("test-only", plan.target.connection_key)
         self.assertEqual(len(observations), 1)
         self.assertEqual(observations[0][2], "responses")
+
+    def test_implicit_native_websocket_uses_complete_live_login_headers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "models_cache.json"
+            native_path.write_text(
+                json.dumps({"models": [{"slug": "gpt-native"}]}),
+                encoding="utf-8",
+            )
+            native_auth_path = Path(directory) / "auth.json"
+            config = {
+                "native_catalog_path": str(native_path),
+                "_native_auth_path": str(native_auth_path),
+                "codex_base_url": "https://chatgpt.com/backend-api/codex",
+                "providers": [],
+                "models": [],
+            }
+
+            with patch.object(
+                router,
+                "native_auth_headers",
+                return_value={
+                    "Authorization": "Bearer live-native-token",
+                    "chatgpt-account-id": "live-native-account",
+                },
+            ) as loaded:
+                plan = router.prepare_native_websocket_request(
+                    config,
+                    {
+                        "model": "gpt-native",
+                        "input": [],
+                        "stream": True,
+                    },
+                    {
+                        "Authorization": "Bearer downstream-caller-token",
+                        "OpenAI-Beta": "responses_websockets=test",
+                    },
+                )
+
+            self.assertIsNotNone(plan)
+            loaded.assert_called_once_with(str(native_auth_path))
+            self.assertEqual(
+                plan.target.headers["Authorization"], "Bearer live-native-token"
+            )
+            self.assertEqual(
+                plan.target.headers["chatgpt-account-id"], "live-native-account"
+            )
+            self.assertEqual(
+                plan.target.headers["OpenAI-Beta"], "responses_websockets=test"
+            )
+            self.assertNotIn("live-native-token", plan.target.connection_key)
 
     def test_external_route_has_no_native_websocket_plan(self):
         config = {

@@ -13,6 +13,9 @@ class ClassList {
 
 const elements = new Map();
 let discoveredOptions = [];
+let catalogAliases = [];
+let catalogContexts = [];
+let catalogSummaries = [];
 
 class Element {
   constructor(id = "") {
@@ -32,6 +35,7 @@ class Element {
   set innerHTML(value) {
     this._innerHTML = String(value);
     if (this.id === "modal_body") parseDiscoveredOptions(this._innerHTML);
+    if (this.id === "catalog_display_models") parseCatalogDisplay(this._innerHTML);
   }
   get innerHTML() { return this._innerHTML; }
   querySelector(selector) {
@@ -40,6 +44,21 @@ class Element {
   }
   click() { if (this.onclick) return this.onclick(); }
   remove() {}
+}
+
+function parseCatalogDisplay(html) {
+  catalogAliases = [];
+  catalogContexts = [];
+  catalogSummaries = [];
+  for (const match of html.matchAll(/<input data-catalog-alias data-route="([^"]*)" value="([^"]*)"/g)) {
+    const input = new Element(); input.dataset.route = unescapeHtml(match[1]); input.value = unescapeHtml(match[2]); catalogAliases.push(input);
+  }
+  for (const match of html.matchAll(/<input type="checkbox" data-catalog-context data-route="([^"]*)"([^>]*)>/g)) {
+    const input = new Element(); input.dataset.route = unescapeHtml(match[1]); input.checked = /\schecked(?:\s|$)/.test(match[2]); catalogContexts.push(input);
+  }
+  for (const match of html.matchAll(/<select data-catalog-summary data-route="([^"]*)"[^>]*>([\s\S]*?)<\/select>/g)) {
+    const select = new Element(); select.dataset.route = unescapeHtml(match[1]); const selected = match[2].match(/<option value="([^"]*)" selected>/); select.value = selected ? selected[1] : "auto"; catalogSummaries.push(select);
+  }
 }
 
 function unescapeHtml(value) {
@@ -76,8 +95,13 @@ const document = {
     if (selector === 'input[name="discovered_model"]:checked') {
       return discoveredOptions.map(option => option.input).filter(input => input.checked);
     }
+    if (selector === "[data-catalog-alias]") return catalogAliases;
+    if (selector === "[data-catalog-context]") return catalogContexts;
+    if (selector === "[data-catalog-summary]") return catalogSummaries;
     return [];
   },
+  documentElement: {lang: "", dataset: {}},
+  addEventListener() {},
   createElement: () => new Element(),
   body: {appendChild() {}},
 };
@@ -85,10 +109,10 @@ const document = {
 for (const id of [
   "status", "modal_backdrop", "modal_title", "modal_body", "modal_status",
   "modal_submit", "integration", "integration_badge", "integration_title",
-  "integration_summary", "integration_commands", "integration_enable",
-  "integration_restore", "integration_reload", "native_catalog_path",
-  "diagnostics_summary", "diagnostics_records", "listen_info", "accounts",
-  "providers", "models",
+  "integration_summary", "integration_enable", "integration_restore",
+  "integration_reload", "language_select", "theme_select",
+  "catalog_display_search", "catalog_display_toggle", "catalog_display_models",
+  "diagnostics_summary", "diagnostics_records", "accounts", "providers", "models",
 ]) getElement(id);
 
 const html = fs.readFileSync(process.argv[2], "utf8");
@@ -99,6 +123,7 @@ const context = vm.createContext({
   console,
   document,
   window: {location: {origin: "http://127.0.0.1:4200"}},
+  localStorage: {values:new Map(), getItem(key) { return this.values.get(key) || null; }, setItem(key, value) { this.values.set(key, String(value)); }},
   URL,
   TextEncoder,
   Uint8Array,
@@ -174,10 +199,10 @@ async function integrationBehavior() {
   const loaded = await run("loadIntegration()");
   assert.strictEqual(loaded, false);
   assert.strictEqual(getElement("integration").dataset.state, "unavailable");
-  assert.strictEqual(getElement("integration_badge").textContent, "Unavailable");
+  assert.match(getElement("integration_badge").textContent, /Unavailable|不可用/);
   assert.match(getElement("integration_summary").textContent, /integration request failed/);
   assert.match(getElement("integration_summary").textContent, /stale|过期/i);
-  assert.notStrictEqual(getElement("integration_badge").textContent, "Conflict");
+  assert.doesNotMatch(getElement("integration_badge").textContent, /^Conflict$|^配置冲突$/);
 
   context.__apiStub = async (path) => {
     if (path === "/api/config") return {native_catalog_path: "", accounts: [], providers: [], models: []};
@@ -195,7 +220,7 @@ async function integrationBehavior() {
   };
   run("api = __apiStub; state = {native_catalog_path:'', accounts:[], providers:[], models:[]}; confirmIntegrationAction('enable')");
   await getElement("modal_submit").click();
-  assert.strictEqual(getElement("integration_badge").textContent, "EMP applied");
+  assert.match(getElement("integration_badge").textContent, /EMP (?:applied|已启用)/);
   assert.match(getElement("integration_summary").textContent, /没有加载完整|partial catalog/i);
   assert.strictEqual(getElement("integration_reload").hidden, false);
 }
@@ -232,7 +257,7 @@ function duplicateAccountBehavior() {
   const html = getElement("accounts").innerHTML;
   assert.match(html, /same-login-account/);
   assert.match(html, /usable-account/);
-  assert.match(html, /模型显示设置作用于原生列表/);
+  assert.match(html, /可见性设置作用于原生列表/);
 }
 
 function modelGroupBehavior() {
@@ -289,28 +314,29 @@ function capabilityMetadataBehavior() {
   assert.doesNotMatch(pickerUnconfirmedHtml, /输入 文本/, "unknown provenance must not display as confirmed support in picker");
 }
 
-function presentationBehavior() {
-  run("state = {catalog_presentations:{'provider-a/other':{catalog_alias:'General',show_context:true,reasoning_summary:'auto'}},subscription_models:[{id:'native-model',display_name:'Native Model',context_window:258000}],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',display_name:'Model',context_window:258000,enabled:true}]} ");
-  run("openManualModelModal('provider-a/model')");
-  assert.match(getElement("modal_body").innerHTML, /Codex 显示名称/);
-  assert.match(getElement("modal_body").innerHTML, /Reasoning summary/);
-  getElement("modal_model_provider").value = "provider-a";
-  getElement("modal_model_upstream").value = "model";
-  getElement("modal_model_context").value = "258000";
-  getElement("modal_catalog_alias").value = "General";
-  getElement("modal_show_context").checked = false;
-  getElement("modal_reasoning_summary").value = "hide";
-  run("updateManualModelPresentationPreview()");
-  assert.strictEqual(getElement("modal_catalog_preview").textContent, "General");
-  assert.match(getElement("modal_catalog_warning").textContent, /可能无法区分/);
-  run("savePresentation('provider-a/model')");
-  const saved = run("state.catalog_presentations['provider-a/model']");
+async function presentationBehavior() {
+  run("state = {catalog_presentations:{'provider-a/other':{catalog_alias:'General',show_context:true,reasoning_summary:'auto'}},catalog_models:[{id:'native-model',default_display_name:'Native Model',display_name:'[ 258K]  Native Model',context_window:258000,source_type:'native',source_id:'',supports_reasoning_summaries:true},{id:'provider-a/model',default_display_name:'provider-a/model',display_name:'[ 258K]  provider-a/model',context_window:258000,source_type:'provider',source_id:'provider-a',supports_reasoning_summaries:true}],subscription_models:[{id:'native-model',display_name:'Native Model',context_window:258000}],providers:[{id:'provider-a',name:'Provider A'}],accounts:[],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',display_name:'Model',context_window:258000,enabled:true}]} ");
+  run("renderCatalogDisplay()");
+  assert.match(getElement("catalog_display_models").innerHTML, /data-catalog-alias/);
+  assert.match(getElement("catalog_display_models").innerHTML, /provider-a\/model/);
+  const alias = catalogAliases.find(input => input.dataset.route === "provider-a/model");
+  const contextInput = catalogContexts.find(input => input.dataset.route === "provider-a/model");
+  const summary = catalogSummaries.find(input => input.dataset.route === "provider-a/model");
+  assert(alias && contextInput && summary, "display controls must be rendered for every catalog route");
+  alias.value = "General";
+  contextInput.checked = false;
+  summary.value = "hide";
+  context.__persistStateStub = async (_message, candidate) => { context.__savedCandidate = candidate; context.state = candidate; };
+  run("__realPersistState = persistState; persistState = __persistStateStub");
+  await run("saveCatalogDisplay()");
+  run("persistState = __realPersistState");
+  const saved = run("__savedCandidate.catalog_presentations['provider-a/model']");
   assert.strictEqual(saved.catalog_alias, "General");
   assert.strictEqual(saved.show_context, false);
   assert.strictEqual(saved.reasoning_summary, "hide");
-  run("openNativePresentationModal()");
-  assert.match(getElement("modal_body").innerHTML, /native-model/);
-  assert.match(getElement("modal_body").innerHTML, /显示设置/);
+  run("openManualModelModal('provider-a/model')");
+  assert.doesNotMatch(getElement("modal_body").innerHTML, /Codex 显示名称|Reasoning summary/);
+  assert.match(getElement("modal_body").innerHTML, /模型列表显示/);
 }
 
 function presentationMigrationBehavior() {
@@ -326,23 +352,20 @@ function presentationMigrationBehavior() {
   assert.strictEqual(run("state.catalog_presentations['new/model-a']"), undefined);
   assert.strictEqual(run("state.catalog_presentations['provider/model-a'].reasoning_summary"), "hide");
 
-  run("state.emp_version = '0.6.0'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.6.0.emp");
+  run("state.emp_version = '0.7.5'");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.7.5.emp");
   run("state.emp_version = '../../unsafe'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.6.0.emp");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.7.5.emp");
 }
 
-function nestedModalBehavior() {
-  run("openModal('Parent editor', '<p>parent marker</p>', 'Save parent', () => {}); openNestedModal('Child editor', '<p>child marker</p>', 'Save child', () => {})");
-  assert.strictEqual(getElement("modal_title").textContent, "Child editor");
-  assert.match(getElement("modal_body").innerHTML, /child marker/);
-  run("closeModal()");
-  assert.strictEqual(getElement("modal_title").textContent, "Parent editor");
-  assert.match(getElement("modal_body").innerHTML, /parent marker/);
-  assert.strictEqual(getElement("modal_submit").textContent, "Save parent");
+function modalDismissalBehavior() {
+  run("openModal('Editor', '<p>unsaved marker</p>', 'Save', () => {})");
   assert(!getElement("modal_backdrop").classList.contains("hidden"));
-  run("closeModal()");
-  assert(getElement("modal_backdrop").classList.contains("hidden"));
+  assert.strictEqual(run("typeof backdropClose"), "undefined", "backdrop clicks must not dismiss the editor");
+  run("handleModalKeydown({key:'Enter'})");
+  assert(!getElement("modal_backdrop").classList.contains("hidden"), "unrelated keys must not dismiss the editor");
+  run("handleModalKeydown({key:'Escape'})");
+  assert(getElement("modal_backdrop").classList.contains("hidden"), "Escape must dismiss the editor");
 }
 
 async function atomicStateBehavior() {
@@ -399,9 +422,9 @@ async function atomicStateBehavior() {
   modelGroupBehavior();
   officialPresetBehavior();
   capabilityMetadataBehavior();
-  presentationBehavior();
+  await presentationBehavior();
   presentationMigrationBehavior();
-  nestedModalBehavior();
+  modalDismissalBehavior();
   await atomicStateBehavior();
   process.stdout.write("web DOM behavior: ok\n");
 })().catch(error => {

@@ -24,6 +24,9 @@ EFFORT_DESCRIPTIONS = {
 }
 _CONTEXT_SUFFIX = re.compile(r"\s+\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]$")
 _CONTEXT_PREFIX = re.compile(r"^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+")
+_DESCRIPTION_CONTEXT_SUFFIX = re.compile(
+    r"(?:\s+·\s+)?Context\s+(?:\d+(?:\.\d+)?(?:K|M)?|\?)$"
+)
 
 
 def _usable_context_window(model: Dict[str, Any]) -> int:
@@ -90,6 +93,7 @@ def _apply_presentation(config: Dict[str, Any], entry: Dict[str, Any]) -> None:
     entry["display_name"] = _display_name_with_context(
         entry, presentation
     )
+    entry["description"] = _description_with_context(entry, presentation)
     policy = presentation.get("reasoning_summary", "auto")
     supports_summary = entry.get("supports_reasoning_summary_parameter")
     if not isinstance(supports_summary, bool):
@@ -127,8 +131,19 @@ def _release_value(model: Dict[str, Any]) -> int:
     return max(0, value)
 
 
-def _description_with_context(model: Dict[str, Any]) -> str:
-    description = str(model.get("description") or "")
+def _description_with_context(
+    model: Dict[str, Any], presentation: Optional[Dict[str, Any]] = None
+) -> str:
+    presentation = presentation or {}
+    description = _DESCRIPTION_CONTEXT_SUFFIX.sub(
+        "", str(model.get("description") or "").strip()
+    ).strip()
+    alias = presentation.get("catalog_alias", "")
+    if isinstance(alias, str) and alias:
+        if description != alias and not description.startswith(alias + " · "):
+            description = "%s · %s" % (alias, description) if description else alias
+    if presentation.get("show_context", True) is False:
+        return description
     context_window = _usable_context_window(model)
     if not context_window:
         return description
@@ -311,10 +326,14 @@ def subscription_model_options(config: Dict[str, Any]) -> List[Dict[str, str]]:
 
 def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
     native = load_native_catalog(config)
-    native_models = [copy.deepcopy(item) for item in native["models"] if isinstance(item, dict)]
+    native_models = [
+        copy.deepcopy(item)
+        for item in native["models"]
+        if isinstance(item, dict)
+        and item.get("supported_in_api", True) is not False
+    ]
     for model_index, model in enumerate(native_models):
         _apply_presentation(config, model)
-        model["description"] = _description_with_context(model)
         slug = str(model.get("slug") or "")
         model["_emp_family"] = _family_identity(model, slug)
         model["_emp_family_verified"] = True

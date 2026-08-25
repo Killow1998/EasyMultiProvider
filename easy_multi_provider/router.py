@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import __version__
-from .accounts import AccountError, auth_headers
+from .accounts import AccountError, auth_headers, native_auth_headers
 from .capabilities import (
     deployment_identity,
     endpoint_fingerprint,
@@ -28,12 +28,8 @@ from .context_guard import (
     is_explicit_context_error,
     mark_explicit_failure,
 )
-from .continuity import (
-    BindingError,
-    BindingMissing,
-    CompactionBinding,
-    CompactionBindingStore,
-    ContinuityError,
+from .native_identity import (
+    NativeIdentityError,
     NativeRouteIdentity,
     derive_native_route_identity,
 )
@@ -91,11 +87,13 @@ from .protocol_projection import (
     validate_responses_body,
 )
 from .router_errors import (
-    ContextHandoffRequiredError,
     ContextLengthError,
+    ExternalCompactionError,
     ExternalProtocolError,
+    HistoryReconstructionError,
     RouterError,
     StreamBoundaryError,
+    UpstreamHTTPError,
 )
 from .stream_adapters import (
     StreamAdapterIO,
@@ -117,18 +115,16 @@ from .stream_adapters import (
 from .transport import TransportError, sse_json_events, zstd_encode
 
 
-NativeResponseObserver = Callable[
-    [Dict[str, Any], Dict[str, Any], str, Dict[str, str], NativeRouteIdentity, bytes, bool],
-    None,
-]
-
-NativeStreamStartFactory = Callable[
-    [NativeRouteIdentity],
-    Optional[Callable[[Mapping[str, Any]], None]],
-]
-ContinuityHandoffCallback = Callable[
-    [str, bool, bool, bool, Optional[int], Optional[str], Optional[str]],
-    None,
+HistoryPreparationCallback = Callable[
+    [
+        Mapping[str, Any],
+        Mapping[str, Any],
+        Mapping[str, Any],
+        str,
+        Mapping[str, Any],
+        Mapping[str, str],
+    ],
+    Dict[str, Any],
 ]
 
 
@@ -159,6 +155,7 @@ def urlopen(request: Request, timeout: float):
 MAX_UPSTREAM_BODY_BYTES = 16 * 1024 * 1024
 MAX_UPSTREAM_ERROR_BYTES = 4096
 MAX_UPSTREAM_ERROR_TEXT_CHARS = 512
+MAX_EXTERNAL_COMPACTION_SUMMARY_CHARS = 256 * 1024
 MAX_DISCOVERY_BODY_BYTES = 4 * 1024 * 1024
 MAX_DISCOVERY_TOTAL_BYTES = 8 * 1024 * 1024
 MAX_DISCOVERY_SECONDS = 60
@@ -177,13 +174,6 @@ _COMPACTION_SUMMARY_PREFIX = (
     "Use it to continue without repeating completed work:"
 )
 _COMPACTION_PREFIX = "emp1:"
-_CONTINUITY_BRIDGE_PROMPT = (
-    "Produce a provider-neutral continuation checkpoint from the compacted "
-    "history. Return final checkpoint text only. Include current progress, key "
-    "decisions, constraints, and remaining work; do not expose chain-of-thought."
-)
-_CONTINUITY_BRIDGE_MAX_OUTPUT_TOKENS = 4096
-_CONTINUITY_CHECKPOINT_MAX_BYTES = 128 * 1024
 _PROTOCOL_REJECTION_STATUSES = frozenset({404, 405, 415, 501})
 _AUTO_PROTOCOL_REJECTION_STATUSES = _PROTOCOL_REJECTION_STATUSES
 _CONCRETE_PROTOCOLS = frozenset(
@@ -229,6 +219,31 @@ def _http_error_message(prefix: str, exc: HTTPError) -> str:
     if content_type in {"text/html", "application/xhtml+xml"}:
         return "%s %d (%s): %s" % (prefix, exc.code, content_type, detail)
     return "%s %d (%s)" % (prefix, exc.code, content_type)
+
+
+def _upstream_failure_reason(status: int, detail: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", " ", str(detail or "").lower()).strip()
+    if status in (401, 403):
+        return "auth_rejected"
+    if status == 413 or any(
+        phrase in text
+        for phrase in ("request too large", "payload too large", "input too large")
+    ):
+        return "request_too_large"
+    if any(
+        phrase in text
+        for phrase in ("context length", "context window", "maximum context")
+    ):
+        return "context_length_exceeded"
+    if status == 429:
+        if any(word in text for word in ("quota", "credit", "balance", "insufficient")):
+            return "quota_exhausted"
+        if any(word in text for word in ("capacity", "overloaded", "saturated")):
+            return "upstream_capacity"
+        return "rate_limited"
+    if status in (500, 502, 503, 504):
+        return "upstream_unavailable"
+    return "upstream_rejected"
 
 
 def _set_response_timeout(response: Any, timeout: float) -> None:
@@ -441,19 +456,20 @@ def _implicit_native_route(
             continue
         if item.get("supported_in_api", True) is False:
             continue
-        return (
-            {
-                "id": "codex-native",
-                "name": "Native Codex",
-                "base_url": config.get(
-                    "codex_base_url", "https://chatgpt.com/backend-api/codex"
-                ),
-                "protocol": "responses",
-                "auth_mode": "forward",
-                "implicit_native": True,
-            },
-            {"id": model_id, "upstream_id": model_id},
-        )
+        provider = {
+            "id": "codex-native",
+            "name": "Native Codex",
+            "base_url": config.get(
+                "codex_base_url", "https://chatgpt.com/backend-api/codex"
+            ),
+            "protocol": "responses",
+            "auth_mode": "forward",
+            "implicit_native": True,
+        }
+        native_auth_path = config.get("_native_auth_path")
+        if isinstance(native_auth_path, str) and native_auth_path:
+            provider["_native_auth_path"] = native_auth_path
+        return provider, {"id": model_id, "upstream_id": model_id}
     return None
 
 
@@ -599,7 +615,12 @@ def resolve_provider_protocol(
     return resolved
 
 
-def _headers(provider: Dict[str, Any], incoming: Dict[str, str], stream: bool) -> Dict[str, str]:
+def _headers(
+    provider: Dict[str, Any],
+    incoming: Dict[str, str],
+    stream: bool,
+    resolved_native_auth: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
     headers = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream" if stream else "application/json",
@@ -621,6 +642,26 @@ def _headers(provider: Dict[str, Any], incoming: Dict[str, str], stream: bool) -
             headers.update(auth_headers(provider["account"]))
         except AccountError as exc:
             raise RouterError(str(exc), 503)
+    elif provider.get("implicit_native") is True:
+        try:
+            selected = (
+                resolved_native_auth
+                if resolved_native_auth is not None
+                else native_auth_headers(provider.get("_native_auth_path"))
+            )
+            headers.update(selected)
+        except AccountError:
+            # Preserve the existing pass-through compatibility path when the
+            # active Codex home has no readable ChatGPT login.
+            lower = {key.lower(): value for key, value in incoming.items()}
+            if lower.get("authorization"):
+                headers["Authorization"] = lower["authorization"]
+            if lower.get("chatgpt-account-id"):
+                headers["chatgpt-account-id"] = lower["chatgpt-account-id"]
+            if "Authorization" not in headers:
+                raise RouterError(
+                    "native Codex login credentials are unavailable", 401
+                )
     else:
         # Only forward the headers needed by a local Codex-to-Codex pass-through.
         allowed = {
@@ -812,7 +853,11 @@ def _request(
             )
             if content_type in {"text/html", "application/xhtml+xml"}:
                 public_message += ": " + detail
-            raise RouterError(public_message, exc.code)
+            raise UpstreamHTTPError(
+                public_message,
+                exc.code,
+                _upstream_failure_reason(exc.code, detail),
+            )
         except URLError as exc:
             if (
                 isinstance(exc.reason, TimeoutError)
@@ -851,10 +896,16 @@ def forward_responses(
     model: Dict[str, Any],
     incoming: Dict[str, str],
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+    allow_retries: bool = True,
 ) -> Tuple[int, str, bytes]:
     payload = _responses_payload(provider, body, model)
     with _request(
-        provider, payload, incoming, bool(body.get("stream")), context_check=context_check
+        provider,
+        payload,
+        incoming,
+        bool(body.get("stream")),
+        context_check=context_check,
+        allow_retries=allow_retries,
     ) as response:
         content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses 响应")
@@ -906,27 +957,14 @@ def forward_responses_stream(
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
-    on_native_stream_start: Optional[NativeStreamStartFactory] = None,
 ):
     payload = _responses_payload(provider, body, model)
     upstream = _bounded_stream_response(
         _request(provider, payload, incoming, True, context_check=context_check)
     )
     validated = _validated_responses_stream(upstream, terminal_callback, provider)
-    effective_callback = on_stream_event
-    if on_native_stream_start is not None and classify_dialect(provider) == CODEX_NATIVE:
-        try:
-            _, identity_headers = _native_route_headers(provider, incoming)
-            stream_identity = _native_route_identity(
-                provider, model, body.get('model', ''), identity_headers
-            )
-            factory_callback = on_native_stream_start(stream_identity)
-            if factory_callback is not None:
-                effective_callback = factory_callback
-        except Exception:
-            effective_callback = on_stream_event
-    if effective_callback is not None:
-        validated = _observing_stream(validated, effective_callback)
+    if on_stream_event is not None:
+        validated = _observing_stream(validated, on_stream_event)
     if classify_dialect(provider) == PORTABLE_RESPONSES:
         return _project_responses_stream(
             provider,
@@ -1114,11 +1152,9 @@ def _prepare_reasoning_summary_route(
     model["_emp_preserve_reasoning_summary"] = bool(
         supported and responses_capable and policy != "hide"
     )
-    # Opaque reasoning state is scoped to the upstream that created it.  EMP
-    # currently has no portable source binding for external Responses routes,
-    # so forwarding it across a model/provider switch would leak private state
-    # and can make the destination reject the request.  Native Codex requests
-    # return above and remain byte-for-byte untouched.
+    # Opaque reasoning state is scoped to the upstream that created it.  It is
+    # never copied across a model/provider switch; only Codex-visible history
+    # reconstructed by HistoryContinuityEngine may cross that boundary.
     model["_emp_preserve_reasoning_state"] = False
     projected = dict(body)
     reasoning = projected.get("reasoning")
@@ -1145,11 +1181,32 @@ def _responses_payload(
             is True,
         )
     except ProjectionError as exc:
-        if exc.failure_class == "opaque_compaction":
-            raise ContextHandoffRequiredError(exc.index, exc.item_type) from exc
+        if exc.failure_class in {"opaque_compaction", "invalid_compaction"}:
+            raise HistoryReconstructionError("history_projection_incomplete") from exc
         raise RouterError(str(exc), 422) from exc
     payload["model"] = _upstream_model(provider, model, body["model"])
     return payload
+
+
+def _preflight_history_projection(
+    provider: Dict[str, Any], body: Dict[str, Any], model: Dict[str, Any]
+) -> None:
+    """Raise history failures before a lazy stream adapter starts."""
+
+    try:
+        if provider.get("protocol") == "responses":
+            _responses_payload(provider, body, model)
+        elif provider.get("protocol") == "chat_completions":
+            responses_to_chat(body, _upstream_model(provider, model, body["model"]))
+        elif provider.get("protocol") == "anthropic_messages":
+            responses_to_anthropic(
+                body, _upstream_model(provider, model, body["model"])
+            )
+    except HistoryReconstructionError:
+        raise
+    except RouterError:
+        # Ordinary projection failures retain the existing stream error path.
+        return
 
 
 def prepare_native_websocket_request(
@@ -1157,8 +1214,7 @@ def prepare_native_websocket_request(
     body: Dict[str, Any],
     incoming: Dict[str, str],
     on_context: Optional[Callable[..., Mapping[str, Any]]] = None,
-    binding_store: Optional[CompactionBindingStore] = None,
-    on_continuity: Optional[ContinuityHandoffCallback] = None,
+    history_preparer: Optional[HistoryPreparationCallback] = None,
 ) -> Optional[NativeWebSocketPlan]:
     """Prepare one native Responses WebSocket request without sending it.
 
@@ -1185,8 +1241,7 @@ def prepare_native_websocket_request(
         model_id,
         prepared,
         incoming,
-        binding_store,
-        on_continuity,
+        history_preparer,
     )
     payload = _responses_payload(provider, prepared, model)
     context_observation: Dict[str, Any] = {}
@@ -1203,7 +1258,7 @@ def prepare_native_websocket_request(
         identity = _native_route_identity(
             provider, model, model_id, identity_headers
         )
-    except (AccountError, ContinuityError, KeyError, TypeError):
+    except (AccountError, NativeIdentityError, KeyError, TypeError):
         # HTTP forwarding remains the compatibility path when a stable native
         # connection identity cannot be proven.
         return None
@@ -1214,20 +1269,14 @@ def prepare_native_websocket_request(
     websocket_url = parsed._replace(
         scheme={"http": "ws", "https": "wss"}.get(parsed.scheme, parsed.scheme)
     ).geturl()
-    headers = _headers(provider, incoming, True)
+    headers = _headers(provider, incoming, True, full_headers)
     # _native_route_headers performs stricter identity validation; use the same
     # resolved credentials for the actual handshake.
     for key, value in full_headers.items():
         if key.lower() in {"authorization", "chatgpt-account-id"}:
             headers[key] = value
     payload["type"] = "response.create"
-    connection_key = ":".join(
-        (
-            identity.trust_domain.auth_identity,
-            identity.endpoint_fingerprint,
-            identity.deployment_fingerprint,
-        )
-    )
+    connection_key = identity.connection_key
     return NativeWebSocketPlan(
         target=NativeWebSocketTarget(websocket_url, headers, connection_key),
         provider=provider,
@@ -1245,10 +1294,18 @@ def chat_completion(
     model: Dict[str, Any],
     incoming: Dict[str, str],
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+    allow_retries: bool = True,
 ) -> Tuple[int, str, bytes]:
     body = _body_with_supported_effort(provider, body, model)
     payload = responses_to_chat(body, _upstream_model(provider, model, body["model"]))
-    with _request(provider, payload, incoming, False, context_check=context_check) as response:
+    with _request(
+        provider,
+        payload,
+        incoming,
+        False,
+        context_check=context_check,
+        allow_retries=allow_retries,
+    ) as response:
         content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Chat Completions 响应")
     _raise_if_context_response(provider, response.status, content_type, raw)
@@ -1271,9 +1328,17 @@ def anthropic_completion(
     model: Dict[str, Any],
     incoming: Dict[str, str],
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+    allow_retries: bool = True,
 ) -> Tuple[int, str, bytes]:
     payload = responses_to_anthropic(body, _upstream_model(provider, model, body["model"]))
-    with _request(provider, payload, incoming, False, context_check=context_check) as response:
+    with _request(
+        provider,
+        payload,
+        incoming,
+        False,
+        context_check=context_check,
+        allow_retries=allow_retries,
+    ) as response:
         content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Anthropic 响应")
     _raise_if_context_response(provider, response.status, content_type, raw)
@@ -1292,20 +1357,23 @@ def _response_text(raw: bytes) -> str:
     try:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
-        raise RouterError("compaction upstream returned invalid JSON", 502) from exc
+        raise ExternalCompactionError("invalid_response") from exc
     text = value.get("output_text") if isinstance(value, dict) else None
     if isinstance(text, str) and text.strip():
-        return text.strip()
-    parts = []
-    for item in value.get("output", []) if isinstance(value, dict) else []:
-        if not isinstance(item, dict):
-            continue
-        for part in item.get("content", []) or []:
-            if isinstance(part, dict) and part.get("type") in ("output_text", "text"):
-                parts.append(str(part.get("text", "")))
-    summary = "\n".join(parts).strip()
+        summary = text.strip()
+    else:
+        parts = []
+        for item in value.get("output", []) if isinstance(value, dict) else []:
+            if not isinstance(item, dict):
+                continue
+            for part in item.get("content", []) or []:
+                if isinstance(part, dict) and part.get("type") in ("output_text", "text"):
+                    parts.append(str(part.get("text", "")))
+        summary = "\n".join(parts).strip()
     if not summary:
-        raise RouterError("compaction upstream returned an empty summary", 502)
+        raise ExternalCompactionError("summary_empty")
+    if len(summary) > MAX_EXTERNAL_COMPACTION_SUMMARY_CHARS:
+        raise ExternalCompactionError("summary_too_large")
     return summary
 
 
@@ -1317,14 +1385,13 @@ def _summary_body(body: Dict[str, Any]) -> Dict[str, Any]:
         source = [source]
     elif not isinstance(source, list):
         source = []
-    payload = dict(body)
-    payload["input"] = list(_normalize_compaction_input(source, drop_trigger=True)) + [
-        _message_item(_COMPACTION_PROMPT)
-    ]
-    payload["stream"] = False
-    payload["tools"] = []
-    payload.pop("previous_response_id", None)
-    return payload
+    return {
+        "model": body["model"],
+        "input": list(_normalize_compaction_input(source, drop_trigger=True))
+        + [_message_item(_COMPACTION_PROMPT)],
+        "stream": False,
+        "tools": [],
+    }
 
 
 def _summarize(
@@ -1337,17 +1404,47 @@ def _summarize(
     payload = _summary_body(body)
     if provider["protocol"] == "responses":
         _, _, raw = forward_responses(
-            provider, payload, model, incoming, context_check=context_check
+            provider,
+            payload,
+            model,
+            incoming,
+            context_check=context_check,
+            allow_retries=False,
         )
     elif provider["protocol"] == "chat_completions":
         _, _, raw = chat_completion(
-            provider, payload, model, incoming, context_check=context_check
+            provider,
+            payload,
+            model,
+            incoming,
+            context_check=context_check,
+            allow_retries=False,
         )
     else:
         _, _, raw = anthropic_completion(
-            provider, payload, model, incoming, context_check=context_check
+            provider,
+            payload,
+            model,
+            incoming,
+            context_check=context_check,
+            allow_retries=False,
         )
     return _response_text(raw)
+
+
+def _external_compaction_response(
+    provider: Dict[str, Any],
+    body: Dict[str, Any],
+    model: Dict[str, Any],
+    incoming: Dict[str, str],
+    context_check: Optional[
+        Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]
+    ] = None,
+) -> Dict[str, Any]:
+    """Ask the selected external model for one summary and wrap it for Codex."""
+
+    summary = _summarize(provider, body, model, incoming, context_check)
+    return _compaction_response(body["model"], summary)
 
 
 def _retained_user_messages(source: Any, budget: int = 80_000) -> list:
@@ -1577,6 +1674,9 @@ def _route_event(
     ):
         if key in terminal:
             event[key] = terminal[key]
+    failure_reason = terminal.get("failure_reason")
+    if isinstance(failure_reason, str) and failure_reason:
+        event["failure_reason"] = failure_reason
     if event["success"]:
         event["protocol_observation"] = _route_protocol_observation(provider, model)
     return event
@@ -1718,7 +1818,6 @@ def _auto_stream_result(
     callback: Optional[Callable[[Dict[str, Any]], None]],
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
-    on_native_stream_start: Optional[NativeStreamStartFactory] = None,
 ) -> Iterator[bytes]:
     for index, protocol in enumerate(candidates):
         resolved = dict(provider)
@@ -1750,7 +1849,6 @@ def _auto_stream_result(
                 terminal_callback=lambda value: terminal.update(value),
                 context_check=_bind_context_check(resolved, model, context_check),
                 on_stream_event=on_stream_event,
-                on_native_stream_start=on_native_stream_start,
             )
             for chunk in result:
                 response_bytes += len(chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8"))
@@ -1858,23 +1956,30 @@ def _native_route_headers(
     if auth_mode == "account":
         account = provider.get("account")
         if not isinstance(account, Mapping):
-            raise ContinuityError("native route authentication is unavailable")
+            raise NativeIdentityError("native route authentication is unavailable")
         selected = auth_headers(account)
         if not isinstance(selected, Mapping):
-            raise ContinuityError("native route authentication is unavailable")
+            raise NativeIdentityError("native route authentication is unavailable")
         full = {
             key: value
             for key, value in selected.items()
             if isinstance(key, str) and isinstance(value, str)
         }
     elif auth_mode == "forward":
+        if provider.get("implicit_native") is True:
+            try:
+                selected = native_auth_headers(provider.get("_native_auth_path"))
+            except AccountError:
+                selected = incoming
+        else:
+            selected = incoming
         full = {
             key: value
-            for key, value in incoming.items()
+            for key, value in selected.items()
             if isinstance(key, str) and isinstance(value, str)
         }
     else:
-        raise ContinuityError("native route authentication is unavailable")
+        raise NativeIdentityError("native route authentication is unavailable")
     return full, _identity_headers(full)
 
 
@@ -1889,188 +1994,7 @@ def _native_route_identity(
         provider.get("base_url"),
         deployment_identity(provider, model),
         _upstream_model(provider, model, requested_slug),
-        requested_slug,
     )
-
-
-def _bridge_final_text(raw: bytes) -> str:
-    try:
-        decoded = raw.decode("utf-8", errors="strict")
-        value = json.loads(decoded)
-    except (UnicodeDecodeError, ValueError):
-        raise ValueError("bridge summary is invalid") from None
-    if not isinstance(value, Mapping) or value.get("status") != "completed":
-        raise ValueError("bridge summary is invalid")
-    if value.get("error") not in (None, {}):
-        raise ValueError("bridge summary is invalid")
-
-    output = value.get("output", [])
-    if not isinstance(output, list):
-        raise ValueError("bridge summary is invalid")
-    parts = []
-    for item in output:
-        if not isinstance(item, Mapping):
-            raise ValueError("bridge summary is invalid")
-        item_type = item.get("type")
-        if item_type == "reasoning":
-            continue
-        if item_type != "message" or item.get("role", "assistant") != "assistant":
-            raise ValueError("bridge summary is invalid")
-        if item.get("status") not in (None, "completed"):
-            raise ValueError("bridge summary is invalid")
-        content = item.get("content", [])
-        if not isinstance(content, list):
-            raise ValueError("bridge summary is invalid")
-        for part in content:
-            if (
-                not isinstance(part, Mapping)
-                or part.get("type") not in {"output_text", "text"}
-                or not isinstance(part.get("text"), str)
-            ):
-                raise ValueError("bridge summary is invalid")
-            parts.append(part["text"])
-
-    top_level = value.get("output_text")
-    if top_level is not None and not isinstance(top_level, str):
-        raise ValueError("bridge summary is invalid")
-    text = top_level if isinstance(top_level, str) and top_level.strip() else "\n".join(parts)
-    text = text.strip()
-    if not text:
-        raise ValueError("bridge summary is invalid")
-    try:
-        encoded = text.encode("utf-8", errors="strict")
-    except UnicodeEncodeError:
-        raise ValueError("bridge summary is invalid") from None
-    if len(encoded) > _CONTINUITY_CHECKPOINT_MAX_BYTES:
-        raise ValueError("bridge summary is invalid")
-    return text
-
-
-def _configured_source_is_disabled(
-    config: Mapping[str, Any], source_slug: str
-) -> bool:
-    models = config.get("models", [])
-    if isinstance(models, list):
-        matches = [
-            item
-            for item in models
-            if isinstance(item, Mapping) and item.get("id") == source_slug
-        ]
-        if matches:
-            return not any(item.get("enabled", True) for item in matches)
-    accounts = config.get("accounts", [])
-    if isinstance(accounts, list):
-        matches = []
-        for account in accounts:
-            if not isinstance(account, Mapping):
-                continue
-            prefix = str(account.get("prefix", "")) + "/"
-            if prefix != "/" and source_slug.startswith(prefix):
-                matches.append(account)
-        if matches:
-            return not any(account.get("enabled", True) for account in matches)
-    return False
-
-
-def _source_handoff_summary(
-    config: Dict[str, Any],
-    binding: CompactionBinding,
-    opaque_item: Mapping[str, Any],
-    incoming: Dict[str, str],
-    item_index: int,
-) -> str:
-    if _configured_source_is_disabled(config, binding.source_model_slug):
-        raise ContextHandoffRequiredError(
-            item_index, "compaction", "source_unavailable"
-        )
-    try:
-        source_provider, source_model = find_route(
-            config, binding.source_model_slug
-        )
-    except RouterError:
-        raise ContextHandoffRequiredError(
-            item_index, "compaction", "source_unavailable"
-        ) from None
-    source_provider = dict(source_provider)
-    source_model = dict(source_model)
-    if classify_dialect(source_provider) != CODEX_NATIVE:
-        raise ContextHandoffRequiredError(
-            item_index, "compaction", "source_unavailable"
-        )
-
-    try:
-        request_headers, identity_headers = _native_route_headers(
-            source_provider, incoming
-        )
-        source_identity = _native_route_identity(
-            source_provider,
-            source_model,
-            binding.source_model_slug,
-            identity_headers,
-        )
-    except (AccountError, BindingError, ContinuityError, KeyError, TypeError):
-        raise ContextHandoffRequiredError(
-            item_index, "compaction", "source_unavailable"
-        ) from None
-
-    if (
-        source_identity.trust_domain != binding.trust_domain
-        or source_identity.endpoint_fingerprint != binding.endpoint_fingerprint
-        or source_identity.deployment_fingerprint != binding.deployment_fingerprint
-    ):
-        raise ContextHandoffRequiredError(
-            item_index, "compaction", "binding_stale"
-        )
-
-    bridge_body = {
-        "model": binding.source_model_slug,
-        "input": [
-            copy.deepcopy(dict(opaque_item)),
-            _message_item(_CONTINUITY_BRIDGE_PROMPT),
-        ],
-        "stream": False,
-        "tools": [],
-        "max_output_tokens": _CONTINUITY_BRIDGE_MAX_OUTPUT_TOKENS,
-    }
-    bridge_provider = dict(source_provider)
-    bridge_incoming = dict(incoming)
-    if source_provider.get("auth_mode") == "account":
-        # Use the exact transient credentials selected above.  Treating this
-        # ephemeral copy as forward avoids a second account read or any 401
-        # quota refresh while preserving the native wire dialect.
-        bridge_provider["auth_mode"] = "forward"
-        bridge_incoming = request_headers
-    try:
-        payload = _responses_payload(bridge_provider, bridge_body, source_model)
-        with _request(
-            bridge_provider,
-            payload,
-            bridge_incoming,
-            False,
-            allow_retries=False,
-        ) as response:
-            status = getattr(response, "status", None)
-            if (
-                isinstance(status, bool)
-                or not isinstance(status, int)
-                or not 200 <= status < 300
-            ):
-                raise RouterError("continuity source request failed", 502)
-            raw = _read_limited(
-                response,
-                MAX_UPSTREAM_BODY_BYTES,
-                "continuity source response",
-            )
-    except Exception:
-        raise ContextHandoffRequiredError(
-            item_index, "compaction", "source_unavailable"
-        ) from None
-    try:
-        return _bridge_final_text(raw)
-    except ValueError:
-        raise ContextHandoffRequiredError(
-            item_index, "compaction", "summary_invalid"
-        ) from None
 
 
 def _prepare_continuity_body(
@@ -2080,171 +2004,32 @@ def _prepare_continuity_body(
     requested_slug: str,
     body: Dict[str, Any],
     incoming: Dict[str, str],
-    binding_store: Optional[CompactionBindingStore],
-    on_continuity: Optional[ContinuityHandoffCallback] = None,
+    history_preparer: Optional[HistoryPreparationCallback],
 ) -> Dict[str, Any]:
-    prepared = dict(body)
-    source = prepared.get("input")
-    single_item = isinstance(source, Mapping)
-    if single_item:
-        items = [source]
-    elif isinstance(source, list):
-        items = source
-    else:
-        return prepared
-
-    destination_checked = False
-    destination_identity = None
-    result = []
-    for index, item in enumerate(items):
-        if not isinstance(item, Mapping) or item.get("type") != "compaction":
-            result.append(item)
-            continue
-        opaque = item.get("encrypted_content")
-        if isinstance(opaque, str) and opaque.startswith(_COMPACTION_PREFIX):
-            result.append(item)
-            continue
-        if binding_store is None:
-            raise ContextHandoffRequiredError(index, "compaction", "binding_missing")
-        if not isinstance(binding_store, CompactionBindingStore):
-            raise ContextHandoffRequiredError(index, "compaction", "binding_missing")
+    if history_preparer is not None:
         try:
-            binding = binding_store.lookup(opaque)
-        except BindingMissing:
-            if on_continuity is not None:
-                try:
-                    on_continuity(
-                        "missing", False, False, False, index, "compaction", "binding_missing"
-                    )
-                except Exception:
-                    pass
-            raise ContextHandoffRequiredError(
-                index, "compaction", "binding_missing"
-            ) from None
-        except BindingError:
-            if on_continuity is not None:
-                try:
-                    on_continuity(
-                        "stale", False, False, False, index, "compaction", "binding_stale"
-                    )
-                except Exception:
-                    pass
-            raise ContextHandoffRequiredError(
-                index, "compaction", "binding_stale"
-            ) from None
-
-        if classify_dialect(provider) == CODEX_NATIVE:
-            if not destination_checked:
-                destination_checked = True
-                try:
-                    _, destination_headers = _native_route_headers(
-                        provider, incoming
-                    )
-                    destination_identity = _native_route_identity(
-                        provider,
-                        model,
-                        requested_slug,
-                        destination_headers,
-                    )
-                except (
-                    AccountError,
-                    BindingError,
-                    ContinuityError,
-                    KeyError,
-                    TypeError,
-                ):
-                    destination_identity = None
-            if (
-                destination_identity is not None
-                and destination_identity.trust_domain == binding.trust_domain
-            ):
-                if on_continuity is not None:
-                    try:
-                        on_continuity(
-                        "hit", True, False, False, index, "compaction", "same_domain"
-                    )
-                    except Exception:
-                        pass
-                result.append(item)
-                continue
-
-        try:
-            summary = _source_handoff_summary(
-                config, binding, item, incoming, index
+            prepared = history_preparer(
+                config, provider, model, requested_slug, body, incoming
             )
-        except ContextHandoffRequiredError as handoff_exc:
-            if on_continuity is not None:
-                try:
-                    failure_reason = getattr(handoff_exc, 'reason', 'source_unavailable')
-                    on_continuity(
-                        "hit", False, True, False, index, "compaction", failure_reason
-                    )
-                except Exception:
-                    pass
+        except HistoryReconstructionError:
             raise
-        if on_continuity is not None:
-            try:
-                on_continuity(
-                    "hit", False, True, True, index, "compaction", "handoff_succeeded"
-                )
-            except Exception:
-                pass
-        result.append(
-            _message_item(_COMPACTION_SUMMARY_PREFIX + "\n\n" + summary)
-        )
+        except Exception:
+            raise HistoryReconstructionError("history_unavailable") from None
+        if not isinstance(prepared, Mapping):
+            raise HistoryReconstructionError("invalid_history_projection")
+        return dict(prepared)
 
-
-    prepared["input"] = result[0] if single_item else result
-    return prepared
-
-
-def _native_json_success(metadata: Mapping[str, Any], result: Any) -> bool:
-    status = metadata.get("status")
-    if isinstance(status, bool) or not isinstance(status, int) or not 200 <= status < 300:
-        return False
-    if not isinstance(result, (bytes, bytearray)):
-        return False
-    try:
-        value = json.loads(bytes(result).decode("utf-8", errors="strict"))
-    except (UnicodeDecodeError, ValueError):
-        return False
-    if not isinstance(value, Mapping) or value.get("error") not in (None, {}):
-        return False
-    return value.get("status") in {None, "completed"}
-
-
-def _emit_native_response(
-    callback: Optional[NativeResponseObserver],
-    provider: Dict[str, Any],
-    model: Dict[str, Any],
-    requested_slug: str,
-    incoming: Dict[str, str],
-    metadata: Mapping[str, Any],
-    result: Any,
-) -> None:
-    if callback is None or classify_dialect(provider) != CODEX_NATIVE:
-        return
-    success = _native_json_success(metadata, result)
-    identity = None
-    try:
-        _, identity_headers = _native_route_headers(provider, incoming)
-        identity = _native_route_identity(
-            provider, model, requested_slug, identity_headers
-        )
-    except Exception:
-        identity = None
-    try:
-        callback(
-            dict(provider),
-            dict(model),
-            requested_slug,
-            dict(incoming),
-            identity,
-            result,
-            success,
-        )
-    except Exception:
-        pass
+    source = body.get("input")
+    items = [source] if isinstance(source, Mapping) else source
+    if not isinstance(items, list):
+        return dict(body)
+    for item in items:
+        if not isinstance(item, Mapping) or item.get("type") != "compaction":
+            continue
+        encoded = item.get("encrypted_content")
+        if not isinstance(encoded, str) or not encoded.startswith(_COMPACTION_PREFIX):
+            raise HistoryReconstructionError("history_reader_unavailable")
+    return dict(body)
 
 
 def _proxy_resolved(
@@ -2257,11 +2042,10 @@ def _proxy_resolved(
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
-    on_native_stream_start: Optional[NativeStreamStartFactory] = None,
 ) -> Tuple[Dict[str, Any], Any]:
     if _is_compaction_trigger(body) and classify_dialect(provider) != CODEX_NATIVE:
-        response = _compaction_response(
-            body["model"], _summarize(provider, body, model, incoming, context_check)
+        response = _external_compaction_response(
+            provider, body, model, incoming, context_check
         )
         if body.get("stream"):
             return _tag_route(
@@ -2289,6 +2073,7 @@ def _proxy_resolved(
             request=body,
         ), json.dumps(response, ensure_ascii=False).encode("utf-8")
     if body.get("stream") and provider["protocol"] == "chat_completions":
+        _preflight_history_projection(provider, body, model)
         return _tag_route(
             {"kind": "stream", "status": 200, "content_type": "text/event-stream"},
             provider,
@@ -2303,6 +2088,7 @@ def _proxy_resolved(
             terminal_callback,
         )
     if body.get("stream") and provider["protocol"] == "anthropic_messages":
+        _preflight_history_projection(provider, body, model)
         return _tag_route(
             {"kind": "stream", "status": 200, "content_type": "text/event-stream"},
             provider,
@@ -2318,11 +2104,11 @@ def _proxy_resolved(
         )
     if provider["protocol"] == "responses":
         if body.get("stream"):
+            _preflight_history_projection(provider, body, model)
             upstream = _reliable_responses_stream(
                 lambda: forward_responses_stream(
                     provider, body, model, incoming, None, context_check,
                     on_stream_event=on_stream_event,
-                    on_native_stream_start=on_native_stream_start,
                 ),
                 terminal_callback,
             )
@@ -2401,11 +2187,8 @@ def proxy(
     incoming: Dict[str, str],
     on_observation: Optional[Callable[[Dict[str, Any]], None]] = None,
     on_context: Optional[Callable[..., Mapping[str, Any]]] = None,
-    binding_store: Optional[CompactionBindingStore] = None,
-    on_native_response: Optional[NativeResponseObserver] = None,
+    history_preparer: Optional[HistoryPreparationCallback] = None,
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
-    on_native_stream_start: Optional[NativeStreamStartFactory] = None,
-    on_continuity: Optional[ContinuityHandoffCallback] = None,
 ) -> Tuple[Dict[str, Any], Any]:
     model_id = body.get("model")
     if not isinstance(model_id, str) or not model_id:
@@ -2424,10 +2207,9 @@ def proxy(
             model_id,
             body,
             incoming,
-            binding_store,
-            on_continuity,
+            history_preparer,
         )
-    except ContextHandoffRequiredError as exc:
+    except HistoryReconstructionError as exc:
         _emit_observation(
             on_observation,
             {
@@ -2435,7 +2217,8 @@ def proxy(
                 "transport": "unknown",
                 "status": exc.status,
                 "success": False,
-                "error_class": "context_handoff_required",
+                "error_class": exc.error_class,
+                "failure_reason": exc.reason,
                 "terminal_event_observed": True,
             },
         )
@@ -2467,7 +2250,6 @@ def proxy(
                 terminal_callback=terminal.update if on_observation and body.get("stream") else None,
                 context_check=_bind_context_check(provider, model, on_context),
                 on_stream_event=on_stream_event,
-                on_native_stream_start=on_native_stream_start,
             )
         except RouterError as exc:
             _emit_observation(
@@ -2498,15 +2280,6 @@ def proxy(
                 metadata["observation_attached"] = True
         else:
             _finish_nonstream(on_observation, metadata, provider, model, result)
-            _emit_native_response(
-                on_native_response,
-                provider,
-                model,
-                model_id,
-                incoming,
-                metadata,
-                result,
-            )
         return metadata, result
 
     observed = _observed_protocol(provider, model)
@@ -2533,7 +2306,6 @@ def proxy(
             on_observation,
             on_context,
             on_stream_event,
-            on_native_stream_start,
         )
         metadata["observation_attached"] = bool(on_observation)
         return metadata, result
@@ -2578,15 +2350,6 @@ def proxy(
         ):
             continue
         _finish_nonstream(on_observation, metadata, resolved, model, result)
-        _emit_native_response(
-            on_native_response,
-            resolved,
-            model,
-            model_id,
-            incoming,
-            metadata,
-            result,
-        )
         return metadata, result
     raise RouterError("unable to resolve provider protocol", 502)
 
@@ -2597,9 +2360,7 @@ def proxy_compact(
     incoming: Dict[str, str],
     on_observation: Optional[Callable[[Dict[str, Any]], None]] = None,
     on_context: Optional[Callable[..., Mapping[str, Any]]] = None,
-    binding_store: Optional[CompactionBindingStore] = None,
-    on_native_response: Optional[NativeResponseObserver] = None,
-    on_continuity: Optional[ContinuityHandoffCallback] = None,
+    history_preparer: Optional[HistoryPreparationCallback] = None,
 ) -> Tuple[Dict[str, Any], bytes]:
     model_id = body.get("model")
     if not isinstance(model_id, str) or not model_id:
@@ -2615,8 +2376,7 @@ def proxy_compact(
             model_id,
             body,
             incoming,
-            binding_store,
-            on_continuity,
+            history_preparer,
         )
     except RouterError as exc:
         _emit_observation(
@@ -2660,15 +2420,6 @@ def proxy_compact(
             )
             raise
         _finish_nonstream(on_observation, metadata, provider, model, raw)
-        _emit_native_response(
-            on_native_response,
-            provider,
-            model,
-            model_id,
-            incoming,
-            metadata,
-            raw,
-        )
         return metadata, raw
     observed = _observed_protocol(provider, model)
     candidates = _auto_protocol_candidates(provider, model)
@@ -2713,15 +2464,6 @@ def proxy_compact(
         ):
             continue
         _finish_nonstream(on_observation, metadata, resolved, model, raw)
-        _emit_native_response(
-            on_native_response,
-            resolved,
-            model,
-            model_id,
-            incoming,
-            metadata,
-            raw,
-        )
         return metadata, raw
     raise RouterError("unable to resolve provider protocol", 502)
 
@@ -2740,10 +2482,12 @@ def _proxy_compact_resolved(
             provider, body, model, incoming, context_check
         )
     else:
-        summary = _summarize(provider, body, model, incoming, context_check)
         status, content_type = 200, "application/json"
         raw = json.dumps(
-            _compaction_response(body["model"], summary), ensure_ascii=False
+            _external_compaction_response(
+                provider, body, model, incoming, context_check
+            ),
+            ensure_ascii=False,
         ).encode("utf-8")
     return _tag_route(
         {"kind": "body", "status": status, "content_type": content_type},

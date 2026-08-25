@@ -230,7 +230,7 @@ def codex_auth_path() -> Path:
     return (Path(root).expanduser() if root else Path.home() / ".codex") / "auth.json"
 
 
-def load_native_auth() -> Dict[str, Any]:
+def load_native_auth(path: Optional[Path] = None) -> Dict[str, Any]:
     """Read and validate the current native Codex login auth.json (read-only).
 
     This is used for quota queries on accounts that duplicate the current
@@ -239,7 +239,7 @@ def load_native_auth() -> Dict[str, Any]:
     is always the live native file. This function never writes, rotates, or
     mutates the native auth file.
     """
-    path = codex_auth_path()
+    path = codex_auth_path() if path is None else Path(path).expanduser()
     try:
         if path.is_symlink():
             raise AccountError("native auth.json cannot be a symlink")
@@ -287,8 +287,7 @@ def duplicate_account_status(accounts: Iterable[Dict[str, Any]]) -> Dict[str, st
     return duplicates
 
 
-def auth_headers(account: Dict[str, Any]) -> Dict[str, str]:
-    auth = load_auth(account)
+def _auth_headers_from_value(auth: Dict[str, Any]) -> Dict[str, str]:
     tokens = auth.get("tokens") if isinstance(auth.get("tokens"), dict) else auth
     access_token = tokens.get("access_token", "")
     account_id = tokens.get("account_id") or auth.get("account_id", "")
@@ -298,3 +297,13 @@ def auth_headers(account: Dict[str, Any]) -> Dict[str, str]:
     if isinstance(account_id, str) and account_id:
         result["chatgpt-account-id"] = account_id
     return result
+
+
+def auth_headers(account: Dict[str, Any]) -> Dict[str, str]:
+    return _auth_headers_from_value(load_auth(account))
+
+
+def native_auth_headers(path: Optional[Path] = None) -> Dict[str, str]:
+    """Resolve the active Codex login without persisting a credential copy."""
+
+    return _auth_headers_from_value(load_native_auth(path))
