@@ -20,6 +20,7 @@ class UpstreamHTTPError(RouterError):
         {
             "auth_rejected",
             "context_length_exceeded",
+            "payment_required",
             "quota_exhausted",
             "rate_limited",
             "request_too_large",

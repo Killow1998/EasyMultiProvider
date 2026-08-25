@@ -53,6 +53,57 @@ class ContextGuardTests(unittest.TestCase):
             estimate_input_tokens(base, "chat_completions"),
         )
 
+    def test_image_transport_bytes_do_not_become_text_tokens(self):
+        def payload(image_url):
+            return {
+                "model": "model",
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "inspect this image"},
+                        {"type": "input_image", "image_url": image_url},
+                    ],
+                }],
+            }
+
+        url_estimate = estimate_input_tokens(
+            payload("https://example.com/image.png"), "responses"
+        )
+        base64_estimate = estimate_input_tokens(
+            payload("data:image/png;base64," + "A" * (5 * 1024 * 1024)),
+            "responses",
+        )
+
+        self.assertEqual(base64_estimate, url_estimate)
+        self.assertLess(base64_estimate, 10_000)
+
+    def test_effective_context_percentage_is_applied_to_native_catalog_limit(self):
+        model = dict(self.model)
+        model.update(
+            {
+                "context_window": 272_000,
+                "effective_context_window_percent": 95,
+                "capability_sources": {
+                    "context_window": {
+                        "source": "official",
+                        "confidence": 0.95,
+                        "observed_at": None,
+                    }
+                },
+            }
+        )
+
+        assessment = assess_context(
+            self.provider,
+            model,
+            "responses",
+            {"model": "model", "input": "hello", "max_output_tokens": 400},
+        )
+
+        self.assertEqual(assessment.context_limit, 258_400)
+        self.assertEqual(assessment.safe_input_limit, 257_744)
+
     def test_manual_and_advertised_provenance_and_unknown_are_explicit(self):
         manual = assess_context(
             self.provider,

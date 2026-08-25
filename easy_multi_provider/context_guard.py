@@ -24,7 +24,12 @@ CONCRETE_PROTOCOLS = frozenset(
 CALIBRATION_CAPACITY = 8
 SAFETY_RESERVE_TOKENS = 256
 CLEAR_EXCESS_TOKENS = 64
-_SAFE_ID = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
+# Image token cost depends on dimensions and provider policy, not on the byte
+# length of a data URL.  Keep the estimate bounded and deliberately
+# conservative without treating base64 transport bytes as text tokens.
+IMAGE_INPUT_TOKEN_ESTIMATE = 4096
+_IMAGE_PLACEHOLDER = "<image>"
+_SAFE_ID = re.compile(r"^[A-Za-z0-9._/:-]{1,256}$")
 _FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SOURCES = frozenset(
     {"official", "advertised", "observed", "manual", "inferred", "unknown"}
@@ -128,6 +133,14 @@ def _context_window(
         value = _positive_int(source.get("context_window"))
         if value is None:
             continue
+        try:
+            percentage = float(
+                source.get("effective_context_window_percent", 100) or 100
+            )
+        except (TypeError, ValueError):
+            percentage = 100.0
+        if math.isfinite(percentage) and 0 < percentage <= 100:
+            value = max(1, round(value * percentage / 100))
         provenance_source, confidence, observed_at = _source_for(source, "context_window")
         if provenance_source == "unknown":
             continue
@@ -295,26 +308,75 @@ def _payload_view(payload: Mapping[str, Any], protocol: str) -> Optional[Dict[st
     return view
 
 
+def _scrub_images(value: Any) -> Tuple[Any, int]:
+    """Return a JSON-compatible estimate view and the number of image parts."""
+
+    if isinstance(value, Mapping):
+        kind = str(value.get("type") or "")
+        image_part = kind in {"input_image", "output_image", "image", "image_url"}
+        result: Dict[str, Any] = {}
+        images = 1 if image_part else 0
+        for key, item in value.items():
+            if image_part and key in {"data", "image_data"}:
+                result[key] = _IMAGE_PLACEHOLDER
+                continue
+            if image_part and key == "image_url":
+                if isinstance(item, Mapping):
+                    nested = dict(item)
+                    if "url" in nested:
+                        nested["url"] = _IMAGE_PLACEHOLDER
+                    result[key], nested_images = _scrub_images(nested)
+                    images += nested_images
+                else:
+                    result[key] = _IMAGE_PLACEHOLDER
+                continue
+            if image_part and key == "source" and isinstance(item, Mapping):
+                source = dict(item)
+                for source_key in ("data", "url"):
+                    if source_key in source:
+                        source[source_key] = _IMAGE_PLACEHOLDER
+                result[key], nested_images = _scrub_images(source)
+                images += nested_images
+                continue
+            result[key], nested_images = _scrub_images(item)
+            images += nested_images
+        return result, images
+    if isinstance(value, (list, tuple)):
+        result = []
+        images = 0
+        for item in value:
+            nested, nested_images = _scrub_images(item)
+            result.append(nested)
+            images += nested_images
+        return result, images
+    return value, 0
+
+
+def estimate_json_tokens(value: Any) -> Optional[int]:
+    """Estimate JSON input without charging image transport bytes as text."""
+
+    try:
+        scrubbed, image_count = _scrub_images(value)
+        encoded = json.dumps(
+            scrubbed, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    except (RecursionError, TypeError, ValueError, OverflowError):
+        return None
+    text_tokens = max(1, int(math.ceil(len(encoded) / 2.0))) if encoded else 0
+    return text_tokens + image_count * IMAGE_INPUT_TOKEN_ESTIMATE
+
+
 def estimate_input_tokens(payload: Mapping[str, Any], protocol: str) -> Optional[int]:
     """Conservatively estimate translated input tokens, including tool schemas."""
 
     view = _payload_view(payload, protocol)
     if view is None:
         return None
-    try:
-        encoded = json.dumps(
-            view, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if not encoded:
-        return 0
-    # Two UTF-8 bytes per token intentionally overestimates common BPE inputs.
-    return max(1, int(math.ceil(len(encoded) / 2.0)))
+    return estimate_json_tokens(view)
 
 
 def estimate_method() -> str:
-    return "translated_json_utf8_bytes_div_2_ceil"
+    return "translated_json_bytes_div_2_plus_bounded_images"
 
 
 def _output_reserve(
@@ -671,8 +733,10 @@ __all__ = [
     "assess_context",
     "calibration_for",
     "context_identity",
+    "estimate_json_tokens",
     "estimate_input_tokens",
     "estimate_method",
+    "IMAGE_INPUT_TOKEN_ESTIMATE",
     "format_context_error",
     "is_explicit_context_error",
     "mark_explicit_failure",

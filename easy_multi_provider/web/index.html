@@ -20,7 +20,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
 code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-space:pre-wrap;background:var(--input);padding:12px;border-radius:6px;color:var(--code);overflow:auto}
 .muted{color:var(--muted)}.pill{display:inline-block;background:var(--accent-soft);border-radius:99px;padding:2px 8px;font-size:11px}.danger-text,.refresh-error{color:var(--danger-text)}
 #status{position:fixed;top:14px;right:18px;z-index:10;max-width:min(520px,calc(100vw - 36px));padding:8px 12px;background:var(--panel);border:1px solid var(--border-strong);border-radius:7px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:none}#status:empty{display:none}
-.quota{white-space:pre-line}.model-hidden{opacity:.55}.provider-model-group{background:var(--panel-soft);border:1px solid var(--border);border-radius:8px;padding:12px;margin:12px 0}.provider-model-group h3{color:var(--code)}.model-selection{max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:7px}.model-option{display:flex;gap:10px;align-items:flex-start;padding:9px;border-bottom:1px solid var(--border)}.model-option:last-child{border-bottom:0}.model-option input{width:auto;margin-top:4px}.model-option strong{color:var(--text)}.model-option small{display:block;color:var(--muted)}
+.quota{white-space:pre-line}.model-hidden{opacity:.55}.provider-model-group{background:var(--panel-soft);border:1px solid var(--border);border-radius:8px;padding:12px;margin:12px 0}.provider-model-group h3{color:var(--code)}.model-selection{max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:7px}.model-option{display:flex;gap:10px;align-items:flex-start;padding:9px;border-bottom:1px solid var(--border)}.model-option[hidden]{display:none}.model-option:last-child{border-bottom:0}.model-option input{width:auto;margin-top:4px}.model-option strong{color:var(--text)}.model-option small{display:block;color:var(--muted)}
 .integration-card{background:var(--panel-soft);border:1px solid var(--border);border-radius:8px;padding:14px}.integration-card-header{display:flex;align-items:center;gap:8px}.integration-card-header h3{margin:0}.integration-card[data-state="conflict"]{border-color:var(--danger)}.integration-card[data-state="active"]{border-color:var(--accent)}.integration-card[data-state="prepared"],.integration-card[data-state="restoring"]{border-color:#d97706}
 .display-list{display:grid;gap:8px}.display-row{display:grid;grid-template-columns:minmax(180px,1.25fr) minmax(160px,1fr) auto auto auto;gap:10px;align-items:center;padding:10px;border:1px solid var(--border);border-radius:8px}.display-row .route{min-width:0}.display-row .route code{display:block;overflow:hidden;text-overflow:ellipsis}.display-row label{margin:0}.inline-check{display:flex;align-items:center;gap:6px;white-space:nowrap}.inline-check input{width:auto}.section-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.section-tools input{max-width:320px}.section-tools .spacer{flex:1}
 .modal-backdrop{position:fixed;inset:0;background:rgba(2,6,23,.72);display:flex;align-items:center;justify-content:center;padding:18px;z-index:20}.modal-backdrop.hidden{display:none}.modal{width:min(720px,100%);max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--border-strong);border-radius:12px;box-shadow:0 24px 80px rgba(0,0,0,.45);padding:20px}.modal-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.modal-header h2{margin:0}.modal-close{background:transparent;color:var(--muted);font-size:24px;line-height:1;padding:2px 7px;margin:0}.modal-close:hover{color:var(--text);background:var(--panel-soft)}.modal-status{margin-top:12px;color:var(--danger-text)}.modal-status:empty{display:none}.modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:16px}.modal-actions button{margin:0}.choice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.choice{display:block;text-align:left;background:var(--panel-soft);border:1px solid var(--border-strong);border-radius:8px;padding:13px;color:var(--text)}.choice:hover{border-color:#60a5fa}.choice strong{display:block}.choice small{display:block;color:var(--muted);margin-top:4px}
@@ -45,6 +45,16 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
   <p id="integration_summary" class="muted" data-i18n="integration_loading">正在读取集成状态。</p>
   <div class="toolbar"><button id="integration_enable" onclick="confirmIntegrationAction('enable')" data-i18n="enable_codex">启用默认 Codex</button><button id="integration_restore" class="secondary" onclick="confirmIntegrationAction('restore')" data-i18n="restore_codex">恢复原生 Codex</button><button id="integration_reload" class="secondary" onclick="confirmIntegrationAction('reload')" hidden data-i18n="apply_models">应用模型变化到 Codex</button><button class="secondary" onclick="openDiagnostics()" data-i18n="diagnostics">诊断</button></div>
 </div>
+</section>
+
+<section>
+<h2 data-i18n="subscription_search">Subscription Web Search</h2>
+<p class="muted" data-i18n="subscription_search_hint">可选地让外部模型使用 ChatGPT/Codex subscription 的独立联网搜索；搜索指令和 Codex 选取的少量可见上下文会发送到该服务。</p>
+<div class="grid">
+  <label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="toggleSubscriptionSearch()"><span data-i18n="enable_subscription_search">启用 Subscription 搜索</span></label>
+  <label><span data-i18n="search_account">搜索账户</span><select id="subscription_search_account"></select></label>
+</div>
+<div class="toolbar"><button onclick="saveSubscriptionSearch()" data-i18n="save_search">保存搜索设置</button></div>
 </section>
 
 <section>
@@ -107,10 +117,10 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const translations = {
   'zh-CN': {
-    subtitle:'在浏览器中管理 Codex 的账户、Provider 和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出 EMP 数据', import_emp:'导入 EMP 数据', codex_integration:'Codex 集成', integration_status:'Codex 集成状态', loading:'加载中', integration_loading:'正在读取集成状态。', enable_codex:'启用默认 Codex', restore_codex:'恢复原生 Codex', apply_models:'应用模型变化到 Codex', diagnostics:'诊断', model_display:'模型列表显示', model_display_hint:'集中设置 Codex App 和 TUI 中的模型名称、上下文与推理摘要显示。', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存显示设置', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有会显示在 Codex 中的模型。', no_matches:'没有匹配的模型。', refresh:'刷新', diagnostics_privacy:'这里只保留少量请求状态，不保存消息内容、响应内容或凭据。', accounts_title:'Codex Subscription 账户', accounts_security:'服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器或写入 config/catalog。', import_account:'导入账户', refresh_quotas:'刷新全部余量', accounts_hint:'导入时只填账户 ID。重复账户不会生成重复模型；与当前 Codex 登录重复时，可见性设置直接控制原生列表。', providers_title:'Providers', providers_hint:'添加官方或自建 Provider；官方预设自动填写地址和协议。', add_provider:'添加 Provider', models_routes:'Models / 路由', models_hint:'已导入的模型按 Provider 分组；隐藏模型排在最后。', add_model:'手动添加模型'
+    subtitle:'在浏览器中管理 Codex 的账户、Provider 和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出 EMP 数据', import_emp:'导入 EMP 数据', codex_integration:'Codex 集成', integration_status:'Codex 集成状态', loading:'加载中', integration_loading:'正在读取集成状态。', enable_codex:'启用默认 Codex', restore_codex:'恢复原生 Codex', apply_models:'应用模型变化到 Codex', diagnostics:'诊断', subscription_search:'Subscription 联网搜索', subscription_search_hint:'可选地让外部模型使用 ChatGPT/Codex subscription 的独立联网搜索；搜索指令和 Codex 选取的少量可见上下文会发送到该服务。', enable_subscription_search:'启用 Subscription 搜索', search_account:'搜索账户', current_codex_login:'当前 Codex 登录', save_search:'保存搜索设置', model_display:'模型列表显示', model_display_hint:'集中设置 Codex App 和 TUI 中的模型名称、上下文与推理摘要显示。', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存显示设置', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有会显示在 Codex 中的模型。', no_matches:'没有匹配的模型。', refresh:'刷新', diagnostics_privacy:'这里只保留少量请求状态，不保存消息内容、响应内容或凭据。', accounts_title:'Codex Subscription 账户', accounts_security:'服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器或写入 config/catalog。', import_account:'导入账户', refresh_quotas:'刷新全部余量', accounts_hint:'导入时只填账户 ID。重复账户不会生成重复模型；与当前 Codex 登录重复时，可见性设置直接控制原生列表。', providers_title:'Providers', providers_hint:'添加官方或自建 Provider；官方预设自动填写地址和协议。', add_provider:'添加 Provider', models_routes:'Models / 路由', models_hint:'已导入的模型按 Provider 分组；隐藏模型排在最后。', add_model:'手动添加模型'
   },
   en: {
-    subtitle:'Manage Codex accounts, providers, and models in your browser.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export EMP data', import_emp:'Import EMP data', codex_integration:'Codex integration', integration_status:'Codex integration status', loading:'Loading', integration_loading:'Reading integration status.', enable_codex:'Enable for Codex', restore_codex:'Restore native Codex', apply_models:'Apply model changes', diagnostics:'Diagnostics', model_display:'Model list display', model_display_hint:'Set names, context labels, and reasoning summaries for Codex App and TUI.', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save display settings', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models are currently visible in Codex.', no_matches:'No matching models.', refresh:'Refresh', diagnostics_privacy:'Only request metadata is kept; prompts, responses, and credentials are never stored here.', accounts_title:'Codex Subscription Accounts', accounts_security:'The service listens locally. Account tokens stay in encrypted local storage and never enter the browser, config, or catalog.', import_account:'Import account', refresh_quotas:'Refresh all quotas', accounts_hint:'Import requires only an account ID. Duplicate accounts do not create duplicate routes; a duplicate of the current Codex login controls native model visibility.', providers_title:'Providers', providers_hint:'Add an official preset or a custom Provider. Official presets fill the endpoint and protocol automatically.', add_provider:'Add Provider', models_routes:'Models / Routes', models_hint:'Imported models are grouped by Provider; hidden models are placed last.', add_model:'Add model manually'
+    subtitle:'Manage Codex accounts, providers, and models in your browser.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export EMP data', import_emp:'Import EMP data', codex_integration:'Codex integration', integration_status:'Codex integration status', loading:'Loading', integration_loading:'Reading integration status.', enable_codex:'Enable for Codex', restore_codex:'Restore native Codex', apply_models:'Apply model changes', diagnostics:'Diagnostics', subscription_search:'Subscription web search', subscription_search_hint:'Optionally let external models use standalone ChatGPT/Codex subscription search. The search command and a small amount of visible context selected by Codex are sent to that service.', enable_subscription_search:'Enable Subscription search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save search settings', model_display:'Model list display', model_display_hint:'Set names, context labels, and reasoning summaries for Codex App and TUI.', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save display settings', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models are currently visible in Codex.', no_matches:'No matching models.', refresh:'Refresh', diagnostics_privacy:'Only request metadata is kept; prompts, responses, and credentials are never stored here.', accounts_title:'Codex Subscription Accounts', accounts_security:'The service listens locally. Account tokens stay in encrypted local storage and never enter the browser, config, or catalog.', import_account:'Import account', refresh_quotas:'Refresh all quotas', accounts_hint:'Import requires only an account ID. Duplicate accounts do not create duplicate routes; a duplicate of the current Codex login controls native model visibility.', providers_title:'Providers', providers_hint:'Add an official preset or a custom Provider. Official presets fill the endpoint and protocol automatically.', add_provider:'Add Provider', models_routes:'Models / Routes', models_hint:'Imported models are grouped by Provider; hidden models are placed last.', add_model:'Add model manually'
   }
 };
 let language = 'zh-CN';
@@ -182,7 +192,7 @@ async function exportMigration() {
     const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = migrationFilename(); document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); closeModal(); notice(tr('EMP 迁移包已下载','EMP data exported'));
   });
 }
-function migrationFilename() { const version = String(state?.emp_version || '0.7.5'); return `easy-multi-provider-${/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version) ? version : '0.7.5'}.emp`; }
+function migrationFilename() { const version = String(state?.emp_version || '0.7.6'); return `easy-multi-provider-${/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version) ? version : '0.7.6'}.emp`; }
 function selectMigrationFile() { $('migration_file').click(); }
 async function migrationFileChosen(input) {
   const file = input.files[0]; if (!file) return; if (file.size > 32 * 1024 * 1024) { input.value = ''; return notice(tr('EMP 文件不能超过 32 MB','EMP files cannot exceed 32 MB'), true); }
@@ -282,8 +292,33 @@ function openCatalogAdvanced(route, sourceType, sourceId) {
   notice(language === 'en' ? 'Native model visibility follows the current Codex catalog.' : '原生模型的可见性由当前 Codex catalog 控制。');
 }
 
+function renderSubscriptionSearch() {
+  const setting = state.subscription_search || {enabled:false, account_id:''};
+  const enabled = $('subscription_search_enabled');
+  const account = $('subscription_search_account');
+  if (!enabled || !account) return;
+  enabled.checked = setting.enabled === true;
+  const options = [`<option value="">${esc(t('current_codex_login'))}</option>`];
+  for (const item of state.accounts || []) {
+    if (!item.credential_set || item.enabled === false) continue;
+    options.push(`<option value="${esc(item.id)}">${esc(item.name || item.id)}</option>`);
+  }
+  account.innerHTML = options.join('');
+  account.value = setting.account_id || '';
+  if (account.value !== (setting.account_id || '')) account.value = '';
+  account.disabled = !enabled.checked;
+}
+function toggleSubscriptionSearch() { $('subscription_search_account').disabled = !$('subscription_search_enabled').checked; }
+async function saveSubscriptionSearch() {
+  const candidate = cloneState();
+  candidate.subscription_search = {
+    enabled: $('subscription_search_enabled').checked,
+    account_id: $('subscription_search_account').value || ''
+  };
+  await persistState(tr('搜索设置已保存；如 Codex 正在运行，请应用模型变化','Search settings saved; apply model changes if Codex is running'), candidate);
+}
 function fill() {
-  applyTranslations(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
+  applyTranslations(); renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
 }
 async function load() { applyPreferences(); try { state = await api('/api/config'); fill(); if (await loadIntegration()) notice(language === 'en' ? 'Configuration loaded' : '配置已加载'); } catch (error) { notice(error.message, true); } }
 function renderIntegration(info) {

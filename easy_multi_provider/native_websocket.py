@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import time
 import uuid
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional
 
@@ -17,16 +16,33 @@ from typing import Any, Callable, Dict, Iterator, Mapping, Optional
 MAX_NATIVE_WEBSOCKET_EVENT_BYTES = 16 * 1024 * 1024
 MAX_NATIVE_WEBSOCKET_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_NATIVE_WEBSOCKET_EVENTS = 100_000
+# websocket-client does not negotiate the permessage-deflate extension used by
+# Codex's native transport.  Large full-history requests therefore use EMP's
+# zstd HTTP path instead of sending an uncompressed WebSocket frame.
+MAX_NATIVE_WEBSOCKET_REQUEST_BYTES = 4 * 1024 * 1024
 NATIVE_WEBSOCKET_CONNECT_TIMEOUT = 30
-NATIVE_WEBSOCKET_IDLE_TIMEOUT = 180
-NATIVE_WEBSOCKET_REQUEST_TIMEOUT = 180
+NATIVE_WEBSOCKET_IDLE_TIMEOUT = 300
 _RETRYABLE_UPGRADE_STATUSES = frozenset(
-    {400, 404, 405, 415, 426, 501, 502, 503, 504}
+    {400, 404, 405, 415, 426, 501}
 )
 
 
 def _retryable_upgrade_status(status: int) -> bool:
     return status in _RETRYABLE_UPGRADE_STATUSES
+
+
+def _http_fallback_before_request(status: int) -> bool:
+    return _retryable_upgrade_status(status) or 500 <= status <= 599
+
+
+def native_websocket_request_fits(request: Mapping[str, Any]) -> bool:
+    try:
+        encoded = json.dumps(
+            dict(request), ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+    except (RecursionError, TypeError, ValueError, OverflowError):
+        return False
+    return len(encoded) <= MAX_NATIVE_WEBSOCKET_REQUEST_BYTES
 
 
 class NativeWebSocketError(RuntimeError):
@@ -38,7 +54,7 @@ class NativeWebSocketError(RuntimeError):
         super().__init__(message)
         self.status = status if isinstance(status, int) else 502
         self.retryable = (
-            _retryable_upgrade_status(self.status)
+            _http_fallback_before_request(self.status)
             if retryable is None
             else bool(retryable)
         )
@@ -183,7 +199,7 @@ class NativeWebSocketBridge:
             raise NativeWebSocketError(
                 "native upstream websocket connection failed",
                 status,
-                _retryable_upgrade_status(status),
+                _http_fallback_before_request(status),
             ) from exc
         status = _handshake_status(connection)
         if status != 101:
@@ -194,7 +210,7 @@ class NativeWebSocketBridge:
             raise NativeWebSocketError(
                 "native upstream websocket upgrade was rejected",
                 status,
-                _retryable_upgrade_status(status),
+                _http_fallback_before_request(status),
             )
         self._connection = connection
         self._connection_key = target.connection_key
@@ -206,7 +222,6 @@ class NativeWebSocketBridge:
         target: NativeWebSocketTarget,
         request: Mapping[str, Any],
     ) -> Iterator[Dict[str, Any]]:
-        started = time.monotonic()
         self.connect(target)
         connection = self._connection
         if connection is None:  # defensive; connect either succeeds or raises
@@ -227,17 +242,10 @@ class NativeWebSocketBridge:
             else:
                 connection.send(payload)
             for _ in range(MAX_NATIVE_WEBSOCKET_EVENTS):
-                remaining = NATIVE_WEBSOCKET_REQUEST_TIMEOUT - (
-                    time.monotonic() - started
-                )
-                if remaining <= 0:
-                    raise NativeWebSocketError(
-                        "native upstream websocket exceeded the request deadline",
-                        504,
-                        False,
-                    )
                 if callable(setter):
-                    setter(min(NATIVE_WEBSOCKET_IDLE_TIMEOUT, remaining))
+                    # Match Codex's native transport: bound inactivity, not the
+                    # total duration of a long-running reasoning request.
+                    setter(NATIVE_WEBSOCKET_IDLE_TIMEOUT)
                 raw = connection.recv()
                 if raw in (None, "", b""):
                     raise NativeWebSocketError(
@@ -295,6 +303,12 @@ class NativeWebSocketBridge:
             raise
         except Exception as exc:
             self.close()
+            if isinstance(exc, TimeoutError) or "timeout" in exc.__class__.__name__.lower():
+                raise NativeWebSocketError(
+                    "native upstream websocket was idle before a terminal event",
+                    504,
+                    True,
+                ) from exc
             raise NativeWebSocketError(
                 "native upstream websocket transport failed"
             ) from exc

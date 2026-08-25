@@ -47,7 +47,7 @@ CAPABILITY_NAMES = (
 KNOWN_PROTOCOLS = frozenset(
     {"auto", "responses", "chat_completions", "anthropic_messages"}
 )
-_SAFE_ID = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
+_SAFE_ID = re.compile(r"^[A-Za-z0-9._/:-]{1,256}$")
 _INPUT_MODALITY_ID = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
 MAX_INPUT_MODALITIES = 16
 MAX_INPUT_MODALITY_ID_BYTES = 64

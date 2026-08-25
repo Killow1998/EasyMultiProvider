@@ -11,7 +11,6 @@ from urllib.error import URLError
 
 from .context_guard import is_explicit_context_error, mark_explicit_failure
 from .dialects import (
-    ProjectionError,
     custom_tool_ids,
     custom_tool_input,
     custom_tool_names,
@@ -36,12 +35,26 @@ from .router_errors import (
     StreamBoundaryError,
 )
 from .transport import TransportError, sse_json_events
+from .transport_failures import (
+    CONNECT_TIMEOUT,
+    PHASE_CONNECT,
+    PROTOCOL_REJECTION_STATUSES,
+    STREAM_INCOMPLETE,
+    FailureSnapshot,
+    StreamLifecycle,
+    TransportFailure,
+    event_activity,
+    failure_from_exception,
+    normalize_error_class,
+    retry_allowed,
+    status_error_class,
+)
 
 
 MAX_UPSTREAM_BODY_BYTES = 16 * 1024 * 1024
 MAX_SSE_FRAME_BYTES = 1024 * 1024
 MAX_STREAM_TEXT_BYTES = 16 * 1024 * 1024
-_PROTOCOL_REJECTION_STATUSES = frozenset({404, 405, 415, 501})
+_PROTOCOL_REJECTION_STATUSES = PROTOCOL_REJECTION_STATUSES
 
 
 @dataclass(frozen=True)
@@ -54,38 +67,27 @@ class StreamAdapterIO:
 
 
 def _route_error_class(status: Any) -> str:
-    if status in (401, 403):
-        return "auth"
-    if status == 429:
-        return "rate_limit"
-    if status in _PROTOCOL_REJECTION_STATUSES:
-        return "protocol_rejection"
-    if status in (408, 504):
-        return "timeout"
-    if isinstance(status, int) and 500 <= status <= 599:
-        return "upstream_5xx"
     if status is None:
         return "network"
-    return "router_error"
+    if status == 402:
+        return "payment_required"
+    return status_error_class(status)
 
 
-def _stream_exception(exc: BaseException) -> Tuple[Optional[int], str]:
-    if isinstance(exc, ContextLengthError):
-        return exc.status, "context_length_exceeded"
-    if isinstance(exc, StreamBoundaryError):
-        return exc.status, exc.error_class
-    if isinstance(exc, RouterError):
-        return exc.status, str(
-            getattr(exc, "error_class", None) or _route_error_class(exc.status)
-        )
-    if isinstance(exc, TimeoutError):
-        return 504, "timeout"
-    if isinstance(exc, (OSError, URLError)):
-        return 502, "network"
-    return 502, "stream_error"
+def _stream_exception(
+    exc: BaseException,
+    phase: Optional[str] = None,
+    output_emitted: bool = False,
+) -> Tuple[Optional[int], str]:
+    failure = failure_from_exception(exc, phase, output_emitted)
+    return failure.status, failure.error_class
 
 
-def _terminal_exception(exc: BaseException) -> Dict[str, Any]:
+def _terminal_exception(
+    exc: BaseException,
+    phase: Optional[str] = None,
+    output_emitted: bool = False,
+) -> Dict[str, Any]:
     if isinstance(exc, ContextLengthError):
         return {
             "success": False,
@@ -93,11 +95,16 @@ def _terminal_exception(exc: BaseException) -> Dict[str, Any]:
             "error_class": "context_length_exceeded",
             "context_observation": dict(exc.context_observation),
         }
-    status, error_class = _stream_exception(exc)
-    terminal = {"success": False, "status": status, "error_class": error_class}
-    failure_reason = getattr(exc, "failure_reason", None)
-    if isinstance(failure_reason, str) and failure_reason:
-        terminal["failure_reason"] = failure_reason
+    failure = failure_from_exception(exc, phase, output_emitted)
+    terminal = {
+        "success": False,
+        "status": failure.status,
+        "error_class": failure.error_class,
+    }
+    if failure.failure_reason:
+        terminal["failure_reason"] = failure.failure_reason
+    if isinstance(getattr(exc, "phase", None), str):
+        terminal["phase"] = exc.phase
     return terminal
 
 
@@ -106,6 +113,7 @@ def _notify_terminal(
     status: Any,
     error_class: str = "none",
     context_observation: Optional[Mapping[str, Any]] = None,
+    diagnostics: Optional[Mapping[str, Any]] = None,
 ) -> None:
     if callback is None:
         return
@@ -121,6 +129,18 @@ def _notify_terminal(
         }
         if isinstance(context_observation, Mapping):
             value["context_observation"] = dict(context_observation)
+        if isinstance(diagnostics, Mapping):
+            for key in (
+                "phase",
+                "duration_ms",
+                "upstream_first_event_ms",
+                "retry_count",
+                "output_emitted",
+                "tool_activity",
+                "terminal_event_observed",
+            ):
+                if key in diagnostics:
+                    value[key] = diagnostics[key]
         callback(value)
     except Exception:
         pass
@@ -130,15 +150,30 @@ def _sse_frame(event: str, value: Dict[str, Any]) -> bytes:
     return ("event: %s\ndata: %s\n\n" % (event, json.dumps(value, ensure_ascii=False))).encode("utf-8")
 
 
+def _content_free_failure_message(value: Any) -> str:
+    """Keep stable category wording while dropping arbitrary upstream text."""
+
+    text = str(value or "")
+    if "textual reasoning/tool-call markup" in text:
+        return "upstream returned textual reasoning/tool-call markup"
+    if "empty Chat Completions response" in text:
+        return "upstream returned an empty Chat Completions response"
+    return "upstream stream failed"
+
+
 def _response_failure_frame(
     message: str,
     status: int = 502,
     error_class: Optional[str] = None,
+    failure_reason: Optional[str] = None,
+    transport_failure: bool = False,
 ) -> bytes:
-    display_message = "HTTP %d: %s" % (status, message)
-    failure_class = error_class or _route_error_class(status)
+    failure_class = normalize_error_class(error_class or _route_error_class(status))
+    safe_message = _content_free_failure_message(message)
+    display_message = "HTTP %d: %s" % (status, safe_message)
     error_code = {
         "context_length_exceeded": "context_length_exceeded",
+        "payment_required": "payment_required",
         "rate_limit": "rate_limit_exceeded",
     }.get(failure_class, "upstream_error")
     response = {
@@ -152,12 +187,20 @@ def _response_failure_frame(
             "error_class": failure_class,
         },
     }
+    if isinstance(failure_reason, str) and failure_reason:
+        safe_reason = "".join(
+            character
+            if character.isalnum() or character in {"_", "-"}
+            else "_"
+            for character in failure_reason.lower()
+        )[:64]
+        if safe_reason:
+            response["error"]["failure_reason"] = safe_reason
+    if transport_failure:
+        response["error"]["transport_failure"] = True
     return _sse_frame("response.failed", {"type": "response.failed", "response": response})
 
 
-_PRE_OUTPUT_RECOVERY_ERRORS = frozenset(
-    {"network", "stream_incomplete", "upstream_close_pre_output", "proxy_reset"}
-)
 _TERMINAL_EVENT_TYPES = frozenset(
     {"response.completed", "response.incomplete", "response.failed", "error"}
 )
@@ -165,47 +208,34 @@ _TERMINAL_EVENT_TYPES = frozenset(
 
 def _stream_event_activity(event: Mapping[str, Any]) -> Tuple[bool, bool]:
     """Return visible-output and tool-activity flags without retaining content."""
-
-    event_type = str(event.get("type") or "")
-    item = event.get("item")
-    item_type = str(item.get("type") or "") if isinstance(item, Mapping) else ""
-    tool_activity = item_type in {
-        "function_call",
-        "custom_tool_call",
-        "tool_call",
-    } or "function_call" in event_type or "tool_call" in event_type
-    output_emitted = tool_activity
-    if event_type.endswith((".delta", ".done")):
-        output_emitted = output_emitted or any(
-            marker in event_type
-            for marker in ("output_text", "output_image", "image_generation", "reasoning")
-        )
-    elif any(marker in event_type for marker in ("output_image", "image_generation")):
-        output_emitted = True
-    part = event.get("part")
-    if isinstance(part, Mapping) and part.get("type") in {
-        "output_text",
-        "output_image",
-        "reasoning_text",
-        "summary_text",
-    }:
-        output_emitted = True
-    if isinstance(item, Mapping):
-        content = item.get("content")
-        if isinstance(content, list) and any(
-            isinstance(part, Mapping)
-            and part.get("type")
-            in {"output_text", "output_image", "image", "image_url", "reasoning_text"}
-            for part in content
-        ):
-            output_emitted = True
-    return output_emitted, tool_activity
+    return event_activity(event)
 
 
 def _stream_terminal(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     event_type = str(event.get("type") or "")
     if event_type not in _TERMINAL_EVENT_TYPES:
         return None
+
+    def reason_value(value: Any) -> Optional[str]:
+        if not isinstance(value, str) or not value:
+            return None
+        value = "".join(
+            character if character.isalnum() or character in {"_", "-"} else "_"
+            for character in value.lower()
+        )
+        return value[:64] or None
+
+    def error_class(error: Mapping[str, Any], status: Any) -> str:
+        candidate = error.get("error_class") or error.get("code")
+        candidate = {
+            "context_length_exceeded": "context_length_exceeded",
+            "rate_limit_exceeded": "rate_limit",
+            "payment_required": "payment_required",
+            "protocol_rejection": "protocol_rejection",
+            "incomplete": STREAM_INCOMPLETE,
+        }.get(candidate, candidate)
+        return normalize_error_class(candidate, _route_error_class(status))
+
     response = event.get("response")
     response = response if isinstance(response, Mapping) else {}
     if event_type == "response.completed":
@@ -219,8 +249,11 @@ def _stream_terminal(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
             return {
                 "success": False,
                 "status": status,
-                "error_class": str(
-                    error.get("error_class") or _route_error_class(status)
+                "error_class": error_class(error, status),
+                **(
+                    {"failure_reason": reason_value(error.get("failure_reason"))}
+                    if reason_value(error.get("failure_reason"))
+                    else {}
                 ),
             }
         if nested_status == "incomplete":
@@ -230,7 +263,7 @@ def _stream_terminal(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
                 if isinstance(details, Mapping)
                 else ""
             )
-            return {
+            terminal = {
                 "success": False,
                 "status": 200,
                 "error_class": {
@@ -238,6 +271,9 @@ def _stream_terminal(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
                     "content_filter": "content_filter",
                 }.get(reason, "stream_incomplete"),
             }
+            if reason_value(reason):
+                terminal["failure_reason"] = reason_value(reason)
+            return terminal
         if nested_status == "failed":
             return {
                 "success": False,
@@ -254,11 +290,14 @@ def _stream_terminal(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     if event_type == "response.incomplete":
         details = response.get("incomplete_details")
         reason = str(details.get("reason") or "") if isinstance(details, Mapping) else ""
-        error_class = {
+        terminal = {
             "max_output_tokens": "output_limit",
             "content_filter": "content_filter",
         }.get(reason, "stream_incomplete")
-        return {"success": False, "status": 200, "error_class": error_class}
+        result = {"success": False, "status": 200, "error_class": terminal}
+        if reason_value(reason):
+            result["failure_reason"] = reason_value(reason)
+        return result
     error = response.get("error")
     if not isinstance(error, Mapping):
         error = event.get("error")
@@ -268,16 +307,33 @@ def _stream_terminal(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         message = str(error.get("message") or event.get("message") or "")
         match = re.search(r"HTTP\s+(\d{3})", message)
         status = int(match.group(1)) if match else 502
-    error_class = str(error.get("error_class") or _route_error_class(status))
+    terminal_class = error_class(error, status)
     close_code = error.get("close_code")
     terminal = {
         "success": False,
         "status": status,
-        "error_class": error_class,
+        "error_class": terminal_class,
     }
+    failure_reason = reason_value(error.get("failure_reason"))
+    if failure_reason:
+        terminal["failure_reason"] = failure_reason
     if isinstance(close_code, int) and not isinstance(close_code, bool):
         terminal["close_code"] = close_code
     return terminal
+
+
+def _validate_terminal_payload(event: Mapping[str, Any]) -> None:
+    """Validate complete terminal output, including structured tool JSON."""
+
+    if str(event.get("type") or "") not in {
+        "response.completed",
+        "response.incomplete",
+    }:
+        return
+    response = event.get("response")
+    if not isinstance(response, Mapping) or "output" not in response:
+        return
+    validate_responses_body(response)
 
 
 def _reliable_responses_stream(
@@ -285,12 +341,10 @@ def _reliable_responses_stream(
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     replay_safe: bool = False,
 ) -> Iterator[bytes]:
-    """Enforce one terminal event; replay only an explicitly safe factory."""
+    """Enforce terminal truth and one explicitly safe pre-output retry."""
 
-    output_emitted = False
-    tool_activity = False
+    lifecycle = StreamLifecycle(replayable=replay_safe)
     recovery_attempted = False
-    terminal_event_observed = False
     reported = False
 
     def report(terminal: Mapping[str, Any], terminal_observed: bool) -> None:
@@ -299,12 +353,12 @@ def _reliable_responses_stream(
             return
         reported = True
         value = dict(terminal)
+        diagnostics = lifecycle.diagnostics(value)
         value.update(
             {
-                "output_emitted": output_emitted,
-                "tool_activity": tool_activity,
+                **diagnostics,
                 "terminal_event_observed": bool(
-                    terminal_event_observed or terminal_observed
+                    diagnostics["terminal_event_observed"] or terminal_observed
                 ),
                 "recovery_succeeded": bool(
                     recovery_attempted and terminal.get("success") is True
@@ -320,31 +374,18 @@ def _reliable_responses_stream(
 
     try:
         for attempt in range(2 if replay_safe else 1):
+            lifecycle.reset_attempt()
             pending = []
             iterator = None
-            retry = False
             try:
                 iterator = iter(factory())
+                lifecycle.mark_iterator_created()
                 for event in sse_json_events(iterator):
-                    visible, tool = _stream_event_activity(event)
-                    output_emitted = output_emitted or visible
-                    tool_activity = tool_activity or tool
+                    lifecycle.observe_event(event)
                     terminal = _stream_terminal(event)
                     if terminal is not None:
-                        terminal_event_observed = True
-                        error_class = terminal.get("error_class")
-                        if (
-                            replay_safe
-                            and
-                            terminal.get("success") is not True
-                            and attempt == 0
-                            and not output_emitted
-                            and not tool_activity
-                            and error_class in _PRE_OUTPUT_RECOVERY_ERRORS
-                        ):
-                            recovery_attempted = True
-                            retry = True
-                            break
+                        terminal = lifecycle.observe_terminal(event, terminal)
+                        _validate_terminal_payload(event)
                         report(terminal, True)
                         if terminal.get("success") is True:
                             for buffered in pending:
@@ -363,83 +404,65 @@ def _reliable_responses_stream(
                                 "upstream stream failed",
                                 int(terminal.get("status") or 502),
                                 str(terminal.get("error_class") or "stream_error"),
+                                terminal.get("failure_reason"),
                             )
                         return
-                    if output_emitted or tool_activity:
+                    if lifecycle.output_emitted or lifecycle.tool_activity:
                         for buffered in pending:
                             yield _sse_frame(str(buffered.get("type") or "message"), buffered)
                         pending = []
                         yield _sse_frame(str(event.get("type") or "message"), dict(event))
                     else:
                         pending.append(dict(event))
-                if retry:
-                    continue
-                if tool_activity:
-                    error_class = "upstream_close_after_tool"
-                elif output_emitted:
-                    error_class = "upstream_close_after_output"
-                else:
-                    error_class = "upstream_close_pre_output"
-                if (
-                    replay_safe
-                    and attempt == 0
-                    and not output_emitted
-                    and not tool_activity
-                ):
-                    recovery_attempted = True
-                    continue
+                failure = lifecycle.incomplete()
                 terminal = {
                     "success": False,
-                    "status": 502,
-                    "error_class": error_class,
+                    "status": failure.status,
+                    "error_class": failure.error_class,
                 }
                 report(terminal, False)
                 yield _response_failure_frame(
                     "upstream stream ended without a terminal event",
-                    502,
-                    error_class,
+                    failure.status,
+                    failure.error_class,
                 )
                 return
             except GeneratorExit:
                 raise
             except Exception as exc:
-                status, failure_class = _stream_exception(exc)
+                failure = failure_from_exception(
+                    exc,
+                    lifecycle.phase,
+                    lifecycle.output_emitted,
+                )
                 if isinstance(exc, TransportError):
-                    failure_class = "malformed_terminal"
-                if (
-                    replay_safe
-                    and attempt == 0
-                    and not output_emitted
-                    and not tool_activity
-                    and failure_class == "network"
+                    failure = FailureSnapshot(
+                        "malformed_terminal", 502, lifecycle.phase
+                    )
+                if retry_allowed(
+                    failure,
+                    attempt,
+                    replay_safe,
+                    lifecycle.output_emitted,
                 ):
                     recovery_attempted = True
+                    lifecycle.retry_count += 1
                     continue
-                error_class = (
-                    "upstream_close_after_tool"
-                    if tool_activity
-                    else "upstream_close_after_output"
-                    if output_emitted
-                    else "proxy_reset"
-                    if failure_class == "network"
-                    else failure_class
-                )
+                lifecycle.phase = failure.phase
                 terminal = {
                     "success": False,
-                    "status": status or 502,
-                    "error_class": error_class,
+                    "status": failure.status,
+                    "error_class": failure.error_class,
                 }
+                if failure.failure_reason:
+                    terminal["failure_reason"] = failure.failure_reason
                 report(terminal, False)
-                failure_message = (
-                    str(exc)
-                    if isinstance(exc, RouterError)
-                    and isinstance(exc.__cause__, ProjectionError)
-                    else "upstream stream failed"
-                )
                 yield _response_failure_frame(
-                    failure_message,
-                    int(status or 502),
-                    error_class,
+                    "upstream stream failed",
+                    failure.status,
+                    failure.error_class,
+                    failure.failure_reason,
+                    transport_failure=True,
                 )
                 return
             finally:
@@ -512,6 +535,45 @@ def _sse_data(response: Any) -> Iterator[Tuple[str, bool]]:
             yield body, False
     finally:
         response.close()
+
+
+def _request_stream(
+    io: StreamAdapterIO,
+    provider: Dict[str, Any],
+    payload: Dict[str, Any],
+    incoming: Dict[str, str],
+    context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]],
+) -> Any:
+    """Mark failures that happen while establishing the upstream response."""
+
+    try:
+        return io.request(
+            provider,
+            payload,
+            incoming,
+            True,
+            context_check=context_check,
+            # Streaming disables transport replay inside Router. Keep the one
+            # pre-header compatibility retry that changes an explicitly
+            # rejected reasoning_effort payload before any output exists.
+            allow_retries=True,
+        )
+    except TransportFailure:
+        raise
+    except TimeoutError as exc:
+        raise TransportFailure(
+            CONNECT_TIMEOUT,
+            504,
+            PHASE_CONNECT,
+        ) from exc
+    except URLError as exc:
+        if isinstance(getattr(exc, "reason", None), TimeoutError):
+            raise TransportFailure(
+                CONNECT_TIMEOUT,
+                504,
+                PHASE_CONNECT,
+            ) from exc
+        raise
 
 
 def _response_json_stream(
@@ -601,19 +663,34 @@ def _validated_responses_stream(
 ) -> Iterator[bytes]:
     """Pass through valid Responses SSE and terminate malformed streams explicitly."""
     reported = False
+    lifecycle = StreamLifecycle()
 
     def report(
         status: Any,
         error_class: str = "none",
         context_observation: Optional[Mapping[str, Any]] = None,
+        terminal: Optional[Mapping[str, Any]] = None,
     ) -> None:
         nonlocal reported
         if reported:
             return
         reported = True
-        _notify_terminal(terminal_callback, status, error_class, context_observation)
+        diagnostics = lifecycle.diagnostics(terminal or {})
+        _notify_terminal(
+            terminal_callback,
+            status,
+            error_class,
+            context_observation,
+            diagnostics,
+        )
 
     try:
+        response_status = getattr(response, "status", None)
+        if isinstance(response_status, int) and not isinstance(response_status, bool):
+            if response_status == 504:
+                raise TransportFailure(UPSTREAM_504, 504, PHASE_CONNECT)
+            if 500 <= response_status <= 599:
+                raise TransportFailure("upstream_5xx", response_status, PHASE_CONNECT)
         content_type = str(getattr(response, "headers", {}).get("Content-Type", "")).lower()
         chunks = response
         if "text/event-stream" not in content_type:
@@ -637,21 +714,30 @@ def _validated_responses_stream(
                     provider is not None
                     and provider.get("auth_mode") == "forward"
                 )
-                terminal = responses_terminal_observation(value, strict_output)
+                lifecycle.mark_iterator_created()
+                lifecycle.observe_event(
+                    {"type": "response." + str(value.get("status")), "response": value}
+                )
+                terminal = lifecycle.observe_terminal(
+                    {"type": "response." + str(value.get("status")), "response": value},
+                    responses_terminal_observation(value, strict_output),
+                )
                 yield from _response_json_stream(value, strict_output)
-                report(terminal["status"], terminal["error_class"])
+                report(
+                    terminal["status"],
+                    terminal["error_class"],
+                    terminal=terminal,
+                )
                 return
 
         line_buffer = ""
         pending_data = []
         saw_data = False
         saw_terminal = False
-        saw_error = False
-        error_message = ""
-        incomplete_reason = ""
+        terminal_observation: Optional[Dict[str, Any]] = None
 
         def consume_line(line: str) -> None:
-            nonlocal saw_data, saw_terminal, saw_error, error_message, pending_data, incomplete_reason
+            nonlocal saw_data, saw_terminal, pending_data, terminal_observation
             line = line.rstrip("\r")
             if line.startswith("data:"):
                 saw_data = True
@@ -677,17 +763,12 @@ def _validated_responses_stream(
                     provider.get("_context_observation", {}).get("input_estimate"),
                 )
                 raise ContextLengthError(observation)
-            event_type = str(value.get("type") or "")
-            if event_type == "response.completed":
+            lifecycle.observe_event(value)
+            terminal = _stream_terminal(value)
+            if terminal is not None:
                 saw_terminal = True
-            elif event_type == "response.incomplete":
-                saw_terminal = True
-                response_value = value.get("response")
-                details = response_value.get("incomplete_details") if isinstance(response_value, Mapping) else None
-                incomplete_reason = str(details.get("reason") or "") if isinstance(details, Mapping) else ""
-            elif event_type in ("error", "response.failed"):
-                saw_error = True
-                error_message = str(value.get("message") or value.get("error") or "upstream Responses stream returned an error")
+                terminal_observation = lifecycle.observe_terminal(value, terminal)
+                _validate_terminal_payload(value)
 
         for raw in chunks:
             raw_bytes = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
@@ -709,32 +790,30 @@ def _validated_responses_stream(
             consume_line(line_buffer)
         if pending_data:
             consume_line("")
-        if not saw_terminal and not saw_error:
+        if not saw_terminal:
             message = "upstream Responses stream ended before response.completed" if saw_data else "upstream Responses stream contained no SSE data"
-            yield _response_failure_frame(message, 502, "stream_incomplete")
-            report(502, "stream_incomplete")
-        elif not saw_terminal and saw_error:
-            yield _response_failure_frame(
-                error_message or "upstream Responses stream returned an error",
-                502,
-                "stream_error",
-            )
-            report(502, "stream_error")
+            yield _response_failure_frame(message, 502, STREAM_INCOMPLETE)
+            report(502, STREAM_INCOMPLETE)
         else:
+            terminal = terminal_observation or {
+                "status": 502,
+                "success": False,
+                "error_class": "stream_error",
+            }
             report(
-                200,
-                {
-                    "max_output_tokens": "output_limit",
-                    "content_filter": "content_filter",
-                }.get(incomplete_reason, "none"),
+                terminal.get("status", 502),
+                terminal.get("error_class", "stream_error"),
+                terminal=terminal,
             )
     except RouterError as exc:
+        if isinstance(exc, TransportFailure):
+            raise
         if isinstance(exc, ContextLengthError):
             report(exc.status, "context_length_exceeded", exc.context_observation)
         else:
             report(exc.status, _route_error_class(exc.status))
         yield _response_failure_frame(
-            str(exc),
+            "upstream stream failed",
             exc.status,
             "context_length_exceeded"
             if isinstance(exc, ContextLengthError)
@@ -786,7 +865,7 @@ def stream_chat_completion(
         return _sse_frame(event, value)
 
     try:
-        upstream = io.request(provider, payload, incoming, True, context_check=context_check)
+        upstream = _request_stream(io, provider, payload, incoming, context_check)
         yield frame("response.created", {"type": "response.created", "response": response})
         for data, framed_as_sse in _sse_data(upstream):
             if data == "[DONE]":
@@ -1132,6 +1211,8 @@ def stream_chat_completion(
             }.get(incomplete_reason, "none"),
         )
     except RouterError as exc:
+        if isinstance(exc, TransportFailure):
+            raise
         terminal = _terminal_exception(exc)
         _notify_terminal(
             terminal_callback,
@@ -1181,7 +1262,7 @@ def stream_anthropic_completion(
         return _sse_frame(event, value)
 
     try:
-        upstream = io.request(provider, payload, incoming, True, context_check=context_check)
+        upstream = _request_stream(io, provider, payload, incoming, context_check)
         yield frame("response.created", {"type": "response.created", "response": response})
         for data, _framed_as_sse in _sse_data(upstream):
             if data == "[DONE]":
@@ -1675,6 +1756,8 @@ def stream_anthropic_completion(
             }.get(incomplete_reason, "none"),
         )
     except RouterError as exc:
+        if isinstance(exc, TransportFailure):
+            raise
         terminal = _terminal_exception(exc)
         _notify_terminal(
             terminal_callback,

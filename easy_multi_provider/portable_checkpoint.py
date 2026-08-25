@@ -1,8 +1,7 @@
-"""Build one request-local view from Codex's latest visible compaction.
+"""Build request-local history projections from Codex-visible rollout items.
 
-Codex owns history. This module neither summarizes nor persists it: it keeps
-the latest Codex compaction summary, the completed visible tail after that
-summary, and the current request in that order.
+Codex owns and persists conversation history. EMP only derives the visible
+prefix needed to replace an opaque native compaction item for one request.
 """
 
 from __future__ import annotations
@@ -10,7 +9,6 @@ from __future__ import annotations
 import copy
 import dataclasses
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -36,17 +34,6 @@ class PortableCheckpointError(Exception):
 
 class CompactionSummaryMissingError(PortableCheckpointError):
     code = "compaction_summary_missing"
-
-
-class IncompleteToolPairError(PortableCheckpointError):
-    code = "checkpoint_tool_pair_incomplete"
-
-
-@dataclass(frozen=True)
-class PortableCheckpoint:
-    summary: Optional[Dict[str, Any]]
-    retained_tail: Tuple[Dict[str, Any], ...]
-    current_request: Tuple[Dict[str, Any], ...]
 
 
 def _mapping(item: Any) -> Dict[str, Any]:
@@ -99,72 +86,107 @@ def _call_id(item: Mapping[str, Any]) -> Optional[str]:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def _validate_tool_pairs(items: Iterable[Mapping[str, Any]]) -> None:
-    open_calls = set()
-    completed = set()
-    for item in items:
+def _tool_family(item: Mapping[str, Any]) -> str:
+    raw_type = str(item.get("raw_type") or item.get("type") or "").lower()
+    return "custom" if "custom_tool" in raw_type else "function"
+
+
+def _aborted_output(call: Mapping[str, Any]) -> Dict[str, Any]:
+    family = _tool_family(call)
+    return {
+        "kind": "tool_result",
+        "content": {"output": "aborted"},
+        "call_id": _call_id(call),
+        "turn_id": call.get("turn_id"),
+        "raw_type": (
+            "custom_tool_call_output"
+            if family == "custom"
+            else "function_call_output"
+        ),
+    }
+
+
+def _normalize_tool_pairs(items: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """Mirror Codex prompt normalization for visible function/custom tools."""
+
+    source = [copy.deepcopy(dict(item)) for item in items]
+    calls = set()
+    outputs = set()
+    for item in source:
         role = _tool_role(item)
         if role is None:
             continue
         call_id = _call_id(item)
         if call_id is None:
-            raise IncompleteToolPairError()
+            raise PortableCheckpointError()
+        key = (_tool_family(item), call_id)
+        (calls if role == "call" else outputs).add(key)
+
+    normalized = []
+    for item in source:
+        role = _tool_role(item)
+        if role == "result":
+            key = (_tool_family(item), _call_id(item))
+            if key not in calls:
+                continue
+        normalized.append(item)
         if role == "call":
-            if call_id in open_calls or call_id in completed:
-                raise IncompleteToolPairError()
-            open_calls.add(call_id)
-        else:
-            if call_id not in open_calls:
-                raise IncompleteToolPairError()
-            open_calls.remove(call_id)
-            completed.add(call_id)
-    if open_calls:
-        raise IncompleteToolPairError()
+            key = (_tool_family(item), _call_id(item))
+            if key not in outputs:
+                normalized.append(_aborted_output(item))
+    return normalized
 
 
-def build_portable_view(
-    persisted_items: Iterable[Any], current_request_items: Iterable[Any]
-) -> PortableCheckpoint:
-    """Return ``Codex summary + completed tail + exact current request``.
+def _latest_compaction(items: List[Dict[str, Any]]) -> int:
+    boundaries = [
+        index for index, item in enumerate(items) if _kind(item) in _COMPACTION_KINDS
+    ]
+    if not boundaries:
+        raise CompactionSummaryMissingError()
+    return boundaries[-1]
 
-    No second summary, clipping, retry, or history cache is permitted here.
-    If Codex's visible state cannot be represented exactly, the caller fails
-    closed instead of sending a partial context.
+
+def build_compaction_replacement(
+    persisted_items: Iterable[Any],
+) -> Tuple[Dict[str, Any], ...]:
+    """Return only the history represented by one opaque compaction item.
+
+    The incoming Codex request already contains the complete active tail. It
+    must not be merged with the same post-compaction rollout items again.
     """
 
     persisted = _items(persisted_items)
-    current = _items(current_request_items)
-    compacted = [
+    boundary = _latest_compaction(persisted)
+    compacted = persisted[boundary]
+    content = compacted.get("content")
+    has_visible_summary = bool(content.strip()) if isinstance(content, str) else bool(content)
+    replacement = [compacted] if has_visible_summary else persisted[:boundary]
+    return tuple(_normalize_tool_pairs(replacement))
+
+
+def build_visible_history(persisted_items: Iterable[Any]) -> Tuple[Dict[str, Any], ...]:
+    """Return complete visible history when no active Codex tail is available."""
+
+    persisted = _items(persisted_items)
+    boundaries = [
         index for index, item in enumerate(persisted) if _kind(item) in _COMPACTION_KINDS
     ]
-    if not compacted:
-        raise CompactionSummaryMissingError()
-    boundary = compacted[-1]
+    if not boundaries:
+        return tuple(_normalize_tool_pairs(persisted))
+    boundary = boundaries[-1]
     compacted = persisted[boundary]
     content = compacted.get("content")
     has_visible_summary = bool(content.strip()) if isinstance(content, str) else bool(content)
     if has_visible_summary:
-        summary = compacted
-        tail = persisted[boundary + 1 :]
+        visible = [compacted, *persisted[boundary + 1 :]]
     else:
-        # OpenAI remote compaction may keep only encrypted_content in the live
-        # context while the append-only rollout retains the complete visible
-        # history. Replaying that visible history is lossless; fabricating a
-        # clipped local "summary" would not be.
-        summary = None
-        tail = persisted[:boundary] + persisted[boundary + 1 :]
-    _validate_tool_pairs([*tail, *current])
-    return PortableCheckpoint(
-        summary=summary,
-        retained_tail=tuple(tail),
-        current_request=tuple(current),
-    )
+        visible = [*persisted[:boundary], *persisted[boundary + 1 :]]
+    return tuple(_normalize_tool_pairs(visible))
 
 
 __all__ = [
     "CompactionSummaryMissingError",
-    "IncompleteToolPairError",
-    "PortableCheckpoint",
     "PortableCheckpointError",
-    "build_portable_view",
+    "build_compaction_replacement",
+    "build_visible_history",
 ]

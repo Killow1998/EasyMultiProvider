@@ -133,6 +133,53 @@ class HistoryContinuityTests(unittest.TestCase):
         self.assertIn("visible checkpoint", rendered)
         self.assertIn("continue exactly", rendered)
 
+    def test_native_route_change_compacts_oversized_visible_history(self):
+        history = []
+        for index in range(8):
+            history.extend(
+                [
+                    VisibleItem(
+                        "user_message",
+                        content="requirement-%d %s" % (index, "x" * 700),
+                        turn_id="turn-%d" % index,
+                    ),
+                    VisibleItem(
+                        "assistant_message",
+                        content="completed-%d %s" % (index, "y" * 700),
+                        turn_id="turn-%d" % index,
+                    ),
+                ]
+            )
+        native = {
+            "id": "imported-account",
+            "protocol": "responses",
+            "auth_mode": "account",
+        }
+        model = {"id": "account/model", "context_window": 5_000}
+        body = {
+            "model": model["id"],
+            "input": [
+                {"type": "compaction", "encrypted_content": HISTORY_REBUILD_MARKER},
+                _message("active request"),
+            ],
+        }
+        calls = []
+
+        def summarize(request):
+            calls.append(request.stage)
+            return "%s checkpoint" % request.stage
+
+        engine = HistoryContinuityEngine(
+            Reader(history), destination_summarizer=summarize
+        )
+        prepared = engine.prepare(
+            {"models": [model]}, native, model, model["id"], body, _headers()
+        )
+
+        self.assertIn("map", calls)
+        self.assertEqual(prepared["input"][-1], _message("active request"))
+        self.assertEqual(engine.last_compaction_metrics.status, "compacted")
+
     def test_websocket_uses_request_client_metadata_instead_of_handshake_headers(self):
         reader = Reader([VisibleItem("compaction_summary", content="checkpoint")])
         config, provider, model = _external()
@@ -175,8 +222,97 @@ class HistoryContinuityTests(unittest.TestCase):
         self.assertIn("PID overshoot", rendered)
         self.assertIn("implemented the response chart", rendered)
         self.assertIn("continue exactly", rendered)
-        self.assertIn("Cross-model handoff boundary", json.dumps(prepared["input"][-2]))
         self.assertEqual(prepared["input"][-1], _message("continue exactly"))
+
+    def test_full_codex_input_replaces_only_opaque_compaction_without_duplicating_tail(self):
+        """Codex sends its complete normalized prompt, not a current-turn delta."""
+
+        reader = Reader(
+            [
+                VisibleItem("user_message", content="old requirement"),
+                VisibleItem("assistant_message", content="old implementation"),
+                VisibleItem("compaction_summary", content=""),
+                VisibleItem("user_message", content="inspect the repository"),
+                VisibleItem(
+                    "tool_call",
+                    content={"name": "read_file", "arguments": "{}"},
+                    item_id="item-call-1",
+                    call_id="call-1",
+                    raw_type="custom_tool_call",
+                ),
+                VisibleItem(
+                    "tool_result",
+                    content={"output": "README contents"},
+                    call_id="call-1",
+                    raw_type="custom_tool_call_output",
+                ),
+                VisibleItem("assistant_message", content="repository inspected"),
+            ]
+        )
+        config, provider, model = _external()
+        active_tail = [
+            _message("inspect the repository"),
+            {
+                "type": "custom_tool_call",
+                "id": "item-call-1",
+                "call_id": "call-1",
+                "name": "read_file",
+                "input": "{}",
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call-1",
+                "output": "README contents",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "repository inspected"}],
+            },
+            _message("continue the task"),
+        ]
+        body = {
+            "model": model["id"],
+            "input": [
+                {"type": "compaction", "encrypted_content": "native-opaque"},
+                *active_tail,
+            ],
+            "tools": [],
+        }
+
+        upstream_response = json.dumps(
+            {
+                "id": "resp_external",
+                "object": "response",
+                "status": "completed",
+                "output": [],
+            }
+        ).encode()
+        with patch.object(
+            router,
+            "forward_responses",
+            return_value=(200, "application/json", upstream_response),
+        ) as forwarded:
+            metadata, result = router.proxy(
+                config,
+                body,
+                _headers(),
+                history_preparer=HistoryContinuityEngine(reader).prepare,
+            )
+        prepared = forwarded.call_args.args[1]
+
+        self.assertEqual(metadata["status"], 200)
+        self.assertEqual(result, upstream_response)
+        self.assertNotIn("native-opaque", json.dumps(prepared["input"]))
+        self.assertEqual(prepared["input"][-len(active_tail) :], active_tail)
+        self.assertEqual(
+            sum(
+                item.get("call_id") == "call-1"
+                for item in prepared["input"]
+                if isinstance(item, dict)
+            ),
+            2,
+        )
 
     def test_external_compaction_after_history_rebuild_returns_one_compaction_item(self):
         reader = Reader(
@@ -266,6 +402,112 @@ class HistoryContinuityTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.reason, "context_budget_exceeded")
+
+    def test_oversized_history_uses_destination_map_reduce_and_keeps_tail_and_request(self):
+        history = []
+        for index in range(9):
+            turn_id = "turn-%d" % index
+            history.append(
+                VisibleItem(
+                    "user_message",
+                    content="history-%d %s" % (index, "x" * 650),
+                    turn_id=turn_id,
+                )
+            )
+            if index == 8:
+                history.extend(
+                    [
+                        VisibleItem(
+                            "tool_call",
+                            content={"name": "read_file", "arguments": "{}"},
+                            turn_id=turn_id,
+                            call_id="tail-call",
+                            raw_type="custom_tool_call",
+                        ),
+                        VisibleItem(
+                            "tool_result",
+                            content={"output": "tail result"},
+                            turn_id=turn_id,
+                            call_id="tail-call",
+                            raw_type="custom_tool_call_output",
+                        ),
+                    ]
+                )
+            history.append(
+                VisibleItem(
+                    "assistant_message",
+                    content="completed-%d %s" % (index, "y" * 650),
+                    turn_id=turn_id,
+                )
+            )
+        history.append(VisibleItem("compaction_summary", content=""))
+
+        config, provider, model = _external(context_window=5_000)
+        active_request = _message("active request must remain byte-for-byte visible")
+        body = _opaque_body()
+        body["input"][-1] = active_request
+        calls = []
+
+        def summarize(request):
+            calls.append(request)
+            encoded = json.dumps(
+                request.body,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            self.assertLessEqual(
+                (len(encoded) + 1) // 2,
+                request.safe_input_budget - request.output_limit,
+            )
+            self.assertFalse(request.body.get("stream"))
+            self.assertEqual(request.body.get("tools"), [])
+            self.assertNotIn("previous_response_id", request.body)
+            return "%s checkpoint %d" % (request.stage, len(calls))
+
+        engine = HistoryContinuityEngine(
+            Reader(history), destination_summarizer=summarize
+        )
+        prepared = engine.prepare(config, provider, model, model["id"], body, _headers())
+
+        self.assertGreaterEqual(len(calls), 3)
+        self.assertIn("map", [request.stage for request in calls])
+        self.assertIn("reduce", [request.stage for request in calls])
+        self.assertEqual(engine.last_compaction_metrics.status, "compacted")
+        self.assertGreater(engine.last_compaction_metrics.map_calls, 1)
+        self.assertGreater(engine.last_compaction_metrics.reduce_calls, 0)
+        self.assertNotIn("history-8", json.dumps(engine.last_compaction_metrics.to_safe_dict()))
+        self.assertEqual(prepared["input"][-1], active_request)
+        rendered = json.dumps(prepared["input"], ensure_ascii=False)
+        self.assertIn("history-8", rendered)
+        self.assertIn("tail-call", rendered)
+        self.assertEqual(
+            sum(
+                item.get("call_id") == "tail-call"
+                for item in prepared["input"]
+                if isinstance(item, dict)
+            ),
+            2,
+        )
+        final_encoded = json.dumps(
+            {
+                key: prepared[key]
+                for key in ("input", "instructions", "tools", "text", "response_format")
+                if key in prepared
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.assertLessEqual((len(final_encoded) + 1) // 2, 4_500)
+
+        first_call_count = len(calls)
+        repeated = engine.prepare(
+            config, provider, model, model["id"], body, _headers()
+        )
+        self.assertEqual(len(calls), first_call_count)
+        self.assertTrue(engine.last_compaction_metrics.cache_hit)
+        self.assertEqual(repeated["input"][-1], active_request)
 
 
 if __name__ == "__main__":

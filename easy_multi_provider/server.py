@@ -76,6 +76,7 @@ from .codex_runtime import (
 )
 from .context_guard import ContextGuard, ContextGuardBlocked
 from .diagnostic_journal import NullJournal, create_journal
+from .destination_summary import DestinationSummaryAdapter
 from .integration import (
     IntegrationError,
     IntegrationManager,
@@ -90,6 +91,7 @@ from .migration import export_bundle, import_bundle
 from .native_websocket import (
     NativeWebSocketBridge,
     NativeWebSocketError,
+    native_websocket_request_fits,
     terminal_observation as native_websocket_terminal,
 )
 from .quota import QuotaError, account_refresh_lock, read_native_login_quota, refresh_account_quota
@@ -119,6 +121,7 @@ from .transport import (
     websocket_accept,
 )
 from .stream_adapters import _response_json_stream
+from .search_integration import SearchFeatureManager
 from .vault import default_master_key_file, ensure_master_key
 
 
@@ -133,7 +136,7 @@ PROXY_ENV_KEYS = (
     "all_proxy",
 )
 _DIAGNOSTIC_CAPACITY = 64
-_DIAGNOSTIC_ID = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
+_DIAGNOSTIC_ID = re.compile(r"^[A-Za-z0-9._/:-]{1,256}$")
 _DIAGNOSTIC_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 _DIAGNOSTIC_PROTOCOLS = frozenset(
     {"responses", "chat_completions", "anthropic_messages", "unknown"}
@@ -155,10 +158,16 @@ _DIAGNOSTIC_ERRORS = frozenset(
     {
         "none",
         "auth",
+        "payment_required",
         "rate_limit",
         "protocol_rejection",
         "upstream_5xx",
+        "upstream_504",
         "timeout",
+        "connect_timeout",
+        "first_event_timeout",
+        "idle_after_output",
+        "local_deadline",
         "network",
         "router_error",
         "stream_error",
@@ -571,7 +580,7 @@ def _ws_history_rebuild_request(request: Mapping[str, Any]) -> Dict[str, Any]:
     """Replace an unavailable WS predecessor with a read-only history anchor."""
 
     current_input = request.get("input", [])
-    if not isinstance(current_input, list) or _ws_replay_size(current_input) is None:
+    if not isinstance(current_input, list) or len(current_input) > _WS_REPLAY_MAX_ITEMS:
         raise TransportError("incremental websocket input is invalid or too large")
     rebuilt = dict(request)
     rebuilt.pop("previous_response_id", None)
@@ -934,13 +943,22 @@ class AppState:
         self.context_guard = ContextGuard()
         self.provider_replay = ProviderReplayCache()
         self.integration_manager = integration_manager
+        self.search_feature_manager = (
+            SearchFeatureManager(
+                integration_manager.config_path,
+                integration_manager.lease_path.with_name("search.json"),
+            )
+            if integration_manager is not None
+            else None
+        )
         codex_home = (
             integration_manager.config_path.parent
             if integration_manager is not None
             else resolve_integration_paths().codex_home
         )
         self.history_continuity = HistoryContinuityEngine(
-            history_reader or CodexHomeHistoryReader(codex_home)
+            history_reader or CodexHomeHistoryReader(codex_home),
+            destination_summarizer=DestinationSummaryAdapter(),
         )
         self.runtime_controller = runtime_controller or CodexRuntimeController(
             target_codex_home=(
@@ -1030,8 +1048,28 @@ class AppState:
                 self.runtime_recovery_store = RuntimeRecoveryStore(
                     self.integration_manager.lease_path.with_name("runtime.json")
                 )
+                self.search_feature_manager = SearchFeatureManager(
+                    self.integration_manager.config_path,
+                    self.integration_manager.lease_path.with_name("search.json"),
+                )
                 self._load_runtime_recovery()
             return self.integration_manager
+
+    def ensure_search_feature_manager(self) -> SearchFeatureManager:
+        self.ensure_integration_manager()
+        with self.lock:
+            if self.search_feature_manager is None:
+                self.search_feature_manager = SearchFeatureManager(
+                    self.integration_manager.config_path,
+                    self.integration_manager.lease_path.with_name("search.json"),
+                )
+            return self.search_feature_manager
+
+    def _sync_search_feature_unlocked(self, enabled: Optional[bool] = None) -> None:
+        if enabled is None:
+            search = self.snapshot().get("subscription_search")
+            enabled = isinstance(search, Mapping) and search.get("enabled") is True
+        self.ensure_search_feature_manager().apply(bool(enabled))
 
     def _load_runtime_recovery(self) -> None:
         store = self.runtime_recovery_store
@@ -1134,6 +1172,12 @@ class AppState:
 
         manager = self.ensure_integration_manager()
         with manager.operation_lock():
+            with self.lock:
+                target_emp = self._runtime_should_be_present
+            if target_emp:
+                self._sync_search_feature_unlocked()
+            else:
+                self.ensure_search_feature_manager().restore()
             return self._sync_integration_runtime_unlocked(confirm_reload)
 
     def _sync_integration_runtime_unlocked(
@@ -1187,6 +1231,11 @@ class AppState:
                 service_ready=self.service_ready,
             )
             if result.ok and result.state == "active":
+                try:
+                    self._sync_search_feature_unlocked()
+                except (IntegrationError, OSError):
+                    manager.restore()
+                    raise
                 with self.lock:
                     self._integration_owned = True
                     self._startup_conflicts = ()
@@ -1205,6 +1254,7 @@ class AppState:
                 else self._runtime_model_ids()
             )
         with manager.operation_lock():
+            self.ensure_search_feature_manager().restore()
             result = manager.restore()
             if result.ok and result.state in ("native", "restored"):
                 with self.lock:
@@ -1235,7 +1285,9 @@ class AppState:
                 status.lease,
                 status.conflicts,
             )
-        result = manager.restore()
+        with manager.operation_lock():
+            self.ensure_search_feature_manager().restore()
+            result = manager.restore()
         if result.ok and result.state in ("native", "restored"):
             with self.lock:
                 self._integration_owned = False
@@ -1243,15 +1295,20 @@ class AppState:
         return result
 
     def reconcile_startup(self, service_ready: Any) -> IntegrationResult:
-        result = self.ensure_integration_manager().recover(
-            re_adopt=True,
-            service_ready=service_ready,
-        )
-        if result.action == "re_adopted" and result.state == "active":
-            with self.lock:
-                self._integration_owned = True
-                self._startup_conflicts = ()
-            self._mark_runtime_pending("emp", "EMP restarted; runtime catalog was not assumed")
+        manager = self.ensure_integration_manager()
+        with manager.operation_lock():
+            result = manager.recover(
+                re_adopt=True,
+                service_ready=service_ready,
+            )
+            if result.action == "re_adopted" and result.state == "active":
+                self._sync_search_feature_unlocked()
+                with self.lock:
+                    self._integration_owned = True
+                    self._startup_conflicts = ()
+                self._mark_runtime_pending(
+                    "emp", "EMP restarted; runtime catalog was not assumed"
+                )
         return result
 
     def update(self, incoming: Dict[str, Any]) -> Dict[str, Any]:
@@ -1335,11 +1392,15 @@ class AppState:
     def _diagnostic_error_class(status: Any) -> str:
         if status in (401, 403):
             return "auth"
+        if status == 402:
+            return "payment_required"
         if status == 429:
             return "rate_limit"
         if status in (404, 405, 415, 501):
             return "protocol_rejection"
-        if status in (408, 504):
+        if status == 504:
+            return "upstream_504"
+        if status == 408:
             return "timeout"
         if status == 502:
             return "network"
@@ -2026,6 +2087,10 @@ class AppState:
 
             updated = dict(self.config)
             updated["accounts"] = [item for item in accounts if item.get("id") != account_id]
+            search = dict(updated.get("subscription_search") or {})
+            if search.get("account_id") == account_id:
+                search.update({"enabled": False, "account_id": ""})
+                updated["subscription_search"] = search
             save(updated, self.path)
             self.config = load(self.path)
 
@@ -2694,6 +2759,7 @@ def make_handler(state: AppState):
             native_upstream = NativeWebSocketBridge()
             last_response_id = None
             last_input = None
+            last_native_response_id = None
             try:
                 while True:
                     text = websocket.receive_text()
@@ -2718,32 +2784,44 @@ def make_handler(state: AppState):
                         )
                         if (
                             plan is not None
+                            and previous_hint is not None
+                            and (
+                                native_upstream.connection_key
+                                != plan.target.connection_key
+                                or previous_hint != last_native_response_id
+                            )
+                        ):
+                            # A Responses WebSocket predecessor is valid only
+                            # for the native chain that produced it.  Codex
+                            # already owns the full visible history and treats
+                            # this standard error as a request to resend the
+                            # same turn without previous_response_id.  Do not
+                            # project rollout history into a native request.
+                            self._websocket_error(
+                                websocket,
+                                "Previous response was not found. Retrying the full request.",
+                                404,
+                                "previous_response_not_found",
+                                {
+                                    "context_decision": "warned",
+                                    "confidence": 0.0,
+                                    "source": "unknown",
+                                    "completeness": "lost",
+                                    "next_action": "retry the full native request",
+                                },
+                            )
+                            continue
+                        if (
+                            plan is not None
+                            and native_websocket_request_fits(plan.payload)
                             and state.native_websocket_allowed(
                                 plan.target.connection_key
                             )
                         ):
-                            if (
-                                previous_hint is not None
-                                and native_upstream.connection_key
-                                != plan.target.connection_key
-                            ):
-                                self._websocket_error(
-                                    websocket,
-                                    "Previous response was not found. Retrying the full request.",
-                                    404,
-                                    "previous_response_not_found",
-                                    {
-                                        "context_decision": "warned",
-                                        "confidence": 0.0,
-                                        "source": "unknown",
-                                        "completeness": "lost",
-                                        "next_action": "retry the full native request",
-                                    },
-                                )
-                                continue
                             response_bytes = 0
                             first_event_ms = None
                             terminal = None
+                            completed_native_id = None
                             output_emitted = False
                             tool_activity = False
                             pending_lifecycle_events = []
@@ -2803,6 +2881,12 @@ def make_handler(state: AppState):
                                     output_emitted = output_emitted or event_output
                                     tool_activity = tool_activity or event_tool
                                     terminal = native_websocket_terminal(event)
+                                    if terminal is not None:
+                                        response = event.get("response")
+                                        if isinstance(response, Mapping) and isinstance(
+                                            response.get("id"), str
+                                        ):
+                                            completed_native_id = response["id"]
                                     if event_output or event_tool or terminal is not None:
                                         for pending_event in pending_lifecycle_events:
                                             websocket.send_json(pending_event)
@@ -2944,9 +3028,19 @@ def make_handler(state: AppState):
                                     output_emitted,
                                     tool_activity,
                                 )
+                                if terminal and terminal.get("success") is True:
+                                    last_native_response_id = completed_native_id
                                 last_response_id = None
                                 last_input = None
                                 continue
+                        if plan is not None:
+                            # Native preparation may have rebuilt or compacted
+                            # visible history already. Reuse that transient
+                            # body for HTTP instead of reading/summarizing the
+                            # same Codex history a second time.
+                            request = plan.payload
+                            request.pop("type", None)
+                            request["model"] = plan.requested_slug
                         previous_response_id = request.pop("previous_response_id", None)
                         generate = request.pop("generate", None)
                         current_input = request.get("input", [])
@@ -2959,22 +3053,15 @@ def make_handler(state: AppState):
                             elif not isinstance(last_input, list) or not isinstance(current_input, list):
                                 raise TransportError("incremental websocket input must be a list")
                             elif _ws_replay_size(last_input, current_input) is None:
-                                self._websocket_error(
-                                    websocket,
-                                    "WebSocket context state is too large; start a new native session.",
-                                    413,
-                                    "context_state_too_large",
-                                    {
-                                        "context_decision": "warned",
-                                        "confidence": 0.0,
-                                        "source": "unknown",
-                                        "completeness": "unknown",
-                                        "next_action": "start a new native session",
-                                    },
+                                request = _ws_history_rebuild_request(
+                                    dict(
+                                        request,
+                                        previous_response_id=previous_response_id,
+                                    )
                                 )
+                                current_input = request["input"]
                                 last_response_id = None
                                 last_input = None
-                                continue
                             else:
                                 request["input"] = last_input + current_input
                         if generate is False:
@@ -3062,19 +3149,10 @@ def make_handler(state: AppState):
                             base_input = request.get("input", [])
                             if isinstance(base_input, list):
                                 if _ws_replay_size(base_input, output_items) is None:
-                                    self._websocket_error(
-                                        websocket,
-                                        "WebSocket context state is too large; start a new native session.",
-                                        413,
-                                        "context_state_too_large",
-                                        {
-                                            "context_decision": "warned",
-                                            "confidence": 0.0,
-                                            "source": "unknown",
-                                            "completeness": "unknown",
-                                            "next_action": "start a new native session",
-                                        },
-                                    )
+                                    # The completed response remains valid. Do
+                                    # not retain a second large history copy;
+                                    # the next delta is rebuilt from Codex's
+                                    # canonical local history instead.
                                     last_response_id = None
                                     last_input = None
                                 else:
@@ -3104,6 +3182,7 @@ def make_handler(state: AppState):
             finally:
                 last_response_id = None
                 last_input = None
+                last_native_response_id = None
                 native_upstream.close()
                 websocket.close()
 

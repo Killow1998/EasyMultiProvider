@@ -18,6 +18,7 @@ from .accounts import AccountError, auth_headers, native_auth_headers
 from .capabilities import (
     deployment_identity,
     endpoint_fingerprint,
+    make_provenance,
     normalize_supported_protocols,
     observed_at_now,
 )
@@ -113,6 +114,13 @@ from .stream_adapters import (
     stream_chat_completion as _owned_stream_chat_completion,
 )
 from .transport import TransportError, sse_json_events, zstd_encode
+from .transport_failures import (
+    CONNECT_TIMEOUT,
+    PHASE_CONNECT,
+    UPSTREAM_504,
+    TransportFailure,
+    protocol_fallback_allowed,
+)
 
 
 HistoryPreparationCallback = Callable[
@@ -164,8 +172,9 @@ MAX_DISCOVERY_TOKEN_BYTES = 4096
 MAX_SSE_FRAME_BYTES = 1024 * 1024
 MAX_STREAM_TEXT_BYTES = 16 * 1024 * 1024
 MAX_DISCOVERED_MODELS = 1000
-MAX_UPSTREAM_SECONDS = 180
+MAX_UPSTREAM_SECONDS = 300
 UPSTREAM_SOCKET_TIMEOUT = 30
+UPSTREAM_STREAM_IDLE_TIMEOUT = 300
 _COMPACTION_PROMPT = """You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another language model that will resume the task.
 
 Include current progress, key decisions, constraints, user preferences, remaining steps, and critical data or references. Be concise, structured, and focused on seamless continuation."""
@@ -225,6 +234,8 @@ def _upstream_failure_reason(status: int, detail: str) -> str:
     text = re.sub(r"[^a-z0-9]+", " ", str(detail or "").lower()).strip()
     if status in (401, 403):
         return "auth_rejected"
+    if status == 402:
+        return "payment_required"
     if status == 413 or any(
         phrase in text
         for phrase in ("request too large", "payload too large", "input too large")
@@ -241,9 +252,36 @@ def _upstream_failure_reason(status: int, detail: str) -> str:
         if any(word in text for word in ("capacity", "overloaded", "saturated")):
             return "upstream_capacity"
         return "rate_limited"
-    if status in (500, 502, 503, 504):
+    if status == 504:
+        return UPSTREAM_504
+    if status in (500, 502, 503):
         return "upstream_unavailable"
     return "upstream_rejected"
+
+
+def _upstream_public_error(
+    status: int,
+    content_type: str,
+    detail: str,
+    model: Any,
+) -> str:
+    free_route = str(model or "").strip().lower().endswith(":free")
+    if status == 402:
+        message = (
+            "payment required: provider balance is insufficient or the selected "
+            "route is paid"
+        )
+        if free_route:
+            message += "; EMP did not fall back from :free to a paid model"
+        return message
+    if status == 429:
+        if free_route:
+            return "free quota exhausted or provider capacity is busy; retry later"
+        return "quota exhausted or provider capacity is busy; retry later"
+    message = "upstream returned %d (%s)" % (status, content_type)
+    if content_type in {"text/html", "application/xhtml+xml"}:
+        message += ": " + detail
+    return message
 
 
 def _set_response_timeout(response: Any, timeout: float) -> None:
@@ -313,9 +351,15 @@ def _read_limited(
 
 
 class _DeadlineResponse:
-    def __init__(self, response: Any, deadline: float):
+    def __init__(
+        self,
+        response: Any,
+        deadline: Optional[float],
+        idle_timeout: float = UPSTREAM_STREAM_IDLE_TIMEOUT,
+    ):
         self._response = response
         self._deadline = deadline
+        self._idle_timeout = max(0.1, float(idle_timeout))
         self._unsized_read = False
 
     @property
@@ -327,9 +371,25 @@ class _DeadlineResponse:
         return self._response.headers
 
     def _check_deadline(self) -> None:
-        if time.monotonic() > self._deadline:
+        if self._deadline is not None and time.monotonic() > self._deadline:
             self.close()
             raise RouterError("upstream request timed out", 504)
+
+    def _read_timeout(self) -> float:
+        if self._deadline is None:
+            return self._idle_timeout
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            self.close()
+            raise RouterError("upstream request timed out", 504)
+        return min(self._idle_timeout, remaining)
+
+    def _timeout_message(self) -> str:
+        return (
+            "upstream stream idle timeout"
+            if self._deadline is None
+            else "upstream request timed out"
+        )
 
     def read(self, size: int = -1) -> bytes:
         self._check_deadline()
@@ -337,7 +397,7 @@ class _DeadlineResponse:
             return b""
         _set_response_timeout(
             self._response,
-            self._deadline - time.monotonic(),
+            self._read_timeout(),
         )
         try:
             return self._response.read(size)
@@ -346,11 +406,13 @@ class _DeadlineResponse:
             return self._response.read()
         except TimeoutError as exc:
             self.close()
-            raise RouterError("upstream request timed out", 504) from exc
+            if self._deadline is None:
+                raise TimeoutError("upstream stream idle timeout") from exc
+            raise RouterError(self._timeout_message(), 504) from exc
         except OSError as exc:
-            if time.monotonic() >= self._deadline:
+            if self._deadline is not None and time.monotonic() >= self._deadline:
                 self.close()
-                raise RouterError("upstream request timed out", 504) from exc
+                raise RouterError(self._timeout_message(), 504) from exc
             raise
 
     def __iter__(self):
@@ -360,17 +422,19 @@ class _DeadlineResponse:
         self._check_deadline()
         _set_response_timeout(
             self._response,
-            self._deadline - time.monotonic(),
+            self._read_timeout(),
         )
         try:
             return next(self._response)
         except TimeoutError as exc:
             self.close()
-            raise RouterError("upstream request timed out", 504) from exc
+            if self._deadline is None:
+                raise TimeoutError("upstream stream idle timeout") from exc
+            raise RouterError(self._timeout_message(), 504) from exc
         except OSError as exc:
-            if time.monotonic() >= self._deadline:
+            if self._deadline is not None and time.monotonic() >= self._deadline:
                 self.close()
-                raise RouterError("upstream request timed out", 504) from exc
+                raise RouterError(self._timeout_message(), 504) from exc
             raise
 
     def __enter__(self):
@@ -445,6 +509,43 @@ def _bounded_stream_response(response: Any) -> _LimitedResponse:
 _advertised_reasoning = _discovery_advertised_reasoning
 _advertised_reasoning_summaries = _discovery_advertised_reasoning_summaries
 
+
+def _native_route_model(
+    native: Mapping[str, Any], requested_id: str, upstream_id: str
+) -> Dict[str, Any]:
+    """Preserve Codex's native capability metadata on a routed model copy."""
+
+    model = copy.deepcopy(dict(native))
+    model["id"] = requested_id
+    model["upstream_id"] = upstream_id
+    try:
+        context_window = int(model.get("context_window", 0) or 0)
+    except (TypeError, ValueError):
+        context_window = 0
+    if context_window > 0:
+        raw_sources = model.get("capability_sources")
+        sources = copy.deepcopy(dict(raw_sources)) if isinstance(raw_sources, Mapping) else {}
+        if not isinstance(sources.get("context_window"), Mapping):
+            sources["context_window"] = make_provenance("official")
+        model["capability_sources"] = sources
+    return model
+
+
+def _native_catalog_route_model(
+    config: Dict[str, Any], requested_id: str, upstream_id: str
+) -> Optional[Dict[str, Any]]:
+    try:
+        native = load_native_catalog(config)
+    except Exception:
+        return None
+    for item in native.get("models", []):
+        if not isinstance(item, Mapping) or item.get("slug") != upstream_id:
+            continue
+        if item.get("supported_in_api", True) is False:
+            return None
+        return _native_route_model(item, requested_id, upstream_id)
+    return None
+
 def _implicit_native_route(
     config: Dict[str, Any], model_id: str
 ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
@@ -469,7 +570,7 @@ def _implicit_native_route(
         native_auth_path = config.get("_native_auth_path")
         if isinstance(native_auth_path, str) and native_auth_path:
             provider["_native_auth_path"] = native_auth_path
-        return provider, {"id": model_id, "upstream_id": model_id}
+        return provider, _native_route_model(item, model_id, model_id)
     return None
 
 
@@ -488,14 +589,16 @@ def find_route(config: Dict[str, Any], model_id: str) -> Tuple[Dict[str, Any], D
             upstream_id = model_id[len(prefix):]
             if not upstream_id:
                 break
-            return {
+            provider = {
                 "id": account["id"],
                 "name": account.get("name", account["id"]),
                 "base_url": config.get("codex_base_url", "https://chatgpt.com/backend-api/codex"),
                 "protocol": "responses",
                 "auth_mode": "account",
                 "account": account,
-            }, {"id": model_id, "upstream_id": upstream_id}
+            }
+            model = _native_catalog_route_model(config, model_id, upstream_id)
+            return provider, model or {"id": model_id, "upstream_id": upstream_id}
 
     forward = [
         item
@@ -524,8 +627,8 @@ def _endpoint(provider: Dict[str, Any], operation: str = "") -> str:
     provider = resolve_provider_protocol(provider)
     base = provider["base_url"].rstrip("/")
     if operation == "alpha_search":
-        if provider.get("auth_mode") != "forward":
-            raise RouterError("native search passthrough requires caller authentication")
+        if provider.get("auth_mode") not in {"forward", "account", "native"}:
+            raise RouterError("subscription search requires Codex authentication")
         return base if base.endswith("/alpha/search") else base + "/alpha/search"
     if operation == "responses_compact":
         if provider["protocol"] != "responses":
@@ -549,7 +652,12 @@ def forward_native_search(
     body: Dict[str, Any],
     incoming: Dict[str, str],
 ) -> Tuple[int, str, bytes]:
-    """Preserve Codex-owned web search while EMP owns openai_base_url."""
+    """Execute standalone search with the explicitly selected Subscription."""
+
+    search = config.get("subscription_search")
+    if not isinstance(search, Mapping) or search.get("enabled") is not True:
+        raise RouterError("Subscription web search is disabled", 403)
+    selected_id = str(search.get("account_id") or "")
 
     provider = {
         "id": "codex-native-search",
@@ -558,14 +666,34 @@ def forward_native_search(
             "codex_base_url", "https://chatgpt.com/backend-api/codex"
         ),
         "protocol": "responses",
-        "auth_mode": "forward",
     }
+    if selected_id:
+        account = next(
+            (
+                item
+                for item in config.get("accounts", [])
+                if item.get("id") == selected_id and item.get("enabled", True)
+            ),
+            None,
+        )
+        if account is None:
+            raise RouterError("selected Subscription search account is unavailable", 503)
+        provider.update({"auth_mode": "account", "account": account})
+    else:
+        provider.update(
+            {
+                "auth_mode": "native",
+                "implicit_native": True,
+                "_native_auth_path": config.get("_native_auth_path"),
+            }
+        )
     with _request(
         provider,
         body,
         incoming,
         False,
         "alpha_search",
+        allow_retries=False,
     ) as response:
         content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "native search response")
@@ -768,14 +896,25 @@ def _request(
 ):
     data, transport_metadata = _encoded_request_body(provider, payload)
     provider["_transport_metadata"] = transport_metadata
-    deadline = time.monotonic() + MAX_UPSTREAM_SECONDS
+    # A streamed response is bounded by per-read idle time, not by total wall
+    # time. Long reasoning runs can legitimately exceed the non-stream limit.
+    deadline = None if stream else time.monotonic() + MAX_UPSTREAM_SECONDS
     # Bridge callers disable retries; ordinary retries keep one route/auth identity.
     endpoint = None
     headers = None
+    transport_retry_allowed = (
+        allow_retries
+        and not stream
+        and classify_dialect(provider) == CODEX_NATIVE
+    )
     for attempt in range(2):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise RouterError("upstream request timed out", 504)
+        remaining = (
+            UPSTREAM_STREAM_IDLE_TIMEOUT
+            if deadline is None
+            else deadline - time.monotonic()
+        )
+        if deadline is not None and remaining <= 0:
+            raise TransportFailure("local_deadline", 504)
         if context_check is not None:
             try:
                 observation = context_check(payload, stream, operation)
@@ -798,13 +937,18 @@ def _request(
             method="POST",
         )
         try:
-            response = urlopen(request, timeout=min(UPSTREAM_SOCKET_TIMEOUT, remaining))
+            # urllib's timeout also bounds the wait for response headers.  A
+            # reasoning stream may legitimately need minutes before its first
+            # event, so use the same 300 s idle budget as native Codex.
+            response = urlopen(request, timeout=max(0.1, remaining))
         except TimeoutError as exc:
-            if transport_metadata["upstream_content_encoding"] == "zstd":
-                if attempt == 0 and allow_retries:
-                    continue
-                raise RouterError("upstream request timed out", 504) from exc
-            raise
+            if attempt == 0 and transport_retry_allowed:
+                continue
+            raise TransportFailure(
+                CONNECT_TIMEOUT,
+                504,
+                PHASE_CONNECT,
+            ) from exc
         except HTTPError as exc:
             raw = exc.read(MAX_UPSTREAM_ERROR_BYTES)
             if is_explicit_context_error(
@@ -830,9 +974,6 @@ def _request(
                 else:
                     headers = None
                     continue
-            if allow_retries and attempt == 0 and exc.code in (500, 502, 503, 504):
-                time.sleep(0.5)
-                continue
             content_type, detail = _http_error_detail(exc, raw)
             if (
                 allow_retries
@@ -847,31 +988,34 @@ def _request(
                 provider["_transport_metadata"] = transport_metadata
                 headers = None
                 continue
-            public_message = "upstream returned %d (%s)" % (
+            failure_reason = _upstream_failure_reason(exc.code, detail)
+            public_message = _upstream_public_error(
                 exc.code,
                 content_type,
+                detail,
+                payload.get("model"),
             )
-            if content_type in {"text/html", "application/xhtml+xml"}:
-                public_message += ": " + detail
             raise UpstreamHTTPError(
                 public_message,
                 exc.code,
-                _upstream_failure_reason(exc.code, detail),
+                failure_reason,
             )
         except URLError as exc:
-            if (
-                isinstance(exc.reason, TimeoutError)
-                and transport_metadata["upstream_content_encoding"] == "zstd"
-            ):
-                if attempt == 0 and allow_retries:
-                    continue
-                raise RouterError("upstream request timed out", 504) from exc
-            if allow_retries and attempt == 0:
-                time.sleep(0.5)
+            if transport_retry_allowed and attempt == 0:
                 continue
+            if isinstance(exc.reason, TimeoutError):
+                raise TransportFailure(
+                    CONNECT_TIMEOUT,
+                    504,
+                    PHASE_CONNECT,
+                ) from exc
             raise RouterError("upstream connection failed: %s" % exc.reason, 502)
         return (
-            _DeadlineResponse(response, deadline)
+            _DeadlineResponse(
+                response,
+                deadline,
+                UPSTREAM_STREAM_IDLE_TIMEOUT if stream else UPSTREAM_SOCKET_TIMEOUT,
+            )
             if hasattr(response, "close")
             else response
         )
@@ -960,7 +1104,14 @@ def forward_responses_stream(
 ):
     payload = _responses_payload(provider, body, model)
     upstream = _bounded_stream_response(
-        _request(provider, payload, incoming, True, context_check=context_check)
+        _request(
+            provider,
+            payload,
+            incoming,
+            True,
+            context_check=context_check,
+            allow_retries=False,
+        )
     )
     validated = _validated_responses_stream(upstream, terminal_callback, provider)
     if on_stream_event is not None:
@@ -1858,7 +2009,13 @@ def _auto_stream_result(
                 if (
                     not emitted
                     and not terminal.get("success", True)
-                    and terminal.get("status") in _PROTOCOL_REJECTION_STATUSES
+                    and protocol_fallback_allowed(
+                        terminal.get("status"),
+                        output_emitted=emitted,
+                        terminal_event_observed=bool(
+                            terminal.get("terminal_event_observed", False)
+                        ),
+                    )
                     and index + 1 < len(candidates)
                 ):
                     fallback = True
@@ -1882,7 +2039,11 @@ def _auto_stream_result(
             closed_by_caller = True
             raise
         except RouterError as exc:
-            if index + 1 < len(candidates) and exc.status in _PROTOCOL_REJECTION_STATUSES:
+            if index + 1 < len(candidates) and protocol_fallback_allowed(
+                exc.status,
+                output_emitted=False,
+                terminal_event_observed=False,
+            ):
                 continue
             if callback is not None and not reported:
                 _emit_observation(
@@ -2086,6 +2247,7 @@ def _proxy_resolved(
                 provider, body, model, incoming, None, context_check
             ),
             terminal_callback,
+            replay_safe=classify_dialect(provider) != CODEX_NATIVE,
         )
     if body.get("stream") and provider["protocol"] == "anthropic_messages":
         _preflight_history_projection(provider, body, model)
@@ -2101,6 +2263,7 @@ def _proxy_resolved(
                 provider, body, model, incoming, None, context_check
             ),
             terminal_callback,
+            replay_safe=classify_dialect(provider) != CODEX_NATIVE,
         )
     if provider["protocol"] == "responses":
         if body.get("stream"):
@@ -2111,6 +2274,7 @@ def _proxy_resolved(
                     on_stream_event=on_stream_event,
                 ),
                 terminal_callback,
+                replay_safe=classify_dialect(provider) != CODEX_NATIVE,
             )
             return _tag_route(
                 {

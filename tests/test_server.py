@@ -55,6 +55,7 @@ from easy_multi_provider.server import (
     _management_config,
     _restore_sigterm_handler,
     _integration_summary,
+    _ws_history_rebuild_request,
     _ws_replay_size,
     _WS_REPLAY_MAX_ITEMS,
     _WS_REPLAY_MAX_BYTES,
@@ -834,6 +835,7 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("全不选搜索结果", html)
         self.assertIn("discovered_search", html)
         self.assertIn("discovered_count", html)
+        self.assertIn(".model-option[hidden]{display:none}", html)
 
     def test_models_endpoint_serves_codex_and_openai_schemas_by_caller(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2236,6 +2238,18 @@ class ServerAccountTests(unittest.TestCase):
             _ws_replay_size([{"text": "界" * (_WS_REPLAY_MAX_BYTES // 3 + 1)}])
         )
 
+    def test_large_active_input_can_rebuild_without_becoming_replay_state(self):
+        rebuilt = _ws_history_rebuild_request(
+            {
+                "previous_response_id": "resp_previous",
+                "input": [{"type": "message", "text": "x" * (4 * 1024 * 1024)}],
+            }
+        )
+
+        self.assertNotIn("previous_response_id", rebuilt)
+        self.assertEqual(rebuilt["input"][0]["type"], "compaction")
+        self.assertEqual(rebuilt["input"][1]["type"], "message")
+
     def test_route_replays_provider_signature_without_persisting_history(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
@@ -3196,7 +3210,7 @@ class ServerAccountTests(unittest.TestCase):
                         },
                     },
                     {
-                        "upstream_id": "new-model",
+                        "upstream_id": "new-model:free",
                         "display_name": "New model",
                         "reasoning_levels": ["medium"],
                         "context_window": 456,
@@ -3205,7 +3219,9 @@ class ServerAccountTests(unittest.TestCase):
             ), patch("easy_multi_provider.server.write_catalog", return_value=root / "catalog.json"):
                 preview = state.discover_provider_models("demo")
                 self.assertEqual(preview["available"], 2)
-                result = state.discover_provider_models("demo", ["hidden", "new-model"])
+                result = state.discover_provider_models(
+                    "demo", ["hidden", "new-model:free"]
+                )
             self.assertEqual(result["added"], 1)
             models = {item["id"]: item for item in state.config["models"]}
             self.assertFalse(models["demo/hidden"]["enabled"])
@@ -3226,9 +3242,9 @@ class ServerAccountTests(unittest.TestCase):
                 models["demo/hidden"]["capability_sources"]["input_modalities"]["source"],
                 "official",
             )
-            self.assertTrue(models["demo/new-model"]["enabled"])
+            self.assertTrue(models["demo/new-model:free"]["enabled"])
             self.assertEqual(
-                models["demo/new-model"]["capability_sources"]["reasoning_levels"]["source"],
+                models["demo/new-model:free"]["capability_sources"]["reasoning_levels"]["source"],
                 "advertised",
             )
             self.assertEqual(
@@ -3666,7 +3682,7 @@ class HistoryContinuityWiringTests(unittest.TestCase):
             "chatgpt-account-id": "account-fixture",
         }
 
-    def test_route_wires_history_and_preserves_portable_compaction_fast_path(self):
+    def test_external_routes_decode_portable_and_rebuild_native_compaction(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             self._write_config(config_path)
@@ -3714,6 +3730,14 @@ class HistoryContinuityWiringTests(unittest.TestCase):
             self.assertEqual(len(reader.calls), 1)
             self.assertEqual(reader.calls[0].thread_id, "thread-cross")
             self.assertEqual(len(captured_payloads), 2)
+            portable_payload = json.loads(captured_payloads[0])
+            rebuilt_payload = json.loads(captured_payloads[1])
+            portable_text = json.dumps(portable_payload["input"], ensure_ascii=False)
+            rebuilt_text = json.dumps(rebuilt_payload["input"], ensure_ascii=False)
+            self.assertNotIn("emp1:", portable_text)
+            self.assertIn("visible checkpoint", portable_text)
+            self.assertNotIn("opaque-native-state", rebuilt_text)
+            self.assertIn("visible task state", rebuilt_text)
 
     def test_http_history_failure_is_structured_and_content_free(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3909,6 +3933,7 @@ class ContinuityAppStateTests(unittest.TestCase):
                             "id": "native/model-a",
                             "provider": "native",
                             "upstream_id": "model-a",
+                            "context_window": 32_000,
                             "enabled": True,
                         }
                     ],
@@ -3917,7 +3942,7 @@ class ContinuityAppStateTests(unittest.TestCase):
             config_path,
         )
 
-    def test_native_websocket_forwards_incremental_input_without_history_replay(self):
+    def test_native_websocket_reuses_own_chain_and_requests_full_retry_for_foreign_chain(self):
         class FakeNativeBridge:
             def __init__(self):
                 self.connection_key = None
@@ -3953,7 +3978,8 @@ class ContinuityAppStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             self._write_config(config_path)
-            state = AppState(config_path)
+            reader = _CountingHistoryReader()
+            state = AppState(config_path, history_reader=reader)
             fake_bridge = FakeNativeBridge()
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -3979,9 +4005,21 @@ class ContinuityAppStateTests(unittest.TestCase):
                             "Authorization: Bearer test-only\r\n"
                             "chatgpt-account-id: account-fixture\r\n"
                             "OpenAI-Beta: responses_websockets=test\r\n"
+                            "thread-id: thread-switch\r\n"
+                            "x-codex-turn-metadata: %s\r\n"
                             "Cookie: emp_session=%s\r\n\r\n"
                         )
-                        % (port, state.session_token)
+                        % (
+                            port,
+                            json.dumps(
+                                {
+                                    "thread_id": "thread-switch",
+                                    "turn_id": "turn-current",
+                                },
+                                separators=(",", ":"),
+                            ),
+                            state.session_token,
+                        )
                     ).encode("ascii"))
                     self.assertIn(b" 101 ", stream.readline())
                     while stream.readline() not in (b"\r\n", b"\n", b""):
@@ -4035,12 +4073,41 @@ class ContinuityAppStateTests(unittest.TestCase):
                         _, raw = _read_text_frame(stream)
                         second_events.append(json.loads(raw))
 
+                    foreign_delta = [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": "return from external",
+                        }
+                    ]
+                    client.sendall(
+                        _masked_text_frame(
+                            json.dumps(
+                                {
+                                    "type": "response.create",
+                                    "model": "native/model-a",
+                                    "previous_response_id": "resp_external",
+                                    "input": foreign_delta,
+                                    "stream": True,
+                                }
+                            )
+                        )
+                    )
+                    _, raw = _read_text_frame(stream)
+                    third_event = json.loads(raw)
+
                 self.assertEqual(len(fake_bridge.requests), 2)
                 self.assertEqual(fake_bridge.requests[0]["input"], first_input)
                 self.assertEqual(fake_bridge.requests[1]["input"], delta)
                 self.assertEqual(
                     fake_bridge.requests[1]["previous_response_id"], first_id
                 )
+                self.assertEqual(third_event["type"], "error")
+                self.assertEqual(third_event["status"], 404)
+                self.assertEqual(
+                    third_event["error"]["code"], "previous_response_not_found"
+                )
+                self.assertEqual(len(reader.calls), 0)
             finally:
                 if stream is not None:
                     stream.close()

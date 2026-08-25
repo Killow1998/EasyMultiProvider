@@ -38,9 +38,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "providers": [],
     "models": [],
     "catalog_presentations": {},
+    "subscription_search": {
+        "enabled": False,
+        "account_id": "",
+    },
 }
 
-_ID = re.compile(r"^[A-Za-z0-9._/-]+$")
+_ID = re.compile(r"^[A-Za-z0-9._/:-]+$")
 _PROVIDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 MAX_CONTEXT_WINDOW = 100_000_000
 MAX_OUTPUT_LIMIT = MAX_CONTEXT_WINDOW
@@ -87,7 +91,7 @@ _BOOLEAN_CAPABILITIES = {
     "supports_reasoning_summaries",
     "websocket",
 }
-_SAFE_CAPABILITY_ID = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
+_SAFE_CAPABILITY_ID = re.compile(r"^[A-Za-z0-9._/:-]{1,256}$")
 _ENDPOINT_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CONCRETE_PROTOCOLS = {"responses", "chat_completions", "anthropic_messages"}
 _REASONING_SUMMARY_POLICIES = {"auto", "show", "hide"}
@@ -163,6 +167,22 @@ def _normalize_catalog_presentations(raw: Any) -> Dict[str, Dict[str, Any]]:
             "reasoning_summary": reasoning_summary,
         }
     return result
+
+
+def _normalize_subscription_search(
+    raw: Any, account_ids: set[str]
+) -> Dict[str, Any]:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ConfigError("subscription_search must be an object")
+    enabled = raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ConfigError("subscription_search.enabled must be boolean")
+    account_id = _string(raw.get("account_id", ""), "subscription_search.account_id")
+    if account_id and account_id not in account_ids:
+        raise ConfigError("subscription_search.account_id references an unknown account")
+    return {"enabled": enabled, "account_id": account_id}
 
 
 def _validate_url(value: Any, field: str) -> str:
@@ -576,6 +596,9 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     result["accounts"] = accounts
     result["catalog_presentations"] = _normalize_catalog_presentations(
         raw.get("catalog_presentations")
+    )
+    result["subscription_search"] = _normalize_subscription_search(
+        raw.get("subscription_search"), account_ids
     )
     return result
 

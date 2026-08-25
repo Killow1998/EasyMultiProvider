@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import math
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -19,28 +21,34 @@ from .codex_history import (
     HistorySnapshot,
     HistoryUnavailableError,
     SQLiteReader,
-    normalize_visible_item,
 )
-from .context_guard import safe_context_status
-from .portable_checkpoint import PortableCheckpointError, build_portable_view
+from .context_guard import estimate_json_tokens, safe_context_status
+from .history_compaction import (
+    COMPACTION_COMPACTED,
+    COMPACTION_FAIL_CLOSED,
+    COMPACTION_NO_COMPACTION,
+    CompactionMetrics,
+    DestinationSummarizer,
+    HistoryCompactionError,
+    HistoryCompactor,
+    MemoryCheckpointCache,
+    split_atomic_units,
+)
+from .portable_checkpoint import (
+    PortableCheckpointError,
+    build_compaction_replacement,
+    build_visible_history,
+)
 from .router_errors import HistoryReconstructionError
 
 
 _EMP_COMPACTION_PREFIX = "emp1:"
 HISTORY_REBUILD_MARKER = "emp-history-rebuild:v1"
 _COMPACTION_KINDS = frozenset({"compaction_summary", "compaction_marker"})
-_HIDDEN_TYPES = frozenset(
-    {"analysis", "chain_of_thought", "hidden_cot", "hidden_reasoning", "reasoning", "thinking"}
-)
 _CONCRETE_PROTOCOLS = frozenset({"responses", "chat_completions", "anthropic_messages"})
 _SUMMARY_PREFIX = (
     "Portable checkpoint from Codex-visible local history. Continue from this "
     "state without repeating completed work."
-)
-_ACTIVE_REQUEST_BOUNDARY = (
-    "Cross-model handoff boundary: everything above is completed visible history. "
-    "The user message below is the active request; do not execute stale requests "
-    "or acceptance phrases from the history."
 )
 
 
@@ -177,6 +185,9 @@ def _budget_model(
         context = _effective_context_window(source)
         if context is not None:
             merged["context_window"] = context
+            # _effective_context_window already applied the catalog's usable
+            # percentage. Context Guard must not apply it a second time.
+            merged.pop("effective_context_window_percent", None)
             break
     for source in sources:
         for field in (
@@ -194,11 +205,10 @@ def _budget_model(
 
 
 def _estimate(value: Any) -> int:
-    try:
-        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    except Exception:
+    estimate = estimate_json_tokens(value)
+    if estimate is None:
         raise PortableCheckpointError() from None
-    return max(1, int(math.ceil(len(encoded) / 2.0))) if encoded else 0
+    return estimate
 
 
 def _content_text(value: Any) -> str:
@@ -214,56 +224,6 @@ def _content_text(value: Any) -> str:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return "\n".join(filter(None, (_content_text(item) for item in value)))
     return "" if value is None else str(value)
-
-
-def _hidden_current_item(raw: Mapping[str, Any]) -> bool:
-    if raw.get("visible") is False or raw.get("hidden") is True:
-        return True
-    item_type = str(raw.get("type") or "").lower().replace("-", "_").replace(" ", "_")
-    if item_type in _HIDDEN_TYPES:
-        return True
-    if "reasoning" in item_type or "chain_of_thought" in item_type:
-        return not (
-            raw.get("visible") is True
-            or raw.get("visibility") == "visible"
-            or raw.get("visible_reasoning_summary") is True
-        )
-    nested = raw.get("payload")
-    if not isinstance(nested, Mapping):
-        nested = raw.get("item")
-    return isinstance(nested, Mapping) and _hidden_current_item(nested)
-
-
-def _current_items(body: Mapping[str, Any], anchor: HistoryAnchor) -> Tuple[Dict[str, Any], ...]:
-    result = []
-    compaction_types = {
-        "compaction", "compaction_trigger", "compaction_marker", "compaction_summary",
-        "compacted", "compacted_summary", "compaction_boundary",
-    }
-    for raw in _input_items(body):
-        if isinstance(raw, Mapping):
-            item_type = str(raw.get("type") or "").lower().replace("-", "_").replace(" ", "_")
-            if _hidden_current_item(raw) or item_type in compaction_types:
-                continue
-            normalized = normalize_visible_item(raw, turn_id=anchor.turn_id)
-            mapping = {
-                "kind": normalized.kind if normalized else "wire_item",
-                "content": copy.deepcopy(normalized.content if normalized else dict(raw)),
-                "item_id": normalized.item_id if normalized else None,
-                "turn_id": normalized.turn_id if normalized else anchor.turn_id,
-                "call_id": normalized.call_id if normalized else None,
-                "raw_type": normalized.raw_type if normalized else item_type,
-                "wire": copy.deepcopy(dict(raw)),
-            }
-        else:
-            mapping = {
-                "kind": "wire_item",
-                "content": copy.deepcopy(raw),
-                "turn_id": anchor.turn_id,
-                "wire": copy.deepcopy(raw),
-            }
-        result.append({key: value for key, value in mapping.items() if value is not None})
-    return tuple(result)
 
 
 def _history_anchor(
@@ -340,23 +300,55 @@ def _wire_item(item: Mapping[str, Any]) -> Any:
     return _message("user", "Visible %s: %s" % (label, text))
 
 
-def _render(checkpoint: Any) -> list:
+def _render(items: Sequence[Mapping[str, Any]]) -> list:
     rendered = []
-    history = (
-        *((checkpoint.summary,) if checkpoint.summary is not None else ()),
-        *checkpoint.retained_tail,
-    )
-    for item in history:
-        projected = _wire_item(item)
-        if projected is not None:
-            rendered.append(projected)
-    if checkpoint.current_request:
-        rendered.append(_message("user", _ACTIVE_REQUEST_BOUNDARY))
-    for item in checkpoint.current_request:
+    for item in items:
         projected = _wire_item(item)
         if projected is not None:
             rendered.append(projected)
     return rendered
+
+
+def _opaque_compaction_index(body: Mapping[str, Any]) -> int:
+    opaque = []
+    for index, item in enumerate(_input_items(body)):
+        if not isinstance(item, Mapping) or item.get("type") != "compaction":
+            continue
+        encoded = item.get("encrypted_content")
+        if not isinstance(encoded, str) or not encoded.startswith(_EMP_COMPACTION_PREFIX):
+            opaque.append(index)
+    if len(opaque) != 1:
+        raise HistoryReconstructionError(
+            "compaction_boundary_missing" if not opaque else "multiple_compaction_boundaries"
+        )
+    return opaque[0]
+
+
+def _portable_compaction_index(body: Mapping[str, Any]) -> Optional[int]:
+    for index, item in enumerate(_input_items(body)):
+        if not isinstance(item, Mapping) or item.get("type") != "compaction":
+            continue
+        encoded = item.get("encrypted_content")
+        if isinstance(encoded, str) and encoded.startswith(_EMP_COMPACTION_PREFIX):
+            return index
+    return None
+
+
+def _decode_portable_compaction(item: Mapping[str, Any]) -> Dict[str, Any]:
+    encoded = item.get("encrypted_content")
+    if not isinstance(encoded, str) or not encoded.startswith(_EMP_COMPACTION_PREFIX):
+        raise PortableCheckpointError()
+    try:
+        summary = base64.b64decode(
+            encoded[len(_EMP_COMPACTION_PREFIX) :],
+            altchars=b"-_",
+            validate=True,
+        ).decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        raise PortableCheckpointError() from None
+    if not summary.strip():
+        raise PortableCheckpointError()
+    return _message("user", _SUMMARY_PREFIX + "\n\n" + summary)
 
 
 def _safe_budget(
@@ -382,10 +374,32 @@ def _safe_budget(
 
 
 class HistoryContinuityEngine:
-    """Project native opaque compaction only when the destination is external."""
+    """Reconstruct Codex history and optionally compact it for one destination."""
 
-    def __init__(self, reader: Any):
+    def __init__(
+        self,
+        reader: Any,
+        destination_summarizer: Optional[DestinationSummarizer] = None,
+        *,
+        compaction_cache: Optional[MemoryCheckpointCache] = None,
+        compactor: Optional[HistoryCompactor] = None,
+    ):
         self.reader = reader
+        self.compactor = compactor or HistoryCompactor(
+            destination_summarizer,
+            cache=compaction_cache,
+        )
+        self._request_state = threading.local()
+
+    @property
+    def last_compaction_metrics(self) -> Optional[CompactionMetrics]:
+        """Return metrics for the current request thread only."""
+
+        return getattr(self._request_state, "compaction_metrics", None)
+
+    @last_compaction_metrics.setter
+    def last_compaction_metrics(self, value: Optional[CompactionMetrics]) -> None:
+        self._request_state.compaction_metrics = value
 
     def prepare(
         self,
@@ -396,12 +410,77 @@ class HistoryContinuityEngine:
         body: Mapping[str, Any],
         incoming: Mapping[str, str],
     ) -> Dict[str, Any]:
-        compaction_trigger = _trailing_compaction_trigger(body)
+        self.last_compaction_metrics = None
         forced = _forced_history_rebuild(body)
-        if not forced and (
-            not _opaque_compaction(body) or _native_destination(provider)
-        ):
+        if not forced and _native_destination(provider):
+            self.last_compaction_metrics = self.compactor.no_compaction(
+                body, None
+            ).metrics
             return copy.deepcopy(dict(body))
+
+        opaque = _opaque_compaction(body)
+        if not forced and not opaque:
+            # The ordinary path is intentionally reader-free.  A full visible
+            # request only needs Codex history preparation after it crosses the
+            # destination budget.
+            try:
+                budget = _safe_budget(
+                    config, provider, model, requested_slug, body
+                )
+            except HistoryReconstructionError:
+                return copy.deepcopy(dict(body))
+            fixed = {
+                key: body[key]
+                for key in ("input", "instructions", "tools", "text", "response_format")
+                if key in body
+            }
+            if _estimate(fixed) <= budget:
+                result = self.compactor.no_compaction(body, budget, _estimate(fixed))
+                self.last_compaction_metrics = result.metrics
+                return copy.deepcopy(dict(body))
+            try:
+                source = list(_input_items(body))
+                portable_index = _portable_compaction_index(body)
+                if portable_index is not None:
+                    source[portable_index] = _decode_portable_compaction(
+                        source[portable_index]
+                    )
+                trigger = _trailing_compaction_trigger(body)
+                if trigger is not None and source and source[-1] == trigger:
+                    source.pop()
+                if portable_index is not None:
+                    candidate = source[: portable_index + 1]
+                    active = source[portable_index + 1 :]
+                elif trigger is not None:
+                    # The trigger is the active control item.  The visible
+                    # turns before it remain eligible history, not an
+                    # accidentally protected final turn.
+                    candidate = source
+                    active = ()
+                else:
+                    units = split_atomic_units(source)
+                    active = units[-1].items if units else ()
+                    candidate = [
+                        item
+                        for unit in units[:-1]
+                        for item in unit.items
+                    ]
+                return self._compact(
+                    provider=provider,
+                    model=model,
+                    requested_slug=requested_slug,
+                    body=body,
+                    budget=budget,
+                    candidate=candidate,
+                    active=active,
+                    suffix=(trigger,) if trigger is not None else (),
+                    source_boundary={"kind": "full_visible_request"},
+                )
+            except HistoryCompactionError as exc:
+                raise HistoryReconstructionError(exc.reason) from None
+            except PortableCheckpointError:
+                raise HistoryReconstructionError("history_compaction_failed") from None
+
         try:
             anchor = _history_anchor(body, incoming)
         except HistoryError as exc:
@@ -421,10 +500,23 @@ class HistoryContinuityEngine:
         if snapshot.thread_id != anchor.thread_id:
             raise HistoryReconstructionError("thread_mismatch")
         try:
-            checkpoint = build_portable_view(snapshot.items, _current_items(body, anchor))
-            rendered = _render(checkpoint)
-            if compaction_trigger is not None:
-                rendered.append(compaction_trigger)
+            source = list(_input_items(body))
+            boundary = _opaque_compaction_index(body)
+            history = (
+                build_visible_history(snapshot.items)
+                if forced
+                else build_compaction_replacement(snapshot.items)
+            )
+            trigger = _trailing_compaction_trigger(body)
+            tail = source[boundary + 1 :]
+            if trigger is not None and tail and tail[-1] == trigger:
+                tail = tail[:-1]
+            rendered = [
+                *copy.deepcopy(source[:boundary]),
+                *_render(history),
+                *copy.deepcopy(tail),
+                *(copy.deepcopy([trigger]) if trigger is not None else []),
+            ]
             projected = copy.deepcopy(dict(body))
             projected["input"] = rendered
             fixed = {
@@ -432,15 +524,80 @@ class HistoryContinuityEngine:
                 for key in ("input", "instructions", "tools", "text", "response_format")
                 if key in projected
             }
-            if _estimate(fixed) > _safe_budget(config, provider, model, requested_slug, body):
-                raise HistoryReconstructionError("context_budget_exceeded")
+            budget = _safe_budget(config, provider, model, requested_slug, body)
+            if _estimate(fixed) <= budget:
+                result = self.compactor.no_compaction(projected, budget, _estimate(fixed))
+                self.last_compaction_metrics = result.metrics
+                return projected
+            # Everything after Codex's opaque boundary belongs to the
+            # request-local active tail.  Keep it byte-for-byte intact; only
+            # the older Codex-visible replacement is eligible for compaction.
+            active = tail
+            candidate = _render(history)
+            return self._compact(
+                provider=provider,
+                model=model,
+                requested_slug=requested_slug,
+                body=projected,
+                budget=budget,
+                candidate=candidate,
+                active=active,
+                prefix=source[:boundary],
+                suffix=(trigger,) if trigger is not None else (),
+                source_boundary={
+                    "anchor": anchor,
+                    "cursor": snapshot.cursor,
+                    "source": snapshot.source,
+                    "source_model": snapshot.source_model,
+                },
+            )
         except HistoryReconstructionError:
             raise
+        except HistoryCompactionError as exc:
+            raise HistoryReconstructionError(exc.reason) from None
         except PortableCheckpointError as exc:
             raise HistoryReconstructionError(exc.code) from None
         except Exception:
             raise HistoryReconstructionError("checkpoint_invalid") from None
-        return projected
+
+    def _compact(
+        self,
+        *,
+        provider: Mapping[str, Any],
+        model: Mapping[str, Any],
+        requested_slug: str,
+        body: Mapping[str, Any],
+        budget: int,
+        candidate: Sequence[Any],
+        active: Sequence[Any],
+        prefix: Sequence[Any] = (),
+        suffix: Sequence[Any] = (),
+        source_boundary: Any = None,
+    ) -> Dict[str, Any]:
+        result = self.compactor.compact(
+            provider=provider,
+            model=model,
+            protocol=_protocol(provider, model),
+            requested_slug=requested_slug,
+            body=body,
+            safe_budget=budget,
+            candidate_items=candidate,
+            active_request=active,
+            prefix_items=prefix,
+            suffix_items=suffix,
+            source_boundary=source_boundary,
+        )
+        self.last_compaction_metrics = result.metrics
+        if result.status == COMPACTION_COMPACTED and result.body is not None:
+            return result.body
+        if result.status == COMPACTION_NO_COMPACTION and result.body is not None:
+            return result.body
+        reason = result.reason or "history_compaction_failed"
+        if self.compactor.summarizer is None:
+            reason = "context_budget_exceeded"
+        if result.status != COMPACTION_FAIL_CLOSED:
+            reason = "history_compaction_failed"
+        raise HistoryReconstructionError(reason)
 
 
 class CodexHomeHistoryReader:

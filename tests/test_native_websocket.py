@@ -3,10 +3,12 @@ import unittest
 from unittest.mock import patch
 
 from easy_multi_provider.native_websocket import (
+    MAX_NATIVE_WEBSOCKET_REQUEST_BYTES,
     NativeWebSocketBridge,
     NativeWebSocketError,
     NativeWebSocketTarget,
     _default_connector,
+    native_websocket_request_fits,
     terminal_observation,
 )
 
@@ -44,7 +46,42 @@ class _FakeConnection:
         self.shutdown()
 
 
+class _GatewayFailure(Exception):
+    status_code = 502
+
+
 class NativeWebSocketTests(unittest.TestCase):
+    def test_large_uncompressed_request_uses_http_transport(self):
+        self.assertTrue(
+            native_websocket_request_fits(
+                {"type": "response.create", "input": "small"}
+            )
+        )
+        self.assertFalse(
+            native_websocket_request_fits(
+                {
+                    "type": "response.create",
+                    "input": "x" * MAX_NATIVE_WEBSOCKET_REQUEST_BYTES,
+                }
+            )
+        )
+
+    def test_gateway_failure_before_request_allows_http_fallback(self):
+        def fail(_target):
+            raise _GatewayFailure()
+
+        bridge = NativeWebSocketBridge(fail)
+
+        with self.assertRaises(NativeWebSocketError) as raised:
+            bridge.connect(
+                NativeWebSocketTarget(
+                    "wss://example.invalid/responses", {}, "route-a"
+                )
+            )
+
+        self.assertEqual(raised.exception.status, 502)
+        self.assertTrue(raised.exception.retryable)
+
     def test_default_connector_disables_credential_redirects(self):
         target = NativeWebSocketTarget(
             "wss://example.invalid/responses",
@@ -215,51 +252,44 @@ class NativeWebSocketTests(unittest.TestCase):
         self.assertEqual(raised.exception.status, 400)
         self.assertTrue(raised.exception.retryable)
 
-    def test_absolute_request_deadline_is_bounded(self):
+    def test_long_stream_uses_idle_timeout_without_absolute_deadline(self):
         connection = _FakeConnection(
             [{"type": "response.completed", "response": {"status": "completed"}}]
         )
         bridge = NativeWebSocketBridge(lambda _target: connection)
-        with patch(
-            "easy_multi_provider.native_websocket.time.monotonic",
-            side_effect=(0.0, 181.0),
-        ):
-            with self.assertRaisesRegex(NativeWebSocketError, "deadline") as raised:
-                list(
-                    bridge.events(
-                        NativeWebSocketTarget(
-                            "wss://example.invalid/responses", {}, "route-a"
-                        ),
-                        {"type": "response.create", "input": []},
-                    )
-                )
-        self.assertFalse(raised.exception.retryable)
-
-    def test_absolute_request_deadline_includes_connection_time(self):
-        connection = _FakeConnection(
-            [{"type": "response.completed", "response": {"status": "completed"}}]
+        events = list(
+            bridge.events(
+                NativeWebSocketTarget(
+                    "wss://example.invalid/responses", {}, "route-a"
+                ),
+                {"type": "response.create", "input": []},
+            )
         )
 
-        def slow_connector(_target):
-            from easy_multi_provider import native_websocket
+        self.assertEqual(events[-1]["type"], "response.completed")
+        self.assertEqual(connection.timeout, 300)
 
-            native_websocket.time.monotonic()
-            return connection
+    def test_idle_timeout_allows_http_fallback_before_output(self):
+        connection = _FakeConnection([])
 
-        bridge = NativeWebSocketBridge(slow_connector)
-        with patch(
-            "easy_multi_provider.native_websocket.time.monotonic",
-            side_effect=(0.0, 179.0, 181.0),
-        ):
-            with self.assertRaisesRegex(NativeWebSocketError, "deadline"):
-                list(
-                    bridge.events(
-                        NativeWebSocketTarget(
-                            "wss://example.invalid/responses", {}, "route-a"
-                        ),
-                        {"type": "response.create", "input": []},
-                    )
+        def timed_out():
+            raise TimeoutError("idle")
+
+        connection.recv = timed_out
+        bridge = NativeWebSocketBridge(lambda _target: connection)
+
+        with self.assertRaisesRegex(NativeWebSocketError, "idle") as raised:
+            list(
+                bridge.events(
+                    NativeWebSocketTarget(
+                        "wss://example.invalid/responses", {}, "route-a"
+                    ),
+                    {"type": "response.create", "input": []},
                 )
+            )
+
+        self.assertEqual(raised.exception.status, 504)
+        self.assertTrue(raised.exception.retryable)
 
     def test_cumulative_response_size_is_bounded(self):
         connection = _FakeConnection(

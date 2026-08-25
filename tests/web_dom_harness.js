@@ -352,10 +352,10 @@ function presentationMigrationBehavior() {
   assert.strictEqual(run("state.catalog_presentations['new/model-a']"), undefined);
   assert.strictEqual(run("state.catalog_presentations['provider/model-a'].reasoning_summary"), "hide");
 
-  run("state.emp_version = '0.7.5'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.7.5.emp");
+  run("state.emp_version = '0.7.6'");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.7.6.emp");
   run("state.emp_version = '../../unsafe'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.7.5.emp");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.7.6.emp");
 }
 
 function modalDismissalBehavior() {
