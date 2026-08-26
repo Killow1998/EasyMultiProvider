@@ -1,4 +1,5 @@
 import json
+import tracemalloc
 import unittest
 
 from easy_multi_provider.capabilities import endpoint_fingerprint
@@ -7,6 +8,7 @@ from easy_multi_provider.context_guard import (
     assess_context,
     calibration_for,
     context_identity,
+    estimate_json_tokens,
     estimate_input_tokens,
     format_context_error,
     is_explicit_context_error,
@@ -77,6 +79,45 @@ class ContextGuardTests(unittest.TestCase):
 
         self.assertEqual(base64_estimate, url_estimate)
         self.assertLess(base64_estimate, 10_000)
+
+    def test_json_estimator_preserves_compact_utf8_and_image_accounting(self):
+        samples = [
+            {"a": "hello\n\"世界", "b": [1, True, None, 3.5]},
+            {
+                "type": "input_image",
+                "image_url": "data:image/png;base64," + "A" * 1000,
+            },
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "A" * 1000,
+                },
+            },
+            {
+                "messages": [{"role": "user", "content": "x" * 10_000}],
+                "tools": [{"name": "t", "schema": {"type": "object"}}],
+            },
+        ]
+
+        self.assertEqual(
+            [estimate_json_tokens(sample) for sample in samples],
+            [23, 4118, 4139, 5047],
+        )
+
+    def test_json_estimator_does_not_duplicate_large_text_payload(self):
+        payload = {"messages": [{"role": "user", "content": "x" * (2 * 1024 * 1024)}]}
+
+        tracemalloc.start()
+        try:
+            estimate = estimate_json_tokens(payload)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        self.assertIsNotNone(estimate)
+        self.assertLess(peak, 512 * 1024)
 
     def test_effective_context_percentage_is_applied_to_native_catalog_limit(self):
         model = dict(self.model)

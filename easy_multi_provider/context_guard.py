@@ -29,6 +29,8 @@ CLEAR_EXCESS_TOKENS = 64
 # conservative without treating base64 transport bytes as text tokens.
 IMAGE_INPUT_TOKEN_ESTIMATE = 4096
 _IMAGE_PLACEHOLDER = "<image>"
+_MAX_ESTIMATE_DEPTH = 128
+_JSON_STRING_CHUNK_CHARS = 64 * 1024
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._/:-]{1,256}$")
 _FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SOURCES = frozenset(
@@ -308,61 +310,129 @@ def _payload_view(payload: Mapping[str, Any], protocol: str) -> Optional[Dict[st
     return view
 
 
-def _scrub_images(value: Any) -> Tuple[Any, int]:
-    """Return a JSON-compatible estimate view and the number of image parts."""
+def _json_string_bytes(value: str) -> int:
+    """Return JSON string bytes using bounded standard-encoder chunks."""
 
+    size = 2  # The enclosing quotes.
+    for offset in range(0, len(value), _JSON_STRING_CHUNK_CHARS):
+        encoded = json.dumps(
+            value[offset : offset + _JSON_STRING_CHUNK_CHARS],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        size += len(encoded) - 2
+    return size
+
+
+def _json_key_bytes(value: Any) -> int:
+    if isinstance(value, str):
+        text = value
+    elif value is True:
+        text = "true"
+    elif value is False:
+        text = "false"
+    elif value is None:
+        text = "null"
+    elif isinstance(value, int):
+        text = str(value)
+    elif isinstance(value, float):
+        text = json.dumps(value, allow_nan=True)
+    else:
+        raise TypeError("unsupported JSON object key")
+    return _json_string_bytes(text)
+
+
+def _estimate_json_bytes(
+    value: Any,
+    seen: set,
+    depth: int = 0,
+    redacted_keys: frozenset = frozenset(),
+) -> Tuple[int, int]:
+    """Count compact JSON bytes and image parts in one read-only traversal."""
+
+    if depth > _MAX_ESTIMATE_DEPTH:
+        raise RecursionError("JSON estimate depth exceeded")
     if isinstance(value, Mapping):
-        kind = str(value.get("type") or "")
-        image_part = kind in {"input_image", "output_image", "image", "image_url"}
-        result: Dict[str, Any] = {}
-        images = 1 if image_part else 0
-        for key, item in value.items():
-            if image_part and key in {"data", "image_data"}:
-                result[key] = _IMAGE_PLACEHOLDER
-                continue
-            if image_part and key == "image_url":
-                if isinstance(item, Mapping):
-                    nested = dict(item)
-                    if "url" in nested:
-                        nested["url"] = _IMAGE_PLACEHOLDER
-                    result[key], nested_images = _scrub_images(nested)
-                    images += nested_images
-                else:
-                    result[key] = _IMAGE_PLACEHOLDER
-                continue
-            if image_part and key == "source" and isinstance(item, Mapping):
-                source = dict(item)
-                for source_key in ("data", "url"):
-                    if source_key in source:
-                        source[source_key] = _IMAGE_PLACEHOLDER
-                result[key], nested_images = _scrub_images(source)
+        identity = id(value)
+        if identity in seen:
+            raise ValueError("circular JSON mapping")
+        seen.add(identity)
+        try:
+            kind = str(value.get("type") or "")
+            image_part = kind in {
+                "input_image",
+                "output_image",
+                "image",
+                "image_url",
+            }
+            size = 2  # Braces.
+            images = 1 if image_part else 0
+            first = True
+            for key, item in value.items():
+                if not first:
+                    size += 1
+                first = False
+                size += _json_key_bytes(key) + 1  # Key plus colon.
+                nested_redactions = frozenset()
+                if key in redacted_keys or (
+                    image_part and key in {"data", "image_data"}
+                ):
+                    item = _IMAGE_PLACEHOLDER
+                elif image_part and key == "image_url":
+                    if isinstance(item, Mapping):
+                        nested_redactions = frozenset({"url"})
+                    else:
+                        item = _IMAGE_PLACEHOLDER
+                elif image_part and key == "source" and isinstance(item, Mapping):
+                    nested_redactions = frozenset({"data", "url"})
+                nested_size, nested_images = _estimate_json_bytes(
+                    item,
+                    seen,
+                    depth + 1,
+                    nested_redactions,
+                )
+                size += nested_size
                 images += nested_images
-                continue
-            result[key], nested_images = _scrub_images(item)
-            images += nested_images
-        return result, images
+            return size, images
+        finally:
+            seen.remove(identity)
     if isinstance(value, (list, tuple)):
-        result = []
-        images = 0
-        for item in value:
-            nested, nested_images = _scrub_images(item)
-            result.append(nested)
-            images += nested_images
-        return result, images
-    return value, 0
+        identity = id(value)
+        if identity in seen:
+            raise ValueError("circular JSON sequence")
+        seen.add(identity)
+        try:
+            size = 2  # Brackets.
+            images = 0
+            for index, item in enumerate(value):
+                if index:
+                    size += 1
+                nested_size, nested_images = _estimate_json_bytes(
+                    item, seen, depth + 1
+                )
+                size += nested_size
+                images += nested_images
+            return size, images
+        finally:
+            seen.remove(identity)
+    if isinstance(value, str):
+        return _json_string_bytes(value), 0
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return len(encoded), 0
 
 
 def estimate_json_tokens(value: Any) -> Optional[int]:
     """Estimate JSON input without charging image transport bytes as text."""
 
     try:
-        scrubbed, image_count = _scrub_images(value)
-        encoded = json.dumps(
-            scrubbed, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-    except (RecursionError, TypeError, ValueError, OverflowError):
+        encoded_bytes, image_count = _estimate_json_bytes(value, set())
+    except (RecursionError, TypeError, ValueError, OverflowError, UnicodeError):
         return None
-    text_tokens = max(1, int(math.ceil(len(encoded) / 2.0))) if encoded else 0
+    text_tokens = (
+        max(1, int(math.ceil(encoded_bytes / 2.0))) if encoded_bytes else 0
+    )
     return text_tokens + image_count * IMAGE_INPUT_TOKEN_ESTIMATE
 
 
