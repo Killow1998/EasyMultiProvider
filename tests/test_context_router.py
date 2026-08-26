@@ -129,11 +129,11 @@ class ContextRouterTests(unittest.TestCase):
             }
 
         def rejected(provider, body, model, incoming, context_check=None):
-            context_check({"model": "model", "input": "x"}, False, "")
+            self.assertIsNone(context_check)
             raise RouterError("protocol rejected", 404)
 
         def successful(provider, body, model, incoming, context_check=None):
-            context_check({"model": "model", "input": "x"}, False, "")
+            self.assertIsNone(context_check)
             return (
                 200,
                 "application/json",

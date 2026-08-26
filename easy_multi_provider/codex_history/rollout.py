@@ -271,6 +271,98 @@ def _visible_payload(record: Mapping) -> Optional[Mapping]:
     return None
 
 
+def _replacement_history(record: Mapping) -> Optional[List[Mapping]]:
+    """Return a Codex 0.149 replacement base, or ``None`` for legacy compact."""
+
+    record_type = _token(record.get("type"))
+    if record_type not in (
+        "compaction",
+        "compaction_summary",
+        "compacted",
+        "compacted_summary",
+    ):
+        return None
+    payload = _payload(record) or record
+    if "replacement_history" not in payload or payload.get("replacement_history") is None:
+        return None
+    replacement = payload.get("replacement_history")
+    if not isinstance(replacement, list) or any(
+        not isinstance(item, Mapping) for item in replacement
+    ):
+        raise HistoryCorruptError("invalid_replacement_history", source="rollout")
+    metadata = payload.get("replacement_history_metadata")
+    if metadata is not None:
+        if not isinstance(metadata, list) or len(metadata) != len(replacement):
+            raise HistoryCorruptError(
+                "invalid_replacement_history_metadata", source="rollout"
+            )
+    return [dict(item) for item in replacement]
+
+
+def _portable_base_entries(entries: List[Tuple[Any, int, bool]]) -> List[Tuple[Any, int, bool]]:
+    """Materialize the latest visible base without forwarding an opaque item."""
+
+    boundaries = [
+        index
+        for index, (item, _, _) in enumerate(entries)
+        if item.kind in ("compaction_summary", "compaction_marker")
+    ]
+    if not boundaries:
+        return list(entries)
+    boundary = boundaries[-1]
+    item = entries[boundary][0]
+    content = item.content
+    has_summary = bool(content.strip()) if isinstance(content, str) else bool(content)
+    if has_summary:
+        return list(entries[boundary:])
+    return [*entries[:boundary], *entries[boundary + 1 :]]
+
+
+def _replacement_entries(
+    replacement: List[Mapping],
+    previous: List[Tuple[Any, int, bool]],
+    *,
+    turn_id: Optional[str],
+    ordinal: int,
+    offset: int,
+    line_index: int,
+    explicit: bool,
+) -> List[Tuple[Any, int, bool]]:
+    """Normalize one replacement base and terminate it with a visible boundary."""
+
+    normalized = []
+    for raw in replacement:
+        if _token(raw.get("type")) == "compaction":
+            encoded = raw.get("encrypted_content")
+            if isinstance(encoded, str) and encoded:
+                portable = _portable_base_entries(previous)
+                if not portable:
+                    raise HistoryUnavailableError(
+                        "opaque_replacement_unavailable", source="rollout"
+                    )
+                normalized.extend(portable)
+                continue
+        item = normalize_visible_item(
+            raw,
+            turn_id=turn_id,
+            ordinal=ordinal,
+            offset=offset,
+        )
+        if item is not None:
+            normalized.append((item, line_index, explicit))
+
+    boundary = normalize_visible_item(
+        {"type": "compaction_marker", "marker": ""},
+        turn_id=turn_id,
+        ordinal=ordinal,
+        offset=offset,
+    )
+    if boundary is None:
+        raise HistoryCorruptError("invalid_compaction_boundary", source="rollout")
+    normalized.append((boundary, line_index, explicit))
+    return normalized
+
+
 def _record_thread_ids(records: List[_ParsedRecord]) -> List[str]:
     values = []
     for record in records:
@@ -529,9 +621,11 @@ class RolloutReader:
             record_ordinal = _record_ordinal(record.value, payload)
             record_offset = _record_offset(record.value, payload)
             raw_item = _visible_payload(record.value)
+            replacement = _replacement_history(record.value)
             item_turn_id = record_turn_ids[index]
             if item_turn_id is not None and item_turn_id not in successful_turns:
                 raw_item = None
+                replacement = None
             if (
                 _token(record.value.get("type")) == "event_msg"
                 and (item_turn_id, _message_role(record.value)) in response_message_roles
@@ -550,6 +644,22 @@ class RolloutReader:
                     raise HistoryAmbiguousError("ordinal_not_monotonic", source="rollout")
                 last_explicit = item_ordinal
                 explicit_max = max(explicit_max or item_ordinal, item_ordinal)
+            if replacement is not None:
+                explicit_item_ordinal = item_ordinal is not None
+                if item_ordinal is None:
+                    item_ordinal = record.line_index
+                item_offset = record_offset if record_offset is not None else record.start
+                normalized_entries = _replacement_entries(
+                    replacement,
+                    normalized_entries,
+                    turn_id=item_turn_id,
+                    ordinal=item_ordinal,
+                    offset=item_offset,
+                    line_index=record.line_index,
+                    explicit=explicit_item_ordinal,
+                )
+                visible_offsets = [item_offset]
+                continue
             if raw_item is None:
                 continue
             explicit_item_ordinal = item_ordinal is not None

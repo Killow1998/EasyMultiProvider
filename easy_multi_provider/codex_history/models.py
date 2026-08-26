@@ -106,14 +106,16 @@ class HistoryAmbiguousError(HistoryError):
 
 @dataclass(frozen=True)
 class HistoryAnchor:
-    """Validated Codex thread/turn identity; never stores request content."""
+    """Validated Codex thread/turn/window identity; never stores content."""
 
     thread_id: Optional[str] = None
     turn_id: Optional[str] = None
+    window_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "thread_id", _identifier(self.thread_id, "thread_id"))
         object.__setattr__(self, "turn_id", _identifier(self.turn_id, "turn_id"))
+        object.__setattr__(self, "window_id", _identifier(self.window_id, "window_id"))
 
     @classmethod
     def from_headers(cls, headers: Mapping) -> "HistoryAnchor":
@@ -154,15 +156,23 @@ class HistoryAnchor:
             explicit_thread_id = header_thread_id or header_session_id
             if explicit_thread_id is not None and metadata_thread_id != explicit_thread_id:
                 raise HistoryMismatchError("conflicting_thread_identity", source="anchor")
+        header_window_id = header("x-codex-window-id")
+        metadata_window_id = metadata.get("window_id", metadata.get("windowId"))
+        if metadata_window_id is not None:
+            metadata_window_id = _identifier(metadata_window_id, "window_id")
+            if header_window_id is not None and metadata_window_id != header_window_id:
+                raise HistoryMismatchError("conflicting_window_identity", source="anchor")
         return cls(
             thread_id=header_thread_id or header_session_id or metadata_thread_id,
             turn_id=metadata.get("turn_id", metadata.get("turnId")),
+            window_id=header_window_id or metadata_window_id,
         )
 
     def __repr__(self) -> str:
-        return "HistoryAnchor(thread_id=%r, turn_id=%r)" % (
+        return "HistoryAnchor(thread_id=%r, turn_id=%r, window_id=%r)" % (
             self.thread_id,
             self.turn_id,
+            self.window_id,
         )
 
 

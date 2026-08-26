@@ -55,10 +55,6 @@ from easy_multi_provider.server import (
     _management_config,
     _restore_sigterm_handler,
     _integration_summary,
-    _ws_history_rebuild_request,
-    _ws_replay_size,
-    _WS_REPLAY_MAX_ITEMS,
-    _WS_REPLAY_MAX_BYTES,
     configure_proxy_environment,
     make_handler,
     serve,
@@ -2045,6 +2041,7 @@ class ServerAccountTests(unittest.TestCase):
             "connection_reused",
             "status",
             "error_class",
+            "failure_reason",
             "fallback",
             "decision",
             "context_decision",
@@ -2149,6 +2146,7 @@ class ServerAccountTests(unittest.TestCase):
                     "connection_reused",
                     "status",
                     "error_class",
+                    "failure_reason",
                     "fallback",
                     "decision",
                     "context_decision",
@@ -2229,26 +2227,6 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(records[1]["status"], 502)
             self.assertEqual(records[2]["error_class"], "client_disconnect")
             self.assertIsNone(records[2]["status"])
-
-    def test_websocket_replay_state_has_fixed_item_and_byte_bounds(self):
-        self.assertEqual(_ws_replay_size([{"type": "message"}])[0], 1)
-        self.assertIsNone(_ws_replay_size([{}] * (_WS_REPLAY_MAX_ITEMS + 1)))
-        self.assertIsNone(_ws_replay_size([{"text": "x" * (4 * 1024 * 1024)}]))
-        self.assertIsNone(
-            _ws_replay_size([{"text": "界" * (_WS_REPLAY_MAX_BYTES // 3 + 1)}])
-        )
-
-    def test_large_active_input_can_rebuild_without_becoming_replay_state(self):
-        rebuilt = _ws_history_rebuild_request(
-            {
-                "previous_response_id": "resp_previous",
-                "input": [{"type": "message", "text": "x" * (4 * 1024 * 1024)}],
-            }
-        )
-
-        self.assertNotIn("previous_response_id", rebuilt)
-        self.assertEqual(rebuilt["input"][0]["type"], "compaction")
-        self.assertEqual(rebuilt["input"][1]["type"], "message")
 
     def test_route_replays_provider_signature_without_persisting_history(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3942,6 +3920,106 @@ class ContinuityAppStateTests(unittest.TestCase):
             config_path,
         )
 
+    def test_external_incremental_chain_loss_requests_full_retry_without_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(
+                normalize(
+                    {
+                        "providers": [
+                            {
+                                "id": "external",
+                                "enabled": True,
+                                "auth_mode": "api_key",
+                                "protocol": "responses",
+                                "base_url": "https://external.example/v1",
+                            }
+                        ],
+                        "models": [
+                            {
+                                "id": "external/model-a",
+                                "provider": "external",
+                                "upstream_id": "model-a",
+                                "context_window": 32_000,
+                                "enabled": True,
+                            }
+                        ],
+                    }
+                ),
+                config_path,
+            )
+            reader = _CountingHistoryReader()
+            state = AppState(config_path, history_reader=reader)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            client = None
+            stream = None
+            try:
+                client = socket.create_connection(server.server_address, timeout=5)
+                stream = client.makefile("rb")
+                port = server.server_address[1]
+                client.sendall(
+                    (
+                        (
+                            "GET /v1/responses HTTP/1.1\r\n"
+                            "Host: 127.0.0.1:%d\r\n"
+                            "Upgrade: websocket\r\n"
+                            "Connection: Upgrade\r\n"
+                            "Sec-WebSocket-Version: 13\r\n"
+                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                            "Cookie: emp_session=%s\r\n\r\n"
+                        )
+                        % (port, state.session_token)
+                    ).encode("ascii")
+                )
+                self.assertIn(b" 101 ", stream.readline())
+                while stream.readline() not in (b"\r\n", b"\n", b""):
+                    pass
+                client.sendall(
+                    _masked_text_frame(
+                        json.dumps(
+                            {
+                                "type": "response.create",
+                                "model": "external/model-a",
+                                "previous_response_id": "resp_external_lost",
+                                "input": [
+                                    {
+                                        "type": "message",
+                                        "role": "user",
+                                        "content": "incremental delta",
+                                    }
+                                ],
+                                "stream": True,
+                            }
+                        )
+                    )
+                )
+                _, raw = _read_text_frame(stream)
+                event = json.loads(raw)
+
+                self.assertEqual(
+                    event,
+                    {
+                        "type": "error",
+                        "error": {
+                            "code": "previous_response_not_found",
+                            "message": (
+                                "Previous response was not found. "
+                                "Retrying the full request."
+                            ),
+                        },
+                    },
+                )
+                self.assertEqual(len(reader.calls), 0)
+            finally:
+                if stream is not None:
+                    stream.close()
+                if client is not None:
+                    client.close()
+                server.shutdown()
+                server.server_close()
+
     def test_native_websocket_reuses_own_chain_and_requests_full_retry_for_foreign_chain(self):
         class FakeNativeBridge:
             def __init__(self):
@@ -4102,10 +4180,18 @@ class ContinuityAppStateTests(unittest.TestCase):
                 self.assertEqual(
                     fake_bridge.requests[1]["previous_response_id"], first_id
                 )
-                self.assertEqual(third_event["type"], "error")
-                self.assertEqual(third_event["status"], 404)
                 self.assertEqual(
-                    third_event["error"]["code"], "previous_response_not_found"
+                    third_event,
+                    {
+                        "type": "error",
+                        "error": {
+                            "code": "previous_response_not_found",
+                            "message": (
+                                "Previous response was not found. "
+                                "Retrying the full request."
+                            ),
+                        },
+                    },
                 )
                 self.assertEqual(len(reader.calls), 0)
             finally:
@@ -4330,9 +4416,19 @@ class ContinuityAppStateTests(unittest.TestCase):
                     _, raw = _read_text_frame(stream)
                     event = json.loads(raw)
 
-                self.assertEqual(event["type"], "error")
-                self.assertEqual(event["status"], 404)
-                self.assertEqual(event["error"]["code"], "previous_response_not_found")
+                self.assertEqual(
+                    event,
+                    {
+                        "type": "error",
+                        "error": {
+                            "code": "previous_response_not_found",
+                            "message": (
+                                "Previous response was not found. "
+                                "Retrying the full request."
+                            ),
+                        },
+                    },
+                )
                 self.assertEqual(reader.calls, 0)
             finally:
                 if stream is not None:

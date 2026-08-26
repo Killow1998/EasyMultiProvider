@@ -19,6 +19,11 @@ from easy_multi_provider.router import (
 )
 from easy_multi_provider.server import AppState, BoundedThreadingHTTPServer, ObservationRing, make_handler
 from easy_multi_provider.transport import WebSocketConnection, sse_json_events
+from easy_multi_provider.transport_failures import (
+    CONNECT_TIMEOUT,
+    PHASE_CONNECT,
+    TransportFailure,
+)
 
 
 def _event(event_type, **value):
@@ -26,31 +31,19 @@ def _event(event_type, **value):
 
 
 class StreamReliabilityTests(unittest.TestCase):
-    def test_pre_output_close_retries_once_without_duplicate_events(self):
+    def test_deterministic_failure_frame_fails_closed_without_retry(self):
         attempts = []
         terminals = []
 
         def factory():
             attempts.append(len(attempts) + 1)
-            if len(attempts) == 1:
-                return iter(
-                    [
-                        _event("response.created", response={"id": "resp_fixture"}),
-                        _response_failure_frame(
-                            "upstream closed before terminal",
-                            error_class="upstream_close_pre_output",
-                        ),
-                    ]
-                )
             return iter(
                 [
                     _event("response.created", response={"id": "resp_fixture"}),
-                    _event("response.output_text.delta", delta="visible"),
-                    _event(
-                        "response.output_item.added",
-                        item={"type": "function_call", "call_id": "call_fixture"},
+                    _response_failure_frame(
+                        "upstream closed before terminal",
+                        error_class="stream_incomplete",
                     ),
-                    _event("response.completed", response={"id": "resp_fixture"}),
                 ]
             )
 
@@ -64,22 +57,14 @@ class StreamReliabilityTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(attempts, [1, 2])
-        self.assertEqual(
-            [event["type"] for event in events],
-            [
-                "response.created",
-                "response.output_text.delta",
-                "response.output_item.added",
-                "response.completed",
-            ],
-        )
+        self.assertEqual(attempts, [1])
+        self.assertEqual([event["type"] for event in events], ["response.failed"])
         self.assertEqual(len(terminals), 1)
-        self.assertTrue(terminals[0]["success"])
-        self.assertTrue(terminals[0]["output_emitted"])
-        self.assertTrue(terminals[0]["tool_activity"])
+        self.assertFalse(terminals[0]["success"])
+        self.assertFalse(terminals[0]["output_emitted"])
+        self.assertFalse(terminals[0]["tool_activity"])
         self.assertTrue(terminals[0]["terminal_event_observed"])
-        self.assertTrue(terminals[0]["recovery_succeeded"])
+        self.assertFalse(terminals[0]["recovery_succeeded"])
 
     def test_partial_output_close_fails_once_without_replay(self):
         attempts = []
@@ -106,7 +91,7 @@ class StreamReliabilityTests(unittest.TestCase):
             ["response.created", "response.output_text.delta", "response.failed"],
         )
         self.assertEqual(len(terminals), 1)
-        self.assertEqual(terminals[0]["error_class"], "upstream_close_after_output")
+        self.assertEqual(terminals[0]["error_class"], "stream_incomplete")
         self.assertTrue(terminals[0]["output_emitted"])
         self.assertFalse(terminals[0]["recovery_succeeded"])
 
@@ -139,7 +124,7 @@ class StreamReliabilityTests(unittest.TestCase):
         self.assertEqual(attempts, [1])
         self.assertEqual(events[-1]["type"], "response.failed")
         self.assertEqual(sum(event["type"] == "response.failed" for event in events), 1)
-        self.assertEqual(terminals[0]["error_class"], "upstream_close_after_tool")
+        self.assertEqual(terminals[0]["error_class"], "stream_incomplete")
         self.assertTrue(terminals[0]["tool_activity"])
 
     def test_duplicate_terminal_is_suppressed(self):
@@ -197,15 +182,7 @@ class StreamReliabilityTests(unittest.TestCase):
 
         def factory():
             attempts.append(len(attempts) + 1)
-            return iter(
-                [
-                    _event("response.created", response={"id": "resp_fixture"}),
-                    _response_failure_frame(
-                        "upstream closed before terminal",
-                        error_class="upstream_close_pre_output",
-                    ),
-                ]
-            )
+            raise TransportFailure(CONNECT_TIMEOUT, 504, PHASE_CONNECT)
 
         events = list(
             sse_json_events(
@@ -266,7 +243,7 @@ class StreamReliabilityTests(unittest.TestCase):
         self.assertEqual(metadata["kind"], "stream")
         self.assertEqual(
             [event["type"] for event in events],
-            ["response.created", "response.failed"],
+            ["response.failed"],
         )
         self.assertTrue(terminals[0]["terminal_event_observed"])
         self.assertFalse(terminals[0]["recovery_succeeded"])

@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.8.0 (2026-08-26)
+
+### Product
+
+- Separated WebSocket transport continuity, Codex-owned history
+  materialization, and destination context budgeting into independent
+  boundaries.
+- Made an unavailable `previous_response_id` return Codex's standard retry
+  event without reading local history, allowing Codex to resend the same turn
+  as a full logical request.
+- Limited rollout reconstruction to full external-destination requests that
+  contain unreadable native opaque compaction state. Native destinations and
+  portable EMP checkpoints remain reader-free.
+- Implemented Codex 0.149 remote-compaction-v2 reconstruction from the latest
+  `replacement_history` plus the successful tail, with fail-closed handling of
+  unresolved opaque state.
+- Made Context Guard the only final destination-payload budget decision. An
+  oversized payload is compacted for that destination, re-projected, and
+  checked once more before sending.
+- Preserved current request window identity across long-lived WebSockets after
+  native compaction while keeping thread identity conflicts strict.
+- Kept standalone web search on Codex's Subscription-backed tool path so an
+  external model can search without receiving Provider or Subscription
+  credentials.
+
+### Verification
+
+- Passed the complete offline suite for the P0 change set. After the final
+  isolated WebSocket window-identity correction, its focused continuity,
+  history, context, loopback, compilation, and whitespace checks also passed.
+- Live-validated first-send Native -> External, External -> External, and
+  External -> Native transitions after compaction, including tools, image
+  input, standalone search, compressed large requests, later WebSocket turns,
+  and native resume on Codex 0.149.
+- Confirmed EMP does not write Codex SQLite or rollout files and does not put
+  conversation content in its diagnostic journal.
+
+## 0.7.6 (2026-08-25)
+
+- Added destination-model hierarchical compaction, stricter stream terminal
+  handling, and Subscription-backed standalone search for external models.
+- Kept derived checkpoints memory-only and diagnostics content-free while
+  preserving Codex-owned threads and resume state.
+
+## 0.7.5 (2026-08-24)
+
+- Replaced the legacy continuity layer with read-only Codex App Server,
+  SQLite-locator, and rollout history adapters.
+- Reconstructed visible history only for external handoffs across an opaque
+  native compaction boundary; native routing retained Codex's own compaction
+  and retry behavior.
+- Simplified model presentation and management controls without introducing an
+  EMP-owned history database.
+
 ## 0.6.0 (2026-08-23)
 
 ### Product

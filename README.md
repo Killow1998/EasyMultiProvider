@@ -6,7 +6,7 @@ EasyMultiProvider (EMP) is a local, browser-configured model router for Codex.
 It keeps the native Codex experience while adding multiple ChatGPT
 subscriptions, API providers, and external models to the same model list.
 
-The current source version is `v0.7.6`.
+The current source version is `v0.8.0`.
 
 ## Features
 
@@ -28,6 +28,8 @@ The current source version is `v0.7.6`.
 - Preserve native Codex sessions, `resume`, WebSockets, compression, and MCP.
 - Continue compacted tasks when switching between the current login, imported
   subscriptions, and external models, using Codex-owned visible history only.
+- Let external models use Codex standalone web search through an explicitly
+  selected ChatGPT Subscription without exposing Provider credentials.
 
 ## Install
 

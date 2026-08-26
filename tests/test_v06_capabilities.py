@@ -217,7 +217,15 @@ class CapabilityTruthTests(unittest.TestCase):
             def close(self):
                 pass
 
-        def request(provider, payload, incoming, stream=False, operation="", context_check=None):
+        def request(
+            provider,
+            payload,
+            incoming,
+            stream=False,
+            operation="",
+            context_check=None,
+            allow_retries=True,
+        ):
             captured.append(payload)
             if provider["protocol"] == "chat_completions":
                 return Response(

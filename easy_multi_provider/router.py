@@ -25,10 +25,12 @@ from .capabilities import (
 from .catalog import load_native_catalog
 from .config import api_key
 from .context_guard import (
+    ContextAssessment,
     ContextGuardBlocked,
     is_explicit_context_error,
     mark_explicit_failure,
 )
+from .destination_context import strip_history_accounting
 from .native_identity import (
     NativeIdentityError,
     NativeRouteIdentity,
@@ -131,6 +133,16 @@ HistoryPreparationCallback = Callable[
         str,
         Mapping[str, Any],
         Mapping[str, str],
+    ],
+    Dict[str, Any],
+]
+DestinationCompactionCallback = Callable[
+    [
+        Mapping[str, Any],
+        Mapping[str, Any],
+        str,
+        Mapping[str, Any],
+        ContextAssessment,
     ],
     Dict[str, Any],
 ]
@@ -1360,12 +1372,102 @@ def _preflight_history_projection(
         return
 
 
+def _destination_context_payload(
+    provider: Dict[str, Any], body: Dict[str, Any], model: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Project the exact logical body that ContextGuard must judge."""
+
+    protocol = provider.get("protocol")
+    if protocol == "responses":
+        return _responses_payload(provider, body, model)
+    if protocol == "chat_completions":
+        supported = _body_with_supported_effort(provider, body, model)
+        return responses_to_chat(
+            supported, _upstream_model(provider, model, body["model"])
+        )
+    if protocol == "anthropic_messages":
+        return responses_to_anthropic(
+            body, _upstream_model(provider, model, body["model"])
+        )
+    raise RouterError("provider protocol is unresolved", 502)
+
+
+def _fit_destination_context(
+    provider: Dict[str, Any],
+    model: Dict[str, Any],
+    requested_slug: str,
+    body: Dict[str, Any],
+    context_check: Optional[
+        Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]
+    ],
+    destination_compactor: Optional[DestinationCompactionCallback],
+    operation: str = "",
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Guard the final projection, compact once when blocked, then re-check."""
+
+    clean = strip_history_accounting(body)
+    if context_check is None:
+        return clean, {}
+
+    def assess(candidate: Dict[str, Any]) -> Dict[str, Any]:
+        logical = (
+            _summary_body(candidate)
+            if operation == "compact" and classify_dialect(provider) != CODEX_NATIVE
+            else candidate
+        )
+        payload = _destination_context_payload(provider, logical, model)
+        observed = context_check(
+            payload,
+            bool(candidate.get("stream")),
+            operation,
+        )
+        observation = dict(observed) if isinstance(observed, Mapping) else {}
+        if observation:
+            provider["_context_observation"] = observation
+        return observation
+
+    try:
+        return clean, assess(clean)
+    except ContextGuardBlocked as exc:
+        if destination_compactor is None:
+            raise ContextLengthError(
+                exc.assessment.to_safe_dict(), preflight=True
+            ) from exc
+        try:
+            compacted = destination_compactor(
+                provider,
+                model,
+                requested_slug,
+                body,
+                exc.assessment,
+            )
+        except HistoryReconstructionError as compact_error:
+            if compact_error.reason == "compaction_unit_too_large":
+                raise ContextLengthError(
+                    exc.assessment.to_safe_dict(), preflight=True
+                ) from compact_error
+            raise
+        except Exception:
+            raise HistoryReconstructionError("history_compaction_failed") from None
+        if not isinstance(compacted, Mapping):
+            raise HistoryReconstructionError("history_compaction_failed")
+        compacted = strip_history_accounting(compacted)
+        try:
+            return compacted, assess(compacted)
+        except ContextGuardBlocked as final:
+            raise ContextLengthError(
+                final.assessment.to_safe_dict(), preflight=True
+            ) from final
+
+
 def prepare_native_websocket_request(
     config: Dict[str, Any],
     body: Dict[str, Any],
     incoming: Dict[str, str],
     on_context: Optional[Callable[..., Mapping[str, Any]]] = None,
     history_preparer: Optional[HistoryPreparationCallback] = None,
+    destination_compactor: Optional[DestinationCompactionCallback] = None,
+    transport_incremental: bool = False,
 ) -> Optional[NativeWebSocketPlan]:
     """Prepare one native Responses WebSocket request without sending it.
 
@@ -1385,25 +1487,26 @@ def prepare_native_websocket_request(
     prepared = _prepare_reasoning_summary_route(
         config, provider, model, model_id, body
     )
-    prepared = _prepare_continuity_body(
-        config,
+    if not transport_incremental:
+        prepared = _prepare_continuity_body(
+            config,
+            provider,
+            model,
+            model_id,
+            prepared,
+            incoming,
+            history_preparer,
+        )
+    context_check = _bind_context_check(provider, model, on_context)
+    prepared, context_observation = _fit_destination_context(
         provider,
         model,
         model_id,
         prepared,
-        incoming,
-        history_preparer,
+        context_check,
+        destination_compactor,
     )
     payload = _responses_payload(provider, prepared, model)
-    context_observation: Dict[str, Any] = {}
-    context_check = _bind_context_check(provider, model, on_context)
-    if context_check is not None:
-        try:
-            observed = context_check(payload, True, "")
-        except ContextGuardBlocked as exc:
-            raise ContextLengthError(exc.assessment.to_safe_dict(), preflight=True) from exc
-        if isinstance(observed, Mapping):
-            context_observation = dict(observed)
     try:
         full_headers, identity_headers = _native_route_headers(provider, incoming)
         identity = _native_route_identity(
@@ -1968,6 +2071,7 @@ def _auto_stream_result(
     decision: str,
     callback: Optional[Callable[[Dict[str, Any]], None]],
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+    destination_compactor: Optional[DestinationCompactionCallback] = None,
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Iterator[bytes]:
     for index, protocol in enumerate(candidates):
@@ -1999,6 +2103,7 @@ def _auto_stream_result(
                 index > 0,
                 terminal_callback=lambda value: terminal.update(value),
                 context_check=_bind_context_check(resolved, model, context_check),
+                destination_compactor=destination_compactor,
                 on_stream_event=on_stream_event,
             )
             for chunk in result:
@@ -2167,6 +2272,10 @@ def _prepare_continuity_body(
     incoming: Dict[str, str],
     history_preparer: Optional[HistoryPreparationCallback],
 ) -> Dict[str, Any]:
+    # ``previous_response_id`` is transport state.  Only Codex's subsequent
+    # full logical request may enter source-history materialization.
+    if body.get("previous_response_id") is not None:
+        return dict(body)
     if history_preparer is not None:
         try:
             prepared = history_preparer(
@@ -2202,11 +2311,26 @@ def _proxy_resolved(
     fallback: bool = False,
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+    destination_compactor: Optional[DestinationCompactionCallback] = None,
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Tuple[Dict[str, Any], Any]:
-    if _is_compaction_trigger(body) and classify_dialect(provider) != CODEX_NATIVE:
+    requested_slug = str(body.get("model") or "")
+    external_compaction = (
+        _is_compaction_trigger(body)
+        and classify_dialect(provider) != CODEX_NATIVE
+    )
+    body, _ = _fit_destination_context(
+        provider,
+        model,
+        requested_slug,
+        body,
+        context_check,
+        destination_compactor,
+        operation="compact" if external_compaction else "",
+    )
+    if external_compaction:
         response = _external_compaction_response(
-            provider, body, model, incoming, context_check
+            provider, body, model, incoming, None
         )
         if body.get("stream"):
             return _tag_route(
@@ -2244,7 +2368,7 @@ def _proxy_resolved(
             request=body,
         ), _reliable_responses_stream(
             lambda: stream_chat_completion(
-                provider, body, model, incoming, None, context_check
+                provider, body, model, incoming, None, None
             ),
             terminal_callback,
             replay_safe=classify_dialect(provider) != CODEX_NATIVE,
@@ -2260,7 +2384,7 @@ def _proxy_resolved(
             request=body,
         ), _reliable_responses_stream(
             lambda: stream_anthropic_completion(
-                provider, body, model, incoming, None, context_check
+                provider, body, model, incoming, None, None
             ),
             terminal_callback,
             replay_safe=classify_dialect(provider) != CODEX_NATIVE,
@@ -2270,7 +2394,7 @@ def _proxy_resolved(
             _preflight_history_projection(provider, body, model)
             upstream = _reliable_responses_stream(
                 lambda: forward_responses_stream(
-                    provider, body, model, incoming, None, context_check,
+                    provider, body, model, incoming, None, None,
                     on_stream_event=on_stream_event,
                 ),
                 terminal_callback,
@@ -2289,16 +2413,12 @@ def _proxy_resolved(
                 request=body,
             ), upstream
         status, content_type, raw = forward_responses(
-            provider, body, model, incoming, context_check
+            provider, body, model, incoming, None
         )
     elif provider["protocol"] == "chat_completions":
-        status, content_type, raw = chat_completion(
-            provider, body, model, incoming, context_check
-        )
+        status, content_type, raw = chat_completion(provider, body, model, incoming, None)
     else:
-        status, content_type, raw = anthropic_completion(
-            provider, body, model, incoming, context_check
-        )
+        status, content_type, raw = anthropic_completion(provider, body, model, incoming, None)
     return _tag_route(
         {"kind": "body", "status": status, "content_type": content_type},
         provider,
@@ -2352,6 +2472,7 @@ def proxy(
     on_observation: Optional[Callable[[Dict[str, Any]], None]] = None,
     on_context: Optional[Callable[..., Mapping[str, Any]]] = None,
     history_preparer: Optional[HistoryPreparationCallback] = None,
+    destination_compactor: Optional[DestinationCompactionCallback] = None,
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Tuple[Dict[str, Any], Any]:
     model_id = body.get("model")
@@ -2413,6 +2534,7 @@ def proxy(
                 incoming,
                 terminal_callback=terminal.update if on_observation and body.get("stream") else None,
                 context_check=_bind_context_check(provider, model, on_context),
+                destination_compactor=destination_compactor,
                 on_stream_event=on_stream_event,
             )
         except RouterError as exc:
@@ -2469,6 +2591,7 @@ def proxy(
             decision,
             on_observation,
             on_context,
+            destination_compactor,
             on_stream_event,
         )
         metadata["observation_attached"] = bool(on_observation)
@@ -2487,6 +2610,7 @@ def proxy(
                 candidate_decision,
                 index > 0,
                 context_check=_bind_context_check(resolved, model, on_context),
+                destination_compactor=destination_compactor,
             )
         except RouterError as exc:
             if index + 1 < len(candidates) and exc.status in _PROTOCOL_REJECTION_STATUSES:
@@ -2525,6 +2649,7 @@ def proxy_compact(
     on_observation: Optional[Callable[[Dict[str, Any]], None]] = None,
     on_context: Optional[Callable[..., Mapping[str, Any]]] = None,
     history_preparer: Optional[HistoryPreparationCallback] = None,
+    destination_compactor: Optional[DestinationCompactionCallback] = None,
 ) -> Tuple[Dict[str, Any], bytes]:
     model_id = body.get("model")
     if not isinstance(model_id, str) or not model_id:
@@ -2560,12 +2685,21 @@ def proxy_compact(
         raise
     if provider.get("protocol") != "auto":
         try:
+            body, _ = _fit_destination_context(
+                provider,
+                model,
+                model_id,
+                body,
+                _bind_context_check(provider, model, on_context),
+                destination_compactor,
+                operation="compact",
+            )
             metadata, raw = _proxy_compact_resolved(
                 provider,
                 model,
                 body,
                 incoming,
-                context_check=_bind_context_check(provider, model, on_context),
+                context_check=None,
             )
         except RouterError as exc:
             _emit_observation(
@@ -2593,14 +2727,23 @@ def proxy_compact(
         resolved["protocol"] = protocol
         candidate_decision = "fallback_rejection" if index else decision
         try:
+            candidate_body, _ = _fit_destination_context(
+                resolved,
+                model,
+                model_id,
+                body,
+                _bind_context_check(resolved, model, on_context),
+                destination_compactor,
+                operation="compact",
+            )
             metadata, raw = _proxy_compact_resolved(
                 resolved,
                 model,
-                body,
+                candidate_body,
                 incoming,
                 candidate_decision,
                 index > 0,
-                context_check=_bind_context_check(resolved, model, on_context),
+                context_check=None,
             )
         except RouterError as exc:
             if index + 1 < len(candidates) and exc.status in _PROTOCOL_REJECTION_STATUSES:

@@ -8,6 +8,7 @@ from easy_multi_provider.codex_history import (
     AppServerReader,
     HistoryAnchor,
     HistoryCorruptError,
+    HistoryMismatchError,
     HistoryUnavailableError,
     RolloutReader,
     SQLiteReader,
@@ -42,7 +43,22 @@ def _rollout_text():
         _record("event_msg", {"type": "task_started", "turn_id": COMPACT_TURN}),
         _record(
             "compacted",
-            {"message": "", "replacement_history": [], "window_id": "window-1"},
+            {
+                "message": "",
+                "replacement_history": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": "original constraint",
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "completed work",
+                    },
+                ],
+                "window_id": "window-1",
+            },
         ),
         _record("event_msg", {"type": "task_complete", "turn_id": COMPACT_TURN}),
         _record("event_msg", {"type": "task_started", "turn_id": FAILED_TURN}),
@@ -62,6 +78,32 @@ def _rollout_text():
 
 
 class CodexHistoryReaderTests(unittest.TestCase):
+    def test_history_anchor_carries_window_identity_and_rejects_conflicts(self):
+        anchor = HistoryAnchor.from_headers(
+            {
+                "thread-id": THREAD,
+                "x-codex-window-id": "window-7",
+                "x-codex-turn-metadata": json.dumps(
+                    {
+                        "thread_id": THREAD,
+                        "turn_id": NATIVE_TURN,
+                        "window_id": "window-7",
+                    }
+                ),
+            }
+        )
+
+        self.assertEqual(anchor.window_id, "window-7")
+        with self.assertRaises(HistoryMismatchError):
+            HistoryAnchor.from_headers(
+                {
+                    "x-codex-window-id": "window-a",
+                    "x-codex-turn-metadata": json.dumps(
+                        {"window_id": "window-b"}
+                    ),
+                }
+            )
+
     def test_failed_destination_turn_does_not_poison_retry_source_or_history(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "rollout.jsonl"
@@ -75,7 +117,96 @@ class CodexHistoryReaderTests(unittest.TestCase):
         self.assertIn("original constraint", visible)
         self.assertIn("completed work", visible)
         self.assertNotIn("failed attempt marker", visible)
-        self.assertEqual(snapshot.items[-1].kind, "compaction_summary")
+        self.assertEqual(snapshot.items[-1].kind, "compaction_marker")
+
+    def test_remote_compaction_v2_uses_replacement_base_plus_tail(self):
+        tail_turn = "01a00000-0000-7000-8000-000000000006"
+        incoming_turn = "01a00000-0000-7000-8000-000000000007"
+        records = [
+            _record("session_meta", {"id": THREAD, "history_mode": "legacy"}),
+            _record("event_msg", {"type": "task_started", "turn_id": NATIVE_TURN}),
+            _record(
+                "response_item",
+                {"type": "message", "role": "user", "content": "superseded base"},
+            ),
+            _record("event_msg", {"type": "task_complete", "turn_id": NATIVE_TURN}),
+            _record("event_msg", {"type": "task_started", "turn_id": COMPACT_TURN}),
+            _record(
+                "compacted",
+                {
+                    "message": "",
+                    "replacement_history": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": "replacement base",
+                        }
+                    ],
+                    "window_id": "window-v2",
+                },
+            ),
+            _record("event_msg", {"type": "task_complete", "turn_id": COMPACT_TURN}),
+            _record("event_msg", {"type": "task_started", "turn_id": tail_turn}),
+            _record(
+                "response_item",
+                {"type": "message", "role": "assistant", "content": "post checkpoint tail"},
+            ),
+            _record("event_msg", {"type": "task_complete", "turn_id": tail_turn}),
+            _record("event_msg", {"type": "task_started", "turn_id": incoming_turn}),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rollout.jsonl"
+            path.write_text("".join(records))
+            snapshot = RolloutReader(path).read_visible_history(
+                HistoryAnchor(THREAD, incoming_turn, "window-v2")
+            )
+
+        visible = json.dumps([item.content for item in snapshot.items])
+        self.assertNotIn("superseded base", visible)
+        self.assertIn("replacement base", visible)
+        self.assertIn("post checkpoint tail", visible)
+        self.assertEqual(snapshot.items[1].kind, "compaction_marker")
+
+    def test_remote_replacement_opaque_item_uses_prior_visible_base(self):
+        incoming_turn = "01a00000-0000-7000-8000-000000000008"
+        records = [
+            _record("session_meta", {"id": THREAD, "history_mode": "legacy"}),
+            _record("event_msg", {"type": "task_started", "turn_id": NATIVE_TURN}),
+            _record(
+                "response_item",
+                {"type": "message", "role": "user", "content": "visible before opaque"},
+            ),
+            _record("event_msg", {"type": "task_complete", "turn_id": NATIVE_TURN}),
+            _record("event_msg", {"type": "task_started", "turn_id": COMPACT_TURN}),
+            _record(
+                "compacted",
+                {
+                    "message": "",
+                    "replacement_history": [
+                        {"type": "compaction", "encrypted_content": "native-opaque"},
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": "replacement tail",
+                        },
+                    ],
+                },
+            ),
+            _record("event_msg", {"type": "task_complete", "turn_id": COMPACT_TURN}),
+            _record("event_msg", {"type": "task_started", "turn_id": incoming_turn}),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rollout.jsonl"
+            path.write_text("".join(records))
+            snapshot = RolloutReader(path).read_visible_history(
+                HistoryAnchor(THREAD, incoming_turn)
+            )
+
+        visible = json.dumps([item.content for item in snapshot.items])
+        self.assertIn("visible before opaque", visible)
+        self.assertIn("replacement tail", visible)
+        self.assertNotIn("native-opaque", visible)
+        self.assertEqual(snapshot.items[-1].kind, "compaction_marker")
 
     def test_reader_stops_before_first_record_of_incoming_turn(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,3 +1,4 @@
+import base64
 import json
 import unittest
 from unittest.mock import patch
@@ -11,7 +12,6 @@ from easy_multi_provider.codex_history import (
     VisibleItem,
 )
 from easy_multi_provider.history_continuity import (
-    HISTORY_REBUILD_MARKER,
     HistoryContinuityEngine,
     HistoryReconstructionError,
 )
@@ -48,13 +48,27 @@ def _opaque_body(text="continue exactly"):
     }
 
 
+def _portable_body(model="external/model"):
+    encoded = base64.urlsafe_b64encode(b"portable visible checkpoint").decode()
+    return {
+        "model": model,
+        "input": [
+            {"type": "compaction", "encrypted_content": "emp1:" + encoded},
+            _message("continue from the checkpoint"),
+        ],
+        "tools": [],
+    }
+
+
 class Reader:
     def __init__(self, items):
         self.items = tuple(items)
         self.calls = 0
+        self.anchors = []
 
     def read_visible_history(self, anchor):
         self.calls += 1
+        self.anchors.append(anchor)
         return HistorySnapshot(
             anchor=anchor,
             items=self.items,
@@ -96,89 +110,46 @@ class HistoryContinuityTests(unittest.TestCase):
         self.assertEqual(prepared, body)
         self.assertEqual(reader.calls, 0)
 
-    def test_websocket_route_change_rebuilds_even_for_native_destination(self):
-        reader = Reader(
-            [
-                VisibleItem("compaction_summary", content="visible checkpoint"),
-                VisibleItem("assistant_message", content="completed work"),
-            ]
-        )
-        native = {
-            "id": "imported-account",
-            "protocol": "responses",
-            "auth_mode": "account",
-        }
-        model = {
-            "id": "account/model",
-            "context_window": 32_000,
-        }
-        body = {
-            "model": model["id"],
-            "input": [
-                {
-                    "type": "compaction",
-                    "encrypted_content": HISTORY_REBUILD_MARKER,
-                },
-                _message("continue exactly"),
-            ],
-        }
+    def test_portable_checkpoint_to_external_is_visible_without_rollout(self):
+        reader = Reader([])
+        config, provider, model = _external()
 
         prepared = HistoryContinuityEngine(reader).prepare(
-            {"models": [model]}, native, model, model["id"], body, _headers()
+            config,
+            provider,
+            model,
+            model["id"],
+            _portable_body(),
+            _headers(),
         )
 
         rendered = json.dumps(prepared["input"], ensure_ascii=False)
-        self.assertEqual(reader.calls, 1)
-        self.assertNotIn(HISTORY_REBUILD_MARKER, rendered)
-        self.assertIn("visible checkpoint", rendered)
-        self.assertIn("continue exactly", rendered)
+        self.assertEqual(reader.calls, 0)
+        self.assertNotIn("emp1:", rendered)
+        self.assertIn("portable visible checkpoint", rendered)
 
-    def test_native_route_change_compacts_oversized_visible_history(self):
-        history = []
-        for index in range(8):
-            history.extend(
-                [
-                    VisibleItem(
-                        "user_message",
-                        content="requirement-%d %s" % (index, "x" * 700),
-                        turn_id="turn-%d" % index,
-                    ),
-                    VisibleItem(
-                        "assistant_message",
-                        content="completed-%d %s" % (index, "y" * 700),
-                        turn_id="turn-%d" % index,
-                    ),
-                ]
-            )
+    def test_portable_checkpoint_to_native_becomes_visible_without_rollout(self):
+        reader = Reader([])
         native = {
             "id": "imported-account",
             "protocol": "responses",
             "auth_mode": "account",
         }
-        model = {"id": "account/model", "context_window": 5_000}
-        body = {
-            "model": model["id"],
-            "input": [
-                {"type": "compaction", "encrypted_content": HISTORY_REBUILD_MARKER},
-                _message("active request"),
-            ],
-        }
-        calls = []
+        model = {"id": "account/model", "context_window": 32_000}
 
-        def summarize(request):
-            calls.append(request.stage)
-            return "%s checkpoint" % request.stage
-
-        engine = HistoryContinuityEngine(
-            Reader(history), destination_summarizer=summarize
-        )
-        prepared = engine.prepare(
-            {"models": [model]}, native, model, model["id"], body, _headers()
+        prepared = HistoryContinuityEngine(reader).prepare(
+            {},
+            native,
+            model,
+            model["id"],
+            _portable_body(model["id"]),
+            _headers(),
         )
 
-        self.assertIn("map", calls)
-        self.assertEqual(prepared["input"][-1], _message("active request"))
-        self.assertEqual(engine.last_compaction_metrics.status, "compacted")
+        rendered = json.dumps(prepared["input"], ensure_ascii=False)
+        self.assertEqual(reader.calls, 0)
+        self.assertNotIn("emp1:", rendered)
+        self.assertIn("portable visible checkpoint", rendered)
 
     def test_websocket_uses_request_client_metadata_instead_of_handshake_headers(self):
         reader = Reader([VisibleItem("compaction_summary", content="checkpoint")])
@@ -202,6 +173,73 @@ class HistoryContinuityTests(unittest.TestCase):
         self.assertEqual(reader.calls, 1)
         self.assertIn("checkpoint", json.dumps(prepared["input"]))
 
+    def test_websocket_current_request_window_overrides_stale_handshake_window(self):
+        reader = Reader([VisibleItem("compaction_summary", content="checkpoint")])
+        config, provider, model = _external()
+        body = _opaque_body()
+        body["client_metadata"] = {
+            "x-codex-turn-metadata": json.dumps(
+                {
+                    "thread_id": THREAD,
+                    "turn_id": TURN,
+                    "window_id": "window-after-compact",
+                }
+            )
+        }
+
+        prepared = HistoryContinuityEngine(reader).prepare(
+            config,
+            provider,
+            model,
+            model["id"],
+            body,
+            {
+                "thread-id": THREAD,
+                "x-codex-window-id": "window-before-compact",
+                "x-codex-turn-metadata": json.dumps(
+                    {
+                        "thread_id": THREAD,
+                        "turn_id": "turn-before-compact",
+                        "window_id": "window-before-compact",
+                    }
+                ),
+            },
+        )
+
+        self.assertEqual(reader.calls, 1)
+        self.assertEqual(reader.anchors[0].window_id, "window-after-compact")
+        self.assertIn("checkpoint", json.dumps(prepared["input"]))
+
+    def test_websocket_current_window_does_not_weaken_thread_identity(self):
+        reader = Reader([VisibleItem("compaction_summary", content="checkpoint")])
+        config, provider, model = _external()
+        body = _opaque_body()
+        body["client_metadata"] = {
+            "x-codex-turn-metadata": json.dumps(
+                {
+                    "thread_id": THREAD,
+                    "turn_id": TURN,
+                    "window_id": "window-after-compact",
+                }
+            )
+        }
+
+        with self.assertRaises(HistoryReconstructionError) as raised:
+            HistoryContinuityEngine(reader).prepare(
+                config,
+                provider,
+                model,
+                model["id"],
+                body,
+                {
+                    "thread-id": "different-thread",
+                    "x-codex-window-id": "window-before-compact",
+                },
+            )
+
+        self.assertEqual(raised.exception.reason, "conflicting_thread_identity")
+        self.assertEqual(reader.calls, 0)
+
     def test_native_opaque_to_external_replays_visible_history_on_first_send(self):
         reader = Reader(
             [
@@ -223,6 +261,22 @@ class HistoryContinuityTests(unittest.TestCase):
         self.assertIn("implemented the response chart", rendered)
         self.assertIn("continue exactly", rendered)
         self.assertEqual(prepared["input"][-1], _message("continue exactly"))
+
+    def test_previous_response_id_never_enters_history_reader(self):
+        reader = Reader([VisibleItem("compaction_summary", content="checkpoint")])
+        config, _, _ = _external()
+        body = _opaque_body()
+        body["previous_response_id"] = "resp_transport_only"
+
+        with self.assertRaises(router.RouterError):
+            router.proxy(
+                config,
+                body,
+                _headers(),
+                history_preparer=HistoryContinuityEngine(reader).prepare,
+            )
+
+        self.assertEqual(reader.calls, 0)
 
     def test_full_codex_input_replaces_only_opaque_compaction_without_duplicating_tail(self):
         """Codex sends its complete normalized prompt, not a current-turn delta."""
@@ -359,156 +413,6 @@ class HistoryContinuityTests(unittest.TestCase):
         self.assertNotIn("native-opaque", rendered)
         self.assertNotIn("compaction_trigger", rendered)
         self.assertIn("visible checkpoint", rendered)
-
-    def test_context_window_without_output_limit_uses_explicit_safety_margin(self):
-        reader = Reader(
-            [
-                VisibleItem("compaction_summary", content="visible checkpoint"),
-                VisibleItem("assistant_message", content="tail"),
-            ]
-        )
-        config, provider, model = _external(context_window=8_000)
-
-        prepared = HistoryContinuityEngine(reader).prepare(
-            config, provider, model, model["id"], _opaque_body(), _headers()
-        )
-
-        self.assertIn("visible checkpoint", json.dumps(prepared["input"]))
-
-    def test_missing_context_capability_fails_closed(self):
-        reader = Reader([VisibleItem("compaction_summary", content="checkpoint")])
-        config, provider, model = _external()
-        model.pop("context_window")
-
-        with self.assertRaises(HistoryReconstructionError) as raised:
-            HistoryContinuityEngine(reader).prepare(
-                config, provider, model, model["id"], _opaque_body(), _headers()
-            )
-
-        self.assertEqual(raised.exception.reason, "context_budget_unknown")
-
-    def test_oversized_lossless_projection_fails_instead_of_clipping(self):
-        reader = Reader(
-            [
-                VisibleItem("user_message", content="x" * 20_000),
-                VisibleItem("compaction_summary", content=""),
-            ]
-        )
-        config, provider, model = _external(context_window=1_000)
-
-        with self.assertRaises(HistoryReconstructionError) as raised:
-            HistoryContinuityEngine(reader).prepare(
-                config, provider, model, model["id"], _opaque_body(), _headers()
-            )
-
-        self.assertEqual(raised.exception.reason, "context_budget_exceeded")
-
-    def test_oversized_history_uses_destination_map_reduce_and_keeps_tail_and_request(self):
-        history = []
-        for index in range(9):
-            turn_id = "turn-%d" % index
-            history.append(
-                VisibleItem(
-                    "user_message",
-                    content="history-%d %s" % (index, "x" * 650),
-                    turn_id=turn_id,
-                )
-            )
-            if index == 8:
-                history.extend(
-                    [
-                        VisibleItem(
-                            "tool_call",
-                            content={"name": "read_file", "arguments": "{}"},
-                            turn_id=turn_id,
-                            call_id="tail-call",
-                            raw_type="custom_tool_call",
-                        ),
-                        VisibleItem(
-                            "tool_result",
-                            content={"output": "tail result"},
-                            turn_id=turn_id,
-                            call_id="tail-call",
-                            raw_type="custom_tool_call_output",
-                        ),
-                    ]
-                )
-            history.append(
-                VisibleItem(
-                    "assistant_message",
-                    content="completed-%d %s" % (index, "y" * 650),
-                    turn_id=turn_id,
-                )
-            )
-        history.append(VisibleItem("compaction_summary", content=""))
-
-        config, provider, model = _external(context_window=5_000)
-        active_request = _message("active request must remain byte-for-byte visible")
-        body = _opaque_body()
-        body["input"][-1] = active_request
-        calls = []
-
-        def summarize(request):
-            calls.append(request)
-            encoded = json.dumps(
-                request.body,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-            self.assertLessEqual(
-                (len(encoded) + 1) // 2,
-                request.safe_input_budget - request.output_limit,
-            )
-            self.assertFalse(request.body.get("stream"))
-            self.assertEqual(request.body.get("tools"), [])
-            self.assertNotIn("previous_response_id", request.body)
-            return "%s checkpoint %d" % (request.stage, len(calls))
-
-        engine = HistoryContinuityEngine(
-            Reader(history), destination_summarizer=summarize
-        )
-        prepared = engine.prepare(config, provider, model, model["id"], body, _headers())
-
-        self.assertGreaterEqual(len(calls), 3)
-        self.assertIn("map", [request.stage for request in calls])
-        self.assertIn("reduce", [request.stage for request in calls])
-        self.assertEqual(engine.last_compaction_metrics.status, "compacted")
-        self.assertGreater(engine.last_compaction_metrics.map_calls, 1)
-        self.assertGreater(engine.last_compaction_metrics.reduce_calls, 0)
-        self.assertNotIn("history-8", json.dumps(engine.last_compaction_metrics.to_safe_dict()))
-        self.assertEqual(prepared["input"][-1], active_request)
-        rendered = json.dumps(prepared["input"], ensure_ascii=False)
-        self.assertIn("history-8", rendered)
-        self.assertIn("tail-call", rendered)
-        self.assertEqual(
-            sum(
-                item.get("call_id") == "tail-call"
-                for item in prepared["input"]
-                if isinstance(item, dict)
-            ),
-            2,
-        )
-        final_encoded = json.dumps(
-            {
-                key: prepared[key]
-                for key in ("input", "instructions", "tools", "text", "response_format")
-                if key in prepared
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        self.assertLessEqual((len(final_encoded) + 1) // 2, 4_500)
-
-        first_call_count = len(calls)
-        repeated = engine.prepare(
-            config, provider, model, model["id"], body, _headers()
-        )
-        self.assertEqual(len(calls), first_call_count)
-        self.assertTrue(engine.last_compaction_metrics.cache_hit)
-        self.assertEqual(repeated["input"][-1], active_request)
-
 
 if __name__ == "__main__":
     unittest.main()

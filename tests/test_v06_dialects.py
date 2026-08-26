@@ -20,6 +20,7 @@ from easy_multi_provider.dialects import (
     request_shape,
 )
 from easy_multi_provider.server import ObservationRing
+from easy_multi_provider.transport import sse_json_events
 
 
 class ResponsesDialectTests(unittest.TestCase):
@@ -527,7 +528,15 @@ class ResponsesDialectTests(unittest.TestCase):
             def close(self):
                 pass
 
-        def request(provider, payload, incoming, stream=False, operation="", context_check=None):
+        def request(
+            provider,
+            payload,
+            incoming,
+            stream=False,
+            operation="",
+            context_check=None,
+            allow_retries=True,
+        ):
             captured["payload"] = payload
             return Response()
 
@@ -723,6 +732,10 @@ class ResponsesDialectTests(unittest.TestCase):
     def test_forward_responses_stream_projects_reasoning_before_codex(self):
         events = [
             {
+                "type": "response.created",
+                "response": {"id": "response_fixture", "status": "in_progress"},
+            },
+            {
                 "type": "response.output_item.added",
                 "item": {"id": "reasoning_fixture", "type": "reasoning"},
             },
@@ -746,6 +759,7 @@ class ResponsesDialectTests(unittest.TestCase):
                         {
                             "id": "message_fixture",
                             "type": "message",
+                            "role": "assistant",
                             "content": [
                                 {"type": "output_text", "text": "final"}
                             ],
@@ -797,7 +811,15 @@ class ResponsesDialectTests(unittest.TestCase):
         self.assertNotIn("reasoning", raw.lower())
         self.assertNotIn("redacted", raw)
         self.assertIn("final", raw)
-        self.assertEqual(raw.count('"type": "response.completed"'), 1)
+        projected_events = list(sse_json_events([raw.encode("utf-8")]))
+        self.assertEqual(
+            sum(
+                event.get("type") == "response.completed"
+                for event in projected_events
+            ),
+            1,
+            projected_events,
+        )
 
     def test_observation_ring_keeps_only_bounded_request_shape(self):
         ring = ObservationRing()
