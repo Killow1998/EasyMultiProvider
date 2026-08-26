@@ -24,6 +24,9 @@
 - Kept standalone web search on Codex's Subscription-backed tool path so an
   external model can search without receiving Provider or Subscription
   credentials.
+- Treated client-cancelled HTTP streams as normal disconnects: EMP now closes
+  the upstream iterator without logging an internal 500 or writing a second
+  response to an already closed socket.
 
 ### Verification
 

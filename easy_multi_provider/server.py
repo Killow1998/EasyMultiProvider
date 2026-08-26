@@ -3637,6 +3637,12 @@ def make_handler(state: AppState):
                         )
                     return
                 self._error(404, "not found")
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # The caller cancelled or replaced the request. Stream cleanup
+                # has already closed the upstream iterator in its finally block;
+                # do not misreport the disconnect or write a second response to
+                # the dead socket.
+                self.close_connection = True
             except HistoryReconstructionError as exc:
                 emit_operation_failure(exc)
                 if body.get("stream"):

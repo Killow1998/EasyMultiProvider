@@ -1494,6 +1494,58 @@ class ServerAccountTests(unittest.TestCase):
         self.assertNotIn('onclick="backdropClose(event)"', html)
         self.assertNotIn("function backdropClose", html)
 
+    def test_stream_client_disconnect_closes_upstream_without_internal_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            handler = object.__new__(make_handler(state))
+            handler.path = "/v1/responses"
+            handler.headers = {}
+            handler.close_connection = False
+            handler._proxy_allowed = lambda: True
+            handler._body = lambda _limit: {"model": "demo/fixed", "stream": True}
+            handler.send_response = lambda _status: None
+            handler.send_header = lambda *_args: None
+            handler.end_headers = lambda: None
+
+            internal_errors = []
+            handler._record_unexpected_exception = internal_errors.append
+            handler._error = lambda status, message: internal_errors.append(
+                (status, message)
+            )
+
+            class DisconnectingWriter:
+                def write(self, _chunk):
+                    raise BrokenPipeError(32, "broken pipe")
+
+                def flush(self):
+                    pass
+
+            handler.wfile = DisconnectingWriter()
+            stream_closed = []
+
+            def stream():
+                try:
+                    yield b'data: {"type":"response.created","response":{"id":"r"}}\n\n'
+                    yield b'data: {"type":"response.completed","response":{"id":"r"}}\n\n'
+                finally:
+                    stream_closed.append(True)
+
+            with patch.object(
+                state,
+                "route",
+                return_value=(
+                    {"kind": "stream", "content_type": "text/event-stream"},
+                    stream(),
+                ),
+            ):
+                handler.do_POST()
+
+            self.assertEqual(stream_closed, [True])
+            self.assertEqual(internal_errors, [])
+            self.assertTrue(handler.close_connection)
+
     def test_integration_api_failure_is_unavailable_without_configuration_state(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
