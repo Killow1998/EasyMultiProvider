@@ -2283,8 +2283,32 @@ class ServerAccountTests(unittest.TestCase):
     def test_route_replays_provider_signature_without_persisting_history(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
-            save(normalize({}), config_path)
+            save(
+                normalize(
+                    {
+                        "providers": [
+                            {
+                                "id": "demo",
+                                "base_url": "https://example.com/v1",
+                                "protocol": "responses",
+                            }
+                        ],
+                        "models": [
+                            {
+                                "id": "demo/model",
+                                "provider": "demo",
+                                "upstream_id": "model",
+                            }
+                        ],
+                    }
+                ),
+                config_path,
+            )
             state = AppState(config_path)
+            incoming = {
+                "thread-id": "thread-fixture",
+                "x-codex-window-id": "window-fixture",
+            }
             event = {
                 "type": "response.output_item.done",
                 "item": {
@@ -2314,7 +2338,7 @@ class ServerAccountTests(unittest.TestCase):
             ):
                 _, result = state.route(
                     {"model": "demo/model", "stream": True, "input": "prompt"},
-                    {},
+                    incoming,
                 )
                 self.assertEqual(b"".join(result), stream_bytes)
 
@@ -2345,7 +2369,7 @@ class ServerAccountTests(unittest.TestCase):
                             },
                         ],
                     },
-                    {},
+                    incoming,
                 )
 
             self.assertEqual(

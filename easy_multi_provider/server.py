@@ -50,6 +50,7 @@ from .capabilities import (
     output_modalities_metadata_source,
     safe_capability_list,
 )
+from .codex_history import HistoryError
 from .config import (
     MAX_CONTEXT_WINDOW,
     ConfigError,
@@ -96,16 +97,18 @@ from .native_websocket import (
     terminal_observation as native_websocket_terminal,
 )
 from .quota import QuotaError, account_refresh_lock, read_native_login_quota, refresh_account_quota
-from .provider_replay import ProviderReplayCache
+from .provider_replay import ProviderReplayCache, ProviderReplayScope
 from .history_continuity import (
     CodexHomeHistoryReader,
     HistoryContinuityEngine,
+    request_history_anchor,
 )
 from .router import (
     ContextLengthError,
     HistoryReconstructionError,
     RouterError,
     discover_models,
+    find_route,
     forward_native_search,
     model_metadata,
     prepare_native_websocket_request,
@@ -885,6 +888,38 @@ def _history_stream_error(exc) -> Dict[str, Any]:
         "error_class": getattr(exc, "error_class", "history_reconstruction_failed"),
         "reason": getattr(exc, "reason", "history_unavailable"),
     }
+
+
+def _provider_replay_scope(
+    snapshot: Dict[str, Any],
+    body: Mapping[str, Any],
+    incoming: Mapping[str, str],
+) -> Optional[ProviderReplayScope]:
+    """Resolve a fail-closed, content-free scope for opaque Provider state."""
+
+    model_id = body.get("model")
+    if not isinstance(model_id, str) or not model_id:
+        return None
+    try:
+        provider, model = find_route(snapshot, model_id)
+    except RouterError:
+        return None
+    try:
+        anchor = request_history_anchor(body, incoming)
+    except HistoryError:
+        return None
+    if not anchor.thread_id:
+        return None
+    try:
+        return ProviderReplayScope(
+            endpoint_fingerprint(provider.get("base_url")),
+            deployment_identity(provider, model),
+            model_id,
+            anchor.thread_id,
+            anchor.window_id or "",
+        )
+    except ValueError:
+        return None
 
 
 class AppState:
@@ -1693,7 +1728,9 @@ class AppState:
         transport: Optional[str] = None,
         context_completeness: str = "high",
     ) -> Tuple[Dict[str, Any], Any]:
-        body = self.provider_replay.prepare(body)
+        routing_snapshot = self._routing_snapshot()
+        replay_scope = _provider_replay_scope(routing_snapshot, body, incoming)
+        body = self.provider_replay.prepare(body, replay_scope)
         started = time.monotonic()
         selected_transport = transport or ("sse" if body.get("stream") else "http")
         observed = False
@@ -1731,7 +1768,7 @@ class AppState:
 
         try:
             metadata, result = proxy(
-                self._routing_snapshot(),
+                routing_snapshot,
                 body,
                 incoming,
                 on_observation,
@@ -1777,9 +1814,9 @@ class AppState:
                     selected_transport,
                     "responses",
                 )
-            result = self.provider_replay.observe_stream(body.get("model"), result)
+            result = self.provider_replay.observe_stream(replay_scope, result)
         else:
-            self.provider_replay.observe_bytes(body.get("model"), result)
+            self.provider_replay.observe_bytes(replay_scope, result)
             if not observed:
                 event = dict(metadata)
                 event["response_bytes"] = len(result) if isinstance(result, (bytes, bytearray)) else 0

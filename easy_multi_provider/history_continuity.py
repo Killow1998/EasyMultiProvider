@@ -82,7 +82,7 @@ def _content_text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
-def _history_anchor(
+def request_history_anchor(
     body: Mapping[str, Any], incoming: Mapping[str, str]
 ) -> HistoryAnchor:
     """Read the canonical turn metadata from the active Codex transport."""
@@ -267,7 +267,7 @@ class HistoryContinuityEngine:
             return decoded
 
         try:
-            anchor = _history_anchor(decoded, incoming)
+            anchor = request_history_anchor(decoded, incoming)
         except HistoryError as exc:
             raise HistoryReconstructionError(exc.reason) from None
         if not anchor.thread_id:

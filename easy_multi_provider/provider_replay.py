@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from dataclasses import dataclass
 import json
 import threading
 import time
@@ -46,6 +47,47 @@ def _response_items(value: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
             yield from (entry for entry in output if isinstance(entry, Mapping))
 
 
+@dataclass(frozen=True)
+class ProviderReplayScope:
+    """Content-free identity for one Provider continuation boundary."""
+
+    endpoint_fingerprint: str
+    deployment_identity: str
+    model_id: str
+    thread_id: str
+    window_id: str = ""
+
+    def __post_init__(self) -> None:
+        required = (
+            "endpoint_fingerprint",
+            "deployment_identity",
+            "model_id",
+            "thread_id",
+        )
+        for field in required:
+            value = _bounded_identifier(getattr(self, field))
+            if not value:
+                raise ValueError("invalid Provider replay %s" % field)
+            object.__setattr__(self, field, value)
+        window_id = _bounded_identifier(self.window_id)
+        if self.window_id and not window_id:
+            raise ValueError("invalid Provider replay window_id")
+        object.__setattr__(self, "window_id", window_id)
+
+    def key(self, call_id: Any) -> Optional[Tuple[str, str, str, str, str, str]]:
+        call_id = _bounded_identifier(call_id)
+        if not call_id:
+            return None
+        return (
+            self.endpoint_fingerprint,
+            self.deployment_identity,
+            self.model_id,
+            self.thread_id,
+            self.window_id,
+            call_id,
+        )
+
+
 class ProviderReplayCache:
     """Replay only opaque provider metadata that Codex cannot retain itself.
 
@@ -63,22 +105,24 @@ class ProviderReplayCache:
         self.ttl_seconds = max(1.0, float(ttl_seconds))
         self.clock = clock
         self.lock = threading.RLock()
-        self._values: "OrderedDict[Tuple[str, str], Tuple[float, str]]" = OrderedDict()
+        self._values: "OrderedDict[Tuple[str, str, str, str, str, str], Tuple[float, str]]" = (
+            OrderedDict()
+        )
 
     def _purge(self, now: float) -> None:
         expired = [key for key, (deadline, _) in self._values.items() if deadline <= now]
         for key in expired:
             self._values.pop(key, None)
 
-    def _remember(self, model_id: Any, call_id: Any, signature: Any) -> None:
-        model_id = _bounded_identifier(model_id)
-        call_id = _bounded_identifier(call_id)
-        if not model_id or not call_id or not isinstance(signature, str) or not signature:
+    def _remember(
+        self, scope: Optional[ProviderReplayScope], call_id: Any, signature: Any
+    ) -> None:
+        key = scope.key(call_id) if isinstance(scope, ProviderReplayScope) else None
+        if key is None or not isinstance(signature, str) or not signature:
             return
         if len(signature.encode("utf-8")) > _MAX_SIGNATURE_BYTES:
             return
         now = self.clock()
-        key = (model_id, call_id)
         with self.lock:
             self._purge(now)
             self._values.pop(key, None)
@@ -86,13 +130,11 @@ class ProviderReplayCache:
             while len(self._values) > self.capacity:
                 self._values.popitem(last=False)
 
-    def _lookup(self, model_id: Any, call_id: Any) -> str:
-        model_id = _bounded_identifier(model_id)
-        call_id = _bounded_identifier(call_id)
-        if not model_id or not call_id:
+    def _lookup(self, scope: Optional[ProviderReplayScope], call_id: Any) -> str:
+        key = scope.key(call_id) if isinstance(scope, ProviderReplayScope) else None
+        if key is None:
             return ""
         now = self.clock()
-        key = (model_id, call_id)
         with self.lock:
             self._purge(now)
             value = self._values.get(key)
@@ -101,7 +143,9 @@ class ProviderReplayCache:
             self._values.move_to_end(key)
             return value[1]
 
-    def observe_value(self, model_id: Any, value: Any) -> None:
+    def observe_value(
+        self, scope: Optional[ProviderReplayScope], value: Any
+    ) -> None:
         if not isinstance(value, Mapping):
             return
         for item in _response_items(value):
@@ -110,23 +154,26 @@ class ProviderReplayCache:
             call_id = item.get("call_id") or item.get("id")
             signature = _thought_signature(item)
             if signature:
-                self._remember(model_id, call_id, signature)
+                self._remember(scope, call_id, signature)
 
-    def observe_bytes(self, model_id: Any, payload: Any) -> None:
+    def observe_bytes(
+        self, scope: Optional[ProviderReplayScope], payload: Any
+    ) -> None:
         if not isinstance(payload, (bytes, bytearray)) or len(payload) > _MAX_EVENT_BYTES:
             return
         try:
             value = json.loads(bytes(payload).decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
             return
-        self.observe_value(model_id, value)
+        self.observe_value(scope, value)
 
-    def prepare(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    def prepare(
+        self, body: Dict[str, Any], scope: Optional[ProviderReplayScope]
+    ) -> Dict[str, Any]:
         """Inject cached provider metadata into matching Codex tool-call items."""
 
-        model_id = body.get("model")
         source = body.get("input")
-        if not _bounded_identifier(model_id) or not isinstance(source, list):
+        if not isinstance(scope, ProviderReplayScope) or not isinstance(source, list):
             return body
         prepared: Optional[list] = None
         for index, item in enumerate(source):
@@ -135,7 +182,7 @@ class ProviderReplayCache:
             if _thought_signature(item):
                 continue
             call_id = item.get("call_id") or item.get("id")
-            signature = self._lookup(model_id, call_id)
+            signature = self._lookup(scope, call_id)
             if not signature:
                 continue
             if prepared is None:
@@ -161,7 +208,9 @@ class ProviderReplayCache:
         result["input"] = prepared
         return result
 
-    def observe_stream(self, model_id: Any, chunks: Iterable[bytes]) -> Iterator[bytes]:
+    def observe_stream(
+        self, scope: Optional[ProviderReplayScope], chunks: Iterable[bytes]
+    ) -> Iterator[bytes]:
         """Observe SSE JSON while yielding the original byte stream unchanged."""
 
         pending = bytearray()
@@ -178,7 +227,7 @@ class ProviderReplayCache:
                 value = json.loads(raw.decode("utf-8"))
             except (UnicodeDecodeError, ValueError):
                 return
-            self.observe_value(model_id, value)
+            self.observe_value(scope, value)
 
         try:
             for chunk in chunks:
@@ -200,3 +249,6 @@ class ProviderReplayCache:
             close = getattr(chunks, "close", None)
             if callable(close):
                 close()
+
+
+__all__ = ["ProviderReplayCache", "ProviderReplayScope"]

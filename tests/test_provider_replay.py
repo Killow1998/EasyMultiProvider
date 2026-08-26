@@ -1,7 +1,10 @@
 import json
 import unittest
 
-from easy_multi_provider.provider_replay import ProviderReplayCache
+from easy_multi_provider.provider_replay import (
+    ProviderReplayCache,
+    ProviderReplayScope,
+)
 from easy_multi_provider.router import responses_to_chat
 
 
@@ -16,9 +19,26 @@ def _tool_item(call_id="call_fixture", signature="signature-fixture"):
     }
 
 
+def _scope(
+    model_id="demo/model",
+    thread_id="thread-a",
+    window_id="window-1",
+    endpoint="sha256:endpoint-a",
+    deployment="default",
+):
+    return ProviderReplayScope(
+        endpoint,
+        deployment,
+        model_id,
+        thread_id,
+        window_id,
+    )
+
+
 class ProviderReplayTests(unittest.TestCase):
     def test_stream_signature_is_replayed_into_next_chat_tool_call(self):
         cache = ProviderReplayCache()
+        scope = _scope()
         event = {
             "type": "response.output_item.done",
             "item": _tool_item(),
@@ -29,7 +49,7 @@ class ProviderReplayTests(unittest.TestCase):
         ).encode()
         chunks = [raw[:31], raw[31:]]
 
-        self.assertEqual(b"".join(cache.observe_stream("demo/model", iter(chunks))), raw)
+        self.assertEqual(b"".join(cache.observe_stream(scope, iter(chunks))), raw)
 
         original = {
             "model": "demo/model",
@@ -48,7 +68,7 @@ class ProviderReplayTests(unittest.TestCase):
                 },
             ],
         }
-        prepared = cache.prepare(original)
+        prepared = cache.prepare(original, scope)
         payload = responses_to_chat(prepared, "upstream-model")
 
         self.assertNotIn("extra_content", original["input"][0])
@@ -59,8 +79,9 @@ class ProviderReplayTests(unittest.TestCase):
 
     def test_nonstream_signature_is_model_and_call_scoped(self):
         cache = ProviderReplayCache()
+        scope = _scope()
         cache.observe_bytes(
-            "demo/model",
+            scope,
             json.dumps({"output": [_tool_item()]}).encode(),
         )
         base = {
@@ -74,29 +95,56 @@ class ProviderReplayTests(unittest.TestCase):
                 }
             ],
         }
-        self.assertIs(cache.prepare(base), base)
+        self.assertIs(cache.prepare(base, _scope(model_id="other/model")), base)
         base["model"] = "demo/model"
         base["input"][0]["call_id"] = "other_call"
-        self.assertIs(cache.prepare(base), base)
+        self.assertIs(cache.prepare(base, scope), base)
 
     def test_expired_and_evicted_signatures_are_not_replayed(self):
         now = [10.0]
         cache = ProviderReplayCache(capacity=1, ttl_seconds=1, clock=lambda: now[0])
-        cache.observe_value("demo/model", {"output": [_tool_item("call_old", "old")]})
-        cache.observe_value("demo/model", {"output": [_tool_item("call_new", "new")]})
+        scope = _scope()
+        cache.observe_value(scope, {"output": [_tool_item("call_old", "old")]})
+        cache.observe_value(scope, {"output": [_tool_item("call_new", "new")]})
 
         old = {
             "model": "demo/model",
             "input": [{"type": "function_call", "call_id": "call_old"}],
         }
-        self.assertIs(cache.prepare(old), old)
+        self.assertIs(cache.prepare(old, scope), old)
 
         now[0] += 2
         new = {
             "model": "demo/model",
             "input": [{"type": "function_call", "call_id": "call_new"}],
         }
-        self.assertIs(cache.prepare(new), new)
+        self.assertIs(cache.prepare(new, scope), new)
+
+    def test_signatures_are_isolated_by_route_thread_and_window(self):
+        cache = ProviderReplayCache()
+        scope_a = _scope(thread_id="thread-a")
+        scope_b = _scope(thread_id="thread-b")
+        cache.observe_value(scope_a, {"output": [_tool_item("call-1", "sig-A")]})
+        cache.observe_value(scope_b, {"output": [_tool_item("call-1", "sig-B")]})
+        body = {
+            "model": "demo/model",
+            "input": [{"type": "function_call", "call_id": "call-1"}],
+        }
+
+        prepared_a = cache.prepare(body, scope_a)
+        prepared_b = cache.prepare(body, scope_b)
+
+        self.assertEqual(
+            prepared_a["input"][0]["extra_content"]["google"]["thought_signature"],
+            "sig-A",
+        )
+        self.assertEqual(
+            prepared_b["input"][0]["extra_content"]["google"]["thought_signature"],
+            "sig-B",
+        )
+        self.assertIs(cache.prepare(body, _scope(window_id="window-2")), body)
+        self.assertIs(cache.prepare(body, _scope(endpoint="sha256:endpoint-b")), body)
+        self.assertIs(cache.prepare(body, None), body)
 
 
 if __name__ == "__main__":
