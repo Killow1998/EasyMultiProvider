@@ -192,7 +192,7 @@ async function exportMigration() {
     const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = migrationFilename(); document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); closeModal(); notice(tr('EMP 迁移包已下载','EMP data exported'));
   });
 }
-function migrationFilename() { const version = String(state?.emp_version || '0.8.0'); return `easy-multi-provider-${/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version) ? version : '0.8.0'}.emp`; }
+function migrationFilename() { const version = String(state?.emp_version || '0.8.1'); return `easy-multi-provider-${/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version) ? version : '0.8.1'}.emp`; }
 function selectMigrationFile() { $('migration_file').click(); }
 async function migrationFileChosen(input) {
   const file = input.files[0]; if (!file) return; if (file.size > 32 * 1024 * 1024) { input.value = ''; return notice(tr('EMP 文件不能超过 32 MB','EMP files cannot exceed 32 MB'), true); }

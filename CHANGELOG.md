@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.8.1 (2026-08-27)
+
+### Product
+
+- Added Codex 0.150 named standalone tool-output support. Responses keeps the
+  native item shape, while Chat Completions and Anthropic receive explicit
+  visible context without fabricated call IDs.
+- Unified Native destination classification so forwarded Native routes keep
+  Codex-owned opaque history and never invoke EMP destination compaction.
+- Included the resolved upstream model in Provider replay identity, preventing
+  opaque tool metadata from crossing a model remap.
+- Bounded aggregate SSE events and pre-output retry buffers, and made temporary
+  context-failure calibration expire or clear after contradictory success.
+- Made Provider-key saves and `.emp` account imports transactional, restoring
+  prior encrypted credentials if the surrounding configuration update fails.
+
+### Verification
+
+- Passed Python compilation, whitespace validation, and 336 focused regression
+  tests for the affected continuity, protocol, context, stream, replay, and
+  credential boundaries.
+- Live-validated Codex 0.150.1 Native opaque compaction to External, portable
+  External compaction to another External model, External to Native, image and
+  tool continuity, and `codex resume` on the current host.
+
 ## 0.8.0 (2026-08-26)
 
 ### Product
