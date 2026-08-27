@@ -1,5 +1,6 @@
 import unittest
 
+from easy_multi_provider.codex_history import normalize_visible_item
 from easy_multi_provider.portable_checkpoint import (
     CompactionSummaryMissingError,
     build_compaction_replacement,
@@ -60,6 +61,20 @@ class PortableCheckpointTests(unittest.TestCase):
         self.assertEqual([item["call_id"] for item in complete], ["call-1", "call-1"])
         self.assertEqual(complete[1]["raw_type"], "custom_tool_call_output")
         self.assertEqual(complete[1]["content"]["output"], "aborted")
+
+    def test_named_standalone_output_is_not_forced_into_tool_pairing(self):
+        item = normalize_visible_item({
+            "type": "function_call_output",
+            "name": "notifications",
+            "namespace": "slack",
+            "output": "Alice mentioned you.",
+        })
+
+        complete = build_visible_history([item])
+
+        self.assertEqual(complete[0]["kind"], "standalone_tool_output")
+        self.assertEqual(complete[0]["content"]["name"], "notifications")
+        self.assertEqual(complete[0]["content"]["namespace"], "slack")
 
     def test_compaction_replacement_requires_a_boundary(self):
         with self.assertRaises(CompactionSummaryMissingError):

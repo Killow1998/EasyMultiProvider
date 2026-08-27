@@ -395,7 +395,9 @@ class RouterTests(unittest.TestCase):
         provider = {"id": "gemini"}
         model = {"upstream_id": "gemini/gemini-3.5-flash"}
         self.assertEqual(
-            router._upstream_model(provider, model, "gemini/gemini-3.5-flash"),
+            router.resolved_upstream_model(
+                provider, model, "gemini/gemini-3.5-flash"
+            ),
             "gemini-3.5-flash",
         )
 

@@ -6,6 +6,7 @@ from easy_multi_provider.provider_replay import (
     ProviderReplayScope,
 )
 from easy_multi_provider.router import responses_to_chat
+from easy_multi_provider.server import _provider_replay_scope
 
 
 def _tool_item(call_id="call_fixture", signature="signature-fixture"):
@@ -26,18 +27,57 @@ def _scope(
     endpoint="sha256:endpoint-a",
     deployment="default",
     provider_id="demo",
+    upstream_model="upstream-model",
 ):
     return ProviderReplayScope(
-        provider_id,
-        endpoint,
-        deployment,
-        model_id,
-        thread_id,
-        window_id,
+        provider_id=provider_id,
+        endpoint_fingerprint=endpoint,
+        deployment_identity=deployment,
+        model_id=model_id,
+        upstream_model=upstream_model,
+        thread_id=thread_id,
+        window_id=window_id,
     )
 
 
 class ProviderReplayTests(unittest.TestCase):
+    def test_scope_changes_when_resolved_upstream_model_changes(self):
+        provider = {
+            "id": "demo",
+            "base_url": "https://example.com/v1",
+            "protocol": "chat_completions",
+            "auth_mode": "api_key",
+        }
+        body = {
+            "model": "demo/logical",
+            "client_metadata": {
+                "x-codex-turn-metadata": json.dumps({
+                    "thread_id": "thread-a",
+                    "turn_id": "turn-a",
+                    "window_id": "window-a",
+                })
+            },
+        }
+
+        scopes = []
+        for upstream in ("gemini-X", "gemini-Y"):
+            scopes.append(_provider_replay_scope(
+                {
+                    "providers": [provider],
+                    "models": [{
+                        "id": "demo/logical",
+                        "provider": "demo",
+                        "upstream_id": upstream,
+                    }],
+                },
+                body,
+                {},
+            ))
+
+        self.assertIsNotNone(scopes[0])
+        self.assertIsNotNone(scopes[1])
+        self.assertNotEqual(scopes[0].key("call-1"), scopes[1].key("call-1"))
+
     def test_stream_signature_is_replayed_into_next_chat_tool_call(self):
         cache = ProviderReplayCache()
         scope = _scope()

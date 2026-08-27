@@ -626,7 +626,9 @@ def find_route(config: Dict[str, Any], model_id: str) -> Tuple[Dict[str, Any], D
     raise RouterError("unknown model: %s" % model_id, 404)
 
 
-def _upstream_model(provider: Dict[str, Any], model: Dict[str, Any], requested: str) -> str:
+def resolved_upstream_model(
+    provider: Mapping[str, Any], model: Mapping[str, Any], requested: str
+) -> str:
     explicit = model.get("upstream_id", "")
     if explicit:
         prefix = str(provider.get("id", "")) + "/"
@@ -1347,7 +1349,7 @@ def _responses_payload(
         if exc.failure_class in {"opaque_compaction", "invalid_compaction"}:
             raise HistoryReconstructionError("history_projection_incomplete") from exc
         raise RouterError(str(exc), 422) from exc
-    payload["model"] = _upstream_model(provider, model, body["model"])
+    payload["model"] = resolved_upstream_model(provider, model, body["model"])
     return payload
 
 
@@ -1360,10 +1362,10 @@ def _preflight_history_projection(
         if provider.get("protocol") == "responses":
             _responses_payload(provider, body, model)
         elif provider.get("protocol") == "chat_completions":
-            responses_to_chat(body, _upstream_model(provider, model, body["model"]))
+            responses_to_chat(body, resolved_upstream_model(provider, model, body["model"]))
         elif provider.get("protocol") == "anthropic_messages":
             responses_to_anthropic(
-                body, _upstream_model(provider, model, body["model"])
+                body, resolved_upstream_model(provider, model, body["model"])
             )
     except HistoryReconstructionError:
         raise
@@ -1383,11 +1385,11 @@ def _destination_context_payload(
     if protocol == "chat_completions":
         supported = _body_with_supported_effort(provider, body, model)
         return responses_to_chat(
-            supported, _upstream_model(provider, model, body["model"])
+            supported, resolved_upstream_model(provider, model, body["model"])
         )
     if protocol == "anthropic_messages":
         return responses_to_anthropic(
-            body, _upstream_model(provider, model, body["model"])
+            body, resolved_upstream_model(provider, model, body["model"])
         )
     raise RouterError("provider protocol is unresolved", 502)
 
@@ -1433,7 +1435,10 @@ def _fit_destination_context(
             raise ContextLengthError(
                 exc.assessment.to_safe_dict(), preflight=True
             ) from exc
-        if destination_compactor is None:
+        if (
+            classify_dialect(provider) == CODEX_NATIVE
+            or destination_compactor is None
+        ):
             raise ContextLengthError(
                 exc.assessment.to_safe_dict(), preflight=True
             ) from exc
@@ -1555,7 +1560,9 @@ def chat_completion(
     allow_retries: bool = True,
 ) -> Tuple[int, str, bytes]:
     body = _body_with_supported_effort(provider, body, model)
-    payload = responses_to_chat(body, _upstream_model(provider, model, body["model"]))
+    payload = responses_to_chat(
+        body, resolved_upstream_model(provider, model, body["model"])
+    )
     with _request(
         provider,
         payload,
@@ -1588,7 +1595,9 @@ def anthropic_completion(
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
     allow_retries: bool = True,
 ) -> Tuple[int, str, bytes]:
-    payload = responses_to_anthropic(body, _upstream_model(provider, model, body["model"]))
+    payload = responses_to_anthropic(
+        body, resolved_upstream_model(provider, model, body["model"])
+    )
     with _request(
         provider,
         payload,
@@ -1759,7 +1768,7 @@ def _stream_adapter_io() -> StreamAdapterIO:
         read_limited=_read_limited,
         raise_if_context_response=_raise_if_context_response,
         body_with_supported_effort=_body_with_supported_effort,
-        upstream_model=_upstream_model,
+        upstream_model=resolved_upstream_model,
     )
 
 
@@ -2263,7 +2272,7 @@ def _native_route_identity(
         identity_headers,
         provider.get("base_url"),
         deployment_identity(provider, model),
-        _upstream_model(provider, model, requested_slug),
+        resolved_upstream_model(provider, model, requested_slug),
     )
 
 

@@ -55,6 +55,7 @@ class ProviderReplayScope:
     endpoint_fingerprint: str
     deployment_identity: str
     model_id: str
+    upstream_model: str
     thread_id: str
     window_id: str = ""
 
@@ -64,6 +65,7 @@ class ProviderReplayScope:
             "endpoint_fingerprint",
             "deployment_identity",
             "model_id",
+            "upstream_model",
             "thread_id",
         )
         for field in required:
@@ -78,7 +80,7 @@ class ProviderReplayScope:
 
     def key(
         self, call_id: Any
-    ) -> Optional[Tuple[str, str, str, str, str, str, str]]:
+    ) -> Optional[Tuple[str, str, str, str, str, str, str, str]]:
         call_id = _bounded_identifier(call_id)
         if not call_id:
             return None
@@ -87,6 +89,7 @@ class ProviderReplayScope:
             self.endpoint_fingerprint,
             self.deployment_identity,
             self.model_id,
+            self.upstream_model,
             self.thread_id,
             self.window_id,
             call_id,
@@ -110,7 +113,7 @@ class ProviderReplayCache:
         self.ttl_seconds = max(1.0, float(ttl_seconds))
         self.clock = clock
         self.lock = threading.RLock()
-        self._values: "OrderedDict[Tuple[str, str, str, str, str, str, str], Tuple[float, str]]" = (
+        self._values: "OrderedDict[Tuple[str, str, str, str, str, str, str, str], Tuple[float, str]]" = (
             OrderedDict()
         )
 

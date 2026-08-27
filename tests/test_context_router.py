@@ -106,6 +106,34 @@ class ContextRouterTests(unittest.TestCase):
         self.assertEqual(raised.exception.status, 413)
         self.assertIn("demo/model", str(raised.exception))
 
+    def test_native_preflight_block_never_invokes_destination_compactor(self):
+        class Assessment:
+            input_estimate = 5000
+
+            def to_safe_dict(self):
+                return {"input_estimate": 5000, "safe_input_limit": 1000}
+
+        def block(payload, stream, operation):
+            raise ContextGuardBlocked(Assessment())
+
+        compacted = []
+
+        def compact(*args):
+            compacted.append(args)
+            return {"model": "gpt-native", "input": "smaller"}
+
+        with self.assertRaises(ContextLengthError):
+            router._fit_destination_context(
+                {"protocol": "responses", "auth_mode": "account"},
+                {"id": "gpt-native", "upstream_id": "gpt-native"},
+                "gpt-native",
+                {"model": "gpt-native", "input": "too-large"},
+                block,
+                compact,
+            )
+
+        self.assertEqual(compacted, [])
+
     def test_auto_fallback_does_not_emit_or_calibrate_rejected_candidate(self):
         config = {
             "providers": [{**self.provider, "protocol": "auto"}],

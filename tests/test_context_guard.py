@@ -4,6 +4,7 @@ import unittest
 
 from easy_multi_provider.capabilities import endpoint_fingerprint
 from easy_multi_provider.context_guard import (
+    FAILURE_BOUND_TTL_SECONDS,
     SAFETY_RESERVE_TOKENS,
     assess_context,
     calibration_for,
@@ -365,6 +366,63 @@ class ContextGuardTests(unittest.TestCase):
         self.assertEqual(assessment.source, "observed")
         self.assertEqual(assessment.confidence, 1.0)
         self.assertEqual(assessment.decision, "block")
+
+    def test_expired_failure_bound_stops_controlling_future_requests(self):
+        model = dict(self.model, context_window=0, capability_sources={})
+        observation = assess_context(
+            self.provider,
+            model,
+            "responses",
+            {"model": "model", "input": "hello", "max_output_tokens": 128},
+        ).to_safe_dict()
+        self.assertTrue(update_calibration(
+            model,
+            observation,
+            "explicit_failure",
+            1250,
+            "2000-01-01T00:00:00+00:00",
+        ))
+
+        assessment = assess_context(
+            self.provider,
+            model,
+            "responses",
+            {"model": "model", "input": "x" * 10000, "max_output_tokens": 128},
+        )
+
+        self.assertGreater(FAILURE_BOUND_TTL_SECONDS, 0)
+        self.assertIsNone(assessment.safe_input_limit)
+        self.assertEqual(assessment.decision, "warn")
+
+    def test_later_success_at_failure_boundary_clears_obsolete_failure(self):
+        observation = assess_context(
+            self.provider,
+            self.model,
+            "responses",
+            {"model": "model", "input": "hello", "max_output_tokens": 128},
+        ).to_safe_dict()
+        self.assertTrue(update_calibration(
+            self.model, observation, "explicit_failure", 1250
+        ))
+
+        self.assertTrue(update_calibration(
+            self.model, observation, "success", 1300
+        ))
+
+        current = calibration_for(self.provider, self.model, "responses")
+        self.assertEqual(current["largest_success_estimate"], 1300)
+        self.assertIsNone(current["smallest_failure_estimate"])
+        assessment = assess_context(
+            self.provider,
+            self.model,
+            "responses",
+            {"model": "model", "input": "hello", "max_output_tokens": 128},
+        )
+        self.assertEqual(
+            assessment.safe_input_limit,
+            4096 - 128 - SAFETY_RESERVE_TOKENS,
+        )
+        self.assertEqual(assessment.source, "manual")
 
     def test_base_safe_input_and_failure_select_the_smaller_bound(self):
         model = dict(self.model, context_window=2000)

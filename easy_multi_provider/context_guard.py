@@ -22,6 +22,7 @@ CONCRETE_PROTOCOLS = frozenset(
     {"responses", "chat_completions", "anthropic_messages"}
 )
 CALIBRATION_CAPACITY = 8
+FAILURE_BOUND_TTL_SECONDS = 24 * 60 * 60
 SAFETY_RESERVE_TOKENS = 256
 CLEAR_EXCESS_TOKENS = 64
 # Image token cost depends on dimensions and provider policy, not on the byte
@@ -71,6 +72,22 @@ def _valid_timestamp(value: Any) -> Optional[str]:
     except ValueError:
         return None
     return value
+
+
+def _fresh_failure_timestamp(value: Any) -> bool:
+    timestamp = _valid_timestamp(value)
+    if timestamp is None:
+        return False
+    try:
+        observed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if observed.tzinfo is None:
+            observed = observed.replace(tzinfo=timezone.utc)
+        age = (
+            datetime.now(timezone.utc) - observed.astimezone(timezone.utc)
+        ).total_seconds()
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return 0 <= age <= FAILURE_BOUND_TTL_SECONDS
 
 
 @dataclass(frozen=True)
@@ -245,7 +262,7 @@ def update_calibration(
     estimate: Any,
     observed_at: Optional[str] = None,
 ) -> bool:
-    """Monotonically update one model's numeric calibration entry."""
+    """Update one model's bounded, recoverable calibration evidence."""
 
     if outcome not in ("success", "explicit_failure"):
         return False
@@ -280,9 +297,19 @@ def update_calibration(
             current["largest_success_confidence"] = 1.0
             current["largest_success_observed_at"] = timestamp
             changed = True
+        failure = current.get("smallest_failure_estimate")
+        if failure is not None and value >= failure:
+            current["smallest_failure_estimate"] = None
+            current["smallest_failure_source"] = "unknown"
+            current["smallest_failure_confidence"] = 0.0
+            current["smallest_failure_observed_at"] = None
+            changed = True
     else:
         old = current.get("smallest_failure_estimate")
-        if old is None or value < old:
+        old_is_fresh = _fresh_failure_timestamp(
+            current.get("smallest_failure_observed_at")
+        )
+        if old is None or not old_is_fresh or value < old:
             current["smallest_failure_estimate"] = value
             current["smallest_failure_source"] = "observed"
             current["smallest_failure_confidence"] = 1.0
@@ -530,7 +557,12 @@ def _safe_limit(
 
     context_limit, base_source, base_confidence, _ = _context_window(provider, model)
     calibration = calibration_for(provider, model, protocol)
-    failure = calibration.get("smallest_failure_estimate") if calibration else None
+    failure = (
+        calibration.get("smallest_failure_estimate")
+        if calibration
+        and _fresh_failure_timestamp(calibration.get("smallest_failure_observed_at"))
+        else None
+    )
     failure_bound = max(0, failure - 1) if failure is not None else None
     base_input_limit = (
         max(0, context_limit - reserves)
@@ -803,6 +835,7 @@ __all__ = [
     "ContextGuard",
     "ContextGuardBlocked",
     "ContextIdentity",
+    "FAILURE_BOUND_TTL_SECONDS",
     "SAFETY_RESERVE_TOKENS",
     "assess_context",
     "calibration_for",

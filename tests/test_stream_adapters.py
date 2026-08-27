@@ -23,7 +23,11 @@ from easy_multi_provider.transport_failures import (
     TransportFailure,
     protocol_fallback_allowed,
 )
-from easy_multi_provider.transport import sse_json_events
+from easy_multi_provider.transport import (
+    MAX_SSE_EVENT_BYTES,
+    TransportError,
+    sse_json_events,
+)
 
 
 def _event(event_type, **value):
@@ -31,6 +35,44 @@ def _event(event_type, **value):
 
 
 class StreamAdapterTransportMatrixTests(unittest.TestCase):
+    def test_sse_parser_limits_aggregate_multiline_event_size(self):
+        piece = "a" * (MAX_SSE_EVENT_BYTES // 2 + 100)
+        chunks = [
+            b'data: {"parts":[\n',
+            ('data: "' + piece + '",\n').encode(),
+            ('data: "' + piece + '"\n').encode(),
+            b'data: ]}\n',
+            b'\n',
+        ]
+
+        with self.assertRaises(TransportError):
+            list(sse_json_events(chunks))
+
+    def test_pre_output_retry_buffer_is_bounded(self):
+        piece = "a" * (600 * 1024)
+        stream = iter(
+            [
+                _event(
+                    "response.created",
+                    response={"status": "in_progress", "pad": piece},
+                ),
+                _event(
+                    "response.created",
+                    response={"status": "in_progress", "pad": piece},
+                ),
+                _event(
+                    "response.completed",
+                    response={"status": "completed", "output": []},
+                ),
+            ]
+        )
+
+        events = list(sse_json_events(
+            _reliable_responses_stream(lambda: stream, replay_safe=False)
+        ))
+
+        self.assertEqual([event["type"] for event in events], ["response.failed"])
+
     def test_native_tool_argument_events_do_not_create_phantom_open_calls(self):
         completed_tool = {
             "id": "tool-1",

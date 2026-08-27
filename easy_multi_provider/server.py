@@ -114,6 +114,7 @@ from .router import (
     prepare_native_websocket_request,
     proxy,
     proxy_compact,
+    resolved_upstream_model,
 )
 from .transport import (
     TransportError,
@@ -240,7 +241,9 @@ _DIAGNOSTIC_CONTEXT_SOURCES = frozenset(
     }
 )
 _DIAGNOSTIC_COMPLETENESS = frozenset({"high", "lost", "unknown"})
-_DIAGNOSTIC_TOOL_PAIRING = frozenset({"none", "paired", "incomplete", "invalid"})
+_DIAGNOSTIC_TOOL_PAIRING = frozenset(
+    {"none", "standalone", "paired", "incomplete", "invalid"}
+)
 _DIAGNOSTIC_RECOVERY_MODES = frozenset(
     {
         "none",
@@ -916,6 +919,7 @@ def _provider_replay_scope(
             endpoint_fingerprint=endpoint_fingerprint(provider.get("base_url")),
             deployment_identity=deployment_identity(provider, model),
             model_id=model_id,
+            upstream_model=resolved_upstream_model(provider, model, model_id),
             thread_id=anchor.thread_id,
             window_id=anchor.window_id or "",
         )

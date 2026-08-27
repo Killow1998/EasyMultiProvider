@@ -202,12 +202,23 @@ class WebSocketConnection:
 def sse_json_events(chunks: Iterable[bytes]) -> Iterator[Dict[str, Any]]:
     pending = bytearray()
     data_lines = []
+    data_bytes = 0
+
+    def append_data(value: bytes) -> None:
+        nonlocal data_bytes
+        projected = data_bytes + len(value) + (1 if data_lines else 0)
+        if projected > MAX_SSE_EVENT_BYTES:
+            raise TransportError("upstream SSE event is too large")
+        data_lines.append(value)
+        data_bytes = projected
 
     def finish_event() -> Optional[Dict[str, Any]]:
+        nonlocal data_bytes
         if not data_lines:
             return None
         raw = b"\n".join(data_lines)
         data_lines[:] = []
+        data_bytes = 0
         if raw == b"[DONE]":
             return None
         try:
@@ -233,11 +244,11 @@ def sse_json_events(chunks: Iterable[bytes]) -> Iterator[Dict[str, Any]]:
                 if event is not None:
                     yield event
             elif line.startswith(b"data:"):
-                data_lines.append(line[5:].lstrip())
+                append_data(line[5:].lstrip())
     if pending:
         line = bytes(pending).rstrip(b"\r")
         if line.startswith(b"data:"):
-            data_lines.append(line[5:].lstrip())
+            append_data(line[5:].lstrip())
     event = finish_event()
     if event is not None:
         yield event

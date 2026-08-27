@@ -214,6 +214,25 @@ class ResponsesDialectTests(unittest.TestCase):
         )
         self.assertIn("portable summary", projected["input"][0]["content"][0]["text"])
 
+    def test_portable_projection_preserves_named_standalone_tool_output(self):
+        item = {
+            "type": "function_call_output",
+            "name": "notifications",
+            "namespace": "slack",
+            "output": "Alice mentioned you.",
+        }
+
+        projected = project_request(
+            {"protocol": "responses", "auth_mode": "api_key"},
+            {"model": "provider/model", "input": [item]},
+        )
+
+        self.assertEqual(projected["input"], [item])
+        self.assertEqual(
+            request_shape({"input": [item]})["tool_pairing_status"],
+            "standalone",
+        )
+
     def test_native_projection_decodes_emp_compaction_and_preserves_surrounding_history(self):
         summary = base64.urlsafe_b64encode(b"portable checkpoint").decode("ascii")
         body = {

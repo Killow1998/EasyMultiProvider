@@ -110,6 +110,50 @@ class HistoryContinuityTests(unittest.TestCase):
         self.assertEqual(prepared, body)
         self.assertEqual(reader.calls, 0)
 
+    def test_forward_native_keeps_opaque_compaction_without_history_reader(self):
+        reader = Reader([])
+        body = _opaque_body()
+        native = {
+            "id": "forward-native",
+            "protocol": "responses",
+            "auth_mode": "forward",
+        }
+
+        prepared = HistoryContinuityEngine(reader).prepare(
+            {}, native, {"id": "gpt-native"}, "gpt-native", body, _headers()
+        )
+
+        self.assertEqual(prepared, body)
+        self.assertEqual(reader.calls, 0)
+
+    def test_native_compacted_standalone_output_is_rebuilt_for_external(self):
+        reader = Reader([
+            VisibleItem("user_message", content="watch notifications"),
+            VisibleItem(
+                "standalone_tool_output",
+                content={
+                    "name": "notifications",
+                    "namespace": "slack",
+                    "output": "Alice mentioned you.",
+                },
+                raw_type="function_call_output",
+            ),
+            VisibleItem("compaction_summary", content=""),
+        ])
+        config, provider, model = _external()
+
+        prepared = HistoryContinuityEngine(reader).prepare(
+            config, provider, model, model["id"], _opaque_body(), _headers()
+        )
+
+        standalone = next(
+            item for item in prepared["input"]
+            if isinstance(item, dict) and item.get("name") == "notifications"
+        )
+        self.assertNotIn("call_id", standalone)
+        self.assertEqual(standalone["namespace"], "slack")
+        self.assertEqual(standalone["output"], "Alice mentioned you.")
+
     def test_portable_checkpoint_to_external_is_visible_without_rollout(self):
         reader = Reader([])
         config, provider, model = _external()

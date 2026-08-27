@@ -19,6 +19,7 @@ from .codex_history import (
     HistoryUnavailableError,
     SQLiteReader,
 )
+from .dialects import CODEX_NATIVE, classify_dialect
 from .portable_checkpoint import (
     PortableCheckpointError,
     build_compaction_replacement,
@@ -61,10 +62,6 @@ def _opaque_compaction(body: Mapping[str, Any]) -> bool:
         if not isinstance(value, str) or not value.startswith(_EMP_COMPACTION_PREFIX):
             return True
     return False
-
-
-def _native_destination(provider: Mapping[str, Any]) -> bool:
-    return provider.get("implicit_native") is True or provider.get("auth_mode") == "account"
 
 
 def _content_text(value: Any) -> str:
@@ -170,6 +167,11 @@ def _wire_item(item: Mapping[str, Any]) -> Any:
         if item.get("item_id"):
             value["id"] = item["item_id"]
         return value
+    if kind == "standalone_tool_output":
+        value = dict(content) if isinstance(content, Mapping) else {"output": content}
+        value["type"] = "function_call_output"
+        value.pop("call_id", None)
+        return value
     text = _content_text(content).strip()
     if not text:
         return None
@@ -258,7 +260,7 @@ class HistoryContinuityEngine:
             decoded = _decode_portable_items(body)
         except PortableCheckpointError as exc:
             raise HistoryReconstructionError(exc.code) from None
-        if _native_destination(provider):
+        if classify_dialect(provider) == CODEX_NATIVE:
             # Native can consume its own opaque compaction state.  EMP portable
             # checkpoints are visible text and therefore need only decoding.
             return decoded

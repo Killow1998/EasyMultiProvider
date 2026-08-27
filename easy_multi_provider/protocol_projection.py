@@ -240,6 +240,23 @@ def _required_string(value: Any, field: str) -> str:
     return value
 
 
+def _standalone_tool_output_text(item: Mapping[str, Any]) -> Optional[str]:
+    """Render a named unpaired Codex output without inventing a call ID."""
+
+    if item.get("type") != "function_call_output" or item.get("call_id") is not None:
+        return None
+    name = _required_string(item.get("name"), "standalone tool output name")
+    namespace = item.get("namespace")
+    if namespace is not None and not isinstance(namespace, str):
+        raise RouterError(
+            "request projection failed: invalid standalone tool output namespace",
+            422,
+        )
+    label = (namespace + "/" if namespace else "") + name
+    output = _request_text(item.get("output", ""), "standalone tool output")
+    return "Standalone tool output from %s:\n%s" % (label, output)
+
+
 def _request_tool_arguments(value: Any) -> str:
     if not isinstance(value, str):
         raise RouterError("request projection failed: invalid tool arguments", 422)
@@ -419,6 +436,10 @@ def _messages(body: Dict[str, Any]) -> list:
             pending_calls.append(call)
         elif item_type in {"function_call_output", "custom_tool_call_output"}:
             flush_calls()
+            standalone = _standalone_tool_output_text(item)
+            if standalone is not None:
+                messages.append({"role": "user", "content": standalone})
+                continue
             call_id = _required_string(item.get("call_id"), "tool call ID")
             if call_id not in call_ids or call_id in output_ids:
                 raise RouterError(
@@ -641,6 +662,18 @@ def _anthropic_messages(body: Dict[str, Any]) -> list:
             if pending_calls:
                 messages.append({"role": "assistant", "content": list(pending_calls)})
                 pending_calls.clear()
+            standalone = _standalone_tool_output_text(item)
+            if standalone is not None:
+                if pending_results:
+                    messages.append({"role": "user", "content": list(pending_results)})
+                    pending_results.clear()
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": standalone}],
+                    }
+                )
+                continue
             call_id = _required_string(item.get("call_id"), "tool call ID")
             if call_id not in call_ids or call_id in output_ids:
                 raise RouterError(

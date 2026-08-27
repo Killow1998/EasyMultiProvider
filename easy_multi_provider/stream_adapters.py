@@ -53,6 +53,8 @@ from .transport_failures import (
 
 MAX_UPSTREAM_BODY_BYTES = 16 * 1024 * 1024
 MAX_SSE_FRAME_BYTES = 1024 * 1024
+MAX_PRE_OUTPUT_BUFFER_BYTES = 1024 * 1024
+MAX_PRE_OUTPUT_BUFFER_EVENTS = 256
 MAX_STREAM_TEXT_BYTES = 16 * 1024 * 1024
 _PROTOCOL_REJECTION_STATUSES = PROTOCOL_REJECTION_STATUSES
 
@@ -376,6 +378,7 @@ def _reliable_responses_stream(
         for attempt in range(2 if replay_safe else 1):
             lifecycle.reset_attempt()
             pending = []
+            pending_bytes = 0
             iterator = None
             try:
                 iterator = iter(factory())
@@ -389,15 +392,11 @@ def _reliable_responses_stream(
                         report(terminal, True)
                         if terminal.get("success") is True:
                             for buffered in pending:
-                                yield _sse_frame(
-                                    str(buffered.get("type") or "message"), buffered
-                                )
+                                yield buffered
                             yield _sse_frame("response.completed", dict(event))
                         elif str(event.get("type") or "") == "response.incomplete":
                             for buffered in pending:
-                                yield _sse_frame(
-                                    str(buffered.get("type") or "message"), buffered
-                                )
+                                yield buffered
                             yield _sse_frame("response.incomplete", dict(event))
                         else:
                             yield _response_failure_frame(
@@ -409,11 +408,23 @@ def _reliable_responses_stream(
                         return
                     if lifecycle.output_emitted or lifecycle.tool_activity:
                         for buffered in pending:
-                            yield _sse_frame(str(buffered.get("type") or "message"), buffered)
+                            yield buffered
                         pending = []
+                        pending_bytes = 0
                         yield _sse_frame(str(event.get("type") or "message"), dict(event))
                     else:
-                        pending.append(dict(event))
+                        buffered = _sse_frame(
+                            str(event.get("type") or "message"), dict(event)
+                        )
+                        if (
+                            len(pending) >= MAX_PRE_OUTPUT_BUFFER_EVENTS
+                            or pending_bytes + len(buffered) > MAX_PRE_OUTPUT_BUFFER_BYTES
+                        ):
+                            raise TransportError(
+                                "upstream pre-output SSE buffer is too large"
+                            )
+                        pending.append(buffered)
+                        pending_bytes += len(buffered)
                 failure = lifecycle.incomplete()
                 terminal = {
                     "success": False,

@@ -130,6 +130,28 @@ class FinalReviewRegressionTests(unittest.TestCase):
                 with self.assertRaises(RouterError):
                     responses_to_anthropic(body, "upstream")
 
+    def test_named_standalone_tool_output_becomes_visible_context(self):
+        body = {
+            "input": [{
+                "type": "function_call_output",
+                "name": "notifications",
+                "namespace": "slack",
+                "output": "Alice mentioned you.",
+            }]
+        }
+
+        chat = responses_to_chat(body, "upstream")
+        anthropic = responses_to_anthropic(body, "upstream")
+
+        self.assertEqual(chat["messages"][0]["role"], "user")
+        self.assertIn("slack/notifications", chat["messages"][0]["content"])
+        self.assertIn("Alice mentioned you.", chat["messages"][0]["content"])
+        self.assertEqual(anthropic["messages"][0]["role"], "user")
+        self.assertIn(
+            "slack/notifications",
+            anthropic["messages"][0]["content"][0]["text"],
+        )
+
     def test_unknown_terminal_reasons_are_protocol_errors(self):
         with self.assertRaises(ExternalProtocolError):
             _chat_incomplete_reason(None)

@@ -332,6 +332,25 @@ def _portable_input(
             continue
         if item_type in {"function_call_output", "custom_tool_call_output"}:
             call_id = item.get("call_id")
+            if item_type == "function_call_output" and call_id is None:
+                name = item.get("name")
+                namespace = item.get("namespace")
+                output = item.get("output", "")
+                if not isinstance(name, str) or not name:
+                    raise ProjectionError(index, item_type, (), "invalid_tool_pair")
+                if namespace is not None and not isinstance(namespace, str):
+                    raise ProjectionError(index, item_type, (), "invalid_tool_output")
+                if not isinstance(output, (str, list)):
+                    raise ProjectionError(index, item_type, (), "invalid_tool_output")
+                standalone: Dict[str, Any] = {
+                    "type": "function_call_output",
+                    "name": name,
+                    "output": copy.deepcopy(output),
+                }
+                if namespace:
+                    standalone["namespace"] = namespace
+                result.append(standalone)
+                continue
             if not isinstance(call_id, str) or not call_id or call_id not in calls:
                 raise ProjectionError(index, item_type, (), "invalid_tool_pair")
             if call_id in outputs:
@@ -616,6 +635,7 @@ def request_shape(body: Mapping[str, Any]) -> Dict[str, Any]:
     part_types = []
     calls = set()
     outputs = set()
+    standalone_outputs = False
     invalid_pair = False
     for item in source[:256]:
         if not isinstance(item, Mapping):
@@ -642,6 +662,14 @@ def request_shape(body: Mapping[str, Any]) -> Dict[str, Any]:
                 invalid_pair = True
         elif item_type in {"function_call_output", "custom_tool_call_output"}:
             call_id = item.get("call_id")
+            if (
+                item_type == "function_call_output"
+                and call_id is None
+                and isinstance(item.get("name"), str)
+                and item.get("name")
+            ):
+                standalone_outputs = True
+                continue
             if not isinstance(call_id, str) or not call_id or call_id in outputs:
                 invalid_pair = True
             else:
@@ -651,7 +679,7 @@ def request_shape(body: Mapping[str, Any]) -> Dict[str, Any]:
     if invalid_pair:
         pairing = "invalid"
     elif not calls and not outputs:
-        pairing = "none"
+        pairing = "standalone" if standalone_outputs else "none"
     elif calls == outputs:
         pairing = "paired"
     else:

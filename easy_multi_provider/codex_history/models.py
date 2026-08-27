@@ -414,8 +414,23 @@ def normalize_visible_item(
         "tool_output",
         "mcp_tool_result",
     ):
-        kind = "tool_result"
-        content = _content_map(raw, ("output", "result", "content", "status"))
+        standalone = (
+            token == "function_call_output"
+            and _string(raw, "call_id", "callId") is None
+            and _string(raw, "name") is not None
+        )
+        kind = "standalone_tool_output" if standalone else "tool_result"
+        content = _content_map(
+            raw,
+            (
+                "name",
+                "namespace",
+                "output",
+                "result",
+                "content",
+                "status",
+            ),
+        )
     elif token in ("mcp_tool_call", "dynamic_tool_call", "collab_agent_tool_call"):
         # App Server exposes these as one display item rather than a Responses
         # call/output pair.  Keep the visible activity without inventing an
