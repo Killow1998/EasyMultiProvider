@@ -912,11 +912,12 @@ def _provider_replay_scope(
         return None
     try:
         return ProviderReplayScope(
-            endpoint_fingerprint(provider.get("base_url")),
-            deployment_identity(provider, model),
-            model_id,
-            anchor.thread_id,
-            anchor.window_id or "",
+            provider_id=provider.get("id"),
+            endpoint_fingerprint=endpoint_fingerprint(provider.get("base_url")),
+            deployment_identity=deployment_identity(provider, model),
+            model_id=model_id,
+            thread_id=anchor.thread_id,
+            window_id=anchor.window_id or "",
         )
     except ValueError:
         return None

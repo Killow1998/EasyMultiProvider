@@ -20,7 +20,7 @@ class ContextGuardTests(unittest.TestCase):
     def setUp(self):
         self.provider = {
             "id": "demo",
-            "base_url": "https://example.com/v1?tenant=private",
+            "base_url": "https://example.com/v1",
             "protocol": "auto",
         }
         self.model = {
@@ -118,6 +118,39 @@ class ContextGuardTests(unittest.TestCase):
 
         self.assertIsNotNone(estimate)
         self.assertLess(peak, 512 * 1024)
+
+    def test_estimator_failure_blocks_when_safe_limit_is_known(self):
+        nested = "leaf"
+        for _ in range(130):
+            nested = {"nested": nested}
+        payload = {"model": "model", "input": nested, "max_output_tokens": 128}
+
+        self.assertIsNone(estimate_input_tokens(payload, "responses"))
+        assessment = assess_context(
+            self.provider,
+            self.model,
+            "responses",
+            payload,
+        )
+
+        self.assertIsNotNone(assessment.safe_input_limit)
+        self.assertEqual(assessment.decision, "block")
+
+    def test_estimator_failure_warns_when_safe_limit_is_unknown(self):
+        nested = "leaf"
+        for _ in range(130):
+            nested = {"nested": nested}
+        model = dict(self.model, context_window=0, capability_sources={})
+
+        assessment = assess_context(
+            self.provider,
+            model,
+            "responses",
+            {"model": "model", "input": nested},
+        )
+
+        self.assertIsNone(assessment.safe_input_limit)
+        self.assertEqual(assessment.decision, "warn")
 
     def test_effective_context_percentage_is_applied_to_native_catalog_limit(self):
         model = dict(self.model)

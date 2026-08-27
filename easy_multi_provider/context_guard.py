@@ -581,7 +581,11 @@ def assess_context(
     decision = "allow"
     reason = "translated payload is within the known safe budget"
     next_action = "continue"
-    if input_estimate is None or completeness != "high":
+    if input_estimate is None and safe_input_limit is not None:
+        decision = "block"
+        reason = "context estimate failed for a payload with a known safe limit"
+        next_action = "simplify the translated payload; request was not sent"
+    elif input_estimate is None or completeness != "high":
         decision = "warn"
         reason = "context estimate or connection-local history is incomplete"
         next_action = "continue only with bounded state; use native compaction if needed"

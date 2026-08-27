@@ -1967,7 +1967,7 @@ class ServerAccountTests(unittest.TestCase):
                 normalize({
                     "providers": [{
                         "id": "demo",
-                        "base_url": "https://example.com/v1?tenant=private",
+                        "base_url": "https://example.com/v1/private-tenant",
                         "protocol": "responses",
                         "api_key": "provider-secret",
                     }],
@@ -2006,7 +2006,7 @@ class ServerAccountTests(unittest.TestCase):
                 serialized = json.dumps(payload)
                 for value in (
                     "https://",
-                    "tenant=private",
+                    "private-tenant",
                     "provider-secret",
                     "base_url",
                     "api_key",

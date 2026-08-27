@@ -1429,6 +1429,10 @@ def _fit_destination_context(
     try:
         return clean, assess(clean)
     except ContextGuardBlocked as exc:
+        if exc.assessment.input_estimate is None:
+            raise ContextLengthError(
+                exc.assessment.to_safe_dict(), preflight=True
+            ) from exc
         if destination_compactor is None:
             raise ContextLengthError(
                 exc.assessment.to_safe_dict(), preflight=True

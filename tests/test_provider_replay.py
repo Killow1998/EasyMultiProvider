@@ -25,8 +25,10 @@ def _scope(
     window_id="window-1",
     endpoint="sha256:endpoint-a",
     deployment="default",
+    provider_id="demo",
 ):
     return ProviderReplayScope(
+        provider_id,
         endpoint,
         deployment,
         model_id,
@@ -144,6 +146,7 @@ class ProviderReplayTests(unittest.TestCase):
         )
         self.assertIs(cache.prepare(body, _scope(window_id="window-2")), body)
         self.assertIs(cache.prepare(body, _scope(endpoint="sha256:endpoint-b")), body)
+        self.assertIs(cache.prepare(body, _scope(provider_id="other")), body)
         self.assertIs(cache.prepare(body, None), body)
 
 

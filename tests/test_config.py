@@ -349,6 +349,14 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             normalize({"providers": [{"id": "demo", "base_url": "http://example.com/v1"}]})
 
+    def test_provider_base_url_rejects_query_and_fragment(self):
+        for base_url in (
+            "https://example.com/v1?tenant=a",
+            "https://example.com/v1#deployment-a",
+        ):
+            with self.subTest(base_url=base_url), self.assertRaises(ConfigError):
+                normalize({"providers": [{"id": "demo", "base_url": base_url}]})
+
     def test_model_context_window_has_a_safe_upper_bound(self):
         with self.assertRaises(ConfigError):
             normalize({

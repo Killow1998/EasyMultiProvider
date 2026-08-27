@@ -1,3 +1,4 @@
+from dataclasses import replace
 import unittest
 
 from easy_multi_provider.context_guard import (
@@ -6,7 +7,10 @@ from easy_multi_provider.context_guard import (
     context_identity,
 )
 from easy_multi_provider.router import _fit_destination_context
-from easy_multi_provider.router_errors import HistoryReconstructionError
+from easy_multi_provider.router_errors import (
+    ContextLengthError,
+    HistoryReconstructionError,
+)
 
 
 def _message(text):
@@ -108,6 +112,37 @@ class DestinationContextTests(unittest.TestCase):
         self.assertEqual(raised.exception.reason, "history_compaction_failed")
         self.assertEqual(len(checks), 1)
         self.assertEqual(len(compactions), 1)
+
+    def test_failed_estimate_fails_closed_without_compaction(self):
+        body = {"model": self.model["id"], "input": [_message("history")]}
+        assessment = replace(
+            _blocked(self.provider, self.model),
+            input_estimate=None,
+            confidence=0.0,
+            next_action="simplify payload",
+            reason="context estimate failed",
+        )
+        compactions = []
+
+        def context_check(payload, stream, operation):
+            raise ContextGuardBlocked(assessment)
+
+        def compact(provider, model, requested_slug, logical_body, blocked):
+            compactions.append(blocked)
+            return logical_body
+
+        with self.assertRaises(ContextLengthError) as raised:
+            _fit_destination_context(
+                self.provider,
+                self.model,
+                self.model["id"],
+                body,
+                context_check,
+                compact,
+            )
+
+        self.assertEqual(raised.exception.status, 413)
+        self.assertEqual(compactions, [])
 
 
 if __name__ == "__main__":

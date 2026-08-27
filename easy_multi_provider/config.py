@@ -192,6 +192,8 @@ def _validate_url(value: Any, field: str) -> str:
         raise ConfigError("%s must be an http(s) URL" % field)
     if parsed.username or parsed.password:
         raise ConfigError("%s must not contain URL credentials" % field)
+    if parsed.query or parsed.fragment:
+        raise ConfigError("%s must not contain a query or fragment" % field)
     try:
         hostname = (parsed.hostname or "").lower()
         loopback = hostname == "localhost" or ipaddress.ip_address(hostname).is_loopback

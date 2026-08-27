@@ -51,6 +51,7 @@ def _response_items(value: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
 class ProviderReplayScope:
     """Content-free identity for one Provider continuation boundary."""
 
+    provider_id: str
     endpoint_fingerprint: str
     deployment_identity: str
     model_id: str
@@ -59,6 +60,7 @@ class ProviderReplayScope:
 
     def __post_init__(self) -> None:
         required = (
+            "provider_id",
             "endpoint_fingerprint",
             "deployment_identity",
             "model_id",
@@ -74,11 +76,14 @@ class ProviderReplayScope:
             raise ValueError("invalid Provider replay window_id")
         object.__setattr__(self, "window_id", window_id)
 
-    def key(self, call_id: Any) -> Optional[Tuple[str, str, str, str, str, str]]:
+    def key(
+        self, call_id: Any
+    ) -> Optional[Tuple[str, str, str, str, str, str, str]]:
         call_id = _bounded_identifier(call_id)
         if not call_id:
             return None
         return (
+            self.provider_id,
             self.endpoint_fingerprint,
             self.deployment_identity,
             self.model_id,
@@ -105,7 +110,7 @@ class ProviderReplayCache:
         self.ttl_seconds = max(1.0, float(ttl_seconds))
         self.clock = clock
         self.lock = threading.RLock()
-        self._values: "OrderedDict[Tuple[str, str, str, str, str, str], Tuple[float, str]]" = (
+        self._values: "OrderedDict[Tuple[str, str, str, str, str, str, str], Tuple[float, str]]" = (
             OrderedDict()
         )
 
