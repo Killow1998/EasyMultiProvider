@@ -13,14 +13,22 @@ from tests.support import ensure_test_master_key
 import easy_multi_provider.router as router
 from easy_multi_provider.capabilities import endpoint_fingerprint
 from easy_multi_provider.config import normalize
-from easy_multi_provider.router import (
-    RouterError,
+from easy_multi_provider.dialects import CODEX_NATIVE, PORTABLE_RESPONSES
+from easy_multi_provider.protocol_adapters import protocol_adapter
+from easy_multi_provider.protocol_projection import (
     _response_from_anthropic,
     _response_from_chat,
-    find_route,
-    proxy_compact,
     responses_to_anthropic,
     responses_to_chat,
+)
+from easy_multi_provider.router import (
+    RouterError,
+    proxy_compact,
+)
+from easy_multi_provider.route_plan import (
+    FORWARD_PROVIDER,
+    resolve_route,
+    resolved_upstream_model,
 )
 from easy_multi_provider.router_errors import (
     ExternalProtocolError,
@@ -45,9 +53,14 @@ class RouterTests(unittest.TestCase):
         }
 
     def test_external_model_routes_to_configured_provider(self):
-        provider, model = find_route(self.config, "demo/model")
-        self.assertEqual(provider["id"], "demo")
-        self.assertEqual(model["id"], "demo/model")
+        route = resolve_route(self.config, "demo/model")
+        self.assertEqual(route.provider["id"], "demo")
+        self.assertEqual(route.model["id"], "demo/model")
+        with self.assertRaises(TypeError):
+            route.provider["protocol"] = "responses"
+        provider_copy = route.provider_copy()
+        provider_copy["protocol"] = "responses"
+        self.assertEqual(route.provider["protocol"], "chat_completions")
 
     def test_reasoning_summary_route_policy_preserves_effort_and_native_payload(self):
         external = {
@@ -395,7 +408,7 @@ class RouterTests(unittest.TestCase):
         provider = {"id": "gemini"}
         model = {"upstream_id": "gemini/gemini-3.5-flash"}
         self.assertEqual(
-            router.resolved_upstream_model(
+            resolved_upstream_model(
                 provider, model, "gemini/gemini-3.5-flash"
             ),
             "gemini-3.5-flash",
@@ -824,8 +837,8 @@ class RouterTests(unittest.TestCase):
             }],
             "models": [{"id": "native/model-a", "provider": "native", "upstream_id": "model-a"}],
         })
-        provider, _ = find_route(config, "native/model-a")
-        self.assertEqual(provider["protocol"], "responses")
+        route = resolve_route(config, "native/model-a")
+        self.assertEqual(route.protocol, "responses")
 
     def test_auto_provider_falls_back_when_responses_endpoint_is_unavailable(self):
         config = {
@@ -1086,9 +1099,10 @@ class RouterTests(unittest.TestCase):
         )
 
     def test_unlisted_native_model_uses_unique_forward_provider(self):
-        provider, model = find_route(self.config, "gpt-native")
-        self.assertEqual(provider["id"], "chatgpt")
-        self.assertEqual(model["upstream_id"], "gpt-native")
+        route = resolve_route(self.config, "gpt-native")
+        self.assertEqual(route.provider_id, "chatgpt")
+        self.assertEqual(route.upstream_model, "gpt-native")
+        self.assertEqual(route.source, FORWARD_PROVIDER)
 
     def test_known_native_model_uses_implicit_current_login_route_without_provider(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1114,7 +1128,8 @@ class RouterTests(unittest.TestCase):
                 "models": [],
             }
 
-            provider, model = find_route(config, "gpt-native")
+            route = resolve_route(config, "gpt-native")
+            provider, model = route.provider, route.model
 
             self.assertEqual(provider["auth_mode"], "forward")
             self.assertEqual(provider["protocol"], "responses")
@@ -1197,7 +1212,8 @@ class RouterTests(unittest.TestCase):
             "providers": [],
             "models": [],
         }
-        provider, model = find_route(config, "secondary/gpt-native")
+        route = resolve_route(config, "secondary/gpt-native")
+        provider, model = route.provider, route.model
         self.assertEqual(provider["auth_mode"], "account")
         self.assertEqual(provider["account"]["id"], "plus")
         self.assertEqual(provider["base_url"], "https://chatgpt.com/backend-api/codex")
@@ -1233,7 +1249,7 @@ class RouterTests(unittest.TestCase):
                 "models": [],
             }
 
-            _, model = find_route(config, "secondary/gpt-native")
+            model = resolve_route(config, "secondary/gpt-native").model
 
         self.assertEqual(model["id"], "secondary/gpt-native")
         self.assertEqual(model["upstream_id"], "gpt-native")
@@ -1358,14 +1374,15 @@ class RouterTests(unittest.TestCase):
                 "models": [],
             }
 
-            provider, model = find_route(config, "gpt-hidden")
+            route = resolve_route(config, "gpt-hidden")
+            provider, model = route.provider, route.model
             self.assertTrue(provider["implicit_native"])
             self.assertEqual(model["upstream_id"], "gpt-hidden")
 
             for model_id in ("gpt-unknown", "gpt-unsupported"):
                 with self.subTest(model_id=model_id):
                     with self.assertRaises(RouterError) as raised:
-                        find_route(config, model_id)
+                        resolve_route(config, model_id)
                     self.assertEqual(raised.exception.status, 404)
 
     def test_explicit_and_prefixed_routes_precede_implicit_native_route(self):
@@ -1402,8 +1419,16 @@ class RouterTests(unittest.TestCase):
                 ],
             }
 
-            explicit_provider, explicit_model = find_route(config, "gpt-native")
-            prefixed_provider, prefixed_model = find_route(config, "primary/gpt-native")
+            explicit_route = resolve_route(config, "gpt-native")
+            prefixed_route = resolve_route(config, "primary/gpt-native")
+            explicit_provider, explicit_model = (
+                explicit_route.provider,
+                explicit_route.model,
+            )
+            prefixed_provider, prefixed_model = (
+                prefixed_route.provider,
+                prefixed_route.model,
+            )
 
             self.assertEqual(explicit_provider["id"], "external")
             self.assertEqual(explicit_model["upstream_id"], "external-native")
@@ -1490,7 +1515,7 @@ class RouterTests(unittest.TestCase):
 
     def test_router_normalizes_invalid_visible_compaction_to_history_failure(self):
         with self.assertRaises(HistoryReconstructionError) as raised:
-            router._responses_payload(
+            protocol_adapter(PORTABLE_RESPONSES).project_request(
                 {
                     "protocol": "responses",
                     "auth_mode": "api_key",
@@ -1505,6 +1530,7 @@ class RouterTests(unittest.TestCase):
                     ],
                 },
                 {},
+                "model",
             )
         self.assertEqual(raised.exception.status, 409)
         self.assertEqual(
@@ -3215,7 +3241,7 @@ class RouterTests(unittest.TestCase):
 
     def test_subscription_responses_preserve_native_codex_client_metadata(self):
         metadata = {"thread_id": "native-thread"}
-        payload = router._responses_payload(
+        payload = protocol_adapter(CODEX_NATIVE).project_request(
             {"id": "primary", "auth_mode": "account"},
             {
                 "model": "primary/gpt-native",
@@ -3223,6 +3249,7 @@ class RouterTests(unittest.TestCase):
                 "client_metadata": metadata,
             },
             {"id": "primary/gpt-native", "upstream_id": "gpt-native"},
+            "gpt-native",
         )
         self.assertEqual(payload["client_metadata"], metadata)
 

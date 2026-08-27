@@ -5,8 +5,9 @@ from easy_multi_provider.provider_replay import (
     ProviderReplayCache,
     ProviderReplayScope,
 )
-from easy_multi_provider.router import responses_to_chat
-from easy_multi_provider.server import _provider_replay_scope
+from easy_multi_provider.protocol_projection import responses_to_chat
+from easy_multi_provider.route_plan import resolve_route
+from easy_multi_provider.codex_dispatch import provider_replay_scope
 
 
 def _tool_item(call_id="call_fixture", signature="signature-fixture"):
@@ -61,15 +62,16 @@ class ProviderReplayTests(unittest.TestCase):
 
         scopes = []
         for upstream in ("gemini-X", "gemini-Y"):
-            scopes.append(_provider_replay_scope(
-                {
+            config = {
                     "providers": [provider],
                     "models": [{
                         "id": "demo/logical",
                         "provider": "demo",
                         "upstream_id": upstream,
                     }],
-                },
+                }
+            scopes.append(provider_replay_scope(
+                resolve_route(config, "demo/logical"),
                 body,
                 {},
             ))

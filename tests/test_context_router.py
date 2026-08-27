@@ -156,12 +156,28 @@ class ContextRouterTests(unittest.TestCase):
                 "source": "manual",
             }
 
-        def rejected(provider, body, model, incoming, context_check=None):
+        def rejected(
+            provider,
+            body,
+            model,
+            incoming,
+            context_check=None,
+            **request_options,
+        ):
             self.assertIsNone(context_check)
+            self.assertEqual(request_options["upstream_model"], "model")
             raise RouterError("protocol rejected", 404)
 
-        def successful(provider, body, model, incoming, context_check=None):
+        def successful(
+            provider,
+            body,
+            model,
+            incoming,
+            context_check=None,
+            **request_options,
+        ):
             self.assertIsNone(context_check)
+            self.assertEqual(request_options["upstream_model"], "model")
             return (
                 200,
                 "application/json",

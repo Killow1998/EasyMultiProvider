@@ -17,7 +17,7 @@ from unittest.mock import patch
 import easy_multi_provider.router as router
 from easy_multi_provider.catalog import write_catalog
 from easy_multi_provider.config import api_key, load, normalize, save
-from easy_multi_provider.router import find_route
+from easy_multi_provider.route_plan import resolve_route
 from easy_multi_provider.server import AppState, make_handler
 from easy_multi_provider.vault import MASTER_KEY_ENV
 
@@ -40,7 +40,8 @@ class LiveExternalModelTests(unittest.TestCase):
         self.assertTrue(model_slug, "EASY_MP_LIVE_MODEL is required")
         source_path = Path(os.environ.get("EASY_MP_LIVE_CONFIG", "config.json"))
         source = load(source_path)
-        provider, model = find_route(source, model_slug)
+        route = resolve_route(source, model_slug)
+        provider, model = route.provider_copy(), route.model_copy()
 
         server = None
         thread = None

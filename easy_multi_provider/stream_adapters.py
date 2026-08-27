@@ -40,7 +40,7 @@ from .transport_failures import (
     PHASE_CONNECT,
     PROTOCOL_REJECTION_STATUSES,
     STREAM_INCOMPLETE,
-    FailureSnapshot,
+    UpstreamFailure,
     StreamLifecycle,
     TransportFailure,
     event_activity,
@@ -65,49 +65,6 @@ class StreamAdapterIO:
     read_limited: Callable[..., bytes]
     raise_if_context_response: Callable[..., None]
     body_with_supported_effort: Callable[..., Dict[str, Any]]
-    upstream_model: Callable[..., str]
-
-
-def _route_error_class(status: Any) -> str:
-    if status is None:
-        return "network"
-    if status == 402:
-        return "payment_required"
-    return status_error_class(status)
-
-
-def _stream_exception(
-    exc: BaseException,
-    phase: Optional[str] = None,
-    output_emitted: bool = False,
-) -> Tuple[Optional[int], str]:
-    failure = failure_from_exception(exc, phase, output_emitted)
-    return failure.status, failure.error_class
-
-
-def _terminal_exception(
-    exc: BaseException,
-    phase: Optional[str] = None,
-    output_emitted: bool = False,
-) -> Dict[str, Any]:
-    if isinstance(exc, ContextLengthError):
-        return {
-            "success": False,
-            "status": exc.status,
-            "error_class": "context_length_exceeded",
-            "context_observation": dict(exc.context_observation),
-        }
-    failure = failure_from_exception(exc, phase, output_emitted)
-    terminal = {
-        "success": False,
-        "status": failure.status,
-        "error_class": failure.error_class,
-    }
-    if failure.failure_reason:
-        terminal["failure_reason"] = failure.failure_reason
-    if isinstance(getattr(exc, "phase", None), str):
-        terminal["phase"] = exc.phase
-    return terminal
 
 
 def _notify_terminal(
@@ -170,7 +127,7 @@ def _response_failure_frame(
     failure_reason: Optional[str] = None,
     transport_failure: bool = False,
 ) -> bytes:
-    failure_class = normalize_error_class(error_class or _route_error_class(status))
+    failure_class = normalize_error_class(error_class or status_error_class(status))
     safe_message = _content_free_failure_message(message)
     display_message = "HTTP %d: %s" % (status, safe_message)
     error_code = {
@@ -236,7 +193,7 @@ def _stream_terminal(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
             "protocol_rejection": "protocol_rejection",
             "incomplete": STREAM_INCOMPLETE,
         }.get(candidate, candidate)
-        return normalize_error_class(candidate, _route_error_class(status))
+        return normalize_error_class(candidate, status_error_class(status))
 
     response = event.get("response")
     response = response if isinstance(response, Mapping) else {}
@@ -447,7 +404,7 @@ def _reliable_responses_stream(
                     lifecycle.output_emitted,
                 )
                 if isinstance(exc, TransportError):
-                    failure = FailureSnapshot(
+                    failure = UpstreamFailure(
                         "malformed_terminal", 502, lifecycle.phase
                     )
                 if retry_allowed(
@@ -822,13 +779,13 @@ def _validated_responses_stream(
         if isinstance(exc, ContextLengthError):
             report(exc.status, "context_length_exceeded", exc.context_observation)
         else:
-            report(exc.status, _route_error_class(exc.status))
+            report(exc.status, status_error_class(exc.status))
         yield _response_failure_frame(
             "upstream stream failed",
             exc.status,
             "context_length_exceeded"
             if isinstance(exc, ContextLengthError)
-            else _route_error_class(exc.status),
+            else status_error_class(exc.status),
         )
     finally:
         response.close()
@@ -840,11 +797,12 @@ def stream_chat_completion(
     body: Dict[str, Any],
     model: Dict[str, Any],
     incoming: Dict[str, str],
+    upstream_model: str,
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> Iterable[bytes]:
     body = io.body_with_supported_effort(provider, body, model)
-    payload = responses_to_chat(body, io.upstream_model(provider, model, body["model"]))
+    payload = responses_to_chat(body, upstream_model)
     payload["stream"] = True
     response_id = "resp_" + uuid.uuid4().hex
     message_id = "msg_" + uuid.uuid4().hex
@@ -1224,7 +1182,7 @@ def stream_chat_completion(
     except RouterError as exc:
         if isinstance(exc, TransportFailure):
             raise
-        terminal = _terminal_exception(exc)
+        terminal = failure_from_exception(exc).terminal()
         _notify_terminal(
             terminal_callback,
             terminal["status"],
@@ -1242,10 +1200,11 @@ def stream_anthropic_completion(
     body: Dict[str, Any],
     model: Dict[str, Any],
     incoming: Dict[str, str],
+    upstream_model: str,
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> Iterable[bytes]:
-    payload = responses_to_anthropic(body, io.upstream_model(provider, model, body["model"]))
+    payload = responses_to_anthropic(body, upstream_model)
     payload["stream"] = True
     response_id = "resp_" + uuid.uuid4().hex
     custom_names = custom_tool_names(body)
@@ -1769,7 +1728,7 @@ def stream_anthropic_completion(
     except RouterError as exc:
         if isinstance(exc, TransportFailure):
             raise
-        terminal = _terminal_exception(exc)
+        terminal = failure_from_exception(exc).terminal()
         _notify_terminal(
             terminal_callback,
             terminal["status"],

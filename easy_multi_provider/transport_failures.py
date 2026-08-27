@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
+import re
 import time
 from typing import Any, Dict, Mapping, Optional, Set, Tuple
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 from .router_errors import (
     ContextLengthError,
@@ -26,6 +28,8 @@ UPSTREAM_504 = "upstream_504"
 IDLE_AFTER_OUTPUT = "idle_after_output"
 LOCAL_DEADLINE = "local_deadline"
 STREAM_INCOMPLETE = "stream_incomplete"
+MAX_UPSTREAM_ERROR_BYTES = 4096
+MAX_UPSTREAM_ERROR_TEXT_CHARS = 512
 
 PROTOCOL_REJECTION_STATUSES = frozenset({404, 405, 415, 501})
 _TOOL_TYPES = frozenset({"function_call", "custom_tool_call", "tool_call"})
@@ -88,6 +92,8 @@ def normalize_error_class(value: Any, fallback: str = "stream_error") -> str:
 def status_error_class(status: Any) -> str:
     """Classify an HTTP boundary without treating status as protocol evidence."""
 
+    if status is None:
+        return "network"
     status = _safe_status(status)
     if status in (401, 403):
         return "auth"
@@ -129,14 +135,147 @@ def protocol_fallback_allowed(
 
 
 @dataclass(frozen=True)
-class FailureSnapshot:
-    """A bounded failure observation used by retry and diagnostic code."""
+class UpstreamFailure:
+    """One bounded, content-free failure used by HTTP, stream, and retry code."""
 
     error_class: str
     status: int = 502
     phase: str = PHASE_TERMINAL
     terminal_event: bool = False
     failure_reason: Optional[str] = None
+    public_message: Optional[str] = None
+    context_observation: Optional[Mapping[str, Any]] = None
+
+    def terminal(self) -> Dict[str, Any]:
+        value: Dict[str, Any] = {
+            "success": False,
+            "status": self.status,
+            "error_class": self.error_class,
+        }
+        if self.failure_reason:
+            value["failure_reason"] = self.failure_reason
+        if isinstance(self.context_observation, Mapping):
+            value["context_observation"] = dict(self.context_observation)
+        if self.phase:
+            value["phase"] = self.phase
+        return value
+
+
+def http_error_detail(
+    error: HTTPError, raw: Optional[bytes] = None
+) -> Tuple[str, str]:
+    """Return bounded HTTP diagnostics without echoing an upstream HTML page."""
+
+    headers = getattr(error, "headers", {}) or {}
+    content_type = str(headers.get("Content-Type", "")).split(";", 1)[0].strip().lower()
+    if raw is None:
+        raw = error.read(MAX_UPSTREAM_ERROR_BYTES)
+    decoded = raw.decode("utf-8", "replace")
+    if content_type in ("text/html", "application/xhtml+xml") or re.match(
+        r"\s*(?:<!doctype\s+html|<html\b)", decoded, re.I
+    ):
+        return (
+            content_type or "text/html",
+            "HTML error page omitted; the upstream gateway or WAF may have rejected the request",
+        )
+    detail = decoded
+    if "json" in content_type or decoded.lstrip().startswith(("{", "[")):
+        try:
+            value = json.loads(decoded)
+        except ValueError:
+            pass
+        else:
+            if isinstance(value, dict):
+                nested = value.get("error") or value.get("message") or value
+                if isinstance(nested, dict):
+                    detail = str(
+                        nested.get("message")
+                        or nested.get("type")
+                        or nested.get("code")
+                        or nested
+                    )
+                else:
+                    detail = str(nested)
+            else:
+                detail = str(value)
+    detail = re.sub(r"\s+", " ", detail).strip()
+    if not detail:
+        detail = str(getattr(error, "reason", "") or "no response detail")
+    if len(detail) > MAX_UPSTREAM_ERROR_TEXT_CHARS:
+        detail = detail[: MAX_UPSTREAM_ERROR_TEXT_CHARS - 3].rstrip() + "..."
+    return content_type or "unknown content type", detail
+
+
+def http_error_message(prefix: str, error: HTTPError) -> str:
+    content_type, detail = http_error_detail(error)
+    if content_type in {"text/html", "application/xhtml+xml"}:
+        return "%s %d (%s): %s" % (prefix, error.code, content_type, detail)
+    return "%s %d (%s)" % (prefix, error.code, content_type)
+
+
+def _http_failure_reason(status: int, detail: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", " ", str(detail or "").lower()).strip()
+    if status in (401, 403):
+        return "auth_rejected"
+    if status == 402:
+        return "payment_required"
+    if status == 413 or any(
+        phrase in text
+        for phrase in ("request too large", "payload too large", "input too large")
+    ):
+        return "request_too_large"
+    if any(
+        phrase in text
+        for phrase in ("context length", "context window", "maximum context")
+    ):
+        return "context_length_exceeded"
+    if status == 429:
+        if any(word in text for word in ("quota", "credit", "balance", "insufficient")):
+            return "quota_exhausted"
+        if any(word in text for word in ("capacity", "overloaded", "saturated")):
+            return "upstream_capacity"
+        return "rate_limited"
+    if status == 504:
+        return UPSTREAM_504
+    if status in (500, 502, 503):
+        return "upstream_unavailable"
+    return "upstream_rejected"
+
+
+def http_failure(
+    status: int, content_type: str, detail: str, model: Any
+) -> UpstreamFailure:
+    free_route = str(model or "").strip().lower().endswith(":free")
+    if status == 402:
+        message = (
+            "payment required: provider balance is insufficient or the selected "
+            "route is paid"
+        )
+        if free_route:
+            message += "; EMP did not fall back from :free to a paid model"
+    elif status == 429:
+        message = (
+            "free quota exhausted or provider capacity is busy; retry later"
+            if free_route
+            else "quota exhausted or provider capacity is busy; retry later"
+        )
+    else:
+        message = "upstream returned %d (%s)" % (status, content_type)
+        if content_type in {"text/html", "application/xhtml+xml"}:
+            message += ": " + detail
+    return UpstreamFailure(
+        error_class=status_error_class(status),
+        status=_safe_status(status),
+        failure_reason=_http_failure_reason(status, detail),
+        public_message=message,
+    )
+
+
+def upstream_http_failure(
+    error: HTTPError, raw: bytes, model: Any
+) -> UpstreamFailure:
+    content_type, detail = http_error_detail(error, raw)
+    return http_failure(error.code, content_type, detail, model)
 
 
 class TransportFailure(RouterError):
@@ -180,12 +319,12 @@ def failure_from_exception(
     exc: BaseException,
     phase: Optional[str] = None,
     output_emitted: bool = False,
-) -> FailureSnapshot:
+) -> UpstreamFailure:
     """Normalize exceptions at the phase where they crossed the boundary."""
 
     phase = phase or PHASE_TERMINAL
     if isinstance(exc, TransportFailure):
-        return FailureSnapshot(
+        return UpstreamFailure(
             exc.error_class,
             _safe_status(exc.status),
             exc.phase,
@@ -193,24 +332,36 @@ def failure_from_exception(
             exc.failure_reason,
         )
     if isinstance(exc, ContextLengthError):
-        return FailureSnapshot(
-            "context_length_exceeded", _safe_status(exc.status, 413), phase, False
+        return UpstreamFailure(
+            "context_length_exceeded",
+            _safe_status(exc.status, 413),
+            phase,
+            False,
+            context_observation=dict(exc.context_observation),
         )
     if isinstance(exc, UpstreamHTTPError):
         reason = _safe_token(getattr(exc, "failure_reason", None))
-        return FailureSnapshot(
-            status_error_class(exc.status), _safe_status(exc.status), phase, False, reason
+        return UpstreamFailure(
+            status_error_class(exc.status),
+            _safe_status(exc.status),
+            phase,
+            False,
+            reason,
+            str(exc),
         )
     if isinstance(exc, StreamBoundaryError):
         error_class = normalize_error_class(
             getattr(exc, "error_class", None), STREAM_INCOMPLETE
         )
-        return FailureSnapshot(
+        return UpstreamFailure(
             error_class,
             _safe_status(exc.status),
             phase,
             False,
-            _safe_token(getattr(exc, "failure_reason", None)),
+            _safe_token(
+                getattr(exc, "failure_reason", None)
+                or getattr(exc, "reason", None)
+            ),
         )
     if isinstance(exc, TimeoutError) or (
         isinstance(exc, URLError) and isinstance(getattr(exc, "reason", None), TimeoutError)
@@ -224,31 +375,31 @@ def failure_from_exception(
         else:
             error_class = FIRST_EVENT_TIMEOUT
             failure_phase = PHASE_FIRST_EVENT
-        return FailureSnapshot(error_class, 504, failure_phase)
+        return UpstreamFailure(error_class, 504, failure_phase)
     if isinstance(exc, (OSError, URLError)):
-        return FailureSnapshot("network", 502, phase)
+        return UpstreamFailure("network", 502, phase)
     if isinstance(exc, RouterError):
         if (
             _safe_status(exc.status) == 504
             and not getattr(exc, "error_class", None)
             and str(exc) == "upstream request timed out"
         ):
-            return FailureSnapshot(LOCAL_DEADLINE, 504, phase)
+            return UpstreamFailure(LOCAL_DEADLINE, 504, phase)
         error_class = normalize_error_class(
             getattr(exc, "error_class", None), status_error_class(exc.status)
         )
-        return FailureSnapshot(
+        return UpstreamFailure(
             error_class,
             _safe_status(exc.status),
             phase,
             False,
             _safe_token(getattr(exc, "failure_reason", None)),
         )
-    return FailureSnapshot("stream_error", 502, phase)
+    return UpstreamFailure("stream_error", 502, phase)
 
 
 def retry_allowed(
-    failure: FailureSnapshot,
+    failure: UpstreamFailure,
     attempt: int,
     replayable: bool,
     output_emitted: bool,
@@ -409,9 +560,9 @@ class StreamLifecycle:
                 return True
         return False
 
-    def incomplete(self) -> FailureSnapshot:
+    def incomplete(self) -> UpstreamFailure:
         self.phase = PHASE_TERMINAL
-        return FailureSnapshot(STREAM_INCOMPLETE, 502, PHASE_TERMINAL, False)
+        return UpstreamFailure(STREAM_INCOMPLETE, 502, PHASE_TERMINAL, False)
 
     def diagnostics(self, terminal: Mapping[str, Any]) -> Dict[str, Any]:
         duration_ms = max(

@@ -43,6 +43,7 @@ from easy_multi_provider.integration import (
     _FileLock,
 )
 from easy_multi_provider.native_websocket import NativeWebSocketError
+from easy_multi_provider.integration_views import integration_summary
 from easy_multi_provider.router import RouterError
 from easy_multi_provider.vault import MASTER_KEY_ENV, MASTER_KEY_FILE_ENV
 from easy_multi_provider.server import (
@@ -52,14 +53,13 @@ from easy_multi_provider.server import (
     ObservationRing,
     _GracefulShutdown,
     _install_sigterm_handler,
-    _management_config,
     _restore_sigterm_handler,
-    _integration_summary,
     configure_proxy_environment,
     make_handler,
     serve,
     startup_reconcile,
 )
+from easy_multi_provider.management_views import management_config
 
 
 ensure_test_master_key()
@@ -147,6 +147,37 @@ def _integration_test_config(root: Path):
                 }
             ],
         }
+    )
+
+
+def _save_responses_route(
+    config_path: Path,
+    model_id: str,
+    provider_id: str = "demo",
+    auth_mode: str = "api_key",
+) -> None:
+    provider = {
+        "id": provider_id,
+        "base_url": "https://example.com/v1",
+        "protocol": "responses",
+        "auth_mode": auth_mode,
+    }
+    if auth_mode == "api_key":
+        provider["api_key"] = "test-only"
+    save(
+        normalize(
+            {
+                "providers": [provider],
+                "models": [
+                    {
+                        "id": model_id,
+                        "provider": provider_id,
+                        "upstream_id": model_id.rsplit("/", 1)[-1],
+                    }
+                ],
+            }
+        ),
+        config_path,
     )
 
 
@@ -615,7 +646,7 @@ class ServerAccountTests(unittest.TestCase):
                     ),
                     runtime_controller=runtime,
                 )
-                recovered = _integration_summary(reopened)
+                recovered = integration_summary(reopened)
                 self.assertEqual(recovered["runtime"]["state"], "not_checked")
                 self.assertEqual(recovered["runtime"]["target"], "emp")
                 self.assertFalse(recovered["runtime"]["verified"])
@@ -935,7 +966,7 @@ class ServerAccountTests(unittest.TestCase):
             }), config_path)
             state = AppState(config_path)
             with patch(
-                "easy_multi_provider.server.proxy",
+                "easy_multi_provider.codex_dispatch.proxy",
                 return_value=(
                     {
                         "kind": "body",
@@ -947,7 +978,7 @@ class ServerAccountTests(unittest.TestCase):
                     b"{}",
                 ),
             ):
-                state.route({"model": "demo/model", "input": "hello"}, {})
+                state.codex.route({"model": "demo/model", "input": "hello"}, {})
             provider = state.snapshot()["providers"][0]
             model = state.snapshot()["models"][0]
             self.assertEqual(provider["protocol"], "auto")
@@ -960,7 +991,9 @@ class ServerAccountTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.json"
-            save(normalize({}), config_path)
+            _save_responses_route(
+                config_path, "gpt-native", "native", "forward"
+            )
             codex_home = root / "codex"
             manager = IntegrationManager(
                 codex_home / "config.toml",
@@ -970,7 +1003,7 @@ class ServerAccountTests(unittest.TestCase):
             state = AppState(config_path, integration_manager=manager)
 
             with patch(
-                "easy_multi_provider.server.proxy",
+                "easy_multi_provider.codex_dispatch.proxy",
                 return_value=(
                     {
                         "kind": "body",
@@ -980,12 +1013,12 @@ class ServerAccountTests(unittest.TestCase):
                     b"{}",
                 ),
             ) as routed:
-                state.route({"model": "gpt-native", "input": []}, {})
+                state.codex.route({"model": "gpt-native", "input": []}, {})
 
             public_snapshot = state.snapshot()
             routing_snapshot = routed.call_args.args[0]
             self.assertNotIn("_native_auth_path", public_snapshot)
-            self.assertNotIn("_native_auth_path", _management_config(public_snapshot))
+            self.assertNotIn("_native_auth_path", management_config(public_snapshot))
             self.assertEqual(
                 routing_snapshot["_native_auth_path"],
                 str(codex_home / "auth.json"),
@@ -1046,7 +1079,7 @@ class ServerAccountTests(unittest.TestCase):
                 }
             )
 
-            result = _management_config(config)
+            result = management_config(config)
 
         rows = {row["id"]: row for row in result["catalog_models"]}
         self.assertEqual(set(rows), {"gpt-native", "demo/worker"})
@@ -1060,14 +1093,14 @@ class ServerAccountTests(unittest.TestCase):
     def test_compact_endpoint_routes_remote_compaction(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
-            save(normalize({}), config_path)
+            _save_responses_route(config_path, "demo/fixed")
             state = AppState(config_path)
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
                 with patch(
-                    "easy_multi_provider.server.proxy_compact",
+                    "easy_multi_provider.codex_dispatch.proxy_compact",
                     return_value=(
                         {"kind": "body", "status": 200, "content_type": "application/json"},
                         b'{"output":[]}',
@@ -1131,7 +1164,7 @@ class ServerAccountTests(unittest.TestCase):
     def test_zstd_compressed_proxy_request_is_decoded(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
-            save(normalize({}), config_path)
+            _save_responses_route(config_path, "demo/fixed")
             state = AppState(config_path)
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1140,7 +1173,7 @@ class ServerAccountTests(unittest.TestCase):
             encoded = zstandard.ZstdCompressor().compress(body)
             try:
                 with patch(
-                    "easy_multi_provider.server.proxy",
+                    "easy_multi_provider.codex_dispatch.proxy",
                     return_value=(
                         {"kind": "body", "status": 200, "content_type": "application/json"},
                         b"{}",
@@ -1213,7 +1246,7 @@ class ServerAccountTests(unittest.TestCase):
             stream = None
             try:
                 with patch(
-                    "easy_multi_provider.server.proxy",
+                    "easy_multi_provider.codex_dispatch.proxy",
                     return_value=(
                         {"kind": "stream", "status": 200, "content_type": "text/event-stream"},
                         iter(events),
@@ -1348,7 +1381,7 @@ class ServerAccountTests(unittest.TestCase):
     def test_proxy_requests_are_not_serialized_by_state_lock(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
-            save(normalize({}), config_path)
+            _save_responses_route(config_path, "demo/fixed")
             state = AppState(config_path)
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
             server_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1375,7 +1408,7 @@ class ServerAccountTests(unittest.TestCase):
                 connection.close()
 
             try:
-                with patch("easy_multi_provider.server.proxy", side_effect=fake_proxy):
+                with patch("easy_multi_provider.codex_dispatch.proxy", side_effect=fake_proxy):
                     workers = [threading.Thread(target=request) for _ in range(2)]
                     for worker in workers:
                         worker.start()
@@ -1533,7 +1566,7 @@ class ServerAccountTests(unittest.TestCase):
                     stream_closed.append(True)
 
             with patch.object(
-                state,
+                state.codex,
                 "route",
                 return_value=(
                     {"kind": "stream", "content_type": "text/event-stream"},
@@ -1668,7 +1701,7 @@ class ServerAccountTests(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertEqual(result.state, "active")
             self.assertEqual(state.startup_conflicts(), ())
-            summary = _integration_summary(state)
+            summary = integration_summary(state)
             self.assertEqual(summary["configuration"]["state"], "emp_applied")
             self.assertEqual(summary["runtime"]["state"], "verification_failed")
             self.assertTrue(summary["runtime"]["action_required"])
@@ -1825,7 +1858,7 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(result.action, "re_adopted")
             self.assertEqual(result.state, "active")
             self.assertEqual(state.startup_conflicts(), ())
-            self.assertEqual(_integration_summary(state)["configuration"]["state"], "emp_applied")
+            self.assertEqual(integration_summary(state)["configuration"]["state"], "emp_applied")
 
     def test_startup_re_adoption_refreshes_catalog_without_runtime_restart(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2221,13 +2254,13 @@ class ServerAccountTests(unittest.TestCase):
     def test_stream_diagnostics_record_terminal_success_and_failure_without_buffering(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
-            save(normalize({}), config_path)
+            _save_responses_route(config_path, "demo/model")
             state = AppState(config_path)
             success = iter([b'event: response.completed\ndata: {"type":"response.completed"}\n\n'])
             failure = iter([b'event: response.failed\ndata: {"type":"response.failed"}\n\n'])
             partial = iter([b'data: partial\n\n', b'data: never\n\n'])
             with patch(
-                "easy_multi_provider.server.proxy",
+                "easy_multi_provider.codex_dispatch.proxy",
                 side_effect=[
                     ({
                         "kind": "stream",
@@ -2258,15 +2291,15 @@ class ServerAccountTests(unittest.TestCase):
                     }, partial),
                 ],
             ):
-                _, success_result = state.route(
+                _, success_result = state.codex.route(
                     {"model": "demo/model", "input": [], "stream": True}, {}
                 )
                 list(success_result)
-                _, failure_result = state.route(
+                _, failure_result = state.codex.route(
                     {"model": "demo/model", "input": [], "stream": True}, {}
                 )
                 list(failure_result)
-                _, partial_result = state.route(
+                _, partial_result = state.codex.route(
                     {"model": "demo/model", "input": [], "stream": True}, {}
                 )
                 next(partial_result)
@@ -2333,10 +2366,10 @@ class ServerAccountTests(unittest.TestCase):
                 "observation_attached": True,
             }
             with patch(
-                "easy_multi_provider.server.proxy",
+                "easy_multi_provider.codex_dispatch.proxy",
                 return_value=(stream_metadata, iter([stream_bytes])),
             ):
-                _, result = state.route(
+                _, result = state.codex.route(
                     {"model": "demo/model", "stream": True, "input": "prompt"},
                     incoming,
                 )
@@ -2351,8 +2384,8 @@ class ServerAccountTests(unittest.TestCase):
                     b'{"output":[]}',
                 )
 
-            with patch("easy_multi_provider.server.proxy", side_effect=proxy_request):
-                state.route(
+            with patch("easy_multi_provider.codex_dispatch.proxy", side_effect=proxy_request):
+                state.codex.route(
                     {
                         "model": "demo/model",
                         "input": [
@@ -2424,7 +2457,7 @@ class ServerAccountTests(unittest.TestCase):
             }), config_path)
             state = AppState(config_path)
             with patch("easy_multi_provider.router.urlopen", return_value=Response()):
-                _, result = state.route({
+                _, result = state.codex.route({
                     "model": "demo/model",
                     "input": "prompt-secret",
                     "tools": [{"type": "function", "name": "tool-secret"}],
@@ -2472,7 +2505,7 @@ class ServerAccountTests(unittest.TestCase):
             state = AppState(config_path)
             with patch("easy_multi_provider.router.urlopen") as urlopen:
                 with self.assertRaises(Exception) as raised:
-                    state.route({
+                    state.codex.route({
                         "model": "demo/model",
                         "input": "x" * 10000,
                         "max_output_tokens": 128,
@@ -2520,7 +2553,7 @@ class ServerAccountTests(unittest.TestCase):
             state = AppState(config_path)
             with patch("easy_multi_provider.router.urlopen", side_effect=error) as urlopen:
                 with self.assertRaises(Exception) as raised:
-                    state.route({
+                    state.codex.route({
                         "model": "demo/model",
                         "input": "prompt-secret",
                         "max_output_tokens": 128,
@@ -3764,7 +3797,7 @@ class HistoryContinuityWiringTests(unittest.TestCase):
                 "content": "continue",
             }
             with patch("easy_multi_provider.router.urlopen", side_effect=open_request):
-                state.route(
+                state.codex.route(
                     {
                         "model": "external/model-b",
                         "input": [visible, message],
@@ -3773,7 +3806,7 @@ class HistoryContinuityWiringTests(unittest.TestCase):
                 )
                 self.assertEqual(reader.calls, [])
 
-                state.route(
+                state.codex.route(
                     {
                         "model": "external/model-b",
                         "input": [opaque, message],
@@ -3808,7 +3841,7 @@ class HistoryContinuityWiringTests(unittest.TestCase):
                     "/v1/responses",
                     json.dumps(
                         {
-                            "model": "native/model-a",
+                            "model": "external/model-b",
                             "input": [
                                 {
                                     "type": "compaction",
@@ -3858,7 +3891,7 @@ class HistoryContinuityWiringTests(unittest.TestCase):
                     "/v1/responses",
                     json.dumps(
                         {
-                            "model": "native/model-a",
+                            "model": "external/model-b",
                             "stream": True,
                             "input": [
                                 {
@@ -3935,7 +3968,7 @@ class HistoryContinuityWiringTests(unittest.TestCase):
                         json.dumps(
                             {
                                 "type": "response.create",
-                                "model": "native/model-a",
+                                "model": "external/model-b",
                                 "input": [
                                     {
                                         "type": "compaction",
@@ -4344,7 +4377,7 @@ class ContinuityAppStateTests(unittest.TestCase):
                 with patch(
                     "easy_multi_provider.server.NativeWebSocketBridge",
                     FailingNativeBridge,
-                ), patch("easy_multi_provider.server.proxy", side_effect=fake_proxy):
+                ), patch("easy_multi_provider.codex_dispatch.proxy", side_effect=fake_proxy):
                     client = socket.create_connection(server.server_address, timeout=5)
                     stream = client.makefile("rb")
                     port = server.server_address[1]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass
 import json
 import re
@@ -18,11 +17,9 @@ from .accounts import AccountError, auth_headers, native_auth_headers
 from .capabilities import (
     deployment_identity,
     endpoint_fingerprint,
-    make_provenance,
     normalize_supported_protocols,
     observed_at_now,
 )
-from .catalog import load_native_catalog
 from .config import api_key
 from .context_guard import (
     ContextAssessment,
@@ -46,8 +43,6 @@ from .dialects import (
     custom_tool_input,
     custom_tool_names,
     portable_tool_definitions,
-    project_request,
-    project_response,
     project_stream_event,
     request_shape,
 )
@@ -79,16 +74,11 @@ from .protocol_projection import (
     _message_item,
     _messages,
     _normalize_compaction_input,
-    _response_from_anthropic,
-    _response_from_chat,
     _tools,
-    _upstream_error_text,
     _validate_textual_protocol,
     responses_terminal_observation,
-    responses_to_anthropic,
-    responses_to_chat,
-    validate_responses_body,
 )
+from .protocol_adapters import body_with_supported_effort, protocol_adapter
 from .router_errors import (
     ContextLengthError,
     ExternalCompactionError,
@@ -98,19 +88,17 @@ from .router_errors import (
     StreamBoundaryError,
     UpstreamHTTPError,
 )
+from .route_plan import ResolvedRoute, resolve_route, resolved_upstream_model
 from .stream_adapters import (
     StreamAdapterIO,
     _notify_terminal,
     _reliable_responses_stream,
     _response_failure_frame,
     _response_json_stream,
-    _route_error_class,
     _sse_data,
     _sse_frame,
     _stream_event_activity,
-    _stream_exception,
     _stream_terminal,
-    _terminal_exception,
     _validated_responses_stream as _owned_validated_responses_stream,
     stream_anthropic_completion as _owned_stream_anthropic_completion,
     stream_chat_completion as _owned_stream_chat_completion,
@@ -118,10 +106,15 @@ from .stream_adapters import (
 from .transport import TransportError, sse_json_events, zstd_encode
 from .transport_failures import (
     CONNECT_TIMEOUT,
+    MAX_UPSTREAM_ERROR_BYTES,
     PHASE_CONNECT,
     UPSTREAM_504,
     TransportFailure,
+    failure_from_exception,
+    http_error_message,
     protocol_fallback_allowed,
+    status_error_class,
+    upstream_http_failure,
 )
 
 
@@ -173,8 +166,6 @@ def urlopen(request: Request, timeout: float):
 
 
 MAX_UPSTREAM_BODY_BYTES = 16 * 1024 * 1024
-MAX_UPSTREAM_ERROR_BYTES = 4096
-MAX_UPSTREAM_ERROR_TEXT_CHARS = 512
 MAX_EXTERNAL_COMPACTION_SUMMARY_CHARS = 256 * 1024
 MAX_DISCOVERY_BODY_BYTES = 4 * 1024 * 1024
 MAX_DISCOVERY_TOTAL_BYTES = 8 * 1024 * 1024
@@ -201,101 +192,6 @@ _CONCRETE_PROTOCOLS = frozenset(
     {"responses", "chat_completions", "anthropic_messages"}
 )
 _REASONING_LEVEL_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-def _http_error_detail(exc: HTTPError, raw: Optional[bytes] = None) -> Tuple[str, str]:
-    """Return a bounded diagnostic without echoing an upstream HTML page."""
-    headers = getattr(exc, "headers", {}) or {}
-    content_type = str(headers.get("Content-Type", "")).split(";", 1)[0].strip().lower()
-    if raw is None:
-        raw = exc.read(MAX_UPSTREAM_ERROR_BYTES)
-    decoded = raw.decode("utf-8", "replace")
-    if content_type in ("text/html", "application/xhtml+xml") or re.match(
-        r"\s*(?:<!doctype\s+html|<html\b)", decoded, re.I
-    ):
-        return (
-            content_type or "text/html",
-            "HTML error page omitted; the upstream gateway or WAF may have rejected the request",
-        )
-
-    detail = decoded
-    if "json" in content_type or decoded.lstrip().startswith(("{", "[")):
-        try:
-            value = json.loads(decoded)
-        except ValueError:
-            pass
-        else:
-            if isinstance(value, dict):
-                detail = _upstream_error_text(value.get("error") or value.get("message") or value)
-            else:
-                detail = str(value)
-    detail = re.sub(r"\s+", " ", detail).strip()
-    if not detail:
-        detail = str(getattr(exc, "reason", "") or "no response detail")
-    if len(detail) > MAX_UPSTREAM_ERROR_TEXT_CHARS:
-        detail = detail[: MAX_UPSTREAM_ERROR_TEXT_CHARS - 3].rstrip() + "..."
-    return content_type or "unknown content type", detail
-
-
-def _http_error_message(prefix: str, exc: HTTPError) -> str:
-    content_type, detail = _http_error_detail(exc)
-    if content_type in {"text/html", "application/xhtml+xml"}:
-        return "%s %d (%s): %s" % (prefix, exc.code, content_type, detail)
-    return "%s %d (%s)" % (prefix, exc.code, content_type)
-
-
-def _upstream_failure_reason(status: int, detail: str) -> str:
-    text = re.sub(r"[^a-z0-9]+", " ", str(detail or "").lower()).strip()
-    if status in (401, 403):
-        return "auth_rejected"
-    if status == 402:
-        return "payment_required"
-    if status == 413 or any(
-        phrase in text
-        for phrase in ("request too large", "payload too large", "input too large")
-    ):
-        return "request_too_large"
-    if any(
-        phrase in text
-        for phrase in ("context length", "context window", "maximum context")
-    ):
-        return "context_length_exceeded"
-    if status == 429:
-        if any(word in text for word in ("quota", "credit", "balance", "insufficient")):
-            return "quota_exhausted"
-        if any(word in text for word in ("capacity", "overloaded", "saturated")):
-            return "upstream_capacity"
-        return "rate_limited"
-    if status == 504:
-        return UPSTREAM_504
-    if status in (500, 502, 503):
-        return "upstream_unavailable"
-    return "upstream_rejected"
-
-
-def _upstream_public_error(
-    status: int,
-    content_type: str,
-    detail: str,
-    model: Any,
-) -> str:
-    free_route = str(model or "").strip().lower().endswith(":free")
-    if status == 402:
-        message = (
-            "payment required: provider balance is insufficient or the selected "
-            "route is paid"
-        )
-        if free_route:
-            message += "; EMP did not fall back from :free to a paid model"
-        return message
-    if status == 429:
-        if free_route:
-            return "free quota exhausted or provider capacity is busy; retry later"
-        return "quota exhausted or provider capacity is busy; retry later"
-    message = "upstream returned %d (%s)" % (status, content_type)
-    if content_type in {"text/html", "application/xhtml+xml"}:
-        message += ": " + detail
-    return message
-
-
 def _set_response_timeout(response: Any, timeout: float) -> None:
     # urllib wraps a TLS socket differently across Python/proxy paths. A
     # typical chunked response is addinfourl.fp -> HTTPResponse.fp ->
@@ -522,121 +418,6 @@ _advertised_reasoning = _discovery_advertised_reasoning
 _advertised_reasoning_summaries = _discovery_advertised_reasoning_summaries
 
 
-def _native_route_model(
-    native: Mapping[str, Any], requested_id: str, upstream_id: str
-) -> Dict[str, Any]:
-    """Preserve Codex's native capability metadata on a routed model copy."""
-
-    model = copy.deepcopy(dict(native))
-    model["id"] = requested_id
-    model["upstream_id"] = upstream_id
-    try:
-        context_window = int(model.get("context_window", 0) or 0)
-    except (TypeError, ValueError):
-        context_window = 0
-    if context_window > 0:
-        raw_sources = model.get("capability_sources")
-        sources = copy.deepcopy(dict(raw_sources)) if isinstance(raw_sources, Mapping) else {}
-        if not isinstance(sources.get("context_window"), Mapping):
-            sources["context_window"] = make_provenance("official")
-        model["capability_sources"] = sources
-    return model
-
-
-def _native_catalog_route_model(
-    config: Dict[str, Any], requested_id: str, upstream_id: str
-) -> Optional[Dict[str, Any]]:
-    try:
-        native = load_native_catalog(config)
-    except Exception:
-        return None
-    for item in native.get("models", []):
-        if not isinstance(item, Mapping) or item.get("slug") != upstream_id:
-            continue
-        if item.get("supported_in_api", True) is False:
-            return None
-        return _native_route_model(item, requested_id, upstream_id)
-    return None
-
-def _implicit_native_route(
-    config: Dict[str, Any], model_id: str
-) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
-    if "/" in model_id:
-        return None
-    native = load_native_catalog(config)
-    for item in native.get("models", []):
-        if not isinstance(item, dict) or item.get("slug") != model_id:
-            continue
-        if item.get("supported_in_api", True) is False:
-            continue
-        provider = {
-            "id": "codex-native",
-            "name": "Native Codex",
-            "base_url": config.get(
-                "codex_base_url", "https://chatgpt.com/backend-api/codex"
-            ),
-            "protocol": "responses",
-            "auth_mode": "forward",
-            "implicit_native": True,
-        }
-        native_auth_path = config.get("_native_auth_path")
-        if isinstance(native_auth_path, str) and native_auth_path:
-            provider["_native_auth_path"] = native_auth_path
-        return provider, _native_route_model(item, model_id, model_id)
-    return None
-
-
-def find_route(config: Dict[str, Any], model_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    for model in config.get("models", []):
-        if model.get("enabled", True) and model.get("id") == model_id:
-            providers = {item["id"]: item for item in config.get("providers", [])}
-            provider = providers.get(model.get("provider"))
-            if provider and provider.get("enabled", True):
-                return provider, model
-            raise RouterError("provider for model is missing or disabled: %s" % model_id, 503)
-
-    for account in config.get("accounts", []):
-        prefix = str(account.get("prefix", "")) + "/"
-        if account.get("enabled", True) and prefix != "/" and model_id.startswith(prefix):
-            upstream_id = model_id[len(prefix):]
-            if not upstream_id:
-                break
-            provider = {
-                "id": account["id"],
-                "name": account.get("name", account["id"]),
-                "base_url": config.get("codex_base_url", "https://chatgpt.com/backend-api/codex"),
-                "protocol": "responses",
-                "auth_mode": "account",
-                "account": account,
-            }
-            model = _native_catalog_route_model(config, model_id, upstream_id)
-            return provider, model or {"id": model_id, "upstream_id": upstream_id}
-
-    forward = [
-        item
-        for item in config.get("providers", [])
-        if item.get("enabled", True) and item.get("auth_mode") == "forward"
-    ]
-    if len(forward) == 1:
-        return forward[0], {"id": model_id, "upstream_id": model_id}
-    if not forward:
-        implicit = _implicit_native_route(config, model_id)
-        if implicit is not None:
-            return implicit
-    raise RouterError("unknown model: %s" % model_id, 404)
-
-
-def resolved_upstream_model(
-    provider: Mapping[str, Any], model: Mapping[str, Any], requested: str
-) -> str:
-    explicit = model.get("upstream_id", "")
-    if explicit:
-        prefix = str(provider.get("id", "")) + "/"
-        return explicit[len(prefix):] if prefix != "/" and explicit.startswith(prefix) else explicit
-    prefix = provider.get("id", "") + "/"
-    return requested[len(prefix):] if requested.startswith(prefix) else requested
-
-
 def _endpoint(provider: Dict[str, Any], operation: str = "") -> str:
     provider = resolve_provider_protocol(provider)
     base = provider["base_url"].rstrip("/")
@@ -728,7 +509,7 @@ def _discovery_io() -> DiscoveryIO:
     return DiscoveryIO(
         open_url=urlopen,
         read_limited=_read_limited,
-        http_error_message=_http_error_message,
+        http_error_message=http_error_message,
         discovery_headers=_discovery_headers,
         anthropic_headers=_anthropic_discovery_headers,
     )
@@ -988,13 +769,12 @@ def _request(
                 else:
                     headers = None
                     continue
-            content_type, detail = _http_error_detail(exc, raw)
             if (
                 allow_retries
                 and attempt == 0
                 and exc.code == 400
                 and "reasoning_effort" in payload
-                and "reasoning_effort" in detail
+                and "reasoning_effort" in raw.decode("utf-8", "replace")
             ):
                 payload = dict(payload)
                 payload.pop("reasoning_effort", None)
@@ -1002,17 +782,11 @@ def _request(
                 provider["_transport_metadata"] = transport_metadata
                 headers = None
                 continue
-            failure_reason = _upstream_failure_reason(exc.code, detail)
-            public_message = _upstream_public_error(
-                exc.code,
-                content_type,
-                detail,
-                payload.get("model"),
-            )
+            failure = upstream_http_failure(exc, raw, payload.get("model"))
             raise UpstreamHTTPError(
-                public_message,
-                exc.code,
-                failure_reason,
+                failure.public_message or "upstream request failed",
+                failure.status,
+                failure.failure_reason or "upstream_rejected",
             )
         except URLError as exc:
             if transport_retry_allowed and attempt == 0:
@@ -1055,8 +829,15 @@ def forward_responses(
     incoming: Dict[str, str],
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
     allow_retries: bool = True,
+    upstream_model: Optional[str] = None,
 ) -> Tuple[int, str, bytes]:
-    payload = _responses_payload(provider, body, model)
+    adapter = protocol_adapter(classify_dialect(provider))
+    payload = adapter.project_request(
+        provider,
+        body,
+        model,
+        upstream_model or resolved_upstream_model(provider, model, body["model"]),
+    )
     with _request(
         provider,
         payload,
@@ -1068,43 +849,13 @@ def forward_responses(
         content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses 响应")
         _raise_if_context_response(provider, response.status, content_type, raw)
-        if classify_dialect(provider) == PORTABLE_RESPONSES:
-            try:
-                value = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, ValueError) as exc:
-                raise RouterError("upstream Responses response is not valid JSON", 502) from exc
-            if not isinstance(value, dict):
-                raise RouterError("upstream Responses response must be a JSON object", 502)
-            validate_responses_body(value)
-            try:
-                projected = project_response(
-                    provider,
-                    value,
-                    custom_names=custom_tool_names(body),
-                    preserve_reasoning_summary=model.get(
-                        "_emp_preserve_reasoning_summary"
-                    )
-                    is True,
-                    preserve_reasoning_state=model.get(
-                        "_emp_preserve_reasoning_state"
-                    )
-                    is True,
-                )
-            except ProjectionError as exc:
-                if exc.failure_class == "external_compaction":
-                    raise ExternalProtocolError(
-                        "external upstream returned an unexpected compaction item"
-                    ) from exc
-                raise ExternalProtocolError(
-                    "external upstream response projection failed"
-                ) from exc
-            validate_responses_body(projected)
-            raw = json.dumps(
-                projected,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        return response.status, content_type, raw
+        return (
+            response.status,
+            content_type,
+            adapter.normalize_response(
+                provider, raw, body["model"], body, model
+            ),
+        )
 
 
 def forward_responses_stream(
@@ -1115,8 +866,15 @@ def forward_responses_stream(
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
+    upstream_model: Optional[str] = None,
 ):
-    payload = _responses_payload(provider, body, model)
+    adapter = protocol_adapter(classify_dialect(provider))
+    payload = adapter.project_request(
+        provider,
+        body,
+        model,
+        upstream_model or resolved_upstream_model(provider, model, body["model"]),
+    )
     upstream = _bounded_stream_response(
         _request(
             provider,
@@ -1130,7 +888,7 @@ def forward_responses_stream(
     validated = _validated_responses_stream(upstream, terminal_callback, provider)
     if on_stream_event is not None:
         validated = _observing_stream(validated, on_stream_event)
-    if classify_dialect(provider) == PORTABLE_RESPONSES:
+    if adapter.dialect == PORTABLE_RESPONSES:
         return _project_responses_stream(
             provider,
             validated,
@@ -1248,8 +1006,15 @@ def forward_responses_compact(
     model: Dict[str, Any],
     incoming: Dict[str, str],
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+    upstream_model: Optional[str] = None,
 ) -> Tuple[int, str, bytes]:
-    payload = _responses_payload(provider, body, model)
+    adapter = protocol_adapter(classify_dialect(provider))
+    payload = adapter.project_request(
+        provider,
+        body,
+        model,
+        upstream_model or resolved_upstream_model(provider, model, body["model"]),
+    )
     with _request(
         provider,
         payload,
@@ -1262,28 +1027,6 @@ def forward_responses_compact(
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses compact response")
         _raise_if_context_response(provider, response.status, content_type, raw)
         return response.status, content_type, raw
-
-
-def _body_with_supported_effort(
-    provider: Mapping[str, Any], body: Mapping[str, Any], model: Mapping[str, Any]
-) -> Dict[str, Any]:
-    projected = dict(body)
-    if provider.get("auth_mode") in {"account", "forward"}:
-        return projected
-    reasoning = projected.get("reasoning")
-    if not isinstance(reasoning, Mapping) or "effort" not in reasoning:
-        return projected
-    levels = model.get("reasoning_levels")
-    effort = reasoning.get("effort")
-    if isinstance(levels, list) and effort in levels:
-        return projected
-    reasoning = dict(reasoning)
-    reasoning.pop("effort", None)
-    if reasoning:
-        projected["reasoning"] = reasoning
-    else:
-        projected.pop("reasoning", None)
-    return projected
 
 
 def _reasoning_summary_policy(
@@ -1335,38 +1078,24 @@ def _prepare_reasoning_summary_route(
     return projected
 
 
-def _responses_payload(
-    provider: Dict[str, Any], body: Dict[str, Any], model: Dict[str, Any]
-) -> Dict[str, Any]:
-    try:
-        payload = project_request(
-            provider,
-            _body_with_supported_effort(provider, body, model),
-            preserve_reasoning_state=model.get("_emp_preserve_reasoning_state")
-            is True,
-        )
-    except ProjectionError as exc:
-        if exc.failure_class in {"opaque_compaction", "invalid_compaction"}:
-            raise HistoryReconstructionError("history_projection_incomplete") from exc
-        raise RouterError(str(exc), 422) from exc
-    payload["model"] = resolved_upstream_model(provider, model, body["model"])
-    return payload
-
-
 def _preflight_history_projection(
-    provider: Dict[str, Any], body: Dict[str, Any], model: Dict[str, Any]
+    provider: Dict[str, Any],
+    body: Dict[str, Any],
+    model: Dict[str, Any],
+    upstream_model: Optional[str] = None,
+    dialect: Optional[str] = None,
 ) -> None:
     """Raise history failures before a lazy stream adapter starts."""
 
     try:
-        if provider.get("protocol") == "responses":
-            _responses_payload(provider, body, model)
-        elif provider.get("protocol") == "chat_completions":
-            responses_to_chat(body, resolved_upstream_model(provider, model, body["model"]))
-        elif provider.get("protocol") == "anthropic_messages":
-            responses_to_anthropic(
-                body, resolved_upstream_model(provider, model, body["model"])
-            )
+        adapter = protocol_adapter(dialect or classify_dialect(provider))
+        adapter.project_request(
+            provider,
+            body,
+            model,
+            upstream_model
+            or resolved_upstream_model(provider, model, body["model"]),
+        )
     except HistoryReconstructionError:
         raise
     except RouterError:
@@ -1375,23 +1104,22 @@ def _preflight_history_projection(
 
 
 def _destination_context_payload(
-    provider: Dict[str, Any], body: Dict[str, Any], model: Dict[str, Any]
+    provider: Dict[str, Any],
+    body: Dict[str, Any],
+    model: Dict[str, Any],
+    upstream_model: Optional[str] = None,
+    dialect: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Project the exact logical body that ContextGuard must judge."""
 
-    protocol = provider.get("protocol")
-    if protocol == "responses":
-        return _responses_payload(provider, body, model)
-    if protocol == "chat_completions":
-        supported = _body_with_supported_effort(provider, body, model)
-        return responses_to_chat(
-            supported, resolved_upstream_model(provider, model, body["model"])
-        )
-    if protocol == "anthropic_messages":
-        return responses_to_anthropic(
-            body, resolved_upstream_model(provider, model, body["model"])
-        )
-    raise RouterError("provider protocol is unresolved", 502)
+    adapter = protocol_adapter(dialect or classify_dialect(provider))
+    return adapter.project_request(
+        provider,
+        body,
+        model,
+        upstream_model
+        or resolved_upstream_model(provider, model, body["model"]),
+    )
 
 
 def _fit_destination_context(
@@ -1404,6 +1132,8 @@ def _fit_destination_context(
     ],
     destination_compactor: Optional[DestinationCompactionCallback],
     operation: str = "",
+    dialect: Optional[str] = None,
+    upstream_model: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Guard the final projection, compact once when blocked, then re-check."""
 
@@ -1414,10 +1144,13 @@ def _fit_destination_context(
     def assess(candidate: Dict[str, Any]) -> Dict[str, Any]:
         logical = (
             _summary_body(candidate)
-            if operation == "compact" and classify_dialect(provider) != CODEX_NATIVE
+            if operation == "compact"
+            and (dialect or classify_dialect(provider)) != CODEX_NATIVE
             else candidate
         )
-        payload = _destination_context_payload(provider, logical, model)
+        payload = _destination_context_payload(
+            provider, logical, model, upstream_model, dialect
+        )
         observed = context_check(
             payload,
             bool(candidate.get("stream")),
@@ -1436,7 +1169,7 @@ def _fit_destination_context(
                 exc.assessment.to_safe_dict(), preflight=True
             ) from exc
         if (
-            classify_dialect(provider) == CODEX_NATIVE
+            (dialect or classify_dialect(provider)) == CODEX_NATIVE
             or destination_compactor is None
         ):
             raise ContextLengthError(
@@ -1477,6 +1210,7 @@ def prepare_native_websocket_request(
     history_preparer: Optional[HistoryPreparationCallback] = None,
     destination_compactor: Optional[DestinationCompactionCallback] = None,
     transport_incremental: bool = False,
+    resolved_route: Optional[ResolvedRoute] = None,
 ) -> Optional[NativeWebSocketPlan]:
     """Prepare one native Responses WebSocket request without sending it.
 
@@ -1488,10 +1222,12 @@ def prepare_native_websocket_request(
     model_id = body.get("model")
     if not isinstance(model_id, str) or not model_id:
         raise RouterError("request.model is required")
-    provider, model = find_route(config, model_id)
-    provider = dict(provider)
-    model = dict(model)
-    if provider.get("protocol") != "responses" or classify_dialect(provider) != CODEX_NATIVE:
+    route = resolved_route or resolve_route(config, model_id)
+    if route.requested_model != model_id:
+        raise RouterError("resolved route does not match request.model", 500)
+    provider = route.provider_copy()
+    model = route.model_copy()
+    if route.protocol != "responses" or route.dialect != CODEX_NATIVE:
         return None
     prepared = _prepare_reasoning_summary_route(
         config, provider, model, model_id, body
@@ -1514,13 +1250,15 @@ def prepare_native_websocket_request(
         prepared,
         context_check,
         destination_compactor,
+        dialect=route.dialect,
+        upstream_model=route.upstream_model,
     )
-    payload = _responses_payload(provider, prepared, model)
+    payload = protocol_adapter(route.dialect).project_request(
+        provider, prepared, model, route.upstream_model
+    )
     try:
         full_headers, identity_headers = _native_route_headers(provider, incoming)
-        identity = _native_route_identity(
-            provider, model, model_id, identity_headers
-        )
+        identity = _native_route_identity(route, identity_headers)
     except (AccountError, NativeIdentityError, KeyError, TypeError):
         # HTTP forwarding remains the compatibility path when a stable native
         # connection identity cannot be proven.
@@ -1558,10 +1296,14 @@ def chat_completion(
     incoming: Dict[str, str],
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
     allow_retries: bool = True,
+    upstream_model: Optional[str] = None,
 ) -> Tuple[int, str, bytes]:
-    body = _body_with_supported_effort(provider, body, model)
-    payload = responses_to_chat(
-        body, resolved_upstream_model(provider, model, body["model"])
+    adapter = protocol_adapter(classify_dialect(provider))
+    payload = adapter.project_request(
+        provider,
+        body,
+        model,
+        upstream_model or resolved_upstream_model(provider, model, body["model"]),
     )
     with _request(
         provider,
@@ -1574,17 +1316,11 @@ def chat_completion(
         content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Chat Completions 响应")
     _raise_if_context_response(provider, response.status, content_type, raw)
-    try:
-        value = json.loads(raw.decode("utf-8"))
-    except ValueError:
-        raise RouterError("chat-completions upstream returned invalid JSON", 502)
-    return 200, "application/json", json.dumps(
-        _response_from_chat(
-            value,
-            body["model"],
-            custom_names=custom_tool_names(body),
-        )
-    ).encode("utf-8")
+    return (
+        200,
+        "application/json",
+        adapter.normalize_response(provider, raw, body["model"], body, model),
+    )
 
 
 def anthropic_completion(
@@ -1594,9 +1330,14 @@ def anthropic_completion(
     incoming: Dict[str, str],
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
     allow_retries: bool = True,
+    upstream_model: Optional[str] = None,
 ) -> Tuple[int, str, bytes]:
-    payload = responses_to_anthropic(
-        body, resolved_upstream_model(provider, model, body["model"])
+    adapter = protocol_adapter(classify_dialect(provider))
+    payload = adapter.project_request(
+        provider,
+        body,
+        model,
+        upstream_model or resolved_upstream_model(provider, model, body["model"]),
     )
     with _request(
         provider,
@@ -1609,15 +1350,11 @@ def anthropic_completion(
         content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Anthropic 响应")
     _raise_if_context_response(provider, response.status, content_type, raw)
-    try:
-        value = json.loads(raw.decode("utf-8"))
-    except ValueError:
-        raise RouterError("Anthropic upstream returned invalid JSON", 502)
-    return 200, "application/json", json.dumps(
-        _response_from_anthropic(
-            value, body["model"], custom_names=custom_tool_names(body)
-        )
-    ).encode("utf-8")
+    return (
+        200,
+        "application/json",
+        adapter.normalize_response(provider, raw, body["model"], body, model),
+    )
 
 
 def _response_text(raw: bytes) -> str:
@@ -1667,6 +1404,7 @@ def _summarize(
     model: Dict[str, Any],
     incoming: Dict[str, str],
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+    upstream_model: Optional[str] = None,
 ) -> str:
     payload = _summary_body(body)
     if provider["protocol"] == "responses":
@@ -1677,6 +1415,7 @@ def _summarize(
             incoming,
             context_check=context_check,
             allow_retries=False,
+            upstream_model=upstream_model,
         )
     elif provider["protocol"] == "chat_completions":
         _, _, raw = chat_completion(
@@ -1686,6 +1425,7 @@ def _summarize(
             incoming,
             context_check=context_check,
             allow_retries=False,
+            upstream_model=upstream_model,
         )
     else:
         _, _, raw = anthropic_completion(
@@ -1695,6 +1435,7 @@ def _summarize(
             incoming,
             context_check=context_check,
             allow_retries=False,
+            upstream_model=upstream_model,
         )
     return _response_text(raw)
 
@@ -1707,10 +1448,13 @@ def _external_compaction_response(
     context_check: Optional[
         Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]
     ] = None,
+    upstream_model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Ask the selected external model for one summary and wrap it for Codex."""
 
-    summary = _summarize(provider, body, model, incoming, context_check)
+    summary = _summarize(
+        provider, body, model, incoming, context_check, upstream_model
+    )
     return _compaction_response(body["model"], summary)
 
 
@@ -1767,8 +1511,7 @@ def _stream_adapter_io() -> StreamAdapterIO:
         request=_request,
         read_limited=_read_limited,
         raise_if_context_response=_raise_if_context_response,
-        body_with_supported_effort=_body_with_supported_effort,
-        upstream_model=resolved_upstream_model,
+        body_with_supported_effort=body_with_supported_effort,
     )
 
 
@@ -1791,6 +1534,7 @@ def stream_chat_completion(
     context_check: Optional[
         Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]
     ] = None,
+    upstream_model: Optional[str] = None,
 ) -> Iterable[bytes]:
     return _owned_stream_chat_completion(
         _stream_adapter_io(),
@@ -1798,6 +1542,8 @@ def stream_chat_completion(
         body,
         model,
         incoming,
+        upstream_model
+        or resolved_upstream_model(provider, model, body["model"]),
         terminal_callback,
         context_check,
     )
@@ -1812,6 +1558,7 @@ def stream_anthropic_completion(
     context_check: Optional[
         Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]
     ] = None,
+    upstream_model: Optional[str] = None,
 ) -> Iterable[bytes]:
     return _owned_stream_anthropic_completion(
         _stream_adapter_io(),
@@ -1819,6 +1566,8 @@ def stream_anthropic_completion(
         body,
         model,
         incoming,
+        upstream_model
+        or resolved_upstream_model(provider, model, body["model"]),
         terminal_callback,
         context_check,
     )
@@ -1920,7 +1669,7 @@ def _route_event(
     event["error_class"] = (
         "none"
         if event["success"]
-        else terminal.get("error_class") or _route_error_class(status)
+        else terminal.get("error_class") or status_error_class(status)
     )
     event["endpoint_fingerprint"] = endpoint_fingerprint(provider.get("base_url"))
     event["deployment_identity"] = deployment_identity(provider, model)
@@ -2011,7 +1760,7 @@ def _stream_signal(chunk: Any) -> Optional[Dict[str, Any]]:
             return {
                 "success": False,
                 "status": status,
-                "error_class": _route_error_class(status),
+                "error_class": status_error_class(status),
             }
     return None
 
@@ -2052,7 +1801,8 @@ def _observed_stream(
         raise
     except Exception as exc:
         if not terminal or terminal.get("success") is not True:
-            status, error_class = _stream_exception(exc)
+            failure = failure_from_exception(exc)
+            status, error_class = failure.status, failure.error_class
             terminal.update(
                 {"success": False, "status": status, "error_class": error_class}
             )
@@ -2077,7 +1827,7 @@ def _observed_stream(
 
 def _auto_stream_result(
     candidates: Tuple[str, ...],
-    provider: Dict[str, Any],
+    route: ResolvedRoute,
     model: Dict[str, Any],
     body: Dict[str, Any],
     incoming: Dict[str, str],
@@ -2088,8 +1838,8 @@ def _auto_stream_result(
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Iterator[bytes]:
     for index, protocol in enumerate(candidates):
-        resolved = dict(provider)
-        resolved["protocol"] = protocol
+        candidate_route = route.with_protocol(protocol)
+        resolved = candidate_route.provider_copy()
         candidate_decision = "fallback_rejection" if index else decision
         metadata = _tag_route(
             {"kind": "stream", "status": 200, "content_type": "text/event-stream"},
@@ -2108,6 +1858,7 @@ def _auto_stream_result(
         closed_by_caller = False
         try:
             _, result = _proxy_resolved(
+                candidate_route,
                 resolved,
                 model,
                 body,
@@ -2170,7 +1921,7 @@ def _auto_stream_result(
                         metadata,
                         resolved,
                         model,
-                        _terminal_exception(exc),
+                        failure_from_exception(exc).terminal(),
                         response_bytes,
                     ),
                 )
@@ -2178,7 +1929,8 @@ def _auto_stream_result(
             raise
         except Exception as exc:
             if callback is not None and not reported:
-                status, error_class = _stream_exception(exc)
+                failure = failure_from_exception(exc)
+                status, error_class = failure.status, failure.error_class
                 _emit_observation(
                     callback,
                     _route_event(
@@ -2263,16 +2015,14 @@ def _native_route_headers(
 
 
 def _native_route_identity(
-    provider: Mapping[str, Any],
-    model: Mapping[str, Any],
-    requested_slug: str,
+    route: ResolvedRoute,
     identity_headers: Mapping[str, str],
 ):
     return derive_native_route_identity(
         identity_headers,
-        provider.get("base_url"),
-        deployment_identity(provider, model),
-        resolved_upstream_model(provider, model, requested_slug),
+        route.provider.get("base_url"),
+        route.deployment_identity,
+        route.upstream_model,
     )
 
 
@@ -2316,6 +2066,7 @@ def _prepare_continuity_body(
 
 
 def _proxy_resolved(
+    route: ResolvedRoute,
     provider: Dict[str, Any],
     model: Dict[str, Any],
     body: Dict[str, Any],
@@ -2327,10 +2078,11 @@ def _proxy_resolved(
     destination_compactor: Optional[DestinationCompactionCallback] = None,
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Tuple[Dict[str, Any], Any]:
-    requested_slug = str(body.get("model") or "")
+    adapter = protocol_adapter(route.dialect)
+    requested_slug = route.requested_model
     external_compaction = (
         _is_compaction_trigger(body)
-        and classify_dialect(provider) != CODEX_NATIVE
+        and not adapter.native
     )
     body, _ = _fit_destination_context(
         provider,
@@ -2340,10 +2092,12 @@ def _proxy_resolved(
         context_check,
         destination_compactor,
         operation="compact" if external_compaction else "",
+        dialect=route.dialect,
+        upstream_model=route.upstream_model,
     )
     if external_compaction:
         response = _external_compaction_response(
-            provider, body, model, incoming, None
+            provider, body, model, incoming, None, route.upstream_model
         )
         if body.get("stream"):
             return _tag_route(
@@ -2370,8 +2124,10 @@ def _proxy_resolved(
             fallback,
             request=body,
         ), json.dumps(response, ensure_ascii=False).encode("utf-8")
-    if body.get("stream") and provider["protocol"] == "chat_completions":
-        _preflight_history_projection(provider, body, model)
+    if body.get("stream") and adapter.protocol == "chat_completions":
+        _preflight_history_projection(
+            provider, body, model, route.upstream_model, route.dialect
+        )
         return _tag_route(
             {"kind": "stream", "status": 200, "content_type": "text/event-stream"},
             provider,
@@ -2381,13 +2137,21 @@ def _proxy_resolved(
             request=body,
         ), _reliable_responses_stream(
             lambda: stream_chat_completion(
-                provider, body, model, incoming, None, None
+                provider,
+                body,
+                model,
+                incoming,
+                None,
+                None,
+                route.upstream_model,
             ),
             terminal_callback,
-            replay_safe=classify_dialect(provider) != CODEX_NATIVE,
+            replay_safe=adapter.replay_safe,
         )
-    if body.get("stream") and provider["protocol"] == "anthropic_messages":
-        _preflight_history_projection(provider, body, model)
+    if body.get("stream") and adapter.protocol == "anthropic_messages":
+        _preflight_history_projection(
+            provider, body, model, route.upstream_model, route.dialect
+        )
         return _tag_route(
             {"kind": "stream", "status": 200, "content_type": "text/event-stream"},
             provider,
@@ -2397,21 +2161,30 @@ def _proxy_resolved(
             request=body,
         ), _reliable_responses_stream(
             lambda: stream_anthropic_completion(
-                provider, body, model, incoming, None, None
+                provider,
+                body,
+                model,
+                incoming,
+                None,
+                None,
+                route.upstream_model,
             ),
             terminal_callback,
-            replay_safe=classify_dialect(provider) != CODEX_NATIVE,
+            replay_safe=adapter.replay_safe,
         )
-    if provider["protocol"] == "responses":
+    if adapter.protocol == "responses":
         if body.get("stream"):
-            _preflight_history_projection(provider, body, model)
+            _preflight_history_projection(
+                provider, body, model, route.upstream_model, route.dialect
+            )
             upstream = _reliable_responses_stream(
                 lambda: forward_responses_stream(
                     provider, body, model, incoming, None, None,
                     on_stream_event=on_stream_event,
+                    upstream_model=route.upstream_model,
                 ),
                 terminal_callback,
-                replay_safe=classify_dialect(provider) != CODEX_NATIVE,
+                replay_safe=adapter.replay_safe,
             )
             return _tag_route(
                 {
@@ -2426,12 +2199,31 @@ def _proxy_resolved(
                 request=body,
             ), upstream
         status, content_type, raw = forward_responses(
-            provider, body, model, incoming, None
+            provider,
+            body,
+            model,
+            incoming,
+            None,
+            upstream_model=route.upstream_model,
         )
-    elif provider["protocol"] == "chat_completions":
-        status, content_type, raw = chat_completion(provider, body, model, incoming, None)
+    elif adapter.protocol == "chat_completions":
+        status, content_type, raw = chat_completion(
+            provider,
+            body,
+            model,
+            incoming,
+            None,
+            upstream_model=route.upstream_model,
+        )
     else:
-        status, content_type, raw = anthropic_completion(provider, body, model, incoming, None)
+        status, content_type, raw = anthropic_completion(
+            provider,
+            body,
+            model,
+            incoming,
+            None,
+            upstream_model=route.upstream_model,
+        )
     return _tag_route(
         {"kind": "body", "status": status, "content_type": content_type},
         provider,
@@ -2453,7 +2245,7 @@ def _finish_nonstream(
         return
     response_bytes = len(result) if isinstance(result, (bytes, bytearray)) else 0
     terminal: Dict[str, Any] = {}
-    if classify_dialect(provider) != CODEX_NATIVE and isinstance(
+    if metadata.get("dialect") != CODEX_NATIVE and isinstance(
         result, (bytes, bytearray)
     ):
         try:
@@ -2487,13 +2279,16 @@ def proxy(
     history_preparer: Optional[HistoryPreparationCallback] = None,
     destination_compactor: Optional[DestinationCompactionCallback] = None,
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
+    resolved_route: Optional[ResolvedRoute] = None,
 ) -> Tuple[Dict[str, Any], Any]:
     model_id = body.get("model")
     if not isinstance(model_id, str) or not model_id:
         raise RouterError("request.model is required")
-    provider, model = find_route(config, model_id)
-    provider = dict(provider)
-    model = dict(model)
+    route = resolved_route or resolve_route(config, model_id)
+    if route.requested_model != model_id:
+        raise RouterError("resolved route does not match request.model", 500)
+    provider = route.provider_copy()
+    model = route.model_copy()
     body = _prepare_reasoning_summary_route(
         config, provider, model, model_id, body
     )
@@ -2533,7 +2328,7 @@ def proxy(
                 ),
                 provider,
                 model,
-                _terminal_exception(exc),
+                failure_from_exception(exc).terminal(),
             ),
         )
         raise
@@ -2541,6 +2336,7 @@ def proxy(
         terminal: Dict[str, Any] = {}
         try:
             metadata, result = _proxy_resolved(
+                route,
                 provider,
                 model,
                 body,
@@ -2562,7 +2358,7 @@ def proxy(
                     ),
                     provider,
                     model,
-                    _terminal_exception(exc),
+                    failure_from_exception(exc).terminal(),
                 ),
             )
             raise
@@ -2597,7 +2393,7 @@ def proxy(
         )
         result = _auto_stream_result(
             candidates,
-            provider,
+            route,
             model,
             body,
             incoming,
@@ -2611,11 +2407,12 @@ def proxy(
         return metadata, result
 
     for index, protocol in enumerate(candidates):
-        resolved = dict(provider)
-        resolved["protocol"] = protocol
+        candidate_route = route.with_protocol(protocol)
+        resolved = candidate_route.provider_copy()
         candidate_decision = "fallback_rejection" if index else decision
         try:
             metadata, result = _proxy_resolved(
+                candidate_route,
                 resolved,
                 model,
                 body,
@@ -2641,7 +2438,7 @@ def proxy(
                     ),
                     resolved,
                     model,
-                        _terminal_exception(exc),
+                        failure_from_exception(exc).terminal(),
                 ),
             )
             raise
@@ -2663,13 +2460,16 @@ def proxy_compact(
     on_context: Optional[Callable[..., Mapping[str, Any]]] = None,
     history_preparer: Optional[HistoryPreparationCallback] = None,
     destination_compactor: Optional[DestinationCompactionCallback] = None,
+    resolved_route: Optional[ResolvedRoute] = None,
 ) -> Tuple[Dict[str, Any], bytes]:
     model_id = body.get("model")
     if not isinstance(model_id, str) or not model_id:
         raise RouterError("request.model is required")
-    provider, model = find_route(config, model_id)
-    provider = dict(provider)
-    model = dict(model)
+    route = resolved_route or resolve_route(config, model_id)
+    if route.requested_model != model_id:
+        raise RouterError("resolved route does not match request.model", 500)
+    provider = route.provider_copy()
+    model = route.model_copy()
     try:
         body = _prepare_continuity_body(
             config,
@@ -2692,7 +2492,7 @@ def proxy_compact(
                 ),
                 provider,
                 model,
-                _terminal_exception(exc),
+                failure_from_exception(exc).terminal(),
             ),
         )
         raise
@@ -2706,8 +2506,11 @@ def proxy_compact(
                 _bind_context_check(provider, model, on_context),
                 destination_compactor,
                 operation="compact",
+                dialect=route.dialect,
+                upstream_model=route.upstream_model,
             )
             metadata, raw = _proxy_compact_resolved(
+                route,
                 provider,
                 model,
                 body,
@@ -2726,7 +2529,7 @@ def proxy_compact(
                     ),
                     provider,
                     model,
-                    _terminal_exception(exc),
+                    failure_from_exception(exc).terminal(),
                 ),
             )
             raise
@@ -2736,8 +2539,8 @@ def proxy_compact(
     candidates = _auto_protocol_candidates(provider, model)
     decision = "observed_priority" if observed and candidates[0] == observed else "normal_order"
     for index, protocol in enumerate(candidates):
-        resolved = dict(provider)
-        resolved["protocol"] = protocol
+        candidate_route = route.with_protocol(protocol)
+        resolved = candidate_route.provider_copy()
         candidate_decision = "fallback_rejection" if index else decision
         try:
             candidate_body, _ = _fit_destination_context(
@@ -2748,8 +2551,11 @@ def proxy_compact(
                 _bind_context_check(resolved, model, on_context),
                 destination_compactor,
                 operation="compact",
+                dialect=candidate_route.dialect,
+                upstream_model=candidate_route.upstream_model,
             )
             metadata, raw = _proxy_compact_resolved(
+                candidate_route,
                 resolved,
                 model,
                 candidate_body,
@@ -2774,7 +2580,7 @@ def proxy_compact(
                     ),
                     resolved,
                     model,
-                        _terminal_exception(exc),
+                        failure_from_exception(exc).terminal(),
                 ),
             )
             raise
@@ -2789,6 +2595,7 @@ def proxy_compact(
 
 
 def _proxy_compact_resolved(
+    route: ResolvedRoute,
     provider: Dict[str, Any],
     model: Dict[str, Any],
     body: Dict[str, Any],
@@ -2797,15 +2604,26 @@ def _proxy_compact_resolved(
     fallback: bool = False,
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
 ) -> Tuple[Dict[str, Any], bytes]:
-    if classify_dialect(provider) == CODEX_NATIVE:
+    adapter = protocol_adapter(route.dialect)
+    if adapter.native:
         status, content_type, raw = forward_responses_compact(
-            provider, body, model, incoming, context_check
+            provider,
+            body,
+            model,
+            incoming,
+            context_check,
+            route.upstream_model,
         )
     else:
         status, content_type = 200, "application/json"
         raw = json.dumps(
             _external_compaction_response(
-                provider, body, model, incoming, context_check
+                provider,
+                body,
+                model,
+                incoming,
+                context_check,
+                route.upstream_model,
             ),
             ensure_ascii=False,
         ).encode("utf-8")

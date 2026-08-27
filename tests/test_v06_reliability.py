@@ -17,6 +17,7 @@ from easy_multi_provider.router import (
     _response_failure_frame,
     _sse_frame,
 )
+from easy_multi_provider.route_plan import EXPLICIT_MODEL, ResolvedRoute
 from easy_multi_provider.server import AppState, BoundedThreadingHTTPServer, ObservationRing, make_handler
 from easy_multi_provider.transport import WebSocketConnection, sse_json_events
 from easy_multi_provider.transport_failures import (
@@ -225,14 +226,18 @@ class StreamReliabilityTests(unittest.TestCase):
         }
         model = {"id": "provider-fixture/model-fixture", "upstream_id": "model-fixture"}
         body = {"model": model["id"], "input": [], "stream": True}
+        route = ResolvedRoute.from_parts(
+            model["id"], provider, model, EXPLICIT_MODEL
+        )
 
         with patch(
             "easy_multi_provider.router.forward_responses_stream",
             side_effect=[first, second],
         ) as upstream:
             metadata, result = router._proxy_resolved(
-                provider,
-                model,
+                route,
+                route.provider_copy(),
+                route.model_copy(),
                 body,
                 {},
                 terminal_callback=terminals.append,

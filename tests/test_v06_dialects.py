@@ -479,7 +479,15 @@ class ResponsesDialectTests(unittest.TestCase):
         first_entered = threading.Event()
         release_first = threading.Event()
 
-        def forward(_provider, body, _model, _incoming, _context_check=None):
+        def forward(
+            _provider,
+            body,
+            _model,
+            _incoming,
+            _context_check=None,
+            **request_options,
+        ):
+            self.assertEqual(request_options["upstream_model"], "model-fixture")
             if len(body["input"]) == 1:
                 first_entered.set()
                 self.assertTrue(release_first.wait(2))

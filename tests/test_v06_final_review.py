@@ -8,6 +8,8 @@ from cryptography.fernet import Fernet
 
 from easy_multi_provider import router, stream_adapters
 from easy_multi_provider.model_discovery import created_timestamp
+from easy_multi_provider.protocol_adapters import protocol_adapter
+from easy_multi_provider.dialects import PORTABLE_RESPONSES
 from easy_multi_provider.protocol_projection import (
     _advance_textual_protocol_probe,
     _anthropic_incomplete_reason,
@@ -341,7 +343,9 @@ class FinalReviewRegressionTests(unittest.TestCase):
         prepared = router._prepare_reasoning_summary_route(
             {}, provider, model, body["model"], body
         )
-        payload = router._responses_payload(provider, prepared, model)
+        payload = protocol_adapter(PORTABLE_RESPONSES).project_request(
+            provider, prepared, model, "model"
+        )
         self.assertNotIn("provider-a-opaque", json.dumps(payload))
 
     def test_chat_stream_requires_done_and_tool_indexes_are_contiguous(self):

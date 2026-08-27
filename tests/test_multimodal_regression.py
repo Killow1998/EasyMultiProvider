@@ -7,7 +7,8 @@ from unittest.mock import patch
 import easy_multi_provider.router as router
 from easy_multi_provider.catalog import build_catalog, write_catalog
 from easy_multi_provider.config import load, normalize, save
-from easy_multi_provider.router import discover_models, forward_responses, responses_to_chat
+from easy_multi_provider.protocol_projection import responses_to_chat
+from easy_multi_provider.router import discover_models, forward_responses
 from easy_multi_provider.server import AppState
 
 

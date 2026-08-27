@@ -13,7 +13,8 @@ from easy_multi_provider.codex_runtime import (
 )
 from easy_multi_provider.config import normalize, save
 from easy_multi_provider.integration import IntegrationManager
-from easy_multi_provider.server import AppState, _integration_summary
+from easy_multi_provider.integration_views import integration_summary
+from easy_multi_provider.server import AppState
 
 
 class RecordingRuntimeController:
@@ -95,7 +96,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
         state.refresh_catalog()
 
         self.assertEqual(runtime.calls, [])
-        summary = _integration_summary(state)
+        summary = integration_summary(state)
         self.assertEqual(summary["runtime"]["state"], RELOAD_REQUIRED)
         self.assertEqual(summary["runtime"]["target"], "emp")
         persisted = json.loads(
@@ -115,7 +116,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
 
         self.assertEqual(result.state, EMP_LOADED)
         self.assertEqual(runtime.calls, [(('external/model-a',), "emp", True)])
-        summary = _integration_summary(state)
+        summary = integration_summary(state)
         self.assertEqual(summary["runtime"]["state"], EMP_LOADED)
         self.assertEqual(summary["runtime"]["confidence"], "live")
 
@@ -162,7 +163,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
             catalog_path=root / "catalog.json",
             runtime_controller=runtime,
         )
-        summary = _integration_summary(reopened)
+        summary = integration_summary(reopened)
 
         self.assertEqual(summary["runtime"]["state"], RELOAD_REQUIRED)
         self.assertEqual(summary["runtime"]["confidence"], "stale")

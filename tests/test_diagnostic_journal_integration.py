@@ -484,7 +484,7 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
                 def fail_route(*args, **kwargs):
                     raise RuntimeError("route failure secret")
 
-                state.route = fail_route
+                state.codex.route = fail_route
                 with patch(
                     "easy_multi_provider.server.valid_caller_authorization",
                     return_value=True,
@@ -515,7 +515,7 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
             def fail_delete(*args, **kwargs):
                 raise OSError("DELETE-EXCEPTION-SECRET")
 
-            state.route = fail_route
+            state.codex.route = fail_route
             state.delete_account = fail_delete
             with running_server(state) as server:
                 with patch(
@@ -565,7 +565,7 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
             journal = CapturingJournal()
             state = self.make_state(root, journal=journal)
             chunk = b'data: {"type": "response.failed"}\n\n'
-            state.route = lambda *args, **kwargs: (
+            state.codex.route = lambda *args, **kwargs: (
                 {"kind": "stream", "content_type": "text/event-stream"},
                 iter([chunk]),
             )
@@ -972,7 +972,7 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
             }
             with running_server(state) as server:
                 with patch(
-                    "easy_multi_provider.server._integration_summary",
+                    "easy_multi_provider.server.integration_summary",
                     return_value=summary,
                 ):
                     confirmation_status, _ = request(

@@ -35,7 +35,6 @@ from .accounts import (
 from .catalog import (
     build_catalog,
     generated_catalog_path,
-    subscription_model_options,
     write_catalog,
 )
 from .capabilities import (
@@ -48,16 +47,14 @@ from .capabilities import (
     normalize_supported_protocols,
     observed_at_now,
     output_modalities_metadata_source,
-    safe_capability_list,
 )
-from .codex_history import HistoryError
+from .codex_dispatch import CodexRequestDispatcher
 from .config import (
     MAX_CONTEXT_WINDOW,
     ConfigError,
     config_path,
     load,
     merge_web_update,
-    public_config,
     save,
 )
 from .codex_runtime import (
@@ -75,7 +72,7 @@ from .codex_runtime import (
     RuntimeSyncResult,
     offline_runtime_snapshot,
 )
-from .context_guard import ContextGuard, ContextGuardBlocked
+from .context_guard import ContextGuard
 from .diagnostic_journal import NullJournal, create_journal
 from .destination_summary import DestinationSummaryAdapter
 from .destination_context import DestinationContextCompactor
@@ -88,8 +85,19 @@ from .integration import (
     ServiceNotReady,
     _FileLock,
 )
+from .integration_views import (
+    bound_base_url,
+    integration_error_message,
+    integration_summary,
+    integration_target,
+    startup_target_conflict,
+)
 from .main import resolve_integration_paths
 from .migration import export_bundle, import_bundle
+from .management_views import (
+    management_capabilities,
+    management_config,
+)
 from .native_websocket import (
     NativeWebSocketBridge,
     NativeWebSocketError,
@@ -97,24 +105,18 @@ from .native_websocket import (
     terminal_observation as native_websocket_terminal,
 )
 from .quota import QuotaError, account_refresh_lock, read_native_login_quota, refresh_account_quota
-from .provider_replay import ProviderReplayCache, ProviderReplayScope
+from .provider_replay import ProviderReplayCache
 from .history_continuity import (
     CodexHomeHistoryReader,
     HistoryContinuityEngine,
-    request_history_anchor,
 )
 from .router import (
     ContextLengthError,
     HistoryReconstructionError,
     RouterError,
     discover_models,
-    find_route,
     forward_native_search,
     model_metadata,
-    prepare_native_websocket_request,
-    proxy,
-    proxy_compact,
-    resolved_upstream_model,
 )
 from .transport import (
     TransportError,
@@ -124,6 +126,7 @@ from .transport import (
     sse_json_events,
     websocket_accept,
 )
+from .transport_failures import status_error_class
 from .transport_continuity import (
     PREVIOUS_RESPONSE_NOT_FOUND_CODE,
     PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
@@ -893,40 +896,6 @@ def _history_stream_error(exc) -> Dict[str, Any]:
     }
 
 
-def _provider_replay_scope(
-    snapshot: Dict[str, Any],
-    body: Mapping[str, Any],
-    incoming: Mapping[str, str],
-) -> Optional[ProviderReplayScope]:
-    """Resolve a fail-closed, content-free scope for opaque Provider state."""
-
-    model_id = body.get("model")
-    if not isinstance(model_id, str) or not model_id:
-        return None
-    try:
-        provider, model = find_route(snapshot, model_id)
-    except RouterError:
-        return None
-    try:
-        anchor = request_history_anchor(body, incoming)
-    except HistoryError:
-        return None
-    if not anchor.thread_id:
-        return None
-    try:
-        return ProviderReplayScope(
-            provider_id=provider.get("id"),
-            endpoint_fingerprint=endpoint_fingerprint(provider.get("base_url")),
-            deployment_identity=deployment_identity(provider, model),
-            model_id=model_id,
-            upstream_model=resolved_upstream_model(provider, model, model_id),
-            thread_id=anchor.thread_id,
-            window_id=anchor.window_id or "",
-        )
-    except ValueError:
-        return None
-
-
 class AppState:
     def __init__(
         self,
@@ -1022,6 +991,16 @@ class AppState:
         ):
             save(self.config, self.path)
             self.config = load(self.path)
+        self.codex = CodexRequestDispatcher(
+            lambda: self._routing_snapshot(),
+            self.context_guard,
+            self.provider_replay,
+            self.history_continuity,
+            self.destination_context,
+            lambda *args, **kwargs: self._record_route_event(*args, **kwargs),
+            lambda *args, **kwargs: self._record_route_failure(*args, **kwargs),
+            lambda *args, **kwargs: self._diagnostic_stream(*args, **kwargs),
+        )
 
     def _persist_route_observation(self, record: Mapping[str, Any]) -> None:
         self.journal.event("info", "route_observation", **record)
@@ -1399,26 +1378,6 @@ class AppState:
         except (TypeError, ValueError):
             return 0
 
-    @staticmethod
-    def _diagnostic_error_class(status: Any) -> str:
-        if status in (401, 403):
-            return "auth"
-        if status == 402:
-            return "payment_required"
-        if status == 429:
-            return "rate_limit"
-        if status in (404, 405, 415, 501):
-            return "protocol_rejection"
-        if status == 504:
-            return "upstream_504"
-        if status == 408:
-            return "timeout"
-        if status == 502:
-            return "network"
-        if isinstance(status, int) and 500 <= status <= 599:
-            return "upstream_5xx"
-        return "router_error"
-
     def _record_route_event(
         self,
         event: Mapping[str, Any],
@@ -1516,7 +1475,7 @@ class AppState:
                 "resolved_protocol": protocol,
                 "status": status,
                 "success": False,
-                "error_class": error_class or self._diagnostic_error_class(status),
+                "error_class": error_class or status_error_class(status),
                 "failure_reason": failure_reason or "",
                 "protocol_decision": "explicit" if protocol != "auto" else "normal_order",
                 "protocol_fallback": False,
@@ -1577,72 +1536,6 @@ class AppState:
             })
             event["response_bytes"] = response_bytes
             self._record_route_event(event, body, started, transport, route)
-
-    def prepare_native_websocket(
-        self,
-        body: Dict[str, Any],
-        incoming: Dict[str, str],
-        context_completeness: str,
-        *,
-        transport_incremental: bool = False,
-        transport_probe: bool = False,
-    ):
-        """Resolve a transient native WS plan without retaining request content."""
-
-        started = time.monotonic()
-
-        def on_context(provider, model, protocol, payload, stream, operation):
-            assessment = self.context_guard.assess(
-                provider,
-                model,
-                protocol,
-                payload,
-                context_completeness,
-            )
-            observation = assessment.to_safe_dict()
-            if assessment.decision == "block":
-                raise ContextGuardBlocked(assessment)
-            return observation
-
-        try:
-            plan = prepare_native_websocket_request(
-                self._routing_snapshot(),
-                body,
-                incoming,
-                on_context=None if transport_probe else on_context,
-                history_preparer=(
-                    None
-                    if transport_incremental
-                    else self.history_continuity.prepare
-                ),
-                destination_compactor=(
-                    None if transport_probe else self.destination_context.compact
-                ),
-                transport_incremental=transport_incremental,
-            )
-        except RouterError as exc:
-            self._record_route_failure(
-                body,
-                started,
-                "websocket",
-                "responses",
-                exc.status,
-                getattr(exc, "context_observation", None),
-                (
-                    "history_reconstruction_failed"
-                    if isinstance(exc, HistoryReconstructionError)
-                    else "context_length_exceeded"
-                    if isinstance(exc, ContextLengthError)
-                    else None
-                ),
-                failure_reason=(
-                    getattr(exc, "reason", None)
-                    or getattr(exc, "failure_reason", None)
-                ),
-            )
-            raise
-        prepare_ms = max(0, int(round((time.monotonic() - started) * 1000)))
-        return plan, started, prepare_ms
 
     def native_websocket_allowed(self, connection_key: str) -> bool:
         now = time.monotonic()
@@ -1725,202 +1618,6 @@ class AppState:
         self._record_route_event(
             event, body, started, "websocket", "responses"
         )
-
-    def route(
-        self,
-        body: Dict[str, Any],
-        incoming: Dict[str, str],
-        transport: Optional[str] = None,
-        context_completeness: str = "high",
-    ) -> Tuple[Dict[str, Any], Any]:
-        routing_snapshot = self._routing_snapshot()
-        replay_scope = _provider_replay_scope(routing_snapshot, body, incoming)
-        body = self.provider_replay.prepare(body, replay_scope)
-        started = time.monotonic()
-        selected_transport = transport or ("sse" if body.get("stream") else "http")
-        observed = False
-
-        def on_context(
-            provider: Dict[str, Any],
-            model: Dict[str, Any],
-            protocol: str,
-            payload: Dict[str, Any],
-            stream: bool,
-            operation: str,
-        ) -> Dict[str, Any]:
-            assessment = self.context_guard.assess(
-                provider,
-                model,
-                protocol,
-                payload,
-                context_completeness,
-            )
-            observation = assessment.to_safe_dict()
-            if assessment.decision == "block":
-                raise ContextGuardBlocked(assessment)
-            return observation
-
-        def on_observation(event: Dict[str, Any]) -> None:
-            nonlocal observed
-            observed = True
-            self._record_route_event(
-                event,
-                body,
-                started,
-                selected_transport,
-                "responses",
-            )
-
-        try:
-            metadata, result = proxy(
-                routing_snapshot,
-                body,
-                incoming,
-                on_observation,
-                on_context,
-                history_preparer=self.history_continuity.prepare,
-                destination_compactor=self.destination_context.compact,
-            )
-        except RouterError as exc:
-            if not observed:
-                self._record_route_failure(
-                    body,
-                    started,
-                    selected_transport,
-                    "responses",
-                    exc.status,
-                    getattr(exc, "context_observation", None),
-                    (
-                        "history_reconstruction_failed"
-                        if isinstance(exc, HistoryReconstructionError)
-                        else "context_length_exceeded"
-                        if isinstance(exc, ContextLengthError)
-                        else None
-                    ),
-                    failure_reason=(
-                        getattr(exc, "reason", None)
-                        or getattr(exc, "failure_reason", None)
-                    ),
-                )
-            raise
-        except Exception:
-            if not observed:
-                self._record_route_failure(
-                    body, started, selected_transport, "responses", 500
-                )
-            raise
-        if metadata.get("kind") == "stream":
-            if not metadata.get("observation_attached"):
-                result = self._diagnostic_stream(
-                    result,
-                    metadata,
-                    body,
-                    started,
-                    selected_transport,
-                    "responses",
-                )
-            result = self.provider_replay.observe_stream(replay_scope, result)
-        else:
-            self.provider_replay.observe_bytes(replay_scope, result)
-            if not observed:
-                event = dict(metadata)
-                event["response_bytes"] = len(result) if isinstance(result, (bytes, bytearray)) else 0
-                self._record_route_event(
-                    event,
-                    body,
-                    started,
-                    selected_transport,
-                    "responses",
-                )
-        return metadata, result
-
-    def route_compact(
-        self,
-        body: Dict[str, Any],
-        incoming: Dict[str, str],
-        transport: Optional[str] = None,
-        context_completeness: str = "high",
-    ) -> Tuple[Dict[str, Any], bytes]:
-        started = time.monotonic()
-        selected_transport = transport or "http"
-        observed = False
-
-        def on_context(
-            provider: Dict[str, Any],
-            model: Dict[str, Any],
-            protocol: str,
-            payload: Dict[str, Any],
-            stream: bool,
-            operation: str,
-        ) -> Dict[str, Any]:
-            assessment = self.context_guard.assess(
-                provider,
-                model,
-                protocol,
-                payload,
-                context_completeness,
-            )
-            observation = assessment.to_safe_dict()
-            if assessment.decision == "block":
-                raise ContextGuardBlocked(assessment)
-            return observation
-
-        def on_observation(event: Dict[str, Any]) -> None:
-            nonlocal observed
-            observed = True
-            self._record_route_event(
-                event,
-                body,
-                started,
-                selected_transport,
-                "compact",
-            )
-
-        try:
-            metadata, result = proxy_compact(
-                self._routing_snapshot(), body, incoming, on_observation, on_context,
-                history_preparer=self.history_continuity.prepare,
-                destination_compactor=self.destination_context.compact,
-            )
-        except RouterError as exc:
-            if not observed:
-                self._record_route_failure(
-                    body,
-                    started,
-                    selected_transport,
-                    "compact",
-                    exc.status,
-                    getattr(exc, "context_observation", None),
-                    (
-                        "history_reconstruction_failed"
-                        if isinstance(exc, HistoryReconstructionError)
-                        else "context_length_exceeded"
-                        if isinstance(exc, ContextLengthError)
-                        else None
-                    ),
-                    failure_reason=(
-                        getattr(exc, "reason", None)
-                        or getattr(exc, "failure_reason", None)
-                    ),
-                )
-            raise
-        except Exception:
-            if not observed:
-                self._record_route_failure(
-                    body, started, selected_transport, "compact", 500
-                )
-            raise
-        if not observed:
-            event = dict(metadata)
-            event["response_bytes"] = len(result) if isinstance(result, (bytes, bytearray)) else 0
-            self._record_route_event(
-                event,
-                body,
-                started,
-                selected_transport,
-                "compact",
-            )
-        return metadata, result
 
     def export_migration(self, password: str) -> bytes:
         with self.lock:
@@ -2140,244 +1837,6 @@ def load_from_value(value: Dict[str, Any]) -> Dict[str, Any]:
 
 def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False).encode("utf-8")
-
-
-def _management_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    result = public_config(config)
-    result["emp_version"] = __version__
-    result["subscription_models"] = subscription_model_options(config)
-    result["catalog_models"] = _management_catalog_models(config)
-    return result
-
-
-def _management_catalog_models(config: Dict[str, Any]) -> list[Dict[str, Any]]:
-    """Return the small, credential-free model view used by display settings."""
-    baseline_config = dict(config)
-    baseline_config["catalog_presentations"] = {}
-    baseline = {
-        str(item.get("slug") or ""): item
-        for item in build_catalog(baseline_config).get("models", [])
-        if isinstance(item, Mapping)
-    }
-    external_sources = {
-        str(item.get("id") or ""): str(item.get("provider") or "")
-        for item in config.get("models", [])
-        if isinstance(item, Mapping)
-    }
-    account_prefixes = [
-        (str(item.get("prefix") or ""), str(item.get("id") or ""))
-        for item in config.get("accounts", [])
-        if isinstance(item, Mapping) and item.get("prefix") and item.get("id")
-    ]
-    rows = []
-    for item in build_catalog(config).get("models", []):
-        if not isinstance(item, Mapping):
-            continue
-        if item.get("visibility", "list") != "list":
-            continue
-        if item.get("supported_in_api", True) is False:
-            continue
-        route = str(item.get("slug") or "")
-        if not route:
-            continue
-        source_type = "native"
-        source_id = ""
-        if route in external_sources:
-            source_type = "provider"
-            source_id = external_sources[route]
-        else:
-            for prefix, account_id in account_prefixes:
-                if route.startswith(prefix + "/"):
-                    source_type = "account"
-                    source_id = account_id
-                    break
-        raw_context = item.get("context_window", 0)
-        try:
-            context_window = int(raw_context or 0)
-        except (TypeError, ValueError):
-            context_window = 0
-        try:
-            percentage = float(
-                item.get("effective_context_window_percent", 100) or 100
-            )
-        except (TypeError, ValueError):
-            percentage = 100
-        if context_window > 0 and 0 < percentage <= 100:
-            context_window = max(1, round(context_window * percentage / 100))
-        default_name = str(
-            baseline.get(route, {}).get("display_name") or route
-        )
-        default_name = re.sub(
-            r"^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+", "", default_name
-        )
-        rows.append(
-            {
-                "id": route,
-                "display_name": str(item.get("display_name") or route),
-                "default_display_name": default_name,
-                "context_window": max(0, context_window),
-                "source_type": source_type,
-                "source_id": source_id,
-                "supports_reasoning_summaries": (
-                    item.get("supports_reasoning_summary_parameter") is True
-                ),
-            }
-        )
-    return rows
-
-
-def _management_capabilities(state: AppState) -> Dict[str, Any]:
-    config = state.snapshot()
-    providers = {
-        item.get("id"): item
-        for item in config.get("providers", [])
-        if isinstance(item, Mapping)
-    }
-    models = {
-        item.get("id"): item
-        for item in config.get("models", [])
-        if isinstance(item, Mapping)
-    }
-    records = safe_capability_list(config)
-    for record in records:
-        provider = providers.get(record.get("provider_id"))
-        model = models.get(record.get("model_id"))
-        if provider is None or model is None:
-            continue
-        effective = (
-            record.get("capabilities", {})
-            .get("effective_protocol", {})
-            .get("value", "unknown")
-        )
-        protocol = effective if effective in _DIAGNOSTIC_PROTOCOLS else "unknown"
-        record["context"] = state.context_guard.status(provider, model, protocol)
-    return {"capabilities": records}
-
-
-def _integration_next_action(state: str, service_health: str) -> str:
-    if state in ("prepared", "restoring"):
-        return "restore"
-    if state == "active":
-        return "none" if service_health == "ready" else "confirm service health or restore"
-    if state == "conflict":
-        return "restore"
-    if state == "native":
-        return "enable default Codex"
-    return "none"
-
-
-def _integration_summary(
-    state: AppState,
-    result: Optional[IntegrationResult] = None,
-) -> Dict[str, Any]:
-    observed = state.integration_status()
-    service_health = "ready" if state.service_ready() else "not_ready"
-    summary_state = observed.state
-    relation = observed.relation
-    conflicts = list(observed.conflicts)
-    startup_conflicts = state.startup_conflicts()
-    if startup_conflicts:
-        summary_state = "conflict"
-        conflicts = list(startup_conflicts)
-    if result is not None and not result.ok:
-        summary_state = "conflict"
-        relation = result.relation
-        conflicts = list(result.conflicts)
-    lease_status = observed.lease.status if observed.lease is not None else "none"
-    runtime = state.runtime_sync_snapshot()
-    runtime_state = runtime.get("state", NOT_CHECKED)
-    runtime_action_required = runtime_state in {
-        RELOAD_REQUIRED,
-        STOP_FAILED,
-        VERIFICATION_FAILED,
-        UNSUPPORTED,
-    }
-    if runtime_action_required:
-        next_action = "reconnect Codex"
-    else:
-        next_action = _integration_next_action(summary_state, service_health)
-    if summary_state == "active":
-        configuration_state = "emp_applied"
-    elif summary_state in ("native", "restored"):
-        configuration_state = "native"
-    else:
-        configuration_state = summary_state
-    return {
-        "configuration": {
-            "state": configuration_state,
-            "relation": relation,
-            "config_exists": observed.config_exists,
-            "lease_status": lease_status,
-            "conflicts": conflicts,
-        },
-        "runtime": {
-            "state": runtime_state,
-            "target": runtime.get("target", "native"),
-            "verified": bool(runtime.get("verified", False)),
-            "confidence": runtime.get("confidence", "not_checked"),
-            "action_required": runtime_action_required,
-            "detail": runtime.get("detail", ""),
-            "last_known": runtime.get("last_known"),
-        },
-        "service_health": service_health,
-        "next_action": next_action,
-    }
-
-
-def _integration_error_message(error: BaseException) -> str:
-    if isinstance(error, ServiceNotReady):
-        return "EMP service is not ready"
-    if isinstance(error, IntegrationError):
-        return "integration state is unavailable"
-    return "integration operation failed"
-
-
-def _bound_base_url(server_address: Tuple[Any, ...]) -> str:
-    host = str(server_address[0])
-    if host in ("0.0.0.0", "::"):
-        host = "127.0.0.1"
-    elif ":" in host and not host.startswith("["):
-        host = "[%s]" % host
-    return "http://%s:%d/v1" % (host, int(server_address[1]))
-
-
-def _integration_target(
-    state: AppState,
-    server_address: Tuple[Any, ...],
-) -> Tuple[str, str]:
-    return _bound_base_url(server_address), str(state.integration_catalog_path.resolve())
-
-
-def _startup_target_conflict(
-    state: AppState,
-    base_url: str,
-    catalog_path: str,
-) -> Optional[IntegrationResult]:
-    status = state.integration_status()
-    lease = status.lease
-    if (
-        lease is None
-        or lease.status == "restored"
-        or status.relation != "applied"
-    ):
-        return None
-    conflicts = []
-    if lease.fields["openai_base_url"].applied.value != base_url:
-        conflicts.append("listener_mismatch")
-    if lease.fields["model_catalog_json"].applied.value != catalog_path:
-        conflicts.append("catalog_mismatch")
-    if not conflicts:
-        return None
-    names = tuple(conflicts)
-    state.set_startup_conflicts(names)
-    return IntegrationResult(
-        "conflict",
-        "conflict",
-        status.relation,
-        status.fields,
-        lease,
-        names,
-    )
 
 
 def make_handler(state: AppState):
@@ -2816,7 +2275,7 @@ def make_handler(state: AppState):
                         }
                         previous_hint = request.get("previous_response_id")
                         if previous_hint is not None:
-                            probe, _, _ = state.prepare_native_websocket(
+                            probe, _, _ = state.codex.prepare_native_websocket(
                                 request,
                                 incoming_headers,
                                 "unknown",
@@ -2848,7 +2307,7 @@ def make_handler(state: AppState):
                             self._previous_response_not_found(websocket)
                             continue
                         plan, native_started, native_prepare_ms = (
-                            state.prepare_native_websocket(
+                            state.codex.prepare_native_websocket(
                                 request,
                                 incoming_headers,
                                 "unknown" if previous_hint is not None else "high",
@@ -2985,9 +2444,7 @@ def make_handler(state: AppState):
                                     )
                                     continue
                                 if not exc.retryable:
-                                    error_class = state._diagnostic_error_class(
-                                        exc.status
-                                    )
+                                    error_class = status_error_class(exc.status)
                                     terminal = {
                                         "status": exc.status,
                                         "success": False,
@@ -3016,9 +2473,7 @@ def make_handler(state: AppState):
                                 failure_terminal = {
                                     "status": exc.status,
                                     "success": False,
-                                    "error_class": state._diagnostic_error_class(
-                                        exc.status
-                                    ),
+                                    "error_class": status_error_class(exc.status),
                                 }
                                 if previous_hint is not None:
                                     # Codex recognizes this code and retries the
@@ -3114,7 +2569,7 @@ def make_handler(state: AppState):
                                 }
                             )
                             continue
-                        metadata, result = state.route(
+                        metadata, result = state.codex.route(
                             request,
                             {key: value for key, value in self.headers.items()},
                             transport="websocket",
@@ -3199,11 +2654,11 @@ def make_handler(state: AppState):
                 self._send(200, _json_bytes({"status": "ok"}))
                 return
             if path == "/api/config":
-                self._send(200, _json_bytes(_management_config(state.snapshot())))
+                self._send(200, _json_bytes(management_config(state.snapshot())))
                 return
             if path == "/api/capabilities":
                 try:
-                    self._send(200, _json_bytes(_management_capabilities(state)))
+                    self._send(200, _json_bytes(management_capabilities(state)))
                 except (ConfigError, OSError, ValueError):
                     self._error(409, "capability state is unavailable")
                 return
@@ -3215,7 +2670,7 @@ def make_handler(state: AppState):
                 return
             if path == "/api/integration":
                 try:
-                    self._send(200, _json_bytes(_integration_summary(state)))
+                    self._send(200, _json_bytes(integration_summary(state)))
                 except (IntegrationError, OSError) as exc:
                     self._send(
                         503,
@@ -3223,7 +2678,7 @@ def make_handler(state: AppState):
                             {
                                 "error": {
                                     "code": "integration_unavailable",
-                                    "message": _integration_error_message(exc),
+                                    "message": integration_error_message(exc),
                                 }
                             }
                         ),
@@ -3357,7 +2812,7 @@ def make_handler(state: AppState):
                     return
                 if path == "/api/integration/enable":
                     if body.get("confirm_reload") is not True:
-                        summary = _integration_summary(state)
+                        summary = integration_summary(state)
                         summary["error"] = {
                             "message": "Confirmation is required before reconnecting Codex"
                         }
@@ -3369,7 +2824,7 @@ def make_handler(state: AppState):
                         self._send(409, _json_bytes(summary))
                         return
                     try:
-                        base_url, _ = _integration_target(
+                        base_url, _ = integration_target(
                             state,
                             self.server.server_address,
                         )
@@ -3377,7 +2832,7 @@ def make_handler(state: AppState):
                             base_url,
                             confirm_reload=True,
                         )
-                        summary = _integration_summary(state, result)
+                        summary = integration_summary(state, result)
                         emit_operation(
                             "integration_operation",
                             "success" if result.ok else "conflict",
@@ -3388,7 +2843,7 @@ def make_handler(state: AppState):
                             _json_bytes(summary),
                         )
                     except EmptyEmpCatalog:
-                        summary = _integration_summary(state)
+                        summary = integration_summary(state)
                         summary["error"] = {
                             "code": "empty_emp_catalog",
                             "message": "Add or show at least one EMP model before enabling Codex",
@@ -3405,11 +2860,11 @@ def make_handler(state: AppState):
                             "integration_error",
                             **self._integration_operation_fields("enable", None),
                         )
-                        self._error(409, _integration_error_message(exc))
+                        self._error(409, integration_error_message(exc))
                     return
                 if path == "/api/integration/restore":
                     if body.get("confirm_reload") is not True:
-                        summary = _integration_summary(state)
+                        summary = integration_summary(state)
                         summary["error"] = {
                             "message": "Confirmation is required before reconnecting Codex"
                         }
@@ -3422,7 +2877,7 @@ def make_handler(state: AppState):
                         return
                     try:
                         result = state.restore_integration(confirm_reload=True)
-                        summary = _integration_summary(state, result)
+                        summary = integration_summary(state, result)
                         emit_operation(
                             "integration_operation",
                             "success" if result.ok else "conflict",
@@ -3438,12 +2893,12 @@ def make_handler(state: AppState):
                             "integration_error",
                             **self._integration_operation_fields("restore", None),
                         )
-                        self._error(409, _integration_error_message(exc))
+                        self._error(409, integration_error_message(exc))
                     return
                 if path == "/api/integration/reload":
                     confirm_reload = body.get("confirm_reload") is True
                     result = state.sync_integration_runtime(confirm_reload)
-                    summary = _integration_summary(state)
+                    summary = integration_summary(state)
                     successful = result.state in {
                         EMP_LOADED,
                         NATIVE_LOADED,
@@ -3463,7 +2918,7 @@ def make_handler(state: AppState):
                     return
                 if path == "/api/config":
                     updated = state.update(body)
-                    self._send(200, _json_bytes(_management_config(updated)))
+                    self._send(200, _json_bytes(management_config(updated)))
                     return
                 if path == "/api/providers/discover":
                     provider_id = body.get("provider")
@@ -3598,7 +3053,7 @@ def make_handler(state: AppState):
                     self._send(200, _json_bytes(model_metadata(provider, upstream_model)))
                     return
                 if path == "/v1/responses/compact":
-                    metadata, result = state.route_compact(
+                    metadata, result = state.codex.route_compact(
                         body,
                         {key: value for key, value in self.headers.items()},
                         transport="http",
@@ -3610,7 +3065,7 @@ def make_handler(state: AppState):
                     )
                     return
                 if path == "/v1/responses":
-                    metadata, result = state.route(
+                    metadata, result = state.codex.route(
                         body,
                         {key: value for key, value in self.headers.items()},
                         transport="sse" if body.get("stream") else "http",
@@ -3817,8 +3272,8 @@ def startup_reconcile(state: AppState, server: BoundedThreadingHTTPServer) -> In
     if server.fileno() < 0:
         raise ServiceNotReady("EMP listener is not bound")
     state.mark_service_ready()
-    base_url, catalog_path = _integration_target(state, server.server_address)
-    conflict = _startup_target_conflict(state, base_url, catalog_path)
+    base_url, catalog_path = integration_target(state, server.server_address)
+    conflict = startup_target_conflict(state, base_url, catalog_path)
     if conflict is not None:
         return conflict
     result = state.reconcile_startup(state.service_ready)
@@ -3954,7 +3409,7 @@ def _serve_owned(
             bind_port = port if port is not None else config["port"]
             stage = "listener_bind"
             server = BoundedThreadingHTTPServer((bind_host, bind_port), make_handler(state))
-            base_url = _bound_base_url(server.server_address).rsplit("/v1", 1)[0]
+            base_url = bound_base_url(server.server_address).rsplit("/v1", 1)[0]
             previous_sigterm = _install_sigterm_handler()
 
             _journal_event(
