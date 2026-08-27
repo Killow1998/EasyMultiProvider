@@ -8,6 +8,7 @@ from cryptography.fernet import Fernet
 
 from easy_multi_provider.accounts import import_account, load_auth
 from easy_multi_provider.config import api_key, load, normalize, save
+import easy_multi_provider.migration as migration_module
 from easy_multi_provider.migration import MigrationError, export_bundle, import_bundle, read_bundle
 
 
@@ -116,6 +117,63 @@ class MigrationTests(unittest.TestCase):
                 bundle = export_bundle(load(source_path), source_path, "migration-pass-2")
                 imported, _ = import_bundle(load(target_path), bundle, "migration-pass-2", target_path)
                 self.assertEqual({p["id"] for p in imported["providers"]}, {"local", "source"})
+
+    def test_failed_import_restores_existing_account_credential(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = Fernet.generate_key().decode("ascii")
+            with patch.dict(
+                os.environ,
+                {"EASY_MULTI_PROVIDER_MASTER_KEY": key},
+                clear=False,
+            ):
+                source_path = root / "source" / "config.json"
+                source = normalize({
+                    "account_store_path": str(root / "source" / "accounts")
+                })
+                save(source, source_path)
+                source = load(source_path)
+                source["accounts"] = [import_account(
+                    source,
+                    {"id": "same", "prefix": "same"},
+                    {"auth_mode": "chatgpt", "tokens": {"access_token": "NEW"}},
+                    source_path,
+                )]
+                save(source, source_path)
+                bundle = export_bundle(load(source_path), source_path, "migration-pass-3")
+
+                target_path = root / "target" / "config.json"
+                target = normalize({
+                    "account_store_path": str(root / "target" / "accounts")
+                })
+                save(target, target_path)
+                target = load(target_path)
+                target["accounts"] = [import_account(
+                    target,
+                    {"id": "same", "prefix": "same"},
+                    {"auth_mode": "chatgpt", "tokens": {"access_token": "OLD"}},
+                    target_path,
+                )]
+                save(target, target_path)
+
+                with patch.object(
+                    migration_module,
+                    "save",
+                    side_effect=RuntimeError("config commit failed"),
+                ):
+                    with self.assertRaises(RuntimeError):
+                        import_bundle(
+                            load(target_path),
+                            bundle,
+                            "migration-pass-3",
+                            target_path,
+                        )
+
+                persisted = load(target_path)
+                self.assertEqual(
+                    load_auth(persisted["accounts"][0])["tokens"]["access_token"],
+                    "OLD",
+                )
 
 
 if __name__ == "__main__":

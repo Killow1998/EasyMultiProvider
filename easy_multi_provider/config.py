@@ -24,7 +24,13 @@ from .capabilities import (
     output_modalities_known,
     supported_protocols_known,
 )
-from .vault import VaultError, read_encrypted_text, write_encrypted_text
+from .vault import (
+    FileTransaction,
+    VaultError,
+    file_transaction,
+    read_encrypted_text,
+    write_encrypted_text,
+)
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -640,7 +646,18 @@ def load(path: Optional[Path] = None) -> Dict[str, Any]:
         raise ConfigError("invalid JSON in %s: %s" % (path, exc))
 
 
-def save(config: Dict[str, Any], path: Optional[Path] = None) -> Path:
+def _replace_config(source: str, destination: Path) -> None:
+    os.replace(source, str(destination))
+
+
+def save(
+    config: Dict[str, Any],
+    path: Optional[Path] = None,
+    _transaction: Optional[FileTransaction] = None,
+) -> Path:
+    if _transaction is None:
+        with file_transaction() as transaction:
+            return save(config, path, _transaction=transaction)
     path = Path(path or config_path())
     previous_secret_files = set()
     if path.exists():
@@ -665,6 +682,7 @@ def save(config: Dict[str, Any], path: Optional[Path] = None) -> Path:
             os.chmod(str(secret_root), 0o700)
             secret_path = secret_root / (quote(provider["id"], safe="") + ".key.enc")
             try:
+                _transaction.remember(secret_path)
                 write_encrypted_text(secret_path, key)
             except VaultError as exc:
                 raise ConfigError(str(exc)) from exc
@@ -678,7 +696,8 @@ def save(config: Dict[str, Any], path: Optional[Path] = None) -> Path:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(normalized, handle, indent=2, ensure_ascii=False)
             handle.write("\n")
-        os.replace(temporary, str(path))
+        _transaction.remember(path)
+        _replace_config(temporary, path)
         committed = True
     finally:
         if os.path.exists(temporary):
@@ -691,7 +710,11 @@ def save(config: Dict[str, Any], path: Optional[Path] = None) -> Path:
         }
         for obsolete in previous_secret_files - current_secret_files:
             try:
-                Path(obsolete).unlink()
+                obsolete_path = Path(obsolete)
+                _transaction.remember(obsolete_path)
+                obsolete_path.unlink()
+            except FileNotFoundError:
+                pass
             except OSError:
                 pass
     return path

@@ -19,7 +19,7 @@ from .accounts import (
     validate_auth_json,
 )
 from .config import api_key, load, normalize, save
-from .vault import write_encrypted_json
+from .vault import file_transaction, write_encrypted_json
 
 
 MAGIC = b"EMP-MIGRATION\x01\n"
@@ -255,23 +255,14 @@ def import_bundle(
             account["auth_file"] = str(account_auth_path(target, account["id"], config_path))
     target = normalize(target)
 
-    created_auth_paths = []
-    try:
+    with file_transaction() as transaction:
         for account_id, auth in imported_auth.items():
             path = account_auth_path(target, account_id, config_path)
-            if not path.exists():
-                created_auth_paths.append(path)
+            transaction.remember(path)
             write_encrypted_json(path, auth)
-        save(target, config_path)
-    except Exception:
-        for path in created_auth_paths:
-            try:
-                path.unlink()
-            except OSError:
-                pass
-        raise
+        save(target, config_path, _transaction=transaction)
+        result = load(config_path)
 
-    result = load(config_path)
     return result, {
         "accounts": len(imported_auth),
         "providers": len(source.get("providers", [])),

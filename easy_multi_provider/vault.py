@@ -9,7 +9,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -20,10 +20,91 @@ DEFAULT_MASTER_KEY_FILE = Path("state") / "master.key"
 _FORMAT = b"easy-multi-provider-v1\n"
 _default_master_key_file = DEFAULT_MASTER_KEY_FILE
 _default_master_key_lock = threading.RLock()
+_file_transaction_lock = threading.RLock()
+_MAX_TRANSACTION_FILE_BYTES = 64 * 1024 * 1024
 
 
 class VaultError(ValueError):
     """Raised when encrypted credentials cannot be read or written safely."""
+
+
+class FileTransaction:
+    """Restore a bounded set of managed files if a multi-file update fails."""
+
+    def __init__(self) -> None:
+        self._snapshots: Dict[Path, Optional[Tuple[bytes, int]]] = {}
+
+    def remember(self, path: Path) -> None:
+        target = Path(os.path.abspath(os.fspath(Path(path))))
+        if target in self._snapshots:
+            return
+        try:
+            info = target.lstat()
+        except FileNotFoundError:
+            self._snapshots[target] = None
+            return
+        except OSError as exc:
+            raise VaultError("managed file is unavailable") from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise VaultError("managed file is not a regular file")
+        if info.st_size > _MAX_TRANSACTION_FILE_BYTES:
+            raise VaultError("managed file is too large for an atomic update")
+        try:
+            value = target.read_bytes()
+        except OSError as exc:
+            raise VaultError("managed file is unavailable") from exc
+        if len(value) > _MAX_TRANSACTION_FILE_BYTES:
+            raise VaultError("managed file is too large for an atomic update")
+        self._snapshots[target] = (value, stat.S_IMODE(info.st_mode))
+
+    @staticmethod
+    def _restore(path: Path, value: bytes, mode: int) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=".emp-rollback-", dir=str(path.parent)
+        )
+        try:
+            os.chmod(temporary, mode or 0o600)
+            with os.fdopen(descriptor, "wb") as handle:
+                descriptor = -1
+                handle.write(value)
+            os.replace(temporary, str(path))
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    def rollback(self) -> None:
+        for path, snapshot in reversed(tuple(self._snapshots.items())):
+            if snapshot is None:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+            else:
+                self._restore(path, snapshot[0], snapshot[1])
+
+    def commit(self) -> None:
+        self._snapshots.clear()
+
+
+@contextmanager
+def file_transaction():
+    """Serialize and atomically roll back one bounded multi-file update."""
+
+    with _file_transaction_lock:
+        transaction = FileTransaction()
+        try:
+            yield transaction
+        except BaseException:
+            try:
+                transaction.rollback()
+            except Exception as exc:
+                raise VaultError("managed file rollback failed") from exc
+            raise
+        else:
+            transaction.commit()
 
 
 def _key_path() -> Path:

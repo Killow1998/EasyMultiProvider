@@ -3,7 +3,9 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import easy_multi_provider.config as config_module
 from tests.support import ensure_test_master_key
 from easy_multi_provider.capabilities import endpoint_fingerprint
 from easy_multi_provider.config import ConfigError, api_key, load, merge_web_update, normalize, public_config, save
@@ -768,6 +770,36 @@ class TestNestedCapabilityDataFlow(ConfigTests):
         cap = record["capabilities"]["output_modalities"]
         self.assertEqual(cap["value"], "unknown")
         self.assertEqual(cap["source"], "unknown")
+
+
+class ConfigTransactionTests(unittest.TestCase):
+    def test_failed_config_commit_restores_existing_provider_key(self):
+        provider = {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "auth_mode": "api_key",
+            "api_key": "OLD",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            original = normalize({
+                "secret_store_path": str(Path(directory) / "secrets"),
+                "providers": [provider],
+            })
+            save(original, path)
+            updated = load(path)
+            updated["providers"][0]["api_key"] = "NEW"
+            with patch.object(
+                config_module,
+                "_replace_config",
+                side_effect=OSError("config commit failed"),
+            ):
+                with self.assertRaises(OSError):
+                    save(updated, path)
+
+            self.assertEqual(api_key(load(path)["providers"][0]), "OLD")
 
 
 if __name__ == "__main__":
