@@ -21,6 +21,33 @@ ensure_test_master_key()
 
 
 class QuotaTests(unittest.TestCase):
+    def test_windows_root_ca_bundle_exports_server_auth_roots(self):
+        certificates = [
+            (b"root-one", "x509_asn", True),
+            (b"root-two", "x509_asn", {quota_module._SERVER_AUTH_OID}),
+            (b"email-only", "x509_asn", {"1.3.6.1.5.5.7.3.4"}),
+            (b"pkcs-seven", "pkcs_7_asn", True),
+            (b"root-one", "x509_asn", True),
+        ]
+
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory, patch.object(
+            quota_module.ssl,
+            "enum_certificates",
+            return_value=certificates,
+            create=True,
+        ), patch.object(
+            quota_module.ssl,
+            "DER_cert_to_PEM_cert",
+            side_effect=lambda value: "PEM:" + value.decode("ascii") + "\n",
+        ):
+            bundle = quota_module._write_windows_root_ca_bundle(Path(directory))
+            contents = bundle.read_text(encoding="ascii")
+
+        self.assertEqual(contents.count("PEM:root-one"), 1)
+        self.assertIn("PEM:root-two", contents)
+        self.assertNotIn("email-only", contents)
+        self.assertNotIn("pkcs-seven", contents)
+
     @unittest.skipIf(os.name == "nt", "Unix path permission checks do not apply")
     def test_trusts_owner_managed_group_writable_codex_path(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
@@ -123,6 +150,127 @@ class QuotaTests(unittest.TestCase):
         self.assertEqual(value["credits"]["reset_credits"]["available_count"], 2)
         self.assertNotIn("opaque-reset-id", json.dumps(value))
 
+    def test_parser_accepts_codex_multi_limit_response(self):
+        output = json.dumps({
+            "id": 3,
+            "result": {
+                "rateLimitsByLimitId": {
+                    "codex": {
+                        "planType": "pro",
+                        "primary": {"usedPercent": 12},
+                    }
+                }
+            },
+        })
+
+        value = parse_app_server_output(output)
+
+        self.assertEqual(value["plan_type"], "pro")
+        self.assertEqual(value["rate_limits"]["primary"]["usedPercent"], 12)
+
+    def test_direct_usage_parser_normalizes_snake_case_without_identity_leak(self):
+        value = quota_module.parse_direct_usage_payload({
+            "email": "user@example.com",
+            "user_id": "opaque-user-id",
+            "account_id": "opaque-account-id",
+            "plan_type": "plus",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 53,
+                    "limit_window_seconds": 18000,
+                    "reset_at": 123,
+                },
+                "secondary_window": None,
+            },
+            "credits": {
+                "has_credits": True,
+                "unlimited": False,
+                "balance": "42",
+            },
+            "rate_limit_reset_credits": {
+                "available_count": 1,
+                "credits": [{
+                    "id": "opaque-reset-id",
+                    "status": "available",
+                    "expires_at": 456,
+                }],
+            },
+        })
+
+        self.assertEqual(value["account_label"], "u***@example.com")
+        self.assertEqual(value["plan_type"], "plus")
+        self.assertEqual(value["rate_limits"]["primary"]["usedPercent"], 53)
+        self.assertEqual(value["rate_limits"]["primary"]["windowDurationMins"], 300)
+        self.assertEqual(value["credits"]["balance"], "42")
+        serialized = json.dumps(value)
+        self.assertNotIn("opaque-user-id", serialized)
+        self.assertNotIn("opaque-account-id", serialized)
+        self.assertNotIn("opaque-reset-id", serialized)
+
+    def test_direct_usage_get_keeps_credentials_in_request_headers_only(self):
+        payload = json.dumps({
+            "plan_type": "plus",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 10,
+                    "limit_window_seconds": 18000,
+                    "reset_at": 123,
+                }
+            },
+        }).encode("utf-8")
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def getcode(self):
+                return self.status
+
+            def read(self, _size):
+                return payload
+
+        class FakeOpener:
+            def __init__(self):
+                self.request = None
+                self.timeout = None
+
+            def open(self, request, timeout):
+                self.request = request
+                self.timeout = timeout
+                return FakeResponse()
+
+        opener = FakeOpener()
+        auth = {
+            "tokens": {
+                "access_token": "request-only-secret",
+                "account_id": "request-only-account",
+            }
+        }
+        with patch(
+            "easy_multi_provider.quota._direct_usage_ssl_context"
+        ), patch(
+            "easy_multi_provider.quota.build_opener", return_value=opener
+        ):
+            value = quota_module._read_direct_chatgpt_quota(auth, 9)
+
+        self.assertEqual(opener.timeout, 9)
+        self.assertEqual(opener.request.get_method(), "GET")
+        self.assertEqual(
+            opener.request.get_header("Authorization"),
+            "Bearer request-only-secret",
+        )
+        self.assertEqual(
+            opener.request.get_header("Chatgpt-account-id"),
+            "request-only-account",
+        )
+        self.assertNotIn("request-only-secret", json.dumps(value))
+        self.assertNotIn("request-only-account", json.dumps(value))
+
     def test_quota_process_is_pinned_to_account_directory(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             account_dir = Path(directory) / "primary"
@@ -185,6 +333,11 @@ class QuotaTests(unittest.TestCase):
             self.assertNotEqual(kwargs["env"]["CODEX_HOME"], str(account_dir))
             self.assertNotIn("EASY_MULTI_PROVIDER_MASTER_KEY", kwargs["env"])
             self.assertEqual(kwargs["env"]["HTTPS_PROXY"], "http://proxy.invalid")
+            if os.name == "nt" and "SSL_CERT_FILE" not in os.environ:
+                self.assertEqual(
+                    Path(kwargs["env"]["SSL_CERT_FILE"]).parent,
+                    Path(kwargs["env"]["CODEX_HOME"]),
+                )
             self.assertNotIn("secret", process.stdin.body)
             self.assertEqual(json.loads(process.stdin.body.splitlines()[1])["method"], "initialized")
             self.assertTrue(process.stdin.closed)
@@ -343,6 +496,122 @@ class NativeLoginQuotaTests(unittest.TestCase):
             self.assertIsInstance(written_value, dict)
             self.assertIn("tokens", written_value)
             self.assertIn("access_token", written_value["tokens"])
+
+    def test_imported_quota_retries_without_refresh_for_external_codex_auth(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            account_dir = Path(directory) / "primary"
+            account_dir.mkdir()
+            auth_file = account_dir / "auth.json.enc"
+            write_encrypted_json(auth_file, {"tokens": {"access_token": "imported-secret"}})
+
+            expected = {"plan_type": "plus"}
+            with patch(
+                "easy_multi_provider.quota._run_quota_query",
+                side_effect=[
+                    quota_module._CodexRequestError(2, -32600, "refresh unavailable"),
+                    expected,
+                ],
+            ) as query, patch(
+                "easy_multi_provider.quota.write_encrypted_json"
+            ) as persisted:
+                value = read_account_quota(
+                    {"auth_file": str(auth_file)}, codex_binary="codex"
+                )
+
+        self.assertIs(value, expected)
+        self.assertEqual(query.call_count, 2)
+        self.assertTrue(query.call_args_list[0].kwargs["allow_refresh"])
+        self.assertFalse(query.call_args_list[1].kwargs["allow_refresh"])
+        self.assertIsNone(query.call_args_list[1].kwargs["persist_path"])
+        persisted.assert_not_called()
+
+    def test_imported_quota_does_not_retry_rate_limit_request_errors(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            account_dir = Path(directory) / "primary"
+            account_dir.mkdir()
+            auth_file = account_dir / "auth.json.enc"
+            write_encrypted_json(auth_file, {"tokens": {"access_token": "imported-secret"}})
+
+            with patch(
+                "easy_multi_provider.quota._run_quota_query",
+                side_effect=quota_module._CodexRequestError(
+                    3, -32603, "rate limit transport failed"
+                ),
+            ) as query:
+                with self.assertRaises(quota_module._CodexRequestError):
+                    read_account_quota(
+                        {"auth_file": str(auth_file)}, codex_binary="codex"
+                    )
+
+        self.assertEqual(query.call_count, 1)
+
+    def test_imported_quota_falls_back_for_codex_0151_usage_transport_error(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            account_dir = Path(directory) / "primary"
+            account_dir.mkdir()
+            auth_file = account_dir / "auth.json.enc"
+            auth = {
+                "tokens": {
+                    "access_token": "imported-secret",
+                    "account_id": "account-id",
+                }
+            }
+            write_encrypted_json(auth_file, auth)
+            expected = {"plan_type": "plus"}
+
+            with patch(
+                "easy_multi_provider.quota._run_quota_query",
+                side_effect=quota_module._CodexRequestError(
+                    3,
+                    -32603,
+                    "failed to fetch codex rate limits: error sending request for url "
+                    "(https://chatgpt.com/backend-api/wham/usage)",
+                ),
+            ) as query, patch(
+                "easy_multi_provider.quota._read_direct_chatgpt_quota",
+                return_value=expected,
+            ) as direct:
+                value = read_account_quota(
+                    {"auth_file": str(auth_file)}, codex_binary="codex"
+                )
+
+        self.assertIs(value, expected)
+        self.assertEqual(query.call_count, 1)
+        direct.assert_called_once_with(auth, 45)
+
+    def test_imported_quota_uses_direct_fallback_after_refresh_rejection(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            account_dir = Path(directory) / "primary"
+            account_dir.mkdir()
+            auth_file = account_dir / "auth.json.enc"
+            auth = {
+                "tokens": {
+                    "access_token": "imported-secret",
+                    "account_id": "account-id",
+                }
+            }
+            write_encrypted_json(auth_file, auth)
+            expected = {"plan_type": "plus"}
+
+            with patch(
+                "easy_multi_provider.quota._run_quota_query",
+                side_effect=[
+                    quota_module._CodexRequestError(2, -32600, "refresh unavailable"),
+                    quota_module._CodexRequestError(
+                        3, -32603, "failed to fetch codex rate limits"
+                    ),
+                ],
+            ) as query, patch(
+                "easy_multi_provider.quota._read_direct_chatgpt_quota",
+                return_value=expected,
+            ) as direct:
+                value = read_account_quota(
+                    {"auth_file": str(auth_file)}, codex_binary="codex"
+                )
+
+        self.assertIs(value, expected)
+        self.assertEqual(query.call_count, 2)
+        direct.assert_called_once_with(auth, 45)
 
 
 if __name__ == "__main__":

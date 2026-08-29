@@ -178,6 +178,31 @@ async function integrationBehavior() {
   run("renderIntegration({configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'stopped_waiting_for_start',target:'emp',verified:false,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
   assert.match(getElement("integration_summary").textContent, /next|下次/i);
 
+  let passiveVerifyCalls = 0;
+  context.__apiStub = async (path) => {
+    if (path === "/api/integration") return {
+      configuration: {state: "emp_applied", relation: "applied", conflicts: []},
+      runtime: {state: "stop_failed", target: "emp", verified: false, action_required: true, detail: "old stop failure"},
+      service_health: "ready",
+      next_action: "reconnect Codex",
+    };
+    if (path === "/api/integration/verify") {
+      passiveVerifyCalls += 1;
+      return {
+        configuration: {state: "emp_applied", relation: "applied", conflicts: []},
+        runtime: {state: "emp_loaded", target: "emp", verified: true, action_required: false, detail: "complete catalog"},
+        service_health: "ready",
+        next_action: "none",
+      };
+    }
+    throw new Error("unexpected API " + path);
+  };
+  run("api = __apiStub");
+  await run("loadIntegration()");
+  assert.strictEqual(passiveVerifyCalls, 1);
+  assert.match(getElement("integration_summary").textContent, /loaded|已加载/i);
+  assert.strictEqual(getElement("integration_reload").hidden, true);
+
   context.__apiStub = async (path, options = {}) => {
     if (path === "/api/integration/restore") throw new Error("restore failed safely");
     if (path === "/api/config") return {native_catalog_path: "", accounts: [], providers: [], models: []};

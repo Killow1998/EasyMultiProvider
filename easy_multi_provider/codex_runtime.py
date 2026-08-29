@@ -965,3 +965,29 @@ class CodexRuntimeController:
                     "Codex stopped and will load the new configuration when it next starts",
                 )
             time.sleep(min(self.poll_interval, max(0.0, deadline - time.monotonic())))
+
+    def observe(
+        self,
+        expected_models: Sequence[str],
+        target: str,
+    ) -> RuntimeSyncResult:
+        """Verify the live catalog without stopping or otherwise mutating Codex."""
+        if target not in ("emp", "native"):
+            return RuntimeSyncResult(UNSUPPORTED, target, False, "Unknown runtime target")
+        try:
+            observed = self._model_list()
+        except RuntimeSyncError as error:
+            if error.kind == "unavailable":
+                return RuntimeSyncResult(
+                    RELOAD_REQUIRED,
+                    target,
+                    False,
+                    "Codex is not running; the target will load on next start",
+                )
+            return RuntimeSyncResult(
+                UNSUPPORTED if error.kind == "unsupported" else VERIFICATION_FAILED,
+                target,
+                False,
+                str(error),
+            )
+        return self._validate_models(observed, expected_models, target)

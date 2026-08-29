@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased (2026-08-30)
+
+### Codex 0.151 compatibility
+
+- Kept the official Codex App Server quota query as the primary path and added
+  a narrowly scoped, read-only `wham/usage` fallback for the Codex 0.151
+  transport failure. Stored access tokens remain memory-only and are never
+  logged, returned to the browser, or written back by the fallback.
+- Normalized the Codex 0.151 snake-case quota response into EMP's existing
+  masked account, rate-window, and credit snapshot without retaining raw
+  response identity fields.
+- Added Windows trusted-root export for isolated Codex quota subprocesses and
+  retained explicit operator proxy and CA settings.
+- Added passive live-catalog verification after Codex restarts, allowing EMP to
+  replace a stale `stop_failed` status with `emp_loaded` without stopping or
+  mutating Codex again.
+
+### Verification
+
+- Live-validated two imported subscription accounts through the bounded quota
+  fallback without exposing credentials.
+- Confirmed with official Codex 0.151 `model/list` that the active catalog
+  contains all expected EMP model routes.
+- Passed 24 focused quota and runtime-integration tests plus the Web DOM
+  integration behavior test and whitespace validation.
+
 ## 0.9.0 (2026-08-29)
 
 ### Maintenance architecture

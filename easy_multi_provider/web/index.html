@@ -113,6 +113,7 @@ let catalogDisplayExpanded = false;
 const expandedModelGroups = new Set();
 const refreshErrors = {};
 const refreshingAccounts = new Set();
+const integrationVerificationAttempts = new Set();
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const translations = {
@@ -361,7 +362,17 @@ function renderIntegration(info) {
 }
 async function loadIntegration() {
   try {
-    const info = await api('/api/integration');
+    let info = await api('/api/integration');
+    const configuration = info.configuration || {};
+    const runtime = info.runtime || {};
+    const verifyKey = `${configuration.state || ''}:${runtime.state || ''}:${runtime.target || ''}`;
+    const passivelyVerifiable = configuration.state === 'emp_applied' && runtime.target === 'emp' && ['stop_failed','verification_failed','stopped_waiting_for_start'].includes(runtime.state);
+    if (passivelyVerifiable && !integrationVerificationAttempts.has(verifyKey)) {
+      integrationVerificationAttempts.add(verifyKey);
+      try {
+        info = await api('/api/integration/verify', {method:'POST', body:'{}'});
+      } catch (_) {}
+    }
     renderIntegration(info);
     return info;
   } catch (error) {

@@ -34,6 +34,16 @@ class RecordingRuntimeController:
             self.result.observed_models,
         )
 
+    def observe(self, expected_models, target):
+        self.calls.append((tuple(expected_models), target, "observe"))
+        return RuntimeSyncResult(
+            self.result.state,
+            target,
+            self.result.verified,
+            self.result.detail,
+            self.result.observed_models,
+        )
+
 
 class RuntimeIntegrationTests(unittest.TestCase):
     def make_state(self, runtime=None):
@@ -119,6 +129,25 @@ class RuntimeIntegrationTests(unittest.TestCase):
         summary = integration_summary(state)
         self.assertEqual(summary["runtime"]["state"], EMP_LOADED)
         self.assertEqual(summary["runtime"]["confidence"], "live")
+
+    def test_passive_verification_repairs_stale_stop_failure_without_reload(self):
+        runtime = RecordingRuntimeController(
+            RuntimeSyncResult(EMP_LOADED, "emp", True, "complete catalog")
+        )
+        _root, state, manager, _runtime = self.make_state(runtime)
+        self.activate(state, manager)
+        state.refresh_catalog()
+
+        result = state.verify_integration_runtime()
+
+        self.assertEqual(result.state, EMP_LOADED)
+        self.assertEqual(
+            runtime.calls,
+            [(("external/model-a",), "emp", "observe")],
+        )
+        summary = integration_summary(state)
+        self.assertTrue(summary["runtime"]["verified"])
+        self.assertFalse(summary["runtime"]["action_required"])
 
     def test_restore_uses_expected_slugs_from_recovery_record(self):
         runtime = RecordingRuntimeController()
