@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0 (2026-08-29)
+
+### Maintenance architecture
+
+- Centralized immutable route resolution and request dispatch across HTTP and
+  Responses WebSocket entry points.
+- Isolated Native Responses, portable Responses, Chat Completions, and
+  Anthropic projection behind protocol adapters.
+- Unified content-free upstream failure classification and bounded stream
+  lifecycle handling without changing fallback policy.
+- Split credential-free management and Codex integration projections out of
+  the runtime request path.
+- Preserved Codex-owned history, transport-only `previous_response_id`, Native
+  compaction, final-payload Context Guard authority, and fail-closed external
+  history reconstruction.
+
+### Verification
+
+- Passed focused routing, protocol, history, context, stream, replay, and
+  runtime integration checks plus Python compilation and whitespace validation.
+- Live-validated first-send Native to External, External to External, and
+  External to Native transitions with repeated compaction, tools, and image
+  continuity on the current host.
+
 ## 0.8.1 (2026-08-27)
 
 ### Product
