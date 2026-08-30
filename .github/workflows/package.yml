@@ -60,15 +60,15 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v9
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Install locked packaging environment
         run: uv sync --frozen --group package
@@ -77,7 +77,7 @@ jobs:
         run: uv run --frozen --group package python packaging/build.py
 
       - name: Upload package artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: easy-multi-provider-${{ runner.os }}-${{ runner.arch }}
           path: artifacts/*
@@ -96,15 +96,15 @@ jobs:
       contents: write
     steps:
       - name: Check out source
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
 
       - name: Download all native packages
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: easy-multi-provider-*
           path: release-assets
