@@ -62,7 +62,12 @@ def _display_name_with_context(
     if isinstance(alias, str) and alias:
         # A user alias is exact presentation data. Do not reinterpret a
         # context-looking prefix or suffix that was entered deliberately.
-        name = alias
+        source_label = (
+            model.get("_emp_source_label")
+            if presentation.get("_family_scoped") is True
+            else ""
+        )
+        name = "%s · %s" % (source_label, alias) if source_label else alias
     else:
         name = str(
             model.get("display_name")
@@ -79,7 +84,7 @@ def _display_name_with_context(
     return "[%5s]  %s" % (context, name)
 
 
-def _presentation(config: Dict[str, Any], route: str) -> Dict[str, Any]:
+def _route_presentation(config: Dict[str, Any], route: str) -> Dict[str, Any]:
     presentations = config.get("catalog_presentations")
     if not isinstance(presentations, dict):
         return {}
@@ -87,9 +92,42 @@ def _presentation(config: Dict[str, Any], route: str) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _family_presentation(config: Dict[str, Any], family: str) -> Dict[str, Any]:
+    presentations = config.get("catalog_family_presentations")
+    if not isinstance(presentations, dict):
+        return {}
+    value = presentations.get(family)
+    if not isinstance(value, dict):
+        return {}
+    result = dict(value)
+    result["_family_scoped"] = True
+    return result
+
+
+def presentation_for_route(
+    config: Dict[str, Any],
+    route: str,
+    model: Optional[Dict[str, Any]] = None,
+    *,
+    family_verified: bool = False,
+) -> Dict[str, Any]:
+    model = model or {}
+    family = model_family_identity(model, route)
+    if family_verified:
+        presentation = _family_presentation(config, family)
+        if presentation:
+            return presentation
+    return _route_presentation(config, route)
+
+
 def _apply_presentation(config: Dict[str, Any], entry: Dict[str, Any]) -> None:
     route = str(entry.get("slug") or "")
-    presentation = _presentation(config, route)
+    presentation = presentation_for_route(
+        config,
+        route,
+        entry,
+        family_verified=entry.get("_emp_family_verified") is True,
+    )
     entry["display_name"] = _display_name_with_context(
         entry, presentation
     )
@@ -104,7 +142,7 @@ def _apply_presentation(config: Dict[str, Any], entry: Dict[str, Any]) -> None:
         entry["default_reasoning_summary"] = "auto"
 
 
-def _family_identity(model: Dict[str, Any], fallback: str) -> str:
+def model_family_identity(model: Dict[str, Any], fallback: str) -> str:
     explicit = model.get("family_id")
     if isinstance(explicit, str) and explicit.strip():
         return explicit.strip()
@@ -116,7 +154,7 @@ def _family_identity(model: Dict[str, Any], fallback: str) -> str:
     return fallback
 
 
-def _has_explicit_family_identity(model: Dict[str, Any]) -> bool:
+def has_explicit_family_identity(model: Dict[str, Any]) -> bool:
     return any(
         isinstance(model.get(field), str) and bool(model.get(field).strip())
         for field in ("family_id", "upstream_id")
@@ -290,6 +328,7 @@ def _account_entry(account: Dict[str, Any], native: Dict[str, Any]) -> Dict[str,
     entry["display_name"] = _display_name_with_context(entry)
     entry["description"] = "ChatGPT subscription: %s" % (account.get("name") or account["prefix"])
     entry["description"] = _description_with_context(entry)
+    entry["_emp_source_label"] = account.get("name") or account["prefix"]
     entry["visibility"] = native.get("visibility", "list")
     entry["supported_in_api"] = native.get("supported_in_api", True)
     return entry
@@ -327,12 +366,13 @@ def subscription_model_options(config: Dict[str, Any]) -> List[Dict[str, str]]:
 def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
     native = load_native_catalog(config)
     duplicate_accounts = duplicate_account_status(config.get("accounts", []))
-    native_hidden_models = {
+    native_hidden_models = set(config.get("native_hidden_models", []))
+    native_hidden_models.update(
         model_id
         for account in config.get("accounts", [])
         if duplicate_accounts.get(account.get("id")) == "当前 Codex 登录"
         for model_id in account.get("hidden_models", [])
-    }
+    )
     native_models = [
         copy.deepcopy(item)
         for item in native["models"]
@@ -344,9 +384,8 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
         )
     ]
     for model_index, model in enumerate(native_models):
-        _apply_presentation(config, model)
         slug = str(model.get("slug") or "")
-        model["_emp_family"] = _family_identity(model, slug)
+        model["_emp_family"] = model_family_identity(model, slug)
         model["_emp_family_verified"] = True
         model["_emp_release"] = _release_value(model)
         model["_emp_source_rank"] = 0
@@ -374,7 +413,7 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
             alias = _account_entry(account, model)
             if alias["slug"] not in existing:
                 native_slug = str(model.get("slug") or "")
-                alias["_emp_family"] = _family_identity(model, native_slug)
+                alias["_emp_family"] = model_family_identity(model, native_slug)
                 alias["_emp_family_verified"] = True
                 alias["_emp_release"] = _release_value(model)
                 alias["_emp_source_rank"] = 1
@@ -399,8 +438,12 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
             template,
             providers_by_id.get(str(model.get("provider") or ""), {}),
         )
-        entry["_emp_family"] = _family_identity(model, model["id"])
-        entry["_emp_family_verified"] = _has_explicit_family_identity(model)
+        entry["_emp_family"] = model_family_identity(model, model["id"])
+        entry["_emp_family_verified"] = has_explicit_family_identity(model)
+        provider = providers_by_id.get(str(model.get("provider") or ""), {})
+        entry["_emp_source_label"] = str(
+            provider.get("name") or provider.get("id") or model.get("provider") or ""
+        )
         entry["_emp_release"] = _release_value(model)
         entry["_emp_source_rank"] = 2
         entry["_emp_source_order"] = (
@@ -475,6 +518,7 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
             "_emp_source_rank",
             "_emp_source_order",
             "_emp_order",
+            "_emp_source_label",
         ):
             entry.pop(field, None)
     return {"models": result}

@@ -129,6 +129,30 @@ class ConfigTests(unittest.TestCase):
                 }
             })
 
+    def test_family_presentations_and_native_visibility_are_bounded_config(self):
+        value = normalize(
+            {
+                "native_hidden_models": ["gpt-5.5", "gpt-5.5"],
+                "catalog_family_presentations": {
+                    "gpt-5.6-sol": {
+                        "catalog_alias": "将军",
+                        "show_context": False,
+                        "reasoning_summary": "show",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(value["native_hidden_models"], ["gpt-5.5"])
+        self.assertEqual(
+            value["catalog_family_presentations"]["gpt-5.6-sol"],
+            {
+                "catalog_alias": "将军",
+                "show_context": False,
+                "reasoning_summary": "show",
+            },
+        )
+
     def test_reasoning_summary_capability_is_explicit_and_persisted(self):
         for value in (True, False, None):
             with self.subTest(value=value):

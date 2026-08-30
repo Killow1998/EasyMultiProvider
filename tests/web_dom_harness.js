@@ -16,6 +16,7 @@ let discoveredOptions = [];
 let catalogAliases = [];
 let catalogContexts = [];
 let catalogSummaries = [];
+let subscriptionModelInputs = [];
 
 class Element {
   constructor(id = "") {
@@ -34,7 +35,7 @@ class Element {
   }
   set innerHTML(value) {
     this._innerHTML = String(value);
-    if (this.id === "modal_body") parseDiscoveredOptions(this._innerHTML);
+    if (this.id === "modal_body") { parseDiscoveredOptions(this._innerHTML); parseSubscriptionOptions(this._innerHTML); }
     if (this.id === "catalog_display_models") parseCatalogDisplay(this._innerHTML);
   }
   get innerHTML() { return this._innerHTML; }
@@ -80,6 +81,13 @@ function parseDiscoveredOptions(html) {
   }
 }
 
+function parseSubscriptionOptions(html) {
+  subscriptionModelInputs = [];
+  for (const match of html.matchAll(/<input type="checkbox" name="subscription_model" value="([^"]*)"([^>]*)>/g)) {
+    const input = new Element(); input.value = unescapeHtml(match[1]); input.checked = /\schecked(?:\s|$)/.test(match[2]); subscriptionModelInputs.push(input);
+  }
+}
+
 function getElement(id) {
   if (!elements.has(id)) elements.set(id, new Element(id));
   return elements.get(id);
@@ -95,6 +103,8 @@ const document = {
     if (selector === 'input[name="discovered_model"]:checked') {
       return discoveredOptions.map(option => option.input).filter(input => input.checked);
     }
+    if (selector === 'input[name="subscription_model"]') return subscriptionModelInputs;
+    if (selector === 'input[name="subscription_model"]:checked') return subscriptionModelInputs.filter(input => input.checked);
     if (selector === "[data-catalog-alias]") return catalogAliases;
     if (selector === "[data-catalog-context]") return catalogContexts;
     if (selector === "[data-catalog-summary]") return catalogSummaries;
@@ -173,10 +183,10 @@ async function integrationBehavior() {
   assert.match(getElement("status").textContent, /next|下次/i);
   assert(getElement("modal_backdrop").classList.contains("hidden"), "successful modal must close");
 
-  run("renderIntegration({codex_compatibility:{installed:'0.150.1',status:'supported',supported_range:'0.149.x–0.151.x',recommended:'0.151.x'},configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'emp_loaded',target:'emp',verified:true,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
+  run("renderIntegration({codex_compatibility:{installed:'0.151.2',status:'recommended',source:'managed',path_cli:{installed:'0.146.0',status:'unsupported'},supported_range:'0.149.x–0.151.x',recommended:'0.151.x'},configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'emp_loaded',target:'emp',verified:true,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
   assert.match(getElement("integration_summary").textContent, /loaded|已加载/i);
-  assert.match(getElement("codex_compatibility").textContent, /0\.150\.1.*0\.149\.x.*0\.151\.x/);
-  assert.strictEqual(getElement("codex_compatibility").dataset.state, "supported");
+  assert.match(getElement("codex_compatibility").textContent, /托管 Codex runtime 0\.151\.2.*独立命令行 0\.146\.0.*0\.149\.x.*0\.151\.x/);
+  assert.strictEqual(getElement("codex_compatibility").dataset.state, "recommended");
   run("renderIntegration({configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'stopped_waiting_for_start',target:'emp',verified:false,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
   assert.match(getElement("integration_summary").textContent, /next|下次/i);
 
@@ -280,11 +290,89 @@ function pickerBehavior() {
 }
 
 function duplicateAccountBehavior() {
-  run("state = {accounts:[{id:'same-login-account',prefix:'same-login-account',duplicate:true,duplicate_of:'当前 Codex 登录',credential_set:true},{id:'usable-account',prefix:'usable-account',duplicate:false,credential_set:true}]}; renderAccounts()");
+  run("state = {native_account:{id:'@native',name:'当前 Codex 登录',prefix:'',native:true,credential_set:true,hidden_models:[]},accounts:[{id:'same-login-account',prefix:'same-login-account',duplicate:true,duplicate_of:'当前 Codex 登录',credential_set:true},{id:'usable-account',prefix:'usable-account',duplicate:false,credential_set:true}]}; renderAccounts()");
   const html = getElement("accounts").innerHTML;
+  assert.match(html, /当前 Codex 登录/);
+  assert.match(html, /Native/);
   assert.match(html, /same-login-account/);
   assert.match(html, /usable-account/);
-  assert.match(html, /可见性设置作用于原生列表/);
+  assert.match(html, /模型显示由原生账户管理/);
+  const nativeRow = html.split("当前 Codex 登录")[1].split("</tr>")[0];
+  assert.doesNotMatch(nativeRow, /removeAccount\('@native'\)/);
+  const duplicateRow = html.split("</tr>").find(row => row.includes("same-login-account"));
+  assert(duplicateRow, "duplicate account row must render");
+  assert.match(duplicateRow, /account-duplicate/);
+  assert.doesNotMatch(duplicateRow, /editAccount\('same-login-account'\)/);
+  assert.match(duplicateRow, /refreshAccount\('same-login-account'\)/);
+  assert.match(duplicateRow, /openQuotaHistory\('same-login-account'\)/);
+}
+
+function quotaHistoryBehavior() {
+  run("renderQuotaHistory({series:[]}, '1d')");
+  assert.match(getElement("quota_history_content").innerHTML, /暂无额度历史/);
+  context.__quotaPayload = {series:[{limit_id:'codex',window_kind:'primary',window_minutes:10080,points:[{observed_at:1000,remaining_percent:80},{observed_at:1300,remaining_percent:75}]}]};
+  run("renderQuotaHistory(__quotaPayload, '1h')");
+  const html = getElement("quota_history_content").innerHTML;
+  assert.match(html, /<svg/);
+  assert.match(html, /主窗口/);
+  assert.match(html, /75%/);
+  assert.match(html, /每 5 分钟自动采样/);
+
+  for (const [seriesValues, expectedMin, expectedMax] of [
+    [[[72,74],[80]], 71, 81],
+    [[[74.1,74.2]], 73, 76],
+    [[[50,50]], 49, 51],
+    [[[0]], 0, 1],
+    [[[100]], 99, 100],
+    [[[0,100]], 0, 100],
+  ]) {
+    context.__axisSeries = seriesValues.map(values => ({points:values.map((value, index) => ({observed_at:1000 + index * 300, remaining_percent:value}))}));
+    const svg = run("quotaChartSvg(__axisSeries)");
+    const ticks = [...svg.matchAll(/>([\d.]+)%<\/text>/g)].map(match => Number(match[1]));
+    assert.strictEqual(ticks.length, 5);
+    assert.strictEqual(ticks[0], expectedMin);
+    assert.strictEqual(ticks[4], expectedMax);
+    assert.doesNotMatch(svg, /NaN|Infinity/);
+  }
+  assert.strictEqual(run("quotaChartSvg([])"), "");
+}
+
+async function nativeAccountBehavior() {
+  run("state = {native_account:{id:'@native',name:'Current Codex login',prefix:'',native:true,credential_set:true,hidden_models:['model-b']},native_hidden_models:['model-b'],catalog_presentations:{},catalog_family_presentations:{},catalog_families:[],subscription_models:[{id:'model-a',display_name:'Model A'},{id:'model-b',display_name:'Model B'}],accounts:[{id:'legacy',prefix:'legacy',duplicate:true,duplicate_of:'当前 Codex 登录',hidden_models:['model-b']}],providers:[],models:[]}; editAccount('@native')");
+  assert.doesNotMatch(getElement("modal_body").innerHTML, /modal_account_alias/);
+  assert.deepStrictEqual(subscriptionModelInputs.map(input => input.checked), [true, false]);
+  subscriptionModelInputs[0].checked = false;
+  subscriptionModelInputs[1].checked = true;
+  context.__persistStateStub = async (_message, candidate) => { context.__savedNativeCandidate = candidate; context.state = candidate; };
+  run("__realPersistState = persistState; persistState = __persistStateStub");
+  await getElement("modal_submit").click();
+  run("persistState = __realPersistState");
+  assert.deepStrictEqual(Array.from(run("__savedNativeCandidate.native_hidden_models")), ["model-a"]);
+  assert.deepStrictEqual(Array.from(run("__savedNativeCandidate.accounts[0].hidden_models")), []);
+}
+
+async function accountEmojiBehavior() {
+  run("state = {accounts:[{id:'ship',name:'ship',prefix:'ship',hidden_models:[]}],subscription_models:[{id:'model-a',display_name:'Model A'}],catalog_presentations:{'ship/model-a':{catalog_alias:'Keep me'}},providers:[],models:[]}; editAccount('ship')");
+  getElement("modal_account_alias").value = "🚢";
+  context.__persistStateStub = async (_message, candidate) => { context.__savedEmojiCandidate = candidate; };
+  run("__realPersistState = persistState; persistState = __persistStateStub");
+  await getElement("modal_submit").click();
+  run("persistState = __realPersistState");
+  assert.strictEqual(run("__savedEmojiCandidate.accounts[0].name"), "🚢");
+  assert.strictEqual(run("__savedEmojiCandidate.accounts[0].prefix"), "ship");
+  assert.strictEqual(run("__savedEmojiCandidate.catalog_presentations['ship/model-a'].catalog_alias"), "Keep me");
+  run("state = __savedEmojiCandidate; renderAccounts()");
+  assert.match(getElement("accounts").innerHTML, /class="pill">🚢<\/span>/);
+}
+
+async function quotaErrorBehavior() {
+  context.__quotaError = Object.assign(new Error("safe fallback"), {payload:{error:{code:'quota_auth_required'}}});
+  context.__apiQuotaError = async () => { throw context.__quotaError; };
+  run("__realQuotaApi = api; api = __apiQuotaError");
+  assert.strictEqual(await run("refreshAccount('ship', false)"), false);
+  assert.match(getElement("accounts").innerHTML, /相同账户 ID 导入最新 auth.json/);
+  assert.doesNotMatch(getElement("accounts").innerHTML, /safe fallback/);
+  run("api = __realQuotaApi");
 }
 
 function modelGroupBehavior() {
@@ -342,14 +430,14 @@ function capabilityMetadataBehavior() {
 }
 
 async function presentationBehavior() {
-  run("state = {catalog_presentations:{'provider-a/other':{catalog_alias:'General',show_context:true,reasoning_summary:'auto'}},catalog_models:[{id:'native-model',default_display_name:'Native Model',display_name:'[ 258K]  Native Model',context_window:258000,source_type:'native',source_id:'',supports_reasoning_summaries:true},{id:'provider-a/model',default_display_name:'provider-a/model',display_name:'[ 258K]  provider-a/model',context_window:258000,source_type:'provider',source_id:'provider-a',supports_reasoning_summaries:true}],subscription_models:[{id:'native-model',display_name:'Native Model',context_window:258000}],providers:[{id:'provider-a',name:'Provider A'}],accounts:[],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',display_name:'Model',context_window:258000,enabled:true}]} ");
+  run("state = {catalog_presentations:{'provider-a/model':{catalog_alias:'Legacy',show_context:true,reasoning_summary:'auto'}},catalog_family_presentations:{},catalog_families:[{id:'native-model',default_display_name:'Native Model',display_name:'Native Model',context_window:258000,supports_reasoning_summaries:true,routes:[{id:'native-model',source_type:'native',source_id:''}]},{id:'model',default_display_name:'Model',display_name:'Model',context_window:258000,supports_reasoning_summaries:true,routes:[{id:'provider-a/model',source_type:'provider',source_id:'provider-a'}]}],subscription_models:[{id:'native-model',display_name:'Native Model',context_window:258000}],providers:[{id:'provider-a',name:'Provider A'}],accounts:[],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',display_name:'Model',context_window:258000,enabled:true}]} ");
   run("renderCatalogDisplay()");
   assert.match(getElement("catalog_display_models").innerHTML, /data-catalog-alias/);
   assert.match(getElement("catalog_display_models").innerHTML, /provider-a\/model/);
-  const alias = catalogAliases.find(input => input.dataset.route === "provider-a/model");
-  const contextInput = catalogContexts.find(input => input.dataset.route === "provider-a/model");
-  const summary = catalogSummaries.find(input => input.dataset.route === "provider-a/model");
-  assert(alias && contextInput && summary, "display controls must be rendered for every catalog route");
+  const alias = catalogAliases.find(input => input.dataset.route === "model");
+  const contextInput = catalogContexts.find(input => input.dataset.route === "model");
+  const summary = catalogSummaries.find(input => input.dataset.route === "model");
+  assert(alias && contextInput && summary, "display controls must be rendered once per model family");
   alias.value = "General";
   contextInput.checked = false;
   summary.value = "hide";
@@ -357,10 +445,11 @@ async function presentationBehavior() {
   run("__realPersistState = persistState; persistState = __persistStateStub");
   await run("saveCatalogDisplay()");
   run("persistState = __realPersistState");
-  const saved = run("__savedCandidate.catalog_presentations['provider-a/model']");
+  const saved = run("__savedCandidate.catalog_family_presentations['model']");
   assert.strictEqual(saved.catalog_alias, "General");
   assert.strictEqual(saved.show_context, false);
   assert.strictEqual(saved.reasoning_summary, "hide");
+  assert.strictEqual(run("__savedCandidate.catalog_presentations['provider-a/model']"), undefined);
   run("openManualModelModal('provider-a/model')");
   assert.doesNotMatch(getElement("modal_body").innerHTML, /Codex 显示名称|Reasoning summary/);
   assert.match(getElement("modal_body").innerHTML, /模型列表显示/);
@@ -368,21 +457,18 @@ async function presentationBehavior() {
 
 function presentationMigrationBehavior() {
   run("state = {catalog_presentations:{'old/model-a':{catalog_alias:'General',show_context:false,reasoning_summary:'hide'},'old/model-b':{catalog_alias:'Builder',show_context:true,reasoning_summary:'auto'},'native-model':{catalog_alias:'Native',show_context:true,reasoning_summary:'show'}}}");
-  run("movePresentationPrefix('old', 'new')");
+  run("movePresentation('old/model-a', 'provider/model-a')");
   assert.strictEqual(run("state.catalog_presentations['old/model-a']"), undefined);
-  assert.strictEqual(run("state.catalog_presentations['new/model-a'].catalog_alias"), "General");
-  assert.strictEqual(run("state.catalog_presentations['new/model-a'].show_context"), false);
-  assert.strictEqual(run("state.catalog_presentations['new/model-b'].catalog_alias"), "Builder");
+  assert.strictEqual(run("state.catalog_presentations['provider/model-a'].catalog_alias"), "General");
+  assert.strictEqual(run("state.catalog_presentations['provider/model-a'].show_context"), false);
+  assert.strictEqual(run("state.catalog_presentations['old/model-b'].catalog_alias"), "Builder");
   assert.strictEqual(run("state.catalog_presentations['native-model'].catalog_alias"), "Native");
-
-  run("movePresentation('new/model-a', 'provider/model-a')");
-  assert.strictEqual(run("state.catalog_presentations['new/model-a']"), undefined);
   assert.strictEqual(run("state.catalog_presentations['provider/model-a'].reasoning_summary"), "hide");
 
-  run("state.emp_version = '0.9.2'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.2.emp");
+  run("state.emp_version = '0.9.3'");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.3.emp");
   run("state.emp_version = '../../unsafe'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.2.emp");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.3.emp");
 }
 
 function modalDismissalBehavior() {
@@ -446,6 +532,10 @@ async function atomicStateBehavior() {
   await integrationBehavior();
   pickerBehavior();
   duplicateAccountBehavior();
+  quotaHistoryBehavior();
+  await nativeAccountBehavior();
+  await accountEmojiBehavior();
+  await quotaErrorBehavior();
   modelGroupBehavior();
   officialPresetBehavior();
   capabilityMetadataBehavior();

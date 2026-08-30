@@ -26,9 +26,11 @@ from urllib.request import getproxies
 
 from . import __version__
 from .accounts import (
+    NATIVE_ACCOUNT_ID,
     account_root,
     duplicate_account_status,
     import_account,
+    migrate_duplicate_native_visibility,
     public_accounts,
     valid_caller_authorization,
 )
@@ -106,6 +108,12 @@ from .native_websocket import (
     terminal_observation as native_websocket_terminal,
 )
 from .quota import QuotaError, account_refresh_lock, read_native_login_quota, refresh_account_quota
+from .quota_history import (
+    QuotaHistoryError,
+    QuotaHistoryStore,
+    SAMPLE_INTERVAL_SECONDS,
+    quota_history_path,
+)
 from .provider_replay import ProviderReplayCache
 from .history_continuity import (
     CodexHomeHistoryReader,
@@ -568,8 +576,8 @@ def _diagnostic_http_path(raw_target: Any) -> str:
     if suffix and "/" not in suffix:
         return prefix + "{account}"
     account, separator, operation = suffix.partition("/")
-    if account and separator and operation == "quota":
-        return prefix + "{account}/quota"
+    if account and separator and operation in {"quota", "quota-history"}:
+        return prefix + "{account}/" + operation
     return path
 
 
@@ -935,6 +943,11 @@ class AppState:
             if integration_manager is not None
             else resolve_integration_paths().codex_home
         )
+        self.codex_home = Path(codex_home)
+        self._native_quota: Optional[Dict[str, Any]] = None
+        self.quota_history = QuotaHistoryStore(quota_history_path(self.path))
+        self._quota_sampler_stop = threading.Event()
+        self._quota_sampler_thread: Optional[threading.Thread] = None
         self.history_continuity = HistoryContinuityEngine(
             history_reader or CodexHomeHistoryReader(codex_home)
         )
@@ -987,7 +1000,11 @@ class AppState:
         self._native_websocket_cooldowns: Dict[str, float] = {}
         self.config = load(self.path)
         self._load_runtime_recovery()
-        if any(
+        self.config, visibility_migrated = migrate_duplicate_native_visibility(
+            self.config,
+            duplicate_account_status(self.config.get("accounts", [])),
+        )
+        if visibility_migrated or any(
             provider.get("api_key") for provider in self.config.get("providers", [])
         ):
             save(self.config, self.path)
@@ -1010,6 +1027,34 @@ class AppState:
         with self.lock:
             return json.loads(json.dumps(self.config))
 
+    def native_account_snapshot(self) -> Dict[str, Any]:
+        auth_path = self.codex_home / "auth.json"
+        try:
+            credential_set = auth_path.is_file() and not auth_path.is_symlink()
+        except OSError:
+            credential_set = False
+        with self.lock:
+            hidden_models = list(self.config.get("native_hidden_models", []))
+            quota = (
+                json.loads(json.dumps(self._native_quota))
+                if self._native_quota is not None
+                else None
+            )
+        return {
+            "id": NATIVE_ACCOUNT_ID,
+            "name": "Current Codex login",
+            "prefix": "",
+            "native": True,
+            "credential_set": credential_set,
+            "hidden_models": hidden_models,
+            "quota": quota,
+        }
+
+    def management_snapshot(self) -> Dict[str, Any]:
+        return management_config(
+            self.snapshot(), native_account=self.native_account_snapshot()
+        )
+
     def _routing_snapshot(self) -> Dict[str, Any]:
         """Return transient route context without exposing it as Web config."""
 
@@ -1031,6 +1076,7 @@ class AppState:
                     paths.lease_path,
                     lock_path=paths.lock_path,
                 )
+                self.codex_home = Path(self.integration_manager.config_path.parent)
                 if isinstance(self.runtime_controller, CodexRuntimeController):
                     self.runtime_controller.set_target_codex_home(
                         self.integration_manager.config_path.parent
@@ -1346,6 +1392,10 @@ class AppState:
     def update(self, incoming: Dict[str, Any]) -> Dict[str, Any]:
         with self.lock:
             updated = merge_web_update(self.config, incoming, self.path)
+            updated, _ = migrate_duplicate_native_visibility(
+                updated,
+                duplicate_account_status(updated.get("accounts", [])),
+            )
             save(updated, self.path)
             self.config = load(self.path)
             result = self.snapshot()
@@ -1794,6 +1844,10 @@ class AppState:
                 updated = dict(self.config)
                 updated["accounts"] = accounts
                 self.config = load_from_value(updated)
+                self.config, _ = migrate_duplicate_native_visibility(
+                    self.config,
+                    duplicate_account_status(self.config.get("accounts", [])),
+                )
                 save(self.config, self.path)
                 return account
 
@@ -1816,17 +1870,115 @@ class AppState:
             # stale snapshot; do not request token rotation and never persist
             # back to the EMP vault or mutate the native auth file.
             duplicates = duplicate_account_status([target])
+            executable = getattr(self.runtime_controller, "executable", None)
+            codex_binary = executable() if callable(executable) else "codex"
             if account_id in duplicates:
-                quota = read_native_login_quota()
+                quota = read_native_login_quota(
+                    codex_binary=codex_binary, auth_path=self.codex_home / "auth.json"
+                )
             else:
-                quota = refresh_account_quota(target)
+                quota = refresh_account_quota(target, codex_binary=codex_binary)
             with self.lock:
                 for item in self.config.get("accounts", []):
                     if item.get("id") == account_id and item.get("auth_file") == target.get("auth_file"):
                         item["quota"] = quota
                         save(self.config, self.path)
-                        return dict(item)
-                raise QuotaError("account changed during quota refresh")
+                        result = dict(item)
+                        break
+                else:
+                    raise QuotaError("account changed during quota refresh")
+            self._record_quota_snapshot(account_id, quota)
+            return result
+
+    def refresh_native_account(self) -> Dict[str, Any]:
+        with account_refresh_lock(NATIVE_ACCOUNT_ID):
+            executable = getattr(self.runtime_controller, "executable", None)
+            codex_binary = executable() if callable(executable) else "codex"
+            quota = read_native_login_quota(
+                codex_binary=codex_binary,
+                auth_path=self.codex_home / "auth.json",
+            )
+            with self.lock:
+                self._native_quota = quota
+            self._record_quota_snapshot(NATIVE_ACCOUNT_ID, quota)
+        return self.native_account_snapshot()
+
+    def _quota_owner_key(self, account_id: str) -> str:
+        if account_id == NATIVE_ACCOUNT_ID:
+            return NATIVE_ACCOUNT_ID
+        with self.lock:
+            accounts = [dict(item) for item in self.config.get("accounts", [])]
+        if not any(item.get("id") == account_id for item in accounts):
+            raise QuotaError("unknown account: %s" % account_id)
+        source = duplicate_account_status(accounts).get(account_id)
+        if source == "当前 Codex 登录":
+            return NATIVE_ACCOUNT_ID
+        return source or account_id
+
+    def _record_quota_snapshot(
+        self, account_id: str, quota: Mapping[str, Any]
+    ) -> bool:
+        try:
+            owner = self._quota_owner_key(account_id)
+            return bool(self.quota_history.append_snapshot(owner, quota))
+        except (OSError, QuotaError, QuotaHistoryError):
+            return False
+
+    def quota_history_snapshot(
+        self, account_id: str, range_name: str
+    ) -> Dict[str, Any]:
+        owner = self._quota_owner_key(account_id)
+        result = self.quota_history.query(owner, range_name)
+        result["account_id"] = account_id
+        return result
+
+    def sample_quotas_once(self) -> Dict[str, int]:
+        with self.lock:
+            accounts = [dict(item) for item in self.config.get("accounts", [])]
+        duplicates = duplicate_account_status(accounts)
+        sampled = 0
+        failed = 0
+        if self.native_account_snapshot().get("credential_set"):
+            try:
+                self.refresh_native_account()
+                sampled += 1
+            except (OSError, QuotaError, ValueError):
+                failed += 1
+        for account in accounts:
+            account_id = account.get("id")
+            if not isinstance(account_id, str) or not account.get("auth_file"):
+                continue
+            if account_id in duplicates:
+                continue
+            try:
+                self.refresh_account(account_id)
+                sampled += 1
+            except (OSError, QuotaError, ValueError):
+                failed += 1
+        return {"sampled": sampled, "failed": failed}
+
+    def _quota_sampler_loop(self) -> None:
+        while not self._quota_sampler_stop.wait(SAMPLE_INTERVAL_SECONDS):
+            self.sample_quotas_once()
+
+    def start_quota_sampler(self) -> None:
+        if self._quota_sampler_thread is not None:
+            return
+        self._quota_sampler_stop.clear()
+        thread = threading.Thread(
+            target=self._quota_sampler_loop,
+            name="emp-quota-sampler",
+            daemon=True,
+        )
+        self._quota_sampler_thread = thread
+        thread.start()
+
+    def stop_quota_sampler(self) -> None:
+        self._quota_sampler_stop.set()
+        thread = self._quota_sampler_thread
+        self._quota_sampler_thread = None
+        if thread is not None:
+            thread.join(timeout=1)
 
     def delete_account(self, account_id: str) -> None:
         with self.lock:
@@ -1836,6 +1988,7 @@ class AppState:
             self._delete_account(account_id)
 
     def _delete_account(self, account_id: str) -> None:
+        owner = self._quota_owner_key(account_id)
         with self.lock:
             accounts = self.config.get("accounts", [])
             target = next((item for item in accounts if item.get("id") == account_id), None)
@@ -1868,6 +2021,8 @@ class AppState:
                 account_dir.rmdir()
             except OSError:
                 pass
+        if owner == account_id:
+            self.quota_history.delete_account(account_id)
 
 
 def load_from_value(value: Dict[str, Any]) -> Dict[str, Any]:
@@ -2340,8 +2495,7 @@ def make_handler(state: AppState):
                                 upstream_incremental_capable=probe is not None,
                                 live_connection=(
                                     probe is not None
-                                    and native_upstream.connection_key
-                                    == probe.target.connection_key
+                                    and native_upstream.can_continue(probe.target)
                                 ),
                             ),
                         )
@@ -2660,7 +2814,8 @@ def make_handler(state: AppState):
                 websocket.close()
 
         def do_GET(self) -> None:
-            path = urlparse(self.path).path
+            parsed = urlparse(self.path)
+            path = parsed.path
             if path == "/v1/responses" and self.headers.get("Upgrade", "").lower() == "websocket":
                 self._serve_responses_websocket()
                 return
@@ -2696,7 +2851,7 @@ def make_handler(state: AppState):
                 self._send(200, _json_bytes({"status": "ok"}))
                 return
             if path == "/api/config":
-                self._send(200, _json_bytes(management_config(state.snapshot())))
+                self._send(200, _json_bytes(state.management_snapshot()))
                 return
             if path == "/api/capabilities":
                 try:
@@ -2708,7 +2863,31 @@ def make_handler(state: AppState):
                 self._send(200, _json_bytes(state.diagnostics.snapshot()))
                 return
             if path == "/api/accounts":
-                self._send(200, _json_bytes({"accounts": public_accounts(state.snapshot().get("accounts", []))}))
+                self._send(
+                    200,
+                    _json_bytes(
+                        {
+                            "native_account": state.native_account_snapshot(),
+                            "accounts": public_accounts(
+                                state.snapshot().get("accounts", [])
+                            ),
+                        }
+                    ),
+                )
+                return
+            account_prefix = "/api/accounts/"
+            history_suffix = "/quota-history"
+            if path.startswith(account_prefix) and path.endswith(history_suffix):
+                account_id = unquote(path[len(account_prefix) : -len(history_suffix)])
+                query = parse_qs(parsed.query)
+                range_name = (query.get("range") or ["1d"])[0]
+                try:
+                    payload = state.quota_history_snapshot(account_id, range_name)
+                    self._send(200, _json_bytes(payload))
+                except QuotaHistoryError as exc:
+                    self._error(400, str(exc))
+                except QuotaError as exc:
+                    self._error(404, str(exc))
                 return
             if path == "/api/integration":
                 try:
@@ -2969,8 +3148,8 @@ def make_handler(state: AppState):
                     self._send(200, _json_bytes(summary))
                     return
                 if path == "/api/config":
-                    updated = state.update(body)
-                    self._send(200, _json_bytes(management_config(updated)))
+                    state.update(body)
+                    self._send(200, _json_bytes(state.management_snapshot()))
                     return
                 if path == "/api/providers/discover":
                     provider_id = body.get("provider")
@@ -3058,14 +3237,18 @@ def make_handler(state: AppState):
                     return
                 if path.startswith("/api/accounts/") and path.endswith("/quota"):
                     account_id = unquote(path[len("/api/accounts/") : -len("/quota")].rstrip("/"))
-                    account = state.refresh_account(account_id)
+                    account = (
+                        state.refresh_native_account()
+                        if account_id == NATIVE_ACCOUNT_ID
+                        else public_accounts([state.refresh_account(account_id)])[0]
+                    )
                     emit_operation(
                         "account_operation",
                         "success",
                         operation="quota_refresh",
                         account_ref=self._account_ref(account_id),
                     )
-                    self._send(200, _json_bytes({"account": public_accounts([account])[0]}))
+                    self._send(200, _json_bytes({"account": account}))
                     return
                 if path == "/api/catalog/refresh":
                     catalog_path = state.refresh_catalog()
@@ -3213,8 +3396,9 @@ def make_handler(state: AppState):
                 emit_operation_failure(exc)
                 status = exc.status if isinstance(exc, RouterError) else 400
                 if isinstance(exc, QuotaError):
-                    status = 503
-                self._error(status, str(exc))
+                    self._send(503, _json_bytes({"error": {"code": exc.code, "message": str(exc)}}))
+                else:
+                    self._error(status, str(exc))
             except Exception as exc:  # Keep server alive and avoid leaking request details.
                 emit_operation_failure(exc)
                 self._record_unexpected_exception(exc)
@@ -3524,6 +3708,7 @@ def _serve_owned(
                 host=str(listening_host),
                 port=int(listening_port),
             )
+            state.start_quota_sampler()
 
             print("EasyMultiProvider listening on %s" % base_url, flush=True)
             print("Network proxy: %s" % proxy_source, flush=True)
@@ -3578,6 +3763,7 @@ def _serve_owned(
         finally:
             try:
                 if state is not None:
+                    state.stop_quota_sampler()
                     restore_result = state.shutdown_restore()
             except Exception as exc:
                 restore_error = exc

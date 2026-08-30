@@ -6,7 +6,7 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 保留 Codex 原生使用体验的同时，把多个 ChatGPT Subscription、API Provider
 和外部模型加入同一个模型列表。
 
-当前源码版本为 `v0.9.2`。
+当前源码版本为 `v0.9.3`。
 
 ## 功能
 
@@ -31,8 +31,9 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 
 ## 安装
 
-EMP 需要系统已经安装 Codex CLI，并且可以通过 `codex` 命令调用。EMP 不会捆绑或
-替代 Codex CLI。
+EMP 需要当前 Codex 目录中存在 Codex 托管 runtime，或系统已安装可通过
+`codex` 命令调用的独立 Codex CLI。EMP 不会捆绑或替代它们。两者同时存在时，App
+集成优先使用托管 runtime，Web UI 会把不同版本的独立 `PATH` CLI 单独列出。
 
 EMP 支持 Codex CLI `0.149.x` 至 `0.151.x`，推荐使用 `0.151.x`。Web UI 会显示
 当前安装版本；更高版本会标记为“尚未验证”，更旧版本会标记为“不再支持”。
@@ -139,8 +140,11 @@ HTTP 正文、请求头、Cookie 和凭据。
 ## Web UI
 
 - **账户**：导入 `auth.json` 或 `auth.json.bk1` 等备份文件。导入时只需要填写
-  账户 ID，显示名称和模型前缀可以稍后修改。点击**刷新**会实时查询额度并保存新的
-  快照。每个 Subscription 都能控制哪些 Coding Agent 模型显示在 Codex 中。
+  账户 ID。显示名称 / 显示前缀可以稍后修改，支持 emoji；实际路由前缀保持不变。
+  点击**刷新**会实时查询额度并保存新的
+  快照。EMP 运行时每 5 分钟自动采样一次，并提供 1 小时、1 天、1 周和最多 15 天
+  的本地余量趋势；历史只包含额度指标，不包含凭据。每个 Subscription 都能控制哪些
+  Coding Agent 模型显示在 Codex 中。
 - **Provider**：选择支持的官方预设，或者通过 Base URL 和 API Key 添加自建
   Provider。
 - **模型**：拉取上游模型，并进行导入、测试、编辑、隐藏或删除。模型按照

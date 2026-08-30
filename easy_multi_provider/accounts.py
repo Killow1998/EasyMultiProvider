@@ -17,6 +17,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _MAX_AUTH_BYTES = 1024 * 1024
 _MAX_HIDDEN_MODELS = 1000
 _MAX_MODEL_ID_BYTES = 256
+NATIVE_ACCOUNT_ID = "@native"
 
 
 class AccountError(ValueError):
@@ -68,18 +69,18 @@ def _name(value: Any, fallback: str) -> str:
     return value.strip() or fallback
 
 
-def _hidden_models(value: Any) -> list:
+def normalize_hidden_models(value: Any, field: str = "account.hidden_models") -> list:
     if value is None:
         return []
     if not isinstance(value, list) or len(value) > _MAX_HIDDEN_MODELS:
-        raise AccountError("account.hidden_models must be a bounded list")
+        raise AccountError("%s must be a bounded list" % field)
     result = set()
     for item in value:
         if not isinstance(item, str) or not item.strip():
-            raise AccountError("account.hidden_models must contain model IDs")
+            raise AccountError("%s must contain model IDs" % field)
         model_id = item.strip()
         if len(model_id.encode("utf-8")) > _MAX_MODEL_ID_BYTES:
-            raise AccountError("account.hidden_models contains an oversized model ID")
+            raise AccountError("%s contains an oversized model ID" % field)
         result.add(model_id)
     return sorted(result)
 
@@ -116,7 +117,7 @@ def normalize_account(raw: Dict[str, Any]) -> Dict[str, Any]:
         "prefix": prefix,
         "auth_file": auth_file.strip(),
         "enabled": bool(raw.get("enabled", True)),
-        "hidden_models": _hidden_models(raw.get("hidden_models")),
+        "hidden_models": normalize_hidden_models(raw.get("hidden_models")),
         "quota": copy.deepcopy(raw.get("quota")) if isinstance(raw.get("quota"), dict) else None,
     }
 
@@ -285,6 +286,37 @@ def duplicate_account_status(accounts: Iterable[Dict[str, Any]]) -> Dict[str, st
         for identity in identities:
             seen[identity] = account["id"]
     return duplicates
+
+
+def migrate_duplicate_native_visibility(
+    config: Dict[str, Any], duplicates: Dict[str, str]
+) -> Tuple[Dict[str, Any], bool]:
+    """Move legacy duplicate-account visibility into the Native owner once."""
+
+    hidden_models = list(config.get("native_hidden_models", []))
+    hidden_seen = set(hidden_models)
+    accounts = []
+    changed = False
+    for raw in config.get("accounts", []):
+        account = dict(raw)
+        if duplicates.get(account.get("id")) == "当前 Codex 登录":
+            legacy_hidden = list(account.get("hidden_models", []))
+            for model_id in legacy_hidden:
+                if model_id not in hidden_seen:
+                    hidden_models.append(model_id)
+                    hidden_seen.add(model_id)
+            if legacy_hidden:
+                account["hidden_models"] = []
+                changed = True
+        accounts.append(account)
+    if hidden_models != list(config.get("native_hidden_models", [])):
+        changed = True
+    if not changed:
+        return config, False
+    result = dict(config)
+    result["native_hidden_models"] = hidden_models
+    result["accounts"] = accounts
+    return result, True
 
 
 def _auth_headers_from_value(auth: Dict[str, Any]) -> Dict[str, str]:

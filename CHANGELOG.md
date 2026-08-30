@@ -1,6 +1,34 @@
 # Changelog
 
-## Unreleased
+## 0.9.3 (2026-08-30)
+
+### Codex and catalog management
+
+- Show the current `.codex` login beside imported Subscription accounts, with
+  credential-free quota refresh and direct Native model visibility controls.
+- Make Native the sole visibility owner when an imported account duplicates the
+  current `.codex` login, while retaining quota refresh on the duplicate row.
+- Apply display name, context label, and reasoning-summary policy once per
+  canonical model family while retaining account and Provider source prefixes.
+- Shorten the browser title and heading to `EMP`.
+- Prefer the Codex-managed runtime for integration and report an
+  older standalone `PATH` CLI separately.
+- Sample each unique Subscription quota every five minutes and show local
+  one-hour, one-day, one-week, and 15-day trends without storing credentials.
+- Scale quota charts to the observed range so small changes remain readable.
+- Keep imported account route prefixes stable while allowing a separate
+  display label, including emoji, in the model catalog.
+- Classify imported-account quota refresh failures without replacing a stored
+  credential after an unsuccessful refresh, and use the selected managed Codex
+  runtime for quota requests.
+- Treat a disconnected same-route Native WebSocket as lost transport continuity
+  so Codex automatically retries the full request instead of upstream rejecting
+  an old `previous_response_id` on a new connection.
+
+### Packaging
+
+- Remove the opaque navy tile from the master application icon so generated
+  Windows, macOS, and Linux icons retain a transparent background.
 
 ## 0.9.2 (2026-08-30)
 

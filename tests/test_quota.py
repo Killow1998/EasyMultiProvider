@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import tempfile
@@ -8,6 +9,7 @@ from unittest.mock import patch
 from tests.support import ensure_test_master_key
 from easy_multi_provider import quota as quota_module
 from easy_multi_provider.quota import (
+    _query_app_server,
     _trusted_codex_binary,
     account_refresh_lock,
     parse_app_server_output,
@@ -309,6 +311,90 @@ class NativeLoginQuotaTests(unittest.TestCase):
                 self.returncode = -9
 
         return FakeProcess(), sent
+
+    def test_quota_rpc_errors_are_classified_without_exposing_response_bodies(self):
+        requests = [
+            {"id": 1, "method": "initialize"},
+            {"method": "initialized"},
+            {"id": 2, "method": "account/read"},
+            {"id": 3, "method": "account/rateLimits/read"},
+        ]
+        for error_text, code in (
+            ("codex account authentication required to read rate limits", "quota_auth_required"),
+            ("failed to fetch codex rate limits: GET https://example.invalid failed: 401 Unauthorized; content-type=text/plain; body=private-token", "quota_auth_required"),
+            ("failed to fetch codex rate limits: GET https://example.invalid failed: 403 Forbidden; content-type=text/plain; body=private-token", "quota_access_denied"),
+            ("failed to fetch codex rate limits: GET https://example.invalid failed: 429 Too Many Requests; content-type=text/plain; body=private-token", "quota_rate_limited"),
+            ("failed to fetch codex rate limits: private-token", "quota_fetch_failed"),
+        ):
+            with self.subTest(code=code):
+                process, _ = self._fake_process_factory(True)
+                process.stdout = io.StringIO("\n".join(json.dumps(value) for value in (
+                    {"id": 1, "result": {}},
+                    {"id": 2, "result": {"account": {"type": "chatgpt"}}},
+                    {"id": 3, "error": {"code": -32603, "message": error_text}},
+                )) + "\n")
+                with self.assertRaises(quota_module.QuotaError) as raised:
+                    _query_app_server(process, requests, 2)
+                self.assertEqual(raised.exception.code, code)
+                self.assertNotIn("private-token", str(raised.exception))
+                self.assertNotIn("example.invalid", str(raised.exception))
+                self.assertTrue(process.stdin.closed)
+
+    def test_missing_account_stops_before_quota_request(self):
+        process, _ = self._fake_process_factory(True)
+        process.stdout = io.StringIO(
+            '{"id":1,"result":{}}\n'
+            '{"id":2,"result":{"account":null,"requiresOpenaiAuth":true}}\n'
+        )
+        with self.assertRaises(quota_module.QuotaError) as raised:
+            _query_app_server(process, [
+                {"id": 1, "method": "initialize"}, {"method": "initialized"},
+                {"id": 2, "method": "account/read"},
+                {"id": 3, "method": "account/rateLimits/read"},
+            ], 2)
+        self.assertEqual(raised.exception.code, "quota_auth_required")
+        self.assertNotIn("account/rateLimits/read", process.stdin.body)
+
+    def test_rotated_imported_credentials_survive_quota_query_failure(self):
+        original = {"tokens": {"access_token": "old-access", "refresh_token": "old-refresh"}}
+        rotated = {"tokens": {"access_token": "new-access", "refresh_token": "new-refresh"}}
+        with tempfile.TemporaryDirectory() as directory:
+            auth_file = Path(directory) / "auth.json.enc"
+            write_encrypted_json(auth_file, original)
+            process, _ = self._fake_process_factory(True)
+
+            def start(*_args, **kwargs):
+                # Codex rotates and saves auth, then quota retrieval fails.
+                (Path(kwargs["cwd"]) / "auth.json").write_text(json.dumps(rotated), encoding="utf-8")
+                return process
+
+            with patch.object(quota_module, "_trusted_codex_binary", return_value=(Path('/codex'), (1, 2))), patch.object(
+                quota_module, "_verify_codex_binary"
+            ), patch.object(quota_module.subprocess, "Popen", side_effect=start), patch.object(
+                quota_module, "_query_app_server", side_effect=quota_module.QuotaError("quota fetch failed")
+            ):
+                with self.assertRaisesRegex(quota_module.QuotaError, "quota fetch failed"):
+                    read_account_quota({"auth_file": str(auth_file)})
+            self.assertEqual(quota_module.load_auth({"auth_file": str(auth_file)}), rotated)
+
+    def test_invalid_refreshed_credentials_do_not_replace_saved_login(self):
+        original = {"tokens": {"access_token": "old-access", "refresh_token": "old-refresh"}}
+        with tempfile.TemporaryDirectory() as directory:
+            auth_file = Path(directory) / "auth.json.enc"
+            write_encrypted_json(auth_file, original)
+            process, _ = self._fake_process_factory(True)
+
+            def start(*_args, **kwargs):
+                (Path(kwargs["cwd"]) / "auth.json").write_text('{}', encoding="utf-8")
+                return process
+
+            with patch.object(quota_module, "_trusted_codex_binary", return_value=(Path('/codex'), (1, 2))), patch.object(
+                quota_module, "_verify_codex_binary"
+            ), patch.object(quota_module.subprocess, "Popen", side_effect=start):
+                with self.assertRaises(quota_module.QuotaError) as raised:
+                    read_account_quota({"auth_file": str(auth_file)})
+            self.assertEqual(raised.exception.code, "quota_credentials_save_failed")
+            self.assertEqual(quota_module.load_auth({"auth_file": str(auth_file)}), original)
 
     def test_native_login_quota_uses_refresh_token_false(self):
         process, _sent = self._fake_process_factory(False)

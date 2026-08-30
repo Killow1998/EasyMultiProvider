@@ -60,8 +60,9 @@ service lifecycle is introduced.
 ## Runtime boundary
 
 The package contains EMP, its Python dependencies, and platform launcher/icon
-metadata. It does not contain Codex CLI, credentials, configuration, model
-catalogs, or generated state. The host must provide a working `codex` command.
+metadata. It does not contain Codex, credentials, configuration, model catalogs,
+or generated state. EMP prefers a compatible Codex App managed runtime when one
+is installed and falls back to a working `codex` command on `PATH`.
 
 ## GitHub Actions and Releases
 
@@ -69,7 +70,7 @@ Run the **Package** workflow manually from GitHub Actions:
 
 - leave `release_tag` blank to build and retain the four platform bundles as
   workflow artifacts for 14 days;
-- on the `main` branch, enter the exact source tag, such as `v0.9.2`, to wait
+- on the `main` branch, enter the exact source tag, such as `v0.9.3`, to wait
   for all four builds, merge their outputs, verify the complete 22-file
   manifest and every SHA-256 sidecar, and create a GitHub Draft Pre-release.
 

@@ -12,7 +12,13 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import quote, urlparse
 
-from .accounts import AccountError, canonicalize_account_paths, normalize_account, public_accounts
+from .accounts import (
+    AccountError,
+    canonicalize_account_paths,
+    normalize_account,
+    normalize_hidden_models,
+    public_accounts,
+)
 from .capabilities import (
     input_modalities_known,
     make_provenance,
@@ -43,7 +49,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "accounts": [],
     "providers": [],
     "models": [],
+    "native_hidden_models": [],
     "catalog_presentations": {},
+    "catalog_family_presentations": {},
     "subscription_search": {
         "enabled": False,
         "account_id": "",
@@ -602,8 +610,14 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     result["providers"] = providers
     result["models"] = models
     result["accounts"] = accounts
+    result["native_hidden_models"] = normalize_hidden_models(
+        raw.get("native_hidden_models"), "native_hidden_models"
+    )
     result["catalog_presentations"] = _normalize_catalog_presentations(
         raw.get("catalog_presentations")
+    )
+    result["catalog_family_presentations"] = _normalize_catalog_presentations(
+        raw.get("catalog_family_presentations")
     )
     result["subscription_search"] = _normalize_subscription_search(
         raw.get("subscription_search"), account_ids

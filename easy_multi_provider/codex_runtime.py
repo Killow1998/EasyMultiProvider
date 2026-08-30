@@ -672,14 +672,18 @@ class CodexRuntimeController:
         target_codex_home: Optional[Path] = None,
     ) -> None:
         self.runner = runner or SubprocessRunner()
-        self.codex_executable = codex_executable or shutil.which("codex") or "codex"
+        self._configured_codex_executable = codex_executable
+        self._path_codex_executable = shutil.which("codex")
+        self.codex_executable = (
+            codex_executable or self._path_codex_executable or "codex"
+        )
         self.control_timeout = max(0.01, float(control_timeout))
         self.observation_timeout = min(20.0, max(0.0, float(observation_timeout)))
         self.poll_interval = max(0.001, float(poll_interval))
         self.host_stopper = host_stopper
         self._compatibility_lock = threading.Lock()
         self._compatibility_checked_at = 0.0
-        self._compatibility: Optional[CodexCompatibility] = None
+        self._compatibility: Optional[Dict[str, Any]] = None
         self.target_codex_home = (
             _normalize_codex_home(target_codex_home)
             if target_codex_home is not None
@@ -690,6 +694,9 @@ class CodexRuntimeController:
         """Bind fallback process selection to the active integration manager."""
 
         self.target_codex_home = _normalize_codex_home(target_codex_home)
+        with self._compatibility_lock:
+            self._compatibility = None
+            self._compatibility_checked_at = 0.0
 
     def _targeted_host_stopper(self) -> Optional[TargetedHostStopper]:
         if self.host_stopper is not None:
@@ -698,8 +705,64 @@ class CodexRuntimeController:
             return None
         return TargetedCodexHostStopper(Path(self.target_codex_home))
 
+    def _managed_codex_executable(self) -> Optional[str]:
+        if self.target_codex_home is None:
+            return None
+        current = Path(self.target_codex_home) / "packages" / "standalone" / "current"
+        names = ("codex.exe", "codex") if os.name == "nt" else ("codex", "codex.exe")
+        candidates = [current / "bin" / name for name in names]
+        candidates.extend(current / name for name in names)
+        for candidate in candidates:
+            try:
+                if candidate.is_file() and (
+                    os.name == "nt" or os.access(str(candidate), os.X_OK)
+                ):
+                    return str(candidate)
+            except OSError:
+                continue
+        return None
+
+    @staticmethod
+    def _same_executable(left: str, right: str) -> bool:
+        try:
+            return Path(left).resolve() == Path(right).resolve()
+        except (OSError, RuntimeError, ValueError):
+            return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
+                os.path.abspath(right)
+            )
+
+    def _path_cli_executable(self) -> Optional[str]:
+        current = shutil.which("codex")
+        if current:
+            self._path_codex_executable = current
+        return self._path_codex_executable
+
+    def executable(self) -> str:
+        """Return the runtime EMP will control for the active Codex home."""
+
+        if self._configured_codex_executable:
+            return self._configured_codex_executable
+        return (
+            self._managed_codex_executable()
+            or self._path_cli_executable()
+            or self.codex_executable
+        )
+
     def _command(self, *parts: str) -> Tuple[str, ...]:
-        return (self.codex_executable, *parts)
+        return (self.executable(), *parts)
+
+    def _observe_compatibility(self, executable: str) -> CodexCompatibility:
+        result = self.runner.run(
+            (executable, "--version"),
+            timeout=min(self.control_timeout, 5.0),
+        )
+        if result.returncode == 0:
+            return classify_codex_version(result.stdout)
+        if result.returncode == 127 or "not found" in (
+            result.stdout + " " + result.stderr
+        ).casefold():
+            return unavailable_compatibility()
+        return CodexCompatibility(None, "unknown")
 
     def compatibility(self) -> Dict[str, Any]:
         """Return one bounded, short-lived observation of `codex --version`."""
@@ -710,24 +773,28 @@ class CodexRuntimeController:
                 and now - self._compatibility_checked_at
                 < _COMPATIBILITY_CACHE_SECONDS
             ):
-                return self._compatibility.public()
+                return dict(self._compatibility)
 
-        result = self.runner.run(
-            self._command("--version"),
-            timeout=min(self.control_timeout, 5.0),
+        executable = self.executable()
+        compatibility = self._observe_compatibility(executable)
+        public = compatibility.public()
+        source = (
+            "configured"
+            if self._configured_codex_executable
+            else "managed"
+            if self._managed_codex_executable() == executable
+            else "path_cli"
         )
-        if result.returncode == 0:
-            compatibility = classify_codex_version(result.stdout)
-        elif result.returncode == 127 or "not found" in (
-            result.stdout + " " + result.stderr
-        ).casefold():
-            compatibility = unavailable_compatibility()
-        else:
-            compatibility = CodexCompatibility(None, "unknown")
+        public["source"] = source
+        path_cli = self._path_cli_executable()
+        if source == "managed" and path_cli and not self._same_executable(
+            path_cli, executable
+        ):
+            public["path_cli"] = self._observe_compatibility(path_cli).public()
         with self._compatibility_lock:
-            self._compatibility = compatibility
+            self._compatibility = dict(public)
             self._compatibility_checked_at = time.monotonic()
-        return compatibility.public()
+        return public
 
     def _stop_current_app_server(self, target: str) -> Optional[RuntimeSyncResult]:
         result = self.runner.run(

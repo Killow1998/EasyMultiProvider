@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EasyMultiProvider</title>
+<title>EMP</title>
 <style>
 :root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.5;color-scheme:dark;--bg:#0f172a;--panel:#111c31;--panel-soft:#0d1729;--input:#0b1324;--text:#e5e7eb;--muted:#94a3b8;--border:#253552;--border-strong:#3b4d70;--accent:#2563eb;--accent-soft:#1e3a8a;--danger:#b91c1c;--danger-text:#fca5a5;--code:#bfdbfe}
 :root[data-theme="light"]{color-scheme:light;--bg:#f4f7fb;--panel:#ffffff;--panel-soft:#f8fafc;--input:#ffffff;--text:#172033;--muted:#5b6b82;--border:#d7dfeb;--border-strong:#aab8ca;--accent:#2563eb;--accent-soft:#dbeafe;--danger:#c62828;--danger-text:#b42318;--code:#1d4ed8}
@@ -20,17 +20,18 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
 code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-space:pre-wrap;background:var(--input);padding:12px;border-radius:6px;color:var(--code);overflow:auto}
 .muted{color:var(--muted)}.pill{display:inline-block;background:var(--accent-soft);border-radius:99px;padding:2px 8px;font-size:11px}.danger-text,.refresh-error{color:var(--danger-text)}
 #status{position:fixed;top:14px;right:18px;z-index:10;max-width:min(520px,calc(100vw - 36px));padding:8px 12px;background:var(--panel);border:1px solid var(--border-strong);border-radius:7px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:none}#status:empty{display:none}
-.quota{white-space:pre-line}.model-hidden{opacity:.55}.provider-model-group{background:var(--panel-soft);border:1px solid var(--border);border-radius:8px;padding:12px;margin:12px 0}.provider-model-group h3{color:var(--code)}.model-selection{max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:7px}.model-option{display:flex;gap:10px;align-items:flex-start;padding:9px;border-bottom:1px solid var(--border)}.model-option[hidden]{display:none}.model-option:last-child{border-bottom:0}.model-option input{width:auto;margin-top:4px}.model-option strong{color:var(--text)}.model-option small{display:block;color:var(--muted)}
+.quota{white-space:pre-line}.model-hidden{opacity:.55}.account-duplicate td:not(:last-child){opacity:.58}.account-duplicate button:disabled{cursor:not-allowed}.provider-model-group{background:var(--panel-soft);border:1px solid var(--border);border-radius:8px;padding:12px;margin:12px 0}.provider-model-group h3{color:var(--code)}.model-selection{max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:7px}.model-option{display:flex;gap:10px;align-items:flex-start;padding:9px;border-bottom:1px solid var(--border)}.model-option[hidden]{display:none}.model-option:last-child{border-bottom:0}.model-option input{width:auto;margin-top:4px}.model-option strong{color:var(--text)}.model-option small{display:block;color:var(--muted)}
 .integration-card{background:var(--panel-soft);border:1px solid var(--border);border-radius:8px;padding:14px}.integration-card-header{display:flex;align-items:center;gap:8px}.integration-card-header h3{margin:0}.integration-card[data-state="conflict"]{border-color:var(--danger)}.integration-card[data-state="active"]{border-color:var(--accent)}.integration-card[data-state="prepared"],.integration-card[data-state="restoring"]{border-color:#d97706}
 .display-list{display:grid;gap:8px}.display-row{display:grid;grid-template-columns:minmax(180px,1.25fr) minmax(160px,1fr) auto auto auto;gap:10px;align-items:center;padding:10px;border:1px solid var(--border);border-radius:8px}.display-row .route{min-width:0}.display-row .route code{display:block;overflow:hidden;text-overflow:ellipsis}.display-row label{margin:0}.inline-check{display:flex;align-items:center;gap:6px;white-space:nowrap}.inline-check input{width:auto}.section-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.section-tools input{max-width:320px}.section-tools .spacer{flex:1}
 .modal-backdrop{position:fixed;inset:0;background:rgba(2,6,23,.72);display:flex;align-items:center;justify-content:center;padding:18px;z-index:20}.modal-backdrop.hidden{display:none}.modal{width:min(720px,100%);max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--border-strong);border-radius:12px;box-shadow:0 24px 80px rgba(0,0,0,.45);padding:20px}.modal-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.modal-header h2{margin:0}.modal-close{background:transparent;color:var(--muted);font-size:24px;line-height:1;padding:2px 7px;margin:0}.modal-close:hover{color:var(--text);background:var(--panel-soft)}.modal-status{margin-top:12px;color:var(--danger-text)}.modal-status:empty{display:none}.modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:16px}.modal-actions button{margin:0}.choice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.choice{display:block;text-align:left;background:var(--panel-soft);border:1px solid var(--border-strong);border-radius:8px;padding:13px;color:var(--text)}.choice:hover{border-color:#60a5fa}.choice strong{display:block}.choice small{display:block;color:var(--muted);margin-top:4px}
+.quota-ranges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}.quota-ranges button{margin:0}.quota-ranges button.active{background:var(--accent)}.quota-chart{width:100%;min-height:260px;border:1px solid var(--border);border-radius:8px;background:var(--panel-soft);padding:8px}.quota-chart svg{display:block;width:100%;height:auto}.quota-legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;font-size:12px}.quota-legend span{display:inline-flex;align-items:center;gap:5px}.quota-swatch{width:10px;height:10px;border-radius:50%}.quota-empty{display:grid;place-items:center;min-height:240px;color:var(--muted)}
 @media(max-width:760px){.page-header{display:block}.page-header-controls{margin-top:12px}.grid,.choice-grid{grid-template-columns:1fr}.wide{grid-column:auto}table{display:block;overflow:auto;white-space:nowrap}.modal{padding:16px}.display-row{grid-template-columns:1fr}.display-row button{justify-self:start}}
 </style>
 </head>
 <body>
 <main>
 <header class="page-header">
-  <div><h1>EasyMultiProvider</h1><p data-i18n="subtitle">在浏览器中管理 Codex 的账户、Provider 和模型。</p></div>
+  <div><h1>EMP</h1><p data-i18n="subtitle">在浏览器中管理 Codex 的账户、Provider 和模型。</p></div>
   <div class="page-header-controls">
     <select id="language_select" aria-label="Language" onchange="setLanguage(this.value)"><option value="zh-CN">中文</option><option value="en">English</option></select>
     <select id="theme_select" aria-label="Theme" onchange="setTheme(this.value)"><option value="system" data-i18n="theme_system">跟随系统</option><option value="light" data-i18n="theme_light">浅色</option><option value="dark" data-i18n="theme_dark">深色</option></select>
@@ -69,7 +70,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 <h2 data-i18n="accounts_title">Codex Subscription Accounts</h2>
 <p class="muted" data-i18n="accounts_security">服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器，也不会写入 config/catalog。</p>
 <div class="toolbar"><button onclick="selectAccountFile()" data-i18n="import_account">导入账户</button><button id="refresh_all" class="secondary" onclick="refreshAllAccounts()" data-i18n="refresh_quotas">刷新全部余量</button><input id="a_auth_json" type="file" hidden accept=".json,.bk1,.bk2,.bk3,.backup" onchange="accountFileChosen(this)"></div>
-<p class="muted" data-i18n="accounts_hint">导入时只需要填写账户 ID；显示名称和模型前缀默认使用账户 ID，可在列表中编辑。重复账户不会生成重复前缀模型；与当前 Codex 登录重复时，账户的模型显示设置将直接控制原生模型列表。</p>
+<p class="muted" data-i18n="accounts_hint">导入时只需要填写账户 ID；显示名称和模型前缀默认使用账户 ID，可在列表中编辑。与当前 Codex 登录重复的账户只保留额度查询；模型显示统一由原生账户管理。</p>
 <pre>19%/7d MMDD-HHmm (UTC-7)
 99%/5h MMDD-HHmm (UTC-7)</pre>
 <div id="accounts"></div>
@@ -110,6 +111,9 @@ let modalReasoningLevels = null;
 let modalReasoningSupport = null;
 let modalReasoningSummarySupport = null;
 let editingModelId = '';
+let activeQuotaAccountId = '';
+let activeQuotaRange = '1d';
+let quotaHistoryTimer = null;
 let catalogDisplayExpanded = false;
 const expandedModelGroups = new Set();
 const refreshErrors = {};
@@ -119,10 +123,10 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const translations = {
   'zh-CN': {
-    subtitle:'在浏览器中管理 Codex 的账户、Provider 和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出 EMP 数据', import_emp:'导入 EMP 数据', codex_integration:'Codex 集成', integration_status:'Codex 集成状态', loading:'加载中', integration_loading:'正在读取集成状态。', enable_codex:'启用默认 Codex', restore_codex:'恢复原生 Codex', apply_models:'应用模型变化到 Codex', diagnostics:'诊断', subscription_search:'Subscription 联网搜索', subscription_search_hint:'可选地让外部模型使用 ChatGPT/Codex subscription 的独立联网搜索；搜索指令和 Codex 选取的少量可见上下文会发送到该服务。', enable_subscription_search:'启用 Subscription 搜索', search_account:'搜索账户', current_codex_login:'当前 Codex 登录', save_search:'保存搜索设置', model_display:'模型列表显示', model_display_hint:'集中设置 Codex App 和 TUI 中的模型名称、上下文与推理摘要显示。', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存显示设置', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有会显示在 Codex 中的模型。', no_matches:'没有匹配的模型。', refresh:'刷新', diagnostics_privacy:'这里只保留少量请求状态，不保存消息内容、响应内容或凭据。', accounts_title:'Codex Subscription 账户', accounts_security:'服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器或写入 config/catalog。', import_account:'导入账户', refresh_quotas:'刷新全部余量', accounts_hint:'导入时只填账户 ID。重复账户不会生成重复模型；与当前 Codex 登录重复时，可见性设置直接控制原生列表。', providers_title:'Providers', providers_hint:'添加官方或自建 Provider；官方预设自动填写地址和协议。', add_provider:'添加 Provider', models_routes:'Models / 路由', models_hint:'已导入的模型按 Provider 分组；隐藏模型排在最后。', add_model:'手动添加模型'
+    subtitle:'在浏览器中管理 Codex 的账户、Provider 和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出 EMP 数据', import_emp:'导入 EMP 数据', codex_integration:'Codex 集成', integration_status:'Codex 集成状态', loading:'加载中', integration_loading:'正在读取集成状态。', enable_codex:'启用默认 Codex', restore_codex:'恢复原生 Codex', apply_models:'应用模型变化到 Codex', diagnostics:'诊断', subscription_search:'Subscription 联网搜索', subscription_search_hint:'可选地让外部模型使用 ChatGPT/Codex subscription 的独立联网搜索；搜索指令和 Codex 选取的少量可见上下文会发送到该服务。', enable_subscription_search:'启用 Subscription 搜索', search_account:'搜索账户', current_codex_login:'当前 Codex 登录', save_search:'保存搜索设置', model_display:'模型列表显示', model_display_hint:'集中设置 Codex App 和 TUI 中的模型名称、上下文与推理摘要显示。', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存显示设置', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有会显示在 Codex 中的模型。', no_matches:'没有匹配的模型。', refresh:'刷新', diagnostics_privacy:'这里只保留少量请求状态，不保存消息内容、响应内容或凭据。', accounts_title:'Codex Subscription 账户', accounts_security:'服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器或写入 config/catalog。', import_account:'导入账户', refresh_quotas:'刷新全部余量', accounts_hint:'导入时只填账户 ID。与当前 Codex 登录重复的账户只保留额度查询；模型显示统一由原生账户管理。', providers_title:'Providers', providers_hint:'添加官方或自建 Provider；官方预设自动填写地址和协议。', add_provider:'添加 Provider', models_routes:'Models / 路由', models_hint:'已导入的模型按 Provider 分组；隐藏模型排在最后。', add_model:'手动添加模型'
   },
   en: {
-    subtitle:'Manage Codex accounts, providers, and models in your browser.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export EMP data', import_emp:'Import EMP data', codex_integration:'Codex integration', integration_status:'Codex integration status', loading:'Loading', integration_loading:'Reading integration status.', enable_codex:'Enable for Codex', restore_codex:'Restore native Codex', apply_models:'Apply model changes', diagnostics:'Diagnostics', subscription_search:'Subscription web search', subscription_search_hint:'Optionally let external models use standalone ChatGPT/Codex subscription search. The search command and a small amount of visible context selected by Codex are sent to that service.', enable_subscription_search:'Enable Subscription search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save search settings', model_display:'Model list display', model_display_hint:'Set names, context labels, and reasoning summaries for Codex App and TUI.', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save display settings', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models are currently visible in Codex.', no_matches:'No matching models.', refresh:'Refresh', diagnostics_privacy:'Only request metadata is kept; prompts, responses, and credentials are never stored here.', accounts_title:'Codex Subscription Accounts', accounts_security:'The service listens locally. Account tokens stay in encrypted local storage and never enter the browser, config, or catalog.', import_account:'Import account', refresh_quotas:'Refresh all quotas', accounts_hint:'Import requires only an account ID. Duplicate accounts do not create duplicate routes; a duplicate of the current Codex login controls native model visibility.', providers_title:'Providers', providers_hint:'Add an official preset or a custom Provider. Official presets fill the endpoint and protocol automatically.', add_provider:'Add Provider', models_routes:'Models / Routes', models_hint:'Imported models are grouped by Provider; hidden models are placed last.', add_model:'Add model manually'
+    subtitle:'Manage Codex accounts, providers, and models in your browser.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export EMP data', import_emp:'Import EMP data', codex_integration:'Codex integration', integration_status:'Codex integration status', loading:'Loading', integration_loading:'Reading integration status.', enable_codex:'Enable for Codex', restore_codex:'Restore native Codex', apply_models:'Apply model changes', diagnostics:'Diagnostics', subscription_search:'Subscription web search', subscription_search_hint:'Optionally let external models use standalone ChatGPT/Codex subscription search. The search command and a small amount of visible context selected by Codex are sent to that service.', enable_subscription_search:'Enable Subscription search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save search settings', model_display:'Model list display', model_display_hint:'Set names, context labels, and reasoning summaries for Codex App and TUI.', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save display settings', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models are currently visible in Codex.', no_matches:'No matching models.', refresh:'Refresh', diagnostics_privacy:'Only request metadata is kept; prompts, responses, and credentials are never stored here.', accounts_title:'Codex Subscription Accounts', accounts_security:'The service listens locally. Account tokens stay in encrypted local storage and never enter the browser, config, or catalog.', import_account:'Import account', refresh_quotas:'Refresh all quotas', accounts_hint:'Import requires only an account ID. Accounts that duplicate the current Codex login retain quota access only; Native manages model visibility.', providers_title:'Providers', providers_hint:'Add an official preset or a custom Provider. Official presets fill the endpoint and protocol automatically.', add_provider:'Add Provider', models_routes:'Models / Routes', models_hint:'Imported models are grouped by Provider; hidden models are placed last.', add_model:'Add model manually'
   }
 };
 let language = 'zh-CN';
@@ -194,7 +198,7 @@ async function exportMigration() {
     const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = migrationFilename(); document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); closeModal(); notice(tr('EMP 迁移包已下载','EMP data exported'));
   });
 }
-function migrationFilename() { const version = String(state?.emp_version || '0.9.2'); return `easy-multi-provider-${/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version) ? version : '0.9.2'}.emp`; }
+function migrationFilename() { const version = String(state?.emp_version || '0.9.3'); return `easy-multi-provider-${/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version) ? version : '0.9.3'}.emp`; }
 function selectMigrationFile() { $('migration_file').click(); }
 async function migrationFileChosen(input) {
   const file = input.files[0]; if (!file) return; if (file.size > 32 * 1024 * 1024) { input.value = ''; return notice(tr('EMP 文件不能超过 32 MB','EMP files cannot exceed 32 MB'), true); }
@@ -227,6 +231,11 @@ function presentationFor(route) {
   const all = state.catalog_presentations || (state.catalog_presentations = {});
   return all[route] || {catalog_alias:'', show_context:true, reasoning_summary:'auto'};
 }
+function familyPresentationFor(family) {
+  const all = state.catalog_family_presentations || (state.catalog_family_presentations = {});
+  const fallback = (state.catalog_families || []).find(item => item.id === family)?.presentation;
+  return all[family] || fallback || {catalog_alias:'', show_context:true, reasoning_summary:'auto'};
+}
 function compactContext(value) {
   const tokens = Number(value || 0); if (!(tokens > 0)) return '?';
   if (tokens >= 1000000) return (tokens / 1000000).toFixed(2).replace(/0+$/, '').replace(/\.$/, '') + 'M';
@@ -235,7 +244,7 @@ function compactContext(value) {
 }
 function canonicalDisplayName(value) { return String(value || '').replace(/^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+/, '').replace(/\s+\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]$/, ''); }
 function presentationPreview(route, fallback, context, alias, showContext) {
-  const saved = presentationFor(route); const label = alias === undefined ? saved.catalog_alias : alias;
+  const family = (state.catalog_families || []).find(item => (item.routes || []).some(candidate => candidate.id === route)); const saved = family ? familyPresentationFor(family.id) : presentationFor(route); const label = alias === undefined ? saved.catalog_alias : alias;
   const visible = label || canonicalDisplayName(fallback) || route;
   const withContext = showContext === undefined ? saved.show_context !== false : Boolean(showContext);
   return withContext ? `[${String(compactContext(context)).padStart(5, ' ')}]  ${visible}` : visible;
@@ -249,18 +258,10 @@ function movePresentation(oldRoute, newRoute, target = state) {
     delete all[oldRoute];
   }
 }
-function movePresentationPrefix(oldPrefix, newPrefix, target = state) {
-  if (!oldPrefix || !newPrefix || oldPrefix === newPrefix) return;
-  const all = target.catalog_presentations || (target.catalog_presentations = {});
-  const oldRoutePrefix = oldPrefix + '/'; const newRoutePrefix = newPrefix + '/';
-  Object.keys(all).filter(route => route.startsWith(oldRoutePrefix)).forEach(route => {
-    movePresentation(route, newRoutePrefix + route.slice(oldRoutePrefix.length), target);
-  });
-}
 function renderCatalogDisplay() {
-  const all = Array.isArray(state?.catalog_models) ? state.catalog_models : [];
+  const all = Array.isArray(state?.catalog_families) ? state.catalog_families : [];
   const query = String($('catalog_display_search')?.value || '').trim().toLowerCase();
-  const matching = all.filter(model => !query || `${model.id} ${model.default_display_name} ${model.display_name}`.toLowerCase().includes(query));
+  const matching = all.filter(model => !query || `${model.id} ${model.default_display_name} ${model.display_name} ${(model.routes || []).map(route => route.id).join(' ')}`.toLowerCase().includes(query));
   const visible = query || catalogDisplayExpanded ? matching : matching.slice(0, 8);
   if ($('catalog_display_toggle')) {
     $('catalog_display_toggle').hidden = Boolean(query) || all.length <= 8;
@@ -269,27 +270,28 @@ function renderCatalogDisplay() {
   if (!all.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_models'))}</p>`; return; }
   if (!visible.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_matches'))}</p>`; return; }
   $('catalog_display_models').innerHTML = visible.map(model => {
-    const presentation = presentationFor(model.id);
+    const presentation = familyPresentationFor(model.id);
     const summary = presentation.reasoning_summary || 'auto';
     const unsupported = model.supports_reasoning_summaries === true ? '' : ` disabled title="${esc(tr('此路由尚未确认支持结构化推理摘要','This route has not confirmed structured reasoning summaries'))}"`;
-    return `<div class="display-row"><div class="route"><strong>${esc(model.display_name || model.default_display_name || model.id)}</strong><code>${esc(model.id)}</code></div><label>${esc(language === 'en' ? 'Display name' : '显示名称')}<input data-catalog-alias data-route="${esc(model.id)}" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(model.default_display_name || model.id)}"></label><label class="inline-check"><input type="checkbox" data-catalog-context data-route="${esc(model.id)}" ${presentation.show_context === false ? '' : 'checked'}> ${esc(t('context'))}</label><label>${esc(t('reasoning_summary'))}<select data-catalog-summary data-route="${esc(model.id)}"${unsupported}><option value="auto" ${summary === 'auto' ? 'selected' : ''}>${tr('自动','Auto')}</option><option value="show" ${summary === 'show' ? 'selected' : ''}>${tr('显示','Show')}</option><option value="hide" ${summary === 'hide' ? 'selected' : ''}>${tr('隐藏','Hide')}</option></select></label><button type="button" class="secondary" onclick="openCatalogAdvanced('${esc(model.id)}','${esc(model.source_type)}','${esc(model.source_id)}')">${esc(t('advanced'))}</button></div>`;
+    const routes = model.routes || []; const routeText = routes.map(route => route.id).join(' · '); const first = routes[0] || {id:model.id,source_type:'native',source_id:''};
+    return `<div class="display-row"><div class="route"><strong>${esc(model.display_name || model.default_display_name || model.id)}</strong><code>${esc(routeText || model.id)}</code></div><label>${esc(language === 'en' ? 'Family display name' : '模型族显示名称')}<input data-catalog-alias data-route="${esc(model.id)}" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(model.default_display_name || model.id)}"></label><label class="inline-check"><input type="checkbox" data-catalog-context data-route="${esc(model.id)}" ${presentation.show_context === false ? '' : 'checked'}> ${esc(t('context'))}</label><label>${esc(t('reasoning_summary'))}<select data-catalog-summary data-route="${esc(model.id)}"${unsupported}><option value="auto" ${summary === 'auto' ? 'selected' : ''}>${tr('自动','Auto')}</option><option value="show" ${summary === 'show' ? 'selected' : ''}>${tr('显示','Show')}</option><option value="hide" ${summary === 'hide' ? 'selected' : ''}>${tr('隐藏','Hide')}</option></select></label><button type="button" class="secondary" onclick="openCatalogAdvanced('${esc(first.id)}','${esc(first.source_type)}','${esc(first.source_id)}')">${esc(t('advanced'))}</button></div>`;
   }).join('');
 }
 function toggleCatalogDisplayExpanded() { catalogDisplayExpanded = !catalogDisplayExpanded; renderCatalogDisplay(); }
 async function saveCatalogDisplay() {
-  const candidate = cloneState(); candidate.catalog_presentations ||= {};
+  const candidate = cloneState(); candidate.catalog_family_presentations ||= {}; candidate.catalog_presentations ||= {};
   const contexts = [...document.querySelectorAll('[data-catalog-context]')]; const summaries = [...document.querySelectorAll('[data-catalog-summary]')];
   document.querySelectorAll('[data-catalog-alias]').forEach(input => {
-    const route = input.dataset.route; const context = contexts.find(item => item.dataset.route === route); const summary = summaries.find(item => item.dataset.route === route); const current = candidate.catalog_presentations[route] || {};
-    candidate.catalog_presentations[route] = {catalog_alias:input.value.trim(), show_context:context ? context.checked : current.show_context !== false, reasoning_summary:summary ? summary.value : current.reasoning_summary || 'auto'};
+    const family = input.dataset.route; const context = contexts.find(item => item.dataset.route === family); const summary = summaries.find(item => item.dataset.route === family); const current = candidate.catalog_family_presentations[family] || {};
+    candidate.catalog_family_presentations[family] = {catalog_alias:input.value.trim(), show_context:context ? context.checked : current.show_context !== false, reasoning_summary:summary ? summary.value : current.reasoning_summary || 'auto'};
+    const group = (candidate.catalog_families || []).find(item => item.id === family); for (const route of group?.routes || []) delete candidate.catalog_presentations[route.id];
   });
   await persistState(language === 'en' ? 'Display settings saved' : '模型显示设置已保存', candidate);
 }
 function openCatalogAdvanced(route, sourceType, sourceId) {
   if (sourceType === 'provider') return openManualModelModal(route);
   if (sourceType === 'account') return editAccount(sourceId);
-  const duplicate = (state.accounts || []).find(account => account.duplicate && account.duplicate_of === '当前 Codex 登录');
-  if (duplicate) return editAccount(duplicate.id);
+  if (state.native_account) return editAccount(state.native_account.id);
   const target = $('accounts'); if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({behavior:'smooth', block:'start'});
   notice(language === 'en' ? 'Native model visibility follows the current Codex catalog.' : '原生模型的可见性由当前 Codex catalog 控制。');
 }
@@ -352,7 +354,8 @@ function renderIntegration(info) {
   const requestError = info.error && info.error.message ? ` ${tr('请求失败','Request failed')}: ${info.error.message}` : '';
   const staleMessage = configuration.stale ? tr(' 配置状态已过期。',' Configuration state is stale.') : '';
   $('integration_summary').textContent = [view[1], staleMessage, runtimeMessage, requestError].filter(Boolean).join(' ').trim();
-  const installed = compatibility.installed ? `Codex ${compatibility.installed}` : tr('Codex 版本未知','Codex version unknown');
+  const sourceLabel = compatibility.source === 'managed' ? tr('托管 Codex runtime','Managed Codex runtime') : compatibility.source === 'configured' ? tr('指定 Codex','Configured Codex') : tr('命令行 Codex','PATH Codex CLI');
+  const installed = compatibility.installed ? `${sourceLabel} ${compatibility.installed}` : tr('Codex 版本未知','Codex version unknown');
   const supportedRange = compatibility.supported_range || '0.149.x–0.151.x';
   const recommended = compatibility.recommended || '0.151.x';
   const compatibilityStatus = english ? {
@@ -361,7 +364,8 @@ function renderIntegration(info) {
     recommended:'推荐版本', supported:'已支持', unverified:'较新或预发布版本，尚未验证', unsupported:'不再支持', unavailable:'未找到 Codex CLI', unknown:'无法识别版本'
   };
   const compatibilityText = compatibilityStatus[compatibility.status] || compatibilityStatus.unknown;
-  $('codex_compatibility').textContent = `${installed} · ${compatibilityText} · ${tr('兼容','Supported')} ${supportedRange} · ${tr('推荐','Recommended')} ${recommended}`;
+  const pathCli = compatibility.path_cli || {}; const pathCliText = pathCli.installed ? ` · ${tr('独立命令行','Standalone PATH CLI')} ${pathCli.installed}` : '';
+  $('codex_compatibility').textContent = `${installed} · ${compatibilityText}${pathCliText} · ${tr('兼容','Supported')} ${supportedRange} · ${tr('推荐','Recommended')} ${recommended}`;
   $('codex_compatibility').dataset.state = compatibility.status || 'unknown';
   $('integration').dataset.state = configuration.state || 'unknown';
   $('integration_badge').textContent = view[0];
@@ -461,12 +465,16 @@ async function persistState(message, candidate = state) {
 }
 
 function renderAccounts() {
-  const accounts = state.accounts || [];
+  const accounts = [...(state.native_account ? [state.native_account] : []), ...(state.accounts || [])];
   if (!accounts.length) { $('accounts').innerHTML = `<p class="muted">${tr('还没有 Codex subscription 账户。','No Codex subscription accounts yet.')}</p>`; return; }
   const rows = accounts.map(a => {
     const busy = refreshingAccounts.has(a.id); const error = refreshErrors[a.id];
-    const duplicateText = a.duplicate ? (a.duplicate_of === '当前 Codex 登录' ? tr('与当前 Codex 登录重复；可见性设置作用于原生列表','Duplicates the current Codex login; visibility controls the native list') : `${tr('与','Duplicates ')}${esc(a.duplicate_of)}${tr('重复；不生成重复前缀模型','; duplicate prefixed routes are omitted')}`) : '';
-    return `<tr><td><code>${esc(a.id)}</code>${a.name && a.name !== a.id ? '<br>'+esc(a.name) : ''}${a.quota && a.quota.account_label ? '<br><span class="muted">'+esc(a.quota.account_label)+'</span>' : ''}</td><td><span class="pill">${esc(a.prefix)}</span></td><td><span class="quota">${esc(quotaText(a))}</span><br><span class="muted">${esc(creditText(a))}</span>${error ? `<br><span class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</span>` : ''}</td><td>${a.credential_set ? tr('凭据已保存','Credentials saved') : tr('未导入凭据','No credentials')}${duplicateText ? '<br><span class="muted">'+duplicateText+'</span>' : ''}</td><td><button class="secondary" onclick="editAccount('${esc(a.id)}')">${tr('编辑','Edit')}</button><button class="secondary" ${busy ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="danger" onclick="removeAccount('${esc(a.id)}')">${tr('删除','Delete')}</button></td></tr>`;
+    const duplicateCurrent = a.duplicate && a.duplicate_of === '当前 Codex 登录';
+    const duplicateText = a.duplicate ? (duplicateCurrent ? tr('与当前 Codex 登录重复；模型显示由原生账户管理','Duplicates the current Codex login; model visibility is managed by Native') : `${tr('与','Duplicates ')}${esc(a.duplicate_of)}${tr('重复；不生成重复前缀模型','; duplicate prefixed routes are omitted')}`) : '';
+    const status = a.native ? (a.credential_set ? tr('使用 .codex 当前登录','Using current .codex login') : tr('未检测到 .codex 登录','No .codex login detected')) : (a.credential_set ? tr('凭据已保存','Credentials saved') : tr('未导入凭据','No credentials'));
+    const remove = a.native ? '' : `<button class="danger" onclick="removeAccount('${esc(a.id)}')">${tr('删除','Delete')}</button>`;
+    const edit = duplicateCurrent ? `<button class="secondary" disabled title="${esc(tr('模型显示由原生账户管理','Model visibility is managed by Native'))}">${tr('编辑','Edit')}</button>` : `<button class="secondary" onclick="editAccount('${esc(a.id)}')">${tr('编辑','Edit')}</button>`;
+    return `<tr${duplicateCurrent ? ' class="account-duplicate"' : ''}><td>${a.native ? tr('当前 Codex 登录','Current Codex login') : `<code>${esc(a.id)}</code>${a.name && a.name !== a.id ? '<br>'+esc(a.name) : ''}`}${a.quota && a.quota.account_label ? '<br><span class="muted">'+esc(a.quota.account_label)+'</span>' : ''}</td><td><span class="pill">${a.native ? 'Native' : esc(a.name || a.prefix)}</span></td><td><span class="quota">${esc(quotaText(a))}</span><br><span class="muted">${esc(creditText(a))}</span>${error ? `<br><span class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</span>` : ''}</td><td>${status}${duplicateText ? '<br><span class="muted">'+duplicateText+'</span>' : ''}</td><td>${edit}<button class="secondary" ${busy || !a.credential_set ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" onclick="openQuotaHistory('${esc(a.id)}')">${tr('趋势','Trend')}</button>${remove}</td></tr>`;
   }).join('');
   $('accounts').innerHTML = `<table><tr><th>${tr('账户','Account')}</th><th>${tr('前缀','Prefix')}</th><th>${tr('余量','Quota')}</th><th>${tr('状态','Status')}</th><th>${tr('操作','Actions')}</th></tr>${rows}</table>`;
 }
@@ -476,6 +484,36 @@ function compactWindowText(minutes) { const value = Number(minutes); if (!Number
 function quotaText(account) { const limits = account.quota && account.quota.rate_limits; if (!limits) return tr('未刷新','Not refreshed'); const windows = [limits.primary, limits.secondary].filter(limit => limit && typeof limit.usedPercent === 'number').sort((a,b) => Number(b.windowDurationMins || 0) - Number(a.windowDurationMins || 0)); if (!windows.length) return tr('未刷新','Not refreshed'); return windows.map(limit => `${Math.min(100, Math.max(0, 100 - limit.usedPercent))}%/${compactWindowText(limit.windowDurationMins)}${localTimeText(limit.resetsAt) ? ' ' + localTimeText(limit.resetsAt) : ''}`).join('\n'); }
 function integerCredit(value) { const number = Number(value); return Number.isFinite(number) ? String(Math.round(number)) : String(value); }
 function creditText(account) { const quota = account.quota; if (!quota) return tr('credit 未查询','credit not checked'); const credit = quota.credits; if (!credit) return tr('credit 未提供','credit unavailable'); const parts = []; if (credit.unlimited === true) parts.push('credit unlimited'); else if (credit.balance !== undefined) parts.push(`credit ${integerCredit(credit.balance)}`); if (credit.individual_limit && typeof credit.individual_limit.remaining_percent === 'number') parts.push(`monthly ${credit.individual_limit.remaining_percent}% left`); if (credit.reset_credits && Number.isInteger(credit.reset_credits.available_count)) parts.push(`reset ${credit.reset_credits.available_count}`); const expires = credit.reset_credits && Array.isArray(credit.reset_credits.credits) ? credit.reset_credits.credits.map(item => localTimeText(item && item.expires_at)).filter(Boolean) : []; expires.forEach(value => parts.push(`expire ${value}`)); if (credit.spend_control_reached === true) parts.push('spend limit reached'); return parts.length ? parts.join(' · ') : tr('credit 未提供','credit unavailable'); }
+
+const quotaChartColors = ['#3b82f6','#f59e0b','#10b981','#a855f7','#ef4444','#06b6d4'];
+function quotaRangeLabel(value) { return ({'1h':tr('1 小时','1 hour'),'1d':tr('1 天','1 day'),'1w':tr('1 周','1 week'),'all':tr('全部 15 天','All 15 days')})[value] || value; }
+function quotaSeriesLabel(series) { const windowName = series.window_kind === 'primary' ? tr('主窗口','Primary') : tr('次窗口','Secondary'); const duration = compactWindowText(series.window_minutes); return `${series.limit_id === 'codex' ? '' : series.limit_id + ' · '}${windowName}${duration === '?' ? '' : ' · ' + duration}`; }
+function quotaChartSvg(series) {
+  const points = series.flatMap(item => item.points || []).filter(point => Number.isFinite(Number(point.observed_at)) && Number.isFinite(Number(point.remaining_percent))); if (!points.length) return '';
+  const minTime = Math.min(...points.map(point => Number(point.observed_at))); const maxTime = Math.max(...points.map(point => Number(point.observed_at))); const span = Math.max(1, maxTime - minTime);
+  const percent = value => Math.max(0, Math.min(100, Number(value)));
+  const values = points.map(point => percent(point.remaining_percent)); const minValue = Math.min(...values); const maxValue = Math.max(...values);
+  const padding = Math.max(1, (maxValue - minValue) * 0.1);
+  const axisMin = Math.max(0, Math.floor(minValue - padding)); const axisMax = Math.min(100, Math.ceil(maxValue + padding)); const axisSpan = axisMax - axisMin;
+  const left = 46, right = 610, top = 18, bottom = 218; const x = time => left + ((Number(time) - minTime) / span) * (right - left); const y = value => bottom - ((percent(value) - axisMin) / axisSpan) * (bottom - top);
+  const grid = Array.from({length:5}, (_, index) => axisMin + axisSpan * index / 4).map(value => `<line x1="${left}" y1="${y(value)}" x2="${right}" y2="${y(value)}" stroke="var(--border)"/><text x="${left-7}" y="${y(value)+4}" text-anchor="end" fill="var(--muted)" font-size="11">${Number(value.toFixed(2))}%</text>`).join('');
+  const lines = series.map((item, index) => { const color = quotaChartColors[index % quotaChartColors.length]; const samples = (item.points || []).filter(point => Number.isFinite(Number(point.observed_at)) && Number.isFinite(Number(point.remaining_percent))); if (!samples.length) return ''; const path = samples.map((point, pointIndex) => `${pointIndex ? 'L' : 'M'}${x(point.observed_at).toFixed(1)},${y(point.remaining_percent).toFixed(1)}`).join(' '); const dots = samples.length === 1 ? `<circle cx="${x(samples[0].observed_at)}" cy="${y(samples[0].remaining_percent)}" r="3" fill="${color}"/>` : ''; return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>${dots}`; }).join('');
+  const start = new Date(minTime * 1000).toLocaleString(); const end = new Date(maxTime * 1000).toLocaleString();
+  return `<svg viewBox="0 0 628 252" role="img" aria-label="${esc(tr('Subscription 余量趋势','Subscription quota trend'))}">${grid}${lines}<text x="${left}" y="242" fill="var(--muted)" font-size="11">${esc(start)}</text><text x="${right}" y="242" text-anchor="end" fill="var(--muted)" font-size="11">${esc(end)}</text></svg>`;
+}
+function renderQuotaHistory(payload, rangeName) {
+  const content = $('quota_history_content'); if (!content) return; const series = (payload.series || []).filter(item => Array.isArray(item.points) && item.points.length);
+  if (!series.length) { content.innerHTML = `<div class="quota-empty">${tr('暂无额度历史；刷新额度或等待下一次自动采样。','No quota history yet. Refresh quota or wait for the next automatic sample.')}</div>`; return; }
+  const legend = series.map((item,index) => { const last = item.points[item.points.length - 1]; const color = quotaChartColors[index % quotaChartColors.length]; const sampledAt = localTimeText(last.observed_at); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(quotaSeriesLabel(item))} · ${esc(last.remaining_percent)}%${sampledAt ? ' · ' + esc(sampledAt) : ''}</span>`; }).join('');
+  content.innerHTML = `<div class="quota-chart">${quotaChartSvg(series)}</div><div class="quota-legend">${legend}</div><p class="muted">${tr('每 5 分钟自动采样，最多保留 15 天。当前范围：','Sampled every 5 minutes and retained for up to 15 days. Current range: ')}${esc(quotaRangeLabel(rangeName))}</p>`;
+}
+async function loadQuotaHistory(accountId, rangeName) {
+  activeQuotaRange = rangeName;
+  document.querySelectorAll('.quota-ranges button').forEach(button => button.classList.toggle('active', button.dataset.range === rangeName)); const content = $('quota_history_content'); if (content) content.innerHTML = `<div class="quota-empty">${tr('加载中…','Loading…')}</div>`;
+  try { renderQuotaHistory(await api('/api/accounts/' + encodeURIComponent(accountId) + '/quota-history?range=' + encodeURIComponent(rangeName)), rangeName); }
+  catch (error) { if (content) content.innerHTML = `<div class="quota-empty danger-text">${esc(error.message)}</div>`; }
+}
+function openQuotaHistory(accountId) { activeQuotaAccountId = accountId; activeQuotaRange = '1d'; const ranges = ['1h','1d','1w','all']; openModal(tr('Subscription 余量趋势','Subscription quota trend'), `<div class="quota-ranges">${ranges.map(rangeName => `<button type="button" class="secondary" data-range="${rangeName}" onclick="loadQuotaHistory(activeQuotaAccountId,'${rangeName}')">${esc(quotaRangeLabel(rangeName))}</button>`).join('')}</div><div id="quota_history_content"></div>`, '', null); loadQuotaHistory(accountId, activeQuotaRange); quotaHistoryTimer = setInterval(() => loadQuotaHistory(activeQuotaAccountId, activeQuotaRange), 5 * 60 * 1000); }
 
 function selectAccountFile() { $('a_auth_json').click(); }
 async function accountFileChosen(input) {
@@ -491,23 +529,39 @@ async function submitAccountImport() {
   pendingAccountAuth = null; $('a_auth_json').value = ''; closeModal(); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice(tr('账户已导入','Account imported'));
 }
 function editAccount(id) {
-  const account = (state.accounts || []).find(item => item.id === id); if (!account) return;
+  const account = state.native_account?.id === id ? state.native_account : (state.accounts || []).find(item => item.id === id); if (!account) return;
+  if (account.duplicate && account.duplicate_of === '当前 Codex 登录') return notice(tr('模型显示请在原生账户中调整','Adjust model visibility from the Native account'), true);
   const options = state.subscription_models || []; const hidden = new Set(account.hidden_models || []);
-  const visibilityHint = account.duplicate && account.duplicate_of === '当前 Codex 登录' ? `<p class="muted">${tr('此账户与当前 Codex 登录重复；下方设置会控制无前缀原生模型。','This account duplicates the current Codex login; these settings control unprefixed native models.')}</p>` : '';
-  const modelSelection = options.length ? `<label>${tr('在 Codex /model 中显示','Visible in Codex /model')}</label><div class="toolbar"><button type="button" class="secondary" onclick="setSubscriptionModelChecks(true)">${tr('全部显示','Show all')}</button><button type="button" class="secondary" onclick="setSubscriptionModelChecks(false)">${tr('全部隐藏','Hide all')}</button></div><div class="model-selection">${options.map(model => { const route = account.duplicate && account.duplicate_of === '当前 Codex 登录' ? model.id : account.prefix + '/' + model.id; return `<label class="model-option"><input type="checkbox" name="subscription_model" value="${esc(model.id)}" ${hidden.has(model.id) ? '' : 'checked'}><span><strong>${esc(canonicalDisplayName(model.display_name || model.id))}</strong><small>${esc(route)}</small></span></label>`; }).join('')}</div>` : `<p class="muted">${tr('当前没有可用的原生 Coding Agent 模型。','No native Coding Agent models are available.')}</p>`;
-  openModal(tr('编辑账户','Edit account'), `<p class="muted">${tr('账户 ID','Account ID')}: <code>${esc(id)}</code></p><label>${tr('显示名称 / 模型前缀','Name / model prefix')}<input id="modal_account_alias" value="${esc(account.name || id)}"></label><p class="muted">${tr('这个值同时用于显示名称和模型前缀。','This value is used as both the display name and model prefix.')}</p>${visibilityHint}${modelSelection}`, tr('保存修改','Save changes'), async () => {
-    const alias = $('modal_account_alias').value.trim() || id;
+  const native = account.native === true; const visibilityHint = native ? `<p class="muted">${tr('这里仅控制无前缀原生模型的显示与隐藏；名称在“模型列表显示”中按模型族统一设置。','This controls only unprefixed Native model visibility. Rename the whole family in Model list display.')}</p>` : '';
+  const modelSelection = options.length ? `<label>${tr('在 Codex /model 中显示','Visible in Codex /model')}</label><div class="toolbar"><button type="button" class="secondary" onclick="setSubscriptionModelChecks(true)">${tr('全部显示','Show all')}</button><button type="button" class="secondary" onclick="setSubscriptionModelChecks(false)">${tr('全部隐藏','Hide all')}</button></div><div class="model-selection">${options.map(model => { const route = native ? model.id : account.prefix + '/' + model.id; return `<label class="model-option"><input type="checkbox" name="subscription_model" value="${esc(model.id)}" ${hidden.has(model.id) ? '' : 'checked'}><span><strong>${esc(canonicalDisplayName(model.display_name || model.id))}</strong><small>${esc(route)}</small></span></label>`; }).join('')}</div>` : `<p class="muted">${tr('当前没有可用的原生 Coding Agent 模型。','No native Coding Agent models are available.')}</p>`;
+  const identityEditor = native ? '' : `<p class="muted">${tr('账户 ID','Account ID')}: <code>${esc(id)}</code></p><label>${tr('显示名称 / 显示前缀','Display name / display prefix')}<input id="modal_account_alias" value="${esc(account.name || account.prefix || id)}"></label><p class="muted">${tr('只改变模型列表中的显示前缀，不改变路由。路由前缀：','Changes the display prefix in the model list, not the route. Route prefix: ')}<code>${esc(account.prefix)}</code></p>`;
+  openModal(native ? tr('编辑原生模型','Edit Native models') : tr('编辑账户','Edit account'), `${identityEditor}${visibilityHint}${modelSelection}`, tr('保存修改','Save changes'), async () => {
+    const alias = native ? '' : ($('modal_account_alias').value.trim() || id);
     const selected = new Set([...document.querySelectorAll('input[name="subscription_model"]:checked')].map(input => input.value));
     const hiddenModels = options.length ? options.filter(model => !selected.has(model.id)).map(model => model.id) : (account.hidden_models || []);
     const candidate = cloneState();
-    if (!(account.duplicate && account.duplicate_of === '当前 Codex 登录')) movePresentationPrefix(account.prefix, alias, candidate);
-    candidate.accounts = candidate.accounts.map(item => item.id === id ? Object.assign({}, item, {name:alias, prefix:alias, hidden_models:hiddenModels}) : item);
+    if (native) { candidate.native_hidden_models = hiddenModels; candidate.accounts = (candidate.accounts || []).map(item => item.duplicate && item.duplicate_of === '当前 Codex 登录' ? Object.assign({}, item, {hidden_models:[]}) : item); }
+    else { candidate.accounts = candidate.accounts.map(item => item.id === id ? Object.assign({}, item, {name:alias, hidden_models:hiddenModels}) : item); }
     await persistState(tr('账户信息已保存','Account saved'), candidate); closeModal();
   });
 }
 function setSubscriptionModelChecks(checked) { document.querySelectorAll('input[name="subscription_model"]').forEach(input => { input.checked = checked; }); }
-async function refreshAccount(id, announce = true) { if (refreshingAccounts.has(id)) return false; refreshingAccounts.add(id); delete refreshErrors[id]; renderAccounts(); try { const result = await api('/api/accounts/' + encodeURIComponent(id) + '/quota', {method:'POST', body:'{}'}); const index = state.accounts.findIndex(a => a.id === id); if (index >= 0) state.accounts[index] = result.account; if (announce) notice(tr('账户余量已刷新','Account quota refreshed')); return true; } catch (error) { refreshErrors[id] = error.message; if (announce) notice(tr('刷新失败','Refresh failed') + ': ' + error.message, true); return false; } finally { refreshingAccounts.delete(id); renderAccounts(); } }
-async function refreshAllAccounts() { const accounts = state.accounts || []; if (!accounts.length) return notice(tr('还没有 Codex subscription 账户','No Codex subscription accounts yet'), true); const button = $('refresh_all'); button.disabled = true; try { const results = await Promise.all(accounts.map(a => refreshAccount(a.id, false))); const failed = accounts.filter((_, index) => !results[index]); notice(failed.length ? tr(`刷新完成：成功 ${accounts.length - failed.length} 个，失败 ${failed.length} 个`,`Refresh complete: ${accounts.length - failed.length} succeeded, ${failed.length} failed`) : tr('全部账户余量已刷新','All account quotas refreshed'), Boolean(failed.length)); } finally { button.disabled = false; } }
+function quotaErrorText(error, id) {
+  const code = error.payload?.error?.code;
+  const messages = {
+    quota_auth_required: id === state.native_account?.id ? tr('当前 Codex 登录已失效，请在 Codex 中重新登录。','The current Codex login is no longer valid. Sign in again in Codex.') : tr('导入的登录凭据已失效，请重新登录该账号，再用相同账户 ID 导入最新 auth.json。','The imported credentials are no longer valid. Sign in again, then import the latest auth.json with the same account ID.'),
+    quota_access_denied: tr('额度服务拒绝访问（403）；请检查账号权限或网络。','Quota access denied (403). Check account permissions or network.'),
+    quota_rate_limited: tr('额度查询过于频繁（429），请稍后再试。','Quota queries are rate limited (429). Try again later.'),
+    quota_fetch_failed: tr('额度服务查询失败，请检查网络后重试。','Quota service query failed. Check network connectivity and retry.'),
+    quota_account_read_failed: tr('Codex 无法读取账号登录状态。','Codex could not read the account login state.'),
+    quota_initialize_failed: tr('Codex runtime 初始化失败，请检查集成中的 runtime 状态。','Codex runtime initialization failed. Check the runtime status under Integration.'),
+    quota_timeout: tr('额度查询超时，请稍后再试。','Quota query timed out. Try again later.'),
+    quota_credentials_save_failed: tr('无法保存刷新后的登录凭据，请检查本地凭据存储后重新导入账号。','Could not save refreshed credentials. Check local credential storage, then re-import the account.'),
+  };
+  return messages[code] || error.message;
+}
+async function refreshAccount(id, announce = true) { if (refreshingAccounts.has(id)) return false; refreshingAccounts.add(id); delete refreshErrors[id]; renderAccounts(); try { const result = await api('/api/accounts/' + encodeURIComponent(id) + '/quota', {method:'POST', body:'{}'}); if (state.native_account?.id === id) state.native_account = result.account; else { const index = state.accounts.findIndex(a => a.id === id); if (index >= 0) state.accounts[index] = result.account; } if (announce) notice(tr('账户余量已刷新','Account quota refreshed')); return true; } catch (error) { const message = quotaErrorText(error, id); refreshErrors[id] = message; if (announce) notice(tr('刷新失败','Refresh failed') + ': ' + message, true); return false; } finally { refreshingAccounts.delete(id); renderAccounts(); } }
+async function refreshAllAccounts() { const accounts = [...(state.native_account?.credential_set ? [state.native_account] : []), ...(state.accounts || [])]; if (!accounts.length) return notice(tr('还没有可刷新账户','No refreshable accounts'), true); const button = $('refresh_all'); button.disabled = true; try { const results = await Promise.all(accounts.map(a => refreshAccount(a.id, false))); const failed = accounts.filter((_, index) => !results[index]); notice(failed.length ? tr(`刷新完成：成功 ${accounts.length - failed.length} 个，失败 ${failed.length} 个`,`Refresh complete: ${accounts.length - failed.length} succeeded, ${failed.length} failed`) : tr('全部账户余量已刷新','All account quotas refreshed'), Boolean(failed.length)); } finally { button.disabled = false; } }
 async function removeAccount(id) { if (!confirm(tr(`删除账户 ${id} 的本地加密凭据？不会撤销远端 Token。`,`Delete local encrypted credentials for ${id}? This does not revoke the remote token.`))) return; try { await api('/api/accounts/' + encodeURIComponent(id), {method:'DELETE'}); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice(tr('账户本地凭据已删除','Local account credentials deleted')); } catch (error) { notice(error.message, true); } }
 
 function renderProviders() {
@@ -590,8 +644,9 @@ async function toggleModel(id, enabled) { const candidate = cloneState(); const 
 async function removeModel(id) { const candidate = cloneState(); candidate.models = candidate.models.filter(m => m.id !== id); try { await persistState(tr('模型已删除','Model deleted'), candidate); } catch (error) { notice(error.message, true); } }
 async function testModel(id) { try { notice(tr(`正在测试 ${id} …`,`Testing ${id}…`)); const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr('测试成功：','Test succeeded: ') + (result.output_text || tr('已收到模型响应','model response received'))); } catch (error) { notice(tr('测试失败：','Test failed: ') + error.message, true); } }
 
-function openModal(title, body, submitLabel, submit) { $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; button.onclick = submit ? async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { button.disabled = false; button.textContent = label; } } : null; $('modal_backdrop').classList.remove('hidden'); }
-function closeModal() { $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
+function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; }
+function openModal(title, body, submitLabel, submit) { clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; button.onclick = submit ? async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { button.disabled = false; button.textContent = label; } } : null; $('modal_backdrop').classList.remove('hidden'); }
+function closeModal() { clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 function handleModalKeydown(event) { if (event.key === 'Escape' && !$('modal_backdrop').classList.contains('hidden')) closeModal(); }
 document.addEventListener('keydown', handleModalKeydown);
 load();

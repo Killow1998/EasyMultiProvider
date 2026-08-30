@@ -6,7 +6,7 @@ EasyMultiProvider (EMP) is a local, browser-configured model router for Codex.
 It keeps the native Codex experience while adding multiple ChatGPT
 subscriptions, API providers, and external models to the same model list.
 
-The current source version is `v0.9.2`.
+The current source version is `v0.9.3`.
 
 ## Features
 
@@ -33,8 +33,10 @@ The current source version is `v0.9.2`.
 
 ## Install
 
-EMP requires the Codex CLI to be installed and available as `codex`. EMP does
-not bundle or replace it.
+EMP requires either the Codex-managed runtime in the active Codex home or a
+standalone Codex CLI available as `codex`. EMP does not bundle
+or replace either runtime. When both exist, App integration uses the managed
+runtime and the Web UI reports a different standalone `PATH` CLI separately.
 
 EMP supports Codex CLI `0.149.x` through `0.151.x`; `0.151.x` is recommended.
 The Web UI shows the installed version and marks newer versions as not yet
@@ -149,9 +151,13 @@ not recorded.
 ## Web UI
 
 - **Accounts** imports `auth.json` and backup files such as `auth.json.bk1`.
-  Only an account ID is required; display name and model prefix can be edited
-  later. **Refresh** performs a live quota query and saves the new snapshot.
-  Each subscription can control which Coding Agent models appear in Codex.
+  Only an account ID is required. The display name / display prefix can be edited
+  later and supports emoji; the actual route prefix stays unchanged.
+  **Refresh** performs a live quota query and saves the new snapshot.
+  While EMP is running it samples quota every five minutes and shows local
+  trends for one hour, one day, one week, or up to 15 days. This history stores
+  quota metrics only, never credentials. Each subscription can control which
+  Coding Agent models appear in Codex.
 - **Providers** offers presets for supported official services and a custom
   Provider form for Base URL and API key endpoints.
 - **Models** discovers upstream models and lets you import, test, edit, hide,

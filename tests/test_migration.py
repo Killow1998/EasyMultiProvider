@@ -38,6 +38,14 @@ class MigrationTests(unittest.TestCase):
                             "reasoning_summary": "hide",
                         }
                     },
+                    "catalog_family_presentations": {
+                        "shared-family": {
+                            "catalog_alias": "General",
+                            "show_context": True,
+                            "reasoning_summary": "auto",
+                        }
+                    },
+                    "native_hidden_models": ["gpt-hidden"],
                 }
             )
             source_key = Fernet.generate_key().decode("ascii")
@@ -98,6 +106,13 @@ class MigrationTests(unittest.TestCase):
                         "reasoning_summary": "hide",
                     },
                 )
+                self.assertEqual(
+                    loaded["catalog_family_presentations"]["shared-family"][
+                        "catalog_alias"
+                    ],
+                    "General",
+                )
+                self.assertEqual(loaded["native_hidden_models"], ["gpt-hidden"])
                 self.assertEqual(api_key(loaded["providers"][0]), "provider-secret")
                 self.assertEqual(load_auth(loaded["accounts"][0])["tokens"]["access_token"], "account-access-secret")
                 auth_path = Path(loaded["accounts"][0]["auth_file"])

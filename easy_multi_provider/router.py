@@ -20,6 +20,7 @@ from .capabilities import (
     normalize_supported_protocols,
     observed_at_now,
 )
+from .catalog import has_explicit_family_identity, presentation_for_route
 from .config import api_key
 from .context_guard import (
     ContextAssessment,
@@ -1030,11 +1031,15 @@ def forward_responses_compact(
 
 
 def _reasoning_summary_policy(
-    config: Mapping[str, Any], route: str
+    config: Mapping[str, Any], route: str, model: Dict[str, Any]
 ) -> str:
-    presentations = config.get("catalog_presentations")
-    value = presentations.get(route) if isinstance(presentations, Mapping) else None
-    policy = value.get("reasoning_summary") if isinstance(value, Mapping) else "auto"
+    value = presentation_for_route(
+        dict(config),
+        route,
+        model,
+        family_verified=has_explicit_family_identity(model),
+    )
+    policy = value.get("reasoning_summary", "auto")
     return policy if policy in {"auto", "show", "hide"} else "auto"
 
 
@@ -1049,7 +1054,7 @@ def _prepare_reasoning_summary_route(
 
     if classify_dialect(provider) == CODEX_NATIVE:
         return dict(body)
-    policy = _reasoning_summary_policy(config, route)
+    policy = _reasoning_summary_policy(config, route, model)
     supported = model.get("supports_reasoning_summaries") is True
     configured_protocol = provider.get("protocol")
     responses_capable = configured_protocol == "responses" or (

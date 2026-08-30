@@ -451,7 +451,11 @@ class ServerAccountTests(unittest.TestCase):
                 self.assertEqual(response.status, 409)
                 self.assertEqual(payload["error"]["code"], "empty_emp_catalog")
                 self.assertFalse((codex_home / "config.toml").exists())
-                self.assertFalse(log_path.exists())
+                runtime_calls = [
+                    json.loads(line)["args"]
+                    for line in log_path.read_text(encoding="utf-8").splitlines()
+                ]
+                self.assertEqual(runtime_calls, [["--version"]])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -924,9 +928,11 @@ class ServerAccountTests(unittest.TestCase):
 
     def test_web_exposes_subscription_and_provider_visibility_controls(self):
         html = WEB_FILE.read_text(encoding="utf-8")
+        self.assertIn("<title>EMP</title>", html)
+        self.assertIn("<h1>EMP</h1>", html)
         self.assertIn('name="subscription_model"', html)
         self.assertIn("hidden_models", html)
-        self.assertIn("可见性设置作用于原生列表", html)
+        self.assertIn("模型显示统一由原生账户管理", html)
         self.assertIn("toggleProviderModels", html)
         self.assertIn("隐藏全部模型", html)
 
@@ -1089,6 +1095,198 @@ class ServerAccountTests(unittest.TestCase):
         self.assertEqual(rows["demo/worker"]["source_type"], "provider")
         self.assertEqual(rows["demo/worker"]["source_id"], "demo")
         self.assertNotIn("api_key", json.dumps(result["catalog_models"]))
+        families = {row["id"]: row for row in result["catalog_families"]}
+        self.assertEqual(families["worker"]["presentation"]["catalog_alias"], "Builder")
+
+    def test_management_config_projects_current_codex_login_without_credentials(self):
+        config = normalize({"native_hidden_models": ["gpt-hidden"]})
+        native_account = {
+            "id": "@native",
+            "name": "Current Codex login",
+            "prefix": "",
+            "native": True,
+            "credential_set": True,
+            "hidden_models": ["gpt-hidden"],
+            "quota": None,
+        }
+
+        result = management_config(config, native_account=native_account)
+
+        self.assertEqual(result["native_account"], native_account)
+        self.assertNotIn("auth", json.dumps(result["native_account"]).lower())
+
+    def test_management_config_groups_subscription_route_with_native_family(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            native_path = root / "native.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "gpt-5.6-sol",
+                                "display_name": "GPT-5.6-Sol",
+                                "visibility": "list",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = normalize(
+                {
+                    "native_catalog_path": str(native_path),
+                    "accounts": [
+                        {
+                            "id": "ship",
+                            "name": "ship",
+                            "prefix": "ship",
+                            "auth_file": str(root / "ship.enc"),
+                        }
+                    ],
+                }
+            )
+
+            result = management_config(config)
+
+        families = {row["id"]: row for row in result["catalog_families"]}
+        self.assertEqual(set(families), {"gpt-5.6-sol"})
+        self.assertEqual(
+            [route["id"] for route in families["gpt-5.6-sol"]["routes"]],
+            ["gpt-5.6-sol", "ship/gpt-5.6-sol"],
+        )
+
+    def test_startup_migrates_duplicate_visibility_to_native_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(
+                normalize(
+                    {
+                        "native_hidden_models": ["gpt-existing"],
+                        "accounts": [
+                            {
+                                "id": "primary",
+                                "name": "Primary",
+                                "prefix": "primary",
+                                "hidden_models": ["gpt-5.4", "gpt-existing"],
+                            }
+                        ],
+                    }
+                ),
+                config_path,
+            )
+
+            with patch(
+                "easy_multi_provider.server.duplicate_account_status",
+                return_value={"primary": "当前 Codex 登录"},
+            ):
+                state = AppState(config_path)
+
+            snapshot = state.snapshot()
+            persisted = load(config_path)
+
+        self.assertEqual(
+            set(snapshot["native_hidden_models"]), {"gpt-existing", "gpt-5.4"}
+        )
+        self.assertEqual(snapshot["accounts"][0]["hidden_models"], [])
+        self.assertEqual(persisted["native_hidden_models"], snapshot["native_hidden_models"])
+        self.assertEqual(persisted["accounts"][0]["hidden_models"], [])
+
+    def test_native_account_quota_uses_active_home_and_selected_app_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            codex_home = root / "codex-home"
+            codex_home.mkdir()
+            (codex_home / "auth.json").write_text("{}", encoding="utf-8")
+            manager = IntegrationManager(
+                codex_home / "config.toml",
+                codex_home / "easy-multi-provider" / "integration" / "lease.json",
+                instance_id="native-account",
+            )
+
+            class Runtime:
+                @staticmethod
+                def executable():
+                    return "app-managed-codex"
+
+            state = AppState(
+                root / "config.json",
+                integration_manager=manager,
+                runtime_controller=Runtime(),
+            )
+            quota = {"rate_limits": {"primary": {"usedPercent": 20}}}
+            with patch(
+                "easy_multi_provider.server.read_native_login_quota",
+                return_value=quota,
+            ) as read_quota:
+                account = state.refresh_native_account()
+
+        self.assertTrue(account["native"])
+        self.assertTrue(account["credential_set"])
+        self.assertEqual(account["quota"], quota)
+        read_quota.assert_called_once_with(
+            codex_binary="app-managed-codex",
+            auth_path=codex_home / "auth.json",
+        )
+
+    def test_native_account_quota_endpoint_returns_only_safe_projection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            codex_home = root / "codex-home"
+            codex_home.mkdir()
+            (codex_home / "auth.json").write_text("{}", encoding="utf-8")
+            manager = IntegrationManager(
+                codex_home / "config.toml",
+                codex_home / "easy-multi-provider" / "integration" / "lease.json",
+                instance_id="native-account-api",
+            )
+            state = AppState(root / "config.json", integration_manager=manager)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with patch(
+                    "easy_multi_provider.server.read_native_login_quota",
+                    return_value={"rate_limits": {"primary": {"usedPercent": 20}}},
+                ):
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request(
+                        "POST",
+                        "/api/accounts/%40native/quota",
+                        "{}",
+                        {
+                            "Cookie": "emp_session=" + state.session_token,
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    response = connection.getresponse()
+                    payload = json.loads(response.read())
+                    quota_status = response.status
+                    connection.close()
+
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request(
+                        "GET",
+                        "/api/accounts/%40native/quota-history?range=1d",
+                        headers={"Cookie": "emp_session=" + state.session_token},
+                    )
+                    history_response = connection.getresponse()
+                    history_payload = json.loads(history_response.read())
+                    connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+        self.assertEqual(quota_status, 200)
+        self.assertTrue(payload["account"]["native"])
+        self.assertEqual(payload["account"]["id"], "@native")
+        self.assertNotIn("auth", json.dumps(payload).lower())
+        self.assertEqual(history_response.status, 200)
+        self.assertEqual(history_payload["account_id"], "@native")
+        self.assertEqual(history_payload["range"], "1d")
+        self.assertEqual(history_payload["series"][0]["points"][0]["remaining_percent"], 80.0)
 
     def test_compact_endpoint_routes_remote_compaction(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1946,7 +2144,13 @@ class ServerAccountTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual(
                     set(payload),
-                    {"configuration", "runtime", "service_health", "next_action"},
+                    {
+                        "codex_compatibility",
+                        "configuration",
+                        "runtime",
+                        "service_health",
+                        "next_action",
+                    },
                 )
                 self.assertEqual(payload["configuration"]["state"], "native")
                 self.assertEqual(payload["configuration"]["relation"], "unleased")
@@ -3578,8 +3782,13 @@ class ServerAccountTests(unittest.TestCase):
                     self.assertIn('"usedPercent": 12', payload)
                     connection.close()
                 imported_path.assert_not_called()
-                native_path.assert_called_once()
+                native_path.assert_called_once_with(
+                    codex_binary=state.runtime_controller.executable(),
+                    auth_path=state.codex_home / "auth.json",
+                )
                 dup_check.assert_called()
+                self.assertTrue(state.quota_history.query("@native", "all")["series"])
+                self.assertFalse(state.quota_history.query("primary", "all")["series"])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -3619,7 +3828,9 @@ class ServerAccountTests(unittest.TestCase):
                     return_value=snapshot,
                 ) as imported_path, patch(
                     "easy_multi_provider.server.read_native_login_quota"
-                ) as native_path:
+                ) as native_path, patch.object(
+                    state.runtime_controller, "executable", return_value="/managed/codex"
+                ):
                     connection = HTTPConnection(*server.server_address)
                     connection.request(
                         "POST",
@@ -3636,8 +3847,37 @@ class ServerAccountTests(unittest.TestCase):
                     self.assertIn('"usedPercent": 8', payload)
                     connection.close()
                 imported_path.assert_called_once()
+                self.assertEqual(imported_path.call_args.kwargs["codex_binary"], "/managed/codex")
                 native_path.assert_not_called()
                 dup_check.assert_called()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_quota_failure_returns_safe_error_code_and_retains_snapshot(self):
+        from easy_multi_provider.quota import QuotaError
+
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({"accounts": [{"id": "primary", "prefix": "primary"}]}), config_path)
+            state = AppState(config_path)
+            before = config_path.read_bytes()
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with patch.object(state, "refresh_account", side_effect=QuotaError("Sign in again", "quota_auth_required")):
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request("POST", "/api/accounts/primary/quota", b"{}", {
+                        "Content-Type": "application/json",
+                        "Cookie": "emp_session=" + state.session_token,
+                    })
+                    response = connection.getresponse()
+                    payload = json.loads(response.read())
+                    connection.close()
+                self.assertEqual(response.status, 503)
+                self.assertEqual(payload["error"]["code"], "quota_auth_required")
+                self.assertEqual(config_path.read_bytes(), before)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -4136,6 +4376,14 @@ class ContinuityAppStateTests(unittest.TestCase):
                 self.last_connection_reused = False
                 self.requests = []
                 self.closed = False
+                self.available = True
+
+            def can_continue(self, target):
+                return (
+                    self.available
+                    and not self.closed
+                    and self.connection_key == target.connection_key
+                )
 
             def events(self, target, payload):
                 self.last_connection_reused = self.connection_key == target.connection_key
@@ -4260,6 +4508,24 @@ class ContinuityAppStateTests(unittest.TestCase):
                         _, raw = _read_text_frame(stream)
                         second_events.append(json.loads(raw))
 
+                    fake_bridge.available = False
+                    client.sendall(
+                        _masked_text_frame(
+                            json.dumps(
+                                {
+                                    "type": "response.create",
+                                    "model": "native/model-a",
+                                    "previous_response_id": second_events[-1]["response"]["id"],
+                                    "input": delta,
+                                    "stream": True,
+                                }
+                            )
+                        )
+                    )
+                    _, raw = _read_text_frame(stream)
+                    disconnected_event = json.loads(raw)
+                    fake_bridge.available = True
+
                     foreign_delta = [
                         {
                             "type": "message",
@@ -4301,6 +4567,10 @@ class ContinuityAppStateTests(unittest.TestCase):
                             ),
                         },
                     },
+                )
+                self.assertEqual(
+                    disconnected_event["error"]["code"],
+                    "previous_response_not_found",
                 )
                 self.assertEqual(len(reader.calls), 0)
             finally:
@@ -4442,6 +4712,9 @@ class ContinuityAppStateTests(unittest.TestCase):
                 self.connection_key = None
                 self.last_connection_reused = False
                 self.requests = 0
+
+            def can_continue(self, target):
+                return self.connection_key == target.connection_key
 
             def events(self, target, payload):
                 self.last_connection_reused = self.connection_key == target.connection_key

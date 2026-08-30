@@ -10,14 +10,10 @@
   <title id="title">EasyMultiProvider cool router icon</title>
   <desc id="description">
     A gold face in sunglasses routes three colored inputs into one output on a
-    deep navy rounded square.
+    transparent background.
   </desc>
 
   <defs>
-    <linearGradient id="tile" x1="160" y1="100" x2="864" y2="930">
-      <stop offset="0" stop-color="#17284f" />
-      <stop offset="1" stop-color="#0a1027" />
-    </linearGradient>
     <radialGradient id="face" cx="38%" cy="30%" r="78%">
       <stop offset="0" stop-color="#ffd86a" />
       <stop offset="0.64" stop-color="#f7b936" />
@@ -35,20 +31,6 @@
       <circle cx="512" cy="536" r="292" />
     </clipPath>
   </defs>
-
-  <!-- Transparent outside the application tile. -->
-  <rect x="48" y="48" width="928" height="928" rx="218" fill="url(#tile)" />
-  <rect
-    x="65"
-    y="65"
-    width="894"
-    height="894"
-    rx="202"
-    fill="none"
-    stroke="#31456f"
-    stroke-width="10"
-    opacity="0.58"
-  />
 
   <!-- Three providers enter the router. -->
   <g fill="none" stroke-linecap="round" stroke-width="24">

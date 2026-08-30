@@ -180,6 +180,11 @@ class NativeWebSocketBridge:
         connected = getattr(self._connection, "connected", True)
         return connected is not False
 
+    def can_continue(self, target: NativeWebSocketTarget) -> bool:
+        """Return whether incremental continuity can use the existing socket."""
+
+        return self._usable(target)
+
     def connect(self, target: NativeWebSocketTarget) -> bool:
         """Return True when an existing connection was reused."""
 

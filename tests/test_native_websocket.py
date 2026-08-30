@@ -146,6 +146,18 @@ class NativeWebSocketTests(unittest.TestCase):
         self.assertEqual(connection.sent[1]["previous_response_id"], "resp_1")
         self.assertTrue(bridge.last_connection_reused)
 
+    def test_disconnected_matching_socket_cannot_continue_incrementally(self):
+        connection = _FakeConnection([])
+        target = NativeWebSocketTarget(
+            "wss://example.invalid/v1/responses", {}, "sha256:route-a"
+        )
+        bridge = NativeWebSocketBridge(lambda _target: connection)
+
+        bridge.connect(target)
+        connection.connected = False
+
+        self.assertFalse(bridge.can_continue(target))
+
     def test_route_change_closes_old_connection(self):
         first = _FakeConnection(
             [{"type": "response.completed", "response": {"status": "completed"}}]

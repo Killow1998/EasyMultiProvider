@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import shutil
 import ssl
 import subprocess
@@ -17,11 +18,40 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from . import __version__
-from .accounts import AccountError, load_auth, load_native_auth
+from .accounts import AccountError, load_auth, load_native_auth, validate_auth_json
 from .vault import VaultError, write_encrypted_json
+
 
 class QuotaError(ValueError):
     """Raised when Codex cannot provide a safe quota snapshot."""
+
+    def __init__(self, message: str, code: str = "quota_error"):
+        super().__init__(message)
+        self.code = code
+
+
+def _quota_rpc_error(method: str, error: Any) -> QuotaError:
+    # Codex's backend error includes URL and response body. Classify it here;
+    # neither of those values may be returned to the browser or journal.
+    message = error.get("message", "") if isinstance(error, dict) else ""
+    message = message if isinstance(message, str) else ""
+    auth_required = message in {
+        "codex account authentication required to read rate limits",
+        "chatgpt authentication required to read rate limits",
+    }
+    status = re.search(r" failed: (\d{3})\b[^;]*; content-type=", message.split("; body=", 1)[0])
+    status_code = int(status[1]) if status else None
+    if auth_required or status_code == 401:
+        return QuotaError("Codex account needs sign-in; sign in again and re-import the account", "quota_auth_required")
+    if status_code == 403:
+        return QuotaError("Codex quota access was denied (403); check account access and network", "quota_access_denied")
+    if status_code == 429:
+        return QuotaError("Codex quota queries are rate limited (429); try again later", "quota_rate_limited")
+    if method == "account/rateLimits/read":
+        return QuotaError("Codex quota service query failed; check network connectivity and try again", "quota_fetch_failed")
+    if method == "account/read":
+        return QuotaError("Codex account read failed", "quota_account_read_failed")
+    return QuotaError("Codex app-server initialization failed", "quota_initialize_failed")
 
 
 # ponytail: one bounded lock is enough for the low-frequency quota path;
@@ -125,7 +155,7 @@ def _account_refresh_key(account: Dict[str, Any]) -> bytes:
     return hashlib.sha256(str(account.get("id", "")).encode("utf-8")).digest()
 
 
-def refresh_account_quota(account: Dict[str, Any]) -> Dict[str, Any]:
+def refresh_account_quota(account: Dict[str, Any], codex_binary: str = "codex") -> Dict[str, Any]:
     """Serialize and cool down explicit and automatic account refreshes."""
     global _last_refresh, _last_refresh_key
     with account_refresh_lock(account.get("id")):
@@ -133,7 +163,7 @@ def refresh_account_quota(account: Dict[str, Any]) -> Dict[str, Any]:
         refresh_key = _account_refresh_key(account)
         if refresh_key == _last_refresh_key and now - _last_refresh < _REFRESH_COOLDOWN_SECONDS:
             raise QuotaError("account quota refresh is cooling down")
-        result = read_account_quota(account)
+        result = read_account_quota(account, codex_binary=codex_binary)
         _last_refresh = time.monotonic()
         _last_refresh_key = refresh_key
         return result
@@ -178,15 +208,15 @@ def _query_app_server(process: Any, requests: list, timeout: int) -> str:
         except (OSError, ValueError) as exc:
             raise QuotaError("Codex account quota check failed") from exc
 
-    def wait_for(request_id: int) -> None:
+    def wait_for(request_id: int, method: str) -> None:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise QuotaError("Codex account quota check timed out")
+                raise QuotaError("Codex account quota check timed out", "quota_timeout")
             try:
                 line = output.get(timeout=remaining)
             except queue.Empty as exc:
-                raise QuotaError("Codex account quota check timed out") from exc
+                raise QuotaError("Codex account quota check timed out", "quota_timeout") from exc
             if line is None:
                 raise QuotaError("Codex did not return account rate limits")
             lines.append(line)
@@ -197,7 +227,12 @@ def _query_app_server(process: Any, requests: list, timeout: int) -> str:
             if message.get("id") != request_id:
                 continue
             if "error" in message:
-                raise QuotaError("Codex account quota check failed")
+                raise _quota_rpc_error(method, message["error"])
+            result = message.get("result")
+            if method == "account/read" and isinstance(result, dict) and "account" in result and result["account"] is None:
+                # Codex can return account:null after a permanent refresh
+                # failure instead of exposing the refresh error over RPC.
+                raise QuotaError("Codex account needs sign-in; sign in again and re-import the account", "quota_auth_required")
             return
 
     try:
@@ -205,12 +240,12 @@ def _query_app_server(process: Any, requests: list, timeout: int) -> str:
         # app-server may still be completing account refresh when it receives
         # the rate-limit request; the shared Codex home only hid this race.
         send(requests[0])
-        wait_for(1)
+        wait_for(1, "initialize")
         send(requests[1])
         send(requests[2])
-        wait_for(2)
+        wait_for(2, "account/read")
         send(requests[3])
-        wait_for(3)
+        wait_for(3, "account/rateLimits/read")
     finally:
         try:
             process.stdin.close()
@@ -469,14 +504,16 @@ def _run_quota_query(
                 except (OSError, ValueError):
                     pass
             raise QuotaError("Codex account quota check failed") from exc
-        if process.returncode not in (0, None):
-            raise QuotaError("Codex account quota check failed")
-        if allow_refresh and persist_path is not None:
-            try:
-                refreshed_auth = json.loads(plain_auth.read_text(encoding="utf-8"))
-                write_encrypted_json(Path(persist_path), _validate_refreshed_auth(refreshed_auth))
-            except (OSError, ValueError, VaultError) as exc:
-                raise QuotaError("Codex returned invalid account credentials") from exc
+        finally:
+            # Token rotation and quota retrieval are separate operations. Keep
+            # Codex's refreshed credential even if the later query fails, or
+            # the vault can retain a refresh token that has already been used.
+            if process is not None and allow_refresh and persist_path is not None:
+                try:
+                    refreshed_auth = json.loads(plain_auth.read_text(encoding="utf-8"))
+                    write_encrypted_json(Path(persist_path), validate_auth_json(refreshed_auth))
+                except (OSError, ValueError, VaultError) as exc:
+                    raise QuotaError("Codex refreshed credentials could not be saved", "quota_credentials_save_failed") from exc
         return parse_app_server_output(stdout)
 
 
@@ -503,7 +540,11 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
     )
 
 
-def read_native_login_quota(codex_binary: str = "codex", timeout: int = 45) -> Dict[str, Any]:
+def read_native_login_quota(
+    codex_binary: str = "codex",
+    timeout: int = 45,
+    auth_path: Optional[Path] = None,
+) -> Dict[str, Any]:
     """Query quota for an account that duplicates the current native Codex login.
 
     Uses the live native auth.json (the authoritative source when tokens have
@@ -512,7 +553,7 @@ def read_native_login_quota(codex_binary: str = "codex", timeout: int = 45) -> D
     auth file or any EMP encrypted credential.
     """
     try:
-        auth = load_native_auth()
+        auth = load_native_auth(auth_path)
     except AccountError as exc:
         raise QuotaError(str(exc)) from exc
     return _run_quota_query(
@@ -522,9 +563,3 @@ def read_native_login_quota(codex_binary: str = "codex", timeout: int = 45) -> D
         allow_refresh=False,
         persist_path=None,
     )
-
-
-def _validate_refreshed_auth(value: Any) -> Dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ValueError("auth.json must be an object")
-    return value

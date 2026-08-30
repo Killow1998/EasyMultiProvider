@@ -241,6 +241,18 @@ def import_bundle(
     presentations.update(copy.deepcopy(source.get("catalog_presentations", {})))
     target["catalog_presentations"] = presentations
 
+    family_presentations = copy.deepcopy(
+        target.get("catalog_family_presentations", {})
+    )
+    family_presentations.update(
+        copy.deepcopy(source.get("catalog_family_presentations", {}))
+    )
+    target["catalog_family_presentations"] = family_presentations
+    target["native_hidden_models"] = sorted(
+        set(target.get("native_hidden_models", ()))
+        | set(source.get("native_hidden_models", ()))
+    )
+
     accounts = {item["id"]: item for item in target.get("accounts", [])}
     imported_auth = {}
     for record in payload["accounts"]:

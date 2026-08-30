@@ -1,4 +1,8 @@
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from easy_multi_provider.codex_compatibility import classify_codex_version
 from easy_multi_provider.codex_runtime import (
@@ -15,6 +19,21 @@ class RecordingRunner:
     def run(self, args, *, input_text="", timeout=0):
         self.calls.append((tuple(args), input_text, timeout))
         return self.result
+
+
+class VersionRunner:
+    def __init__(self, versions):
+        self.versions = versions
+        self.calls = []
+
+    def run(self, args, *, input_text="", timeout=0):
+        self.calls.append((tuple(args), input_text, timeout))
+        output = self.versions.get(str(args[0]))
+        return (
+            CommandResult(0, "codex-cli %s\n" % output, "")
+            if output
+            else CommandResult(127, "", "command not found")
+        )
 
 
 class CodexCompatibilityTests(unittest.TestCase):
@@ -80,6 +99,98 @@ class CodexCompatibilityTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
         self.assertIsNone(result["installed"])
         self.assertNotIn("command not found", str(result))
+
+    def test_app_managed_runtime_is_preferred_and_path_cli_is_reported_separately(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            codex_home = Path(temporary)
+            managed = (
+                codex_home
+                / "packages"
+                / "standalone"
+                / "current"
+                / "bin"
+                / ("codex.exe" if os.name == "nt" else "codex")
+            )
+            managed.parent.mkdir(parents=True)
+            managed.write_bytes(b"managed")
+            managed.chmod(0o755)
+            path_cli = str(codex_home / "path" / "codex")
+            runner = VersionRunner({str(managed): "0.151.4", path_cli: "0.146.0"})
+
+            with patch(
+                "easy_multi_provider.codex_runtime.shutil.which",
+                return_value=path_cli,
+            ):
+                controller = CodexRuntimeController(
+                    runner=runner,
+                    target_codex_home=codex_home,
+                )
+                result = controller.compatibility()
+
+        self.assertEqual(result["installed"], "0.151.4")
+        self.assertEqual(result["source"], "managed")
+        self.assertEqual(result["path_cli"]["installed"], "0.146.0")
+        self.assertEqual(result["path_cli"]["status"], "unsupported")
+        self.assertEqual(runner.calls[0][0], (str(managed), "--version"))
+        self.assertEqual(runner.calls[1][0], (path_cli, "--version"))
+
+    def test_legacy_managed_runtime_path_remains_a_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            codex_home = Path(temporary)
+            legacy = (
+                codex_home
+                / "packages"
+                / "standalone"
+                / "current"
+                / ("codex.exe" if os.name == "nt" else "codex")
+            )
+            legacy.parent.mkdir(parents=True)
+            legacy.write_bytes(b"legacy-managed")
+            legacy.chmod(0o755)
+            path_cli = str(codex_home / "path" / "codex")
+            runner = VersionRunner({str(legacy): "0.150.1", path_cli: "0.146.0"})
+
+            with patch(
+                "easy_multi_provider.codex_runtime.shutil.which",
+                return_value=path_cli,
+            ):
+                result = CodexRuntimeController(
+                    runner=runner,
+                    target_codex_home=codex_home,
+                ).compatibility()
+
+        self.assertEqual(result["installed"], "0.150.1")
+        self.assertEqual(result["source"], "managed")
+        self.assertEqual(runner.calls[0][0], (str(legacy), "--version"))
+
+    def test_path_cli_is_not_repeated_when_it_is_the_selected_managed_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            codex_home = Path(temporary)
+            managed = (
+                codex_home
+                / "packages"
+                / "standalone"
+                / "current"
+                / "bin"
+                / ("codex.exe" if os.name == "nt" else "codex")
+            )
+            managed.parent.mkdir(parents=True)
+            managed.write_bytes(b"managed")
+            managed.chmod(0o755)
+            runner = VersionRunner({str(managed): "0.151.4"})
+
+            with patch(
+                "easy_multi_provider.codex_runtime.shutil.which",
+                return_value=str(managed),
+            ):
+                result = CodexRuntimeController(
+                    runner=runner,
+                    target_codex_home=codex_home,
+                ).compatibility()
+
+        self.assertEqual(result["source"], "managed")
+        self.assertNotIn("path_cli", result)
+        self.assertEqual(len(runner.calls), 1)
 
 
 if __name__ == "__main__":

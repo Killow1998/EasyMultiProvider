@@ -21,6 +21,100 @@ ensure_test_master_key()
 
 
 class CatalogTests(unittest.TestCase):
+    def test_family_presentation_renames_native_and_prefixed_sources_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "gpt-5.6-sol",
+                                "family_id": "gpt-5.6-sol",
+                                "display_name": "GPT-5.6-Sol",
+                                "context_window": 258000,
+                                "visibility": "list",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = normalize(
+                {
+                    "native_catalog_path": str(native_path),
+                    "accounts": [
+                        {
+                            "id": "ship",
+                            "name": "🚢",
+                            "prefix": "ship",
+                            "auth_file": str(Path(directory) / "ship.enc"),
+                        }
+                    ],
+                    "providers": [
+                        {
+                            "id": "or",
+                            "name": "OpenRouter",
+                            "base_url": "https://openrouter.ai/api/v1",
+                        }
+                    ],
+                    "models": [
+                        {
+                            "id": "or/gpt-5.6-sol",
+                            "provider": "or",
+                            "upstream_id": "gpt-5.6-sol",
+                            "context_window": 258000,
+                        }
+                    ],
+                    "catalog_family_presentations": {
+                        "gpt-5.6-sol": {
+                            "catalog_alias": "将军",
+                            "show_context": False,
+                        }
+                    },
+                }
+            )
+
+            by_slug = {
+                model["slug"]: model for model in build_catalog(config)["models"]
+            }
+
+        self.assertEqual(by_slug["gpt-5.6-sol"]["display_name"], "将军")
+        self.assertEqual(by_slug["ship/gpt-5.6-sol"]["display_name"], "🚢 · 将军")
+        self.assertEqual(
+            by_slug["or/gpt-5.6-sol"]["display_name"], "OpenRouter · 将军"
+        )
+
+    def test_native_visibility_is_owned_without_importing_a_duplicate_account(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {"slug": "shown", "visibility": "list"},
+                            {"slug": "hidden-by-user", "visibility": "list"},
+                            {"slug": "codex-auto-review", "visibility": "hide"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = normalize(
+                {
+                    "native_catalog_path": str(native_path),
+                    "native_hidden_models": [
+                        "hidden-by-user",
+                        "codex-auto-review",
+                    ],
+                }
+            )
+
+            slugs = {model["slug"] for model in build_catalog(config)["models"]}
+
+        self.assertIn("shown", slugs)
+        self.assertNotIn("hidden-by-user", slugs)
+        self.assertIn("codex-auto-review", slugs)
     def test_reasoning_summary_policy_never_fabricates_support(self):
         config = normalize(
             {

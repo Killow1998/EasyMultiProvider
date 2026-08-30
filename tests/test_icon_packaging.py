@@ -37,6 +37,13 @@ icon_assets = (
 
 @unittest.skipIf(Image is None, "Pillow is only installed in the packaging group")
 class IconPackagingTests(unittest.TestCase):
+    def test_master_has_no_opaque_application_tile(self):
+        with Image.open(icon_assets.MASTER_ICON) as image:
+            master = image.convert("RGBA")
+
+        self.assertEqual(master.getpixel((0, 0))[3], 0)
+        self.assertEqual(master.getpixel((100, 512))[3], 0)
+
     def test_master_generates_windows_macos_and_linux_icons(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)

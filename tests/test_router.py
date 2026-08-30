@@ -104,6 +104,24 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(hidden["reasoning"], {"effort": "high"})
         self.assertFalse(hidden_model["_emp_preserve_reasoning_summary"])
 
+        family_model = {
+            "upstream_id": "shared-family",
+            "supports_reasoning_summaries": True,
+        }
+        family_hidden = router._prepare_reasoning_summary_route(
+            {
+                "catalog_family_presentations": {
+                    "shared-family": {"reasoning_summary": "hide"}
+                }
+            },
+            external,
+            family_model,
+            "external/model",
+            body,
+        )
+        self.assertEqual(family_hidden["reasoning"], {"effort": "high"})
+        self.assertFalse(family_model["_emp_preserve_reasoning_summary"])
+
         chat_model = {"supports_reasoning_summaries": True}
         chat_body = router._prepare_reasoning_summary_route(
             {},
