@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.1 (2026-08-30)
+
 ### Codex compatibility
 
 - Publish the supported Codex CLI range (`0.149.x`–`0.151.x`) and recommended
