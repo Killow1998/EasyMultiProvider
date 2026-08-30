@@ -38,6 +38,30 @@ class QuotaTests(unittest.TestCase):
     def test_account_refresh_lock_does_not_retain_identifier_keys(self):
         self.assertIs(account_refresh_lock("one"), account_refresh_lock("two"))
 
+    def test_windows_root_export_is_bounded_to_server_auth_certificates(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory, patch.object(
+            quota_module.ssl,
+            "enum_certificates",
+            return_value=[
+                (b"server", "x509_asn", {quota_module._SERVER_AUTH_OID}),
+                (b"duplicate", "x509_asn", True),
+                (b"duplicate", "x509_asn", True),
+                (b"client-only", "x509_asn", {"1.3.6.1.5.5.7.3.2"}),
+            ],
+            create=True,
+        ), patch.object(
+            quota_module.ssl,
+            "DER_cert_to_PEM_cert",
+            side_effect=lambda value: "CERT-" + value.decode("ascii"),
+        ):
+            bundle = quota_module._write_windows_root_ca_bundle(Path(directory))
+
+            self.assertIsNotNone(bundle)
+            self.assertEqual(
+                bundle.read_text(encoding="ascii"),
+                "CERT-server\nCERT-duplicate\n",
+            )
+
     def test_refreshes_different_accounts_without_cross_account_cooldown(self):
         with patch.object(quota_module, "_last_refresh", 0.0), patch.object(
             quota_module, "_last_refresh_key", b"", create=True
@@ -123,6 +147,41 @@ class QuotaTests(unittest.TestCase):
         self.assertEqual(value["credits"]["reset_credits"]["available_count"], 2)
         self.assertNotIn("opaque-reset-id", json.dumps(value))
 
+    def test_parser_accepts_codex_multi_bucket_and_rolling_update_shapes(self):
+        output = "\n".join(
+            [
+                json.dumps(
+                    {
+                        "id": 3,
+                        "result": {
+                            "rateLimitsByLimitId": {
+                                "codex": {
+                                    "primary": {"usedPercent": 20},
+                                    "planType": "plus",
+                                }
+                            }
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "method": "account/rateLimits/updated",
+                        "params": {
+                            "rateLimits": {
+                                "primary": {"usedPercent": 21},
+                                "planType": "plus",
+                            }
+                        },
+                    }
+                ),
+            ]
+        )
+
+        value = parse_app_server_output(output)
+
+        self.assertEqual(value["plan_type"], "plus")
+        self.assertEqual(value["rate_limits"]["primary"]["usedPercent"], 21)
+
     def test_quota_process_is_pinned_to_account_directory(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             account_dir = Path(directory) / "primary"
@@ -174,7 +233,14 @@ class QuotaTests(unittest.TestCase):
                     self.returncode = -9
 
             process = FakeProcess()
-            with patch.dict(os.environ, {"HTTPS_PROXY": "http://proxy.invalid"}, clear=False), patch(
+            with patch.dict(
+                os.environ,
+                {
+                    "HTTPS_PROXY": "http://proxy.invalid",
+                    "CODEX_CA_CERTIFICATE": str(Path(directory) / "codex-ca.pem"),
+                },
+                clear=False,
+            ), patch(
                 "easy_multi_provider.quota.subprocess.Popen", return_value=process
             ) as started:
                 value = read_account_quota(
@@ -185,8 +251,15 @@ class QuotaTests(unittest.TestCase):
             self.assertNotEqual(kwargs["env"]["CODEX_HOME"], str(account_dir))
             self.assertNotIn("EASY_MULTI_PROVIDER_MASTER_KEY", kwargs["env"])
             self.assertEqual(kwargs["env"]["HTTPS_PROXY"], "http://proxy.invalid")
+            self.assertEqual(
+                kwargs["env"]["CODEX_CA_CERTIFICATE"],
+                str(Path(directory) / "codex-ca.pem"),
+            )
             self.assertNotIn("secret", process.stdin.body)
             self.assertEqual(json.loads(process.stdin.body.splitlines()[1])["method"], "initialized")
+            rate_limit_request = json.loads(process.stdin.body.splitlines()[3])
+            self.assertEqual(rate_limit_request["method"], "account/rateLimits/read")
+            self.assertIsNone(rate_limit_request["params"])
             self.assertTrue(process.stdin.closed)
 
 

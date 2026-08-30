@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import shutil
+import ssl
 import subprocess
 import stat
 import tempfile
@@ -29,6 +30,7 @@ _refresh_lock = threading.RLock()
 _last_refresh = 0.0
 _last_refresh_key = b""
 _REFRESH_COOLDOWN_SECONDS = 2.0
+_SERVER_AUTH_OID = "1.3.6.1.5.5.7.3.1"
 
 
 def _trusted_codex_binary(codex_binary: str):
@@ -65,6 +67,53 @@ def _verify_codex_binary(binary: Path, identity) -> None:
         raise QuotaError("Codex executable was replaced") from exc
     if verified != binary or current_identity != identity:
         raise QuotaError("Codex executable was replaced")
+
+
+def _write_windows_root_ca_bundle(directory: Path) -> Optional[Path]:
+    """Export Windows server-auth roots for an isolated Codex subprocess."""
+    enum_certificates = getattr(ssl, "enum_certificates", None)
+    if not callable(enum_certificates):
+        return None
+    try:
+        certificates = enum_certificates("ROOT")
+    except (OSError, ssl.SSLError):
+        return None
+
+    seen = set()
+    pem_certificates = []
+    for certificate, encoding, trust in certificates:
+        if encoding != "x509_asn" or not isinstance(certificate, bytes):
+            continue
+        if trust is not True and (
+            not isinstance(trust, (set, frozenset))
+            or _SERVER_AUTH_OID not in trust
+        ):
+            continue
+        if certificate in seen:
+            continue
+        try:
+            pem = ssl.DER_cert_to_PEM_cert(certificate)
+        except (ValueError, ssl.SSLError):
+            continue
+        seen.add(certificate)
+        pem_certificates.append(pem if pem.endswith("\n") else pem + "\n")
+
+    if not pem_certificates:
+        return None
+    bundle = directory / "windows-root-ca.pem"
+    fd = -1
+    try:
+        fd = os.open(str(bundle), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            fd = -1
+            handle.write("".join(pem_certificates))
+        os.chmod(str(bundle), 0o600)
+    except OSError:
+        return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    return bundle
 
 
 def account_refresh_lock(account_id: Any) -> threading.RLock:
@@ -282,18 +331,38 @@ def parse_app_server_output(output: str) -> Dict[str, Any]:
         except ValueError:
             continue
         result = message.get("result")
-        if not isinstance(result, dict):
-            continue
-        if isinstance(result.get("account"), dict):
-            account = result["account"]
-        if isinstance(result.get("rateLimits"), dict):
-            rate_limits = result["rateLimits"]
-            rate_limits_result = result
+        if isinstance(result, dict):
+            if isinstance(result.get("account"), dict):
+                account = result["account"]
+            candidate = result.get("rateLimits")
+            if not isinstance(candidate, dict):
+                by_limit_id = result.get("rateLimitsByLimitId")
+                candidate = (
+                    by_limit_id.get("codex")
+                    if isinstance(by_limit_id, dict)
+                    else None
+                )
+            if isinstance(candidate, dict):
+                rate_limits = candidate
+                rate_limits_result = result
+
+        if message.get("method") == "account/rateLimits/updated":
+            params = message.get("params")
+            candidate = params.get("rateLimits") if isinstance(params, dict) else None
+            if isinstance(candidate, dict):
+                rate_limits = candidate
+                rate_limits_result = params
     if rate_limits is None:
         raise QuotaError("Codex did not return account rate limits")
     return {
         "account_label": _mask_email(account.get("email")),
-        "plan_type": account.get("planType") if isinstance(account.get("planType"), str) else None,
+        "plan_type": (
+            account.get("planType")
+            if isinstance(account.get("planType"), str)
+            else rate_limits.get("planType")
+            if isinstance(rate_limits.get("planType"), str)
+            else None
+        ),
         "rate_limits": rate_limits,
         "credits": _safe_credit_snapshot(rate_limits, rate_limits_result),
         "updated_at": int(time.time()),
@@ -331,7 +400,7 @@ def _run_quota_query(
         },
         {"method": "initialized"},
         {"id": 2, "method": "account/read", "params": {"refreshToken": allow_refresh}},
-        {"id": 3, "method": "account/rateLimits/read"},
+        {"id": 3, "method": "account/rateLimits/read", "params": None},
     ]
     with tempfile.TemporaryDirectory(prefix="easy-mp-codex-account-") as temporary:
         codex_home = Path(temporary)
@@ -368,10 +437,17 @@ def _run_quota_query(
             "no_proxy",
             "SSL_CERT_FILE",
             "SSL_CERT_DIR",
+            "CODEX_CA_CERTIFICATE",
             "NODE_EXTRA_CA_CERTS",
         ):
             if os.environ.get(key):
                 env[key] = os.environ[key]
+        if os.name == "nt" and not env.get("SSL_CERT_FILE") and not env.get(
+            "CODEX_CA_CERTIFICATE"
+        ):
+            windows_ca_bundle = _write_windows_root_ca_bundle(codex_home)
+            if windows_ca_bundle is not None:
+                env["SSL_CERT_FILE"] = str(windows_ca_bundle)
         process = None
         try:
             _verify_codex_binary(binary, identity)
