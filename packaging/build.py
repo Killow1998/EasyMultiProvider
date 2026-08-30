@@ -619,7 +619,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="only verify the packaged --version command",
     )
     args = parser.parse_args(argv)
-    artifacts = build(skip_service_smoke=args.skip_service_smoke)
+    try:
+        artifacts = build(skip_service_smoke=args.skip_service_smoke)
+    except Exception as exc:
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            message = "%s: %s" % (type(exc).__name__, exc)
+            message = (
+                message.replace("%", "%25")
+                .replace("\r", "%0D")
+                .replace("\n", "%0A")
+            )
+            print(
+                "::error title=Native package build failed::%s" % message,
+                file=sys.stderr,
+            )
+        raise
     for artifact in artifacts:
         print(artifact.relative_to(PROJECT_ROOT))
     return 0
