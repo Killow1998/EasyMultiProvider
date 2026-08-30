@@ -66,6 +66,17 @@ def release_artifact_names(version: str) -> Set[str]:
     return primary | {name + ".sha256" for name in primary}
 
 
+def public_artifact_names(version: str) -> Set[str]:
+    base = "%s-%s" % (PACKAGE_NAME, version)
+    return {
+        "%s-windows-x86_64.exe" % base,
+        "%s-linux-x86_64.tar.gz" % base,
+        "%s-linux-x86_64.deb" % base,
+        "%s-macos-x86_64.dmg" % base,
+        "%s-macos-arm64.dmg" % base,
+    }
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -120,19 +131,41 @@ def validate_release(tag: str, artifacts_root: Path) -> str:
     return version
 
 
+def write_public_manifest(
+    version: str, artifacts_root: Path, destination: Path
+) -> None:
+    names = sorted(public_artifact_names(version))
+    missing = [name for name in names if not (artifacts_root / name).is_file()]
+    if missing:
+        raise ReleaseValidationError(
+            "public release assets are missing: %s" % _format_names(missing)
+        )
+    destination.write_text(
+        "".join("%s\n" % (artifacts_root / name) for name in names),
+        encoding="utf-8",
+    )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Validate a complete EasyMultiProvider release asset set"
     )
     parser.add_argument("--tag", required=True, help="release tag, for example v0.9.1")
     parser.add_argument("--artifacts", required=True, type=Path)
+    parser.add_argument(
+        "--public-manifest",
+        type=Path,
+        help="write the five user-facing release asset paths after validation",
+    )
     args = parser.parse_args(argv)
     try:
         version = validate_release(args.tag, args.artifacts)
+        if args.public_manifest is not None:
+            write_public_manifest(version, args.artifacts, args.public_manifest)
     except (OSError, UnicodeError, ReleaseValidationError) as exc:
         print("release validation failed: %s" % exc, file=sys.stderr)
         return 1
-    print("release assets verified: 22 files for v%s" % version)
+    print("release assets verified: 22 files; 5 public downloads for v%s" % version)
     return 0
 
 

@@ -34,6 +34,29 @@ class ReleasePackagingTests(unittest.TestCase):
                 release_validation.validate_release("v" + version, root), version
             )
 
+    def test_public_manifest_contains_only_the_five_install_files(self):
+        version = release_validation.source_version()
+        base = "easy-multi-provider-%s" % version
+        expected = {
+            base + "-windows-x86_64.exe",
+            base + "-linux-x86_64.tar.gz",
+            base + "-linux-x86_64.deb",
+            base + "-macos-x86_64.dmg",
+            base + "-macos-arm64.dmg",
+        }
+        self.assertEqual(release_validation.public_artifact_names(version), expected)
+        self.assertLessEqual(expected, release_validation.primary_artifact_names(version))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._complete_assets(root, version)
+            manifest = root / "public-assets.txt"
+            release_validation.write_public_manifest(version, root, manifest)
+            self.assertEqual(
+                {Path(line).name for line in manifest.read_text().splitlines()},
+                expected,
+            )
+
     def test_release_tag_must_match_source_version(self):
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaisesRegex(

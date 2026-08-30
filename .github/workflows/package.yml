@@ -123,6 +123,7 @@ jobs:
           python packaging/validate_release.py
           --tag "$RELEASE_TAG"
           --artifacts release-assets
+          --public-manifest public-release-assets.txt
 
       - name: Verify an existing tag targets this build
         env:
@@ -150,18 +151,18 @@ jobs:
                 inputs.release_tag || github.ref_name }}
         shell: bash
         run: |
-          primary_assets=()
-          for asset in release-assets/*; do
-            case "$asset" in
-              *.sha256) continue ;;
-            esac
-            primary_assets+=("$asset")
-          done
-          if [ "${#primary_assets[@]}" -ne 11 ]; then
-            echo "Expected 11 user-facing release assets." >&2
+          mapfile -t public_assets < public-release-assets.txt
+          if [ "${#public_assets[@]}" -ne 5 ]; then
+            echo "Expected 5 user-facing release assets." >&2
             exit 1
           fi
-          gh release create "$RELEASE_TAG" "${primary_assets[@]}" \
+          for asset in "${public_assets[@]}"; do
+            if [ ! -f "$asset" ]; then
+              echo "Public release asset is missing: $asset" >&2
+              exit 1
+            fi
+          done
+          gh release create "$RELEASE_TAG" "${public_assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "EasyMultiProvider $RELEASE_TAG" \

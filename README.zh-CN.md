@@ -46,10 +46,10 @@ EMP 支持 Codex CLI `0.149.x` 至 `0.151.x`，推荐使用 `0.151.x`。Web UI �
 
 | 平台 | 产物 |
 | --- | --- |
-| Windows x64 | 带图标的独立 `.exe` 和 `.zip` |
-| Ubuntu 22.04+ x64 | 独立二进制文件、`.tar.gz` 和带桌面入口的 `.deb` |
-| macOS Intel | 独立二进制文件、`.tar.gz` 和包含 `.app` 的 `.dmg` |
-| macOS Apple Silicon | 独立二进制文件、`.tar.gz` 和包含 `.app` 的 `.dmg` |
+| Windows x64 | 带图标的独立 `.exe` |
+| Ubuntu 22.04+ x64 | `.tar.gz` 和带桌面入口的 `.deb` |
+| macOS Intel | 包含 `.app` 的 `.dmg` |
+| macOS Apple Silicon | 包含 `.app` 的 `.dmg` |
 
 最简单的桌面启动方式是：
 
@@ -69,22 +69,23 @@ EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的
 - Linux：`$XDG_CONFIG_HOME/easy-multi-provider/config.json`，未设置时使用
   `~/.config/easy-multi-provider/config.json`
 
-需要命令行控制时仍可显式启动服务。解压 Windows 产物后，在 PowerShell 中运行：
+需要命令行控制时仍可显式启动服务。下载 Windows 可执行文件后，在 PowerShell 中运行：
 
 ```powershell
 .\easy-multi-provider.exe --version
 .\easy-multi-provider.exe serve --config config.json
 ```
 
-解压或安装 Linux、macOS 产物后运行：
+解压 Linux `.tar.gz` 或安装 `.deb` 后运行：
 
 ```bash
 ./easy-multi-provider --version
 ./easy-multi-provider serve --config config.json
 ```
 
-`.deb` 会把同一命令安装到 `PATH` 中，安装后不需要输入前面的 `./`。原始二进制
-文件和压缩包中的程序在无参数运行时，也会进入自动打开浏览器的桌面模式。
+`.deb` 会把同一命令安装到 `PATH` 中，安装后不需要输入前面的 `./`。Windows
+可执行文件和 Linux 压缩包中的程序在无参数运行时，也会进入自动打开浏览器的
+桌面模式。
 
 当前 macOS workflow 产物属于未签名的开发构建。公开分发仍需要 Apple Developer
 ID 签名和公证。

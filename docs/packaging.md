@@ -73,9 +73,11 @@ Run the **Package** workflow manually from GitHub Actions:
   for all four builds, merge their outputs, verify the complete 22-file
   manifest and every SHA-256 sidecar, and create a GitHub Draft Pre-release.
 
-Checksums are CI-only verification evidence. The Release attaches only the 11
-primary executables, archives, and installers; `.sha256` sidecars remain in the
-temporary workflow artifact bundles and do not clutter the user download list.
+Checksums and alternate wrappers are CI-only verification evidence. The Release
+attaches exactly five normal installation downloads: Windows EXE, Linux DEB and
+TAR.GZ, and the Intel and Apple Silicon DMGs. Raw executables, Windows/macOS
+archives, and `.sha256` sidecars remain in the temporary workflow artifact
+bundles and do not clutter the user download list.
 
 The requested tag must equal `v` plus the version in both `pyproject.toml` and
 `easy_multi_provider/__init__.py`. The release job fails closed on a version

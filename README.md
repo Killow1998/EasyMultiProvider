@@ -49,10 +49,10 @@ builds and smoke-tests these native artifacts before a release is published:
 
 | Platform | Artifact |
 | --- | --- |
-| Windows x64 | branded standalone `.exe` and `.zip` |
-| Ubuntu 22.04+ x64 | standalone binary, `.tar.gz`, and desktop-enabled `.deb` |
-| macOS Intel | standalone binary, `.tar.gz`, and `.app` inside a `.dmg` |
-| macOS Apple Silicon | standalone binary, `.tar.gz`, and `.app` inside a `.dmg` |
+| Windows x64 | branded standalone `.exe` |
+| Ubuntu 22.04+ x64 | `.tar.gz` and desktop-enabled `.deb` |
+| macOS Intel | `.app` inside a `.dmg` |
+| macOS Apple Silicon | `.app` inside a `.dmg` |
 
 For the simplest desktop launch:
 
@@ -75,15 +75,15 @@ Desktop launch stores configuration in the normal per-user directory:
 - Linux: `$XDG_CONFIG_HOME/easy-multi-provider/config.json`, or
   `~/.config/easy-multi-provider/config.json`
 
-For command-line use, the explicit service command remains available. After
-extracting the Windows package, use PowerShell:
+For command-line use, the explicit service command remains available. With the
+downloaded Windows executable, use PowerShell:
 
 ```powershell
 .\easy-multi-provider.exe --version
 .\easy-multi-provider.exe serve --config config.json
 ```
 
-After extracting or installing a Linux or macOS package:
+After extracting the Linux `.tar.gz` or installing the `.deb`:
 
 ```bash
 ./easy-multi-provider --version
@@ -91,8 +91,8 @@ After extracting or installing a Linux or macOS package:
 ```
 
 The `.deb` installs the same command into `PATH`, so omit `./` after installing
-it. Raw binaries and archive contents also enter the browser-opening desktop
-mode when run without arguments.
+it. The Windows executable and Linux archive command also enter the
+browser-opening desktop mode when run without arguments.
 
 The current macOS workflow artifacts are unsigned development builds. Public
 distribution still requires Apple Developer ID signing and notarization.
