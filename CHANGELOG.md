@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Packaging
+
+- Keep SHA-256 sidecars in CI validation artifacts while exposing only the 11
+  executable, archive, and installer downloads on GitHub Releases.
+
 ## 0.9.1 (2026-08-30)
 
 ### Codex compatibility
