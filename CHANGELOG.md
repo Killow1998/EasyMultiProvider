@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.9.2 (2026-08-30)
+
+### Model catalog
+
+- Honor current-login model visibility by omitting user-hidden Native picker
+  entries while preserving internal hidden service models such as Codex Auto
+  Review.
+
 ### Packaging
 
 - Keep the complete checksum-verified build matrix in CI while exposing only
