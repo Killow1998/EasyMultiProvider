@@ -199,7 +199,10 @@ def _smoke_executable(executable: Path, version: str, target: Target) -> None:
     if version_result.stdout.strip() != expected:
         raise RuntimeError("packaged version probe returned an unexpected value")
 
-    with tempfile.TemporaryDirectory(prefix="emp-package-smoke-") as temporary:
+    temporary_parent = Path(tempfile.gettempdir()).resolve()
+    with tempfile.TemporaryDirectory(
+        prefix="emp-package-smoke-", dir=str(temporary_parent)
+    ) as temporary:
         temporary_root = Path(temporary)
         codex_home = temporary_root / "codex-home"
         codex_home.mkdir()
