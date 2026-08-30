@@ -1,0 +1,150 @@
+name: Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: >-
+          Optional exact source tag (for example v0.9.0); creates a Draft
+          Pre-release
+        required: false
+        default: ""
+        type: string
+  pull_request:
+    paths:
+      - ".github/workflows/package.yml"
+      - "easy_multi_provider/**"
+      - "assets/**"
+      - "packaging/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "README.md"
+      - "README.zh-CN.md"
+      - "LICENSE"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/package.yml"
+      - "easy_multi_provider/**"
+      - "assets/**"
+      - "packaging/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "README.md"
+      - "README.zh-CN.md"
+      - "LICENSE"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.ref }}-${{ inputs.release_tag || 'build' }}
+  cancel-in-progress: ${{ inputs.release_tag == '' }}
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-2025
+          - name: Linux x64
+            runner: ubuntu-22.04
+          - name: macOS Intel
+            runner: macos-15-intel
+          - name: macOS Apple Silicon
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9
+
+      - name: Install locked packaging environment
+        run: uv sync --frozen --group package
+
+      - name: Build and smoke-test native package
+        run: uv run --frozen --group package python packaging/build.py
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: easy-multi-provider-${{ runner.os }}-${{ runner.arch }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Create Draft Pre-release
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/main' &&
+          inputs.release_tag != '' }}
+    needs: package
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Download all native packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: easy-multi-provider-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Validate release version, manifest, and checksums
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: >-
+          python packaging/validate_release.py
+          --tag "$RELEASE_TAG"
+          --artifacts release-assets
+
+      - name: Verify an existing tag targets this build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          tag_ref="repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}"
+          commit_ref="repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}"
+          if gh api "$tag_ref" >/dev/null 2>&1; then
+            existing_sha="$(gh api "$commit_ref" --jq .sha)"
+            if [ "$existing_sha" != "$GITHUB_SHA" ]; then
+              echo "Tag ${RELEASE_TAG} targets ${existing_sha}, not ${GITHUB_SHA}." >&2
+              exit 1
+            fi
+          fi
+
+      - name: Create Draft Pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: >-
+          gh release create "$RELEASE_TAG" release-assets/*
+          --repo "$GITHUB_REPOSITORY"
+          --target "$GITHUB_SHA"
+          --title "EasyMultiProvider $RELEASE_TAG"
+          --generate-notes
+          --draft
+          --prerelease
+          --latest=false

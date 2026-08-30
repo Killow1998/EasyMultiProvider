@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
+from . import __version__
 from .config import ConfigError
 from .codex_runtime import (
     RELOAD_REQUIRED,
@@ -59,6 +60,41 @@ def resolve_codex_home(
     return (home / ".codex").resolve()
 
 
+def resolve_desktop_config_path(
+    environ: Optional[Mapping[str, str]] = None,
+    user_home: Optional[Path] = None,
+    platform_name: Optional[str] = None,
+) -> Path:
+    """Return the writable per-user config used by packaged desktop launchers."""
+
+    environment = os.environ if environ is None else environ
+    home = Path.home() if user_home is None else Path(user_home)
+    active_platform = sys.platform if platform_name is None else platform_name
+    if active_platform == "win32":
+        configured = (
+            environment.get("LOCALAPPDATA", "").strip()
+            or environment.get("APPDATA", "").strip()
+        )
+        root = (
+            Path(configured).expanduser()
+            if configured
+            else home / "AppData" / "Local"
+        )
+        return root / "EasyMultiProvider" / "config.json"
+    if active_platform == "darwin":
+        return (
+            home
+            / "Library"
+            / "Application Support"
+            / "EasyMultiProvider"
+            / "config.json"
+        )
+
+    configured = environment.get("XDG_CONFIG_HOME", "").strip()
+    root = Path(configured).expanduser() if configured else home / ".config"
+    return root / "easy-multi-provider" / "config.json"
+
+
 def resolve_integration_paths(
     codex_home: Optional[Path] = None,
     state_dir: Optional[Path] = None,
@@ -100,6 +136,11 @@ def _add_serve_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", type=Path, help="EMP JSON configuration path")
     parser.add_argument("--host", help="override the local listen host")
     parser.add_argument("--port", type=int, help="override the local listen port")
+    parser.add_argument(
+        "--open-browser",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
 
 
 def _add_integration_arguments(parser: argparse.ArgumentParser) -> None:
@@ -122,6 +163,11 @@ def _add_integration_arguments(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="EasyMultiProvider Runtime Control Plane commands"
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version="EasyMultiProvider %s" % __version__,
     )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
@@ -251,7 +297,7 @@ def _run_serve(args: argparse.Namespace) -> int:
     # Keep the service import lazy so doctor/restore remain offline operations.
     from .server import serve
 
-    serve(args.config, args.host, args.port)
+    serve(args.config, args.host, args.port, open_browser=args.open_browser)
     return 0
 
 
@@ -274,6 +320,13 @@ def _safe_error_message(error: BaseException) -> str:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
+    if not raw_args and bool(getattr(sys, "frozen", False)):
+        raw_args = [
+            "serve",
+            "--config",
+            str(resolve_desktop_config_path()),
+            "--open-browser",
+        ]
     parser = build_parser()
     if not raw_args:
         parser.print_usage(sys.stderr)

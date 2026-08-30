@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from easy_multi_provider import main as cli
+from easy_multi_provider import __version__, main as cli
 from easy_multi_provider.config import ConfigError
 from easy_multi_provider.integration import (
     IntegrationManager,
@@ -124,6 +124,16 @@ class IntegrationCliTests(unittest.TestCase):
         self.assertIn("relative explicit values resolve from cwd", normalized_help)
         self.assertNotIn("enable", help_text)
 
+    def test_version_reports_runtime_package_version(self):
+        output = io.StringIO()
+        with self.assertRaises(SystemExit) as raised:
+            with patch("sys.stdout", output):
+                cli.main(["--version"])
+        self.assertEqual(raised.exception.code, 0)
+        self.assertEqual(
+            output.getvalue().strip(), "EasyMultiProvider %s" % __version__
+        )
+
     def test_serve_subcommand_keeps_existing_service_call_shape(self):
         with patch("easy_multi_provider.server.serve") as serve:
             code, stdout, stderr = self.invoke(
@@ -142,6 +152,57 @@ class IntegrationCliTests(unittest.TestCase):
             self.root / "emp.json",
             "127.0.0.1",
             43123,
+            open_browser=False,
+        )
+
+    def test_packaged_no_argument_launch_uses_visible_desktop_service(self):
+        desktop_config = self.root / "desktop" / "config.json"
+        with (
+            patch.object(cli.sys, "frozen", True, create=True),
+            patch.object(cli, "resolve_desktop_config_path", return_value=desktop_config),
+            patch("easy_multi_provider.server.serve") as serve,
+        ):
+            code, stdout, stderr = self.invoke()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "")
+        serve.assert_called_once_with(
+            desktop_config,
+            None,
+            None,
+            open_browser=True,
+        )
+
+    def test_desktop_config_path_follows_platform_user_directories(self):
+        home = self.root / "user"
+        self.assertEqual(
+            cli.resolve_desktop_config_path(
+                environ={"LOCALAPPDATA": str(self.root / "local")},
+                user_home=home,
+                platform_name="win32",
+            ),
+            self.root / "local" / "EasyMultiProvider" / "config.json",
+        )
+        self.assertEqual(
+            cli.resolve_desktop_config_path(
+                environ={},
+                user_home=home,
+                platform_name="darwin",
+            ),
+            home
+            / "Library"
+            / "Application Support"
+            / "EasyMultiProvider"
+            / "config.json",
+        )
+        self.assertEqual(
+            cli.resolve_desktop_config_path(
+                environ={"XDG_CONFIG_HOME": str(self.root / "xdg")},
+                user_home=home,
+                platform_name="linux",
+            ),
+            self.root / "xdg" / "easy-multi-provider" / "config.json",
         )
 
     def test_serve_reports_existing_owner_without_traceback(self):

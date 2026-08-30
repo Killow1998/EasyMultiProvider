@@ -24,3 +24,9 @@ include = ["easy_multi_provider*"]
 
 [tool.setuptools.package-data]
 easy_multi_provider = ["web/index.html", "data/*.json"]
+
+[dependency-groups]
+package = [
+    "pillow>=10.4,<13",
+    "pyinstaller==6.21.0",
+]

@@ -3332,7 +3332,13 @@ def _lifecycle_result_fields(result: Any) -> Dict[str, Any]:
         }
 
 
-def serve(path: Optional[Path] = None, host: Optional[str] = None, port: Optional[int] = None) -> None:
+def serve(
+    path: Optional[Path] = None,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    *,
+    open_browser: bool = False,
+) -> None:
     configured_path = Path(path or config_path()).expanduser()
     effective_config_path = configured_path.resolve()
     service_lock_path = effective_config_path.parent / "state" / "service.lock"
@@ -3354,7 +3360,12 @@ def serve(path: Optional[Path] = None, host: Optional[str] = None, port: Optiona
         with default_master_key_file(
             effective_config_path.parent / "state" / "master.key"
         ):
-            _serve_owned(effective_config_path, host, port)
+            _serve_owned(
+                effective_config_path,
+                host,
+                port,
+                open_browser=open_browser,
+            )
     finally:
         if owner is not None:
             owner.__exit__(None, None, None)
@@ -3365,6 +3376,8 @@ def _serve_owned(
     effective_config_path: Path,
     host: Optional[str] = None,
     port: Optional[int] = None,
+    *,
+    open_browser: bool = False,
 ) -> None:
     try:
         journal = create_journal(effective_config_path.parent)
@@ -3462,10 +3475,21 @@ def _serve_owned(
 
             print("EasyMultiProvider listening on %s" % base_url, flush=True)
             print("Network proxy: %s" % proxy_source, flush=True)
-            print(
-                "Open in browser: %s/?bootstrap=%s" % (base_url, state.bootstrap_token),
-                flush=True,
-            )
+            bootstrap_url = "%s/?bootstrap=%s" % (base_url, state.bootstrap_token)
+            print("Open in browser: %s" % bootstrap_url, flush=True)
+            if open_browser:
+                opened = False
+                try:
+                    import webbrowser
+
+                    opened = bool(webbrowser.open(bootstrap_url, new=2))
+                except Exception:
+                    pass
+                if not opened:
+                    print(
+                        "Browser did not open automatically; use the URL above.",
+                        flush=True,
+                    )
             try:
                 if journal.enabled and journal.current_path is not None:
                     print("Diagnostic log: %s" % journal.current_path, flush=True)
@@ -3546,3 +3570,4 @@ def _serve_owned(
                 raise close_error
             if restore_error is not None:
                 raise restore_error
+            print("EasyMultiProvider stopped.", flush=True)

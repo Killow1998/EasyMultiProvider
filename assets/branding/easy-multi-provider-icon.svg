@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1024"
+  height="1024"
+  viewBox="0 0 1024 1024"
+  role="img"
+  aria-labelledby="title description"
+>
+  <title id="title">EasyMultiProvider cool router icon</title>
+  <desc id="description">
+    A gold face in sunglasses routes three colored inputs into one output on a
+    deep navy rounded square.
+  </desc>
+
+  <defs>
+    <linearGradient id="tile" x1="160" y1="100" x2="864" y2="930">
+      <stop offset="0" stop-color="#17284f" />
+      <stop offset="1" stop-color="#0a1027" />
+    </linearGradient>
+    <radialGradient id="face" cx="38%" cy="30%" r="78%">
+      <stop offset="0" stop-color="#ffd86a" />
+      <stop offset="0.64" stop-color="#f7b936" />
+      <stop offset="1" stop-color="#df8e1b" />
+    </radialGradient>
+    <linearGradient id="lens" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#202a43" />
+      <stop offset="0.55" stop-color="#080d1d" />
+      <stop offset="1" stop-color="#02040b" />
+    </linearGradient>
+    <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="22" stdDeviation="24" flood-color="#02040b" flood-opacity="0.42" />
+    </filter>
+    <clipPath id="face-clip">
+      <circle cx="512" cy="536" r="292" />
+    </clipPath>
+  </defs>
+
+  <!-- Transparent outside the application tile. -->
+  <rect x="48" y="48" width="928" height="928" rx="218" fill="url(#tile)" />
+  <rect
+    x="65"
+    y="65"
+    width="894"
+    height="894"
+    rx="202"
+    fill="none"
+    stroke="#31456f"
+    stroke-width="10"
+    opacity="0.58"
+  />
+
+  <!-- Three providers enter the router. -->
+  <g fill="none" stroke-linecap="round" stroke-width="24">
+    <path d="M304 218 C304 304 364 332 392 438" stroke="#49d6ff" />
+    <path d="M512 184 L512 438" stroke="#ffc84b" />
+    <path d="M720 218 C720 304 660 332 632 438" stroke="#a987ff" />
+  </g>
+  <g stroke="#0d1731" stroke-width="12">
+    <circle cx="304" cy="205" r="31" fill="#49d6ff" />
+    <circle cx="512" cy="171" r="31" fill="#ffc84b" />
+    <circle cx="720" cy="205" r="31" fill="#a987ff" />
+  </g>
+
+  <!-- Friendly router mascot. -->
+  <circle
+    cx="512"
+    cy="536"
+    r="292"
+    fill="url(#face)"
+    stroke="#b86d12"
+    stroke-width="18"
+    filter="url(#soft-shadow)"
+  />
+  <path
+    d="M292 390 C352 294 442 259 512 259 C582 259 672 294 732 390"
+    fill="none"
+    stroke="#ffe18a"
+    stroke-width="22"
+    stroke-linecap="round"
+    opacity="0.48"
+    clip-path="url(#face-clip)"
+  />
+
+  <!-- Sunglasses form the routing switch. -->
+  <path
+    d="M254 425 C311 402 409 402 480 428 L463 535 C455 586 415 615 357 607 C302 600 270 569 262 517 Z"
+    fill="url(#lens)"
+    stroke="#050812"
+    stroke-width="22"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M770 425 C713 402 615 402 544 428 L561 535 C569 586 609 615 667 607 C722 600 754 569 762 517 Z"
+    fill="url(#lens)"
+    stroke="#050812"
+    stroke-width="22"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M478 452 C492 438 532 438 546 452"
+    fill="none"
+    stroke="#050812"
+    stroke-width="28"
+    stroke-linecap="round"
+  />
+  <path
+    d="M258 452 L218 432 M766 452 L806 432"
+    fill="none"
+    stroke="#050812"
+    stroke-width="24"
+    stroke-linecap="round"
+  />
+
+  <!-- Restrained route-color reflections make the inputs legible at small size. -->
+  <path
+    d="M303 457 C345 438 393 438 429 448 L417 480 C377 470 338 473 307 488 Z"
+    fill="#49d6ff"
+    opacity="0.82"
+  />
+  <path
+    d="M721 457 C679 438 631 438 595 448 L607 480 C647 470 686 473 717 488 Z"
+    fill="#a987ff"
+    opacity="0.82"
+  />
+  <path
+    d="M337 505 C365 491 391 489 415 494"
+    fill="none"
+    stroke="#dff8ff"
+    stroke-width="13"
+    stroke-linecap="round"
+    opacity="0.72"
+  />
+  <path
+    d="M687 505 C659 491 633 489 609 494"
+    fill="none"
+    stroke="#eee7ff"
+    stroke-width="13"
+    stroke-linecap="round"
+    opacity="0.72"
+  />
+
+  <!-- Calm smile and one routed output. -->
+  <path
+    d="M384 664 C425 718 474 740 512 740 C550 740 599 718 640 664"
+    fill="none"
+    stroke="#643817"
+    stroke-width="30"
+    stroke-linecap="round"
+  />
+  <path
+    d="M512 832 L512 864"
+    fill="none"
+    stroke="#49d6ff"
+    stroke-width="24"
+    stroke-linecap="round"
+  />
+  <circle cx="512" cy="884" r="31" fill="#49d6ff" stroke="#0d1731" stroke-width="12" />
+</svg>

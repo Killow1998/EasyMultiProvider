@@ -1,6 +1,25 @@
 # Changelog
 
+## Unreleased
+
 ## 0.9.0 (2026-08-29)
+
+### Packaging
+
+- Add reproducible native PyInstaller builds for Windows x64, Linux x64,
+  macOS Intel, and macOS Apple Silicon.
+- Produce direct executables, ZIP/tar archives, Linux `.deb`, macOS `.dmg`, and
+  SHA-256 sidecars from one cross-platform packaging script.
+- Smoke-test each packaged service on an isolated loopback configuration before
+  uploading the artifact.
+- Optionally collect all four native builds into a checksum-verified GitHub
+  Draft Pre-release for manual review and publication.
+- Add original EMP artwork and native Windows, macOS, and Linux application
+  icons.
+- Make packaged no-argument launch open the authenticated Web UI in a visible,
+  foreground terminal that can be stopped with `Ctrl+C`.
+- Add a macOS application bundle inside each DMG and a Linux desktop menu entry
+  inside the Debian package.
 
 ### Maintenance architecture
 

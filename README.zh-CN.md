@@ -13,7 +13,7 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 - 在同一个 Codex 模型选择器中使用原生模型、其他 ChatGPT Subscription 和
   外部 API 模型。
 - 使用 `team/gpt-5.6-luna`、`provider/model` 等清晰前缀路由模型。
-- 导入多个 Codex Subscription 账户并查看可用额度信息。
+- 导入多个 Codex Subscription 账户并刷新可用额度信息。
 - 通过 Web UI 添加官方或自建 Provider。
 - 拉取 Provider 模型，自由选择导入模型，修改上下文窗口，执行测试并隐藏
   不常用模型。
@@ -31,8 +31,65 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 
 ## 安装
 
-安装 Git 和 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)，然后
-拉取 EMP：
+EMP 需要系统已经安装 Codex CLI，并且可以通过 `codex` 命令调用。EMP 不会捆绑或
+替代 Codex CLI。
+
+### 预构建安装包
+
+从 [GitHub Releases](https://github.com/Killow1998/EasyMultiProvider/releases)
+下载已经审核的构建。
+[Package workflow](https://github.com/Killow1998/EasyMultiProvider/actions/workflows/package.yml)
+会在发布前原生构建并实际启动检查以下产物：
+
+| 平台 | 产物 |
+| --- | --- |
+| Windows x64 | 带图标的独立 `.exe` 和 `.zip` |
+| Ubuntu 22.04+ x64 | 独立二进制文件、`.tar.gz` 和带桌面入口的 `.deb` |
+| macOS Intel | 独立二进制文件、`.tar.gz` 和包含 `.app` 的 `.dmg` |
+| macOS Apple Silicon | 独立二进制文件、`.tar.gz` 和包含 `.app` 的 `.dmg` |
+
+最简单的桌面启动方式是：
+
+- **Windows：**双击 `easy-multi-provider.exe`。
+- **Linux：**安装 `.deb` 后，从应用菜单打开 **EasyMultiProvider**。
+- **macOS：**打开 DMG，把 **EasyMultiProvider** 拖入“应用程序”，然后双击。
+
+EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的终端窗口。看到
+`EasyMultiProvider listening on ...` 就表示启动成功。使用 EMP 时请保持该终端
+开启；按 `Ctrl+C` 可以干净退出，也可以关闭终端结束进程。正常退出后会显示
+`EasyMultiProvider stopped.`。
+
+桌面启动会把配置保存到各系统标准的用户目录：
+
+- Windows：`%LOCALAPPDATA%\EasyMultiProvider\config.json`
+- macOS：`~/Library/Application Support/EasyMultiProvider/config.json`
+- Linux：`$XDG_CONFIG_HOME/easy-multi-provider/config.json`，未设置时使用
+  `~/.config/easy-multi-provider/config.json`
+
+需要命令行控制时仍可显式启动服务。解压 Windows 产物后，在 PowerShell 中运行：
+
+```powershell
+.\easy-multi-provider.exe --version
+.\easy-multi-provider.exe serve --config config.json
+```
+
+解压或安装 Linux、macOS 产物后运行：
+
+```bash
+./easy-multi-provider --version
+./easy-multi-provider serve --config config.json
+```
+
+`.deb` 会把同一命令安装到 `PATH` 中，安装后不需要输入前面的 `./`。原始二进制
+文件和压缩包中的程序在无参数运行时，也会进入自动打开浏览器的桌面模式。
+
+当前 macOS workflow 产物属于未签名的开发构建。公开分发仍需要 Apple Developer
+ID 签名和公证。
+
+### 从源码安装
+
+安装 Git 和 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)，然后拉取
+EMP：
 
 ```bash
 git clone https://github.com/Killow1998/EasyMultiProvider.git
@@ -44,7 +101,13 @@ uv sync
 
 ## 快速开始
 
-在项目目录中启动 EMP：
+在 Linux 或 macOS 中显式启动打包后的 EMP：
+
+```bash
+easy-multi-provider serve --config config.json
+```
+
+在源码目录中运行时使用：
 
 ```bash
 uv run python -m easy_multi_provider serve --config config.json
@@ -72,8 +135,8 @@ HTTP 正文、请求头、Cookie 和凭据。
 ## Web UI
 
 - **账户**：导入 `auth.json` 或 `auth.json.bk1` 等备份文件。导入时只需要填写
-  账户 ID，显示名称和模型前缀可以稍后修改。每个 Subscription 都能控制哪些
-  Coding Agent 模型显示在 Codex 中。
+  账户 ID，显示名称和模型前缀可以稍后修改。点击**刷新**会实时查询额度并保存新的
+  快照。每个 Subscription 都能控制哪些 Coding Agent 模型显示在 Codex 中。
 - **Provider**：选择支持的官方预设，或者通过 Base URL 和 API Key 添加自建
   Provider。
 - **模型**：拉取上游模型，并进行导入、测试、编辑、隐藏或删除。模型按照

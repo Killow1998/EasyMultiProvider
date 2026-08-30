@@ -14,7 +14,7 @@ The current source version is `v0.9.0`.
   models from the same Codex model picker.
 - Route models with readable prefixes such as `team/gpt-5.6-luna` or
   `provider/model`.
-- Import multiple Codex subscription accounts and view available quota data.
+- Import multiple Codex subscription accounts and refresh available quota data.
 - Add official or custom providers through the Web UI.
 - Discover provider models, select which ones to import, edit context windows,
   test them, and hide unused entries.
@@ -33,6 +33,68 @@ The current source version is `v0.9.0`.
 
 ## Install
 
+EMP requires the Codex CLI to be installed and available as `codex`. EMP does
+not bundle or replace it.
+
+### Prebuilt packages
+
+Download reviewed builds from
+[GitHub Releases](https://github.com/Killow1998/EasyMultiProvider/releases). The
+[Package workflow](https://github.com/Killow1998/EasyMultiProvider/actions/workflows/package.yml)
+builds and smoke-tests these native artifacts before a release is published:
+
+| Platform | Artifact |
+| --- | --- |
+| Windows x64 | branded standalone `.exe` and `.zip` |
+| Ubuntu 22.04+ x64 | standalone binary, `.tar.gz`, and desktop-enabled `.deb` |
+| macOS Intel | standalone binary, `.tar.gz`, and `.app` inside a `.dmg` |
+| macOS Apple Silicon | standalone binary, `.tar.gz`, and `.app` inside a `.dmg` |
+
+For the simplest desktop launch:
+
+- **Windows:** double-click `easy-multi-provider.exe`.
+- **Linux:** install the `.deb`, then open **EasyMultiProvider** from the
+  application menu.
+- **macOS:** open the DMG, drag **EasyMultiProvider** to Applications, then
+  double-click it.
+
+EMP opens the authenticated Web UI and keeps a visible terminal window for
+status and logs. `EasyMultiProvider listening on ...` means startup succeeded.
+Keep that terminal open while using EMP. Press `Ctrl+C` for a clean stop, or
+close the terminal to terminate the process; after a clean stop it prints
+`EasyMultiProvider stopped.`
+
+Desktop launch stores configuration in the normal per-user directory:
+
+- Windows: `%LOCALAPPDATA%\EasyMultiProvider\config.json`
+- macOS: `~/Library/Application Support/EasyMultiProvider/config.json`
+- Linux: `$XDG_CONFIG_HOME/easy-multi-provider/config.json`, or
+  `~/.config/easy-multi-provider/config.json`
+
+For command-line use, the explicit service command remains available. After
+extracting the Windows package, use PowerShell:
+
+```powershell
+.\easy-multi-provider.exe --version
+.\easy-multi-provider.exe serve --config config.json
+```
+
+After extracting or installing a Linux or macOS package:
+
+```bash
+./easy-multi-provider --version
+./easy-multi-provider serve --config config.json
+```
+
+The `.deb` installs the same command into `PATH`, so omit `./` after installing
+it. Raw binaries and archive contents also enter the browser-opening desktop
+mode when run without arguments.
+
+The current macOS workflow artifacts are unsigned development builds. Public
+distribution still requires Apple Developer ID signing and notarization.
+
+### Install from source
+
 Install Git and [`uv`](https://docs.astral.sh/uv/getting-started/installation/),
 then clone EMP:
 
@@ -47,7 +109,13 @@ separate Python version manager is required.
 
 ## Quick Start
 
-Start EMP from the project directory:
+Start a packaged EMP executable explicitly on Linux or macOS with:
+
+```bash
+easy-multi-provider serve --config config.json
+```
+
+When running from a source checkout, use:
 
 ```bash
 uv run python -m easy_multi_provider serve --config config.json
@@ -78,8 +146,8 @@ not recorded.
 
 - **Accounts** imports `auth.json` and backup files such as `auth.json.bk1`.
   Only an account ID is required; display name and model prefix can be edited
-  later. Each subscription can control which Coding Agent models appear in
-  Codex.
+  later. **Refresh** performs a live quota query and saves the new snapshot.
+  Each subscription can control which Coding Agent models appear in Codex.
 - **Providers** offers presets for supported official services and a custom
   Provider form for Base URL and API key endpoints.
 - **Models** discovers upstream models and lets you import, test, edit, hide,
