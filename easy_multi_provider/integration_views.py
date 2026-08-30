@@ -64,6 +64,7 @@ def integration_summary(
     else:
         configuration_state = summary_state
     return {
+        "codex_compatibility": state.codex_compatibility_snapshot(),
         "configuration": {
             "state": configuration_state,
             "relation": relation,

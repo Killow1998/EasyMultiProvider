@@ -36,6 +36,10 @@ The current source version is `v0.9.0`.
 EMP requires the Codex CLI to be installed and available as `codex`. EMP does
 not bundle or replace it.
 
+EMP supports Codex CLI `0.149.x` through `0.151.x`; `0.151.x` is recommended.
+The Web UI shows the installed version and marks newer versions as not yet
+verified or older versions as unsupported.
+
 ### Prebuilt packages
 
 Download reviewed builds from

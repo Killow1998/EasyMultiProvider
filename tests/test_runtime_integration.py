@@ -34,6 +34,25 @@ class RecordingRuntimeController:
             self.result.observed_models,
         )
 
+    def observe(self, expected_models, target):
+        self.calls.append((tuple(expected_models), target, "observe"))
+        return RuntimeSyncResult(
+            self.result.state,
+            target,
+            self.result.verified,
+            self.result.detail,
+            self.result.observed_models,
+        )
+
+    @staticmethod
+    def compatibility():
+        return {
+            "installed": "0.150.1",
+            "status": "supported",
+            "supported_range": "0.149.x–0.151.x",
+            "recommended": "0.151.x",
+        }
+
 
 class RuntimeIntegrationTests(unittest.TestCase):
     def make_state(self, runtime=None):
@@ -99,6 +118,15 @@ class RuntimeIntegrationTests(unittest.TestCase):
         summary = integration_summary(state)
         self.assertEqual(summary["runtime"]["state"], RELOAD_REQUIRED)
         self.assertEqual(summary["runtime"]["target"], "emp")
+        self.assertEqual(
+            summary["codex_compatibility"],
+            {
+                "installed": "0.150.1",
+                "status": "supported",
+                "supported_range": "0.149.x–0.151.x",
+                "recommended": "0.151.x",
+            },
+        )
         persisted = json.loads(
             manager.lease_path.with_name("runtime.json").read_text(encoding="utf-8")
         )
@@ -119,6 +147,25 @@ class RuntimeIntegrationTests(unittest.TestCase):
         summary = integration_summary(state)
         self.assertEqual(summary["runtime"]["state"], EMP_LOADED)
         self.assertEqual(summary["runtime"]["confidence"], "live")
+
+    def test_passive_verification_repairs_stale_runtime_without_reload(self):
+        runtime = RecordingRuntimeController(
+            RuntimeSyncResult(EMP_LOADED, "emp", True, "complete catalog")
+        )
+        _root, state, manager, _runtime = self.make_state(runtime)
+        self.activate(state, manager)
+        state.refresh_catalog()
+
+        result = state.verify_integration_runtime()
+
+        self.assertEqual(result.state, EMP_LOADED)
+        self.assertEqual(
+            runtime.calls,
+            [(("external/model-a",), "emp", "observe")],
+        )
+        summary = integration_summary(state)
+        self.assertTrue(summary["runtime"]["verified"])
+        self.assertFalse(summary["runtime"]["action_required"])
 
     def test_restore_uses_expected_slugs_from_recovery_record(self):
         runtime = RecordingRuntimeController()

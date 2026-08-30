@@ -110,7 +110,7 @@ for (const id of [
   "status", "modal_backdrop", "modal_title", "modal_body", "modal_status",
   "modal_submit", "integration", "integration_badge", "integration_title",
   "integration_summary", "integration_enable", "integration_restore",
-  "integration_reload", "language_select", "theme_select",
+  "integration_reload", "codex_compatibility", "language_select", "theme_select",
   "catalog_display_search", "catalog_display_toggle", "catalog_display_models",
   "diagnostics_summary", "diagnostics_records", "accounts", "providers", "models",
 ]) getElement(id);
@@ -173,10 +173,37 @@ async function integrationBehavior() {
   assert.match(getElement("status").textContent, /next|下次/i);
   assert(getElement("modal_backdrop").classList.contains("hidden"), "successful modal must close");
 
-  run("renderIntegration({configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'emp_loaded',target:'emp',verified:true,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
+  run("renderIntegration({codex_compatibility:{installed:'0.150.1',status:'supported',supported_range:'0.149.x–0.151.x',recommended:'0.151.x'},configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'emp_loaded',target:'emp',verified:true,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
   assert.match(getElement("integration_summary").textContent, /loaded|已加载/i);
+  assert.match(getElement("codex_compatibility").textContent, /0\.150\.1.*0\.149\.x.*0\.151\.x/);
+  assert.strictEqual(getElement("codex_compatibility").dataset.state, "supported");
   run("renderIntegration({configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'stopped_waiting_for_start',target:'emp',verified:false,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
   assert.match(getElement("integration_summary").textContent, /next|下次/i);
+
+  let passiveVerifyCalls = 0;
+  context.__apiStub = async (path) => {
+    if (path === "/api/integration") return {
+      configuration: {state: "emp_applied", relation: "applied", conflicts: []},
+      runtime: {state: "stop_failed", target: "emp", verified: false, action_required: true, detail: "old stop failure"},
+      service_health: "ready",
+      next_action: "reconnect Codex",
+    };
+    if (path === "/api/integration/verify") {
+      passiveVerifyCalls += 1;
+      return {
+        configuration: {state: "emp_applied", relation: "applied", conflicts: []},
+        runtime: {state: "emp_loaded", target: "emp", verified: true, action_required: false, detail: "complete catalog"},
+        service_health: "ready",
+        next_action: "none",
+      };
+    }
+    throw new Error("unexpected API " + path);
+  };
+  run("api = __apiStub");
+  await run("loadIntegration()");
+  assert.strictEqual(passiveVerifyCalls, 1);
+  assert.match(getElement("integration_summary").textContent, /loaded|已加载/i);
+  assert.strictEqual(getElement("integration_reload").hidden, true);
 
   context.__apiStub = async (path, options = {}) => {
     if (path === "/api/integration/restore") throw new Error("restore failed safely");

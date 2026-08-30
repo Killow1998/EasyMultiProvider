@@ -1615,6 +1615,62 @@ class CodexRuntimeProcessTests(unittest.TestCase):
             self.assertEqual(result.state, VERIFICATION_FAILED)
             self.assertFalse(result.verified)
 
+    def test_passive_observation_does_not_stop_codex(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log_path = root / "calls.jsonl"
+            controller = CodexRuntimeController(
+                codex_executable=str(write_fake_codex(root / "codex")),
+                host_stopper=ForbiddenResidualScan(),
+                control_timeout=0.2,
+                observation_timeout=0.1,
+            )
+            pages = {"": {"data": [{"id": "external/model-a"}]}}
+            with patch.dict(
+                os.environ,
+                {
+                    "EMP_FAKE_CODEX_LOG": str(log_path),
+                    "EMP_FAKE_CODEX_MODE": "ready",
+                    "EMP_FAKE_CODEX_PAGES": json.dumps(pages),
+                    "CODEX_HOME": str(root / "codex-home"),
+                },
+            ):
+                result = controller.observe(("external/model-a",), "emp")
+
+            self.assertEqual(result.state, EMP_LOADED)
+            self.assertTrue(result.verified)
+            self.assertEqual(
+                [call["args"] for call in read_calls(log_path)],
+                [["app-server", "proxy"]],
+            )
+
+    def test_passive_observation_preserves_waiting_state_when_codex_is_offline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log_path = root / "calls.jsonl"
+            controller = CodexRuntimeController(
+                codex_executable=str(write_fake_codex(root / "codex")),
+                host_stopper=ForbiddenResidualScan(),
+                control_timeout=0.2,
+                observation_timeout=0.1,
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "EMP_FAKE_CODEX_LOG": str(log_path),
+                    "EMP_FAKE_CODEX_MODE": "unavailable",
+                    "CODEX_HOME": str(root / "codex-home"),
+                },
+            ):
+                result = controller.observe(("external/model-a",), "emp")
+
+            self.assertEqual(result.state, STOPPED_WAITING_FOR_START)
+            self.assertFalse(result.verified)
+            self.assertEqual(
+                [call["args"] for call in read_calls(log_path)],
+                [["app-server", "proxy"]],
+            )
+
     def test_native_target_is_loaded_only_when_all_emp_slugs_are_absent(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

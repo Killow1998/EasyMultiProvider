@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Codex compatibility
+
+- Publish the supported Codex CLI range (`0.149.x`–`0.151.x`) and recommended
+  release line in the Web UI and documentation without exposing source hashes.
+- Detect newer, older, unavailable, and unrecognized Codex installations with
+  one bounded compatibility probe outside the routing path.
+- Keep quota refreshes on the official Codex App Server path while forwarding
+  Codex-specific CA settings, exporting Windows trust roots when needed, and
+  accepting the Codex 0.151 rate-limit response shapes.
+- Passively verify the active EMP catalog after Codex restarts so stale runtime
+  failures recover without stopping Codex or asking the user to reapply models.
+
 ## 0.9.0 (2026-08-29)
 
 ### Packaging

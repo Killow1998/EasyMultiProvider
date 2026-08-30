@@ -43,6 +43,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 <div id="integration" class="integration-card" data-state="unknown">
   <div class="integration-card-header"><span id="integration_badge" class="pill" data-i18n="loading">加载中</span><h3 id="integration_title" data-i18n="integration_status">Codex 集成状态</h3></div>
   <p id="integration_summary" class="muted" data-i18n="integration_loading">正在读取集成状态。</p>
+  <p id="codex_compatibility" class="muted"></p>
   <div class="toolbar"><button id="integration_enable" onclick="confirmIntegrationAction('enable')" data-i18n="enable_codex">启用默认 Codex</button><button id="integration_restore" class="secondary" onclick="confirmIntegrationAction('restore')" data-i18n="restore_codex">恢复原生 Codex</button><button id="integration_reload" class="secondary" onclick="confirmIntegrationAction('reload')" hidden data-i18n="apply_models">应用模型变化到 Codex</button><button class="secondary" onclick="openDiagnostics()" data-i18n="diagnostics">诊断</button></div>
 </div>
 </section>
@@ -113,6 +114,7 @@ let catalogDisplayExpanded = false;
 const expandedModelGroups = new Set();
 const refreshErrors = {};
 const refreshingAccounts = new Set();
+const integrationVerificationAttempts = new Set();
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const translations = {
@@ -324,6 +326,7 @@ async function load() { applyPreferences(); try { state = await api('/api/config
 function renderIntegration(info) {
   const configuration = info.configuration || {};
   const runtime = info.runtime || {};
+  const compatibility = info.codex_compatibility || {};
   const english = language === 'en';
   const views = english ? {
     native: ['Native', 'Native Codex is active.'], emp_applied: ['EMP enabled', 'EMP is active for Codex.'], prepared: ['Recovery needed', 'Integration recovery is required.'], restoring: ['Recovering', 'Restoring native Codex.'], conflict: ['Conflict', 'The Codex configuration changed outside EMP.'], unavailable: ['Unavailable', 'Integration status is unavailable.']
@@ -349,6 +352,17 @@ function renderIntegration(info) {
   const requestError = info.error && info.error.message ? ` ${tr('请求失败','Request failed')}: ${info.error.message}` : '';
   const staleMessage = configuration.stale ? tr(' 配置状态已过期。',' Configuration state is stale.') : '';
   $('integration_summary').textContent = [view[1], staleMessage, runtimeMessage, requestError].filter(Boolean).join(' ').trim();
+  const installed = compatibility.installed ? `Codex ${compatibility.installed}` : tr('Codex 版本未知','Codex version unknown');
+  const supportedRange = compatibility.supported_range || '0.149.x–0.151.x';
+  const recommended = compatibility.recommended || '0.151.x';
+  const compatibilityStatus = english ? {
+    recommended:'Recommended', supported:'Supported', unverified:'Newer or pre-release version not yet verified', unsupported:'Unsupported version', unavailable:'Codex CLI not found', unknown:'Version could not be detected'
+  } : {
+    recommended:'推荐版本', supported:'已支持', unverified:'较新或预发布版本，尚未验证', unsupported:'不再支持', unavailable:'未找到 Codex CLI', unknown:'无法识别版本'
+  };
+  const compatibilityText = compatibilityStatus[compatibility.status] || compatibilityStatus.unknown;
+  $('codex_compatibility').textContent = `${installed} · ${compatibilityText} · ${tr('兼容','Supported')} ${supportedRange} · ${tr('推荐','Recommended')} ${recommended}`;
+  $('codex_compatibility').dataset.state = compatibility.status || 'unknown';
   $('integration').dataset.state = configuration.state || 'unknown';
   $('integration_badge').textContent = view[0];
   $('integration_title').textContent = t('integration_status');
@@ -361,7 +375,16 @@ function renderIntegration(info) {
 }
 async function loadIntegration() {
   try {
-    const info = await api('/api/integration');
+    let info = await api('/api/integration');
+    const configuration = info.configuration || {};
+    const runtime = info.runtime || {};
+    const verifyKey = `${configuration.state || ''}:${runtime.state || ''}:${runtime.target || ''}`;
+    const passivelyVerifiable = configuration.state === 'emp_applied' && runtime.target === 'emp' && ['stop_failed','verification_failed','stopped_waiting_for_start'].includes(runtime.state);
+    if (passivelyVerifiable && !integrationVerificationAttempts.has(verifyKey)) {
+      integrationVerificationAttempts.add(verifyKey);
+      try { info = await api('/api/integration/verify', {method:'POST', body:'{}'}); }
+      catch (_) {}
+    }
     renderIntegration(info);
     return info;
   } catch (error) {

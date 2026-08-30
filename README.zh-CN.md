@@ -34,6 +34,9 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 EMP 需要系统已经安装 Codex CLI，并且可以通过 `codex` 命令调用。EMP 不会捆绑或
 替代 Codex CLI。
 
+EMP 支持 Codex CLI `0.149.x` 至 `0.151.x`，推荐使用 `0.151.x`。Web UI 会显示
+当前安装版本；更高版本会标记为“尚未验证”，更旧版本会标记为“不再支持”。
+
 ### 预构建安装包
 
 从 [GitHub Releases](https://github.com/Killow1998/EasyMultiProvider/releases)

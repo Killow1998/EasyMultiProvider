@@ -49,6 +49,7 @@ from .capabilities import (
     output_modalities_metadata_source,
 )
 from .codex_dispatch import CodexRequestDispatcher
+from .codex_compatibility import CodexCompatibility
 from .config import (
     MAX_CONTEXT_WINDOW,
     ConfigError,
@@ -1157,6 +1158,15 @@ class AppState:
         with self.lock:
             return dict(self._runtime_sync)
 
+    def codex_compatibility_snapshot(self) -> Dict[str, Any]:
+        observer = getattr(self.runtime_controller, "compatibility", None)
+        if not callable(observer):
+            return CodexCompatibility(None, "unknown").public()
+        try:
+            return observer()
+        except (OSError, ValueError):
+            return CodexCompatibility(None, "unknown").public()
+
     def sync_integration_runtime(self, confirm_reload: bool) -> RuntimeSyncResult:
         """Perform one confirmed graceful stop and bounded model/list observation."""
 
@@ -1169,6 +1179,38 @@ class AppState:
             else:
                 self.ensure_search_feature_manager().restore()
             return self._sync_integration_runtime_unlocked(confirm_reload)
+
+    def verify_integration_runtime(self) -> RuntimeSyncResult:
+        """Passively verify an applied EMP catalog without stopping Codex."""
+        manager = self.ensure_integration_manager()
+        with manager.operation_lock():
+            status = manager.status()
+            if status.relation != "applied":
+                result = RuntimeSyncResult(
+                    VERIFICATION_FAILED,
+                    "emp",
+                    False,
+                    "EMP configuration is not applied",
+                )
+            else:
+                with self.lock:
+                    expected_models = self._runtime_expected_models
+                expected_models = expected_models or self._runtime_model_ids()
+                result = self.runtime_controller.observe(expected_models, "emp")
+                with self.lock:
+                    self._runtime_expected_models = tuple(expected_models)
+                    self._runtime_should_be_present = True
+            with self.lock:
+                self._runtime_sync = {
+                    "state": result.state,
+                    "target": result.target,
+                    "verified": result.verified,
+                    "confidence": "live",
+                    "detail": result.detail,
+                    "last_known": None,
+                }
+            self._persist_runtime_recovery()
+            return result
 
     def _sync_integration_runtime_unlocked(
         self, confirm_reload: bool
@@ -2915,6 +2957,16 @@ def make_handler(state: AppState):
                         200 if successful else 409,
                         _json_bytes(summary),
                     )
+                    return
+                if path == "/api/integration/verify":
+                    result = state.verify_integration_runtime()
+                    summary = integration_summary(state)
+                    emit_operation(
+                        "integration_operation",
+                        "success" if result.verified else "verification_pending",
+                        **self._integration_operation_fields("verify", summary),
+                    )
+                    self._send(200, _json_bytes(summary))
                     return
                 if path == "/api/config":
                     updated = state.update(body)

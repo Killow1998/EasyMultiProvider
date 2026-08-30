@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Protocol, Sequence, Tuple, Union
 
 from . import __version__
+from .codex_compatibility import (
+    CodexCompatibility,
+    classify_codex_version,
+    unavailable_compatibility,
+)
 from .integration import atomic_write_text
 
 
@@ -49,6 +55,7 @@ _RUNTIME_STATES = {
 _MAX_EXPECTED_MODELS = 2000
 _MAX_COMMAND_STDOUT_BYTES = 2 * 1024 * 1024
 _MAX_COMMAND_STDERR_BYTES = 32 * 1024
+_COMPATIBILITY_CACHE_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -670,6 +677,9 @@ class CodexRuntimeController:
         self.observation_timeout = min(20.0, max(0.0, float(observation_timeout)))
         self.poll_interval = max(0.001, float(poll_interval))
         self.host_stopper = host_stopper
+        self._compatibility_lock = threading.Lock()
+        self._compatibility_checked_at = 0.0
+        self._compatibility: Optional[CodexCompatibility] = None
         self.target_codex_home = (
             _normalize_codex_home(target_codex_home)
             if target_codex_home is not None
@@ -690,6 +700,34 @@ class CodexRuntimeController:
 
     def _command(self, *parts: str) -> Tuple[str, ...]:
         return (self.codex_executable, *parts)
+
+    def compatibility(self) -> Dict[str, Any]:
+        """Return one bounded, short-lived observation of `codex --version`."""
+        now = time.monotonic()
+        with self._compatibility_lock:
+            if (
+                self._compatibility is not None
+                and now - self._compatibility_checked_at
+                < _COMPATIBILITY_CACHE_SECONDS
+            ):
+                return self._compatibility.public()
+
+        result = self.runner.run(
+            self._command("--version"),
+            timeout=min(self.control_timeout, 5.0),
+        )
+        if result.returncode == 0:
+            compatibility = classify_codex_version(result.stdout)
+        elif result.returncode == 127 or "not found" in (
+            result.stdout + " " + result.stderr
+        ).casefold():
+            compatibility = unavailable_compatibility()
+        else:
+            compatibility = CodexCompatibility(None, "unknown")
+        with self._compatibility_lock:
+            self._compatibility = compatibility
+            self._compatibility_checked_at = time.monotonic()
+        return compatibility.public()
 
     def _stop_current_app_server(self, target: str) -> Optional[RuntimeSyncResult]:
         result = self.runner.run(
@@ -965,3 +1003,29 @@ class CodexRuntimeController:
                     "Codex stopped and will load the new configuration when it next starts",
                 )
             time.sleep(min(self.poll_interval, max(0.0, deadline - time.monotonic())))
+
+    def observe(
+        self,
+        expected_models: Sequence[str],
+        target: str,
+    ) -> RuntimeSyncResult:
+        """Verify the live catalog without stopping or mutating Codex."""
+        if target not in ("emp", "native"):
+            return RuntimeSyncResult(UNSUPPORTED, target, False, "Unknown runtime target")
+        try:
+            observed = self._model_list()
+        except RuntimeSyncError as error:
+            if error.kind == "unavailable":
+                return RuntimeSyncResult(
+                    STOPPED_WAITING_FOR_START,
+                    target,
+                    False,
+                    "Codex is not running; the target will load on next start",
+                )
+            return RuntimeSyncResult(
+                UNSUPPORTED if error.kind == "unsupported" else VERIFICATION_FAILED,
+                target,
+                False,
+                str(error),
+            )
+        return self._validate_models(observed, expected_models, target)
