@@ -506,6 +506,14 @@ class CatalogTests(unittest.TestCase):
                     "base_instructions": "Be useful",
                     "model_messages": {},
                 },
+                {
+                    "slug": "codex-auto-review",
+                    "display_name": "Codex Auto Review",
+                    "visibility": "hide",
+                    "supported_in_api": True,
+                    "base_instructions": "Review code",
+                    "model_messages": {},
+                },
             ]}), encoding="utf-8")
             codex_home = root / "codex"
             codex_home.mkdir()
@@ -527,7 +535,10 @@ class CatalogTests(unittest.TestCase):
                         "id": "same",
                         "prefix": "same",
                         "auth_file": str(duplicate_path),
-                        "hidden_models": ["gpt-hidden-by-current-login"],
+                        "hidden_models": [
+                            "gpt-hidden-by-current-login",
+                            "codex-auto-review",
+                        ],
                     },
                     {"id": "unique", "prefix": "unique", "auth_file": str(unique_path)},
                 ],
@@ -538,7 +549,7 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(
                 [item["slug"] for item in catalog["models"]],
                 [
-                    "gpt-hidden-by-current-login",
+                    "codex-auto-review",
                     "unique/gpt-hidden-by-current-login",
                     "gpt-native",
                     "unique/gpt-native",
@@ -547,7 +558,7 @@ class CatalogTests(unittest.TestCase):
             by_slug = {item["slug"]: item for item in catalog["models"]}
             self.assertEqual(by_slug["gpt-native"].get("visibility", "list"), "list")
             self.assertEqual(
-                by_slug["gpt-hidden-by-current-login"]["visibility"],
+                by_slug["codex-auto-review"]["visibility"],
                 "hide",
             )
             self.assertEqual(

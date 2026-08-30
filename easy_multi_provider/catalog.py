@@ -326,11 +326,22 @@ def subscription_model_options(config: Dict[str, Any]) -> List[Dict[str, str]]:
 
 def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
     native = load_native_catalog(config)
+    duplicate_accounts = duplicate_account_status(config.get("accounts", []))
+    native_hidden_models = {
+        model_id
+        for account in config.get("accounts", [])
+        if duplicate_accounts.get(account.get("id")) == "当前 Codex 登录"
+        for model_id in account.get("hidden_models", [])
+    }
     native_models = [
         copy.deepcopy(item)
         for item in native["models"]
         if isinstance(item, dict)
         and item.get("supported_in_api", True) is not False
+        and not (
+            item.get("slug") in native_hidden_models
+            and item.get("visibility", "list") != "hide"
+        )
     ]
     for model_index, model in enumerate(native_models):
         _apply_presentation(config, model)
@@ -348,16 +359,6 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
     }
     external_by_provider = {}
     account_aliases = []
-    duplicate_accounts = duplicate_account_status(config.get("accounts", []))
-    native_hidden_models = {
-        model_id
-        for account in config.get("accounts", [])
-        if duplicate_accounts.get(account.get("id")) == "当前 Codex 登录"
-        for model_id in account.get("hidden_models", [])
-    }
-    for model in native_models:
-        if model.get("slug") in native_hidden_models:
-            model["visibility"] = "hide"
     subscription_models = _subscription_native_models(config)
     for account_index, account in enumerate(config.get("accounts", [])):
         if (
