@@ -151,11 +151,11 @@ ordinary use. This preserves the native session identity and therefore the
 normal resume list.
 
 Codex loads session-static model settings when its App Server starts, so file
-state and runtime state are separate. EMP uses the runtime states defined in
-`docs/codex-runtime-sync-v0.5-spec.md`, including `reload_required`,
-`stopping`, `emp_loaded`, `native_loaded`, `stopped_waiting_for_start`, and
-explicit failure boundaries. A loaded state from a prior EMP process is
-last-known accounting, not fresh verification.
+state and observed runtime state are separate. EMP uses the runtime states
+defined in `docs/codex-runtime-sync-v0.5-spec.md`. A loaded state from a prior
+EMP process is last-known accounting, not fresh verification. Live
+`model/list` success proves only the observed model ID set; it does not prove
+that endpoints, display names, or every other startup setting were hot-loaded.
 
 Integration is an explicit user action and occurs only after the local listener
 is ready. First installation must not silently redirect Codex.
@@ -202,48 +202,32 @@ Normal restoration follows this order:
 4. Restore only values that EMP still owns.
 5. Mark the lease `restored`.
 
-### Portable stop-only runtime synchronization
+### Shared runtime observation
 
-Initial enable and Web restore are each one confirmed transaction: write the
-target catalog/configuration, persist `reload_required`, request only
-`codex remote-control stop --json`, then observe for at most 20 seconds. The
-real lifecycle values are `stopped` and `notRunning`. Only the documented
-"App Server is running but is not managed" error activates the fallback from
-an error response; both successful values also require one residual psutil scan
-because they describe only the pid-managed daemon. The scan revalidates creation
-time, owner, executable, semantic argv, and the effective Codex home. The target
-home is derived from the active integration manager's config path, never an
-unrelated shell default. Owner/executable/argv classification happens before
-environment access; only a supported candidate's `CODEX_HOME` is read, with an
-absent value mapped to that user's platform default. Different, unreadable,
-ambiguous, or changed homes are ineligible. The normalized effective home is
-used only for ephemeral revalidation and is never logged, returned, or persisted.
-The scan then gracefully terminates only same-user foreground Remote Control or
-listening App Server process families, native child before official Node
-launcher. Node `bin/codex` shims are accepted only when canonical resolution
-reaches the installed `@openai/codex/bin/codex.js`. The scan excludes TUI, exec,
-resume, review, proxy, daemon, schema helpers, other users, lookalikes, and
-ambiguous identities. It has no hard-kill path and exposes no PID, argv, path,
-or environment data.
+The Codex App Server is owned by its launcher, service manager, or user. EMP
+never stops, starts, restarts, terminates, or replaces it. Enable and restore
+write only EMP-owned integration files, then optionally perform one bounded,
+read-only observation. Catalog refresh writes the generated catalog and marks
+runtime state `reload_required`; it does not touch any process.
 
-Before identifying `remote-control` or `app-server`, the classifier consumes
-only the known value-taking root options `-c`/`--config`, `--enable`, and
-`--disable`, including supported long equals forms. Unknown options, missing
-values, and unrelated positional prefixes reject the identity immediately;
-classification never scans loosely for a later command token.
+On platforms with Unix-domain socket support, EMP connects to
+`$CODEX_HOME/app-server-control/app-server-control.sock`, performs the required
+HTTP WebSocket Upgrade, and sends `initialize`, `initialized`, then paginated
+`model/list` JSON-RPC text frames. It does not use `app-server proxy` as a JSONL
+RPC endpoint and never starts a listener to make a probe succeed.
 
-EMP never owns startup, restart, or service-manager lifecycle. If an external
-owner starts Codex again, EMP queries paginated `model/list` and requires the
-entire expected EMP set for enable, or the absence of every retained EMP slug
-for native restore. Partial overlap is `verification_failed`.
+For an EMP target, observing every expected EMP model ID yields `emp_loaded`.
+For a native target, observing none of the recorded EMP model IDs yields
+`native_loaded`. These states verify model IDs only. A different set remains
+`reload_required`, with an instruction to wait for the backend owner to restart
+Codex in a safe maintenance window. A missing listener is
+`stopped_waiting_for_start` and waits for its owner to start it. Permission,
+Upgrade, malformed-response, and unsupported-platform errors stay explicit.
 
-No runtime is a successful `stopped_waiting_for_start` result. Permission,
-protocol, malformed-output, and unsupported-command errors remain explicit.
-An unmanaged fallback with no safely identifiable host is `unsupported`; an
-identity race, access denial, or graceful timeout is `stop_failed`.
-Catalog refresh records `reload_required`; only a later confirmed Reload action
-requests another graceful stop. WebSockets, request compression, remote
-compaction, and MCP remain native Codex capabilities and are not disabled.
+Legacy `stopping` and `stop_failed` values may still appear in durable recovery
+records created by older EMP releases, but current operations never produce
+them through process control. WebSockets, request compression, remote
+compaction, MCP, TUI sessions, and enrollment remain owned by Codex.
 
 `doctor` and offline `restore` do not run Codex commands. They report durable
 configuration and stale/offline last-known runtime accounting separately;

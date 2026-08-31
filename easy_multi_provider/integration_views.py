@@ -8,6 +8,7 @@ from .codex_runtime import (
     NOT_CHECKED,
     RELOAD_REQUIRED,
     STOP_FAILED,
+    STOPPED_WAITING_FOR_START,
     UNSUPPORTED,
     VERIFICATION_FAILED,
 )
@@ -52,11 +53,14 @@ def integration_summary(
         VERIFICATION_FAILED,
         UNSUPPORTED,
     }
-    next_action = (
-        "reconnect Codex"
-        if runtime_action_required
-        else _next_action(summary_state, service_health)
-    )
+    if runtime_state == RELOAD_REQUIRED:
+        next_action = "wait for shared backend owner restart"
+    elif runtime_state == STOPPED_WAITING_FOR_START:
+        next_action = "wait for shared backend owner start"
+    elif runtime_action_required:
+        next_action = "check shared Codex backend"
+    else:
+        next_action = _next_action(summary_state, service_health)
     if summary_state == "active":
         configuration_state = "emp_applied"
     elif summary_state in ("native", "restored"):

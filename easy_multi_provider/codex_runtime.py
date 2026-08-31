@@ -1,16 +1,18 @@
-"""Portable, stop-only synchronization with the Codex runtime.
+"""Read-only observation of a separately owned Codex runtime.
 
-EMP never owns the Codex process lifecycle. After a user-confirmed config or
-catalog mutation it asks Codex Remote Control to stop gracefully, then only
-observes whether an external owner starts the App Server again. EMP never
-starts, restarts, kills, or replaces that process.
+EMP may update its integration files, but it never controls the shared Codex
+App Server lifecycle. Runtime synchronization means observing the catalog
+already loaded by the backend owner; a stale catalog remains pending until
+that owner restarts Codex in a safe maintenance window.
 """
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -19,6 +21,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Protocol, Sequence, Tuple, Union
+
+import websocket
 
 from . import __version__
 from .codex_compatibility import (
@@ -56,6 +60,10 @@ _MAX_EXPECTED_MODELS = 2000
 _MAX_COMMAND_STDOUT_BYTES = 2 * 1024 * 1024
 _MAX_COMMAND_STDERR_BYTES = 32 * 1024
 _COMPATIBILITY_CACHE_SECONDS = 60.0
+_APP_SERVER_CONTROL_SOCKET_DIR = "app-server-control"
+_APP_SERVER_CONTROL_SOCKET_NAME = "app-server-control.sock"
+_MAX_CONTROL_MESSAGES_PER_RESPONSE = 100
+_MAX_CONTROL_MESSAGE_BYTES = 2 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -129,6 +137,189 @@ class RuntimeSyncError(RuntimeError):
     def __init__(self, message: str, kind: str = "malformed") -> None:
         super().__init__(message)
         self.kind = kind
+
+
+class ModelCatalogProbe(Protocol):
+    def model_list(self, codex_home: Path, timeout: float) -> Tuple[str, ...]:
+        """Read the catalog loaded by an existing shared Codex backend."""
+
+
+class UnixSocketModelCatalogProbe:
+    """Read ``model/list`` over Codex's Unix WebSocket control socket."""
+
+    @staticmethod
+    def _socket_path(codex_home: Path) -> Path:
+        return (
+            codex_home
+            / _APP_SERVER_CONTROL_SOCKET_DIR
+            / _APP_SERVER_CONTROL_SOCKET_NAME
+        )
+
+    @staticmethod
+    def _send(websocket_connection: Any, value: Mapping[str, Any]) -> None:
+        websocket_connection.send(
+            json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        )
+
+    @staticmethod
+    def _response(websocket_connection: Any, request_id: int) -> Mapping[str, Any]:
+        for _message in range(_MAX_CONTROL_MESSAGES_PER_RESPONSE):
+            payload = websocket_connection.recv()
+            if payload in (None, "", b""):
+                raise RuntimeSyncError(
+                    "The shared Codex backend closed the catalog probe", "unavailable"
+                )
+            if isinstance(payload, bytes):
+                try:
+                    payload = payload.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise RuntimeSyncError(
+                        "Codex returned an invalid model catalog", "malformed"
+                    ) from exc
+            if (
+                not isinstance(payload, str)
+                or len(payload.encode("utf-8")) > _MAX_CONTROL_MESSAGE_BYTES
+            ):
+                raise RuntimeSyncError(
+                    "Codex returned an invalid model catalog", "malformed"
+                )
+            try:
+                message = json.loads(payload)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeSyncError(
+                    "Codex returned an invalid model catalog", "malformed"
+                ) from exc
+            if not isinstance(message, Mapping) or message.get("id") != request_id:
+                continue
+            error = message.get("error")
+            if error is not None:
+                raise RuntimeSyncError(
+                    "Codex rejected the read-only model catalog query", "permission"
+                )
+            return message
+        raise RuntimeSyncError(
+            "Codex did not return a usable model catalog", "malformed"
+        )
+
+    def model_list(self, codex_home: Path, timeout: float) -> Tuple[str, ...]:
+        if not hasattr(socket, "AF_UNIX"):
+            raise RuntimeSyncError(
+                "Unix Codex control sockets are unsupported on this platform",
+                "unsupported",
+            )
+        socket_path = self._socket_path(codex_home)
+        raw_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        websocket_connection = None
+        try:
+            raw_socket.settimeout(timeout)
+            raw_socket.connect(str(socket_path))
+            # websocket-client does not advertise compression extensions.  The
+            # preconnected socket keeps this a local, read-only Unix transport.
+            websocket_connection = websocket.create_connection(
+                "ws://localhost/",
+                timeout=timeout,
+                socket=raw_socket,
+                suppress_origin=True,
+                enable_multithread=False,
+            )
+            self._send(
+                websocket_connection,
+                {
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "clientInfo": {
+                            "name": "easy-multi-provider",
+                            "title": "EMP",
+                            "version": __version__,
+                        },
+                        "capabilities": None,
+                    },
+                },
+            )
+            self._response(websocket_connection, 1)
+            self._send(websocket_connection, {"method": "initialized"})
+
+            models = []
+            cursor: Optional[str] = None
+            seen_cursors = set()
+            for page_index in range(20):
+                params: Dict[str, Any] = {
+                    "includeHidden": False,
+                    "limit": 1000,
+                }
+                if cursor is not None:
+                    params["cursor"] = cursor
+                request_id = page_index + 2
+                self._send(
+                    websocket_connection,
+                    {"id": request_id, "method": "model/list", "params": params},
+                )
+                response = self._response(websocket_connection, request_id)
+                result = response.get("result")
+                data = result.get("data") if isinstance(result, Mapping) else None
+                if not isinstance(data, list):
+                    raise RuntimeSyncError(
+                        "Codex returned an invalid model catalog", "malformed"
+                    )
+                models.extend(
+                    item["id"]
+                    for item in data
+                    if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+                )
+                if len(models) > 20_000:
+                    raise RuntimeSyncError(
+                        "Codex model catalog is too large", "malformed"
+                    )
+                next_cursor = result.get("nextCursor")
+                if next_cursor in (None, ""):
+                    return tuple(dict.fromkeys(models))
+                if (
+                    not isinstance(next_cursor, str)
+                    or len(next_cursor) > 1024
+                    or next_cursor in seen_cursors
+                ):
+                    raise RuntimeSyncError(
+                        "Codex returned an invalid model cursor", "malformed"
+                    )
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+            raise RuntimeSyncError(
+                "Codex model catalog pagination exceeded its limit", "malformed"
+            )
+        except PermissionError as exc:
+            raise RuntimeSyncError(
+                "Codex model catalog access was denied", "permission"
+            ) from exc
+        except (FileNotFoundError, ConnectionRefusedError) as exc:
+            raise RuntimeSyncError(
+                "The shared Codex backend is unavailable", "unavailable"
+            ) from exc
+        except (socket.timeout, websocket.WebSocketTimeoutException) as exc:
+            raise RuntimeSyncError(
+                "The shared Codex backend did not answer the catalog probe",
+                "unavailable",
+            ) from exc
+        except websocket.WebSocketException as exc:
+            raise RuntimeSyncError(
+                "Codex rejected the WebSocket catalog probe", "malformed"
+            ) from exc
+        except OSError as exc:
+            if exc.errno in (errno.ENOENT, errno.ECONNREFUSED):
+                raise RuntimeSyncError(
+                    "The shared Codex backend is unavailable", "unavailable"
+                ) from exc
+            raise RuntimeSyncError(
+                "Codex model catalog query failed", "command"
+            ) from exc
+        finally:
+            if websocket_connection is not None:
+                try:
+                    websocket_connection.close()
+                except OSError:
+                    pass
+            else:
+                raw_socket.close()
 
 
 @dataclass(frozen=True)
@@ -659,7 +850,7 @@ def _is_documented_unmanaged_host_error(result: CommandResult) -> bool:
 
 
 class CodexRuntimeController:
-    """Issue one graceful stop and perform bounded, read-only observation."""
+    """Observe a shared Codex runtime without controlling its lifecycle."""
 
     def __init__(
         self,
@@ -670,6 +861,7 @@ class CodexRuntimeController:
         poll_interval: float = 0.25,
         host_stopper: Optional[TargetedHostStopper] = None,
         target_codex_home: Optional[Path] = None,
+        model_catalog_probe: Optional[ModelCatalogProbe] = None,
     ) -> None:
         self.runner = runner or SubprocessRunner()
         self._configured_codex_executable = codex_executable
@@ -681,6 +873,7 @@ class CodexRuntimeController:
         self.observation_timeout = min(20.0, max(0.0, float(observation_timeout)))
         self.poll_interval = max(0.001, float(poll_interval))
         self.host_stopper = host_stopper
+        self.model_catalog_probe = model_catalog_probe or UnixSocketModelCatalogProbe()
         self._compatibility_lock = threading.Lock()
         self._compatibility_checked_at = 0.0
         self._compatibility: Optional[Dict[str, Any]] = None
@@ -899,93 +1092,13 @@ class CodexRuntimeController:
         return None
 
     def _model_list(self) -> Tuple[str, ...]:
-        models = []
-        cursor: Optional[str] = None
-        seen_cursors = set()
-        for _page in range(20):
-            params: Dict[str, Any] = {"includeHidden": False, "limit": 1000}
-            if cursor is not None:
-                params["cursor"] = cursor
-            request_lines = (
-                {
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "clientInfo": {
-                            "name": "easy-multi-provider",
-                            "version": __version__,
-                        },
-                        "capabilities": {"experimentalApi": True},
-                    },
-                },
-                {"method": "initialized", "params": {}},
-                {"id": 2, "method": "model/list", "params": params},
+        if self.target_codex_home is None:
+            raise RuntimeSyncError(
+                "The active Codex integration home is unavailable", "unsupported"
             )
-            input_text = "".join(
-                json.dumps(item, separators=(",", ":")) + "\n"
-                for item in request_lines
-            )
-            result = self.runner.run(
-                self._command("app-server", "proxy"),
-                input_text=input_text,
-                timeout=self.control_timeout,
-            )
-            if result.returncode != 0:
-                lowered = (result.stdout + " " + result.stderr).lower()
-                if any(
-                    marker in lowered
-                    for marker in ("connection refused", "not running", "no app server")
-                ):
-                    raise RuntimeSyncError(
-                        "Codex App Server is not available", "unavailable"
-                    )
-                if "permission denied" in lowered or "forbidden" in lowered:
-                    raise RuntimeSyncError(
-                        "Codex model catalog access was denied", "permission"
-                    )
-                if "unknown command" in lowered or result.returncode == 127:
-                    raise RuntimeSyncError(
-                        "Codex model-list control is unsupported", "unsupported"
-                    )
-                raise RuntimeSyncError("Codex model catalog query failed", "command")
-            response: Optional[Mapping[str, Any]] = None
-            for line in result.stdout.splitlines():
-                try:
-                    message = json.loads(line)
-                except (TypeError, ValueError):
-                    continue
-                if isinstance(message, Mapping) and message.get("id") == 2:
-                    response = message
-                    break
-            if response is None or response.get("error") is not None:
-                raise RuntimeSyncError(
-                    "Codex did not return a usable model catalog", "malformed"
-                )
-            payload = response.get("result")
-            data = payload.get("data") if isinstance(payload, Mapping) else None
-            if not isinstance(data, list):
-                raise RuntimeSyncError(
-                    "Codex returned an invalid model catalog", "malformed"
-                )
-            models.extend(
-                item["id"]
-                for item in data
-                if isinstance(item, Mapping) and isinstance(item.get("id"), str)
-            )
-            if len(models) > 20_000:
-                raise RuntimeSyncError("Codex model catalog is too large", "malformed")
-            next_cursor = payload.get("nextCursor")
-            if next_cursor in (None, ""):
-                return tuple(dict.fromkeys(models))
-            if (
-                not isinstance(next_cursor, str)
-                or len(next_cursor) > 1024
-                or next_cursor in seen_cursors
-            ):
-                raise RuntimeSyncError("Codex returned an invalid model cursor", "malformed")
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
-        raise RuntimeSyncError("Codex model catalog pagination exceeded its limit", "malformed")
+        return self.model_catalog_probe.model_list(
+            Path(self.target_codex_home), self.control_timeout
+        )
 
     @staticmethod
     def _validate_models(
@@ -1010,7 +1123,12 @@ class CodexRuntimeController:
                     VERIFICATION_FAILED, target, False, detail, observed
                 )
             return RuntimeSyncResult(
-                EMP_LOADED, target, True, "Codex loaded the complete EMP catalog", observed
+                EMP_LOADED,
+                target,
+                True,
+                "The shared Codex backend exposes all expected EMP model IDs; "
+                "other startup settings are not verified",
+                observed,
             )
         remaining = sorted(expected.intersection(observed_set))
         if remaining:
@@ -1022,7 +1140,12 @@ class CodexRuntimeController:
                 observed,
             )
         return RuntimeSyncResult(
-            NATIVE_LOADED, target, True, "Codex loaded the native catalog", observed
+            NATIVE_LOADED,
+            target,
+            True,
+            "The shared Codex backend exposes no expected EMP model IDs; other "
+            "startup settings are not verified",
+            observed,
         )
 
     def reload(
@@ -1039,37 +1162,37 @@ class CodexRuntimeController:
                 RELOAD_REQUIRED,
                 target,
                 False,
-                "Confirmation is required before reconnecting Codex",
+                "Confirmation is required before checking the shared Codex backend",
             )
-
-        stop_result = self._stop_current_app_server(target)
-        if stop_result is not None:
-            return stop_result
-
-        deadline = time.monotonic() + self.observation_timeout
-        while True:
-            try:
-                observed = self._model_list()
-            except RuntimeSyncError as error:
-                if error.kind == "unavailable":
-                    observed = None
-                else:
-                    return RuntimeSyncResult(
-                        UNSUPPORTED if error.kind == "unsupported" else VERIFICATION_FAILED,
-                        target,
-                        False,
-                        str(error),
-                    )
-            if observed is not None:
-                return self._validate_models(observed, expected_models, target)
-            if time.monotonic() >= deadline:
+        try:
+            observed_models = self._model_list()
+        except RuntimeSyncError as error:
+            if error.kind == "unavailable":
                 return RuntimeSyncResult(
                     STOPPED_WAITING_FOR_START,
                     target,
                     False,
-                    "Codex stopped and will load the new configuration when it next starts",
+                    "The shared Codex backend is unavailable; configuration is saved "
+                    "and will load when its owner starts it",
                 )
-            time.sleep(min(self.poll_interval, max(0.0, deadline - time.monotonic())))
+            return RuntimeSyncResult(
+                UNSUPPORTED if error.kind == "unsupported" else VERIFICATION_FAILED,
+                target,
+                False,
+                str(error),
+            )
+        observed = self._validate_models(observed_models, expected_models, target)
+        if not observed.verified:
+            return RuntimeSyncResult(
+                RELOAD_REQUIRED,
+                target,
+                False,
+                "Configuration is saved, but the shared Codex backend still has the "
+                "previous catalog; wait for its owner to restart it in a safe "
+                "maintenance window",
+                observed.observed_models,
+            )
+        return observed
 
     def observe(
         self,
@@ -1087,7 +1210,8 @@ class CodexRuntimeController:
                     STOPPED_WAITING_FOR_START,
                     target,
                     False,
-                    "Codex is not running; the target will load on next start",
+                    "The shared Codex backend is unavailable; configuration is saved "
+                    "and will load when its owner starts it",
                 )
             return RuntimeSyncResult(
                 UNSUPPORTED if error.kind == "unsupported" else VERIFICATION_FAILED,

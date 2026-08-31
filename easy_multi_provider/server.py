@@ -1184,7 +1184,7 @@ class AppState:
         )
 
     def _mark_runtime_pending(self, intent: str, detail: str) -> None:
-        """Record that a catalog mutation needs one confirmed graceful stop."""
+        """Record a saved file change separately from the loaded runtime."""
 
         expected_models = self._runtime_model_ids()
         with self.lock:
@@ -1214,7 +1214,7 @@ class AppState:
             return CodexCompatibility(None, "unknown").public()
 
     def sync_integration_runtime(self, confirm_reload: bool) -> RuntimeSyncResult:
-        """Perform one confirmed graceful stop and bounded model/list observation."""
+        """Read the catalog loaded by the separately owned Codex backend."""
 
         manager = self.ensure_integration_manager()
         with manager.operation_lock():
@@ -1264,17 +1264,6 @@ class AppState:
         with self.lock:
             expected_models = self._runtime_expected_models
             target = "emp" if self._runtime_should_be_present else "native"
-            if confirm_reload:
-                self._runtime_sync = {
-                    "state": "stopping",
-                    "target": target,
-                    "verified": False,
-                    "confidence": "pending",
-                    "detail": "Codex graceful stop is in progress",
-                    "last_known": None,
-                }
-        if confirm_reload:
-            self._persist_runtime_recovery()
         result = self.runtime_controller.reload(
             expected_models,
             target,
@@ -1343,8 +1332,7 @@ class AppState:
                 with self.lock:
                     self._runtime_expected_models = expected_models
                 self._persist_runtime_recovery()
-                if confirm_reload:
-                    self._sync_integration_runtime_unlocked(True)
+                self._sync_integration_runtime_unlocked(confirm_reload)
         return result
 
     def shutdown_restore(self) -> IntegrationResult:
@@ -3035,7 +3023,7 @@ def make_handler(state: AppState):
                     if body.get("confirm_reload") is not True:
                         summary = integration_summary(state)
                         summary["error"] = {
-                            "message": "Confirmation is required before reconnecting Codex"
+                            "message": "Confirmation is required before changing Codex integration files"
                         }
                         emit_operation(
                             "integration_operation",
@@ -3087,7 +3075,7 @@ def make_handler(state: AppState):
                     if body.get("confirm_reload") is not True:
                         summary = integration_summary(state)
                         summary["error"] = {
-                            "message": "Confirmation is required before reconnecting Codex"
+                            "message": "Confirmation is required before changing Codex integration files"
                         }
                         emit_operation(
                             "integration_operation",
@@ -3123,6 +3111,7 @@ def make_handler(state: AppState):
                     successful = result.state in {
                         EMP_LOADED,
                         NATIVE_LOADED,
+                        RELOAD_REQUIRED,
                         STOPPED_WAITING_FOR_START,
                     }
                     if not successful:

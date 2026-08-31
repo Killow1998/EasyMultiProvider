@@ -6,7 +6,7 @@ EasyMultiProvider (EMP) is a local, browser-configured model router for Codex.
 It keeps the native Codex experience while adding multiple ChatGPT
 subscriptions, API providers, and external models to the same model list.
 
-The current source version is `v0.9.3`.
+The current source version is `v0.9.4`.
 
 ## Features
 
@@ -37,6 +37,15 @@ EMP requires either the Codex-managed runtime in the active Codex home or a
 standalone Codex CLI available as `codex`. EMP does not bundle
 or replace either runtime. When both exist, App integration uses the managed
 runtime and the Web UI reports a different standalone `PATH` CLI separately.
+
+EMP treats a persistent Codex App Server as externally owned. Enabling,
+restoring, refreshing, or checking integration files never stops, starts, or
+restarts Codex. EMP reads `model/list` from an existing shared Unix WebSocket
+listener; if the saved files differ from the loaded model IDs, the Web UI asks
+the backend owner to restart it in a safe maintenance window. A successful
+check proves only the observed model ID set, not that endpoints, display names,
+or every other startup setting were hot-reloaded. This live probe is verified
+on Linux for this release; macOS and Windows remain unverified for this path.
 
 EMP supports Codex CLI `0.149.x` through `0.151.x`; `0.151.x` is recommended.
 The Web UI shows the installed version and marks newer versions as not yet
@@ -163,7 +172,9 @@ not recorded.
 - **Models** discovers upstream models and lets you import, test, edit, hide,
   or remove them. Models stay grouped by Provider.
 - **Codex integration** applies the current EMP catalog to the default Codex
-  configuration and can restore native Codex routing from the same page.
+  configuration and can restore native Codex routing from the same page. File
+  state and the model IDs observed from the shared backend are shown separately;
+  EMP never controls that backend's process lifecycle.
 
 EMP automatically detects proxy settings from its launch environment or the
 operating system.

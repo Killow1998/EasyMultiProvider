@@ -22,13 +22,9 @@ from tests.support import ensure_test_master_key
 from easy_multi_provider import __version__
 from easy_multi_provider.config import ConfigError, api_key, load, normalize, save
 from easy_multi_provider.codex_runtime import (
-    HostStopResult,
-    ProcessIdentity,
-    STOP_FAILED,
     STOPPED_WAITING_FOR_START,
     CodexRuntimeController,
     RuntimeSyncResult,
-    TargetedCodexHostStopper,
 )
 from easy_multi_provider.codex_history import (
     HistoryAnchor,
@@ -65,13 +61,7 @@ from easy_multi_provider.management_views import management_config
 ensure_test_master_key()
 
 
-class _NoResidualHosts:
-    @staticmethod
-    def stop_stale_codex_hosts():
-        return HostStopResult("none")
-
-
-def _write_stop_only_fake_codex(path: Path) -> Path:
+def _write_recording_fake_codex(path: Path) -> Path:
     path.write_text(
         """#!/usr/bin/env python3
 import json
@@ -80,46 +70,13 @@ import sys
 from pathlib import Path
 
 args = sys.argv[1:]
-home = Path(os.environ["CODEX_HOME"])
-entry = {"args": args}
-config_path = home / "config.toml"
-if args == ["remote-control", "stop", "--json"]:
-    entry["config_at_stop"] = config_path.read_text(encoding="utf-8")
-    runtime_path = home / "easy-multi-provider" / "integration" / "runtime.json"
-    if runtime_path.exists():
-        entry["runtime_at_stop"] = json.loads(runtime_path.read_text(encoding="utf-8"))
-    result = {"status": "stopped"}
-    code = 0
-elif args == ["app-server", "proxy"]:
-    counter_path = home / "fake-proxy-count"
-    try:
-        count = int(counter_path.read_text(encoding="utf-8")) + 1
-    except (FileNotFoundError, ValueError):
-        count = 1
-    counter_path.parent.mkdir(parents=True, exist_ok=True)
-    counter_path.write_text(str(count), encoding="utf-8")
-    ready_after = int(os.environ.get("EMP_FAKE_READY_AFTER", "999999"))
-    if count >= ready_after:
-        models = [
-            {"id": model_id}
-            for model_id in os.environ.get("EMP_FAKE_MODELS", "").split(",")
-            if model_id
-        ]
-        print(json.dumps({"id": 2, "result": {"data": models}}))
-        result = None
-        code = 0
-    else:
-        print("connection refused", file=sys.stderr)
-        result = None
-        code = 1
-else:
-    result = None
-    code = 97
 with Path(os.environ["EMP_FAKE_CODEX_LOG"]).open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(entry) + "\\n")
-if result is not None:
-    print(json.dumps(result))
-sys.exit(code)
+    handle.write(json.dumps({"args": args}) + "\\n")
+if args == ["--version"]:
+    print("codex-cli 0.150.1")
+    raise SystemExit(0)
+print("unexpected command", file=sys.stderr)
+raise SystemExit(97)
 """,
         encoding="utf-8",
     )
@@ -307,7 +264,7 @@ class ServerAccountTests(unittest.TestCase):
                 os.path.normcase(os.path.realpath(str(codex_home.resolve()))),
             )
 
-    def test_runtime_failure_api_and_durable_record_do_not_leak_codex_home(self):
+    def test_unavailable_shared_runtime_record_does_not_leak_codex_home(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             codex_home = root / "private-home-marker"
@@ -322,36 +279,11 @@ class ServerAccountTests(unittest.TestCase):
             normalized_home = os.path.normcase(
                 os.path.realpath(str(codex_home.resolve()))
             )
-            identity = ProcessIdentity(
-                42004,
-                0,
-                "test-user",
-                1.0,
-                "/opt/codex",
-                ("/opt/codex", "remote-control", "--json"),
-                normalized_home,
-            )
-
-            class DeniedInventory:
-                current_username = "test-user"
-
-                @staticmethod
-                def list_processes():
-                    return (identity,)
-
-                @staticmethod
-                def terminate(_expected, _timeout):
-                    return "denied"
-
             runtime = CodexRuntimeController(
-                codex_executable=str(_write_stop_only_fake_codex(root / "codex-fake")),
-                host_stopper=TargetedCodexHostStopper(
-                    codex_home,
-                    process_inventory=DeniedInventory(),
-                    termination_timeout=0.1,
-                ),
+                codex_executable=str(_write_recording_fake_codex(root / "codex-fake")),
+                target_codex_home=codex_home,
                 control_timeout=0.1,
-                observation_timeout=0.01,
+                observation_timeout=0,
             )
             state = AppState(
                 config_path,
@@ -386,8 +318,15 @@ class ServerAccountTests(unittest.TestCase):
 
                 self.assertEqual(response.status, 200)
                 payload = json.loads(payload_text)
-                self.assertEqual(payload["runtime"]["state"], STOP_FAILED)
-                runtime_path = codex_home / "easy-multi-provider" / "integration" / "runtime.json"
+                self.assertEqual(
+                    payload["runtime"]["state"], STOPPED_WAITING_FOR_START
+                )
+                runtime_path = (
+                    codex_home
+                    / "easy-multi-provider"
+                    / "integration"
+                    / "runtime.json"
+                )
                 durable_text = runtime_path.read_text(encoding="utf-8")
                 for rendered in (payload_text, durable_text):
                     self.assertNotIn(str(codex_home), rendered)
@@ -395,11 +334,15 @@ class ServerAccountTests(unittest.TestCase):
                     self.assertNotIn("private-home-marker", rendered)
                     self.assertNotIn("CODEX_HOME", rendered)
                     self.assertNotIn("UNRELATED", rendered)
+                commands = [
+                    json.loads(line)["args"]
+                    for line in log_path.read_text(encoding="utf-8").splitlines()
+                ]
+                self.assertEqual(commands, [["--version"]])
             finally:
                 server.shutdown()
                 server.server_close()
-
-    def test_enable_rejects_empty_emp_catalog_before_config_or_stop(self):
+    def test_enable_rejects_empty_emp_catalog_before_config_or_runtime_probe(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             codex_home = root / "codex"
@@ -412,8 +355,7 @@ class ServerAccountTests(unittest.TestCase):
                 instance_id="empty-enable",
             )
             runtime = CodexRuntimeController(
-                codex_executable=str(_write_stop_only_fake_codex(root / "codex-fake")),
-                host_stopper=_NoResidualHosts(),
+                codex_executable=str(_write_recording_fake_codex(root / "codex-fake")),
                 control_timeout=0.1,
                 observation_timeout=0.01,
             )
@@ -460,405 +402,11 @@ class ServerAccountTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
-    def test_enable_confirmation_applies_config_then_only_stops_runtime(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            codex_home = root / "codex"
-            config_path = root / "config.json"
-            log_path = root / "fake-codex.jsonl"
-            fake_codex = _write_stop_only_fake_codex(root / "codex-fake")
-            save(
-                normalize(
-                    {
-                        "providers": [
-                            {
-                                "id": "external",
-                                "name": "External",
-                                "base_url": "https://example.invalid/v1",
-                                "protocol": "responses",
-                                "auth_mode": "api_key",
-                            }
-                        ],
-                        "models": [
-                            {
-                                "id": "external/model-a",
-                                "provider": "external",
-                                "upstream_id": "model-a",
-                            }
-                        ],
-                    }
-                ),
-                config_path,
-            )
-            manager = IntegrationManager(
-                codex_home / "config.toml",
-                codex_home / "easy-multi-provider" / "integration" / "lease.json",
-                instance_id="endpoint-enable",
-            )
-            runtime = CodexRuntimeController(
-                codex_executable=str(fake_codex),
-                host_stopper=_NoResidualHosts(),
-                control_timeout=0.1,
-            )
-            runtime.observation_timeout = 0.05
-            runtime.poll_interval = 0.005
-            state = AppState(
-                config_path,
-                integration_manager=manager,
-                runtime_controller=runtime,
-            )
-            state.mark_service_ready()
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                headers = {
-                    "Cookie": "emp_session=" + state.session_token,
-                    "Content-Type": "application/json",
-                }
-                with patch.dict(
-                    os.environ,
-                    {
-                        "CODEX_HOME": str(codex_home),
-                        "EMP_FAKE_CODEX_LOG": str(log_path),
-                    },
-                ):
-                    connection = HTTPConnection(*server.server_address)
-                    connection.request(
-                        "POST",
-                        "/api/integration/enable",
-                        json.dumps({"confirm_reload": True}),
-                        headers,
-                    )
-                    response = connection.getresponse()
-                    payload = json.loads(response.read().decode("utf-8"))
-                    connection.close()
-
-                self.assertEqual(response.status, 200)
-                self.assertEqual(payload["configuration"]["state"], "emp_applied")
-                self.assertEqual(payload["runtime"]["state"], "stopped_waiting_for_start")
-                calls = [
-                    json.loads(line)
-                    for line in log_path.read_text(encoding="utf-8").splitlines()
-                ]
-                self.assertEqual(calls[0]["args"], ["remote-control", "stop", "--json"])
-                self.assertIn("openai_base_url", calls[0]["config_at_stop"])
-                self.assertEqual(calls[0]["runtime_at_stop"]["state"], "stopping")
-                self.assertNotIn(
-                    "start",
-                    " ".join(part for call in calls for part in call["args"]),
-                )
-                self.assertFalse(any("daemon" in call["args"] for call in calls))
-            finally:
-                server.shutdown()
-                server.server_close()
-
-    def test_enable_verifies_complete_delayed_catalog_and_persists_runtime_state(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            codex_home = root / "codex"
-            config_path = root / "config.json"
-            log_path = root / "fake-codex.jsonl"
-            fake_codex = _write_stop_only_fake_codex(root / "codex-fake")
-            save(
-                normalize(
-                    {
-                        "providers": [
-                            {
-                                "id": "external",
-                                "name": "External",
-                                "base_url": "https://example.invalid/v1",
-                                "protocol": "responses",
-                                "auth_mode": "api_key",
-                            }
-                        ],
-                        "models": [
-                            {
-                                "id": "external/model-a",
-                                "provider": "external",
-                                "upstream_id": "model-a",
-                            },
-                            {
-                                "id": "external/model-b",
-                                "provider": "external",
-                                "upstream_id": "model-b",
-                            },
-                        ],
-                    }
-                ),
-                config_path,
-            )
-            lease_path = (
-                codex_home / "easy-multi-provider" / "integration" / "lease.json"
-            )
-            manager = IntegrationManager(
-                codex_home / "config.toml",
-                lease_path,
-                instance_id="delayed-enable",
-            )
-            runtime = CodexRuntimeController(
-                codex_executable=str(fake_codex),
-                host_stopper=_NoResidualHosts(),
-                control_timeout=0.1,
-                observation_timeout=0.5,
-                poll_interval=0.005,
-            )
-            state = AppState(
-                config_path,
-                integration_manager=manager,
-                runtime_controller=runtime,
-            )
-            state.mark_service_ready()
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                headers = {
-                    "Cookie": "emp_session=" + state.session_token,
-                    "Content-Type": "application/json",
-                }
-                with patch.dict(
-                    os.environ,
-                    {
-                        "CODEX_HOME": str(codex_home),
-                        "EMP_FAKE_CODEX_LOG": str(log_path),
-                        "EMP_FAKE_READY_AFTER": "3",
-                        "EMP_FAKE_MODELS": "native,external/model-a,external/model-b",
-                    },
-                ):
-                    connection = HTTPConnection(*server.server_address)
-                    connection.request(
-                        "POST",
-                        "/api/integration/enable",
-                        json.dumps({"confirm_reload": True}),
-                        headers,
-                    )
-                    response = connection.getresponse()
-                    payload = json.loads(response.read().decode("utf-8"))
-                    connection.close()
-
-                self.assertEqual(response.status, 200)
-                self.assertEqual(payload["runtime"]["state"], "emp_loaded")
-                self.assertTrue(payload["runtime"]["verified"])
-
-                reopened = AppState(
-                    config_path,
-                    integration_manager=IntegrationManager(
-                        codex_home / "config.toml",
-                        lease_path,
-                        instance_id="reopened",
-                    ),
-                    runtime_controller=runtime,
-                )
-                recovered = integration_summary(reopened)
-                self.assertEqual(recovered["runtime"]["state"], "not_checked")
-                self.assertEqual(recovered["runtime"]["target"], "emp")
-                self.assertFalse(recovered["runtime"]["verified"])
-                self.assertEqual(recovered["runtime"]["confidence"], "stale")
-                self.assertEqual(
-                    recovered["runtime"]["last_known"]["state"], "emp_loaded"
-                )
-                self.assertTrue(recovered["runtime"]["last_known"]["verified"])
-            finally:
-                server.shutdown()
-                server.server_close()
-
-    def test_enable_keeps_applied_configuration_when_runtime_verification_warns(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            codex_home = root / "codex"
-            config_path = root / "config.json"
-            fake_codex = _write_stop_only_fake_codex(root / "codex-fake")
-            save(
-                normalize(
-                    {
-                        "providers": [
-                            {
-                                "id": "external",
-                                "base_url": "https://example.invalid/v1",
-                                "protocol": "responses",
-                                "auth_mode": "api_key",
-                            }
-                        ],
-                        "models": [
-                            {
-                                "id": "external/model-a",
-                                "provider": "external",
-                                "upstream_id": "model-a",
-                            },
-                            {
-                                "id": "external/model-b",
-                                "provider": "external",
-                                "upstream_id": "model-b",
-                            },
-                        ],
-                    }
-                ),
-                config_path,
-            )
-            manager = IntegrationManager(
-                codex_home / "config.toml",
-                codex_home / "easy-multi-provider" / "integration" / "lease.json",
-                instance_id="partial-enable",
-            )
-            runtime = CodexRuntimeController(
-                codex_executable=str(fake_codex),
-                host_stopper=_NoResidualHosts(),
-                control_timeout=0.1,
-                observation_timeout=0.2,
-                poll_interval=0.005,
-            )
-            state = AppState(
-                config_path,
-                integration_manager=manager,
-                runtime_controller=runtime,
-            )
-            state.mark_service_ready()
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                with patch.dict(
-                    os.environ,
-                    {
-                        "CODEX_HOME": str(codex_home),
-                        "EMP_FAKE_CODEX_LOG": str(root / "fake-codex.jsonl"),
-                        "EMP_FAKE_READY_AFTER": "1",
-                        "EMP_FAKE_MODELS": "native,external/model-a",
-                    },
-                ):
-                    connection = HTTPConnection(*server.server_address)
-                    connection.request(
-                        "POST",
-                        "/api/integration/enable",
-                        json.dumps({"confirm_reload": True}),
-                        {
-                            "Cookie": "emp_session=" + state.session_token,
-                            "Content-Type": "application/json",
-                        },
-                    )
-                    response = connection.getresponse()
-                    payload = json.loads(response.read().decode("utf-8"))
-                    connection.close()
-
-                self.assertEqual(response.status, 200)
-                self.assertEqual(payload["configuration"]["state"], "emp_applied")
-                self.assertEqual(payload["configuration"]["conflicts"], [])
-                self.assertEqual(payload["runtime"]["state"], "verification_failed")
-                self.assertFalse(payload["runtime"]["verified"])
-                self.assertTrue(payload["runtime"]["action_required"])
-            finally:
-                server.shutdown()
-                server.server_close()
-
-    def test_restore_confirmation_writes_native_config_before_stop_and_accounts_relation(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            codex_home = root / "codex"
-            codex_config = codex_home / "config.toml"
-            codex_config.parent.mkdir(parents=True)
-            codex_config.write_text(
-                'openai_base_url = "https://native.invalid/v1"\n'
-                'model_catalog_json = "/native/catalog.json"\n',
-                encoding="utf-8",
-            )
-            config_path = root / "config.json"
-            save(
-                normalize(
-                    {
-                        "providers": [
-                            {
-                                "id": "external",
-                                "base_url": "https://example.invalid/v1",
-                                "protocol": "responses",
-                                "auth_mode": "api_key",
-                            }
-                        ],
-                        "models": [
-                            {
-                                "id": "external/model-a",
-                                "provider": "external",
-                                "upstream_id": "model-a",
-                            }
-                        ],
-                    }
-                ),
-                config_path,
-            )
-            lease_path = (
-                codex_home / "easy-multi-provider" / "integration" / "lease.json"
-            )
-            manager = IntegrationManager(
-                codex_config,
-                lease_path,
-                instance_id="restore-transaction",
-            )
-            manager.enable(
-                "http://127.0.0.1:4201/v1",
-                str(codex_home / "easy-multi-provider" / "catalog.json"),
-                service_ready=True,
-            )
-            log_path = root / "fake-codex.jsonl"
-            runtime = CodexRuntimeController(
-                codex_executable=str(_write_stop_only_fake_codex(root / "codex-fake")),
-                host_stopper=_NoResidualHosts(),
-                control_timeout=0.1,
-                observation_timeout=0.05,
-                poll_interval=0.005,
-            )
-            state = AppState(
-                config_path,
-                integration_manager=manager,
-                runtime_controller=runtime,
-            )
-            state._mark_runtime_pending("emp", "test fixture active EMP target")
-            state.mark_service_ready()
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                with patch.dict(
-                    os.environ,
-                    {
-                        "CODEX_HOME": str(codex_home),
-                        "EMP_FAKE_CODEX_LOG": str(log_path),
-                    },
-                ):
-                    connection = HTTPConnection(*server.server_address)
-                    connection.request(
-                        "POST",
-                        "/api/integration/restore",
-                        json.dumps({"confirm_reload": True}),
-                        {
-                            "Cookie": "emp_session=" + state.session_token,
-                            "Content-Type": "application/json",
-                        },
-                    )
-                    response = connection.getresponse()
-                    payload = json.loads(response.read().decode("utf-8"))
-                    connection.close()
-
-                self.assertEqual(response.status, 200)
-                self.assertEqual(payload["configuration"]["state"], "native")
-                self.assertEqual(payload["runtime"]["state"], "stopped_waiting_for_start")
-                calls = [
-                    json.loads(line)
-                    for line in log_path.read_text(encoding="utf-8").splitlines()
-                ]
-                self.assertEqual(calls[0]["args"], ["remote-control", "stop", "--json"])
-                self.assertIn("https://native.invalid/v1", calls[0]["config_at_stop"])
-                recovery = json.loads(
-                    lease_path.with_name("runtime.json").read_text(encoding="utf-8")
-                )
-                self.assertEqual(recovery["target"], "native")
-                self.assertEqual(recovery["configuration_relation"], "original")
-            finally:
-                server.shutdown()
-                server.server_close()
-
     def test_web_exposes_runtime_sync_and_large_model_picker_controls(self):
         html = WEB_FILE.read_text(encoding="utf-8")
-        self.assertIn("应用模型变化到 Codex", html)
+        self.assertIn("检查已加载目录", html)
+        self.assertIn("EMP 不会停止、重启或另行启动 Codex", html)
+        self.assertNotIn("安全关闭当前 Codex", html)
         self.assertIn("/api/integration/reload", html)
         self.assertIn('id="discovered_select_all"', html)
         self.assertIn('id="discovered_clear_all"', html)

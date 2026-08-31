@@ -162,9 +162,9 @@ async function integrationBehavior() {
     if (path === "/api/integration/enable") {
       integration = {
         configuration: {state: "emp_applied", relation: "applied", conflicts: []},
-        runtime: {state: "stopped_waiting_for_start", target: "emp", verified: false, action_required: false, detail: ""},
+        runtime: {state: "stopped_waiting_for_start", target: "emp", verified: false, action_required: false, detail: "shared backend unavailable"},
         service_health: "ready",
-        next_action: "none",
+        next_action: "wait for shared backend owner start",
       };
       return integration;
     }
@@ -174,21 +174,22 @@ async function integrationBehavior() {
   run("api = __apiStub; state = {native_catalog_path:'', accounts:[], providers:[], models:[]}");
   run("confirmIntegrationAction('enable')");
   assert(!getElement("modal_backdrop").classList.contains("hidden"), "confirmation modal must open");
-  assert.match(getElement("modal_body").innerHTML, /disconnect|中断|断开/i);
+  assert.match(getElement("modal_body").innerHTML, /不会停止|will not stop/i);
+  assert.doesNotMatch(getElement("modal_body").innerHTML, /disconnect|中断|断开/i);
   await getElement("modal_submit").click();
   const enable = calls.find(call => call.path === "/api/integration/enable");
   assert(enable, "enable endpoint was not called");
   assert.deepStrictEqual(JSON.parse(enable.options.body), {confirm_reload: true});
   assert(!calls.some(call => call.path === "/api/integration/sync"), "obsolete second sync was called");
-  assert.match(getElement("status").textContent, /next|下次/i);
+  assert.match(getElement("status").textContent, /owner|所有者/i);
   assert(getElement("modal_backdrop").classList.contains("hidden"), "successful modal must close");
 
   run("renderIntegration({codex_compatibility:{installed:'0.151.2',status:'recommended',source:'managed',path_cli:{installed:'0.146.0',status:'unsupported'},supported_range:'0.149.x–0.151.x',recommended:'0.151.x'},configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'emp_loaded',target:'emp',verified:true,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
-  assert.match(getElement("integration_summary").textContent, /loaded|已加载/i);
+  assert.match(getElement("integration_summary").textContent, /exposes|已暴露/i);
   assert.match(getElement("codex_compatibility").textContent, /托管 Codex runtime 0\.151\.2.*独立命令行 0\.146\.0.*0\.149\.x.*0\.151\.x/);
   assert.strictEqual(getElement("codex_compatibility").dataset.state, "recommended");
   run("renderIntegration({configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'stopped_waiting_for_start',target:'emp',verified:false,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
-  assert.match(getElement("integration_summary").textContent, /next|下次/i);
+  assert.match(getElement("integration_summary").textContent, /owner|所有者/i);
 
   let passiveVerifyCalls = 0;
   context.__apiStub = async (path) => {
@@ -212,7 +213,7 @@ async function integrationBehavior() {
   run("api = __apiStub");
   await run("loadIntegration()");
   assert.strictEqual(passiveVerifyCalls, 1);
-  assert.match(getElement("integration_summary").textContent, /loaded|已加载/i);
+  assert.match(getElement("integration_summary").textContent, /exposes|已暴露/i);
   assert.strictEqual(getElement("integration_reload").hidden, true);
 
   context.__apiStub = async (path, options = {}) => {
@@ -258,7 +259,7 @@ async function integrationBehavior() {
   run("api = __apiStub; state = {native_catalog_path:'', accounts:[], providers:[], models:[]}; confirmIntegrationAction('enable')");
   await getElement("modal_submit").click();
   assert.match(getElement("integration_badge").textContent, /EMP (?:applied|已启用)/);
-  assert.match(getElement("integration_summary").textContent, /没有加载完整|partial catalog/i);
+  assert.match(getElement("integration_summary").textContent, /只读目录检查失败|read-only shared backend catalog check failed/i);
   assert.strictEqual(getElement("integration_reload").hidden, false);
 }
 
@@ -465,10 +466,10 @@ function presentationMigrationBehavior() {
   assert.strictEqual(run("state.catalog_presentations['native-model'].catalog_alias"), "Native");
   assert.strictEqual(run("state.catalog_presentations['provider/model-a'].reasoning_summary"), "hide");
 
-  run("state.emp_version = '0.9.3'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.3.emp");
+  run("state.emp_version = '0.9.4'");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.4.emp");
   run("state.emp_version = '../../unsafe'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.3.emp");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.4.emp");
 }
 
 function modalDismissalBehavior() {

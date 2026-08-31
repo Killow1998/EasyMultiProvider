@@ -6,7 +6,7 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 保留 Codex 原生使用体验的同时，把多个 ChatGPT Subscription、API Provider
 和外部模型加入同一个模型列表。
 
-当前源码版本为 `v0.9.3`。
+当前源码版本为 `v0.9.4`。
 
 ## 功能
 
@@ -34,6 +34,13 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 EMP 需要当前 Codex 目录中存在 Codex 托管 runtime，或系统已安装可通过
 `codex` 命令调用的独立 Codex CLI。EMP 不会捆绑或替代它们。两者同时存在时，App
 集成优先使用托管 runtime，Web UI 会把不同版本的独立 `PATH` CLI 单独列出。
+
+EMP 把持久运行的 Codex App Server 视为外部所有者管理的共享后端。启用、恢复、
+刷新或检查集成时，EMP 都不会停止、启动或重启 Codex。EMP 只会通过现有 Unix
+WebSocket listener 读取 `model/list`；如果已保存文件与后端当前暴露的模型 ID 不同，
+Web UI 会提示等待后端所有者在安全维护窗口重启。检查成功只证明观测到的模型 ID
+集合，不证明 endpoint、显示名称或其他启动配置已经热加载。本轮只在 Linux 验证了
+这条真实探测路径；macOS 与 Windows 尚未验证。
 
 EMP 支持 Codex CLI `0.149.x` 至 `0.151.x`，推荐使用 `0.151.x`。Web UI 会显示
 当前安装版本；更高版本会标记为“尚未验证”，更旧版本会标记为“不再支持”。
@@ -150,7 +157,8 @@ HTTP 正文、请求头、Cookie 和凭据。
 - **模型**：拉取上游模型，并进行导入、测试、编辑、隐藏或删除。模型按照
   Provider 分组显示。
 - **Codex 集成**：把当前 EMP 模型目录应用到默认 Codex，也可以在同一页面恢复
-  Codex 原生路由。
+  Codex 原生路由。页面分别显示文件状态和共享后端当前暴露的模型 ID；EMP 不控制
+  共享后端的进程生命周期。
 
 EMP 会自动检测启动环境或操作系统中的代理设置。
 

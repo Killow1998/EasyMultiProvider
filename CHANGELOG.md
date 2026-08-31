@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+## 0.9.4 (2026-08-30)
+
+### Shared Codex runtime compatibility
+
+- Stop treating the persistent Codex App Server as an EMP-owned process:
+  integration enable, restore, catalog refresh, and reload checks no longer
+  stop, start, restart, or terminate Codex processes.
+- Query the existing Unix control socket with a real WebSocket Upgrade and the
+  `initialize` / `initialized` / `model/list` JSON-RPC sequence instead of
+  writing JSONL into the raw `app-server proxy` byte tunnel.
+- Report saved files separately from model IDs observed in the live backend;
+  stale or unavailable listeners now wait for the backend owner instead of
+  claiming synchronization.
+
 ## 0.9.3 (2026-08-30)
 
 ### Codex and catalog management

@@ -45,7 +45,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
   <div class="integration-card-header"><span id="integration_badge" class="pill" data-i18n="loading">加载中</span><h3 id="integration_title" data-i18n="integration_status">Codex 集成状态</h3></div>
   <p id="integration_summary" class="muted" data-i18n="integration_loading">正在读取集成状态。</p>
   <p id="codex_compatibility" class="muted"></p>
-  <div class="toolbar"><button id="integration_enable" onclick="confirmIntegrationAction('enable')" data-i18n="enable_codex">启用默认 Codex</button><button id="integration_restore" class="secondary" onclick="confirmIntegrationAction('restore')" data-i18n="restore_codex">恢复原生 Codex</button><button id="integration_reload" class="secondary" onclick="confirmIntegrationAction('reload')" hidden data-i18n="apply_models">应用模型变化到 Codex</button><button class="secondary" onclick="openDiagnostics()" data-i18n="diagnostics">诊断</button></div>
+  <div class="toolbar"><button id="integration_enable" onclick="confirmIntegrationAction('enable')" data-i18n="enable_codex">启用默认 Codex</button><button id="integration_restore" class="secondary" onclick="confirmIntegrationAction('restore')" data-i18n="restore_codex">恢复原生 Codex</button><button id="integration_reload" class="secondary" onclick="confirmIntegrationAction('reload')" hidden data-i18n="apply_models">检查已加载目录</button><button class="secondary" onclick="openDiagnostics()" data-i18n="diagnostics">诊断</button></div>
 </div>
 </section>
 
@@ -123,10 +123,10 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const translations = {
   'zh-CN': {
-    subtitle:'在浏览器中管理 Codex 的账户、Provider 和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出 EMP 数据', import_emp:'导入 EMP 数据', codex_integration:'Codex 集成', integration_status:'Codex 集成状态', loading:'加载中', integration_loading:'正在读取集成状态。', enable_codex:'启用默认 Codex', restore_codex:'恢复原生 Codex', apply_models:'应用模型变化到 Codex', diagnostics:'诊断', subscription_search:'Subscription 联网搜索', subscription_search_hint:'可选地让外部模型使用 ChatGPT/Codex subscription 的独立联网搜索；搜索指令和 Codex 选取的少量可见上下文会发送到该服务。', enable_subscription_search:'启用 Subscription 搜索', search_account:'搜索账户', current_codex_login:'当前 Codex 登录', save_search:'保存搜索设置', model_display:'模型列表显示', model_display_hint:'集中设置 Codex App 和 TUI 中的模型名称、上下文与推理摘要显示。', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存显示设置', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有会显示在 Codex 中的模型。', no_matches:'没有匹配的模型。', refresh:'刷新', diagnostics_privacy:'这里只保留少量请求状态，不保存消息内容、响应内容或凭据。', accounts_title:'Codex Subscription 账户', accounts_security:'服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器或写入 config/catalog。', import_account:'导入账户', refresh_quotas:'刷新全部余量', accounts_hint:'导入时只填账户 ID。与当前 Codex 登录重复的账户只保留额度查询；模型显示统一由原生账户管理。', providers_title:'Providers', providers_hint:'添加官方或自建 Provider；官方预设自动填写地址和协议。', add_provider:'添加 Provider', models_routes:'Models / 路由', models_hint:'已导入的模型按 Provider 分组；隐藏模型排在最后。', add_model:'手动添加模型'
+    subtitle:'在浏览器中管理 Codex 的账户、Provider 和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出 EMP 数据', import_emp:'导入 EMP 数据', codex_integration:'Codex 集成', integration_status:'Codex 集成状态', loading:'加载中', integration_loading:'正在读取集成状态。', enable_codex:'启用默认 Codex', restore_codex:'恢复原生 Codex', apply_models:'检查已加载目录', diagnostics:'诊断', subscription_search:'Subscription 联网搜索', subscription_search_hint:'可选地让外部模型使用 ChatGPT/Codex subscription 的独立联网搜索；搜索指令和 Codex 选取的少量可见上下文会发送到该服务。', enable_subscription_search:'启用 Subscription 搜索', search_account:'搜索账户', current_codex_login:'当前 Codex 登录', save_search:'保存搜索设置', model_display:'模型列表显示', model_display_hint:'集中设置 Codex App 和 TUI 中的模型名称、上下文与推理摘要显示。', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存显示设置', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有会显示在 Codex 中的模型。', no_matches:'没有匹配的模型。', refresh:'刷新', diagnostics_privacy:'这里只保留少量请求状态，不保存消息内容、响应内容或凭据。', accounts_title:'Codex Subscription 账户', accounts_security:'服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器或写入 config/catalog。', import_account:'导入账户', refresh_quotas:'刷新全部余量', accounts_hint:'导入时只填账户 ID。与当前 Codex 登录重复的账户只保留额度查询；模型显示统一由原生账户管理。', providers_title:'Providers', providers_hint:'添加官方或自建 Provider；官方预设自动填写地址和协议。', add_provider:'添加 Provider', models_routes:'Models / 路由', models_hint:'已导入的模型按 Provider 分组；隐藏模型排在最后。', add_model:'手动添加模型'
   },
   en: {
-    subtitle:'Manage Codex accounts, providers, and models in your browser.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export EMP data', import_emp:'Import EMP data', codex_integration:'Codex integration', integration_status:'Codex integration status', loading:'Loading', integration_loading:'Reading integration status.', enable_codex:'Enable for Codex', restore_codex:'Restore native Codex', apply_models:'Apply model changes', diagnostics:'Diagnostics', subscription_search:'Subscription web search', subscription_search_hint:'Optionally let external models use standalone ChatGPT/Codex subscription search. The search command and a small amount of visible context selected by Codex are sent to that service.', enable_subscription_search:'Enable Subscription search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save search settings', model_display:'Model list display', model_display_hint:'Set names, context labels, and reasoning summaries for Codex App and TUI.', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save display settings', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models are currently visible in Codex.', no_matches:'No matching models.', refresh:'Refresh', diagnostics_privacy:'Only request metadata is kept; prompts, responses, and credentials are never stored here.', accounts_title:'Codex Subscription Accounts', accounts_security:'The service listens locally. Account tokens stay in encrypted local storage and never enter the browser, config, or catalog.', import_account:'Import account', refresh_quotas:'Refresh all quotas', accounts_hint:'Import requires only an account ID. Accounts that duplicate the current Codex login retain quota access only; Native manages model visibility.', providers_title:'Providers', providers_hint:'Add an official preset or a custom Provider. Official presets fill the endpoint and protocol automatically.', add_provider:'Add Provider', models_routes:'Models / Routes', models_hint:'Imported models are grouped by Provider; hidden models are placed last.', add_model:'Add model manually'
+    subtitle:'Manage Codex accounts, providers, and models in your browser.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export EMP data', import_emp:'Import EMP data', codex_integration:'Codex integration', integration_status:'Codex integration status', loading:'Loading', integration_loading:'Reading integration status.', enable_codex:'Enable for Codex', restore_codex:'Restore native Codex', apply_models:'Check loaded catalog', diagnostics:'Diagnostics', subscription_search:'Subscription web search', subscription_search_hint:'Optionally let external models use standalone ChatGPT/Codex subscription search. The search command and a small amount of visible context selected by Codex are sent to that service.', enable_subscription_search:'Enable Subscription search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save search settings', model_display:'Model list display', model_display_hint:'Set names, context labels, and reasoning summaries for Codex App and TUI.', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save display settings', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models are currently visible in Codex.', no_matches:'No matching models.', refresh:'Refresh', diagnostics_privacy:'Only request metadata is kept; prompts, responses, and credentials are never stored here.', accounts_title:'Codex Subscription Accounts', accounts_security:'The service listens locally. Account tokens stay in encrypted local storage and never enter the browser, config, or catalog.', import_account:'Import account', refresh_quotas:'Refresh all quotas', accounts_hint:'Import requires only an account ID. Accounts that duplicate the current Codex login retain quota access only; Native manages model visibility.', providers_title:'Providers', providers_hint:'Add an official preset or a custom Provider. Official presets fill the endpoint and protocol automatically.', add_provider:'Add Provider', models_routes:'Models / Routes', models_hint:'Imported models are grouped by Provider; hidden models are placed last.', add_model:'Add model manually'
   }
 };
 let language = 'zh-CN';
@@ -198,7 +198,7 @@ async function exportMigration() {
     const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = migrationFilename(); document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); closeModal(); notice(tr('EMP 迁移包已下载','EMP data exported'));
   });
 }
-function migrationFilename() { const version = String(state?.emp_version || '0.9.3'); return `easy-multi-provider-${/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version) ? version : '0.9.3'}.emp`; }
+function migrationFilename() { const version = String(state?.emp_version || '0.9.4'); return `easy-multi-provider-${/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version) ? version : '0.9.4'}.emp`; }
 function selectMigrationFile() { $('migration_file').click(); }
 async function migrationFileChosen(input) {
   const file = input.files[0]; if (!file) return; if (file.size > 32 * 1024 * 1024) { input.value = ''; return notice(tr('EMP 文件不能超过 32 MB','EMP files cannot exceed 32 MB'), true); }
@@ -319,7 +319,7 @@ async function saveSubscriptionSearch() {
     enabled: $('subscription_search_enabled').checked,
     account_id: $('subscription_search_account').value || ''
   };
-  await persistState(tr('搜索设置已保存；如 Codex 正在运行，请应用模型变化','Search settings saved; apply model changes if Codex is running'), candidate);
+  await persistState(tr('搜索设置已保存；共享 Codex 后端需由其所有者安全重启后加载','Search settings saved; the shared Codex backend owner must restart it safely to load the change'), candidate);
 }
 function fill() {
   applyTranslations(); renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
@@ -337,16 +337,16 @@ function renderIntegration(info) {
   };
   const view = views[configuration.state] || views.unavailable;
   const runtimeMessages = english ? {
-    emp_loaded:'Codex loaded the EMP catalog.', native_loaded:'Codex loaded the native catalog.', stopped_waiting_for_start:'The target will load on the next Codex start.', reload_required:'Apply the saved model changes.', stopping:'Stopping the previous Codex process.', stop_failed:'The previous Codex process could not be confirmed stopped.', verification_failed:'Codex restarted without the complete target catalog.', unsupported:'This Codex version cannot be safely reloaded.', not_checked:''
+    emp_loaded:'The shared backend exposes all expected EMP model IDs. Endpoint, rename, and other startup settings are not verified.', native_loaded:'The shared backend exposes no expected EMP model IDs. Other startup settings are not verified.', stopped_waiting_for_start:'The shared Codex backend is unavailable; its owner must start it.', reload_required:'The files are saved, but the shared backend still has the previous catalog. Wait for its owner to restart it safely.', stopping:'Legacy runtime state; check the shared backend again.', stop_failed:'Legacy runtime state; EMP will not stop the shared backend.', verification_failed:'The read-only shared backend catalog check failed.', unsupported:'The shared backend catalog cannot be checked on this platform.', not_checked:''
   } : {
-    emp_loaded: 'Codex 已加载 EMP 模型目录，当前即可使用。',
-    native_loaded: 'Codex 已加载原生模型目录，当前即可使用。',
-    stopped_waiting_for_start: 'Codex 当前已停止；下次正常启动时会加载目标配置。',
-    reload_required: '模型目录有变化，需要确认一次“应用模型变化到 Codex”。',
-    stopping: '正在安全关闭旧的 Codex 运行实例。',
-    stop_failed: '无法证明旧的 Codex 已停止；目标配置已保留，可重试应用。',
-    verification_failed: 'Codex 已返回，但没有加载完整的目标模型目录。',
-    unsupported: '当前 Codex CLI 不提供 EMP 能安全使用的关闭接口。',
+    emp_loaded: '共享后端已暴露全部预期 EMP 模型 ID；endpoint、rename 和其他启动设置未验证。',
+    native_loaded: '共享后端未暴露预期 EMP 模型 ID；其他启动设置未验证。',
+    stopped_waiting_for_start: '共享 Codex 后端当前不可用，需要由后端所有者启动。',
+    reload_required: '文件已经保存，但共享后端仍加载旧目录；请等待后端所有者在安全维护窗口重启。',
+    stopping: '这是旧版运行状态；请重新检查共享后端。',
+    stop_failed: '这是旧版运行状态；EMP 不会停止共享后端。',
+    verification_failed: '共享后端的只读目录检查失败。',
+    unsupported: '当前平台无法只读检查共享后端目录。',
     not_checked: ''
   };
   const runtimeState = runtime.state || 'not_checked';
@@ -410,27 +410,27 @@ async function loadDiagnostics() { try { renderDiagnostics(await api('/api/diagn
 function openDiagnostics() { openModal(t('diagnostics'), `<p class="muted">${esc(t('diagnostics_privacy'))}</p><div class="toolbar"><button type="button" class="secondary" onclick="loadDiagnostics()">${esc(t('refresh'))}</button></div><div id="diagnostics_summary" class="muted"></div><div id="diagnostics_records"></div>`, '', null); loadDiagnostics(); }
 function confirmIntegrationAction(action) {
   const actions = language === 'en' ? {
-    enable: ['Enable for Codex', 'EMP will write the target configuration and safely stop the current Codex process.'],
-    restore: ['Restore native Codex', 'EMP will restore the native configuration and safely stop the current Codex process.'],
-    reload: ['Apply model changes', 'EMP saved the catalog and will safely stop Codex so it can reload it.']
+    enable: ['Enable for Codex', 'EMP will write the target files, then read the catalog currently loaded by the shared backend.'],
+    restore: ['Restore native Codex', 'EMP will restore the native files, then read the catalog currently loaded by the shared backend.'],
+    reload: ['Check loaded catalog', 'EMP will only read the catalog currently loaded by the shared backend.']
   } : {
-    enable: ['启用默认 Codex', 'EMP 将写入目标配置，然后安全关闭当前 Codex，使新目录在自动恢复或下次启动时生效。'],
-    restore: ['恢复原生 Codex', 'EMP 将恢复原生配置，然后安全关闭当前 Codex，使原生目录在自动恢复或下次启动时生效。'],
-    reload: ['应用模型变化到 Codex', 'EMP 已保存模型目录；本操作只会安全关闭当前 Codex，让它重新读取目录。']
+    enable: ['启用默认 Codex', 'EMP 将写入目标文件，然后只读检查共享后端当前加载的目录。'],
+    restore: ['恢复原生 Codex', 'EMP 将恢复原生文件，然后只读检查共享后端当前加载的目录。'],
+    reload: ['检查已加载目录', 'EMP 只会读取共享后端当前加载的模型目录。']
   };
   const selected = actions[action]; if (!selected) return;
-  const body = `<p>${esc(selected[1])}</p><p class="muted">${tr('当前连接会断开，正在执行的请求可能中断。EMP 不会启动替代进程，也不会修改会话、WebSocket、压缩或认证设置。','The current connection will close and active requests may be interrupted. EMP does not start a replacement process or modify sessions, WebSocket, compaction, or authentication settings.')}</p>`;
+  const body = `<p>${esc(selected[1])}</p><p class="muted">${tr('EMP 不会停止、重启或另行启动 Codex；现有会话和请求不受本操作影响。若目录仍旧，请等待后端所有者在安全维护窗口重启。','EMP will not stop, restart, or start Codex. Existing sessions and requests are unaffected. If the catalog is stale, wait for the backend owner to restart it in a safe maintenance window.')}</p>`;
   openModal(selected[0], body, selected[0], () => submitIntegrationAction(action));
 }
 function integrationOutcomeMessage(info) {
   const runtime = info && info.runtime || {};
-  if (runtime.state === 'emp_loaded') return tr('Codex 已加载 EMP 模型，当前即可使用','Codex loaded the EMP catalog');
-  if (runtime.state === 'native_loaded') return tr('Codex 已加载原生模型，当前即可使用','Codex loaded the native catalog');
-  if (runtime.state === 'stopped_waiting_for_start') return tr('配置已保存；Codex 将在下次正常启动时加载','Configuration saved; Codex will load it on its next start');
+  if (runtime.state === 'emp_loaded') return tr('已观测到全部预期 EMP 模型 ID；其他启动设置未验证','All expected EMP model IDs were observed; other startup settings were not verified');
+  if (runtime.state === 'native_loaded') return tr('未观测到预期 EMP 模型 ID；其他启动设置未验证','No expected EMP model IDs were observed; other startup settings were not verified');
+  if (runtime.state === 'stopped_waiting_for_start') return tr('文件已保存；共享 Codex 后端当前不可用，等待其所有者启动','Files saved; the shared Codex backend is unavailable and must be started by its owner');
   return runtime.detail || tr('操作已完成','Operation complete');
 }
 async function submitIntegrationAction(action) {
-  const progress = tr('正在准备 · 保存目标配置 · 安全关闭 Codex · 观察是否自动恢复','Preparing · saving configuration · safely stopping Codex');
+  const progress = tr('正在保存目标文件 · 只读检查共享 Codex 后端','Saving target files · checking the shared Codex backend read-only');
   $('modal_status').textContent = progress;
   notice(progress);
   try {
@@ -623,7 +623,7 @@ function openModelImportModal(provider, models) {
   const sorted = [...models].sort(modelSort);
   const imported = new Set((state.models || []).filter(model => model.provider === provider).map(model => model.upstream_id));
   const body = `<p class="muted">${tr(`${esc(provider)} 发现 ${sorted.length} 个模型。已导入的模型默认保留，新发现的模型默认不选。`,`${esc(provider)} returned ${sorted.length} models. Imported models stay selected; newly discovered models start unselected.`)}</p><div class="toolbar"><input id="discovered_search" placeholder="${tr('搜索模型名称或 ID','Search model name or ID')}" oninput="filterDiscoveredModels(this.value)"><button id="discovered_select_all" type="button" class="secondary" onclick="setDiscoveredChecks(true)">${tr('全选','Select all')}</button><button id="discovered_clear_all" type="button" class="secondary" onclick="setDiscoveredChecks(false)">${tr('全不选','Select none')}</button><span id="discovered_count" class="muted"></span></div><div id="discovered_models" class="model-selection">${sorted.map(m => { const id = m.upstream_id || ''; const text = (m.display_name || id) + ' ' + id; const capabilities = capabilitySummary(m); return `<label class="model-option" data-discovered-option data-search="${esc(text.toLowerCase())}"><input type="checkbox" name="discovered_model" value="${esc(id)}" ${imported.has(id) ? 'checked' : ''} onchange="updateDiscoveredCount()"><span><strong>${esc(m.display_name || id)}</strong><small>${esc(id)} · context ${Number(m.context_window || 0).toLocaleString()}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</small></span></label>`; }).join('')}</div>`;
-  openModal(tr('选择要导入的模型','Select models to import'), body, tr('导入选中模型','Import selected models'), async () => { const selected = [...document.querySelectorAll('input[name="discovered_model"]:checked')].map(input => input.value); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider, selected})}); closeModal(); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); const integration = await loadIntegration(); notice(tr(`${provider} 已导入 ${result.added} 个模型、隐藏 ${result.hidden || 0} 个${integration && integration.runtime && integration.runtime.action_required ? '；请应用模型变化到 Codex' : ''}`,`${provider}: ${result.added} models imported, ${result.hidden || 0} hidden${integration && integration.runtime && integration.runtime.action_required ? '; apply model changes to Codex' : ''}`)); });
+  openModal(tr('选择要导入的模型','Select models to import'), body, tr('导入选中模型','Import selected models'), async () => { const selected = [...document.querySelectorAll('input[name="discovered_model"]:checked')].map(input => input.value); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider, selected})}); closeModal(); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); const integration = await loadIntegration(); notice(tr(`${provider} 已导入 ${result.added} 个模型、隐藏 ${result.hidden || 0} 个${integration && integration.runtime && integration.runtime.action_required ? '；等待共享后端所有者安全重启后加载' : ''}`,`${provider}: ${result.added} models imported, ${result.hidden || 0} hidden${integration && integration.runtime && integration.runtime.action_required ? '; waiting for the shared backend owner to restart it safely' : ''}`)); });
   filterDiscoveredModels('');
 }
 function filterDiscoveredModels(value) { const query = String(value || '').trim().toLowerCase(); document.querySelectorAll('[data-discovered-option]').forEach(option => { option.hidden = Boolean(query) && !String(option.dataset.search || '').includes(query); }); const select = $('discovered_select_all'); const clear = $('discovered_clear_all'); if (select) select.textContent = query ? tr('全选搜索结果','Select all results') : tr('全选','Select all'); if (clear) clear.textContent = query ? tr('全不选搜索结果','Select no results') : tr('全不选','Select none'); updateDiscoveredCount(); }
