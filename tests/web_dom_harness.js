@@ -17,6 +17,7 @@ let catalogAliases = [];
 let catalogContexts = [];
 let catalogSummaries = [];
 let subscriptionModelInputs = [];
+let runtimeInputs = [];
 
 class Element {
   constructor(id = "") {
@@ -37,6 +38,7 @@ class Element {
     this._innerHTML = String(value);
     if (this.id === "modal_body") { parseDiscoveredOptions(this._innerHTML); parseSubscriptionOptions(this._innerHTML); }
     if (this.id === "catalog_display_models") parseCatalogDisplay(this._innerHTML);
+    if (this.id === "codex_runtimes") parseRuntimeInputs(this._innerHTML);
   }
   get innerHTML() { return this._innerHTML; }
   querySelector(selector) {
@@ -88,6 +90,17 @@ function parseSubscriptionOptions(html) {
   }
 }
 
+function parseRuntimeInputs(html) {
+  runtimeInputs = [];
+  for (const match of html.matchAll(/<input type="checkbox" data-runtime-source value="([^"]*)"([^>]*)>/g)) {
+    const input = new Element();
+    input.value = unescapeHtml(match[1]);
+    input.checked = /\schecked(?:\s|$)/.test(match[2]);
+    input.disabled = /\sdisabled(?:\s|$)/.test(match[2]);
+    runtimeInputs.push(input);
+  }
+}
+
 function getElement(id) {
   if (!elements.has(id)) elements.set(id, new Element(id));
   return elements.get(id);
@@ -108,6 +121,8 @@ const document = {
     if (selector === "[data-catalog-alias]") return catalogAliases;
     if (selector === "[data-catalog-context]") return catalogContexts;
     if (selector === "[data-catalog-summary]") return catalogSummaries;
+    if (selector === "[data-runtime-source]") return runtimeInputs;
+    if (selector === "[data-runtime-source]:checked") return runtimeInputs.filter(input => input.checked);
     return [];
   },
   documentElement: {lang: "", dataset: {}},
@@ -120,12 +135,14 @@ for (const id of [
   "status", "modal_backdrop", "modal_title", "modal_body", "modal_status",
   "modal_submit", "integration", "integration_badge", "integration_title",
   "integration_summary", "integration_enable", "integration_restore",
-  "integration_reload", "codex_compatibility", "language_select", "theme_select",
+  "integration_reload", "codex_compatibility", "codex_runtime_save",
+  "codex_runtime_scan", "codex_runtimes", "language_select", "theme_select",
   "catalog_display_search", "catalog_display_toggle", "catalog_display_models",
   "diagnostics_summary", "diagnostics_records", "accounts", "providers", "models",
 ]) getElement(id);
 
 const html = fs.readFileSync(process.argv[2], "utf8");
+assert.doesNotMatch(html, /实际调用时自动使用其中兼容性最可靠的一个/);
 const match = html.match(/<script>([\s\S]*)<\/script>/);
 assert(match, "page script not found");
 const script = match[1].replace(/\nload\(\);\s*$/, "\n");
@@ -169,6 +186,8 @@ async function integrationBehavior() {
       return integration;
     }
     if (path === "/api/integration") return integration;
+    if (path === "/api/runtime/select") return {};
+    if (path === "/api/runtime/scan") return {};
     throw new Error("unexpected API " + path);
   };
   run("api = __apiStub; state = {native_catalog_path:'', accounts:[], providers:[], models:[]}");
@@ -184,10 +203,26 @@ async function integrationBehavior() {
   assert.match(getElement("status").textContent, /owner|所有者/i);
   assert(getElement("modal_backdrop").classList.contains("hidden"), "successful modal must close");
 
-  run("renderIntegration({codex_compatibility:{installed:'0.151.2',status:'recommended',source:'managed',path_cli:{installed:'0.146.0',status:'unsupported'},supported_range:'0.149.x–0.151.x',recommended:'0.151.x'},configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'emp_loaded',target:'emp',verified:true,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
+  run("renderIntegration({codex_compatibility:{installed:'0.151.2',status:'recommended',source:'managed',helper_source:'managed',preferences:['auto'],runtimes:[{source:'managed',path:'/managed/codex',installed:'0.151.2',status:'recommended',selectable:true,targeted:true,helper:true},{source:'cursor',path:'/cursor/codex',installed:'0.150.1',status:'supported',selectable:true,targeted:true,helper:false},{source:'path_cli',path:'/old/codex',installed:'0.146.0',status:'unsupported',selectable:false,targeted:false,helper:false}],supported_range:'0.149.x–0.151.x',recommended:'0.151.x'},configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'emp_loaded',target:'emp',verified:true,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
   assert.match(getElement("integration_summary").textContent, /exposes|已暴露/i);
-  assert.match(getElement("codex_compatibility").textContent, /托管 Codex runtime 0\.151\.2.*独立命令行 0\.146\.0.*0\.149\.x.*0\.151\.x/);
+  assert.match(getElement("codex_compatibility").textContent, /已选择 2 个 Codex 客户端.*0\.149\.x.*0\.151\.x/);
   assert.strictEqual(getElement("codex_compatibility").dataset.state, "recommended");
+  assert.match(getElement("codex_runtimes").innerHTML, /title="\/managed\/codex"/);
+  assert.match(getElement("codex_runtimes").innerHTML, /Codex CLI<\/strong> v0\.146\.0/);
+  assert.doesNotMatch(getElement("codex_runtimes").innerHTML, /<code>/);
+  assert.match(getElement("codex_runtimes").innerHTML, /data-runtime-source/, "compatible runtimes must be independently selectable");
+  assert.deepStrictEqual(runtimeInputs.map(input => input.checked), [true, true, false]);
+  assert.deepStrictEqual(runtimeInputs.map(input => input.disabled), [false, false, true]);
+  await run("saveCodexRuntimeSelection()");
+  const manualRuntimeSelection = calls.find(call => call.path === "/api/runtime/select");
+  assert.deepStrictEqual(JSON.parse(manualRuntimeSelection.options.body), {sources:['managed','cursor']});
+  await run("useAutomaticCodexRuntimes()");
+  await run("scanCodexRuntimes()");
+  assert(calls.some(call => call.path === "/api/runtime/select" && call.options.body.includes('auto')));
+  assert(calls.some(call => call.path === "/api/runtime/scan"));
+
+  run("renderIntegration({codex_compatibility:{installed:'0.151.0-alpha.7.2',status:'unverified',source:'codex_app',helper_source:'codex_app',preferences:['codex_app'],runtimes:[{source:'codex_app',path:'C:/OpenAI/Codex/codex.exe',installed:'0.151.0-alpha.7.2',status:'unverified',selectable:true,targeted:true,helper:true}],supported_range:'0.149.x–0.151.x',recommended:'0.151.x'},configuration:{state:'native',relation:'original',conflicts:[]},runtime:{state:'not_checked',target:'native',verified:false,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
+  assert.match(getElement("codex_compatibility").textContent, /已选择 1 个 Codex 客户端/);
   run("renderIntegration({configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'stopped_waiting_for_start',target:'emp',verified:false,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
   assert.match(getElement("integration_summary").textContent, /owner|所有者/i);
 
@@ -469,7 +504,7 @@ function presentationMigrationBehavior() {
   run("state.emp_version = '0.9.4'");
   assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.4.emp");
   run("state.emp_version = '../../unsafe'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.4.emp");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.5.emp");
 }
 
 function modalDismissalBehavior() {

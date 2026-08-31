@@ -41,6 +41,19 @@ class ConfigTests(unittest.TestCase):
         normalized = normalize({"providers": [self.provider]})["providers"][0]
         self.assertNotIn("tool_call_mode", normalized)
 
+    def test_codex_runtime_sources_are_bounded_configuration(self):
+        self.assertEqual(normalize({})["codex_runtime_sources"], ["auto"])
+        self.assertEqual(
+            normalize({"codex_runtime_sources": ["codex_app", "cursor"]})[
+                "codex_runtime_sources"
+            ],
+            ["codex_app", "cursor"],
+        )
+        with self.assertRaises(ConfigError):
+            normalize({"codex_runtime_sources": ["auto", "cursor"]})
+        with self.assertRaises(ConfigError):
+            normalize({"codex_runtime_sources": ["arbitrary-runtime"]})
+
     def test_web_update_preserves_omitted_secret(self):
         current = normalize({"providers": [self.provider], "models": [self.model]})
         incoming = public_config(current)

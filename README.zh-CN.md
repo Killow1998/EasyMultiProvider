@@ -6,7 +6,7 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 保留 Codex 原生使用体验的同时，把多个 ChatGPT Subscription、API Provider
 和外部模型加入同一个模型列表。
 
-当前源码版本为 `v0.9.4`。
+当前源码版本为 `v0.9.5`。
 
 ## 功能
 
@@ -31,9 +31,16 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 
 ## 安装
 
-EMP 需要当前 Codex 目录中存在 Codex 托管 runtime，或系统已安装可通过
-`codex` 命令调用的独立 Codex CLI。EMP 不会捆绑或替代它们。两者同时存在时，App
-集成优先使用托管 runtime，Web UI 会把不同版本的独立 `PATH` CLI 单独列出。
+EMP 不会捆绑或替代 Codex。首次读取集成状态时，它会在有限的已知位置扫描
+Codex App runtime、当前 `.codex` 托管 runtime、OpenAI 的 VS Code/Cursor
+插件 runtime，以及 `PATH` 中的独立 `codex`。Web UI 会列出版本、合并相同程序，
+并允许用户多选计划使用 EMP 的兼容 Codex 客户端；多个客户端和 workspace 可以
+同时工作。EMP 会独立自动选择一个兼容 helper 程序用于版本检测和账户余量查询，
+这个内部选择不会路由模型请求或限制已选客户端。不兼容或无法读取的 runtime 仍会
+显示，但不可选择；可用的预发布或更新版本会明确标记为“尚未验证”。
+
+这些客户端通常共用同一用户级 `.codex` 目录。客户端选择不会创建新的 Codex
+配置目录，也不会阻止其他客户端读取这份共享配置。
 
 EMP 把持久运行的 Codex App Server 视为外部所有者管理的共享后端。启用、恢复、
 刷新或检查集成时，EMP 都不会停止、启动或重启 Codex。EMP 只会通过现有 Unix

@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,6 +63,24 @@ _MAX_COMMAND_STDERR_BYTES = 32 * 1024
 _COMPATIBILITY_CACHE_SECONDS = 60.0
 _APP_SERVER_CONTROL_SOCKET_DIR = "app-server-control"
 _APP_SERVER_CONTROL_SOCKET_NAME = "app-server-control.sock"
+_WINDOWS_APP_RUNTIME_PARTS = ("OpenAI", "Codex", "bin")
+_MAX_WINDOWS_APP_RUNTIMES = 64
+_MAX_EDITOR_EXTENSIONS = 64
+_MAX_EDITOR_PLATFORMS = 32
+_SELECTABLE_COMPATIBILITY = frozenset(("recommended", "supported", "unverified"))
+_COMPATIBILITY_PRIORITY = {"recommended": 0, "supported": 1, "unverified": 2}
+_RUNTIME_SOURCES = frozenset(
+    (
+        "auto",
+        "configured",
+        "codex_app",
+        "managed",
+        "vscode",
+        "vscode_insiders",
+        "cursor",
+        "path_cli",
+    )
+)
 _MAX_CONTROL_MESSAGES_PER_RESPONSE = 100
 _MAX_CONTROL_MESSAGE_BYTES = 2 * 1024 * 1024
 
@@ -137,6 +156,28 @@ class RuntimeSyncError(RuntimeError):
     def __init__(self, message: str, kind: str = "malformed") -> None:
         super().__init__(message)
         self.kind = kind
+
+
+@dataclass(frozen=True)
+class CodexRuntimeCandidate:
+    source: str
+    name: str
+    executable: str
+
+
+def _normalize_runtime_preferences(
+    sources: Optional[Sequence[str]],
+) -> Tuple[str, ...]:
+    if sources is None:
+        return ("auto",)
+    if isinstance(sources, (str, bytes)):
+        raise ValueError("Codex runtime sources must be a sequence")
+    normalized = tuple(dict.fromkeys(sources))
+    if not normalized or any(source not in _RUNTIME_SOURCES for source in normalized):
+        raise ValueError("unknown Codex runtime source")
+    if "auto" in normalized and len(normalized) != 1:
+        raise ValueError("automatic Codex runtime selection cannot be combined")
+    return normalized
 
 
 class ModelCatalogProbe(Protocol):
@@ -862,6 +903,9 @@ class CodexRuntimeController:
         host_stopper: Optional[TargetedHostStopper] = None,
         target_codex_home: Optional[Path] = None,
         model_catalog_probe: Optional[ModelCatalogProbe] = None,
+        windows_local_app_data: Optional[Path] = None,
+        runtime_user_home: Optional[Path] = None,
+        runtime_preferences: Optional[Sequence[str]] = None,
     ) -> None:
         self.runner = runner or SubprocessRunner()
         self._configured_codex_executable = codex_executable
@@ -874,6 +918,16 @@ class CodexRuntimeController:
         self.poll_interval = max(0.001, float(poll_interval))
         self.host_stopper = host_stopper
         self.model_catalog_probe = model_catalog_probe or UnixSocketModelCatalogProbe()
+        if windows_local_app_data is not None:
+            self._windows_local_app_data = Path(windows_local_app_data)
+        elif os.name == "nt" and os.environ.get("LOCALAPPDATA", "").strip():
+            self._windows_local_app_data = Path(os.environ["LOCALAPPDATA"])
+        else:
+            self._windows_local_app_data = None
+        self._runtime_user_home = Path(runtime_user_home or Path.home())
+        self._runtime_preferences = _normalize_runtime_preferences(
+            runtime_preferences
+        )
         self._compatibility_lock = threading.Lock()
         self._compatibility_checked_at = 0.0
         self._compatibility: Optional[Dict[str, Any]] = None
@@ -898,7 +952,54 @@ class CodexRuntimeController:
             return None
         return TargetedCodexHostStopper(Path(self.target_codex_home))
 
-    def _managed_codex_executable(self) -> Optional[str]:
+    def _windows_app_codex_executable(self) -> Optional[str]:
+        local_app_data = self._windows_local_app_data
+        if local_app_data is None:
+            return None
+        runtime_root = local_app_data.joinpath(*_WINDOWS_APP_RUNTIME_PARTS)
+        try:
+            resolved_root = runtime_root.resolve(strict=True)
+            entries = tuple(runtime_root.iterdir())
+        except (OSError, RuntimeError):
+            return None
+        if len(entries) > _MAX_WINDOWS_APP_RUNTIMES:
+            return None
+
+        candidates = []
+        for entry in entries:
+            candidate = entry / "codex.exe"
+            try:
+                resolved = candidate.resolve(strict=True)
+                if (
+                    not candidate.is_file()
+                    or candidate.is_symlink()
+                    or resolved.parent.parent != resolved_root
+                ):
+                    continue
+                candidates.append((candidate.stat().st_mtime_ns, str(resolved)))
+            except (OSError, RuntimeError):
+                continue
+        if not candidates:
+            return None
+        # Codex App stores each runtime below a build-identity directory. Prefer
+        # the most recently installed direct child when several builds remain.
+        return max(candidates, key=lambda item: (item[0], item[1]))[1]
+
+    @staticmethod
+    def _runtime_file(path: Path) -> Optional[str]:
+        try:
+            resolved = path.resolve(strict=True)
+            if not path.is_file() or path.is_symlink():
+                return None
+            if resolved.suffix.casefold() != ".exe" and not os.access(
+                str(resolved), os.X_OK
+            ):
+                return None
+            return str(resolved)
+        except (OSError, RuntimeError):
+            return None
+
+    def _codex_home_managed_executable(self) -> Optional[str]:
         if self.target_codex_home is None:
             return None
         current = Path(self.target_codex_home) / "packages" / "standalone" / "current"
@@ -914,6 +1015,103 @@ class CodexRuntimeController:
             except OSError:
                 continue
         return None
+
+    def _editor_codex_executable(self, extensions_root: Path) -> Optional[str]:
+        try:
+            root = extensions_root.resolve(strict=True)
+            extensions = tuple(
+                item
+                for item in extensions_root.iterdir()
+                if item.name.casefold().startswith("openai.chatgpt-")
+            )
+        except (OSError, RuntimeError):
+            return None
+        if len(extensions) > _MAX_EDITOR_EXTENSIONS:
+            return None
+
+        candidates = []
+        names = ("codex.exe", "codex") if os.name == "nt" else ("codex", "codex.exe")
+        for extension in extensions:
+            bin_root = extension / "bin"
+            try:
+                platform_dirs = tuple(bin_root.iterdir())
+            except OSError:
+                platform_dirs = ()
+            if len(platform_dirs) > _MAX_EDITOR_PLATFORMS:
+                continue
+            locations = (bin_root, *platform_dirs)
+            for location in locations:
+                for name in names:
+                    executable = self._runtime_file(location / name)
+                    if executable is None:
+                        continue
+                    try:
+                        resolved = Path(executable)
+                        if root not in resolved.parents:
+                            continue
+                        candidates.append((resolved.stat().st_mtime_ns, executable))
+                    except OSError:
+                        continue
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: (item[0], item[1]))[1]
+
+    def _runtime_candidates(self) -> Tuple[CodexRuntimeCandidate, ...]:
+        candidates = []
+        if self._configured_codex_executable:
+            candidates.append(
+                CodexRuntimeCandidate(
+                    "configured", "Configured Codex", self._configured_codex_executable
+                )
+            )
+        windows_app = self._windows_app_codex_executable()
+        if windows_app:
+            candidates.append(
+                CodexRuntimeCandidate("codex_app", "Codex App", windows_app)
+            )
+        managed = self._codex_home_managed_executable()
+        if managed:
+            candidates.append(
+                CodexRuntimeCandidate("managed", "Managed Codex runtime", managed)
+            )
+
+        editor_roots = (
+            (
+                "vscode",
+                "VS Code extension",
+                self._runtime_user_home / ".vscode" / "extensions",
+            ),
+            (
+                "vscode_insiders",
+                "VS Code Insiders extension",
+                self._runtime_user_home / ".vscode-insiders" / "extensions",
+            ),
+            (
+                "cursor",
+                "Cursor extension",
+                self._runtime_user_home / ".cursor" / "extensions",
+            ),
+        )
+        for source, name, root in editor_roots:
+            executable = self._editor_codex_executable(root)
+            if executable:
+                candidates.append(CodexRuntimeCandidate(source, name, executable))
+
+        path_cli = self._path_cli_executable()
+        if path_cli:
+            candidates.append(
+                CodexRuntimeCandidate("path_cli", "PATH Codex CLI", path_cli)
+            )
+
+        unique = []
+        for candidate in candidates:
+            if any(
+                self._same_executable(candidate.executable, existing.executable)
+                for existing in unique
+            ):
+                continue
+            unique.append(candidate)
+        return tuple(unique)
 
     @staticmethod
     def _same_executable(left: str, right: str) -> bool:
@@ -931,15 +1129,14 @@ class CodexRuntimeController:
         return self._path_codex_executable
 
     def executable(self) -> str:
-        """Return the runtime EMP will control for the active Codex home."""
+        """Return the selected compatible runtime without managing its lifecycle."""
 
-        if self._configured_codex_executable:
-            return self._configured_codex_executable
-        return (
-            self._managed_codex_executable()
-            or self._path_cli_executable()
-            or self.codex_executable
-        )
+        compatibility = self.compatibility()
+        helper_source = compatibility.get("helper_source")
+        for runtime in compatibility.get("runtimes", []):
+            if runtime.get("source") == helper_source and runtime.get("helper") is True:
+                return str(runtime["path"])
+        return self.codex_executable
 
     def _command(self, *parts: str) -> Tuple[str, ...]:
         return (self.executable(), *parts)
@@ -947,7 +1144,7 @@ class CodexRuntimeController:
     def _observe_compatibility(self, executable: str) -> CodexCompatibility:
         result = self.runner.run(
             (executable, "--version"),
-            timeout=min(self.control_timeout, 5.0),
+            timeout=min(self.control_timeout, 2.0),
         )
         if result.returncode == 0:
             return classify_codex_version(result.stdout)
@@ -957,8 +1154,21 @@ class CodexRuntimeController:
             return unavailable_compatibility()
         return CodexCompatibility(None, "unknown")
 
+    def set_runtime_preferences(self, sources: Sequence[str]) -> None:
+        preferences = _normalize_runtime_preferences(sources)
+        with self._compatibility_lock:
+            self._runtime_preferences = preferences
+            self._compatibility = None
+            self._compatibility_checked_at = 0.0
+
+    def refresh_compatibility(self) -> Dict[str, Any]:
+        with self._compatibility_lock:
+            self._compatibility = None
+            self._compatibility_checked_at = 0.0
+        return self.compatibility()
+
     def compatibility(self) -> Dict[str, Any]:
-        """Return one bounded, short-lived observation of `codex --version`."""
+        """Return one bounded, cached inventory of local Codex runtimes."""
         now = time.monotonic()
         with self._compatibility_lock:
             if (
@@ -968,22 +1178,82 @@ class CodexRuntimeController:
             ):
                 return dict(self._compatibility)
 
-        executable = self.executable()
-        compatibility = self._observe_compatibility(executable)
-        public = compatibility.public()
-        source = (
-            "configured"
-            if self._configured_codex_executable
-            else "managed"
-            if self._managed_codex_executable() == executable
-            else "path_cli"
+        candidates = self._runtime_candidates()
+        if candidates:
+            workers = min(4, len(candidates))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                observed = tuple(
+                    executor.map(
+                        lambda candidate: self._observe_compatibility(candidate.executable),
+                        candidates,
+                    )
+                )
+        else:
+            observed = ()
+
+        runtimes = []
+        for candidate, compatibility in zip(candidates, observed):
+            item = compatibility.public()
+            item.update(
+                {
+                    "source": candidate.source,
+                    "name": candidate.name,
+                    "path": candidate.executable,
+                    "selectable": compatibility.status in _SELECTABLE_COMPATIBILITY,
+                    "helper": False,
+                }
+            )
+            runtimes.append(item)
+
+        preferences = self._runtime_preferences
+        automatic = preferences == ("auto",)
+        allowed_sources = None if automatic else frozenset(preferences)
+        for item in runtimes:
+            item["targeted"] = bool(
+                item["selectable"]
+                and (allowed_sources is None or item["source"] in allowed_sources)
+            )
+        selectable = [item for item in runtimes if item["selectable"]]
+        selected = next(
+            (
+                item
+                for item in selectable
+                if item["source"] == "configured"
+                and self._configured_codex_executable is not None
+            ),
+            None,
         )
-        public["source"] = source
-        path_cli = self._path_cli_executable()
-        if source == "managed" and path_cli and not self._same_executable(
-            path_cli, executable
-        ):
-            public["path_cli"] = self._observe_compatibility(path_cli).public()
+        if selected is None and selectable:
+            selected = min(
+                enumerate(selectable),
+                key=lambda entry: (
+                    _COMPATIBILITY_PRIORITY.get(str(entry[1].get("status")), 99),
+                    entry[0],
+                ),
+            )[1]
+        if selected is not None:
+            selected["helper"] = True
+            public = {
+                key: selected.get(key)
+                for key in ("installed", "status", "supported_range", "recommended")
+            }
+            public["source"] = selected["source"]
+            helper_source: Optional[str] = str(selected["source"])
+        elif runtimes:
+            first = runtimes[0]
+            public = {
+                key: first.get(key)
+                for key in ("installed", "status", "supported_range", "recommended")
+            }
+            public["source"] = first["source"]
+            helper_source = None
+        else:
+            public = unavailable_compatibility().public()
+            public["source"] = "path_cli"
+            helper_source = None
+        public["helper_source"] = helper_source
+        public["preferences"] = list(preferences)
+        public["runtimes"] = runtimes
         with self._compatibility_lock:
             self._compatibility = dict(public)
             self._compatibility_checked_at = time.monotonic()

@@ -9,7 +9,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 
 from .accounts import (
@@ -56,6 +56,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "enabled": False,
         "account_id": "",
     },
+    "codex_runtime_sources": ["auto"],
 }
 
 _ID = re.compile(r"^[A-Za-z0-9._/:-]+$")
@@ -110,6 +111,16 @@ _ENDPOINT_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CONCRETE_PROTOCOLS = {"responses", "chat_completions", "anthropic_messages"}
 _REASONING_SUMMARY_POLICIES = {"auto", "show", "hide"}
 _MAX_CATALOG_ALIAS_BYTES = 512
+_CODEX_RUNTIME_SOURCES = {
+    "auto",
+    "configured",
+    "codex_app",
+    "managed",
+    "vscode",
+    "vscode_insiders",
+    "cursor",
+    "path_cli",
+}
 
 
 class ConfigError(ValueError):
@@ -216,6 +227,25 @@ def _validate_url(value: Any, field: str) -> str:
     if parsed.scheme == "http" and not loopback:
         raise ConfigError("%s must use HTTPS unless it targets loopback" % field)
     return value
+
+
+def _normalize_codex_runtime_sources(value: Any) -> List[str]:
+    if value is None:
+        return ["auto"]
+    if not isinstance(value, list) or not value:
+        raise ConfigError("codex_runtime_sources must be a non-empty list")
+    if len(value) > len(_CODEX_RUNTIME_SOURCES):
+        raise ConfigError("codex_runtime_sources has too many entries")
+    sources = []
+    for index, raw_source in enumerate(value):
+        source = _string(raw_source, "codex_runtime_sources[%d]" % index)
+        if source not in _CODEX_RUNTIME_SOURCES:
+            raise ConfigError("codex_runtime_sources contains an unsupported source")
+        if source not in sources:
+            sources.append(source)
+    if "auto" in sources and len(sources) != 1:
+        raise ConfigError("codex_runtime_sources auto cannot be combined")
+    return sources
 
 
 def _normalize_capabilities(raw: Any, field: str) -> Dict[str, bool]:
@@ -621,6 +651,9 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     )
     result["subscription_search"] = _normalize_subscription_search(
         raw.get("subscription_search"), account_ids
+    )
+    result["codex_runtime_sources"] = _normalize_codex_runtime_sources(
+        raw.get("codex_runtime_sources", ["auto"])
     )
     return result
 

@@ -135,6 +135,12 @@ def fake_lifecycle_state(order=None, restore_result=None, restore_error=None):
         def snapshot(self):
             return json.loads(json.dumps(self.config))
 
+        def start_quota_sampler(self):
+            return None
+
+        def stop_quota_sampler(self):
+            return None
+
         def shutdown_restore(self):
             if order is not None:
                 order.append("shutdown_restore")

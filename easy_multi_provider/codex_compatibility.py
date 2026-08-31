@@ -48,10 +48,10 @@ def classify_codex_version(output: str) -> CodexCompatibility:
     suffix = (match.group("prerelease") or "") + (match.group("build") or "")
     installed = "%d.%d.%d%s" % (major, minor, patch, suffix)
     release_line: Tuple[int, int] = (major, minor)
-    if match.group("prerelease"):
-        status = "unverified"
-    elif release_line < SUPPORTED_MIN:
+    if release_line < SUPPORTED_MIN:
         status = "unsupported"
+    elif match.group("prerelease"):
+        status = "unverified"
     elif release_line > SUPPORTED_MAX:
         status = "unverified"
     elif release_line == RECOMMENDED:

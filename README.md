@@ -6,7 +6,7 @@ EasyMultiProvider (EMP) is a local, browser-configured model router for Codex.
 It keeps the native Codex experience while adding multiple ChatGPT
 subscriptions, API providers, and external models to the same model list.
 
-The current source version is `v0.9.4`.
+The current source version is `v0.9.5`.
 
 ## Features
 
@@ -33,10 +33,21 @@ The current source version is `v0.9.4`.
 
 ## Install
 
-EMP requires either the Codex-managed runtime in the active Codex home or a
-standalone Codex CLI available as `codex`. EMP does not bundle
-or replace either runtime. When both exist, App integration uses the managed
-runtime and the Web UI reports a different standalone `PATH` CLI separately.
+EMP does not bundle or replace Codex. On the first integration-status load, it
+performs a bounded scan of known locations for the Codex App runtime, the
+active `.codex` managed runtime, OpenAI's VS Code/Cursor extension runtime, and
+a standalone `codex` on `PATH`. The Web UI lists their versions, deduplicates
+the same executable, and lets the user select the compatible Codex clients in
+which they intend to use EMP. Multiple selected clients and workspaces can run
+concurrently. EMP independently chooses a compatible helper executable for
+version checks and account quota queries; that internal choice does not route
+model traffic or limit selected clients. Unsupported or unreadable
+runtimes remain visible but cannot be selected; otherwise eligible pre-release
+or newer versions remain explicitly unverified.
+
+These clients normally share the same user-level `.codex` directory. Runtime
+selection does not create another Codex profile and does not restrict which
+client receives the shared configuration.
 
 EMP treats a persistent Codex App Server as externally owned. Enabling,
 restoring, refreshing, or checking integration files never stops, starts, or

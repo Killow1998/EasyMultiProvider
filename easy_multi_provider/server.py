@@ -999,6 +999,10 @@ class AppState:
         self._native_websocket_lock = threading.Lock()
         self._native_websocket_cooldowns: Dict[str, float] = {}
         self.config = load(self.path)
+        if isinstance(self.runtime_controller, CodexRuntimeController):
+            self.runtime_controller.set_runtime_preferences(
+                self.config.get("codex_runtime_sources", ["auto"])
+            )
         self._load_runtime_recovery()
         self.config, visibility_migrated = migrate_duplicate_native_visibility(
             self.config,
@@ -1213,6 +1217,50 @@ class AppState:
         except (OSError, ValueError):
             return CodexCompatibility(None, "unknown").public()
 
+    def refresh_codex_runtimes(self) -> Dict[str, Any]:
+        refresh = getattr(self.runtime_controller, "refresh_compatibility", None)
+        if not callable(refresh):
+            return self.codex_compatibility_snapshot()
+        try:
+            return refresh()
+        except (OSError, ValueError):
+            return CodexCompatibility(None, "unknown").public()
+
+    def select_codex_runtimes(self, sources: Any) -> Dict[str, Any]:
+        if not isinstance(sources, list) or not sources:
+            raise ConfigError("at least one runtime source is required")
+        normalized = []
+        for source in sources:
+            if not isinstance(source, str) or not source.strip():
+                raise ConfigError("runtime source is invalid")
+            source = source.strip()
+            if source not in normalized:
+                normalized.append(source)
+        if "auto" in normalized and len(normalized) != 1:
+            raise ConfigError("automatic runtime selection cannot be combined")
+        current = self.refresh_codex_runtimes()
+        if normalized != ["auto"]:
+            available = {
+                item.get("source")
+                for item in current.get("runtimes", [])
+                if isinstance(item, Mapping) and item.get("selectable") is True
+            }
+            if any(source not in available for source in normalized):
+                raise ConfigError("Codex runtime is unavailable or incompatible")
+        setter = getattr(self.runtime_controller, "set_runtime_preferences", None)
+        if not callable(setter):
+            raise ConfigError("Codex runtime selection is unavailable")
+        try:
+            setter(normalized)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+        with self.lock:
+            updated = json.loads(json.dumps(self.config))
+            updated["codex_runtime_sources"] = normalized
+            save(updated, self.path)
+            self.config = load(self.path)
+        return self.codex_compatibility_snapshot()
+
     def sync_integration_runtime(self, confirm_reload: bool) -> RuntimeSyncResult:
         """Read the catalog loaded by the separately owned Codex backend."""
 
@@ -1386,6 +1434,10 @@ class AppState:
             )
             save(updated, self.path)
             self.config = load(self.path)
+            if isinstance(self.runtime_controller, CodexRuntimeController):
+                self.runtime_controller.set_runtime_preferences(
+                    self.config.get("codex_runtime_sources", ["auto"])
+                )
             result = self.snapshot()
         try:
             if self.integration_status().state == "active":
@@ -3135,6 +3187,13 @@ def make_handler(state: AppState):
                         **self._integration_operation_fields("verify", summary),
                     )
                     self._send(200, _json_bytes(summary))
+                    return
+                if path == "/api/runtime/scan":
+                    self._send(200, _json_bytes(state.refresh_codex_runtimes()))
+                    return
+                if path == "/api/runtime/select":
+                    compatibility = state.select_codex_runtimes(body.get("sources"))
+                    self._send(200, _json_bytes(compatibility))
                     return
                 if path == "/api/config":
                     state.update(body)

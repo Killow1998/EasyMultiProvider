@@ -236,6 +236,47 @@ class _CompletedResponse:
 
 
 class ServerAccountTests(unittest.TestCase):
+    def test_runtime_selection_persists_multiple_selectable_inventory_sources(self):
+        class RuntimeInventory:
+            def __init__(self):
+                self.preferences = ["auto"]
+
+            def refresh_compatibility(self):
+                return {
+                    "runtimes": [
+                        {"source": "cursor", "selectable": True},
+                        {"source": "managed", "selectable": True},
+                        {"source": "path_cli", "selectable": False},
+                    ]
+                }
+
+            def set_runtime_preferences(self, sources):
+                self.preferences = list(sources)
+
+            def compatibility(self):
+                return {
+                    "status": "supported",
+                    "helper_source": "cursor",
+                    "preferences": self.preferences,
+                    "runtimes": [],
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            runtime = RuntimeInventory()
+            state = AppState(config_path, runtime_controller=runtime)
+
+            result = state.select_codex_runtimes(["cursor", "managed"])
+
+            self.assertEqual(result["helper_source"], "cursor")
+            self.assertEqual(
+                load(config_path)["codex_runtime_sources"],
+                ["cursor", "managed"],
+            )
+            self.assertEqual(state.runtime_sync_snapshot()["state"], "not_checked")
+            with self.assertRaises(ConfigError):
+                state.select_codex_runtimes(["path_cli"])
+
     def test_runtime_controller_targets_integration_manager_codex_home(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1227,7 +1268,8 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("confirmIntegrationAction('restore')", html)
         self.assertIn("/api/integration/enable", html)
         self.assertIn("/api/integration/restore", html)
-        self.assertIn("应用模型变化到 Codex", html)
+        self.assertIn("检查已加载目录", html)
+        self.assertNotIn("应用模型变化到 Codex", html)
         self.assertIn("/api/integration/reload", html)
         self.assertIn("await loadIntegration()", html)
         self.assertIn("const configuration = info.configuration || {}", html)
