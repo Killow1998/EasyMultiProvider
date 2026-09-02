@@ -24,9 +24,10 @@ The current source version is `v0.9.6`.
   existing model slug; Codex continues to own the child task and permissions.
 - Keep credentials encrypted on the local machine.
 - Keep a private, bounded diagnostic journal for later troubleshooting.
-- Inspect median TTFT/TPS by recently used model and OpenAI speed mode, plus
-  observed success, 429, 502, and local queue-limit rates, without storing
-  prompt or response content.
+- Inspect median TTFT/TPS by recently used model. OpenAI speed modes appear
+  only after a Fast request is actually observed. EMP also shows observed
+  success, 429, 502, and local queue-limit rates without storing prompt or
+  response content.
 - Export and import password-protected `.emp` migration files.
 - Preserve native Codex sessions, `resume`, WebSockets, compression, and MCP.
 - Continue compacted tasks when switching between the current login, imported

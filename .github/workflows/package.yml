@@ -5,7 +5,7 @@ on:
     inputs:
       release_tag:
         description: >-
-          Optional exact source tag (for example v0.9.6); creates a Draft
+          Optional exact source tag (for example v0.9.6); publishes a
           Pre-release
         required: false
         default: ""
@@ -87,7 +87,7 @@ jobs:
           retention-days: 14
 
   release:
-    name: Create Draft Pre-release
+    name: Publish Pre-release
     if: >-
       ${{ (github.event_name == 'workflow_dispatch' &&
            github.ref == 'refs/heads/main' &&
@@ -143,7 +143,7 @@ jobs:
             fi
           fi
 
-      - name: Create Draft Pre-release
+      - name: Publish Pre-release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: >-
@@ -177,6 +177,5 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "EMP $RELEASE_TAG" \
             --generate-notes \
-            --draft \
             --prerelease \
             --latest=false

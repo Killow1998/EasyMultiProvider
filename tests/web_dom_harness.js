@@ -441,8 +441,7 @@ function performanceDiagnosticsBehavior() {
   assert.match(getElement('diagnostics_summary').textContent, /最近 12 次请求/);
   assert.match(getElement('health_summary').innerHTML, /83\.3%/);
   assert.match(getElement('health_summary').innerHTML, />502</);
-  assert.match(getElement('health_summary').innerHTML, /输出前断线 1/);
-  assert.match(getElement('health_summary').innerHTML, /上游限流 1/);
+  assert.doesNotMatch(getElement('health_summary').innerHTML, /失败原因|输出前断线|上游限流/);
   const rendered = getElement('performance_records').innerHTML;
   assert.match(rendered, /gpt-5\.6-sol/);
   assert.match(rendered, /5\.00 s/);
@@ -450,7 +449,7 @@ function performanceDiagnosticsBehavior() {
   assert.match(rendered, />Fast</);
   assert.match(rendered, /82\.0 token\/s/);
   assert.match(rendered, /gemini-3\.7-flash/);
-  assert.match(rendered, /未标记/);
+  assert.doesNotMatch(rendered, /未标记/);
   assert.doesNotMatch(rendered, /codex-auto-review/);
   assert.doesNotMatch(rendered, /判断|参考|原生 A\/B/);
   run('openDiagnostics()');
@@ -458,7 +457,13 @@ function performanceDiagnosticsBehavior() {
   assert.match(getElement('modal_body').innerHTML, /从发出请求到模型开始返回内容的时间/);
   assert.match(getElement('modal_body').innerHTML, /平均每秒生成的回答 token 数/);
   assert.doesNotMatch(getElement('modal_body').innerHTML, /SOL 原生参考|原生 A\/B/);
+  assert.doesNotMatch(getElement('modal_body').innerHTML, /最近请求|失败原因/);
   run('closeModal()');
+  context.__performancePayload.models = [
+    {model_id:'gemini-3.7-flash',speed_mode:'unknown',call_count:2,ttft_ms:1200,ttft_samples:2,tokens_per_second:90,tps_samples:2},
+  ];
+  run('renderDiagnostics(__performancePayload)');
+  assert.doesNotMatch(getElement('performance_records').innerHTML, />模式<|>Mode<|未标记|Unmarked/);
 }
 
 function providerDiscoveryErrorBehavior() {
