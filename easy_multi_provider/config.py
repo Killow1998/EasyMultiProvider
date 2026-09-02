@@ -195,7 +195,7 @@ def _normalize_catalog_presentations(raw: Any) -> Dict[str, Dict[str, Any]]:
 
 
 def _normalize_subscription_search(
-    raw: Any, account_ids: set[str]
+    raw: Any, _account_ids: set[str]
 ) -> Dict[str, Any]:
     if raw is None:
         raw = {}
@@ -204,10 +204,10 @@ def _normalize_subscription_search(
     enabled = raw.get("enabled", False)
     if not isinstance(enabled, bool):
         raise ConfigError("subscription_search.enabled must be boolean")
-    account_id = _string(raw.get("account_id", ""), "subscription_search.account_id")
-    if account_id and account_id not in account_ids:
-        raise ConfigError("subscription_search.account_id references an unknown account")
-    return {"enabled": enabled, "account_id": account_id}
+    # Account selection is automatic. Keep the field in the public shape so
+    # older clients can still round-trip the object, but discard legacy pinned
+    # account IDs during normalization.
+    return {"enabled": enabled, "account_id": ""}
 
 
 def _validate_url(value: Any, field: str) -> str:

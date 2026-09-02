@@ -27,8 +27,8 @@ EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型�
 - 保留 Codex 原生会话、`resume`、WebSocket、压缩和 MCP 功能。
 - 在当前登录、其他 Subscription 和外部模型之间切换时，使用 Codex 自己保存的
   可见历史继续已经压缩过的任务。
-- 外部模型可以通过用户明确选择的 ChatGPT Subscription 使用 Codex 独立联网搜索，
-  无需向外部 Provider 暴露凭据。
+- 外部模型可以使用 Codex 独立联网搜索；EMP 优先使用当前 `.codex` 登录，读取不到时
+  自动回退到可用的导入账号，无需向外部 Provider 暴露凭据。
 
 ## 安装
 
@@ -145,7 +145,7 @@ uv run python -m easy_multi_provider serve --config config.json
 5. 正常启动 Codex，通过 `/model` 或 App 模型菜单选择模型。
 
 只有当前原生账号时，可以跳过导入账号和 Provider：在“当前 Codex 登录 → 编辑”
-中隐藏模型，在“模型列表显示”中修改模型族显示名称，保存后点击“将 EMP 应用于
+中隐藏模型，在“模型显示”中修改显示名称，保存后点击“将 EMP 应用于
 Codex”。至少保留一个可见模型。显示名称不会改变模型 ID。配置写入后，正在运行的
 客户端可能需要由你在合适时机重启；仅凭模型 ID 无法确认隐藏与改名已加载，EMP
 会明确显示目录已保存、显示效果尚未验证，并保留“恢复原生 Codex”。

@@ -41,9 +41,13 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 .display-list{border:1px solid var(--border);border-radius:4px;overflow:hidden}.display-row{display:grid;grid-template-columns:minmax(180px,1.25fr) minmax(160px,1fr) auto auto auto;gap:9px;align-items:center;padding:9px;border-bottom:1px solid var(--border)}.display-row:last-child{border-bottom:0}.display-row .route{min-width:0}.display-row .route code{display:block;overflow:hidden;text-overflow:ellipsis}.display-row label{margin:0}.inline-check{display:flex;align-items:center;gap:6px;white-space:nowrap}.inline-check input{width:auto}.section-tools{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px}.section-tools input{max-width:300px}.section-tools .spacer{flex:1}
 .modal-backdrop{position:fixed;inset:0;background:rgba(6,9,14,.58);display:flex;align-items:center;justify-content:center;padding:18px;z-index:20}.modal-backdrop.hidden{display:none}.modal{width:min(760px,100%);max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 16px 48px rgba(0,0,0,.32);padding:18px}.modal-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.modal-header h2{margin:0}.modal-close{background:transparent;border-color:transparent;color:var(--muted);font-size:22px;line-height:1;padding:1px 6px;margin:0}.modal-close:hover{color:var(--text);background:var(--secondary-hover);border-color:var(--border)}.modal-status{margin-top:10px;color:var(--danger-text)}.modal-status:empty{display:none}.modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:14px}.modal-actions button{margin:0}.choice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.choice{display:block;text-align:left;background:transparent;border:1px solid var(--border);border-radius:4px;padding:11px;color:var(--text);font-weight:400}.choice:hover{background:var(--secondary-hover);border-color:var(--border-strong)}.choice strong{display:block}.choice small{display:block;color:var(--muted);margin-top:3px}
 .quota-ranges{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px}.quota-ranges button{margin:0}.quota-ranges button.active{background:var(--accent);color:#fff;border-color:var(--accent)}.quota-chart{width:100%;min-height:250px;border:1px solid var(--border);border-radius:4px;background:var(--panel-soft);padding:7px}.quota-chart svg{display:block;width:100%;height:auto}.quota-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:12px}.quota-legend span{display:inline-flex;align-items:center;gap:5px}.quota-swatch{width:9px;height:9px;border-radius:50%}.quota-empty{display:grid;place-items:center;min-height:220px;color:var(--muted)}
-.performance-reference{border:1px solid var(--border);border-radius:4px;padding:10px 11px;margin:8px 0 12px;background:var(--panel-soft)}.performance-reference strong{display:block;margin-bottom:4px}.performance-reference span{display:block;color:var(--muted);font-size:12px}.performance-table{overflow:auto}.performance-table table{min-width:700px}.performance-good{color:var(--success)}.performance-warn{color:var(--warning)}.diagnostics-details{margin-top:14px;border-top:1px solid var(--border);padding-top:10px}.diagnostics-details summary{cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:8px}
+.performance-help{border:1px solid var(--border);border-radius:4px;padding:9px 10px;margin:8px 0 12px;background:var(--panel-soft);color:var(--muted);font-size:12px}.performance-help span{display:block}.performance-help strong{color:var(--text)}.performance-table{overflow:auto}.performance-table table{min-width:560px}.diagnostics-details{margin-top:14px;border-top:1px solid var(--border);padding-top:10px}.diagnostics-details summary{cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:8px}
+main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(470px,.88fr);gap:12px;align-items:start}.workspace-column>section,.workspace-side>section{margin:12px 0}.workspace-side{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto}.integration-actions{display:grid;gap:8px;margin-top:10px}.action-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.action-group-label{width:68px;color:var(--muted);font-size:12px}.search-toggle{padding-top:8px;border-top:1px solid var(--border)}
+.display-row{grid-template-columns:minmax(150px,1.15fr) minmax(130px,1fr) auto auto}.quota-battery-fill{animation:none}.quota-meter.is-updated .quota-battery-fill{animation:quota-level-in .5s ease-out both}
+.quota-chart{position:relative}.quota-hover-target{fill:transparent;pointer-events:all}.quota-chart-guide{stroke:var(--border-strong);stroke-dasharray:3 3}.quota-chart-point{stroke:var(--panel-soft);stroke-width:2}.quota-chart-tooltip{position:absolute;z-index:2;max-width:260px;padding:6px 8px;border:1px solid var(--border-strong);border-radius:4px;background:var(--panel);box-shadow:0 3px 12px rgba(0,0,0,.18);font-size:12px;pointer-events:none;transform:translate(-50%,calc(-100% - 8px));white-space:nowrap}.quota-chart-tooltip[hidden]{display:none}
 @keyframes quota-level-in{from{width:0;opacity:.6}}@keyframes quota-charge{from{transform:translateX(-120%)}to{transform:translateX(120%)}}@keyframes quota-pending{0%,100%{width:18%;opacity:.55}50%{width:70%;opacity:1}}
-@media(prefers-reduced-motion:reduce){.quota-battery-fill,.quota-meter.is-refreshing .quota-battery-fill::after,.quota-pending .quota-battery-fill{animation:none;transition:none}}
+@media(prefers-reduced-motion:reduce){.quota-battery-fill,.quota-meter.is-updated .quota-battery-fill,.quota-meter.is-refreshing .quota-battery-fill::after,.quota-pending .quota-battery-fill{animation:none;transition:none}}
+@media(max-width:1040px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}}
 @media(max-width:760px){main{padding:18px 12px 32px}.page-header{display:block}.page-header-controls{margin-top:10px}.page-utilities{justify-content:flex-start}.grid,.choice-grid{grid-template-columns:1fr}.wide{grid-column:auto}section{padding:13px}table{display:block;overflow:auto;white-space:nowrap}.modal{padding:15px}.display-row{grid-template-columns:1fr}.display-row button{justify-self:start}}
 </style>
 </head>
@@ -58,6 +62,8 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 </header>
 <div class="toolbar page-utilities"><button class="secondary" data-icon="download" onclick="exportMigration()" data-i18n="export_emp">导出数据</button><button class="secondary" data-icon="upload" onclick="selectMigrationFile()" data-i18n="import_emp">导入数据</button><input id="migration_file" type="file" hidden accept=".emp,application/octet-stream" onchange="migrationFileChosen(this)"></div>
 
+<div class="workspace-layout">
+<div class="workspace-column">
 <section>
 <h2 data-i18n="codex_integration">Codex 集成</h2>
 <div id="integration" class="integration-card" data-state="unknown">
@@ -66,24 +72,12 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
   <p id="codex_compatibility" class="muted" hidden></p>
   <div id="codex_runtimes" class="runtime-list"></div>
   <p id="codex_runtime_dirty" class="muted" hidden></p>
-  <div class="runtime-controls"><button class="secondary" data-icon="check" onclick="useAutomaticCodexRuntimes()" data-i18n="automatic_runtimes">选择全部</button><button id="codex_runtime_save" class="secondary" data-icon="save" onclick="saveCodexRuntimeSelection()" data-i18n="save_runtimes">保存选择</button><button id="codex_runtime_scan" class="secondary" data-icon="refresh" onclick="scanCodexRuntimes()" data-i18n="rescan_runtimes">重新扫描</button></div>
-  <div class="toolbar"><button id="integration_enable" data-icon="check" onclick="confirmIntegrationAction('enable')" data-i18n="enable_codex">启用 EMP</button><button id="integration_restore" class="secondary" data-icon="restore" onclick="confirmIntegrationAction('restore')" data-i18n="restore_codex">恢复原生</button><button id="integration_reload" class="secondary" data-icon="refresh" onclick="confirmIntegrationAction('reload')" hidden data-i18n="apply_models">重新检查</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">诊断</button></div>
+  <div class="integration-actions">
+    <div class="action-group"><span class="action-group-label" data-i18n="client_scope">客户端</span><div class="runtime-controls"><button class="secondary" data-icon="check" onclick="useAutomaticCodexRuntimes()" data-i18n="automatic_runtimes">选择全部</button><button id="codex_runtime_save" class="secondary" data-icon="save" onclick="saveCodexRuntimeSelection()" data-i18n="save_runtimes">保存选择</button><button id="codex_runtime_scan" class="secondary" data-icon="refresh" onclick="scanCodexRuntimes()" data-i18n="rescan_runtimes">重新扫描</button></div></div>
+    <div class="action-group"><span class="action-group-label" data-i18n="emp_scope">EMP</span><div class="toolbar"><button id="integration_enable" data-icon="check" onclick="confirmIntegrationAction('enable')" data-i18n="enable_codex">启用 EMP</button><button id="integration_restore" class="secondary" data-icon="restore" onclick="confirmIntegrationAction('restore')" data-i18n="restore_codex">恢复原生</button><button id="integration_reload" class="secondary" data-icon="refresh" onclick="confirmIntegrationAction('reload')" hidden data-i18n="apply_models">重新检查</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">性能</button></div></div>
+    <div class="action-group search-toggle"><span class="action-group-label" data-i18n="search_scope">工具</span><label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="saveSubscriptionSearch()"><span data-i18n="enable_subscription_search">联网搜索</span></label></div>
+  </div>
 </div>
-</section>
-
-<section>
-<h2 data-i18n="subscription_search">联网搜索</h2>
-<div class="grid">
-  <label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="toggleSubscriptionSearch()"><span data-i18n="enable_subscription_search">启用联网搜索</span></label>
-  <label><span data-i18n="search_account">搜索账号</span><select id="subscription_search_account"></select></label>
-</div>
-<div class="toolbar"><button data-icon="save" onclick="saveSubscriptionSearch()" data-i18n="save_search">保存</button></div>
-</section>
-
-<section>
-<h2 data-i18n="model_display">模型显示</h2>
-<div class="section-tools"><input id="catalog_display_search" type="search" placeholder="搜索模型" data-i18n-placeholder="search_models" oninput="renderCatalogDisplay()"><button id="catalog_display_toggle" type="button" class="secondary" onclick="toggleCatalogDisplayExpanded()" data-i18n="show_all">显示全部</button><span class="spacer"></span><button data-icon="save" onclick="saveCatalogDisplay()" data-i18n="save_display">保存</button></div>
-<div id="catalog_display_models" class="display-list"></div>
 </section>
 
 <section>
@@ -103,6 +97,16 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 <div class="toolbar"><button data-icon="plus" onclick="openManualModelModal()" data-i18n="add_model">手动添加模型</button></div>
 <div id="models"></div>
 </section>
+
+</div>
+<aside class="workspace-side">
+<section>
+<h2 data-i18n="model_display">模型显示</h2>
+<div class="section-tools"><input id="catalog_display_search" type="search" placeholder="搜索模型" data-i18n-placeholder="search_models" oninput="renderCatalogDisplay()"><button id="catalog_display_toggle" type="button" class="secondary" onclick="toggleCatalogDisplayExpanded()" data-i18n="show_all">显示全部</button><span class="spacer"></span><button data-icon="save" onclick="saveCatalogDisplay()" data-i18n="save_display">保存</button></div>
+<div id="catalog_display_models" class="display-list"></div>
+</section>
+</aside>
+</div>
 
 </main>
 
@@ -135,6 +139,7 @@ let runtimeSelectionDraft = null;
 const expandedModelGroups = new Set();
 const refreshErrors = {};
 const refreshingAccounts = new Set();
+const quotaAnimationAccounts = new Set();
 const integrationVerificationAttempts = new Set();
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -146,6 +151,8 @@ const translations = {
     subtitle:'Manage Codex accounts and models.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', apply_models:'Check again', diagnostics:'Performance', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', accounts_title:'Subscription accounts', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
   }
 };
+Object.assign(translations['zh-CN'], {client_scope:'客户端', emp_scope:'EMP', search_scope:'工具'});
+Object.assign(translations.en, {client_scope:'Clients', emp_scope:'EMP', search_scope:'Tools'});
 let language = 'zh-CN';
 function storedPreference(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch (_) { return fallback; } }
 function savePreference(key, value) { try { localStorage.setItem(key, value); } catch (_) {} }
@@ -201,6 +208,7 @@ async function api(path, options = {}) {
   if (!response.ok) {
     const error = new Error(data.error?.message || response.statusText || `HTTP ${response.status}`);
     error.payload = data;
+    error.status = response.status;
     throw error;
   }
   return data;
@@ -288,19 +296,27 @@ function renderCatalogDisplay() {
   if (!visible.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_matches'))}</p>`; return; }
   $('catalog_display_models').innerHTML = visible.map(model => {
     const presentation = familyPresentationFor(model.id);
-    const summary = presentation.reasoning_summary || 'auto';
-    const unsupported = model.supports_reasoning_summaries === true ? '' : ` disabled title="${esc(tr('此路由尚未确认支持结构化推理摘要','This route has not confirmed structured reasoning summaries'))}"`;
     const routes = model.routes || []; const routeText = routes.map(route => route.id).join(' · '); const first = routes[0] || {id:model.id,source_type:'native',source_id:''};
-    return `<div class="display-row"><div class="route"><strong>${esc(model.display_name || model.default_display_name || model.id)}</strong><code>${esc(routeText || model.id)}</code></div><label>${esc(language === 'en' ? 'Family display name' : '模型族显示名称')}<input data-catalog-alias data-route="${esc(model.id)}" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(model.default_display_name || model.id)}"></label><label class="inline-check"><input type="checkbox" data-catalog-context data-route="${esc(model.id)}" ${presentation.show_context === false ? '' : 'checked'}> ${esc(t('context'))}</label><label>${esc(t('reasoning_summary'))}<select data-catalog-summary data-route="${esc(model.id)}"${unsupported}><option value="auto" ${summary === 'auto' ? 'selected' : ''}>${tr('自动','Auto')}</option><option value="show" ${summary === 'show' ? 'selected' : ''}>${tr('显示','Show')}</option><option value="hide" ${summary === 'hide' ? 'selected' : ''}>${tr('隐藏','Hide')}</option></select></label><button type="button" class="secondary" data-icon="settings" onclick="openCatalogAdvanced('${esc(first.id)}','${esc(first.source_type)}','${esc(first.source_id)}')">${esc(t('advanced'))}</button></div>`;
+    const preview = presentationPreview(first.id, model.default_display_name || model.display_name || model.id, model.context_window, presentation.catalog_alias, presentation.show_context !== false);
+    return `<div class="display-row"><div class="route"><strong data-catalog-preview data-route="${esc(model.id)}">${esc(preview)}</strong><code>${esc(routeText || model.id)}</code></div><label>${esc(language === 'en' ? 'Display name' : '显示名称')}<input data-catalog-alias data-route="${esc(model.id)}" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(model.default_display_name || model.id)}" oninput="updateCatalogDisplayPreview('${esc(model.id)}')"></label><label class="inline-check"><input type="checkbox" data-catalog-context data-route="${esc(model.id)}" ${presentation.show_context === false ? '' : 'checked'} onchange="updateCatalogDisplayPreview('${esc(model.id)}')"> ${esc(t('context'))}</label><button type="button" class="secondary" data-icon="settings" onclick="openCatalogAdvanced('${esc(first.id)}','${esc(first.source_type)}','${esc(first.source_id)}')">${esc(t('advanced'))}</button></div>`;
   }).join('');
+}
+function updateCatalogDisplayPreview(family) {
+  const group = (state.catalog_families || []).find(item => item.id === family); if (!group) return;
+  const alias = [...document.querySelectorAll('[data-catalog-alias]')].find(item => item.dataset.route === family);
+  const context = [...document.querySelectorAll('[data-catalog-context]')].find(item => item.dataset.route === family);
+  const preview = [...document.querySelectorAll('[data-catalog-preview]')].find(item => item.dataset.route === family);
+  if (!preview) return;
+  const first = (group.routes || [])[0] || {id:group.id};
+  preview.textContent = presentationPreview(first.id, group.default_display_name || group.display_name || group.id, group.context_window, alias?.value.trim() || '', context?.checked !== false);
 }
 function toggleCatalogDisplayExpanded() { catalogDisplayExpanded = !catalogDisplayExpanded; renderCatalogDisplay(); }
 async function saveCatalogDisplay() {
   const candidate = cloneState(); candidate.catalog_family_presentations ||= {}; candidate.catalog_presentations ||= {};
-  const contexts = [...document.querySelectorAll('[data-catalog-context]')]; const summaries = [...document.querySelectorAll('[data-catalog-summary]')];
+  const contexts = [...document.querySelectorAll('[data-catalog-context]')];
   document.querySelectorAll('[data-catalog-alias]').forEach(input => {
-    const family = input.dataset.route; const context = contexts.find(item => item.dataset.route === family); const summary = summaries.find(item => item.dataset.route === family); const current = candidate.catalog_family_presentations[family] || {};
-    candidate.catalog_family_presentations[family] = {catalog_alias:input.value.trim(), show_context:context ? context.checked : current.show_context !== false, reasoning_summary:summary ? summary.value : current.reasoning_summary || 'auto'};
+    const family = input.dataset.route; const context = contexts.find(item => item.dataset.route === family); const current = candidate.catalog_family_presentations[family] || familyPresentationFor(family) || {};
+    candidate.catalog_family_presentations[family] = Object.assign({}, current, {catalog_alias:input.value.trim(), show_context:context ? context.checked : current.show_context !== false});
     const group = (candidate.catalog_families || []).find(item => item.id === family); for (const route of group?.routes || []) delete candidate.catalog_presentations[route.id];
   });
   await persistState(language === 'en' ? 'Display settings saved' : '模型显示设置已保存', candidate);
@@ -316,25 +332,14 @@ function openCatalogAdvanced(route, sourceType, sourceId) {
 function renderSubscriptionSearch() {
   const setting = state.subscription_search || {enabled:false, account_id:''};
   const enabled = $('subscription_search_enabled');
-  const account = $('subscription_search_account');
-  if (!enabled || !account) return;
+  if (!enabled) return;
   enabled.checked = setting.enabled === true;
-  const options = [`<option value="">${esc(t('current_codex_login'))}</option>`];
-  for (const item of state.accounts || []) {
-    if (!item.credential_set || item.enabled === false) continue;
-    options.push(`<option value="${esc(item.id)}">${esc(item.name || item.id)}</option>`);
-  }
-  account.innerHTML = options.join('');
-  account.value = setting.account_id || '';
-  if (account.value !== (setting.account_id || '')) account.value = '';
-  account.disabled = !enabled.checked;
 }
-function toggleSubscriptionSearch() { $('subscription_search_account').disabled = !$('subscription_search_enabled').checked; }
 async function saveSubscriptionSearch() {
   const candidate = cloneState();
   candidate.subscription_search = {
     enabled: $('subscription_search_enabled').checked,
-    account_id: $('subscription_search_account').value || ''
+    account_id: ''
   };
   await persistState(tr('设置已保存，请重启 Codex。','Settings saved. Restart Codex.'), candidate);
 }
@@ -454,26 +459,16 @@ function diagnosticsProtocolLabel(value) { return ({responses:'Responses',chat_c
 function diagnosticsContextLabel(record) { const labels = language === 'en' ? {allowed:'Context OK',warned:'Context warning',blocked:'Blocked: context too large',unknown:'Context unknown'} : {allowed:'上下文正常',warned:'上下文需关注',blocked:'已拦截：上下文过大',unknown:'上下文未知'}; const decision = labels[record.context_decision] || labels.unknown; const estimate = record.estimated_tokens == null ? tr('估算未知','Estimate unknown') : `${tr('估算','Estimate')} ${Number(record.estimated_tokens).toLocaleString()} tokens`; const limit = record.safe_input_limit == null ? tr('安全上限未知','Safe limit unknown') : `${tr('安全上限','Safe limit')} ${Number(record.safe_input_limit).toLocaleString()}`; return `${decision} · ${estimate} · ${limit}`; }
 function performanceNumber(value) { const number = Number(value); return Number.isFinite(number) && number >= 0 ? number : null; }
 function performanceTime(value) { const date = new Date(value || 0); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'}); }
-function performanceAssessment(record) {
-  const success = record.error_class === 'none' && Number(record.status) >= 200 && Number(record.status) < 300;
-  if (!success) return {text:tr('调用未完成','Call did not complete'), className:'performance-warn'};
-  const ttft = performanceNumber(record.ttft_ms); const tps = performanceNumber(record.tokens_per_second); const prepare = performanceNumber(record.local_prepare_ms);
-  if (ttft == null && tps == null) return {text:tr('暂无流式指标','No streaming metrics'), className:''};
-  if (prepare != null && ttft && prepare >= 750 && prepare / ttft >= .2) return {text:tr('EMP 准备耗时占比较高','EMP preparation is a significant share'), className:'performance-warn'};
-  if (ttft != null && ttft > 6500) return {text:record.upstream_first_token_ms != null ? tr('上游首个输出偏慢','Upstream first output is slow') : tr('TTFT 慢于参考，建议原生 A/B','TTFT is below reference; compare with Native'), className:'performance-warn'};
-  if (tps != null && tps < 44) return {text:tr('TPS 低于参考，建议原生 A/B','TPS is below reference; compare with Native'), className:'performance-warn'};
-  return {text:tr('未发现明显 EMP 准备延迟','No obvious EMP preparation delay'), className:'performance-good'};
-}
 function renderDiagnostics(payload) {
   const records = Array.isArray(payload.records) ? payload.records : [];
   const calls = records.filter(record => record && record.model_id && record.route === 'responses').slice().reverse().slice(0, 8);
-  $('diagnostics_summary').textContent = calls.length ? tr(`最近 ${calls.length} 次模型调用`,`Latest ${calls.length} model calls`) : tr('还没有模型调用记录。','No model calls recorded yet.');
-  $('performance_records').innerHTML = calls.length ? `<div class="performance-table"><table><tr><th>${tr('时间','Time')}</th><th>${tr('模型','Model')}</th><th>TTFT</th><th>TPS</th><th>${tr('EMP 准备','EMP prepare')}</th><th>${tr('判断','Assessment')}</th></tr>${calls.map(record => { const ttft = performanceNumber(record.ttft_ms); const tps = performanceNumber(record.tokens_per_second); const prepare = performanceNumber(record.local_prepare_ms); const assessment = performanceAssessment(record); return `<tr><td>${esc(performanceTime(record.observed_at))}</td><td><code>${esc(record.model_id)}</code></td><td>${ttft == null ? '—' : (ttft / 1000).toFixed(2) + ' s'}</td><td>${tps == null ? '—' : tps.toFixed(1) + ' token/s'}</td><td>${prepare == null ? '—' : prepare.toLocaleString() + ' ms'}</td><td class="${assessment.className}">${esc(assessment.text)}</td></tr>`; }).join('')}</table></div>` : '';
+  $('diagnostics_summary').textContent = calls.length ? tr(`最近 ${calls.length} 次模型调用`,`Latest ${calls.length} model calls`) : tr('完成一次模型调用后，这里会显示实际速度。','Actual speed appears here after a model call completes.');
+  $('performance_records').innerHTML = calls.length ? `<div class="performance-table"><table><tr><th>${tr('时间','Time')}</th><th>${tr('模型','Model')}</th><th>TTFT</th><th>TPS</th><th>${tr('EMP 处理','EMP processing')}</th></tr>${calls.map(record => { const ttft = performanceNumber(record.ttft_ms); const tps = performanceNumber(record.tokens_per_second); const prepare = performanceNumber(record.local_prepare_ms); return `<tr><td>${esc(performanceTime(record.observed_at))}</td><td><code>${esc(record.model_id)}</code></td><td>${ttft == null ? '—' : (ttft / 1000).toFixed(2) + ' s'}</td><td>${tps == null ? '—' : tps.toFixed(1) + ' token/s'}</td><td>${prepare == null ? '—' : prepare.toLocaleString() + ' ms'}</td></tr>`; }).join('')}</table></div>` : '';
   if (!records.length) { $('diagnostics_records').innerHTML = ''; return; }
   $('diagnostics_records').innerHTML = `<table><tr><th>${tr('模型','Model')}</th><th>${tr('结果','Result')}</th><th>${tr('上下文','Context')}</th><th>${tr('协议 / 通道','Protocol / transport')}</th><th>${tr('耗时','Duration')}</th></tr>${records.slice().reverse().slice(0, 8).map(record => { const success = record.error_class === 'none' && Number(record.status) >= 200 && Number(record.status) < 300; const result = success ? tr('成功','Success') : (record.error_class === 'client_disconnect' ? tr('客户端中断','Client disconnected') : tr('需要关注','Needs attention')); const fallback = record.fallback ? tr(' · 已自动切换',' · fallback used') : ''; return `<tr><td><code>${esc(record.model_id || tr('未知模型','Unknown model'))}</code></td><td>${esc(result)}${fallback}</td><td>${esc(diagnosticsContextLabel(record))}</td><td>${esc(diagnosticsProtocolLabel(record.protocol))} · ${esc(diagnosticsTransportLabel(record.transport))}</td><td>${Number(record.duration_ms || 0).toLocaleString()} ms</td></tr>`; }).join('')}</table>`;
 }
 async function loadDiagnostics() { try { renderDiagnostics(await api('/api/diagnostics')); return true; } catch (error) { if ($('diagnostics_summary')) $('diagnostics_summary').textContent = language === 'en' ? 'Diagnostics are unavailable.' : '运行状态暂时不可用。'; return false; } }
-function openDiagnostics() { openModal(tr('性能诊断','Performance diagnostics'), `<div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics()">${esc(t('refresh'))}</button></div><div class="performance-reference"><strong>${tr('SOL 原生参考：TTFT 约 5 s · TPS 约 55 token/s','SOL Native reference: TTFT about 5 s · TPS about 55 token/s')}</strong><span>${tr('TTFT 是请求到首个实际输出的时间；TPS 是首个输出到完成期间的平均生成速度。上下文、Effort 和网络会影响结果。','TTFT runs from request start to first actual output. TPS is average generation speed from first output to completion. Context, Effort, and network affect both.')}</span><span>${tr('EMP 准备耗时可直接定位本地等待；TPS 是否由 EMP 造成，需要用同模型、同会话做原生 A/B。','EMP preparation time identifies local waiting directly. TPS attribution requires a Native A/B with the same model and conversation.')}</span></div><div id="diagnostics_summary" class="muted"></div><div id="performance_records"></div><details class="diagnostics-details"><summary>${tr('请求详情','Request details')}</summary><div id="diagnostics_records"></div></details>`, '', null); loadDiagnostics(); }
+function openDiagnostics() { openModal(tr('性能诊断','Performance diagnostics'), `<div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics()">${esc(t('refresh'))}</button></div><div class="performance-help"><span><strong>TTFT</strong> · ${tr('从发出请求到模型开始返回内容的时间。','Time from sending the request until the model starts returning output.')}</span><span><strong>TPS</strong> · ${tr('模型开始输出后，平均每秒生成的回答 token 数。','Average answer tokens generated per second after output begins.')}</span></div><div id="diagnostics_summary" class="muted"></div><div id="performance_records"></div><details class="diagnostics-details"><summary>${tr('请求详情','Request details')}</summary><div id="diagnostics_records"></div></details>`, '', null); loadDiagnostics(); }
 function confirmIntegrationAction(action) {
   const actions = language === 'en' ? {
     enable: ['Apply EMP to Codex', 'Apply the current EMP settings. Restart Codex when it finishes.'],
@@ -530,17 +525,18 @@ async function persistState(message, candidate = state) {
 
 function renderAccounts() {
   const accounts = [...(state.native_account ? [state.native_account] : []), ...(state.accounts || [])];
-  if (!accounts.length) { $('accounts').innerHTML = `<p class="muted">${tr('还没有 Codex subscription 账户。','No Codex subscription accounts yet.')}</p>`; return; }
+  if (!accounts.length) { quotaAnimationAccounts.clear(); $('accounts').innerHTML = `<p class="muted">${tr('还没有 Codex subscription 账户。','No Codex subscription accounts yet.')}</p>`; return; }
   const rows = accounts.map(a => {
-    const busy = refreshingAccounts.has(a.id); const error = refreshErrors[a.id];
+    const busy = refreshingAccounts.has(a.id); const error = refreshErrors[a.id]; const animateQuota = quotaAnimationAccounts.has(a.id);
     const duplicateCurrent = a.duplicate && a.duplicate_of === '当前 Codex 登录';
     const duplicateText = a.duplicate ? (duplicateCurrent ? tr('与当前 Codex 登录重复；模型显示由原生账户管理','Duplicates the current Codex login; model visibility is managed by Native') : `${tr('与','Duplicates ')}${esc(a.duplicate_of)}${tr('重复；不生成重复前缀模型','; duplicate prefixed routes are omitted')}`) : '';
     const status = a.native ? (a.credential_set ? tr('使用 .codex 当前登录','Using current .codex login') : tr('未检测到 .codex 登录','No .codex login detected')) : (a.credential_set ? tr('凭据已保存','Credentials saved') : tr('未导入凭据','No credentials'));
     const remove = a.native ? '' : `<button class="danger" data-icon="trash" onclick="removeAccount('${esc(a.id)}')">${tr('删除','Delete')}</button>`;
     const edit = duplicateCurrent ? `<button class="secondary" data-icon="edit" disabled title="${esc(tr('模型显示由原生账户管理','Model visibility is managed by Native'))}">${tr('编辑','Edit')}</button>` : `<button class="secondary" data-icon="edit" onclick="editAccount('${esc(a.id)}')">${tr('编辑','Edit')}</button>`;
-    return `<tr${duplicateCurrent ? ' class="account-duplicate"' : ''}><td>${a.native ? tr('当前 Codex 登录','Current Codex login') : `<code>${esc(a.id)}</code>${a.name && a.name !== a.id ? '<br>'+esc(a.name) : ''}`}${a.quota && a.quota.account_label ? '<br><span class="muted">'+esc(a.quota.account_label)+'</span>' : ''}</td><td><span class="pill">${a.native ? 'Native' : esc(a.name || a.prefix)}</span></td><td>${quotaMetersHtml(a, busy)}<div class="muted quota-credit">${esc(creditText(a))}</div>${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</td><td>${status}${duplicateText ? '<br><span class="muted">'+duplicateText+'</span>' : ''}</td><td>${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" onclick="openQuotaHistory('${esc(a.id)}')">${tr('趋势','Trend')}</button>${remove}</td></tr>`;
+    return `<tr${duplicateCurrent ? ' class="account-duplicate"' : ''}><td>${a.native ? tr('当前 Codex 登录','Current Codex login') : `<code>${esc(a.id)}</code>${a.name && a.name !== a.id ? '<br>'+esc(a.name) : ''}`}${a.quota && a.quota.account_label ? '<br><span class="muted">'+esc(a.quota.account_label)+'</span>' : ''}</td><td><span class="pill">${a.native ? 'Native' : esc(a.name || a.prefix)}</span></td><td>${quotaMetersHtml(a, busy, animateQuota)}<div class="muted quota-credit">${esc(creditText(a))}</div>${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</td><td>${status}${duplicateText ? '<br><span class="muted">'+duplicateText+'</span>' : ''}</td><td>${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" onclick="openQuotaHistory('${esc(a.id)}')">${tr('趋势','Trend')}</button>${remove}</td></tr>`;
   }).join('');
   $('accounts').innerHTML = `<table><tr><th>${tr('账户','Account')}</th><th>${tr('前缀','Prefix')}</th><th>${tr('余量','Quota')}</th><th>${tr('状态','Status')}</th><th>${tr('操作','Actions')}</th></tr>${rows}</table>`;
+  quotaAnimationAccounts.clear();
 }
 function utcOffsetLabel(date) { const minutes = -date.getTimezoneOffset(); const sign = minutes >= 0 ? '+' : '-'; const absolute = Math.abs(minutes); const hours = Math.floor(absolute / 60); const remainder = absolute % 60; return `UTC${sign}${hours}${remainder ? ':' + String(remainder).padStart(2, '0') : ''}`; }
 function localTimeText(value) { const timestamp = Number(value); if (!Number.isFinite(timestamp) || timestamp <= 0) return ''; const date = new Date((timestamp > 100000000000 ? timestamp : timestamp * 1000)); if (Number.isNaN(date.getTime())) return ''; const pad = number => String(number).padStart(2, '0'); return `${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())} (${utcOffsetLabel(date)})`; }
@@ -558,10 +554,10 @@ function quotaBuckets(account) {
   return buckets.sort((left,right) => (right.windowMinutes - left.windowMinutes) || String(left.limitId).localeCompare(String(right.limitId)) || left.windowKind.localeCompare(right.windowKind));
 }
 function quotaText(account) { const buckets = quotaBuckets(account); if (!buckets.length) return tr('未刷新','Not refreshed'); return buckets.map(item => `${item.remaining}%/${compactWindowText(item.windowMinutes)}${localTimeText(item.resetsAt) ? ' ' + localTimeText(item.resetsAt) : ''}`).join('\n'); }
-function quotaMetersHtml(account, busy = false) {
+function quotaMetersHtml(account, busy = false, animate = false) {
   const buckets = quotaBuckets(account);
   if (!buckets.length) return busy ? `<div class="quota-meter quota-pending is-refreshing"><div class="quota-meter-head"><span class="quota-window">${tr('正在获取余量','Fetching quota')}</span></div><div class="quota-battery" role="status" aria-label="${esc(tr('正在获取余量','Fetching quota'))}"><span class="quota-battery-fill"></span></div></div>` : `<span class="muted">${tr('未刷新','Not refreshed')}</span>`;
-  return `<div class="quota-stack">${buckets.map(item => { const levelClass = item.remaining <= 20 ? 'is-low' : item.remaining <= 50 ? 'is-medium' : 'is-high'; const duration = compactWindowText(item.windowMinutes); const limitLabel = item.limitId && item.limitId !== 'codex' ? `${item.limitId} · ${duration}` : duration; const reset = localTimeText(item.resetsAt); const aria = tr(`${limitLabel} 剩余 ${item.remaining}%`, `${limitLabel} ${item.remaining}% remaining`); return `<div class="quota-meter ${levelClass}${busy ? ' is-refreshing' : ''}"><div class="quota-meter-head"><span class="quota-window">${esc(limitLabel)}</span><strong class="quota-value">${esc(item.remaining)}%</strong></div><div class="quota-battery" role="progressbar" aria-label="${esc(aria)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(item.remaining)}" style="--quota-level:${esc(item.remaining)}%"><span class="quota-battery-fill"></span></div>${reset ? `<span class="quota-reset">${tr('重置','Resets')} ${esc(reset)}</span>` : ''}</div>`; }).join('')}</div>`;
+  return `<div class="quota-stack">${buckets.map(item => { const levelClass = item.remaining <= 20 ? 'is-low' : item.remaining <= 50 ? 'is-medium' : 'is-high'; const duration = compactWindowText(item.windowMinutes); const limitLabel = item.limitId && item.limitId !== 'codex' ? `${item.limitId} · ${duration}` : duration; const reset = localTimeText(item.resetsAt); const aria = tr(`${limitLabel} 剩余 ${item.remaining}%`, `${limitLabel} ${item.remaining}% remaining`); return `<div class="quota-meter ${levelClass}${busy ? ' is-refreshing' : ''}${animate ? ' is-updated' : ''}"><div class="quota-meter-head"><span class="quota-window">${esc(limitLabel)}</span><strong class="quota-value">${esc(item.remaining)}%</strong></div><div class="quota-battery" role="progressbar" aria-label="${esc(aria)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(item.remaining)}" style="--quota-level:${esc(item.remaining)}%"><span class="quota-battery-fill"></span></div>${reset ? `<span class="quota-reset">${tr('重置','Resets')} ${esc(reset)}</span>` : ''}</div>`; }).join('')}</div>`;
 }
 function accountQuotaSignature(account) { return JSON.stringify(account?.quota || null); }
 async function refreshQuotaState() {
@@ -573,7 +569,7 @@ async function refreshQuotaState() {
     const next = [...(snapshot.native_account ? [snapshot.native_account] : []), ...(snapshot.accounts || [])];
     const previousById = new Map(previous.map(account => [account.id, account]));
     const changed = JSON.stringify({native_account:state.native_account || null,accounts:state.accounts || []}) !== JSON.stringify({native_account:snapshot.native_account || null,accounts:snapshot.accounts || []});
-    for (const account of next) if (accountQuotaSignature(previousById.get(account.id)) !== accountQuotaSignature(account)) delete refreshErrors[account.id];
+    for (const account of next) if (accountQuotaSignature(previousById.get(account.id)) !== accountQuotaSignature(account)) { delete refreshErrors[account.id]; quotaAnimationAccounts.add(account.id); }
     state.native_account = snapshot.native_account || null; state.accounts = Array.isArray(snapshot.accounts) ? snapshot.accounts : [];
     if (changed) renderAccounts();
     return changed;
@@ -595,15 +591,30 @@ function quotaChartSvg(series) {
   const axisMin = Math.max(0, Math.floor(minValue - padding)); const axisMax = Math.min(100, Math.ceil(maxValue + padding)); const axisSpan = axisMax - axisMin;
   const left = 46, right = 610, top = 18, bottom = 218; const x = time => left + ((Number(time) - minTime) / span) * (right - left); const y = value => bottom - ((percent(value) - axisMin) / axisSpan) * (bottom - top);
   const grid = Array.from({length:5}, (_, index) => axisMin + axisSpan * index / 4).map(value => `<line x1="${left}" y1="${y(value)}" x2="${right}" y2="${y(value)}" stroke="var(--border)"/><text x="${left-7}" y="${y(value)+4}" text-anchor="end" fill="var(--muted)" font-size="11">${Number(value.toFixed(2))}%</text>`).join('');
-  const lines = series.map((item, index) => { const color = quotaChartColors[index % quotaChartColors.length]; const samples = (item.points || []).filter(point => Number.isFinite(Number(point.observed_at)) && Number.isFinite(Number(point.remaining_percent))); if (!samples.length) return ''; const path = samples.map((point, pointIndex) => `${pointIndex ? 'L' : 'M'}${x(point.observed_at).toFixed(1)},${y(point.remaining_percent).toFixed(1)}`).join(' '); const dots = samples.length === 1 ? `<circle cx="${x(samples[0].observed_at)}" cy="${y(samples[0].remaining_percent)}" r="3" fill="${color}"/>` : ''; return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>${dots}`; }).join('');
+  const lines = series.map((item, index) => { const color = quotaChartColors[index % quotaChartColors.length]; const samples = (item.points || []).filter(point => Number.isFinite(Number(point.observed_at)) && Number.isFinite(Number(point.remaining_percent))); if (!samples.length) return ''; const path = samples.map((point, pointIndex) => `${pointIndex ? 'L' : 'M'}${x(point.observed_at).toFixed(1)},${y(point.remaining_percent).toFixed(1)}`).join(' '); const dots = samples.map(point => `<circle class="quota-chart-point" data-quota-point data-x="${x(point.observed_at).toFixed(1)}" data-y="${y(point.remaining_percent).toFixed(1)}" data-time="${esc(point.observed_at)}" data-value="${esc(percent(point.remaining_percent))}" data-label="${esc(quotaSeriesLabel(item))}" cx="${x(point.observed_at).toFixed(1)}" cy="${y(point.remaining_percent).toFixed(1)}" r="3" fill="${color}"/>`).join(''); return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>${dots}`; }).join('');
   const start = new Date(minTime * 1000).toLocaleString(); const end = new Date(maxTime * 1000).toLocaleString();
-  return `<svg viewBox="0 0 628 252" role="img" aria-label="${esc(tr('Subscription 余量趋势','Subscription quota trend'))}">${grid}${lines}<text x="${left}" y="242" fill="var(--muted)" font-size="11">${esc(start)}</text><text x="${right}" y="242" text-anchor="end" fill="var(--muted)" font-size="11">${esc(end)}</text></svg>`;
+  return `<svg viewBox="0 0 628 252" role="img" aria-label="${esc(tr('Subscription 余量趋势','Subscription quota trend'))}">${grid}${lines}<line class="quota-chart-guide" x1="${left}" y1="${top}" x2="${left}" y2="${bottom}" hidden/><rect class="quota-hover-target" x="${left}" y="${top}" width="${right-left}" height="${bottom-top}" onpointermove="quotaChartHover(event)" onpointerleave="quotaChartLeave(event)"/><text x="${left}" y="242" fill="var(--muted)" font-size="11">${esc(start)}</text><text x="${right}" y="242" text-anchor="end" fill="var(--muted)" font-size="11">${esc(end)}</text></svg>`;
 }
+function quotaObservedTimeText(value) { const timestamp = Number(value); if (!Number.isFinite(timestamp)) return ''; const date = new Date(timestamp * 1000); return `${date.toLocaleString([], {hour12:false})} (${utcOffsetLabel(date)})`; }
+function quotaChartHover(event) {
+  const svg = event.currentTarget?.ownerSVGElement; if (!svg) return;
+  const bounds = svg.getBoundingClientRect(); if (!(bounds.width > 0)) return;
+  const cursorX = Math.max(46, Math.min(610, ((event.clientX - bounds.left) / bounds.width) * 628));
+  const points = [...svg.querySelectorAll('[data-quota-point]')]; if (!points.length) return;
+  const nearest = points.reduce((best, point) => Math.abs(Number(point.dataset.x) - cursorX) < Math.abs(Number(best.dataset.x) - cursorX) ? point : best, points[0]);
+  const nearestX = Number(nearest.dataset.x); const active = points.filter(point => Math.abs(Number(point.dataset.x) - nearestX) < .2);
+  points.forEach(point => point.setAttribute('r', active.includes(point) ? '4' : '3'));
+  const guide = svg.querySelector('.quota-chart-guide'); if (guide) { guide.hidden = false; guide.setAttribute('x1', nearestX); guide.setAttribute('x2', nearestX); }
+  const tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip'); if (!tooltip) return;
+  const topY = Math.min(...active.map(point => Number(point.dataset.y))); tooltip.hidden = false; tooltip.style.left = `${nearestX / 628 * 100}%`; tooltip.style.top = `${topY / 252 * 100}%`;
+  tooltip.innerHTML = `<strong>${esc(quotaObservedTimeText(nearest.dataset.time))}</strong><br>${active.map(point => `${esc(point.dataset.label)} · ${esc(point.dataset.value)}%`).join('<br>')}`;
+}
+function quotaChartLeave(event) { const svg = event.currentTarget?.ownerSVGElement; if (!svg) return; const guide = svg.querySelector('.quota-chart-guide'); if (guide) guide.hidden = true; svg.querySelectorAll('[data-quota-point]').forEach(point => point.setAttribute('r','3')); const tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip'); if (tooltip) tooltip.hidden = true; }
 function renderQuotaHistory(payload, rangeName) {
   const content = $('quota_history_content'); if (!content) return; const series = (payload.series || []).filter(item => Array.isArray(item.points) && item.points.length);
   if (!series.length) { content.innerHTML = `<div class="quota-empty">${tr('暂无额度历史，请先刷新余量。','No quota history yet. Refresh quota first.')}</div>`; return; }
   const legend = series.map((item,index) => { const last = item.points[item.points.length - 1]; const color = quotaChartColors[index % quotaChartColors.length]; const sampledAt = localTimeText(last.observed_at); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(quotaSeriesLabel(item))} · ${esc(last.remaining_percent)}%${sampledAt ? ' · ' + esc(sampledAt) : ''}</span>`; }).join('');
-  content.innerHTML = `<div class="quota-chart">${quotaChartSvg(series)}</div><div class="quota-legend">${legend}</div>`;
+  content.innerHTML = `<div class="quota-chart">${quotaChartSvg(series)}<div class="quota-chart-tooltip" role="status" hidden></div></div><div class="quota-legend">${legend}</div>`;
 }
 async function loadQuotaHistory(accountId, rangeName) {
   activeQuotaRange = rangeName;
@@ -659,7 +670,7 @@ function quotaErrorText(error, id) {
   };
   return messages[code] || error.message;
 }
-async function refreshAccount(id, announce = true) { if (refreshingAccounts.has(id)) return false; refreshingAccounts.add(id); delete refreshErrors[id]; renderAccounts(); try { const result = await api('/api/accounts/' + encodeURIComponent(id) + '/quota', {method:'POST', body:'{}'}); if (state.native_account?.id === id) state.native_account = result.account; else { const index = state.accounts.findIndex(a => a.id === id); if (index >= 0) state.accounts[index] = result.account; } if (announce) notice(tr('账户余量已刷新','Account quota refreshed')); return true; } catch (error) { const message = quotaErrorText(error, id); refreshErrors[id] = message; if (announce) notice(tr('刷新失败','Refresh failed') + ': ' + message, true); return false; } finally { refreshingAccounts.delete(id); renderAccounts(); } }
+async function refreshAccount(id, announce = true) { if (refreshingAccounts.has(id)) return false; const before = state.native_account?.id === id ? state.native_account : state.accounts.find(a => a.id === id); const previousQuota = accountQuotaSignature(before); refreshingAccounts.add(id); delete refreshErrors[id]; renderAccounts(); try { const result = await api('/api/accounts/' + encodeURIComponent(id) + '/quota', {method:'POST', body:'{}'}); if (previousQuota !== accountQuotaSignature(result.account)) quotaAnimationAccounts.add(id); if (state.native_account?.id === id) state.native_account = result.account; else { const index = state.accounts.findIndex(a => a.id === id); if (index >= 0) state.accounts[index] = result.account; } if (announce) notice(tr('账户余量已刷新','Account quota refreshed')); return true; } catch (error) { const message = quotaErrorText(error, id); refreshErrors[id] = message; if (announce) notice(tr('刷新失败','Refresh failed') + ': ' + message, true); return false; } finally { refreshingAccounts.delete(id); renderAccounts(); } }
 async function refreshAllAccounts() { const accounts = [...(state.native_account?.credential_set ? [state.native_account] : []), ...(state.accounts || [])]; if (!accounts.length) return notice(tr('还没有可刷新账户','No refreshable accounts'), true); const button = $('refresh_all'); button.disabled = true; try { const results = await Promise.all(accounts.map(a => refreshAccount(a.id, false))); const failed = accounts.filter((_, index) => !results[index]); notice(failed.length ? tr(`刷新完成：成功 ${accounts.length - failed.length} 个，失败 ${failed.length} 个`,`Refresh complete: ${accounts.length - failed.length} succeeded, ${failed.length} failed`) : tr('全部账户余量已刷新','All account quotas refreshed'), Boolean(failed.length)); } finally { button.disabled = false; } }
 async function removeAccount(id) { if (!confirm(tr(`删除账户 ${id} 的本地加密凭据？不会撤销远端 Token。`,`Delete local encrypted credentials for ${id}? This does not revoke the remote token.`))) return; try { await api('/api/accounts/' + encodeURIComponent(id), {method:'DELETE'}); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice(tr('账户本地凭据已删除','Local account credentials deleted')); } catch (error) { notice(error.message, true); } }
 
@@ -717,12 +728,13 @@ function renderModels() {
   $('models').innerHTML = groupOrder.map(provider => { const items = groups[provider]; const expanded = expandedModelGroups.has(provider); const shown = expanded ? items : items.slice(0, 6); const rows = shown.map(m => { const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : []; const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? tr('支持推理，档位未知','reasoning supported; levels unknown') : tr('无推理档位控制','no reasoning level control')); const capabilities = capabilitySummary(m); return `<tr class="${m.enabled ? '' : 'model-hidden'}"><td><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, m.context_window))}</strong><br><code>${esc(m.id)}</code><br><span class="muted">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? '<br>' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</span></td><td><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</td><td><button class="secondary" data-icon="edit" onclick="openManualModelModal('${esc(m.id)}')">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" onclick="testModel('${esc(m.id)}')">${tr('测试','Test')}</button><button class="danger" data-icon="trash" onclick="removeModel('${esc(m.id)}')">${tr('删除','Delete')}</button></td></tr>`; }).join(''); const toggle = items.length > 6 ? `<button type="button" class="secondary" onclick="toggleModelGroup('${esc(provider)}')">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : ''; return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><table><tr><th>${tr('模型','Model')}</th><th>${tr('显示','Visibility')}</th><th>${tr('操作','Actions')}</th></tr>${rows}</table>${toggle}</div>`; }).join('');
 }
 function toggleModelGroup(provider) { if (expandedModelGroups.has(provider)) expandedModelGroups.delete(provider); else expandedModelGroups.add(provider); renderModels(); }
-async function discoverProvider(id) { try { notice(tr(`正在拉取 ${id} 的模型列表 …`,`Fetching models from ${id}…`)); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider:id})}); openModelImportModal(id, result.models || []); } catch (error) { notice(tr('拉取失败：','Fetch failed: ') + error.message, true); } }
+function providerDiscoveryError(error) { const status = Number(error?.status || error?.payload?.error?.status || 0); if ([400,401,403].includes(status)) return tr('API Key 无效或没有读取模型列表的权限。','The API key is invalid or cannot read the model list.'); if (status === 429) return tr('请求过于频繁，请稍后重试。','Too many requests. Try again later.'); if (status >= 500) return tr('模型服务暂时不可用，请稍后重试。','The model service is temporarily unavailable. Try again later.'); return error?.message || tr('无法读取模型列表。','Could not read the model list.'); }
+async function discoverProvider(id) { try { notice(tr(`正在拉取 ${id} 的模型列表 …`,`Fetching models from ${id}…`)); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider:id})}); openModelImportModal(id, result.models || []); } catch (error) { notice(providerDiscoveryError(error), true); } }
 function openModelImportModal(provider, models) {
   const sorted = [...models].sort(modelSort);
   const imported = new Set((state.models || []).filter(model => model.provider === provider).map(model => model.upstream_id));
   const body = `<p class="muted">${tr(`${esc(provider)} 发现 ${sorted.length} 个模型。已导入的模型默认保留，新发现的模型默认不选。`,`${esc(provider)} returned ${sorted.length} models. Imported models stay selected; newly discovered models start unselected.`)}</p><div class="toolbar"><input id="discovered_search" placeholder="${tr('搜索模型名称或 ID','Search model name or ID')}" oninput="filterDiscoveredModels(this.value)"><button id="discovered_select_all" type="button" class="secondary" onclick="setDiscoveredChecks(true)">${tr('全选','Select all')}</button><button id="discovered_clear_all" type="button" class="secondary" onclick="setDiscoveredChecks(false)">${tr('全不选','Select none')}</button><span id="discovered_count" class="muted"></span></div><div id="discovered_models" class="model-selection">${sorted.map(m => { const id = m.upstream_id || ''; const text = (m.display_name || id) + ' ' + id; const capabilities = capabilitySummary(m); return `<label class="model-option" data-discovered-option data-search="${esc(text.toLowerCase())}"><input type="checkbox" name="discovered_model" value="${esc(id)}" ${imported.has(id) ? 'checked' : ''} onchange="updateDiscoveredCount()"><span><strong>${esc(m.display_name || id)}</strong><small>${esc(id)} · context ${Number(m.context_window || 0).toLocaleString()}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</small></span></label>`; }).join('')}</div>`;
-  openModal(tr('选择要导入的模型','Select models to import'), body, tr('导入选中模型','Import selected models'), async () => { const selected = [...document.querySelectorAll('input[name="discovered_model"]:checked')].map(input => input.value); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider, selected})}); closeModal(); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice(tr(`${provider} 已导入 ${result.added} 个模型，请重启 Codex。`,`${provider}: ${result.added} models imported. Restart Codex.`)); });
+  openModal(tr('选择要导入的模型','Select models to import'), body, tr('导入选中模型','Import selected models'), async () => { const selected = [...document.querySelectorAll('input[name="discovered_model"]:checked')].map(input => input.value); let result; try { result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider, selected})}); } catch (error) { throw new Error(providerDiscoveryError(error)); } closeModal(); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice(tr(`${provider} 已导入 ${result.added} 个模型，请重启 Codex。`,`${provider}: ${result.added} models imported. Restart Codex.`)); });
   filterDiscoveredModels('');
 }
 function filterDiscoveredModels(value) { const query = String(value || '').trim().toLowerCase(); document.querySelectorAll('[data-discovered-option]').forEach(option => { option.hidden = Boolean(query) && !String(option.dataset.search || '').includes(query); }); const select = $('discovered_select_all'); const clear = $('discovered_clear_all'); if (select) select.textContent = query ? tr('全选搜索结果','Select all results') : tr('全选','Select all'); if (clear) clear.textContent = query ? tr('全不选搜索结果','Select no results') : tr('全不选','Select none'); updateDiscoveredCount(); }
@@ -731,7 +743,7 @@ function updateDiscoveredCount() { const options = [...document.querySelectorAll
 function openManualModelModal(modelId = '') {
   const existing = (state.models || []).find(m => m.id === modelId) || {}; editingModelId = modelId; modalReasoningLevels = Array.isArray(existing.reasoning_levels) ? existing.reasoning_levels : null; modalReasoningSupport = typeof existing.supports_reasoning === 'boolean' ? existing.supports_reasoning : null; modalReasoningSummarySupport = typeof existing.supports_reasoning_summaries === 'boolean' ? existing.supports_reasoning_summaries : null;
   const options = (state.providers || []).map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join('');
-  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label>${tr('上游模型名','Upstream model name')}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${tr('例如 glm','for example glm')}" oninput="updateManualModelRoute()"></div><div><label>${tr('上下文窗口（可选）','Context window (optional)')}</label><input id="modal_model_context" type="number" min="0" value="${Number(existing.context_window || 0)}"></div><div><label>${tr('自动获取','Fetch metadata')}</label><button class="secondary" onclick="inspectModalModel()">${tr('获取上游最大值','Fetch upstream maximum')}</button></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称、上下文标识和推理摘要请在页面上方的“模型列表显示”中设置。','Set the model name, context label, and reasoning summary in Model list display above.')}</p>`, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
+  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label>${tr('上游模型名','Upstream model name')}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${tr('例如 glm','for example glm')}" oninput="updateManualModelRoute()"></div><div><label>${tr('上下文窗口（可选）','Context window (optional)')}</label><input id="modal_model_context" type="number" min="0" value="${Number(existing.context_window || 0)}"></div><div><label>${tr('自动获取','Fetch metadata')}</label><button class="secondary" onclick="inspectModalModel()">${tr('获取上游最大值','Fetch upstream maximum')}</button></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
   if (existing.provider) $('modal_model_provider').value = existing.provider;
   updateManualModelRoute();
 }

@@ -493,14 +493,24 @@ class ServerAccountTests(unittest.TestCase):
 
     def test_web_exposes_route_presentation_controls_and_live_preview(self):
         html = WEB_FILE.read_text(encoding="utf-8")
-        self.assertIn("模型列表显示", html)
+        self.assertIn("模型显示", html)
         self.assertIn("data-catalog-alias", html)
         self.assertIn("data-catalog-context", html)
-        self.assertIn("data-catalog-summary", html)
+        self.assertIn("data-catalog-preview", html)
+        self.assertNotIn("data-catalog-summary", html)
         self.assertIn("presentationPreview", html)
+        self.assertIn("updateCatalogDisplayPreview", html)
         self.assertIn("renderCatalogDisplay", html)
         self.assertNotIn("openNativePresentationModal", html)
         self.assertNotIn("openRoutePresentationModal", html)
+
+    def test_web_uses_two_column_workspace_and_automatic_search_account(self):
+        html = WEB_FILE.read_text(encoding="utf-8")
+        self.assertIn('class="workspace-layout"', html)
+        self.assertIn('<aside class="workspace-side">', html)
+        self.assertIn('id="subscription_search_enabled"', html)
+        self.assertNotIn('id="subscription_search_account"', html)
+        self.assertIn("account_id: ''", html)
 
     def test_web_does_not_expose_internal_tool_call_mode(self):
         html = WEB_FILE.read_text(encoding="utf-8")
@@ -1259,8 +1269,12 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("openDiagnostics", html)
         self.assertIn("loadDiagnostics", html)
         self.assertIn("性能诊断", html)
-        self.assertIn("SOL 原生参考：TTFT 约 5 s · TPS 约 55 token/s", html)
-        self.assertIn("EMP 准备耗时", html)
+        self.assertNotIn("SOL 原生参考", html)
+        self.assertNotIn("TTFT 慢于参考", html)
+        self.assertNotIn("TPS 低于参考", html)
+        self.assertIn("从发出请求到模型开始返回内容的时间", html)
+        self.assertIn("平均每秒生成的回答 token 数", html)
+        self.assertIn("EMP 处理", html)
         self.assertNotIn("不保存消息内容、响应内容或凭据", html)
         self.assertIn("diagnosticsContextLabel", html)
         self.assertIn("context_decision", html)
@@ -2039,7 +2053,7 @@ class ServerAccountTests(unittest.TestCase):
             def success_stream():
                 yield b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"private"}\n\n'
                 time.sleep(0.05)
-                yield b'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"output_tokens":1}}}\n\n'
+                yield b'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0}}}}\n\n'
 
             success = success_stream()
             failure = iter([b'event: response.failed\ndata: {"type":"response.failed"}\n\n'])

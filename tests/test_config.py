@@ -30,6 +30,21 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(saved["codex_runtime_sources"], ["codex_app"])
                 self.assertTrue(saved["subscription_search"]["enabled"])
 
+    def test_legacy_search_account_selection_migrates_to_automatic(self):
+        value = normalize(
+            {
+                "accounts": [{"id": "search", "prefix": "search"}],
+                "subscription_search": {"enabled": True, "account_id": "search"},
+            }
+        )
+        self.assertEqual(
+            value["subscription_search"], {"enabled": True, "account_id": ""}
+        )
+        missing = normalize(
+            {"subscription_search": {"enabled": True, "account_id": "removed"}}
+        )
+        self.assertEqual(missing["subscription_search"]["account_id"], "")
+
     def setUp(self):
         self.provider = {
             "id": "deepseek",

@@ -15,7 +15,7 @@ const elements = new Map();
 let discoveredOptions = [];
 let catalogAliases = [];
 let catalogContexts = [];
-let catalogSummaries = [];
+let catalogPreviews = [];
 let subscriptionModelInputs = [];
 let runtimeInputs = [];
 
@@ -52,15 +52,15 @@ class Element {
 function parseCatalogDisplay(html) {
   catalogAliases = [];
   catalogContexts = [];
-  catalogSummaries = [];
+  catalogPreviews = [];
+  for (const match of html.matchAll(/<strong data-catalog-preview data-route="([^"]*)">([^<]*)<\/strong>/g)) {
+    const preview = new Element(); preview.dataset.route = unescapeHtml(match[1]); preview.textContent = unescapeHtml(match[2]); catalogPreviews.push(preview);
+  }
   for (const match of html.matchAll(/<input data-catalog-alias data-route="([^"]*)" value="([^"]*)"/g)) {
     const input = new Element(); input.dataset.route = unescapeHtml(match[1]); input.value = unescapeHtml(match[2]); catalogAliases.push(input);
   }
   for (const match of html.matchAll(/<input type="checkbox" data-catalog-context data-route="([^"]*)"([^>]*)>/g)) {
     const input = new Element(); input.dataset.route = unescapeHtml(match[1]); input.checked = /\schecked(?:\s|$)/.test(match[2]); catalogContexts.push(input);
-  }
-  for (const match of html.matchAll(/<select data-catalog-summary data-route="([^"]*)"[^>]*>([\s\S]*?)<\/select>/g)) {
-    const select = new Element(); select.dataset.route = unescapeHtml(match[1]); const selected = match[2].match(/<option value="([^"]*)" selected>/); select.value = selected ? selected[1] : "auto"; catalogSummaries.push(select);
   }
 }
 
@@ -120,7 +120,7 @@ const document = {
     if (selector === 'input[name="subscription_model"]:checked') return subscriptionModelInputs.filter(input => input.checked);
     if (selector === "[data-catalog-alias]") return catalogAliases;
     if (selector === "[data-catalog-context]") return catalogContexts;
-    if (selector === "[data-catalog-summary]") return catalogSummaries;
+    if (selector === "[data-catalog-preview]") return catalogPreviews;
     if (selector === "[data-runtime-source]") return runtimeInputs;
     if (selector === "[data-runtime-source]:checked") return runtimeInputs.filter(input => input.checked);
     return [];
@@ -143,6 +143,10 @@ for (const id of [
 
 const html = fs.readFileSync(process.argv[2], "utf8");
 assert.doesNotMatch(html, /实际调用时自动使用其中兼容性最可靠的一个/);
+assert.match(html, /class="workspace-layout"/);
+assert.match(html, /<aside class="workspace-side">/);
+assert.doesNotMatch(html, /id="subscription_search_account"/);
+assert.doesNotMatch(html, /data-catalog-summary/);
 assert.match(html, /@phosphor-icons\/core 2\.1\.1, Regular weight, MIT/);
 assert.strictEqual(
   Array.from(html.matchAll(/button\[data-icon="[^"]+"\]\{--button-icon:url\("data:image\/svg\+xml,%3Csvg%20/g)).length,
@@ -375,6 +379,9 @@ function quotaHistoryBehavior() {
   assert.match(html, /<svg/);
   assert.match(html, /主窗口/);
   assert.match(html, /75%/);
+  assert.match(html, /data-quota-point/);
+  assert.match(html, /quota-hover-target/);
+  assert.match(html, /quota-chart-tooltip/);
   assert.doesNotMatch(html, /每 5 分钟|自动采样|保留 15 天/);
 
   for (const [seriesValues, expectedMin, expectedMax] of [
@@ -394,6 +401,30 @@ function quotaHistoryBehavior() {
     assert.doesNotMatch(svg, /NaN|Infinity/);
   }
   assert.strictEqual(run("quotaChartSvg([])"), "");
+
+  const first = {dataset:{x:'90',y:'80',time:'1000',value:'80',label:'主窗口'},radius:'',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
+  const second = {dataset:{x:'90.1',y:'100',time:'1000',value:'60',label:'次窗口'},radius:'',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
+  const distant = {dataset:{x:'300',y:'120',time:'1300',value:'50',label:'主窗口'},radius:'',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
+  const guide = {hidden:true,values:{},setAttribute(name,value) { this.values[name] = value; }};
+  const tooltip = {hidden:true,style:{},innerHTML:''};
+  context.__quotaHoverSvg = {
+    getBoundingClientRect: () => ({left:0,width:628}),
+    querySelectorAll: selector => selector === '[data-quota-point]' ? [first,second,distant] : [],
+    querySelector: selector => selector === '.quota-chart-guide' ? guide : null,
+    parentElement: {querySelector: selector => selector === '.quota-chart-tooltip' ? tooltip : null},
+  };
+  context.__quotaHoverTarget = {ownerSVGElement:context.__quotaHoverSvg};
+  run("quotaChartHover({currentTarget:__quotaHoverTarget,clientX:95})");
+  assert.strictEqual(guide.hidden, false);
+  assert.strictEqual(first.radius, '4');
+  assert.strictEqual(second.radius, '4');
+  assert.strictEqual(distant.radius, '3');
+  assert.strictEqual(tooltip.hidden, false);
+  assert.match(tooltip.innerHTML, /主窗口 · 80%/);
+  assert.match(tooltip.innerHTML, /次窗口 · 60%/);
+  run("quotaChartLeave({currentTarget:__quotaHoverTarget})");
+  assert.strictEqual(guide.hidden, true);
+  assert.strictEqual(tooltip.hidden, true);
 }
 
 function performanceDiagnosticsBehavior() {
@@ -408,13 +439,22 @@ function performanceDiagnosticsBehavior() {
   assert.match(rendered, /5\.00 s/);
   assert.match(rendered, /55\.0 token\/s/);
   assert.match(rendered, /120 ms/);
-  assert.match(rendered, /未发现明显 EMP 准备延迟/);
-  assert.match(rendered, /上游首个输出偏慢/);
+  assert.doesNotMatch(rendered, /判断|参考|原生 A\/B/);
   run('openDiagnostics()');
   assert.match(getElement('modal_title').textContent, /性能诊断/);
-  assert.match(getElement('modal_body').innerHTML, /TTFT 约 5 s · TPS 约 55 token\/s/);
-  assert.match(getElement('modal_body').innerHTML, /原生 A\/B/);
+  assert.match(getElement('modal_body').innerHTML, /从发出请求到模型开始返回内容的时间/);
+  assert.match(getElement('modal_body').innerHTML, /平均每秒生成的回答 token 数/);
+  assert.doesNotMatch(getElement('modal_body').innerHTML, /SOL 原生参考|原生 A\/B/);
   run('closeModal()');
+}
+
+function providerDiscoveryErrorBehavior() {
+  context.__badKey = Object.assign(new Error('upstream 401'), {status:401});
+  context.__badRequestKey = Object.assign(new Error('upstream 400'), {status:400});
+  context.__busyProvider = Object.assign(new Error('upstream 429'), {status:429});
+  assert.match(run('providerDiscoveryError(__badKey)'), /API Key 无效/);
+  assert.match(run('providerDiscoveryError(__badRequestKey)'), /API Key 无效/);
+  assert.match(run('providerDiscoveryError(__busyProvider)'), /请求过于频繁/);
 }
 
 function quotaMeterBehavior() {
@@ -429,6 +469,12 @@ function quotaMeterBehavior() {
   assert.match(rendered, /aria-valuenow="34\.5"/);
   assert(rendered.indexOf("7d") < rendered.indexOf("5h"), "long quota window must render first");
   assert.match(rendered, /is-medium/);
+  assert.doesNotMatch(rendered, /is-updated/, "ordinary rerenders must not replay quota animation");
+
+  run("quotaAnimationAccounts.add('meter'); renderAccounts()");
+  assert.match(getElement("accounts").innerHTML, /is-updated/, "a real quota update should animate once");
+  run("renderAccounts()");
+  assert.doesNotMatch(getElement("accounts").innerHTML, /is-updated/, "quota animation marker must be consumed after one render");
 
   context.__quotaMeterState.accounts[0].quota = {rate_limits_by_limit_id:{codex:{primary:{usedPercent:4,windowDurationMins:300}},bonus:{secondary:{usedPercent:92,windowDurationMins:60}}}};
   run("renderAccounts()");
@@ -585,17 +631,18 @@ function capabilityMetadataBehavior() {
 }
 
 async function presentationBehavior() {
-  run("state = {catalog_presentations:{'provider-a/model':{catalog_alias:'Legacy',show_context:true,reasoning_summary:'auto'}},catalog_family_presentations:{},catalog_families:[{id:'native-model',default_display_name:'Native Model',display_name:'Native Model',context_window:258000,supports_reasoning_summaries:true,routes:[{id:'native-model',source_type:'native',source_id:''}]},{id:'model',default_display_name:'Model',display_name:'Model',context_window:258000,supports_reasoning_summaries:true,routes:[{id:'provider-a/model',source_type:'provider',source_id:'provider-a'}]}],subscription_models:[{id:'native-model',display_name:'Native Model',context_window:258000}],providers:[{id:'provider-a',name:'Provider A'}],accounts:[],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',display_name:'Model',context_window:258000,enabled:true}]} ");
+  run("state = {catalog_presentations:{'provider-a/model':{catalog_alias:'Legacy',show_context:true,reasoning_summary:'auto'}},catalog_family_presentations:{model:{catalog_alias:'',show_context:true,reasoning_summary:'hide'}},catalog_families:[{id:'native-model',default_display_name:'Native Model',display_name:'Native Model',context_window:258000,supports_reasoning_summaries:true,routes:[{id:'native-model',source_type:'native',source_id:''}]},{id:'model',default_display_name:'Model',display_name:'Model',context_window:258000,supports_reasoning_summaries:true,routes:[{id:'provider-a/model',source_type:'provider',source_id:'provider-a'}]}],subscription_models:[{id:'native-model',display_name:'Native Model',context_window:258000}],providers:[{id:'provider-a',name:'Provider A'}],accounts:[],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',display_name:'Model',context_window:258000,enabled:true}]} ");
   run("renderCatalogDisplay()");
   assert.match(getElement("catalog_display_models").innerHTML, /data-catalog-alias/);
   assert.match(getElement("catalog_display_models").innerHTML, /provider-a\/model/);
   const alias = catalogAliases.find(input => input.dataset.route === "model");
   const contextInput = catalogContexts.find(input => input.dataset.route === "model");
-  const summary = catalogSummaries.find(input => input.dataset.route === "model");
-  assert(alias && contextInput && summary, "display controls must be rendered once per model family");
+  const preview = catalogPreviews.find(input => input.dataset.route === "model");
+  assert(alias && contextInput && preview, "display controls must be rendered once per model family");
   alias.value = "General";
   contextInput.checked = false;
-  summary.value = "hide";
+  run("updateCatalogDisplayPreview('model')");
+  assert.strictEqual(preview.textContent, "General", "context visibility must update the preview before saving");
   context.__persistStateStub = async (_message, candidate) => { context.__savedCandidate = candidate; context.state = candidate; };
   run("__realPersistState = persistState; persistState = __persistStateStub");
   await run("saveCatalogDisplay()");
@@ -603,11 +650,11 @@ async function presentationBehavior() {
   const saved = run("__savedCandidate.catalog_family_presentations['model']");
   assert.strictEqual(saved.catalog_alias, "General");
   assert.strictEqual(saved.show_context, false);
-  assert.strictEqual(saved.reasoning_summary, "hide");
+  assert.strictEqual(saved.reasoning_summary, "hide", "hidden reasoning policy must survive a display-only save");
   assert.strictEqual(run("__savedCandidate.catalog_presentations['provider-a/model']"), undefined);
   run("openManualModelModal('provider-a/model')");
-  assert.doesNotMatch(getElement("modal_body").innerHTML, /Codex 显示名称|Reasoning summary/);
-  assert.match(getElement("modal_body").innerHTML, /模型列表显示/);
+  assert.doesNotMatch(getElement("modal_body").innerHTML, /Codex 显示名称|Reasoning summary|推理摘要/);
+  assert.match(getElement("modal_body").innerHTML, /模型显示/);
 }
 
 function presentationMigrationBehavior() {
@@ -722,10 +769,10 @@ async function runtimeSettingsIsolationBehavior() {
   assert.deepStrictEqual(Array.from(run('state.codex_runtime_sources')), ['codex_app'], 'saving selection must update the general form snapshot');
 
   getElement('subscription_search_enabled').checked = true;
-  getElement('subscription_search_account').value = '';
   await run('saveSubscriptionSearch()');
   assert.deepStrictEqual(configWrites.at(-1).codex_runtime_sources, ['codex_app']);
   assert.strictEqual(saved.subscription_search.enabled, true);
+  assert.strictEqual(saved.subscription_search.account_id, '', 'web search account selection must remain automatic');
   assert.deepStrictEqual(runtimeInputs.map(input => input.checked), [true,false,false], 'search save must keep saved client selection');
 
   runtimeInputs[0].checked = false;
@@ -761,6 +808,7 @@ async function runtimeSettingsIsolationBehavior() {
   duplicateAccountBehavior();
   quotaHistoryBehavior();
   performanceDiagnosticsBehavior();
+  providerDiscoveryErrorBehavior();
   quotaMeterBehavior();
   await quotaStateSyncBehavior();
   await nativeAccountBehavior();

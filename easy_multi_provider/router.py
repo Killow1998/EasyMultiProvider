@@ -448,13 +448,11 @@ def forward_native_search(
     body: Dict[str, Any],
     incoming: Dict[str, str],
 ) -> Tuple[int, str, bytes]:
-    """Execute standalone search with the explicitly selected Subscription."""
+    """Execute standalone search with the best available Codex login."""
 
     search = config.get("subscription_search")
     if not isinstance(search, Mapping) or search.get("enabled") is not True:
         raise RouterError("Subscription web search is disabled", 403)
-    selected_id = str(search.get("account_id") or "")
-
     provider = {
         "id": "codex-native-search",
         "name": "Native Codex Search",
@@ -463,26 +461,48 @@ def forward_native_search(
         ),
         "protocol": "responses",
     }
-    if selected_id:
-        account = next(
-            (
-                item
-                for item in config.get("accounts", [])
-                if item.get("id") == selected_id and item.get("enabled", True)
-            ),
-            None,
-        )
-        if account is None:
-            raise RouterError("selected Subscription search account is unavailable", 503)
-        provider.update({"auth_mode": "account", "account": account})
-    else:
+    try:
+        native_headers = native_auth_headers(config.get("_native_auth_path"))
+    except AccountError:
+        native_headers = None
+    if native_headers:
         provider.update(
             {
                 "auth_mode": "native",
                 "implicit_native": True,
                 "_native_auth_path": config.get("_native_auth_path"),
+                "_resolved_native_auth": native_headers,
             }
         )
+    else:
+        account = None
+        for candidate in config.get("accounts", []):
+            if not candidate.get("enabled", True):
+                continue
+            try:
+                account_headers = auth_headers(candidate)
+            except AccountError:
+                continue
+            account = candidate
+            break
+        if account is not None:
+            provider.update(
+                {
+                    "auth_mode": "account",
+                    "account": account,
+                    "_resolved_account_auth": account_headers,
+                }
+            )
+        else:
+            # Preserve pass-through compatibility for callers that already
+            # carry a Codex login even when no local credential can be read.
+            provider.update(
+                {
+                    "auth_mode": "native",
+                    "implicit_native": True,
+                    "_native_auth_path": config.get("_native_auth_path"),
+                }
+            )
     with _request(
         provider,
         body,
@@ -563,7 +583,10 @@ def _headers(
         headers["anthropic-version"] = provider.get("anthropic_version", "2023-06-01")
     elif provider.get("auth_mode") == "account":
         try:
-            headers.update(auth_headers(provider["account"]))
+            headers.update(
+                provider.get("_resolved_account_auth")
+                or auth_headers(provider["account"])
+            )
         except AccountError as exc:
             raise RouterError(str(exc), 503)
     elif provider.get("implicit_native") is True:
@@ -571,7 +594,8 @@ def _headers(
             selected = (
                 resolved_native_auth
                 if resolved_native_auth is not None
-                else native_auth_headers(provider.get("_native_auth_path"))
+                else provider.get("_resolved_native_auth")
+                or native_auth_headers(provider.get("_native_auth_path"))
             )
             headers.update(selected)
         except AccountError:

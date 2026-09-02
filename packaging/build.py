@@ -600,9 +600,22 @@ def build(skip_service_smoke: bool = False) -> List[Path]:
     artifacts_root.mkdir(parents=True, exist_ok=True)
 
     artifact_base = "%s-%s-%s" % (PACKAGE_NAME, version, target.identity)
-    for stale in artifacts_root.glob(artifact_base + "*"):
-        if stale.is_file():
-            stale.unlink()
+    expected_suffixes = [target.executable_suffix]
+    if target.system == "Windows":
+        expected_suffixes.append(".zip")
+    else:
+        expected_suffixes.append(".tar.gz")
+    if target.system == "Linux":
+        expected_suffixes.append(".deb")
+    if target.system == "Darwin":
+        expected_suffixes.append(".dmg")
+    for suffix in expected_suffixes:
+        for stale in (
+            artifacts_root / (artifact_base + suffix),
+            artifacts_root / (artifact_base + suffix + ".sha256"),
+        ):
+            if stale.is_file():
+                stale.unlink()
 
     icons = _build_icons(build_root)
     executable = _build_binary(target, build_root, icons)

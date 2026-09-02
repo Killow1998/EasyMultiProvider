@@ -237,7 +237,7 @@ class RouterTests(unittest.TestCase):
         )
         self.assertEqual(captured["authorization"], "Bearer session-token")
 
-    def test_subscription_search_is_opt_in_and_can_use_imported_account(self):
+    def test_subscription_search_is_opt_in_and_falls_back_to_imported_account(self):
         with self.assertRaises(RouterError) as disabled:
             router.forward_native_search(
                 {
@@ -270,6 +270,10 @@ class RouterTests(unittest.TestCase):
         }
         with patch.object(
             router,
+            "native_auth_headers",
+            side_effect=router.AccountError("native login unavailable"),
+        ), patch.object(
+            router,
             "auth_headers",
             return_value={
                 "Authorization": "Bearer imported-token",
@@ -287,6 +291,46 @@ class RouterTests(unittest.TestCase):
         headers = {key.lower(): value for key, value in request.header_items()}
         self.assertEqual(headers["authorization"], "Bearer imported-token")
         self.assertEqual(headers["chatgpt-account-id"], "imported-account")
+
+    def test_subscription_search_prefers_current_codex_login_over_imported_account(self):
+        class Response:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __init__(self):
+                self.remaining = b'{"data":[]}'
+
+            def read(self, size=-1):
+                value, self.remaining = self.remaining, b""
+                return value
+
+            def close(self):
+                pass
+
+        config = {
+            "codex_base_url": "https://chatgpt.com/backend-api/codex",
+            "subscription_search": {"enabled": True, "account_id": "legacy"},
+            "accounts": [{"id": "legacy", "enabled": True}],
+        }
+        with patch.object(
+            router,
+            "native_auth_headers",
+            return_value={
+                "Authorization": "Bearer native-token",
+                "chatgpt-account-id": "native-account",
+            },
+        ), patch.object(router, "auth_headers") as imported, patch.object(
+            router, "urlopen", return_value=Response()
+        ) as opened:
+            router.forward_native_search(config, {"query": "codex"}, {})
+
+        imported.assert_not_called()
+        headers = {
+            key.lower(): value
+            for key, value in opened.call_args.args[0].header_items()
+        }
+        self.assertEqual(headers["authorization"], "Bearer native-token")
+        self.assertEqual(headers["chatgpt-account-id"], "native-account")
 
     def test_limited_discovery_read_stops_after_deadline(self):
         class DripResponse:

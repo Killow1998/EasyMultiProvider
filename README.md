@@ -30,8 +30,9 @@ The current source version is `v0.9.5`.
 - Preserve native Codex sessions, `resume`, WebSockets, compression, and MCP.
 - Continue compacted tasks when switching between the current login, imported
   subscriptions, and external models, using Codex-owned visible history only.
-- Let external models use Codex standalone web search through an explicitly
-  selected ChatGPT Subscription without exposing Provider credentials.
+- Let external models use Codex standalone web search. EMP prefers the current
+  `.codex` login and automatically falls back to an available imported account,
+  without exposing Provider credentials.
 
 ## Install
 
@@ -162,7 +163,7 @@ The terminal prints a one-use browser URL. Open it and:
 
 With only the current native account, skip account and Provider import. Hide
 models under **Current Codex login → Edit**, rename model families under
-**Model list display**, save, and click **Apply EMP to Codex**. Keep at least
+**Model display**, save, and click **Apply EMP to Codex**. Keep at least
 one model visible. Display names do not change model IDs. Safely restart active
 Codex clients as needed and check their model picker: model IDs alone cannot
 verify native visibility or names. EMP reports the catalog as saved but display

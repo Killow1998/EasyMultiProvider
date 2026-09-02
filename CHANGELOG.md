@@ -19,14 +19,22 @@
   replay over HTTP once the WebSocket request may have reached the upstream;
   HTTP fallback remains limited to pre-dispatch handshake failures.
 - Keep the account quota display synchronized with EMP's background samples
-  through a local-only account-state poll, and replace the stale text block
-  with accessible battery meters and restrained refresh animation.
+  through a local-only account-state poll. Use accessible battery meters,
+  animate only actual quota changes, and add nearest-point hover details to
+  the quota trend chart.
 - Record content-free TTFT and TPS measurements from real Responses output and
-  terminal usage events. Show the latest model calls in the opt-in Performance
-  modal with EMP preparation time and a concise Native A/B attribution guide.
+  terminal usage events. Exclude reasoning tokens from TPS, and show only the
+  latest measured timings without fixed model baselines or inferred verdicts.
 - Tighten the settings UI hierarchy with quieter secondary actions, compact
   spacing, restrained borders and locally embedded Phosphor action icons in
-  both themes.
+  both themes. Keep model display visible in a desktop side panel, update its
+  context preview immediately, remove the unused reasoning-summary control,
+  and distinguish client actions from EMP actions.
+- Move Web search into Codex integration and select credentials automatically:
+  prefer the current `.codex` login, then fall back to a readable imported
+  Subscription account. Migrate legacy pinned account settings automatically.
+- Replace raw Provider model-discovery HTTP 400/401/403 errors with a concise
+  API-key or permission message.
 - Automatically grow each Responses HTTP/compaction/WebSocket request's 64 MiB
   baseline allowance up to 1 GiB, subject to shared memory reservations. Release
   allowances after processing and keep expansion details in local diagnostics
