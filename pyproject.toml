@@ -13,7 +13,7 @@ dependencies = [
 license = "MIT"
 
 [project.scripts]
-easy-multi-provider = "easy_multi_provider.main:main"
+EMP = "easy_multi_provider.main:main"
 
 [build-system]
 requires = ["setuptools>=61"]

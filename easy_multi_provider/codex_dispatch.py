@@ -58,8 +58,18 @@ def _subscription_admission_identity(
 def _release_admission_when_done(result: Any, lease: Any) -> Iterator[Any]:
     try:
         yield from result
-    finally:
+    except GeneratorExit:
+        # Client cancellation is not evidence about upstream capacity.
         lease.release()
+        raise
+    except BaseException as exc:
+        lease.release(
+            success=False,
+            status=failure_from_exception(exc).status,
+        )
+        raise
+    else:
+        lease.release(success=True)
 
 
 def provider_replay_scope(
@@ -257,7 +267,10 @@ class CodexRequestDispatcher:
             )
         except Exception as exc:
             if admission is not None:
-                admission.release()
+                admission.release(
+                    success=False,
+                    status=failure_from_exception(exc).status,
+                )
                 admission = None
             if not observed:
                 self._record_failure(
@@ -292,7 +305,7 @@ class CodexRequestDispatcher:
                     event, body, started, selected_transport, "responses"
                 )
             if admission is not None:
-                admission.release()
+                admission.release(success=True)
                 admission = None
         return metadata, result
 

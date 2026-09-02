@@ -13,6 +13,8 @@ import time
 import uuid
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Tuple
 
+from .transport_failures import PHASE_CONNECT, network_failure
+
 
 MAX_NATIVE_WEBSOCKET_EVENT_BYTES = 16 * 1024 * 1024
 MAX_NATIVE_WEBSOCKET_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -283,13 +285,26 @@ class NativeWebSocketBridge:
         except NativeWebSocketError:
             raise
         except Exception as exc:
-            status = getattr(exc, "status_code", 502)
-            if not isinstance(status, int) or isinstance(status, bool):
-                status = 502
+            explicit_status = getattr(exc, "status_code", None)
+            failure = network_failure(exc, PHASE_CONNECT)
+            if (
+                isinstance(explicit_status, int)
+                and not isinstance(explicit_status, bool)
+                and failure.error_class == "network"
+            ):
+                status = explicit_status
+                error_class = None
+                failure_reason = None
+            else:
+                status = failure.status
+                error_class = failure.error_class
+                failure_reason = failure.failure_reason
             raise NativeWebSocketError(
                 "native upstream websocket connection failed",
                 status,
                 _http_fallback_before_request(status),
+                error_class=error_class,
+                failure_reason=failure_reason,
             ) from exc
         status = _handshake_status(connection)
         if status != 101:

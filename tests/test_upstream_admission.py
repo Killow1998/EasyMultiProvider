@@ -72,6 +72,57 @@ class UpstreamAdmissionTests(unittest.TestCase):
         replacement = controller.acquire("account-a", timeout=0)
         replacement.release()
 
+    def test_sustained_success_with_waiters_expands_the_active_limit(self):
+        controller = UpstreamAdmissionController(
+            per_identity_limit=2,
+            maximum_per_identity_limit=4,
+            queue_timeout=1,
+        )
+        active = [controller.acquire("account-a") for _ in range(2)]
+        acquired = []
+        all_acquired = threading.Event()
+        release_waiters = threading.Event()
+        lock = threading.Lock()
+
+        def waiter():
+            with controller.acquire("account-a") as lease:
+                with lock:
+                    acquired.append(lease.snapshot)
+                    if len(acquired) == 3:
+                        all_acquired.set()
+                release_waiters.wait(1)
+
+        threads = [threading.Thread(target=waiter) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        time.sleep(0.02)
+
+        active[0].release(success=True)
+        time.sleep(0.02)
+        active[1].release(success=True)
+        self.assertTrue(all_acquired.wait(1))
+        self.assertEqual(max(snapshot.limit for snapshot in acquired), 3)
+
+        release_waiters.set()
+        for thread in threads:
+            thread.join(1)
+            self.assertFalse(thread.is_alive())
+
+    def test_upstream_429_halves_the_current_limit(self):
+        controller = UpstreamAdmissionController(
+            per_identity_limit=8,
+            maximum_per_identity_limit=8,
+        )
+        active = [controller.acquire("account-a") for _ in range(8)]
+        active[0].release(success=False, status=429)
+        for lease in active[1:5]:
+            lease.release()
+        replacement = controller.acquire("account-a", timeout=0)
+        self.assertEqual(replacement.snapshot.limit, 4)
+        replacement.release()
+        for lease in active[5:]:
+            lease.release()
+
 
 if __name__ == "__main__":
     unittest.main()

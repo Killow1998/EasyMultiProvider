@@ -63,6 +63,8 @@ def summarize_route_observations(records, max_models: int = 5) -> Dict[str, Any]
     ]
     status_429 = sum(item.get("status") == 429 for item in health_records)
     status_502 = sum(item.get("status") == 502 for item in health_records)
+    status_503 = sum(item.get("status") == 503 for item in health_records)
+    status_504 = sum(item.get("status") == 504 for item in health_records)
     local_capacity = sum(
         item.get("error_class") == "upstream_capacity" for item in health_records
     )
@@ -135,6 +137,10 @@ def summarize_route_observations(records, max_models: int = 5) -> Dict[str, Any]
             "status_429_rate": _rate(status_429, total),
             "status_502_count": status_502,
             "status_502_rate": _rate(status_502, total),
+            "status_503_count": status_503,
+            "status_503_rate": _rate(status_503, total),
+            "status_504_count": status_504,
+            "status_504_rate": _rate(status_504, total),
             "local_capacity_count": local_capacity,
             "local_capacity_rate": _rate(local_capacity, total),
             "cancelled_count": len(cancellations),

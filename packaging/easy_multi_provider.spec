@@ -40,7 +40,7 @@ executable = EXE(
     analysis.binaries,
     analysis.datas,
     [],
-    name="easy-multi-provider",
+    name="EMP",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

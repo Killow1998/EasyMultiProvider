@@ -1,8 +1,8 @@
-# EasyMultiProvider
+# EMP
 
 English | [中文](README.zh-CN.md)
 
-EasyMultiProvider (EMP) is a local, browser-configured model router for Codex.
+EMP is a local, browser-configured model router for Codex.
 It keeps the native Codex experience while adding multiple ChatGPT
 subscriptions, API providers, and external models to the same model list.
 
@@ -82,17 +82,17 @@ builds and smoke-tests these native artifacts before a release is published:
 
 For the simplest desktop launch:
 
-- **Windows:** double-click `easy-multi-provider.exe`.
-- **Linux:** install the `.deb`, then open **EasyMultiProvider** from the
+- **Windows:** double-click `EMP.exe`.
+- **Linux:** install the `.deb`, then open **EMP** from the
   application menu.
-- **macOS:** open the DMG, drag **EasyMultiProvider** to Applications, then
+- **macOS:** open the DMG, drag **EMP** to Applications, then
   double-click it.
 
 EMP opens the authenticated Web UI and keeps a visible terminal window for
-status and logs. `EasyMultiProvider listening on ...` means startup succeeded.
+status and logs. `EMP listening on ...` means startup succeeded.
 Keep that terminal open while using EMP. Press `Ctrl+C` for a clean stop, or
 close the terminal to terminate the process; after a clean stop it prints
-`EasyMultiProvider stopped.`
+`EMP stopped.`
 
 Desktop launch stores configuration in the normal per-user directory:
 
@@ -105,8 +105,8 @@ For command-line use, the explicit service command remains available. With the
 downloaded Windows executable, use PowerShell:
 
 ```powershell
-.\easy-multi-provider.exe --version
-.\easy-multi-provider.exe serve --config config.json
+.\EMP.exe --version
+.\EMP.exe serve --config config.json
 ```
 
 After extracting the Linux `.tar.gz` or installing the `.deb`:

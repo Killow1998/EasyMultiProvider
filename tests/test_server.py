@@ -2909,7 +2909,7 @@ class ServerAccountTests(unittest.TestCase):
                 serve(port=0)
 
             self.assertEqual(created_servers[0].requested_address, ("127.0.0.1", 0))
-            self.assertIn("EasyMultiProvider listening on http://127.0.0.1:45678", output.getvalue())
+            self.assertIn("EMP listening on http://127.0.0.1:45678", output.getvalue())
             self.assertNotIn("listening on http://127.0.0.1:0", output.getvalue())
             restored = config_path.read_text(encoding="utf-8")
             self.assertIn('title = "native"', restored)
@@ -3070,7 +3070,7 @@ class ServerAccountTests(unittest.TestCase):
                     bundle = response.read()
                     self.assertEqual(response.status, 200)
                     self.assertIn(
-                        "easy-multi-provider-%s.emp" % __version__,
+                        "EMP.emp",
                         response.getheader("Content-Disposition"),
                     )
                     self.assertTrue(bundle.startswith(b"EMP-MIGRATION"))

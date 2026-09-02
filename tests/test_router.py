@@ -184,7 +184,7 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(headers["chatgpt-account-id"], "account-1")
         self.assertEqual(headers["OpenAI-Beta"], "responses=experimental")
         self.assertEqual(headers["originator"], "codex_cli_rs")
-        self.assertEqual(headers["User-Agent"], "EasyMultiProvider/" + router.__version__)
+        self.assertEqual(headers["User-Agent"], "EMP/" + router.__version__)
 
     def test_native_search_uses_codex_base_url_and_caller_auth(self):
         captured = {}
@@ -3097,7 +3097,7 @@ class RouterTests(unittest.TestCase):
             with self.assertRaises(RouterError) as raised:
                 router._request(provider, {}, {}, False)
         self.assertEqual(opened.call_count, 1)
-        self.assertEqual(raised.exception.status, 502)
+        self.assertEqual(raised.exception.status, 503)
 
     def test_request_summarizes_html_error_without_echoing_the_page(self):
         provider = {

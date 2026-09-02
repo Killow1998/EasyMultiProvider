@@ -788,7 +788,7 @@ def merge_web_update(
         if "api_key" not in provider or provider.get("api_key") == "••••••••":
             provider["api_key"] = old.get("api_key", "")
         if provider.get("api_key_file") and provider.get("api_key_file") != old.get("api_key_file"):
-            raise ConfigError("provider.api_key_file is managed by EasyMultiProvider")
+            raise ConfigError("provider.api_key_file is managed by EMP")
         if old.get("api_key_file"):
             provider["api_key_file"] = old["api_key_file"]
         if old and any(
@@ -801,7 +801,7 @@ def merge_web_update(
     for account in merged.get("accounts", []):
         old = old_accounts.get(account.get("id"), {})
         if account.get("auth_file") and account.get("auth_file") != old.get("auth_file"):
-            raise ConfigError("account.auth_file is managed by EasyMultiProvider")
+            raise ConfigError("account.auth_file is managed by EMP")
         if old.get("auth_file"):
             account["auth_file"] = old["auth_file"]
     old_models = {item["id"]: item for item in current.get("models", [])}

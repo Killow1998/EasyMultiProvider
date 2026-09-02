@@ -68,24 +68,24 @@ class IconPackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             icon_assets.generate_icons(root / "icons")
-            executable = root / "easy-multi-provider"
+            executable = root / "EMP"
             executable.write_bytes(b"frozen-binary")
             icons = package_builder.PackageIcons(
                 windows=root / "icons" / "easy-multi-provider.ico",
                 macos=root / "icons" / "easy-multi-provider.icns",
                 linux=root / "icons" / "easy-multi-provider-256.png",
             )
-            app = root / "EasyMultiProvider.app"
+            app = root / "EMP.app"
 
             package_builder._write_macos_app(app, executable, "0.9.0", icons)
 
             with (app / "Contents" / "Info.plist").open("rb") as handle:
                 info = plistlib.load(handle)
-            self.assertEqual(info["CFBundleExecutable"], "EasyMultiProvider")
+            self.assertEqual(info["CFBundleExecutable"], "EMP")
             self.assertEqual(
                 info["CFBundleIconFile"], "easy-multi-provider.icns"
             )
-            launcher = (app / "Contents" / "MacOS" / "EasyMultiProvider").read_text(
+            launcher = (app / "Contents" / "MacOS" / "EMP").read_text(
                 encoding="utf-8"
             )
             command = (app / "Contents" / "Resources" / "launch.command").read_text(
@@ -99,7 +99,7 @@ class IconPackagingTests(unittest.TestCase):
                     (
                         "/bin/sh",
                         "-n",
-                        str(app / "Contents" / "MacOS" / "EasyMultiProvider"),
+                        str(app / "Contents" / "MacOS" / "EMP"),
                     ),
                     check=True,
                 )

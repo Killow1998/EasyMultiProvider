@@ -162,12 +162,12 @@ def _add_integration_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="EasyMultiProvider Runtime Control Plane commands"
+        description="EMP Runtime Control Plane commands"
     )
     parser.add_argument(
         "--version",
         action="version",
-        version="EasyMultiProvider %s" % __version__,
+        version="EMP %s" % __version__,
     )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 

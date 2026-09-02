@@ -46,6 +46,7 @@ from .transport_failures import (
     event_activity,
     failure_from_exception,
     normalize_error_class,
+    public_failure_message,
     retry_allowed,
     status_error_class,
 )
@@ -129,6 +130,12 @@ def _response_failure_frame(
 ) -> bytes:
     failure_class = normalize_error_class(error_class or status_error_class(status))
     safe_message = _content_free_failure_message(message)
+    if safe_message == "upstream stream failed":
+        safe_message = public_failure_message(
+            failure_class,
+            failure_reason,
+            status,
+        )
     display_message = "HTTP %d: %s" % (status, safe_message)
     error_code = {
         "context_length_exceeded": "context_length_exceeded",

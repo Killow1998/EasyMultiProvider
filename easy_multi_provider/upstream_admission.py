@@ -12,8 +12,9 @@ from .router_errors import RouterError
 
 
 DEFAULT_SUBSCRIPTION_CONCURRENCY = 4
+MAX_SUBSCRIPTION_CONCURRENCY = 16
 DEFAULT_SUBSCRIPTION_QUEUE_TIMEOUT = 45.0
-MAX_SUBSCRIPTION_WAITERS = 32
+MAX_SUBSCRIPTION_WAITERS = 128
 MAX_SUBSCRIPTION_IDENTITIES = 64
 
 
@@ -37,6 +38,8 @@ class AdmissionSnapshot:
 class _IdentityState:
     active: int
     waiters: Deque[object]
+    limit: int
+    successful_completions_with_pressure: int = 0
 
 
 class UpstreamAdmissionLease:
@@ -51,11 +54,20 @@ class UpstreamAdmissionLease:
         self.snapshot = snapshot
         self._released = False
 
-    def release(self) -> None:
+    def release(
+        self,
+        *,
+        success: Optional[bool] = None,
+        status: Optional[int] = None,
+    ) -> None:
         if self._released:
             return
         self._released = True
-        self._owner._release(self._identity)
+        self._owner._release(
+            self._identity,
+            success=success,
+            status=status,
+        )
 
     def __enter__(self) -> "UpstreamAdmissionLease":
         return self
@@ -70,12 +82,17 @@ class UpstreamAdmissionController:
     def __init__(
         self,
         per_identity_limit: int = DEFAULT_SUBSCRIPTION_CONCURRENCY,
+        maximum_per_identity_limit: int = MAX_SUBSCRIPTION_CONCURRENCY,
         queue_timeout: float = DEFAULT_SUBSCRIPTION_QUEUE_TIMEOUT,
         max_waiters: int = MAX_SUBSCRIPTION_WAITERS,
         max_identities: int = MAX_SUBSCRIPTION_IDENTITIES,
         clock=time.monotonic,
     ) -> None:
-        self.limit = max(1, int(per_identity_limit))
+        self.initial_limit = max(1, int(per_identity_limit))
+        self.maximum_limit = max(
+            self.initial_limit,
+            int(maximum_per_identity_limit),
+        )
         self.queue_timeout = max(0.0, float(queue_timeout))
         self.max_waiters = max(1, int(max_waiters))
         self.max_identities = max(1, int(max_identities))
@@ -97,13 +114,13 @@ class UpstreamAdmissionController:
             if state is None:
                 if len(self._states) >= self.max_identities:
                     raise UpstreamAdmissionError("concurrency_identity_limit")
-                state = _IdentityState(0, deque())
+                state = _IdentityState(0, deque(), self.initial_limit)
                 self._states[identity] = state
             if len(state.waiters) >= self.max_waiters:
                 self._cleanup(identity, state)
                 raise UpstreamAdmissionError("concurrency_queue_full")
             state.waiters.append(ticket)
-            while state.active >= self.limit or state.waiters[0] is not ticket:
+            while state.active >= state.limit or state.waiters[0] is not ticket:
                 remaining = deadline - self._clock()
                 if remaining <= 0:
                     state.waiters.remove(ticket)
@@ -116,16 +133,41 @@ class UpstreamAdmissionController:
             snapshot = AdmissionSnapshot(
                 wait_ms=max(0, int(round((self._clock() - queued_at) * 1000))),
                 active=state.active,
-                limit=self.limit,
+                limit=state.limit,
             )
             return UpstreamAdmissionLease(self, identity, snapshot)
 
-    def _release(self, identity: str) -> None:
+    def _release(
+        self,
+        identity: str,
+        *,
+        success: Optional[bool],
+        status: Optional[int],
+    ) -> None:
         with self._condition:
             state = self._states.get(identity)
             if state is None or state.active <= 0:
                 return
             state.active -= 1
+            if status == 429:
+                # A real upstream throttle is stronger evidence than local
+                # queue pressure. Back off immediately and let active work
+                # drain below the smaller limit before admitting more.
+                state.limit = max(1, state.limit // 2)
+                state.successful_completions_with_pressure = 0
+            elif success is True and state.waiters:
+                # Grow only while demand is waiting and the current window has
+                # completed successfully. One extra slot per successful window
+                # avoids turning a burst into an upstream 429 storm.
+                state.successful_completions_with_pressure += 1
+                if (
+                    state.limit < self.maximum_limit
+                    and state.successful_completions_with_pressure >= state.limit
+                ):
+                    state.limit += 1
+                    state.successful_completions_with_pressure = 0
+            elif success is False:
+                state.successful_completions_with_pressure = 0
             self._cleanup(identity, state)
             self._condition.notify_all()
 

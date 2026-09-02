@@ -81,7 +81,7 @@ jobs:
       - name: Upload package artifacts
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: easy-multi-provider-${{ runner.os }}-${{ runner.arch }}
+          name: EMP-${{ runner.os }}-${{ runner.arch }}
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
@@ -110,7 +110,7 @@ jobs:
       - name: Download all native packages
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: easy-multi-provider-*
+          pattern: EMP-*
           path: release-assets
           merge-multiple: true
 
@@ -162,10 +162,20 @@ jobs:
               exit 1
             fi
           done
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+            if [ "$is_draft" != "true" ]; then
+              echo "Refusing to replace published release ${RELEASE_TAG}." >&2
+              exit 1
+            fi
+            gh release delete "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" --yes
+          fi
           gh release create "$RELEASE_TAG" "${public_assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "EasyMultiProvider $RELEASE_TAG" \
+            --title "EMP $RELEASE_TAG" \
             --generate-notes \
             --draft \
             --prerelease \

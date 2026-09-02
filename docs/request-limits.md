@@ -44,21 +44,41 @@ native requests continue through EMP's existing compressed HTTP forwarding
 path. Upstream response/event limits are unchanged. Management requests retain
 their 5 MiB limit, or 32 MiB for migration imports.
 
-EMP accepts up to 48 long-lived local Responses WebSockets within a 64-request
-listener budget. The remaining capacity is reserved for new proxy turns, health
-checks, and management requests. An additional WebSocket is closed with code
-1013 so idle Codex task connections cannot make the live EMP process reset every
-new request.
+EMP starts with capacity for 48 long-lived local Responses WebSockets within a
+64-request listener budget. When demand reaches either boundary, the listener
+grows in 32-slot steps, up to 224 WebSockets and 256 total requests. The separate
+ceilings leave 32 slots for new proxy turns, health checks, and management
+requests. Only a connection beyond the expanded ceiling is closed, so ordinary
+bursts do not turn idle Codex task connections into resets.
 
 ## Subscription generation concurrency
 
 An idle local Codex WebSocket does not consume an upstream generation slot.
-When a turn starts, EMP admits at most four active generations for the same
-content-free Subscription identity. Additional turns wait in FIFO order for up
-to 45 seconds. If no slot becomes available, EMP returns status 503 with
+When a turn starts, EMP begins with four active generations for the same
+content-free Subscription identity. While requests are waiting, a complete
+successful window raises that identity's limit one slot at a time, up to 16.
+An upstream 429 immediately halves the current limit. Additional turns wait in
+FIFO order, with a bounded queue of 128, for up to 45 seconds. If no slot becomes
+available, EMP returns status 503 with
 `upstream_capacity` before sending the request upstream, so a client retry
 cannot duplicate model or tool side effects. Different Subscription identities
 have independent limits.
+
+These limits belong to EMP, not Python and not the OpenAI service. They are
+adaptive safety boundaries: local listener capacity grows from 64 to 256 under
+demand, while a busy Subscription identity grows from 4 to 16 active
+generations after successful windows and contracts after a 429. EMP cannot
+raise a provider's own quota or concurrency allowance.
+
+## Failure status classification
+
+EMP preserves an actual upstream HTTP status. Local connection failures use a
+separate boundary so Codex and the health view do not report every outage as
+502: an unavailable configured proxy, DNS failure, or other unavailable
+network path returns 503; a timeout returns 504; TLS and malformed gateway
+responses remain 502. Proxy-generated HTTP errors are identified only from
+explicit proxy evidence such as CONNECT/proxy response markers. Ambiguous
+origin responses are kept as upstream 5xx rather than guessed.
 
 Native WebSocket requests wait at most 120 seconds for the first substantive
 model or tool event. After output starts, the existing 300-second inactivity

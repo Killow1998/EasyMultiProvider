@@ -82,7 +82,9 @@ class RequestLimitTests(unittest.TestCase):
     def test_idle_websockets_leave_capacity_for_health_requests(self):
         class TinyBoundedServer(server.BoundedThreadingHTTPServer):
             request_limit = 4
+            request_limit_max = 4
             websocket_limit = 2
+            websocket_limit_max = 2
 
         state = SimpleNamespace(
             mark_service_ready=lambda: None,
@@ -141,6 +143,43 @@ class RequestLimitTests(unittest.TestCase):
             service.shutdown()
             service.server_close()
             worker.join(timeout=2)
+
+    def test_listener_slots_expand_under_pressure_until_the_hard_cap(self):
+        expansions = []
+        slots = server._AdaptiveSlotPool(
+            initial=2,
+            maximum=4,
+            growth=2,
+            on_expand=lambda previous, current: expansions.append(
+                (previous, current)
+            ),
+        )
+        self.assertTrue(slots.acquire())
+        self.assertTrue(slots.acquire())
+        self.assertTrue(slots.acquire())
+        self.assertTrue(slots.acquire())
+        self.assertFalse(slots.acquire())
+        self.assertEqual(expansions, [(2, 4)])
+        self.assertEqual(
+            slots.snapshot(),
+            {"active": 4, "capacity": 4, "maximum": 4},
+        )
+        for _ in range(4):
+            slots.release()
+
+        def broken_reporter(*_args):
+            raise OSError("journal")
+
+        diagnostic_failure = server._AdaptiveSlotPool(
+            initial=1,
+            maximum=2,
+            growth=1,
+            on_expand=broken_reporter,
+        )
+        self.assertTrue(diagnostic_failure.acquire())
+        self.assertTrue(diagnostic_failure.acquire())
+        diagnostic_failure.release()
+        diagnostic_failure.release()
 
     def test_large_compressed_history_reaches_responses_and_compaction_unchanged(self):
         # This is larger than the former 32 MiB decoded-body limit.

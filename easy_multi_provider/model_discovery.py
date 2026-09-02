@@ -140,7 +140,7 @@ def discovery_headers(
         )
     headers = {
         "Accept": "application/json",
-        "User-Agent": "EasyMultiProvider/%s" % version,
+        "User-Agent": "EMP/%s" % version,
     }
     headers["x-goog-api-key" if native_gemini else "Authorization"] = (
         key if native_gemini else "Bearer " + key
@@ -158,7 +158,7 @@ def anthropic_discovery_headers(
         )
     return {
         "Accept": "application/json",
-        "User-Agent": "EasyMultiProvider/%s" % version,
+        "User-Agent": "EMP/%s" % version,
         "x-api-key": key,
         "anthropic-version": provider.get("anthropic_version", "2023-06-01"),
     }

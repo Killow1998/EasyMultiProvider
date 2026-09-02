@@ -2,18 +2,22 @@
 
 ## 0.9.6 (2026-09-02)
 
+- Name the installed executable and desktop application `EMP` on Windows,
+  Linux, and macOS. Keep release filenames versionless and show the running
+  version beside the EMP title in the Web UI.
 - Extend the tested Codex compatibility line through `0.152.x` and recommend
   `0.152.x`, based on the stable Windows `0.152.0` runtime used by Codex App
   and a successful long-running Responses WebSocket session through EMP.
 - Decode masked WebSocket frames with bounded bulk byte translation instead of
   a Python per-byte loop, reducing EMP's local cost for large Codex messages.
 - Reserve short-request capacity separately from long-lived Codex WebSockets,
-  preventing many idle task connections from exhausting the listener and
+  and grow the local listener from 64 to 256 total connections as demand rises.
+  This prevents many idle task connections from exhausting the listener and
   surfacing as repeated local `502 Bad Gateway` failures.
-- Admit at most four active generations per Subscription identity and queue
-  additional turns fairly, so one account cannot open unbounded upstream
-  channels. Fail a queue timeout before dispatch with an actionable capacity
-  error, and include the wait in EMP preparation timing.
+- Start each Subscription identity with four active generations, grow gradually
+  to 16 only after successful completions under queue pressure, and halve the
+  current limit after an upstream 429. Queue additional turns fairly and fail a
+  queue timeout before dispatch without duplicating upstream side effects.
 - End a native stream that produces no substantive output within 120 seconds,
   while retaining the 300-second idle allowance after output starts. Never
   replay over HTTP once the WebSocket request may have reached the upstream;
@@ -31,9 +35,11 @@
   measurement. Aggregate recent safe logs across EMP restarts by model using
   median TTFT/TPS, and keep OpenAI Fast requests separate from standard mode.
 - Add a compact health view over the same bounded, privacy-safe request log,
-  including observed success, 429, 502, and local queue-limit rates. Keep the
-  latest 512 route observations available for aggregation while returning only
-  the latest 64 request details to the browser.
+  including observed success, 429, 502, 503, 504, and local queue-limit rates.
+  Distinguish an unavailable configured proxy, DNS resolution, TLS, network,
+  timeout, and actual upstream 5xx failures instead of collapsing them into a
+  generic 502. Keep the latest 512 route observations available for aggregation
+  while returning only the latest 64 request details to the browser.
 - Tighten the settings UI hierarchy with quieter secondary actions, compact
   spacing, restrained borders and locally embedded Phosphor action icons in
   both themes. Keep model display visible in a desktop side panel, update its

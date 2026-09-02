@@ -12,7 +12,7 @@ from typing import Iterable, Optional, Sequence, Set
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_NAME = "easy-multi-provider"
+ARTIFACT_NAME = "EMP"
 VERSION_PATTERN = re.compile(r'^__version__\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
@@ -45,19 +45,18 @@ def source_version(project_root: Path = PROJECT_ROOT) -> str:
 
 
 def primary_artifact_names(version: str) -> Set[str]:
-    base = "%s-%s" % (PACKAGE_NAME, version)
     return {
-        "%s-windows-x86_64.exe" % base,
-        "%s-windows-x86_64.zip" % base,
-        "%s-linux-x86_64" % base,
-        "%s-linux-x86_64.tar.gz" % base,
-        "%s-linux-x86_64.deb" % base,
-        "%s-macos-x86_64" % base,
-        "%s-macos-x86_64.tar.gz" % base,
-        "%s-macos-x86_64.dmg" % base,
-        "%s-macos-arm64" % base,
-        "%s-macos-arm64.tar.gz" % base,
-        "%s-macos-arm64.dmg" % base,
+        "EMP.exe",
+        "EMP.zip",
+        "EMP-linux-x86_64",
+        "EMP-linux-x86_64.tar.gz",
+        "EMP-linux-x86_64.deb",
+        "EMP-macos-x86_64",
+        "EMP-macos-x86_64.tar.gz",
+        "EMP-macos-x86_64.dmg",
+        "EMP-macos-arm64",
+        "EMP-macos-arm64.tar.gz",
+        "EMP-macos-arm64.dmg",
     }
 
 
@@ -67,13 +66,12 @@ def release_artifact_names(version: str) -> Set[str]:
 
 
 def public_artifact_names(version: str) -> Set[str]:
-    base = "%s-%s" % (PACKAGE_NAME, version)
     return {
-        "%s-windows-x86_64.exe" % base,
-        "%s-linux-x86_64.tar.gz" % base,
-        "%s-linux-x86_64.deb" % base,
-        "%s-macos-x86_64.dmg" % base,
-        "%s-macos-arm64.dmg" % base,
+        "EMP.exe",
+        "EMP-linux-x86_64.tar.gz",
+        "EMP-linux-x86_64.deb",
+        "EMP-macos-x86_64.dmg",
+        "EMP-macos-arm64.dmg",
     }
 
 

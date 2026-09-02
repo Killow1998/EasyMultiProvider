@@ -29,7 +29,9 @@ import psutil
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_NAME = "easy-multi-provider"
-PRODUCT_NAME = "EasyMultiProvider"
+PRODUCT_NAME = "EMP"
+EXECUTABLE_NAME = "EMP"
+ARTIFACT_NAME = "EMP"
 VERSION_PATTERN = re.compile(r'^__version__\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 
 
@@ -149,7 +151,7 @@ def _build_binary(target: Target, build_root: Path, icons: PackageIcons) -> Path
         ),
         environment=environment,
     )
-    executable = dist_root / (PACKAGE_NAME + target.executable_suffix)
+    executable = dist_root / (EXECUTABLE_NAME + target.executable_suffix)
     if not executable.is_file():
         raise RuntimeError("PyInstaller did not produce the expected executable")
     if target.system != "Windows":
@@ -347,7 +349,7 @@ def _smoke_executable(executable: Path, version: str, target: Target) -> None:
 
 def _copy_release_files(destination: Path, executable: Path, target: Target) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    binary = destination / (PACKAGE_NAME + target.executable_suffix)
+    binary = destination / (EXECUTABLE_NAME + target.executable_suffix)
     shutil.copy2(str(executable), str(binary))
     if target.system != "Windows":
         binary.chmod(0o755)
@@ -413,7 +415,7 @@ def _write_deb(
     scalable_icon_dir.mkdir(parents=True)
     raster_icon_dir.mkdir(parents=True)
     metadata_dir.mkdir(parents=True)
-    binary = binary_dir / PACKAGE_NAME
+    binary = binary_dir / EXECUTABLE_NAME
     shutil.copy2(str(executable), str(binary))
     binary.chmod(0o755)
     shutil.copy2(str(PROJECT_ROOT / "README.md"), str(docs_dir / "README.md"))
@@ -436,10 +438,10 @@ def _write_deb(
     (applications_dir / "easy-multi-provider.desktop").write_text(
         "[Desktop Entry]\n"
         "Type=Application\n"
-        "Name=EasyMultiProvider\n"
+        "Name=EMP\n"
         "Comment=Local multi-provider control plane for Codex\n"
-        "Exec=easy-multi-provider\n"
-        "TryExec=easy-multi-provider\n"
+        "Exec=EMP\n"
+        "TryExec=EMP\n"
         "Icon=easy-multi-provider\n"
         "Terminal=true\n"
         "Categories=Development;\n"
@@ -451,7 +453,7 @@ def _write_deb(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
         "<component type=\"desktop-application\">\n"
         "  <id>io.github.Killow1998.EasyMultiProvider</id>\n"
-        "  <name>EasyMultiProvider</name>\n"
+        "  <name>EMP</name>\n"
         "  <summary>Local multi-provider control plane for Codex</summary>\n"
         "  <description>\n"
         "    <p>Configure Codex subscriptions, API providers, and model routing "
@@ -480,7 +482,7 @@ def _write_deb(
         "Depends: libc6 (>= 2.35)\n"
         "Installed-Size: %s\n"
         "Description: Local multi-provider control plane for Codex\n"
-        " EasyMultiProvider adds subscriptions and external model providers to\n"
+        " EMP adds subscriptions and external model providers to\n"
         " the native Codex model picker while Codex keeps task ownership.\n"
     ) % (version, target.deb_arch, installed_kib)
     (control_dir / "control").write_text(control, encoding="utf-8")
@@ -498,8 +500,8 @@ def _write_macos_app(
     resources_dir = contents / "Resources"
     executable_dir.mkdir(parents=True)
     resources_dir.mkdir(parents=True)
-    shutil.copy2(str(executable), str(resources_dir / PACKAGE_NAME))
-    (resources_dir / PACKAGE_NAME).chmod(0o755)
+    shutil.copy2(str(executable), str(resources_dir / EXECUTABLE_NAME))
+    (resources_dir / EXECUTABLE_NAME).chmod(0o755)
     shutil.copy2(str(icons.macos), str(resources_dir / "easy-multi-provider.icns"))
 
     launcher = executable_dir / PRODUCT_NAME
@@ -517,7 +519,7 @@ def _write_macos_app(
         "set -eu\n"
         "resources_dir=$(CDPATH= cd \"$(dirname \"$0\")\" && pwd)\n"
         "config_path=\"$HOME/Library/Application Support/EasyMultiProvider/config.json\"\n"
-        "exec \"$resources_dir/easy-multi-provider\" serve "
+        "exec \"$resources_dir/EMP\" serve "
         "--config \"$config_path\" --open-browser\n",
         encoding="utf-8",
     )
@@ -599,7 +601,11 @@ def build(skip_service_smoke: bool = False) -> List[Path]:
     build_root.mkdir(parents=True)
     artifacts_root.mkdir(parents=True, exist_ok=True)
 
-    artifact_base = "%s-%s-%s" % (PACKAGE_NAME, version, target.identity)
+    artifact_base = (
+        ARTIFACT_NAME
+        if target.system == "Windows"
+        else "%s-%s" % (ARTIFACT_NAME, target.identity)
+    )
     expected_suffixes = [target.executable_suffix]
     if target.system == "Windows":
         expected_suffixes.append(".zip")
@@ -640,11 +646,11 @@ def build(skip_service_smoke: bool = False) -> List[Path]:
 
     if target.system == "Windows":
         archive = artifacts_root / (artifact_base + ".zip")
-        _write_zip(archive, executable, target, artifact_base)
+        _write_zip(archive, executable, target, PRODUCT_NAME)
         artifacts.append(archive)
     else:
         archive = artifacts_root / (artifact_base + ".tar.gz")
-        _write_tar(archive, executable, target, artifact_base)
+        _write_tar(archive, executable, target, PRODUCT_NAME)
         artifacts.append(archive)
     if target.system == "Linux":
         deb = artifacts_root / (artifact_base + ".deb")

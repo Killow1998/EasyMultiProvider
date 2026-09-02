@@ -113,6 +113,7 @@ from .transport_failures import (
     TransportFailure,
     failure_from_exception,
     http_error_message,
+    network_failure,
     protocol_fallback_allowed,
     status_error_class,
     upstream_http_failure,
@@ -568,7 +569,7 @@ def _headers(
     headers = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream" if stream else "application/json",
-        "User-Agent": "EasyMultiProvider/%s" % __version__,
+        "User-Agent": "EMP/%s" % __version__,
     }
     if provider.get("auth_mode") == "api_key":
         key = api_key(provider)
@@ -812,17 +813,18 @@ def _request(
                 failure.public_message or "upstream request failed",
                 failure.status,
                 failure.failure_reason or "upstream_rejected",
+                failure.error_class,
             )
         except URLError as exc:
             if transport_retry_allowed and attempt == 0:
                 continue
-            if isinstance(exc.reason, TimeoutError):
-                raise TransportFailure(
-                    CONNECT_TIMEOUT,
-                    504,
-                    PHASE_CONNECT,
-                ) from exc
-            raise RouterError("upstream connection failed: %s" % exc.reason, 502)
+            failure = network_failure(exc, PHASE_CONNECT)
+            raise TransportFailure(
+                failure.error_class,
+                failure.status,
+                failure.phase,
+                failure.failure_reason,
+            ) from exc
         return (
             _DeadlineResponse(
                 response,

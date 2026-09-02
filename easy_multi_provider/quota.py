@@ -427,7 +427,7 @@ def _run_quota_query(
             "params": {
                 "clientInfo": {
                     "name": "easy-multi-provider",
-                    "title": "EasyMultiProvider",
+                    "title": "EMP",
                     "version": __version__,
                 },
                 "capabilities": {},

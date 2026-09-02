@@ -36,13 +36,12 @@ class ReleasePackagingTests(unittest.TestCase):
 
     def test_public_manifest_contains_only_the_five_install_files(self):
         version = release_validation.source_version()
-        base = "easy-multi-provider-%s" % version
         expected = {
-            base + "-windows-x86_64.exe",
-            base + "-linux-x86_64.tar.gz",
-            base + "-linux-x86_64.deb",
-            base + "-macos-x86_64.dmg",
-            base + "-macos-arm64.dmg",
+            "EMP.exe",
+            "EMP-linux-x86_64.tar.gz",
+            "EMP-linux-x86_64.deb",
+            "EMP-macos-x86_64.dmg",
+            "EMP-macos-arm64.dmg",
         }
         self.assertEqual(release_validation.public_artifact_names(version), expected)
         self.assertLessEqual(expected, release_validation.primary_artifact_names(version))

@@ -61,6 +61,20 @@ class DiagnosticAnalyticsTest(unittest.TestCase):
         self.assertEqual(models[("gpt-5.6-sol", "fast")]["ttft_ms"], 3000.0)
         self.assertNotIn(("codex-auto-review", "standard"), models)
 
+    def test_health_keeps_gateway_network_and_timeout_statuses_separate(self):
+        records = [
+            self.record("model-a", "unknown", 502, None, None, "upstream_5xx"),
+            self.record("model-a", "unknown", 503, None, None, "proxy_unavailable"),
+            self.record("model-a", "unknown", 504, None, None, "connect_timeout"),
+        ]
+
+        health = summarize_route_observations(records)["health"]
+
+        self.assertEqual(health["status_502_count"], 1)
+        self.assertEqual(health["status_503_count"], 1)
+        self.assertEqual(health["status_504_count"], 1)
+        self.assertEqual(health["status_503_rate"], 33.3)
+
     @staticmethod
     def record(
         model_id,

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import os
 import re
+import socket
+import ssl
 import time
 from typing import Any, Dict, Mapping, Optional, Set, Tuple
 from urllib.error import HTTPError, URLError
@@ -26,6 +29,9 @@ CONNECT_TIMEOUT = "connect_timeout"
 FIRST_EVENT_TIMEOUT = "first_event_timeout"
 FIRST_OUTPUT_TIMEOUT = "first_output_timeout"
 UPSTREAM_504 = "upstream_504"
+PROXY_UNAVAILABLE = "proxy_unavailable"
+DNS_FAILURE = "dns_failure"
+TLS_FAILURE = "tls_failure"
 IDLE_AFTER_OUTPUT = "idle_after_output"
 LOCAL_DEADLINE = "local_deadline"
 STREAM_INCOMPLETE = "stream_incomplete"
@@ -53,6 +59,9 @@ _KNOWN_ERROR_CLASSES = frozenset(
         IDLE_AFTER_OUTPUT,
         LOCAL_DEADLINE,
         "network",
+        PROXY_UNAVAILABLE,
+        DNS_FAILURE,
+        TLS_FAILURE,
         "router_error",
         "protocol_error",
         "stream_error",
@@ -68,6 +77,141 @@ _KNOWN_ERROR_CLASSES = frozenset(
         "upstream_capacity",
     }
 )
+
+_PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+_PROXY_FAILURE_MARKERS = (
+    "cannot connect to proxy",
+    "proxy connect",
+    "proxy connection",
+    "proxy error",
+    "proxy server",
+    "tunnel connection failed",
+)
+
+
+def _proxy_configured() -> bool:
+    return any(str(os.environ.get(key) or "").strip() for key in _PROXY_ENV_KEYS)
+
+
+def _exception_text(exc: BaseException) -> str:
+    """Return bounded exception-chain text for classification only."""
+
+    parts = []
+    current: Optional[BaseException] = exc
+    seen = set()
+    while current is not None and id(current) not in seen and len(parts) < 4:
+        seen.add(id(current))
+        parts.append("%s %s" % (current.__class__.__name__, str(current)))
+        reason = getattr(current, "reason", None)
+        if isinstance(reason, BaseException):
+            current = reason
+        else:
+            current = current.__cause__ or current.__context__
+    return " ".join(parts).lower()[:2048]
+
+
+def _proxy_http_evidence(error: HTTPError, detail: str) -> bool:
+    headers = getattr(error, "headers", {}) or {}
+    header_names = " ".join(str(key).lower() for key in headers.keys())
+    header_values = " ".join(
+        str(headers.get(key, "")).lower()
+        for key in headers.keys()
+        if str(key).lower() in {"server", "via", "proxy-agent", "x-squid-error"}
+    )
+    text = " ".join(
+        (
+            str(getattr(error, "reason", "")),
+            detail,
+            header_names,
+            header_values,
+        )
+    ).lower()
+    return (
+        any(marker in text for marker in _PROXY_FAILURE_MARKERS)
+        or "proxy-agent" in header_names
+        or "x-squid-error" in header_names
+    )
+
+
+def network_failure(exc: BaseException, phase: str = PHASE_TERMINAL) -> UpstreamFailure:
+    """Classify a connection failure without exposing endpoints or OS text."""
+
+    reason = getattr(exc, "reason", None) if isinstance(exc, URLError) else exc
+    text = _exception_text(exc)
+    if isinstance(reason, TimeoutError) or isinstance(exc, TimeoutError):
+        return UpstreamFailure(
+            CONNECT_TIMEOUT,
+            504,
+            PHASE_CONNECT,
+            False,
+            CONNECT_TIMEOUT,
+        )
+    if isinstance(reason, ssl.SSLError) or isinstance(exc, ssl.SSLError) or any(
+        marker in text
+        for marker in ("certificate verify failed", "sslerror", "tlsv1", "tls handshake")
+    ):
+        return UpstreamFailure(TLS_FAILURE, 502, phase, False, TLS_FAILURE)
+    if isinstance(reason, socket.gaierror) or isinstance(exc, socket.gaierror):
+        return UpstreamFailure(DNS_FAILURE, 503, phase, False, DNS_FAILURE)
+    proxy = _proxy_configured()
+    if any(marker in text for marker in _PROXY_FAILURE_MARKERS) or (
+        proxy and isinstance(reason, ConnectionRefusedError)
+    ):
+        return UpstreamFailure(
+            PROXY_UNAVAILABLE,
+            503,
+            phase,
+            False,
+            PROXY_UNAVAILABLE,
+            "Configured proxy is unavailable.",
+        )
+    if proxy and isinstance(reason, ConnectionResetError):
+        return UpstreamFailure("proxy_reset", 502, phase, False, "proxy_reset")
+    return UpstreamFailure("network", 503, phase, False, "network_unavailable")
+
+
+def public_failure_message(
+    error_class: Any,
+    failure_reason: Any = None,
+    status: Any = 502,
+) -> str:
+    """Return a stable, content-free explanation suitable for Codex."""
+
+    error_class = normalize_error_class(error_class)
+    failure_reason = _safe_token(failure_reason)
+    status = _safe_status(status)
+    if error_class == PROXY_UNAVAILABLE or failure_reason == PROXY_UNAVAILABLE:
+        return "Configured proxy is unavailable."
+    if error_class == DNS_FAILURE:
+        return "The upstream host name could not be resolved."
+    if error_class == TLS_FAILURE:
+        return "The secure connection to the upstream failed."
+    if error_class == "network":
+        return "The network connection to the upstream is unavailable."
+    if error_class in {
+        CONNECT_TIMEOUT,
+        FIRST_EVENT_TIMEOUT,
+        FIRST_OUTPUT_TIMEOUT,
+        IDLE_AFTER_OUTPUT,
+        LOCAL_DEADLINE,
+        UPSTREAM_504,
+        "timeout",
+    }:
+        return "The upstream request timed out."
+    if error_class == "rate_limit":
+        return "The upstream rate limit was reached."
+    if error_class == "auth":
+        return "The upstream rejected the account credentials."
+    if error_class == "upstream_5xx":
+        return "The upstream service returned HTTP %d." % status
+    return "The upstream request failed before producing output."
 
 
 def _safe_status(status: Any, fallback: int = 502) -> int:
@@ -278,6 +422,16 @@ def upstream_http_failure(
     error: HTTPError, raw: bytes, model: Any
 ) -> UpstreamFailure:
     content_type, detail = http_error_detail(error, raw)
+    if error.code in (502, 503, 504) and _proxy_http_evidence(error, detail):
+        status = 504 if error.code == 504 else 503
+        return UpstreamFailure(
+            PROXY_UNAVAILABLE,
+            status,
+            PHASE_CONNECT,
+            False,
+            PROXY_UNAVAILABLE,
+            "Configured proxy is unavailable.",
+        )
     return http_failure(error.code, content_type, detail, model)
 
 
@@ -346,13 +500,16 @@ def failure_from_exception(
         )
     if isinstance(exc, UpstreamHTTPError):
         reason = _safe_token(getattr(exc, "failure_reason", None))
+        error_class = normalize_error_class(
+            getattr(exc, "error_class", None), status_error_class(exc.status)
+        )
         return UpstreamFailure(
-            status_error_class(exc.status),
+            error_class,
             _safe_status(exc.status),
             phase,
             False,
             reason,
-            str(exc),
+            public_failure_message(error_class, reason, exc.status),
         )
     if isinstance(exc, StreamBoundaryError):
         error_class = normalize_error_class(
@@ -382,7 +539,7 @@ def failure_from_exception(
             failure_phase = PHASE_FIRST_EVENT
         return UpstreamFailure(error_class, 504, failure_phase)
     if isinstance(exc, (OSError, URLError)):
-        return UpstreamFailure("network", 502, phase)
+        return network_failure(exc, phase)
     if isinstance(exc, RouterError):
         if (
             _safe_status(exc.status) == 504

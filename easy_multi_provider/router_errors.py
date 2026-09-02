@@ -21,6 +21,7 @@ class UpstreamHTTPError(RouterError):
             "auth_rejected",
             "context_length_exceeded",
             "payment_required",
+            "proxy_unavailable",
             "quota_exhausted",
             "rate_limited",
             "request_too_large",
@@ -30,12 +31,19 @@ class UpstreamHTTPError(RouterError):
         }
     )
 
-    def __init__(self, message: str, status: int, failure_reason: str):
+    def __init__(
+        self,
+        message: str,
+        status: int,
+        failure_reason: str,
+        error_class: Optional[str] = None,
+    ):
         self.failure_reason = (
             failure_reason
             if failure_reason in self._REASONS
             else "upstream_rejected"
         )
+        self.error_class = error_class
         super().__init__(message, status)
 
 

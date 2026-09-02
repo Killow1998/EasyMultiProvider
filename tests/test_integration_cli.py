@@ -131,7 +131,7 @@ class IntegrationCliTests(unittest.TestCase):
                 cli.main(["--version"])
         self.assertEqual(raised.exception.code, 0)
         self.assertEqual(
-            output.getvalue().strip(), "EasyMultiProvider %s" % __version__
+            output.getvalue().strip(), "EMP %s" % __version__
         )
 
     def test_serve_subcommand_keeps_existing_service_call_shape(self):

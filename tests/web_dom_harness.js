@@ -681,9 +681,9 @@ function presentationMigrationBehavior() {
   assert.strictEqual(run("state.catalog_presentations['provider/model-a'].reasoning_summary"), "hide");
 
   run("state.emp_version = '0.9.4'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.4.emp");
+  assert.strictEqual(run("migrationFilename()"), "EMP.emp");
   run("state.emp_version = '../../unsafe'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.6.emp");
+  assert.strictEqual(run("migrationFilename()"), "EMP.emp");
 }
 
 function modalDismissalBehavior() {

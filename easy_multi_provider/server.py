@@ -142,7 +142,7 @@ from .transport import (
     sse_json_events,
     websocket_accept,
 )
-from .transport_failures import status_error_class
+from .transport_failures import public_failure_message, status_error_class
 from .request_limits import RequestLimits
 from .upstream_admission import (
     UpstreamAdmissionController,
@@ -208,6 +208,9 @@ _DIAGNOSTIC_ERRORS = frozenset(
         "idle_after_output",
         "local_deadline",
         "network",
+        "proxy_unavailable",
+        "dns_failure",
+        "tls_failure",
         "router_error",
         "stream_error",
         "stream_incomplete",
@@ -246,12 +249,18 @@ def _pre_output_http_failure(event: Any) -> Optional[Tuple[int, Dict[str, Any]]]
     if not isinstance(status, int) or status < 400 or status > 599:
         return None
     error_class = str(error.get("error_class") or "upstream_error")
-    code = str(error.get("code") or "upstream_error")
+    code = str(error.get("code") or error_class or "upstream_error")
+    failure_reason = error.get("failure_reason")
     return status, {
         "error": {
             "type": error_class,
             "code": code,
-            "message": "Upstream request failed before producing output.",
+            "message": public_failure_message(
+                error_class,
+                failure_reason,
+                status,
+            ),
+            "param": None,
         }
     }
 _DIAGNOSTIC_DECISIONS = frozenset(
@@ -2180,7 +2189,7 @@ def _json_bytes(value: Any) -> bytes:
 
 def make_handler(state: AppState):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "EasyMultiProvider/%s" % __version__
+        server_version = "EMP/%s" % __version__
 
         def setup(self) -> None:
             super().setup()
@@ -2852,15 +2861,21 @@ def make_handler(state: AppState):
                                     )
                                     continue
                                 if not exc.retryable:
-                                    error_class = status_error_class(exc.status)
+                                    error_class = exc.error_class or status_error_class(exc.status)
                                     terminal = {
                                         "status": exc.status,
                                         "success": False,
                                         "error_class": error_class,
                                     }
+                                    if exc.failure_reason:
+                                        terminal["failure_reason"] = exc.failure_reason
                                     self._websocket_error(
                                         websocket,
-                                        "Native upstream WebSocket request failed.",
+                                        public_failure_message(
+                                            error_class,
+                                            exc.failure_reason,
+                                            exc.status,
+                                        ),
                                         exc.status,
                                         error_class,
                                     )
@@ -2882,8 +2897,11 @@ def make_handler(state: AppState):
                                 failure_terminal = {
                                     "status": exc.status,
                                     "success": False,
-                                    "error_class": status_error_class(exc.status),
+                                    "error_class": exc.error_class
+                                    or status_error_class(exc.status),
                                 }
+                                if exc.failure_reason:
+                                    failure_terminal["failure_reason"] = exc.failure_reason
                                 if previous_hint is not None:
                                     # Codex recognizes this code and retries the
                                     # same turn as a full request.  Native routes
@@ -2947,7 +2965,23 @@ def make_handler(state: AppState):
                                     last_native_response_id = completed_native_id
                                 continue
                             finally:
-                                admission.release()
+                                terminal_status = (
+                                    terminal.get("status")
+                                    if isinstance(terminal, Mapping)
+                                    else None
+                                )
+                                admission.release(
+                                    success=(
+                                        terminal.get("success") is True
+                                        if isinstance(terminal, Mapping)
+                                        else False
+                                    ),
+                                    status=(
+                                        terminal_status
+                                        if isinstance(terminal_status, int)
+                                        else None
+                                    ),
+                                )
                         if plan is not None:
                             # Native preparation may have rebuilt or compacted
                             # visible history already. Reuse that transient
@@ -3061,7 +3095,7 @@ def make_handler(state: AppState):
             if path in ("/", "/index.html"):
                 if not self._has_session():
                     if not self._has_bootstrap():
-                        self._error(401, "open the management URL printed by EasyMultiProvider")
+                        self._error(401, "open the management URL printed by EMP")
                         return
                     self._send(
                         303,
@@ -3463,7 +3497,7 @@ def make_handler(state: AppState):
                         "application/octet-stream",
                         {
                             "Cache-Control": "no-store",
-                            "Content-Disposition": 'attachment; filename="easy-multi-provider-%s.emp"' % __version__,
+                            "Content-Disposition": 'attachment; filename="EMP.emp"',
                         },
                     )
                     return
@@ -3707,27 +3741,102 @@ def make_handler(state: AppState):
     return Handler
 
 
+class _AdaptiveSlotPool:
+    """A lock-protected capacity gate that grows only when demand reaches it."""
+
+    def __init__(
+        self,
+        initial: int,
+        maximum: int,
+        growth: int,
+        on_expand=None,
+    ) -> None:
+        self.capacity = max(1, int(initial))
+        self.maximum = max(self.capacity, int(maximum))
+        self.growth = max(1, int(growth))
+        self.active = 0
+        self._on_expand = on_expand
+        self._lock = threading.Lock()
+
+    def acquire(self) -> bool:
+        expanded = None
+        with self._lock:
+            if self.active >= self.capacity:
+                if self.capacity >= self.maximum:
+                    return False
+                previous = self.capacity
+                self.capacity = min(self.maximum, self.capacity + self.growth)
+                expanded = (previous, self.capacity)
+            self.active += 1
+        if expanded is not None and self._on_expand is not None:
+            try:
+                self._on_expand(*expanded)
+            except Exception:
+                # Diagnostics must never take back an already admitted slot.
+                pass
+        return True
+
+    def release(self) -> None:
+        with self._lock:
+            if self.active <= 0:
+                raise ValueError("adaptive slot pool released too many times")
+            self.active -= 1
+
+    def snapshot(self) -> Dict[str, int]:
+        with self._lock:
+            return {
+                "active": self.active,
+                "capacity": self.capacity,
+                "maximum": self.maximum,
+            }
+
+
 class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     # Codex keeps one Responses WebSocket open per active task. Bound those
     # separately so long-lived idle sockets cannot exhaust every server thread
     # and turn new proxy, health, and management requests into connection resets.
     request_limit = 64
+    request_limit_max = 256
+    request_limit_growth = 32
     websocket_limit = 48
+    websocket_limit_max = 224
+    websocket_limit_growth = 32
+    request_queue_size = 128
 
     def __init__(self, server_address, handler_cls):
+        self.capacity_reporter = None
         super().__init__(server_address, handler_cls)
-        self._request_slots = threading.BoundedSemaphore(self.request_limit)
-        self._websocket_slots = threading.BoundedSemaphore(self.websocket_limit)
+        self._request_slots = _AdaptiveSlotPool(
+            self.request_limit,
+            self.request_limit_max,
+            self.request_limit_growth,
+            lambda previous, current: self._report_capacity(
+                "requests", previous, current
+            ),
+        )
+        self._websocket_slots = _AdaptiveSlotPool(
+            self.websocket_limit,
+            self.websocket_limit_max,
+            self.websocket_limit_growth,
+            lambda previous, current: self._report_capacity(
+                "websockets", previous, current
+            ),
+        )
+
+    def _report_capacity(self, resource: str, previous: int, current: int) -> None:
+        reporter = self.capacity_reporter
+        if reporter is not None:
+            reporter(resource, previous, current)
 
     def acquire_websocket_slot(self) -> bool:
-        return self._websocket_slots.acquire(blocking=False)
+        return self._websocket_slots.acquire()
 
     def release_websocket_slot(self) -> None:
         self._websocket_slots.release()
 
     def process_request(self, request, client_address):
-        if not self._request_slots.acquire(blocking=False):
+        if not self._request_slots.acquire():
             request.close()
             return
         try:
@@ -3932,6 +4041,14 @@ def _serve_owned(
             bind_port = port if port is not None else config["port"]
             stage = "listener_bind"
             server = BoundedThreadingHTTPServer((bind_host, bind_port), make_handler(state))
+            server.capacity_reporter = lambda resource, previous, current: _journal_event(
+                journal,
+                "info",
+                "listener_capacity_expanded",
+                resource=resource,
+                previous_limit=previous,
+                limit=current,
+            )
             base_url = bound_base_url(server.server_address).rsplit("/v1", 1)[0]
             previous_sigterm = _install_sigterm_handler()
 
@@ -3984,7 +4101,7 @@ def _serve_owned(
             )
             state.start_quota_sampler()
 
-            print("EasyMultiProvider listening on %s" % base_url, flush=True)
+            print("EMP listening on %s" % base_url, flush=True)
             print("Network proxy: %s" % proxy_source, flush=True)
             bootstrap_url = "%s/?bootstrap=%s" % (base_url, state.bootstrap_token)
             print("Open in browser: %s" % bootstrap_url, flush=True)
@@ -4082,4 +4199,4 @@ def _serve_owned(
                 raise close_error
             if restore_error is not None:
                 raise restore_error
-            print("EasyMultiProvider stopped.", flush=True)
+            print("EMP stopped.", flush=True)

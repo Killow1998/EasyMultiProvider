@@ -1,8 +1,8 @@
-# EasyMultiProvider
+# EMP
 
 [English](README.md) | 中文
 
-EasyMultiProvider（EMP）是一个通过浏览器配置的 Codex 本地模型路由器。它在
+EMP 是一个通过浏览器配置的 Codex 本地模型路由器。它在
 保留 Codex 原生使用体验的同时，把多个 ChatGPT Subscription、API Provider
 和外部模型加入同一个模型列表。
 
@@ -70,14 +70,14 @@ EMP 支持 Codex CLI `0.149.x` 至 `0.152.x`，推荐使用 `0.152.x`。Web UI �
 
 最简单的桌面启动方式是：
 
-- **Windows：**双击 `easy-multi-provider.exe`。
-- **Linux：**安装 `.deb` 后，从应用菜单打开 **EasyMultiProvider**。
-- **macOS：**打开 DMG，把 **EasyMultiProvider** 拖入“应用程序”，然后双击。
+- **Windows：**双击 `EMP.exe`。
+- **Linux：**安装 `.deb` 后，从应用菜单打开 **EMP**。
+- **macOS：**打开 DMG，把 **EMP** 拖入“应用程序”，然后双击。
 
 EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的终端窗口。看到
-`EasyMultiProvider listening on ...` 就表示启动成功。使用 EMP 时请保持该终端
+`EMP listening on ...` 就表示启动成功。使用 EMP 时请保持该终端
 开启；按 `Ctrl+C` 可以干净退出，也可以关闭终端结束进程。正常退出后会显示
-`EasyMultiProvider stopped.`。
+`EMP stopped.`。
 
 桌面启动会把配置保存到各系统标准的用户目录：
 
@@ -89,8 +89,8 @@ EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的
 需要命令行控制时仍可显式启动服务。下载 Windows 可执行文件后，在 PowerShell 中运行：
 
 ```powershell
-.\easy-multi-provider.exe --version
-.\easy-multi-provider.exe serve --config config.json
+.\EMP.exe --version
+.\EMP.exe serve --config config.json
 ```
 
 解压 Linux `.tar.gz` 或安装 `.deb` 后运行：

@@ -42,7 +42,7 @@ On Windows, the spec explicitly collects the OpenSSL DLLs loaded by Python.
 This prevents unrelated DLLs on `PATH` from shadowing Python's TLS dependencies
 in Conda or virtual-environment builds. No TLS verification is disabled and no
 system certificates are modified. The offline check can also be run directly:
-`easy-multi-provider.exe --emp-package-tls-check`.
+`EMP.exe --emp-package-tls-check`.
 
 ## Desktop package boundary
 
@@ -58,7 +58,7 @@ Desktop launch is intentionally foreground-only:
   arguments;
 - the Debian package installs a `Terminal=true` desktop entry plus scalable and
   raster icons;
-- the DMG contains `EasyMultiProvider.app`, whose launcher opens the bundled
+- the DMG contains `EMP.app`, whose launcher opens the bundled
   command in Terminal.
 
 All three forms open the authenticated browser URL only after the listener is
@@ -89,8 +89,10 @@ Run the **Package** workflow manually from GitHub Actions:
   manifest and every SHA-256 sidecar, and create a GitHub Draft Pre-release.
 
 Checksums and alternate wrappers are CI-only verification evidence. The Release
-attaches exactly five normal installation downloads: Windows EXE, Linux DEB and
-TAR.GZ, and the Intel and Apple Silicon DMGs. Raw executables, Windows/macOS
+attaches exactly five versionless installation downloads: `EMP.exe`, Linux DEB
+and TAR.GZ, and the Intel and Apple Silicon DMGs. The installed executable and
+desktop application are both named `EMP`; the Web UI shows the running version.
+Raw executables, Windows/macOS
 archives, and `.sha256` sidecars remain in the temporary workflow artifact
 bundles and do not clutter the user download list.
 
@@ -101,8 +103,9 @@ tag that targets a different commit. The build jobs retain read-only repository
 access; only the gated release job receives `contents: write`.
 
 The release remains private as a draft until a maintainer reviews the generated
-notes and assets and clicks **Publish release** on GitHub. The workflow creates
-the tag at the exact commit it built; no local `git tag` command is needed.
+notes and assets and clicks **Publish release** on GitHub. The workflow requires
+the tag to target the exact commit it built. Re-running a draft release replaces
+that draft and its assets, but a published release is never replaced.
 
 Current macOS outputs are unsigned development artifacts. Keep their release
 marked as a pre-release until Developer ID signing and notarization are
