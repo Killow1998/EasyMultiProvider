@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, Tuple
 
 from .codex_runtime import (
+    CATALOG_UNVERIFIED,
     NOT_CHECKED,
     RELOAD_REQUIRED,
     STOP_FAILED,
@@ -48,12 +49,15 @@ def integration_summary(
     runtime = state.runtime_sync_snapshot()
     runtime_state = runtime.get("state", NOT_CHECKED)
     runtime_action_required = runtime_state in {
+        CATALOG_UNVERIFIED,
         RELOAD_REQUIRED,
         STOP_FAILED,
         VERIFICATION_FAILED,
         UNSUPPORTED,
     }
-    if runtime_state == RELOAD_REQUIRED:
+    if runtime_state == CATALOG_UNVERIFIED:
+        next_action = "restart Codex clients safely and check model display"
+    elif runtime_state == RELOAD_REQUIRED:
         next_action = "wait for shared backend owner restart"
     elif runtime_state == STOPPED_WAITING_FOR_START:
         next_action = "wait for shared backend owner start"

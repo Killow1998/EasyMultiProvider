@@ -49,8 +49,8 @@ class RecordingRuntimeController:
         return {
             "installed": "0.150.1",
             "status": "supported",
-            "supported_range": "0.149.x–0.151.x",
-            "recommended": "0.151.x",
+            "supported_range": "0.149.x–0.152.x",
+            "recommended": "0.152.x",
         }
 
 
@@ -123,8 +123,8 @@ class RuntimeIntegrationTests(unittest.TestCase):
             {
                 "installed": "0.150.1",
                 "status": "supported",
-                "supported_range": "0.149.x–0.151.x",
-                "recommended": "0.151.x",
+                "supported_range": "0.149.x–0.152.x",
+                "recommended": "0.152.x",
             },
         )
         persisted = json.loads(

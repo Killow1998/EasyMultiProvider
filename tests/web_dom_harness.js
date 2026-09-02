@@ -138,11 +138,29 @@ for (const id of [
   "integration_reload", "codex_compatibility", "codex_runtime_save",
   "codex_runtime_scan", "codex_runtimes", "language_select", "theme_select",
   "catalog_display_search", "catalog_display_toggle", "catalog_display_models",
-  "diagnostics_summary", "diagnostics_records", "accounts", "providers", "models",
+  "diagnostics_summary", "performance_records", "diagnostics_records", "accounts", "providers", "models",
 ]) getElement(id);
 
 const html = fs.readFileSync(process.argv[2], "utf8");
 assert.doesNotMatch(html, /实际调用时自动使用其中兼容性最可靠的一个/);
+assert.match(html, /@phosphor-icons\/core 2\.1\.1, Regular weight, MIT/);
+assert.strictEqual(
+  Array.from(html.matchAll(/button\[data-icon="[^"]+"\]\{--button-icon:url\("data:image\/svg\+xml,%3Csvg%20/g)).length,
+  13,
+  "all action icons must come from the embedded Phosphor set",
+);
+for (const unwantedDefaultTip of [
+  /长请求自动扩容/,
+  /选中的客户端用于兼容性提示/,
+  /不会返回到浏览器或写入/,
+  /只保留额度查询/,
+  /余量每分钟同步/,
+  /每 5 分钟自动采样/,
+  /隐藏模型排在最后/,
+  /仅凭模型 ID/,
+]) {
+  assert.doesNotMatch(html, unwantedDefaultTip, `developer-facing tip leaked into the default UI: ${unwantedDefaultTip}`);
+}
 const match = html.match(/<script>([\s\S]*)<\/script>/);
 assert(match, "page script not found");
 const script = match[1].replace(/\nload\(\);\s*$/, "\n");
@@ -156,6 +174,8 @@ const context = vm.createContext({
   Uint8Array,
   setTimeout,
   clearTimeout,
+  setInterval: () => 1,
+  clearInterval: () => {},
   confirm: () => true,
   fetch: async () => { throw new Error("unexpected fetch"); },
   btoa: value => Buffer.from(value, "binary").toString("base64"),
@@ -193,19 +213,20 @@ async function integrationBehavior() {
   run("api = __apiStub; state = {native_catalog_path:'', accounts:[], providers:[], models:[]}");
   run("confirmIntegrationAction('enable')");
   assert(!getElement("modal_backdrop").classList.contains("hidden"), "confirmation modal must open");
-  assert.match(getElement("modal_body").innerHTML, /不会停止|will not stop/i);
-  assert.doesNotMatch(getElement("modal_body").innerHTML, /disconnect|中断|断开/i);
+  assert.match(getElement("modal_body").innerHTML, /应用当前 EMP 设置.*重启 Codex/);
+  assert.doesNotMatch(getElement("modal_body").innerHTML, /只读|共享后端|所有者|无法确认/);
   await getElement("modal_submit").click();
   const enable = calls.find(call => call.path === "/api/integration/enable");
   assert(enable, "enable endpoint was not called");
   assert.deepStrictEqual(JSON.parse(enable.options.body), {confirm_reload: true});
   assert(!calls.some(call => call.path === "/api/integration/sync"), "obsolete second sync was called");
-  assert.match(getElement("status").textContent, /owner|所有者/i);
+  assert.match(getElement("status").textContent, /EMP已启动，请重启Codex/);
   assert(getElement("modal_backdrop").classList.contains("hidden"), "successful modal must close");
 
-  run("renderIntegration({codex_compatibility:{installed:'0.151.2',status:'recommended',source:'managed',helper_source:'managed',preferences:['auto'],runtimes:[{source:'managed',path:'/managed/codex',installed:'0.151.2',status:'recommended',selectable:true,targeted:true,helper:true},{source:'cursor',path:'/cursor/codex',installed:'0.150.1',status:'supported',selectable:true,targeted:true,helper:false},{source:'path_cli',path:'/old/codex',installed:'0.146.0',status:'unsupported',selectable:false,targeted:false,helper:false}],supported_range:'0.149.x–0.151.x',recommended:'0.151.x'},configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'emp_loaded',target:'emp',verified:true,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
-  assert.match(getElement("integration_summary").textContent, /exposes|已暴露/i);
-  assert.match(getElement("codex_compatibility").textContent, /已选择 2 个 Codex 客户端.*0\.149\.x.*0\.151\.x/);
+  run("renderIntegration({codex_compatibility:{installed:'0.152.1',status:'recommended',source:'managed',helper_source:'managed',preferences:['auto'],runtimes:[{source:'managed',path:'/managed/codex',installed:'0.152.1',status:'recommended',selectable:true,targeted:true,helper:true},{source:'cursor',path:'/cursor/codex',installed:'0.150.1',status:'supported',selectable:true,targeted:true,helper:false},{source:'path_cli',path:'/old/codex',installed:'0.146.0',status:'unsupported',selectable:false,targeted:false,helper:false}],supported_range:'0.149.x–0.152.x',recommended:'0.152.x'},configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'emp_loaded',target:'emp',verified:true,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
+  assert.strictEqual(getElement("integration_summary").textContent, "EMP已启动，请重启Codex");
+  assert.strictEqual(getElement("codex_compatibility").textContent, "");
+  assert.strictEqual(getElement("codex_compatibility").hidden, true);
   assert.strictEqual(getElement("codex_compatibility").dataset.state, "recommended");
   assert.match(getElement("codex_runtimes").innerHTML, /title="\/managed\/codex"/);
   assert.match(getElement("codex_runtimes").innerHTML, /Codex CLI<\/strong> v0\.146\.0/);
@@ -221,10 +242,11 @@ async function integrationBehavior() {
   assert(calls.some(call => call.path === "/api/runtime/select" && call.options.body.includes('auto')));
   assert(calls.some(call => call.path === "/api/runtime/scan"));
 
-  run("renderIntegration({codex_compatibility:{installed:'0.151.0-alpha.7.2',status:'unverified',source:'codex_app',helper_source:'codex_app',preferences:['codex_app'],runtimes:[{source:'codex_app',path:'C:/OpenAI/Codex/codex.exe',installed:'0.151.0-alpha.7.2',status:'unverified',selectable:true,targeted:true,helper:true}],supported_range:'0.149.x–0.151.x',recommended:'0.151.x'},configuration:{state:'native',relation:'original',conflicts:[]},runtime:{state:'not_checked',target:'native',verified:false,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
-  assert.match(getElement("codex_compatibility").textContent, /已选择 1 个 Codex 客户端/);
+  run("renderIntegration({codex_compatibility:{installed:'0.152.0-alpha.7.2',status:'unverified',source:'codex_app',helper_source:'codex_app',preferences:['codex_app'],runtimes:[{source:'codex_app',path:'C:/OpenAI/Codex/codex.exe',installed:'0.152.0-alpha.7.2',status:'unverified',selectable:true,targeted:true,helper:true}],supported_range:'0.149.x–0.152.x',recommended:'0.152.x'},configuration:{state:'native',relation:'original',conflicts:[]},runtime:{state:'not_checked',target:'native',verified:false,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
+  assert.match(getElement("codex_compatibility").textContent, /0\.152\.0-alpha\.7\.2.*尚未验证.*0\.152\.x/);
+  assert.strictEqual(getElement("codex_compatibility").hidden, false);
   run("renderIntegration({configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'stopped_waiting_for_start',target:'emp',verified:false,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
-  assert.match(getElement("integration_summary").textContent, /owner|所有者/i);
+  assert.strictEqual(getElement("integration_summary").textContent, "EMP已启动，请重启Codex");
 
   let passiveVerifyCalls = 0;
   context.__apiStub = async (path) => {
@@ -248,7 +270,7 @@ async function integrationBehavior() {
   run("api = __apiStub");
   await run("loadIntegration()");
   assert.strictEqual(passiveVerifyCalls, 1);
-  assert.match(getElement("integration_summary").textContent, /exposes|已暴露/i);
+  assert.strictEqual(getElement("integration_summary").textContent, "EMP已启动，请重启Codex");
   assert.strictEqual(getElement("integration_reload").hidden, true);
 
   context.__apiStub = async (path, options = {}) => {
@@ -273,8 +295,8 @@ async function integrationBehavior() {
   assert.strictEqual(loaded, false);
   assert.strictEqual(getElement("integration").dataset.state, "unavailable");
   assert.match(getElement("integration_badge").textContent, /Unavailable|不可用/);
-  assert.match(getElement("integration_summary").textContent, /integration request failed/);
-  assert.match(getElement("integration_summary").textContent, /stale|过期/i);
+  assert.strictEqual(getElement("integration_summary").textContent, "暂时无法读取 EMP 状态，请重试。");
+  assert.doesNotMatch(getElement("integration_summary").textContent, /integration request failed|stale|过期/i);
   assert.doesNotMatch(getElement("integration_badge").textContent, /^Conflict$|^配置冲突$/);
 
   context.__apiStub = async (path) => {
@@ -293,8 +315,9 @@ async function integrationBehavior() {
   };
   run("api = __apiStub; state = {native_catalog_path:'', accounts:[], providers:[], models:[]}; confirmIntegrationAction('enable')");
   await getElement("modal_submit").click();
-  assert.match(getElement("integration_badge").textContent, /EMP (?:applied|已启用)/);
-  assert.match(getElement("integration_summary").textContent, /只读目录检查失败|read-only shared backend catalog check failed/i);
+  assert.strictEqual(getElement("integration_badge").textContent, "EMP");
+  assert.strictEqual(getElement("integration_summary").textContent, "EMP已启动，请重启Codex");
+  assert.doesNotMatch(getElement("integration_summary").textContent, /只读|未验证|无法确认|共享后端/);
   assert.strictEqual(getElement("integration_reload").hidden, false);
 }
 
@@ -352,7 +375,7 @@ function quotaHistoryBehavior() {
   assert.match(html, /<svg/);
   assert.match(html, /主窗口/);
   assert.match(html, /75%/);
-  assert.match(html, /每 5 分钟自动采样/);
+  assert.doesNotMatch(html, /每 5 分钟|自动采样|保留 15 天/);
 
   for (const [seriesValues, expectedMin, expectedMax] of [
     [[[72,74],[80]], 71, 81],
@@ -371,6 +394,102 @@ function quotaHistoryBehavior() {
     assert.doesNotMatch(svg, /NaN|Infinity/);
   }
   assert.strictEqual(run("quotaChartSvg([])"), "");
+}
+
+function performanceDiagnosticsBehavior() {
+  context.__performancePayload = {records:[
+    {observed_at:'2026-09-02T12:00:00Z',route:'responses',model_id:'sol/native',status:200,error_class:'none',ttft_ms:5000,tokens_per_second:55,local_prepare_ms:120,upstream_first_token_ms:4880,duration_ms:7000,protocol:'responses',transport:'websocket',context_decision:'allowed'},
+    {observed_at:'2026-09-02T12:01:00Z',route:'responses',model_id:'sol/slow',status:200,error_class:'none',ttft_ms:9000,tokens_per_second:30,local_prepare_ms:100,upstream_first_token_ms:8900,duration_ms:13000,protocol:'responses',transport:'websocket',context_decision:'allowed'},
+  ]};
+  run('renderDiagnostics(__performancePayload)');
+  assert.match(getElement('diagnostics_summary').textContent, /最近 2 次模型调用/);
+  const rendered = getElement('performance_records').innerHTML;
+  assert.match(rendered, /sol\/native/);
+  assert.match(rendered, /5\.00 s/);
+  assert.match(rendered, /55\.0 token\/s/);
+  assert.match(rendered, /120 ms/);
+  assert.match(rendered, /未发现明显 EMP 准备延迟/);
+  assert.match(rendered, /上游首个输出偏慢/);
+  run('openDiagnostics()');
+  assert.match(getElement('modal_title').textContent, /性能诊断/);
+  assert.match(getElement('modal_body').innerHTML, /TTFT 约 5 s · TPS 约 55 token\/s/);
+  assert.match(getElement('modal_body').innerHTML, /原生 A\/B/);
+  run('closeModal()');
+}
+
+function quotaMeterBehavior() {
+  context.__quotaMeterState = {
+    native_account: null,
+    accounts: [{id:'meter',name:'meter',prefix:'meter',credential_set:true,quota:{rate_limits:{primary:{usedPercent:20,windowDurationMins:10080,resetsAt:1900000000},secondary:{usedPercent:65.5,windowDurationMins:300,resetsAt:1900000300}}}}],
+  };
+  run("state = __quotaMeterState; renderAccounts()");
+  let rendered = getElement("accounts").innerHTML;
+  assert.match(rendered, /class="quota-battery" role="progressbar"/);
+  assert.match(rendered, /aria-valuenow="80"/);
+  assert.match(rendered, /aria-valuenow="34\.5"/);
+  assert(rendered.indexOf("7d") < rendered.indexOf("5h"), "long quota window must render first");
+  assert.match(rendered, /is-medium/);
+
+  context.__quotaMeterState.accounts[0].quota = {rate_limits_by_limit_id:{codex:{primary:{usedPercent:4,windowDurationMins:300}},bonus:{secondary:{usedPercent:92,windowDurationMins:60}}}};
+  run("renderAccounts()");
+  rendered = getElement("accounts").innerHTML;
+  assert.match(rendered, /aria-valuenow="96"/);
+  assert.match(rendered, /bonus · 1h/);
+  assert.match(rendered, /aria-valuenow="8"/);
+  assert.match(rendered, /is-low/);
+
+  run("refreshingAccounts.add('meter'); renderAccounts()");
+  assert.match(getElement("accounts").innerHTML, /is-refreshing/);
+  run("refreshingAccounts.delete('meter')");
+  assert.match(html, /@media\(prefers-reduced-motion:reduce\)/);
+}
+
+async function quotaStateSyncBehavior() {
+  const calls = [];
+  context.__quotaSyncState = {native_account:null,accounts:[{id:'sync',name:'sync',prefix:'sync',credential_set:true,quota:{rate_limits:{primary:{usedPercent:40,windowDurationMins:300}}}}]};
+  context.__quotaSyncApi = async path => {
+    calls.push(path);
+    if (path === '/api/accounts') return {native_account:null,accounts:[{id:'sync',name:'sync',prefix:'sync',credential_set:true,quota:{rate_limits:{primary:{usedPercent:25,windowDurationMins:300}}}}]};
+    throw new Error('unexpected quota sync request: ' + path);
+  };
+  run("state = __quotaSyncState; api = __quotaSyncApi; renderAccounts()");
+  assert.strictEqual(await run("refreshQuotaState()"), true);
+  assert.deepStrictEqual(calls, ['/api/accounts'], 'quota display sync must only read EMP local account state');
+  assert.match(getElement("accounts").innerHTML, /aria-valuenow="75"/);
+  assert.strictEqual(await run("refreshQuotaState()"), false);
+}
+
+async function nativeOnlyIntegrationBehavior() {
+  const nativeIntegration = {
+    configuration: {state: 'emp_applied'},
+    runtime: {state: 'catalog_unverified', target: 'emp', verified: false, action_required: true},
+  };
+  context.__nativeIntegrationStub = async path => {
+    if (path === '/api/integration/enable' || path === '/api/integration') return nativeIntegration;
+    throw new Error('unexpected native integration request: ' + path);
+  };
+  run("api = __nativeIntegrationStub; state = {accounts:[],providers:[],models:[]}; confirmIntegrationAction('enable')");
+  assert.match(getElement('modal_title').textContent, /将 EMP 应用于 Codex/);
+  assert.match(getElement('modal_body').innerHTML, /应用当前 EMP 设置.*重启 Codex/);
+  await getElement('modal_submit').click();
+  assert(getElement('modal_backdrop').classList.contains('hidden'));
+  assert.strictEqual(getElement('integration_summary').textContent, 'EMP已启动，请重启Codex');
+  assert.doesNotMatch(getElement('integration_summary').textContent, /无法确认|仅凭|未验证|共享后端/);
+  assert.strictEqual(getElement('integration_reload').hidden, false);
+  assert.doesNotMatch(getElement('integration_summary').textContent, /检查失败|仍加载旧目录/);
+
+  context.__nativeIntegrationStub = async path => {
+    if (path === '/api/integration/enable') {
+      const error = new Error('Keep at least one model visible');
+      error.payload = {...nativeIntegration, error: {code: 'empty_emp_catalog'}};
+      throw error;
+    }
+    throw new Error('unexpected native integration request: ' + path);
+  };
+  run("api = __nativeIntegrationStub; confirmIntegrationAction('enable')");
+  await getElement('modal_submit').click();
+  assert.match(getElement('modal_status').textContent, /原生模型也可以/);
+  run('closeModal()');
 }
 
 async function nativeAccountBehavior() {
@@ -564,12 +683,88 @@ async function atomicStateBehavior() {
   assert.strictEqual(run("state.catalog_presentations['provider-a/b'].catalog_alias"), "B");
 }
 
+async function runtimeSettingsIsolationBehavior() {
+  let saved = {accounts:[], providers:[], models:[], codex_runtime_sources:['auto'], subscription_search:{enabled:false, account_id:''}};
+  let rejectSelection = false;
+  const configWrites = [];
+  const compatibility = () => ({
+    status:'recommended', preferences:[...saved.codex_runtime_sources],
+    runtimes:[
+      {source:'codex_app', selectable:true, installed:'0.152.1', status:'recommended'},
+      {source:'cursor', selectable:true, installed:'0.150.0', status:'supported'},
+      {source:'path_cli', selectable:false, installed:'0.146.0', status:'unsupported'},
+    ].map(item => ({...item, targeted:item.selectable && (saved.codex_runtime_sources.includes('auto') || saved.codex_runtime_sources.includes(item.source))})),
+  });
+  context.__runtimeSettingsApi = async (path, options = {}) => {
+    if (path === '/api/runtime/select') {
+      if (rejectSelection) throw new Error('selection rejected');
+      saved.codex_runtime_sources = JSON.parse(options.body).sources;
+      return compatibility();
+    }
+    if (path === '/api/runtime/scan') return compatibility();
+    if (path === '/api/integration') return {codex_compatibility:compatibility(), configuration:{state:'native'}, runtime:{state:'not_checked'}};
+    if (path === '/api/config') {
+      if (options.method === 'POST') {
+        configWrites.push(JSON.parse(options.body));
+        saved = JSON.parse(options.body);
+      }
+      return JSON.parse(JSON.stringify(saved));
+    }
+    if (path === '/api/catalog/refresh') return {};
+    throw new Error('unexpected settings API '+path);
+  };
+  context.__runtimeConfig = JSON.parse(JSON.stringify(saved));
+  run('state = __runtimeConfig; runtimeSelectionDraft = null; api = __runtimeSettingsApi');
+  await run('loadIntegration()');
+  runtimeInputs[1].checked = false;
+  run('stageCodexRuntimeSelection()');
+  await run('saveCodexRuntimeSelection()');
+  assert.deepStrictEqual(Array.from(run('state.codex_runtime_sources')), ['codex_app'], 'saving selection must update the general form snapshot');
+
+  getElement('subscription_search_enabled').checked = true;
+  getElement('subscription_search_account').value = '';
+  await run('saveSubscriptionSearch()');
+  assert.deepStrictEqual(configWrites.at(-1).codex_runtime_sources, ['codex_app']);
+  assert.strictEqual(saved.subscription_search.enabled, true);
+  assert.deepStrictEqual(runtimeInputs.map(input => input.checked), [true,false,false], 'search save must keep saved client selection');
+
+  runtimeInputs[0].checked = false;
+  runtimeInputs[1].checked = true;
+  run('stageCodexRuntimeSelection()');
+  await run('saveSubscriptionSearch()');
+  await run('scanCodexRuntimes()');
+  assert.deepStrictEqual(saved.codex_runtime_sources, ['codex_app'], 'search save must not silently save draft checkboxes');
+  assert.deepStrictEqual(runtimeInputs.map(input => input.checked), [false,true,false], 'draft must survive search save and rescan');
+  assert.strictEqual(getElement('codex_runtime_dirty').hidden, false);
+
+  rejectSelection = true;
+  assert.strictEqual(await run('saveCodexRuntimeSelection()'), false);
+  assert.deepStrictEqual(runtimeInputs.map(input => input.checked), [false,true,false], 'failed save must preserve draft for retry');
+  rejectSelection = false;
+  await run('saveCodexRuntimeSelection()');
+  assert.deepStrictEqual(saved.codex_runtime_sources, ['cursor']);
+  assert.strictEqual(getElement('codex_runtime_dirty').hidden, true);
+
+  runtimeInputs[1].checked = false;
+  run('stageCodexRuntimeSelection()');
+  await run('saveSubscriptionSearch()');
+  assert(runtimeInputs.every(input => !input.checked), 'empty draft must not be treated as automatic selection');
+  await run('useAutomaticCodexRuntimes()');
+  assert.deepStrictEqual(saved.codex_runtime_sources, ['auto']);
+  assert.deepStrictEqual(runtimeInputs.map(input => input.checked), [true,true,false]);
+  assert.strictEqual(getElement('codex_runtime_dirty').hidden, true);
+}
+
 (async () => {
   await integrationBehavior();
   pickerBehavior();
   duplicateAccountBehavior();
   quotaHistoryBehavior();
+  performanceDiagnosticsBehavior();
+  quotaMeterBehavior();
+  await quotaStateSyncBehavior();
   await nativeAccountBehavior();
+  await nativeOnlyIntegrationBehavior();
   await accountEmojiBehavior();
   await quotaErrorBehavior();
   modelGroupBehavior();
@@ -579,6 +774,7 @@ async function atomicStateBehavior() {
   presentationMigrationBehavior();
   modalDismissalBehavior();
   await atomicStateBehavior();
+  await runtimeSettingsIsolationBehavior();
   process.stdout.write("web DOM behavior: ok\n");
 })().catch(error => {
   console.error(error.stack || error);

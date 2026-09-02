@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+- Extend the tested Codex compatibility line through `0.152.x` and recommend
+  `0.152.x`, based on the stable Windows `0.152.0` runtime used by Codex App
+  and a successful long-running Responses WebSocket session through EMP.
+- Decode masked WebSocket frames with bounded bulk byte translation instead of
+  a Python per-byte loop, reducing EMP's local cost for large Codex messages.
+- Reserve short-request capacity separately from long-lived Codex WebSockets,
+  preventing many idle task connections from exhausting the listener and
+  surfacing as repeated local `502 Bad Gateway` failures.
+- Keep the account quota display synchronized with EMP's background samples
+  through a local-only account-state poll, and replace the stale text block
+  with accessible battery meters and restrained refresh animation.
+- Record content-free TTFT and TPS measurements from real Responses output and
+  terminal usage events. Show the latest model calls in the opt-in Performance
+  modal with EMP preparation time and a concise Native A/B attribution guide.
+- Tighten the settings UI hierarchy with quieter secondary actions, compact
+  spacing, restrained borders and locally embedded Phosphor action icons in
+  both themes.
+- Automatically grow each Responses HTTP/compaction/WebSocket request's 64 MiB
+  baseline allowance up to 1 GiB, subject to shared memory reservations. Release
+  allowances after processing and keep expansion details in local diagnostics
+  and console output. Preserve response/management limits and bounded decompression;
+  report rejected requests explicitly without truncating history.
+- Keep the normal Web UI focused on the current state and next action. Hide
+  compatibility internals, polling policy, storage details, duplicate-account
+  behavior, catalog ordering, and request-capacity policy unless an actual error
+  or compatibility problem needs the user's attention.
+- Bundle the OpenSSL DLLs actually loaded by the Windows build interpreter,
+  preventing unrelated DLLs on PATH from breaking HTTPS and native WebSocket
+  certificate loading. Check the frozen TLS runtime before packaging artifacts.
+- Allow native-only catalogs to apply model visibility and display names without
+  requiring an additional subscription or Provider model. Keep empty catalogs
+  blocked and report native display verification as pending, not as a failed
+  account or a proven runtime reload.
+- Keep saved Codex client preferences separate from general Web settings saves,
+  and preserve unsaved client checkboxes across search saves and rescans.
+- Preserve `SYSTEMROOT` in the isolated Windows quota subprocess environment so
+  quota requests can reach the service without inheriting unrelated secrets.
+
+- Detect only editor runtimes for the host OS and CPU architecture, so a newer
+  bundled Linux/WSL binary cannot hide a Windows Codex installation.
+- Keep healthy clients visible when another runtime fails its version probe,
+  and show compatibility or probe-failure status beside each client.
+- Distinguish an unavailable or failed scan from an empty runtime inventory.
+
 ## 0.9.4 (2026-08-30)
 
 ### Shared Codex runtime compatibility

@@ -16,6 +16,20 @@ ensure_test_master_key()
 
 
 class ConfigTests(unittest.TestCase):
+    def test_general_web_save_preserves_separately_saved_runtime_selection(self):
+        current = normalize({"codex_runtime_sources": ["codex_app"]})
+        for stale_sources in (["auto"], ["cursor"], None):
+            with self.subTest(stale_sources=stale_sources):
+                incoming = public_config(current)
+                if stale_sources is None:
+                    incoming.pop("codex_runtime_sources")
+                else:
+                    incoming["codex_runtime_sources"] = stale_sources
+                incoming["subscription_search"] = {"enabled": True, "account_id": ""}
+                saved = merge_web_update(current, incoming)
+                self.assertEqual(saved["codex_runtime_sources"], ["codex_app"])
+                self.assertTrue(saved["subscription_search"]["enabled"])
+
     def setUp(self):
         self.provider = {
             "id": "deepseek",
@@ -332,7 +346,8 @@ class ConfigTests(unittest.TestCase):
             loaded = load(path)
             self.assertEqual(api_key(loaded["providers"][0]), "secret-value")
             self.assertEqual(loaded["providers"][0]["api_key"], "")
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_api_key_is_stored_outside_config_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -343,7 +358,8 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(api_key(stored["providers"][0]), "secret-value")
             self.assertNotIn("secret-value", path.read_text(encoding="utf-8"))
             secret_file = Path(stored["providers"][0]["api_key_file"])
-            self.assertEqual(secret_file.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(secret_file.stat().st_mode & 0o777, 0o600)
 
     def test_relative_config_path_does_not_delete_new_provider_key(self):
         original = Path.cwd()
@@ -457,7 +473,8 @@ class ConfigTests(unittest.TestCase):
             account = import_account(config, {"id": "primary", "name": "Primary", "prefix": "primary"}, auth)
             self.assertEqual(account["id"], "primary")
             encrypted_path = root / "primary" / "auth.json.enc"
-            self.assertEqual(encrypted_path.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(encrypted_path.stat().st_mode & 0o777, 0o600)
             self.assertNotIn("do-not-leak", encrypted_path.read_text(encoding="utf-8"))
             safe = public_accounts([account])
             encoded = json.dumps(safe)

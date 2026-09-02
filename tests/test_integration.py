@@ -369,12 +369,14 @@ class IntegrationTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 atomic_write_text(self.config_path, 'openai_base_url = "changed"\n')
         self.assertEqual(self.config_path.read_text(encoding="utf-8"), original)
-        self.assertEqual(stat.S_IMODE(self.config_path.stat().st_mode), 0o644)
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(self.config_path.stat().st_mode), 0o644)
 
         with patch.object(integration.os, "replace", side_effect=check_mode_and_replace):
             atomic_write_text(self.config_path, 'openai_base_url = "changed"\n')
-        self.assertEqual(observed, [0o600])
-        self.assertEqual(stat.S_IMODE(self.config_path.stat().st_mode), 0o600)
+        if os.name != "nt":
+            self.assertEqual(observed, [0o600])
+            self.assertEqual(stat.S_IMODE(self.config_path.stat().st_mode), 0o600)
 
     @unittest.skipUnless(os.name == "posix", "directory fsync semantics are platform-specific")
     def test_atomic_post_replace_directory_fsync_failure_is_success(self):
@@ -419,6 +421,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(victim.stat().st_mode), original_mode)
         self.assertFalse((victim / "service.lock").exists())
 
+    @unittest.skipUnless(os.name == "posix", "POSIX modes are platform-specific")
     def test_config_and_lease_use_strict_permissions(self):
         self.write_config('openai_base_url = "native"\n', mode=0o644)
         self.enable()

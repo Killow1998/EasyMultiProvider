@@ -229,7 +229,9 @@ class CodexRuntimeProcessTests(unittest.TestCase):
 
     def test_targeted_stopper_selects_matching_custom_codex_home(self):
         with tempfile.TemporaryDirectory() as directory:
-            target_home = str((Path(directory) / "target-codex-home").resolve())
+            target_home = os.path.normcase(
+                os.path.realpath(str((Path(directory) / "target-codex-home").resolve()))
+            )
             identity = ProcessIdentity(
                 42000,
                 0,
@@ -461,7 +463,10 @@ class CodexRuntimeProcessTests(unittest.TestCase):
                 identities = inventory.list_processes()
 
             self.assertEqual([identity.pid for identity in identities], [child.pid])
-            self.assertEqual(identities[0].effective_codex_home, str(target_home.resolve()))
+            self.assertEqual(
+                identities[0].effective_codex_home,
+                os.path.normcase(os.path.realpath(str(target_home.resolve()))),
+            )
 
     def test_psutil_inventory_excludes_different_custom_home(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -525,7 +530,10 @@ class CodexRuntimeProcessTests(unittest.TestCase):
                 identities = inventory.list_processes()
 
             self.assertEqual([identity.pid for identity in identities], [child.pid])
-            self.assertEqual(identities[0].effective_codex_home, str(default_home.resolve()))
+            self.assertEqual(
+                identities[0].effective_codex_home,
+                os.path.normcase(os.path.realpath(str(default_home.resolve()))),
+            )
 
     def test_psutil_revalidation_rejects_changed_codex_home_as_raced(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -5,7 +5,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from easy_multi_provider.codex_compatibility import classify_codex_version
-from easy_multi_provider.codex_runtime import CodexRuntimeController, CommandResult
+from easy_multi_provider.codex_runtime import (
+    CodexRuntimeCandidate,
+    CodexRuntimeController,
+    CommandResult,
+)
 
 
 class RecordingRunner:
@@ -20,12 +24,14 @@ class RecordingRunner:
 
 class VersionRunner:
     def __init__(self, versions):
-        self.versions = versions
+        self.versions = {
+            os.path.normcase(path): version for path, version in versions.items()
+        }
         self.calls = []
 
     def run(self, args, *, input_text="", timeout=0):
         self.calls.append((tuple(args), input_text, timeout))
-        output = self.versions.get(str(args[0]))
+        output = self.versions.get(os.path.normcase(str(args[0])))
         return (
             CommandResult(0, "codex-cli %s\n" % output, "")
             if output
@@ -34,20 +40,27 @@ class VersionRunner:
 
 
 class CodexCompatibilityTests(unittest.TestCase):
+    def setUp(self):
+        # Tests must not discover the developer's installed Windows app.
+        environment = patch.dict(os.environ, {"LOCALAPPDATA": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def test_supported_release_lines_are_classified_without_source_metadata(self):
         cases = (
             ("codex-cli 0.149.0", "0.149.0", "supported"),
             ("codex-cli 0.150.8", "0.150.8", "supported"),
-            ("codex-cli 0.151.2", "0.151.2", "recommended"),
-            ("codex-cli 0.151.2+vendor.1", "0.151.2+vendor.1", "recommended"),
+            ("codex-cli 0.151.2", "0.151.2", "supported"),
+            ("codex-cli 0.152.0", "0.152.0", "recommended"),
+            ("codex-cli 0.152.1+vendor.1", "0.152.1+vendor.1", "recommended"),
         )
         for output, installed, status in cases:
             with self.subTest(output=output):
                 public = classify_codex_version(output).public()
                 self.assertEqual(public["installed"], installed)
                 self.assertEqual(public["status"], status)
-                self.assertEqual(public["supported_range"], "0.149.x–0.151.x")
-                self.assertEqual(public["recommended"], "0.151.x")
+                self.assertEqual(public["supported_range"], "0.149.x–0.152.x")
+                self.assertEqual(public["recommended"], "0.152.x")
                 self.assertEqual(
                     set(public),
                     {"installed", "status", "supported_range", "recommended"},
@@ -57,9 +70,9 @@ class CodexCompatibilityTests(unittest.TestCase):
         cases = (
             ("codex-cli 0.148.9", "unsupported"),
             ("codex-cli 0.131.0-alpha.9", "unsupported"),
-            ("codex-cli 0.152.0", "unverified"),
+            ("codex-cli 0.153.0", "unverified"),
             ("codex-cli 1.0.0", "unverified"),
-            ("codex-cli 0.151.0-rc.1", "unverified"),
+            ("codex-cli 0.152.0-rc.1", "unverified"),
             ("not a version", "unknown"),
             ("codex-cli 0.151.0unexpected", "unknown"),
         )
@@ -140,8 +153,11 @@ class CodexCompatibilityTests(unittest.TestCase):
         self.assertEqual(runtimes["path_cli"]["status"], "unsupported")
         self.assertFalse(runtimes["path_cli"]["selectable"])
         self.assertEqual(
-            {call[0] for call in runner.calls},
-            {(str(managed), "--version"), (path_cli, "--version")},
+            {(os.path.normcase(call[0][0]), *call[0][1:]) for call in runner.calls},
+            {
+                (os.path.normcase(str(managed)), "--version"),
+                (os.path.normcase(path_cli), "--version"),
+            },
         )
 
     def test_windows_app_and_cursor_extension_are_discovered_and_selectable(self):
@@ -178,6 +194,12 @@ class CodexCompatibilityTests(unittest.TestCase):
 
             with patch(
                 "easy_multi_provider.codex_runtime.shutil.which", return_value=None
+            ), patch(
+                "easy_multi_provider.codex_runtime.platform.system",
+                return_value="Windows",
+            ), patch(
+                "easy_multi_provider.codex_runtime.platform.machine",
+                return_value="AMD64",
             ):
                 controller = CodexRuntimeController(
                     runner=runner,
@@ -205,6 +227,88 @@ class CodexCompatibilityTests(unittest.TestCase):
         self.assertEqual(selected["preferences"], ["codex_app"])
         self.assertEqual(selected["helper_source"], "cursor")
         self.assertEqual(selected_executable, cursor_executable)
+
+    def test_editor_scan_ignores_newer_foreign_platform_and_architecture(self):
+        cases = (
+            ("Windows", "AMD64", "windows-x86_64", "codex.exe"),
+            ("Windows", "ARM64", "windows-aarch64", "codex.exe"),
+            ("Linux", "x86_64", "linux-x86_64", "codex"),
+            ("Darwin", "arm64", "darwin-aarch64", "codex"),
+        )
+        for system, machine, native_dir, native_name in cases:
+            with self.subTest(
+                system=system, machine=machine
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                extension = root / "openai.chatgpt-mixed" / "bin"
+                native = extension / native_dir / native_name
+                for folder, name in (
+                    ("windows-x86_64", "codex.exe"),
+                    ("windows-aarch64", "codex.exe"),
+                    ("linux-x86_64", "codex"),
+                    ("darwin-aarch64", "codex"),
+                ):
+                    candidate = extension / folder / name
+                    candidate.parent.mkdir(parents=True)
+                    candidate.write_bytes(b"runtime")
+                    candidate.chmod(0o755)
+                    os.utime(candidate, (200, 200))
+                os.utime(native, (100, 100))
+                with patch(
+                    "easy_multi_provider.codex_runtime.platform.system",
+                    return_value=system,
+                ), patch(
+                    "easy_multi_provider.codex_runtime.platform.machine",
+                    return_value=machine,
+                ):
+                    controller = CodexRuntimeController(runtime_user_home=root)
+                    self.assertEqual(
+                        controller._editor_codex_executable(root), str(native.resolve())
+                    )
+                    native.unlink()
+                    self.assertIsNone(controller._editor_codex_executable(root))
+                    direct = extension / native_name
+                    direct.write_bytes(b"runtime")
+                    direct.chmod(0o755)
+                    self.assertEqual(
+                        controller._editor_codex_executable(root), str(direct.resolve())
+                    )
+
+    def test_failed_probe_keeps_other_clients_and_does_not_expose_exception(self):
+        candidates = (
+            CodexRuntimeCandidate("codex_app", "Codex App", "app-codex"),
+            CodexRuntimeCandidate("vscode", "VS Code", "broken-codex"),
+            CodexRuntimeCandidate("path_cli", "CLI", "old-codex"),
+        )
+        for failure in (
+            OSError(193, "private-path-marker"),
+            PermissionError("private-path-marker"),
+            ValueError("private-path-marker"),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                runner = VersionRunner(
+                    {"app-codex": "0.151.0", "old-codex": "0.146.0"}
+                )
+                original_run = runner.run
+
+                def run(args, **kwargs):
+                    if args[0] == "broken-codex":
+                        raise failure
+                    return original_run(args, **kwargs)
+
+                controller = CodexRuntimeController(runner=runner)
+                with patch.object(
+                    controller, "_runtime_candidates", return_value=candidates
+                ), patch.object(runner, "run", side_effect=run):
+                    result = controller.compatibility()
+                runtimes = {item["source"]: item for item in result["runtimes"]}
+                self.assertEqual(len(runtimes), 3)
+                self.assertEqual(result["helper_source"], "codex_app")
+                self.assertTrue(runtimes["codex_app"]["selectable"])
+                self.assertEqual(runtimes["vscode"]["status"], "unknown")
+                self.assertFalse(runtimes["vscode"]["selectable"])
+                self.assertEqual(runtimes["path_cli"]["status"], "unsupported")
+                self.assertNotIn("private-path-marker", str(result))
 
     def test_legacy_managed_runtime_path_remains_a_fallback(self):
         with tempfile.TemporaryDirectory() as temporary:

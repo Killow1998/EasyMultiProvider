@@ -10,6 +10,7 @@ from .context_guard import ContextGuardBlocked
 from .history_continuity import request_history_anchor
 from .protocol_adapters import protocol_adapter
 from .provider_replay import ProviderReplayScope
+from .performance import ResponsesPerformanceTracker
 from .route_plan import ResolvedRoute, resolve_route
 from .router import (
     RouterError,
@@ -171,12 +172,14 @@ class CodexRequestDispatcher:
         selected_transport = transport or (
             "sse" if body.get("stream") else "http"
         )
+        performance = ResponsesPerformanceTracker(started=started)
         observed = False
         replay_scope = None
 
         def on_observation(event: Dict[str, Any]) -> None:
             nonlocal observed
             observed = True
+            event = {**event, **performance.diagnostics()}
             self._record_route_event(
                 event, body, started, selected_transport, "responses"
             )
@@ -210,12 +213,15 @@ class CodexRequestDispatcher:
                     started,
                     selected_transport,
                     "responses",
+                    performance=performance,
                 )
             result = self.provider_replay.observe_stream(replay_scope, result)
+            result = performance.observe_stream(result)
         else:
             self.provider_replay.observe_bytes(replay_scope, result)
+            performance.observe_bytes(result)
             if not observed:
-                event = dict(metadata)
+                event = {**metadata, **performance.diagnostics()}
                 event["response_bytes"] = (
                     len(result) if isinstance(result, (bytes, bytearray)) else 0
                 )

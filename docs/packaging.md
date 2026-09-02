@@ -26,14 +26,23 @@ uv run --frozen --group package python packaging/build.py
 ```
 
 Artifacts and their `.sha256` sidecars are written under `artifacts/`. The
-builder performs two checks before packaging:
+builder performs three checks before packaging:
 
 1. the frozen executable reports the source version through `--version`;
-2. the frozen service starts from a temporary config and Codex home and serves
+2. the frozen executable loads its default TLS trust store with certificate and
+   hostname verification enabled and uses the same OpenSSL version as the build
+   interpreter;
+3. the frozen service starts from a temporary config and Codex home and serves
    its Web UI over loopback.
 
 The smoke test does not enable Codex integration and does not use Provider or
 subscription credentials.
+
+On Windows, the spec explicitly collects the OpenSSL DLLs loaded by Python.
+This prevents unrelated DLLs on `PATH` from shadowing Python's TLS dependencies
+in Conda or virtual-environment builds. No TLS verification is disabled and no
+system certificates are modified. The offline check can also be run directly:
+`easy-multi-provider.exe --emp-package-tls-check`.
 
 ## Desktop package boundary
 

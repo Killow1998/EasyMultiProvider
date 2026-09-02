@@ -774,6 +774,11 @@ def merge_web_update(
     if not isinstance(incoming, dict):
         raise ConfigError("request body must be an object")
     merged = copy.deepcopy(incoming)
+    # Runtime selection has its own endpoint. A stale general settings form
+    # must not overwrite a selection already saved by this or another tab.
+    merged["codex_runtime_sources"] = copy.deepcopy(
+        current.get("codex_runtime_sources", ["auto"])
+    )
     for field in ("account_store_path", "secret_store_path", "native_catalog_path"):
         if field in current:
             merged[field] = current[field]

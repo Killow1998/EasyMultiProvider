@@ -77,6 +77,8 @@ Routing and reliability:
 - provider/model safe IDs, endpoint fingerprint, deployment identity;
 - selected/resolved protocol, dialect, transport and fallback/retry decision;
 - HTTP status/error class, duration and request/response byte counts;
+- content-free performance facts: TTFT, upstream first-token time, generation
+  duration, output-token count, TPS and local preparation time when available;
 - stream terminal observation, close code, output/tool activity and recovery;
 - context estimate/limit/reserve/confidence/source and allow/warn/block result;
 - never persist the original request, SSE events, WebSocket frames, response
@@ -150,6 +152,16 @@ The server integration for this checkout is intentionally narrow:
   `exception_event()` with a constant stage and query-free path. The response
   behavior remains unchanged; arbitrary exception text is not passed to the
   journal.
+- Request-size rejections emit `request_rejected` with a fixed transport and
+  reason (`wire_body_too_large`, `decoded_body_too_large`, or
+  `websocket_message_too_large`), `limit_bytes`, and the bounded declared HTTP
+  `request_bytes`. A WebSocket upgrade has no HTTP body, so that count is zero;
+  it is not the frame size. No request text, attachments, or headers are logged.
+- Automatic growth emits `request_capacity` with a process-local sequence,
+  timestamp, fixed transport/kind/reason, and previous/new byte allowances.
+  Reasons are empty on expansion, `memory_limit`, or `hard_limit`. The same
+  content-free records remain in local diagnostics and console output; normal
+  Web UI status does not expose capacity policy.
 - Management-operation records are emitted at the operation boundary after a
   result is known. Account IDs use `journal.pseudonym(account_id)`. Provider and
   model identifiers may use the existing bounded safe-ID normalizer. Migration

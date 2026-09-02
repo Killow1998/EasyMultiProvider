@@ -13,10 +13,10 @@ from typing import Any, Dict, Optional, Tuple
 
 
 SUPPORTED_MIN = (0, 149)
-SUPPORTED_MAX = (0, 151)
-RECOMMENDED = (0, 151)
-SUPPORTED_RANGE_LABEL = "0.149.x–0.151.x"
-RECOMMENDED_LABEL = "0.151.x"
+SUPPORTED_MAX = (0, 152)
+RECOMMENDED = (0, 152)
+SUPPORTED_RANGE_LABEL = "0.149.x–0.152.x"
+RECOMMENDED_LABEL = "0.152.x"
 
 _VERSION_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_.])v?(\d{1,4})\.(\d{1,4})\.(\d{1,6})"

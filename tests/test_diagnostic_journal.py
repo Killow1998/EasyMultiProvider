@@ -256,6 +256,7 @@ class DiagnosticJournalTest(unittest.TestCase):
         with open(outside, "r", encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "outside\n")
 
+    @unittest.skipUnless(os.name == "posix", "POSIX modes are platform-specific")
     def test_posix_modes_directory_and_file(self):
         journal = self.make_journal()
         journal.event("info", "mode-check")

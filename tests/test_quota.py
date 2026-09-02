@@ -240,6 +240,8 @@ class QuotaTests(unittest.TestCase):
                 {
                     "HTTPS_PROXY": "http://proxy.invalid",
                     "CODEX_CA_CERTIFICATE": str(Path(directory) / "codex-ca.pem"),
+                    "SYSTEMROOT": "C:\\Windows",
+                    "OPENAI_API_KEY": "unrelated-private-key",
                 },
                 clear=False,
             ), patch(
@@ -252,6 +254,8 @@ class QuotaTests(unittest.TestCase):
             kwargs = started.call_args.kwargs
             self.assertNotEqual(kwargs["env"]["CODEX_HOME"], str(account_dir))
             self.assertNotIn("EASY_MULTI_PROVIDER_MASTER_KEY", kwargs["env"])
+            self.assertNotIn("OPENAI_API_KEY", kwargs["env"])
+            self.assertEqual(kwargs["env"]["SYSTEMROOT"], "C:\\Windows")
             self.assertEqual(kwargs["env"]["HTTPS_PROXY"], "http://proxy.invalid")
             self.assertEqual(
                 kwargs["env"]["CODEX_CA_CERTIFICATE"],

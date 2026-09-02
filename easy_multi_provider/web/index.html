@@ -5,93 +5,102 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EMP</title>
 <style>
-:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.5;color-scheme:dark;--bg:#0f172a;--panel:#111c31;--panel-soft:#0d1729;--input:#0b1324;--text:#e5e7eb;--muted:#94a3b8;--border:#253552;--border-strong:#3b4d70;--accent:#2563eb;--accent-soft:#1e3a8a;--danger:#b91c1c;--danger-text:#fca5a5;--code:#bfdbfe}
-:root[data-theme="light"]{color-scheme:light;--bg:#f4f7fb;--panel:#ffffff;--panel-soft:#f8fafc;--input:#ffffff;--text:#172033;--muted:#5b6b82;--border:#d7dfeb;--border-strong:#aab8ca;--accent:#2563eb;--accent-soft:#dbeafe;--danger:#c62828;--danger-text:#b42318;--code:#1d4ed8}
-@media(prefers-color-scheme:light){:root:not([data-theme="dark"]){color-scheme:light;--bg:#f4f7fb;--panel:#ffffff;--panel-soft:#f8fafc;--input:#ffffff;--text:#172033;--muted:#5b6b82;--border:#d7dfeb;--border-strong:#aab8ca;--accent:#2563eb;--accent-soft:#dbeafe;--danger:#c62828;--danger-text:#b42318;--code:#1d4ed8}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}main{max-width:1180px;margin:auto;padding:28px 18px}
-h1{margin:0 0 4px;font-size:26px}h2{font-size:17px;margin:0 0 14px}h3{font-size:15px;margin:0 0 10px}p{color:var(--muted);margin:4px 0 18px}
-.page-header{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.page-header-controls{display:flex;gap:8px;align-items:center}.page-header-controls select{width:auto;min-width:104px}
-section{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;margin:16px 0}
-.toolbar{display:flex;flex-wrap:wrap;gap:4px;margin:0 0 12px}.toolbar button{margin:0}
-.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.wide{grid-column:1/-1}
-label{display:block;color:var(--muted);font-size:12px;margin:0 0 4px}input,select,textarea{width:100%;background:var(--input);color:var(--text);border:1px solid var(--border-strong);border-radius:6px;padding:8px}textarea{min-height:80px;resize:vertical}
-button{border:0;border-radius:6px;padding:8px 13px;background:var(--accent);color:white;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#334155;color:#fff}button.danger{background:var(--danger)}button:disabled{opacity:.6;cursor:wait}
-table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:9px;border-bottom:1px solid var(--border);vertical-align:top}th{color:var(--muted);font-weight:500}
-code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-space:pre-wrap;background:var(--input);padding:12px;border-radius:6px;color:var(--code);overflow:auto}
-.muted{color:var(--muted)}.pill{display:inline-block;background:var(--accent-soft);border-radius:99px;padding:2px 8px;font-size:11px}.danger-text,.refresh-error{color:var(--danger-text)}
-#status{position:fixed;top:14px;right:18px;z-index:10;max-width:min(520px,calc(100vw - 36px));padding:8px 12px;background:var(--panel);border:1px solid var(--border-strong);border-radius:7px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:none}#status:empty{display:none}
-.quota{white-space:pre-line}.model-hidden{opacity:.55}.account-duplicate td:not(:last-child){opacity:.58}.account-duplicate button:disabled{cursor:not-allowed}.provider-model-group{background:var(--panel-soft);border:1px solid var(--border);border-radius:8px;padding:12px;margin:12px 0}.provider-model-group h3{color:var(--code)}.model-selection{max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:7px}.model-option{display:flex;gap:10px;align-items:flex-start;padding:9px;border-bottom:1px solid var(--border)}.model-option[hidden]{display:none}.model-option:last-child{border-bottom:0}.model-option input{width:auto;margin-top:4px}.model-option strong{color:var(--text)}.model-option small{display:block;color:var(--muted)}
-.runtime-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}.runtime-list{display:grid;gap:6px;margin:8px 0}.runtime-row{display:flex;gap:10px;align-items:center;padding:9px 10px;border:1px solid var(--border);border-radius:7px;background:var(--panel-soft);color:var(--text);font-size:13px}.runtime-row input{width:auto}.runtime-row[data-selectable="false"]{opacity:.5}.runtime-name{min-width:0;cursor:help}
-.integration-card{background:var(--panel-soft);border:1px solid var(--border);border-radius:8px;padding:14px}.integration-card-header{display:flex;align-items:center;gap:8px}.integration-card-header h3{margin:0}.integration-card[data-state="conflict"]{border-color:var(--danger)}.integration-card[data-state="active"]{border-color:var(--accent)}.integration-card[data-state="prepared"],.integration-card[data-state="restoring"]{border-color:#d97706}
-.display-list{display:grid;gap:8px}.display-row{display:grid;grid-template-columns:minmax(180px,1.25fr) minmax(160px,1fr) auto auto auto;gap:10px;align-items:center;padding:10px;border:1px solid var(--border);border-radius:8px}.display-row .route{min-width:0}.display-row .route code{display:block;overflow:hidden;text-overflow:ellipsis}.display-row label{margin:0}.inline-check{display:flex;align-items:center;gap:6px;white-space:nowrap}.inline-check input{width:auto}.section-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.section-tools input{max-width:320px}.section-tools .spacer{flex:1}
-.modal-backdrop{position:fixed;inset:0;background:rgba(2,6,23,.72);display:flex;align-items:center;justify-content:center;padding:18px;z-index:20}.modal-backdrop.hidden{display:none}.modal{width:min(720px,100%);max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--border-strong);border-radius:12px;box-shadow:0 24px 80px rgba(0,0,0,.45);padding:20px}.modal-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.modal-header h2{margin:0}.modal-close{background:transparent;color:var(--muted);font-size:24px;line-height:1;padding:2px 7px;margin:0}.modal-close:hover{color:var(--text);background:var(--panel-soft)}.modal-status{margin-top:12px;color:var(--danger-text)}.modal-status:empty{display:none}.modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:16px}.modal-actions button{margin:0}.choice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.choice{display:block;text-align:left;background:var(--panel-soft);border:1px solid var(--border-strong);border-radius:8px;padding:13px;color:var(--text)}.choice:hover{border-color:#60a5fa}.choice strong{display:block}.choice small{display:block;color:var(--muted);margin-top:4px}
-.quota-ranges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}.quota-ranges button{margin:0}.quota-ranges button.active{background:var(--accent)}.quota-chart{width:100%;min-height:260px;border:1px solid var(--border);border-radius:8px;background:var(--panel-soft);padding:8px}.quota-chart svg{display:block;width:100%;height:auto}.quota-legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;font-size:12px}.quota-legend span{display:inline-flex;align-items:center;gap:5px}.quota-swatch{width:10px;height:10px;border-radius:50%}.quota-empty{display:grid;place-items:center;min-height:240px;color:var(--muted)}
-@media(max-width:760px){.page-header{display:block}.page-header-controls{margin-top:12px}.grid,.choice-grid{grid-template-columns:1fr}.wide{grid-column:auto}table{display:block;overflow:auto;white-space:nowrap}.modal{padding:16px}.display-row{grid-template-columns:1fr}.display-row button{justify-self:start}}
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.45;color-scheme:dark;--bg:#12151b;--panel:#191d25;--panel-soft:#151920;--input:#11151c;--text:#e7eaf0;--muted:#9aa4b2;--border:#2a313d;--border-strong:#3b4554;--accent:#3576e8;--accent-hover:#4382ee;--accent-soft:#1c3154;--secondary-hover:#232a35;--danger:#dc6262;--danger-soft:#321d22;--danger-text:#f39a9a;--warning:#d29a45;--warning-soft:#2b2418;--success:#5dae76;--code:#a8c7fa}
+:root[data-theme="light"]{color-scheme:light;--bg:#f5f6f8;--panel:#fff;--panel-soft:#f8f9fb;--input:#fff;--text:#202632;--muted:#667284;--border:#e0e4ea;--border-strong:#c4cbd5;--accent:#2867d7;--accent-hover:#1f59bd;--accent-soft:#eaf1fc;--secondary-hover:#f0f2f5;--danger:#b94141;--danger-soft:#fff1f1;--danger-text:#a73535;--warning:#a66a18;--warning-soft:#fff7e8;--success:#2f7d48;--code:#285fae}
+@media(prefers-color-scheme:light){:root:not([data-theme="dark"]){color-scheme:light;--bg:#f5f6f8;--panel:#fff;--panel-soft:#f8f9fb;--input:#fff;--text:#202632;--muted:#667284;--border:#e0e4ea;--border-strong:#c4cbd5;--accent:#2867d7;--accent-hover:#1f59bd;--accent-soft:#eaf1fc;--secondary-hover:#f0f2f5;--danger:#b94141;--danger-soft:#fff1f1;--danger-text:#a73535;--warning:#a66a18;--warning-soft:#fff7e8;--success:#2f7d48;--code:#285fae}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-size:14px}main{max-width:1120px;margin:auto;padding:24px 18px 40px}
+h1{margin:0 0 2px;font-size:23px;letter-spacing:-.01em}h2{font-size:16px;margin:0 0 10px}h3{font-size:14px;margin:0 0 8px}p{color:var(--muted);margin:4px 0 14px}
+.page-header{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;padding-bottom:12px;border-bottom:1px solid var(--border)}.page-header-controls{display:flex;gap:6px;align-items:center}.page-header-controls select{width:auto;min-width:98px;padding:6px 28px 6px 8px}.page-utilities{justify-content:flex-end;margin:8px 0 14px}
+section{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:16px;margin:12px 0}
+.toolbar{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}.toolbar button{margin:0}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.wide{grid-column:1/-1}
+label{display:block;color:var(--muted);font-size:12px;margin:0 0 4px}input,select,textarea{width:100%;background:var(--input);color:var(--text);border:1px solid var(--border-strong);border-radius:4px;padding:7px 8px;font:inherit}input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent-soft);border-color:var(--accent)}textarea{min-height:78px;resize:vertical}
+button{border:1px solid var(--accent);border-radius:4px;padding:6px 10px;background:var(--accent);color:#fff;cursor:pointer;margin:3px 3px 3px 0;font:600 13px/1.3 inherit;transition:background-color .12s,border-color .12s,color .12s}button:hover{background:var(--accent-hover);border-color:var(--accent-hover)}button.secondary{background:transparent;border-color:var(--border-strong);color:var(--text)}button.secondary:hover{background:var(--secondary-hover);border-color:var(--border-strong)}button.danger{background:transparent;border-color:var(--border-strong);color:var(--danger-text)}button.danger:hover{background:var(--danger-soft);border-color:var(--danger)}button:disabled{opacity:.5;cursor:not-allowed}button:focus-visible{outline:2px solid var(--accent-soft);outline-offset:2px}
+/* @phosphor-icons/core 2.1.1, Regular weight, MIT */
+button[data-icon]{display:inline-flex;align-items:center;gap:6px}button[data-icon]::before{content:"";width:14px;height:14px;flex:none;background:currentColor;mask:var(--button-icon) center/14px 14px no-repeat;-webkit-mask:var(--button-icon) center/14px 14px no-repeat}
+button[data-icon="download"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V32a8,8,0,0,0-16,0v92.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="upload"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0ZM93.66,77.66,120,51.31V144a8,8,0,0,0,16,0V51.31l26.34,26.35a8,8,0,0,0,11.32-11.32l-40-40a8,8,0,0,0-11.32,0l-40,40A8,8,0,0,0,93.66,77.66Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="save"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M219.31,72,184,36.69A15.86,15.86,0,0,0,172.69,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V83.31A15.86,15.86,0,0,0,219.31,72ZM168,208H88V152h80Zm40,0H184V152a16,16,0,0,0-16-16H88a16,16,0,0,0-16,16v56H48V48H172.69L208,83.31ZM160,72a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h56A8,8,0,0,1,160,72Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="refresh"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M224,48V96a8,8,0,0,1-8,8H168a8,8,0,0,1,0-16h28.69L182.06,73.37a79.56,79.56,0,0,0-56.13-23.43h-.45A79.52,79.52,0,0,0,69.59,72.71,8,8,0,0,1,58.41,61.27a96,96,0,0,1,135,.79L208,76.69V48a8,8,0,0,1,16,0ZM186.41,183.29a80,80,0,0,1-112.47-.66L59.31,168H88a8,8,0,0,0,0-16H40a8,8,0,0,0-8,8v48a8,8,0,0,0,16,0V179.31l14.63,14.63A95.43,95.43,0,0,0,130,222.06h.53a95.36,95.36,0,0,0,67.07-27.33,8,8,0,0,0-11.18-11.44Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="check"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M229.66,77.66l-128,128a8,8,0,0,1-11.32,0l-56-56a8,8,0,0,1,11.32-11.32L96,188.69,218.34,66.34a8,8,0,0,1,11.32,11.32Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="restore"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M224,128a96,96,0,0,1-94.71,96H128A95.38,95.38,0,0,1,62.1,197.8a8,8,0,0,1,11-11.63A80,80,0,1,0,71.43,71.39a3.07,3.07,0,0,1-.26.25L44.59,96H72a8,8,0,0,1,0,16H24a8,8,0,0,1-8-8V56a8,8,0,0,1,16,0V85.8L60.25,60A96,96,0,0,1,224,128Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="activity"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M240,128a8,8,0,0,1-8,8H204.94l-37.78,75.58A8,8,0,0,1,160,216h-.4a8,8,0,0,1-7.08-5.14L95.35,60.76,63.28,131.31A8,8,0,0,1,56,136H24a8,8,0,0,1,0-16H50.85L88.72,36.69a8,8,0,0,1,14.76.46l57.51,151,31.85-63.71A8,8,0,0,1,200,120h32A8,8,0,0,1,240,128Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="plus"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M224,128a8,8,0,0,1-8,8H136v80a8,8,0,0,1-16,0V136H40a8,8,0,0,1,0-16h80V40a8,8,0,0,1,16,0v80h80A8,8,0,0,1,224,128Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="edit"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M227.31,73.37,182.63,28.68a16,16,0,0,0-22.63,0L36.69,152A15.86,15.86,0,0,0,32,163.31V208a16,16,0,0,0,16,16H92.69A15.86,15.86,0,0,0,104,219.31L227.31,96a16,16,0,0,0,0-22.63ZM92.69,208H48V163.31l88-88L180.69,120ZM192,108.68,147.31,64l24-24L216,84.68Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="trash"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M216,48H176V40a24,24,0,0,0-24-24H104A24,24,0,0,0,80,40v8H40a8,8,0,0,0,0,16h8V208a16,16,0,0,0,16,16H192a16,16,0,0,0,16-16V64h8a8,8,0,0,0,0-16ZM96,40a8,8,0,0,1,8-8h48a8,8,0,0,1,8,8v8H96Zm96,168H64V64H192ZM112,104v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm48,0v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="chart"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M232,208a8,8,0,0,1-8,8H32a8,8,0,0,1-8-8V48a8,8,0,0,1,16,0v94.37L90.73,98a8,8,0,0,1,10.07-.38l58.81,44.11L218.73,90a8,8,0,1,1,10.54,12l-64,56a8,8,0,0,1-10.07.38L96.39,114.29,40,163.63V200H224A8,8,0,0,1,232,208Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="settings"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z%22%2F%3E%3C%2Fsvg%3E")}
+button[data-icon="test"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M221.69,199.77,160,96.92V40h8a8,8,0,0,0,0-16H88a8,8,0,0,0,0,16h8V96.92L34.31,199.77A16,16,0,0,0,48,224H208a16,16,0,0,0,13.72-24.23ZM110.86,103.25A7.93,7.93,0,0,0,112,99.14V40h32V99.14a7.93,7.93,0,0,0,1.14,4.11L183.36,167c-12,2.37-29.07,1.37-51.75-10.11-15.91-8.05-31.05-12.32-45.22-12.81ZM48,208l28.54-47.58c14.25-1.74,30.31,1.85,47.82,10.72,19,9.61,35,12.88,48,12.88a69.89,69.89,0,0,0,19.55-2.7L208,208Z%22%2F%3E%3C%2Fsvg%3E")}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--border);vertical-align:top}th{color:var(--muted);font-weight:600;font-size:12px}td:last-child button{padding:5px 8px;margin-top:0;margin-bottom:3px}
+code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-space:pre-wrap;background:var(--panel-soft);border:1px solid var(--border);padding:9px;border-radius:4px;color:var(--code);overflow:auto}
+.muted{color:var(--muted)}.pill{display:inline-block;background:var(--accent-soft);border-radius:999px;padding:2px 7px;font-size:11px}.danger-text,.refresh-error{color:var(--danger-text)}
+#status{position:fixed;top:12px;right:16px;z-index:10;max-width:min(500px,calc(100vw - 32px));padding:7px 10px;background:var(--panel);border:1px solid var(--border-strong);border-radius:5px;box-shadow:0 4px 18px rgba(0,0,0,.18);pointer-events:none}#status:empty{display:none}
+.quota-stack{display:grid;gap:7px;min-width:180px;max-width:230px}.quota-meter{display:grid;gap:3px}.quota-meter-head,.quota-reset{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-variant-numeric:tabular-nums}.quota-window{color:var(--muted);font-size:11px}.quota-value{font-size:12px}.quota-reset{justify-content:flex-start;color:var(--muted);font-size:10px;line-height:1.25}.quota-battery{position:relative;width:calc(100% - 5px);height:14px;border:1px solid var(--border-strong);border-radius:3px;padding:2px;background:var(--input)}.quota-battery::after{content:"";position:absolute;right:-5px;top:3px;width:3px;height:6px;border-radius:0 2px 2px 0;background:var(--border-strong)}.quota-battery-fill{position:relative;display:block;width:var(--quota-level);height:100%;min-width:2px;border-radius:1px;background:var(--success);overflow:hidden;animation:quota-level-in .5s ease-out both;transition:width .5s ease-out,background-color .2s}.quota-meter.is-medium .quota-battery-fill{background:var(--warning)}.quota-meter.is-low .quota-battery-fill{background:var(--danger)}.quota-meter.is-refreshing .quota-battery-fill::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 20%,rgba(255,255,255,.5) 50%,transparent 80%);animation:quota-charge .8s linear infinite}.quota-pending{max-width:180px}.quota-pending .quota-battery-fill{width:34%;background:var(--accent);animation:quota-pending 1.1s ease-in-out infinite}.quota-credit{margin-top:6px;font-size:11px}.model-hidden{opacity:.55}.account-duplicate td:not(:last-child){opacity:.58}.account-duplicate button:disabled{cursor:not-allowed}.provider-model-group{border-top:1px solid var(--border);padding:12px 0 0;margin:12px 0}.provider-model-group h3{color:var(--code)}.model-selection{max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:4px}.model-option{display:flex;gap:9px;align-items:flex-start;padding:8px;border-bottom:1px solid var(--border)}.model-option[hidden]{display:none}.model-option:last-child{border-bottom:0}.model-option input{width:auto;margin-top:4px}.model-option strong{color:var(--text)}.model-option small{display:block;color:var(--muted)}
+.runtime-controls{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0}.runtime-list{border:1px solid var(--border);border-radius:4px;overflow:hidden;margin:7px 0}.runtime-row{display:flex;gap:9px;align-items:center;padding:8px 9px;border-bottom:1px solid var(--border);background:transparent;color:var(--text);font-size:13px}.runtime-row:last-child{border-bottom:0}.runtime-row input{width:auto}.runtime-row[data-selectable="false"]{opacity:.5}.runtime-name{min-width:0;cursor:help}
+.integration-card{border:1px solid var(--border);border-radius:4px;padding:13px}.integration-card-header{display:flex;align-items:center;gap:7px}.integration-card-header h3{margin:0}.integration-card[data-state="conflict"]{border-left:3px solid var(--danger)}.integration-card[data-state="active"]{border-left:3px solid var(--success)}.integration-card[data-state="prepared"],.integration-card[data-state="restoring"]{border-left:3px solid var(--warning)}
+.display-list{border:1px solid var(--border);border-radius:4px;overflow:hidden}.display-row{display:grid;grid-template-columns:minmax(180px,1.25fr) minmax(160px,1fr) auto auto auto;gap:9px;align-items:center;padding:9px;border-bottom:1px solid var(--border)}.display-row:last-child{border-bottom:0}.display-row .route{min-width:0}.display-row .route code{display:block;overflow:hidden;text-overflow:ellipsis}.display-row label{margin:0}.inline-check{display:flex;align-items:center;gap:6px;white-space:nowrap}.inline-check input{width:auto}.section-tools{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px}.section-tools input{max-width:300px}.section-tools .spacer{flex:1}
+.modal-backdrop{position:fixed;inset:0;background:rgba(6,9,14,.58);display:flex;align-items:center;justify-content:center;padding:18px;z-index:20}.modal-backdrop.hidden{display:none}.modal{width:min(760px,100%);max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 16px 48px rgba(0,0,0,.32);padding:18px}.modal-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.modal-header h2{margin:0}.modal-close{background:transparent;border-color:transparent;color:var(--muted);font-size:22px;line-height:1;padding:1px 6px;margin:0}.modal-close:hover{color:var(--text);background:var(--secondary-hover);border-color:var(--border)}.modal-status{margin-top:10px;color:var(--danger-text)}.modal-status:empty{display:none}.modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:14px}.modal-actions button{margin:0}.choice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.choice{display:block;text-align:left;background:transparent;border:1px solid var(--border);border-radius:4px;padding:11px;color:var(--text);font-weight:400}.choice:hover{background:var(--secondary-hover);border-color:var(--border-strong)}.choice strong{display:block}.choice small{display:block;color:var(--muted);margin-top:3px}
+.quota-ranges{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px}.quota-ranges button{margin:0}.quota-ranges button.active{background:var(--accent);color:#fff;border-color:var(--accent)}.quota-chart{width:100%;min-height:250px;border:1px solid var(--border);border-radius:4px;background:var(--panel-soft);padding:7px}.quota-chart svg{display:block;width:100%;height:auto}.quota-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:12px}.quota-legend span{display:inline-flex;align-items:center;gap:5px}.quota-swatch{width:9px;height:9px;border-radius:50%}.quota-empty{display:grid;place-items:center;min-height:220px;color:var(--muted)}
+.performance-reference{border:1px solid var(--border);border-radius:4px;padding:10px 11px;margin:8px 0 12px;background:var(--panel-soft)}.performance-reference strong{display:block;margin-bottom:4px}.performance-reference span{display:block;color:var(--muted);font-size:12px}.performance-table{overflow:auto}.performance-table table{min-width:700px}.performance-good{color:var(--success)}.performance-warn{color:var(--warning)}.diagnostics-details{margin-top:14px;border-top:1px solid var(--border);padding-top:10px}.diagnostics-details summary{cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:8px}
+@keyframes quota-level-in{from{width:0;opacity:.6}}@keyframes quota-charge{from{transform:translateX(-120%)}to{transform:translateX(120%)}}@keyframes quota-pending{0%,100%{width:18%;opacity:.55}50%{width:70%;opacity:1}}
+@media(prefers-reduced-motion:reduce){.quota-battery-fill,.quota-meter.is-refreshing .quota-battery-fill::after,.quota-pending .quota-battery-fill{animation:none;transition:none}}
+@media(max-width:760px){main{padding:18px 12px 32px}.page-header{display:block}.page-header-controls{margin-top:10px}.page-utilities{justify-content:flex-start}.grid,.choice-grid{grid-template-columns:1fr}.wide{grid-column:auto}section{padding:13px}table{display:block;overflow:auto;white-space:nowrap}.modal{padding:15px}.display-row{grid-template-columns:1fr}.display-row button{justify-self:start}}
 </style>
 </head>
 <body>
 <main>
 <header class="page-header">
-  <div><h1>EMP</h1><p data-i18n="subtitle">在浏览器中管理 Codex 的账户、Provider 和模型。</p></div>
+  <div><h1>EMP</h1><p data-i18n="subtitle">管理 Codex 的账号和模型。</p></div>
   <div class="page-header-controls">
     <select id="language_select" aria-label="Language" onchange="setLanguage(this.value)"><option value="zh-CN">中文</option><option value="en">English</option></select>
     <select id="theme_select" aria-label="Theme" onchange="setTheme(this.value)"><option value="system" data-i18n="theme_system">跟随系统</option><option value="light" data-i18n="theme_light">浅色</option><option value="dark" data-i18n="theme_dark">深色</option></select>
   </div>
 </header>
-<div class="toolbar"><button class="secondary" onclick="exportMigration()" data-i18n="export_emp">导出 EMP 数据</button><button class="secondary" onclick="selectMigrationFile()" data-i18n="import_emp">导入 EMP 数据</button><input id="migration_file" type="file" hidden accept=".emp,application/octet-stream" onchange="migrationFileChosen(this)"></div>
+<div class="toolbar page-utilities"><button class="secondary" data-icon="download" onclick="exportMigration()" data-i18n="export_emp">导出数据</button><button class="secondary" data-icon="upload" onclick="selectMigrationFile()" data-i18n="import_emp">导入数据</button><input id="migration_file" type="file" hidden accept=".emp,application/octet-stream" onchange="migrationFileChosen(this)"></div>
 
 <section>
 <h2 data-i18n="codex_integration">Codex 集成</h2>
 <div id="integration" class="integration-card" data-state="unknown">
-  <div class="integration-card-header"><span id="integration_badge" class="pill" data-i18n="loading">加载中</span><h3 id="integration_title" data-i18n="integration_status">Codex 集成状态</h3></div>
-  <p id="integration_summary" class="muted" data-i18n="integration_loading">正在读取集成状态。</p>
-  <p id="codex_compatibility" class="muted"></p>
-  <p class="muted" data-i18n="runtime_selection">选择你会在哪些 Codex 客户端中使用 EMP；可多选，多个客户端和 workspace 可以同时工作。</p>
+  <div class="integration-card-header"><span id="integration_badge" class="pill" data-i18n="loading">加载中</span><h3 id="integration_title" data-i18n="integration_status">Codex 状态</h3></div>
+  <p id="integration_summary" class="muted" data-i18n="integration_loading">正在读取状态…</p>
+  <p id="codex_compatibility" class="muted" hidden></p>
   <div id="codex_runtimes" class="runtime-list"></div>
-  <div class="runtime-controls"><button class="secondary" onclick="useAutomaticCodexRuntimes()" data-i18n="automatic_runtimes">选择全部兼容项</button><button id="codex_runtime_save" class="secondary" onclick="saveCodexRuntimeSelection()" data-i18n="save_runtimes">保存选择</button><button id="codex_runtime_scan" class="secondary" onclick="scanCodexRuntimes()" data-i18n="rescan_runtimes">重新扫描</button></div>
-  <p class="muted" data-i18n="runtime_shared_hint">选中的客户端用于兼容性提示和重启提醒。所有客户端仍共用同一份 .codex 配置；EMP 不会停止或重启客户端，配置变化后请自行重启正在使用的 Codex App、IDE 插件或 CLI。</p>
-  <div class="toolbar"><button id="integration_enable" onclick="confirmIntegrationAction('enable')" data-i18n="enable_codex">启用默认 Codex</button><button id="integration_restore" class="secondary" onclick="confirmIntegrationAction('restore')" data-i18n="restore_codex">恢复原生 Codex</button><button id="integration_reload" class="secondary" onclick="confirmIntegrationAction('reload')" hidden data-i18n="apply_models">检查已加载目录</button><button class="secondary" onclick="openDiagnostics()" data-i18n="diagnostics">诊断</button></div>
+  <p id="codex_runtime_dirty" class="muted" hidden></p>
+  <div class="runtime-controls"><button class="secondary" data-icon="check" onclick="useAutomaticCodexRuntimes()" data-i18n="automatic_runtimes">选择全部</button><button id="codex_runtime_save" class="secondary" data-icon="save" onclick="saveCodexRuntimeSelection()" data-i18n="save_runtimes">保存选择</button><button id="codex_runtime_scan" class="secondary" data-icon="refresh" onclick="scanCodexRuntimes()" data-i18n="rescan_runtimes">重新扫描</button></div>
+  <div class="toolbar"><button id="integration_enable" data-icon="check" onclick="confirmIntegrationAction('enable')" data-i18n="enable_codex">启用 EMP</button><button id="integration_restore" class="secondary" data-icon="restore" onclick="confirmIntegrationAction('restore')" data-i18n="restore_codex">恢复原生</button><button id="integration_reload" class="secondary" data-icon="refresh" onclick="confirmIntegrationAction('reload')" hidden data-i18n="apply_models">重新检查</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">诊断</button></div>
 </div>
 </section>
 
 <section>
-<h2 data-i18n="subscription_search">Subscription Web Search</h2>
-<p class="muted" data-i18n="subscription_search_hint">可选地让外部模型使用 ChatGPT/Codex subscription 的独立联网搜索；搜索指令和 Codex 选取的少量可见上下文会发送到该服务。</p>
+<h2 data-i18n="subscription_search">联网搜索</h2>
 <div class="grid">
-  <label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="toggleSubscriptionSearch()"><span data-i18n="enable_subscription_search">启用 Subscription 搜索</span></label>
-  <label><span data-i18n="search_account">搜索账户</span><select id="subscription_search_account"></select></label>
+  <label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="toggleSubscriptionSearch()"><span data-i18n="enable_subscription_search">启用联网搜索</span></label>
+  <label><span data-i18n="search_account">搜索账号</span><select id="subscription_search_account"></select></label>
 </div>
-<div class="toolbar"><button onclick="saveSubscriptionSearch()" data-i18n="save_search">保存搜索设置</button></div>
+<div class="toolbar"><button data-icon="save" onclick="saveSubscriptionSearch()" data-i18n="save_search">保存</button></div>
 </section>
 
 <section>
-<h2 data-i18n="model_display">模型列表显示</h2>
-<p class="muted" data-i18n="model_display_hint">集中设置 Codex App 和 TUI 中的模型名称、上下文与推理摘要显示。</p>
-<div class="section-tools"><input id="catalog_display_search" type="search" placeholder="搜索模型" data-i18n-placeholder="search_models" oninput="renderCatalogDisplay()"><button id="catalog_display_toggle" type="button" class="secondary" onclick="toggleCatalogDisplayExpanded()" data-i18n="show_all">显示全部</button><span class="spacer"></span><button onclick="saveCatalogDisplay()" data-i18n="save_display">保存显示设置</button></div>
+<h2 data-i18n="model_display">模型显示</h2>
+<div class="section-tools"><input id="catalog_display_search" type="search" placeholder="搜索模型" data-i18n-placeholder="search_models" oninput="renderCatalogDisplay()"><button id="catalog_display_toggle" type="button" class="secondary" onclick="toggleCatalogDisplayExpanded()" data-i18n="show_all">显示全部</button><span class="spacer"></span><button data-icon="save" onclick="saveCatalogDisplay()" data-i18n="save_display">保存</button></div>
 <div id="catalog_display_models" class="display-list"></div>
 </section>
 
 <section>
-<h2 data-i18n="accounts_title">Codex Subscription Accounts</h2>
-<p class="muted" data-i18n="accounts_security">服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器，也不会写入 config/catalog。</p>
-<div class="toolbar"><button onclick="selectAccountFile()" data-i18n="import_account">导入账户</button><button id="refresh_all" class="secondary" onclick="refreshAllAccounts()" data-i18n="refresh_quotas">刷新全部余量</button><input id="a_auth_json" type="file" hidden accept=".json,.bk1,.bk2,.bk3,.backup" onchange="accountFileChosen(this)"></div>
-<p class="muted" data-i18n="accounts_hint">导入时只需要填写账户 ID；显示名称和模型前缀默认使用账户 ID，可在列表中编辑。与当前 Codex 登录重复的账户只保留额度查询；模型显示统一由原生账户管理。</p>
-<pre>19%/7d MMDD-HHmm (UTC-7)
-99%/5h MMDD-HHmm (UTC-7)</pre>
+<h2 data-i18n="accounts_title">Subscription 账号</h2>
+<div class="toolbar"><button data-icon="upload" onclick="selectAccountFile()" data-i18n="import_account">导入账号</button><button id="refresh_all" class="secondary" data-icon="refresh" onclick="refreshAllAccounts()" data-i18n="refresh_quotas">刷新余量</button><input id="a_auth_json" type="file" hidden accept=".json,.bk1,.bk2,.bk3,.backup" onchange="accountFileChosen(this)"></div>
 <div id="accounts"></div>
 </section>
 
 <section>
-<h2 data-i18n="providers_title">Providers</h2>
-<p class="muted" data-i18n="providers_hint">点击添加后选择官方 Provider 或自建 Provider。官方 Provider 自动填写固定地址和协议；自建 Provider 可以使用自动协议检测。</p>
-<div class="toolbar"><button onclick="openProviderChooser()" data-i18n="add_provider">添加 Provider</button></div>
+<h2 data-i18n="providers_title">模型服务</h2>
+<div class="toolbar"><button data-icon="plus" onclick="openProviderChooser()" data-i18n="add_provider">添加服务</button></div>
 <div id="providers"></div>
 </section>
 
 <section>
-<h2 data-i18n="models_routes">Models / 路由</h2>
-<p class="muted" data-i18n="models_hint">模型只会在 Provider 的“拉取模型”中选择导入；导入后按 Provider 分组，最新模型优先，隐藏模型排在最后。</p>
-<div class="toolbar"><button onclick="openManualModelModal()" data-i18n="add_model">手动添加模型</button></div>
+<h2 data-i18n="models_routes">模型</h2>
+<div class="toolbar"><button data-icon="plus" onclick="openManualModelModal()" data-i18n="add_model">手动添加模型</button></div>
 <div id="models"></div>
 </section>
 
@@ -104,7 +113,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
     <div class="modal-header"><h2 id="modal_title"></h2><button type="button" class="modal-close" aria-label="Close" onclick="closeModal()">&times;</button></div>
     <div id="modal_body"></div>
     <div id="modal_status" class="modal-status" role="alert" aria-live="polite"></div>
-    <div class="modal-actions"><button id="modal_submit">确定</button></div>
+    <div class="modal-actions"><button id="modal_submit" data-icon="check">确定</button></div>
   </div>
 </div>
 
@@ -119,7 +128,10 @@ let editingModelId = '';
 let activeQuotaAccountId = '';
 let activeQuotaRange = '1d';
 let quotaHistoryTimer = null;
+let quotaStateTimer = null;
+let quotaStateBusy = false;
 let catalogDisplayExpanded = false;
+let runtimeSelectionDraft = null;
 const expandedModelGroups = new Set();
 const refreshErrors = {};
 const refreshingAccounts = new Set();
@@ -128,10 +140,10 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const translations = {
   'zh-CN': {
-    subtitle:'在浏览器中管理 Codex 的账户、Provider 和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出 EMP 数据', import_emp:'导入 EMP 数据', codex_integration:'Codex 集成', integration_status:'Codex 集成状态', loading:'加载中', integration_loading:'正在读取集成状态。', runtime_selection:'选择你会在哪些 Codex 客户端中使用 EMP；可多选，多个客户端和 workspace 可以同时工作。', automatic_runtimes:'选择全部兼容项', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', runtime_shared_hint:'选中的客户端用于兼容性提示和重启提醒。所有客户端仍共用同一份 .codex 配置；EMP 不会停止或重启客户端，配置变化后请自行重启正在使用的 Codex App、IDE 插件或 CLI。', enable_codex:'启用默认 Codex', restore_codex:'恢复原生 Codex', apply_models:'检查已加载目录', diagnostics:'诊断', subscription_search:'Subscription 联网搜索', subscription_search_hint:'可选地让外部模型使用 ChatGPT/Codex subscription 的独立联网搜索；搜索指令和 Codex 选取的少量可见上下文会发送到该服务。', enable_subscription_search:'启用 Subscription 搜索', search_account:'搜索账户', current_codex_login:'当前 Codex 登录', save_search:'保存搜索设置', model_display:'模型列表显示', model_display_hint:'集中设置 Codex App 和 TUI 中的模型名称、上下文与推理摘要显示。', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存显示设置', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有会显示在 Codex 中的模型。', no_matches:'没有匹配的模型。', refresh:'刷新', diagnostics_privacy:'这里只保留少量请求状态，不保存消息内容、响应内容或凭据。', accounts_title:'Codex Subscription 账户', accounts_security:'服务仅监听本机；账户 Token 只写入本机加密目录，不会返回到浏览器或写入 config/catalog。', import_account:'导入账户', refresh_quotas:'刷新全部余量', accounts_hint:'导入时只填账户 ID。与当前 Codex 登录重复的账户只保留额度查询；模型显示统一由原生账户管理。', providers_title:'Providers', providers_hint:'添加官方或自建 Provider；官方预设自动填写地址和协议。', add_provider:'添加 Provider', models_routes:'Models / 路由', models_hint:'已导入的模型按 Provider 分组；隐藏模型排在最后。', add_model:'手动添加模型'
+    subtitle:'管理 Codex 的账号和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', apply_models:'重新检查', diagnostics:'性能', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', accounts_title:'Subscription 账号', import_account:'导入账号', refresh_quotas:'刷新余量', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
   },
   en: {
-    subtitle:'Manage Codex accounts, providers, and models in your browser.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export EMP data', import_emp:'Import EMP data', codex_integration:'Codex integration', integration_status:'Codex integration status', loading:'Loading', integration_loading:'Reading integration status.', runtime_selection:'Select the Codex clients where you use EMP. Multiple clients and workspaces can run concurrently.', automatic_runtimes:'Select all compatible', save_runtimes:'Save selection', rescan_runtimes:'Rescan', runtime_shared_hint:'Selection defines the compatibility and restart-reminder scope. All clients still share the same .codex configuration. EMP never stops or restarts them; restart any active Codex App, IDE extension, or CLI after configuration changes.', enable_codex:'Enable for Codex', restore_codex:'Restore native Codex', apply_models:'Check loaded catalog', diagnostics:'Diagnostics', subscription_search:'Subscription web search', subscription_search_hint:'Optionally let external models use standalone ChatGPT/Codex subscription search. The search command and a small amount of visible context selected by Codex are sent to that service.', enable_subscription_search:'Enable Subscription search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save search settings', model_display:'Model list display', model_display_hint:'Set names, context labels, and reasoning summaries for Codex App and TUI.', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save display settings', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models are currently visible in Codex.', no_matches:'No matching models.', refresh:'Refresh', diagnostics_privacy:'Only request metadata is kept; prompts, responses, and credentials are never stored here.', accounts_title:'Codex Subscription Accounts', accounts_security:'The service listens locally. Account tokens stay in encrypted local storage and never enter the browser, config, or catalog.', import_account:'Import account', refresh_quotas:'Refresh all quotas', accounts_hint:'Import requires only an account ID. Accounts that duplicate the current Codex login retain quota access only; Native manages model visibility.', providers_title:'Providers', providers_hint:'Add an official preset or a custom Provider. Official presets fill the endpoint and protocol automatically.', add_provider:'Add Provider', models_routes:'Models / Routes', models_hint:'Imported models are grouped by Provider; hidden models are placed last.', add_model:'Add model manually'
+    subtitle:'Manage Codex accounts and models.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', apply_models:'Check again', diagnostics:'Performance', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', accounts_title:'Subscription accounts', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
   }
 };
 let language = 'zh-CN';
@@ -279,7 +291,7 @@ function renderCatalogDisplay() {
     const summary = presentation.reasoning_summary || 'auto';
     const unsupported = model.supports_reasoning_summaries === true ? '' : ` disabled title="${esc(tr('此路由尚未确认支持结构化推理摘要','This route has not confirmed structured reasoning summaries'))}"`;
     const routes = model.routes || []; const routeText = routes.map(route => route.id).join(' · '); const first = routes[0] || {id:model.id,source_type:'native',source_id:''};
-    return `<div class="display-row"><div class="route"><strong>${esc(model.display_name || model.default_display_name || model.id)}</strong><code>${esc(routeText || model.id)}</code></div><label>${esc(language === 'en' ? 'Family display name' : '模型族显示名称')}<input data-catalog-alias data-route="${esc(model.id)}" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(model.default_display_name || model.id)}"></label><label class="inline-check"><input type="checkbox" data-catalog-context data-route="${esc(model.id)}" ${presentation.show_context === false ? '' : 'checked'}> ${esc(t('context'))}</label><label>${esc(t('reasoning_summary'))}<select data-catalog-summary data-route="${esc(model.id)}"${unsupported}><option value="auto" ${summary === 'auto' ? 'selected' : ''}>${tr('自动','Auto')}</option><option value="show" ${summary === 'show' ? 'selected' : ''}>${tr('显示','Show')}</option><option value="hide" ${summary === 'hide' ? 'selected' : ''}>${tr('隐藏','Hide')}</option></select></label><button type="button" class="secondary" onclick="openCatalogAdvanced('${esc(first.id)}','${esc(first.source_type)}','${esc(first.source_id)}')">${esc(t('advanced'))}</button></div>`;
+    return `<div class="display-row"><div class="route"><strong>${esc(model.display_name || model.default_display_name || model.id)}</strong><code>${esc(routeText || model.id)}</code></div><label>${esc(language === 'en' ? 'Family display name' : '模型族显示名称')}<input data-catalog-alias data-route="${esc(model.id)}" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(model.default_display_name || model.id)}"></label><label class="inline-check"><input type="checkbox" data-catalog-context data-route="${esc(model.id)}" ${presentation.show_context === false ? '' : 'checked'}> ${esc(t('context'))}</label><label>${esc(t('reasoning_summary'))}<select data-catalog-summary data-route="${esc(model.id)}"${unsupported}><option value="auto" ${summary === 'auto' ? 'selected' : ''}>${tr('自动','Auto')}</option><option value="show" ${summary === 'show' ? 'selected' : ''}>${tr('显示','Show')}</option><option value="hide" ${summary === 'hide' ? 'selected' : ''}>${tr('隐藏','Hide')}</option></select></label><button type="button" class="secondary" data-icon="settings" onclick="openCatalogAdvanced('${esc(first.id)}','${esc(first.source_type)}','${esc(first.source_id)}')">${esc(t('advanced'))}</button></div>`;
   }).join('');
 }
 function toggleCatalogDisplayExpanded() { catalogDisplayExpanded = !catalogDisplayExpanded; renderCatalogDisplay(); }
@@ -324,49 +336,37 @@ async function saveSubscriptionSearch() {
     enabled: $('subscription_search_enabled').checked,
     account_id: $('subscription_search_account').value || ''
   };
-  await persistState(tr('搜索设置已保存；共享 Codex 后端需由其所有者安全重启后加载','Search settings saved; the shared Codex backend owner must restart it safely to load the change'), candidate);
+  await persistState(tr('设置已保存，请重启 Codex。','Settings saved. Restart Codex.'), candidate);
 }
 function fill() {
   applyTranslations(); renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
 }
-async function load() { applyPreferences(); try { state = await api('/api/config'); fill(); if (await loadIntegration()) notice(language === 'en' ? 'Configuration loaded' : '配置已加载'); } catch (error) { notice(error.message, true); } }
+async function load() { applyPreferences(); try { state = await api('/api/config'); fill(); if (quotaStateTimer === null) quotaStateTimer = setInterval(refreshQuotaState, 60 * 1000); if (await loadIntegration()) notice(language === 'en' ? 'Configuration loaded' : '配置已加载'); } catch (error) { notice(error.message, true); } }
 function renderIntegration(info) {
   const configuration = info.configuration || {};
   const runtime = info.runtime || {};
   const compatibility = info.codex_compatibility || {};
   const english = language === 'en';
   const views = english ? {
-    native: ['Native', 'Native Codex is active.'], emp_applied: ['EMP enabled', 'EMP is active for Codex.'], prepared: ['Recovery needed', 'Integration recovery is required.'], restoring: ['Recovering', 'Restoring native Codex.'], conflict: ['Conflict', 'The Codex configuration changed outside EMP.'], unavailable: ['Unavailable', 'Integration status is unavailable.']
+    native: ['Native', 'Native Codex is active.'], emp_applied: ['EMP', 'EMP is ready. Restart Codex.'], prepared: ['Needs recovery', 'EMP setup is incomplete. Restore and try again.'], restoring: ['Restoring', 'Restoring Native Codex…'], conflict: ['Needs attention', 'Codex settings changed. Apply EMP again or restore Native Codex.'], unavailable: ['Unavailable', 'EMP status is unavailable. Try again.']
   } : {
-    native: ['Native', '当前使用原生 Codex。'], emp_applied: ['EMP 已启用', 'Codex 当前通过 EMP 使用模型。'], prepared: ['需要恢复', '检测到未完成的集成。'], restoring: ['正在恢复', '正在恢复原生 Codex。'], conflict: ['配置冲突', 'Codex 配置已在 EMP 之外发生变化。'], unavailable: ['不可用', '无法读取集成状态。']
+    native: ['Native', '当前使用原生 Codex。'], emp_applied: ['EMP', 'EMP已启动，请重启Codex'], prepared: ['需要恢复', 'EMP 设置未完成，请恢复后重试。'], restoring: ['正在恢复', '正在恢复原生 Codex…'], conflict: ['需要处理', 'Codex 设置已变化，请重新应用 EMP 或恢复原生 Codex。'], unavailable: ['不可用', '暂时无法读取 EMP 状态，请重试。']
   };
   const view = views[configuration.state] || views.unavailable;
-  const runtimeMessages = english ? {
-    emp_loaded:'The shared backend exposes all expected EMP model IDs. Endpoint, rename, and other startup settings are not verified.', native_loaded:'The shared backend exposes no expected EMP model IDs. Other startup settings are not verified.', stopped_waiting_for_start:'The shared Codex backend is unavailable; its owner must start it.', reload_required:'The files are saved, but the shared backend still has the previous catalog. Wait for its owner to restart it safely.', stopping:'Legacy runtime state; check the shared backend again.', stop_failed:'Legacy runtime state; EMP will not stop the shared backend.', verification_failed:'The read-only shared backend catalog check failed.', unsupported:'The shared backend catalog cannot be checked on this platform.', not_checked:''
-  } : {
-    emp_loaded: '共享后端已暴露全部预期 EMP 模型 ID；endpoint、rename 和其他启动设置未验证。',
-    native_loaded: '共享后端未暴露预期 EMP 模型 ID；其他启动设置未验证。',
-    stopped_waiting_for_start: '共享 Codex 后端当前不可用，需要由后端所有者启动。',
-    reload_required: '文件已经保存，但共享后端仍加载旧目录；请等待后端所有者在安全维护窗口重启。',
-    stopping: '这是旧版运行状态；请重新检查共享后端。',
-    stop_failed: '这是旧版运行状态；EMP 不会停止共享后端。',
-    verification_failed: '共享后端的只读目录检查失败。',
-    unsupported: '当前平台无法只读检查共享后端目录。',
-    not_checked: ''
-  };
   const runtimeState = runtime.state || 'not_checked';
-  const runtimeMessage = runtimeMessages[runtimeState] || runtimeMessages.not_checked;
-  const requestError = info.error && info.error.message ? ` ${tr('请求失败','Request failed')}: ${info.error.message}` : '';
-  const staleMessage = configuration.stale ? tr(' 配置状态已过期。',' Configuration state is stale.') : '';
-  $('integration_summary').textContent = [view[1], staleMessage, runtimeMessage, requestError].filter(Boolean).join(' ').trim();
+  $('integration_summary').textContent = view[1];
   const runtimes = Array.isArray(compatibility.runtimes) ? compatibility.runtimes : [];
-  const targeted = runtimes.filter(item => item.targeted === true).length;
-  const inventory = runtimes.length
-    ? `${tr('已选择','Selected')} ${targeted} ${tr('个 Codex 客户端','Codex clients')}`
-    : tr('未检测到 Codex runtime','No Codex runtime detected');
-  const supportedRange = compatibility.supported_range || '0.149.x–0.151.x';
-  const recommended = compatibility.recommended || '0.151.x';
-  $('codex_compatibility').textContent = `${inventory} · ${tr('兼容','Supported')} ${supportedRange} · ${tr('推荐','Recommended')} ${recommended}`;
+  const recommended = compatibility.recommended || '0.152.x';
+  const installed = compatibility.installed ? ` ${compatibility.installed}` : '';
+  const compatibilityMessage = compatibility.status === 'unsupported'
+    ? tr(`Codex${installed} 版本过旧，请升级到 ${recommended}。`, `Codex${installed} is too old. Update to ${recommended}.`)
+    : compatibility.status === 'unverified'
+      ? tr(`Codex${installed} 尚未验证，建议使用 ${recommended}。`, `Codex${installed} is unverified. ${recommended} is recommended.`)
+      : compatibility.status === 'unavailable' && !runtimes.length
+        ? tr('未找到 Codex，请重新扫描。', 'Codex was not found. Rescan.')
+        : '';
+  $('codex_compatibility').textContent = compatibilityMessage;
+  $('codex_compatibility').hidden = !compatibilityMessage;
   renderCodexRuntimes(compatibility);
   $('codex_compatibility').dataset.state = compatibility.status || 'unknown';
   $('integration').dataset.state = configuration.state || 'unknown';
@@ -376,7 +376,7 @@ function renderIntegration(info) {
   const canRestore = configuration.state === 'emp_applied' || configuration.state === 'prepared' || configuration.state === 'restoring' || configuration.state === 'conflict';
   $('integration_enable').disabled = !canEnable;
   $('integration_restore').disabled = !canRestore;
-  $('integration_reload').hidden = !runtime.action_required;
+  $('integration_reload').hidden = configuration.state !== 'emp_applied' || !runtime.action_required;
   $('integration_reload').disabled = !runtime.action_required || runtimeState === 'unsupported';
 }
 function runtimeSourceLabel(source) {
@@ -384,16 +384,34 @@ function runtimeSourceLabel(source) {
 }
 function renderCodexRuntimes(compatibility) {
   const runtimes = Array.isArray(compatibility.runtimes) ? compatibility.runtimes : [];
-  const preferences = Array.isArray(compatibility.preferences) && compatibility.preferences.length ? compatibility.preferences : ['auto'];
+  if (Array.isArray(compatibility.preferences) && compatibility.preferences.length) state.codex_runtime_sources = [...compatibility.preferences];
+  const preferences = state.codex_runtime_sources || ['auto'];
   const automatic = preferences.includes('auto');
   $('codex_runtimes').innerHTML = runtimes.length ? runtimes.map(runtime => {
-    const checked = runtime.selectable && (automatic || preferences.includes(runtime.source));
+    const checked = runtime.selectable && (runtimeSelectionDraft !== null ? runtimeSelectionDraft.includes(runtime.source) : automatic || preferences.includes(runtime.source));
     const version = runtime.installed ? `v${runtime.installed}` : tr('版本未知','Unknown version');
-    return `<label class="runtime-row" data-selectable="${runtime.selectable ? 'true' : 'false'}"><input type="checkbox" data-runtime-source value="${esc(runtime.source)}" ${checked ? 'checked' : ''} ${runtime.selectable ? '' : 'disabled'}><span class="runtime-name" title="${esc(runtime.path || '')}"><strong>${esc(runtimeSourceLabel(runtime.source))}</strong> ${esc(version)}</span></label>`;
-  }).join('') : `<p class="muted">${tr('未检测到 Codex runtime。','No Codex runtime detected.')}</p>`;
+    const status = ({recommended:tr('推荐版本','Recommended'),supported:tr('兼容版本','Supported'),unverified:tr('未验证版本','Unverified version'),unsupported:tr('版本过旧，不兼容；请升级此客户端','Too old; update this client'),unavailable:tr('程序不可用；请重新扫描','Executable unavailable; rescan'),unknown:tr('无法启动或读取版本；请检查此客户端','Could not launch or read version; check this client')}[runtime.status] || tr('状态未知','Unknown status'));
+    return `<label class="runtime-row" data-selectable="${runtime.selectable ? 'true' : 'false'}"><input type="checkbox" data-runtime-source value="${esc(runtime.source)}" ${checked ? 'checked' : ''} ${runtime.selectable ? '' : 'disabled'} onchange="stageCodexRuntimeSelection()"><span class="runtime-name" title="${esc(runtime.path || '')}"><strong>${esc(runtimeSourceLabel(runtime.source))}</strong> ${esc(version)} · ${esc(status)}</span></label>`;
+  }).join('') : `<p class="muted">${tr('未找到 Codex，请重新扫描。','Codex was not found. Rescan.')}</p>`;
+  renderRuntimeDraftHint();
+}
+function renderRuntimeDraftHint() {
+  $('codex_runtime_dirty').hidden = runtimeSelectionDraft === null;
+  $('codex_runtime_dirty').textContent = tr('选择尚未保存。','Selection not saved.');
+}
+function stageCodexRuntimeSelection() {
+  runtimeSelectionDraft = [...document.querySelectorAll('[data-runtime-source]:checked')].filter(input => !input.disabled).map(input => input.value);
+  renderRuntimeDraftHint();
 }
 async function selectCodexRuntimes(sources) {
-  try { await api('/api/runtime/select', {method:'POST', body:JSON.stringify({sources})}); await loadIntegration(); notice(tr('使用 EMP 的客户端已保存；不会重启 Codex 客户端','EMP client selection saved; Codex clients were not restarted')); return true; }
+  const submittedDraft = runtimeSelectionDraft;
+  try {
+    const compatibility = await api('/api/runtime/select', {method:'POST', body:JSON.stringify({sources})});
+    state.codex_runtime_sources = [...(compatibility.preferences || sources)];
+    if (runtimeSelectionDraft === submittedDraft) runtimeSelectionDraft = null;
+    await loadIntegration();
+    notice(tr('Codex 客户端选择已保存','Codex client selection saved')); return true;
+  }
   catch (error) { await loadIntegration(); notice(error.message, true); }
   return false;
 }
@@ -434,37 +452,48 @@ async function loadIntegration() {
 function diagnosticsTransportLabel(value) { const labels = language === 'en' ? {http:'HTTP',sse:'SSE',websocket:'WebSocket'} : {http:'普通请求',sse:'流式请求',websocket:'WebSocket'}; return labels[value] || tr('请求','request'); }
 function diagnosticsProtocolLabel(value) { return ({responses:'Responses',chat_completions:'Chat Completions',anthropic_messages:'Anthropic Messages',unknown:tr('未知协议','Unknown protocol')}[value] || tr('未知协议','Unknown protocol')); }
 function diagnosticsContextLabel(record) { const labels = language === 'en' ? {allowed:'Context OK',warned:'Context warning',blocked:'Blocked: context too large',unknown:'Context unknown'} : {allowed:'上下文正常',warned:'上下文需关注',blocked:'已拦截：上下文过大',unknown:'上下文未知'}; const decision = labels[record.context_decision] || labels.unknown; const estimate = record.estimated_tokens == null ? tr('估算未知','Estimate unknown') : `${tr('估算','Estimate')} ${Number(record.estimated_tokens).toLocaleString()} tokens`; const limit = record.safe_input_limit == null ? tr('安全上限未知','Safe limit unknown') : `${tr('安全上限','Safe limit')} ${Number(record.safe_input_limit).toLocaleString()}`; return `${decision} · ${estimate} · ${limit}`; }
+function performanceNumber(value) { const number = Number(value); return Number.isFinite(number) && number >= 0 ? number : null; }
+function performanceTime(value) { const date = new Date(value || 0); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'}); }
+function performanceAssessment(record) {
+  const success = record.error_class === 'none' && Number(record.status) >= 200 && Number(record.status) < 300;
+  if (!success) return {text:tr('调用未完成','Call did not complete'), className:'performance-warn'};
+  const ttft = performanceNumber(record.ttft_ms); const tps = performanceNumber(record.tokens_per_second); const prepare = performanceNumber(record.local_prepare_ms);
+  if (ttft == null && tps == null) return {text:tr('暂无流式指标','No streaming metrics'), className:''};
+  if (prepare != null && ttft && prepare >= 750 && prepare / ttft >= .2) return {text:tr('EMP 准备耗时占比较高','EMP preparation is a significant share'), className:'performance-warn'};
+  if (ttft != null && ttft > 6500) return {text:record.upstream_first_token_ms != null ? tr('上游首个输出偏慢','Upstream first output is slow') : tr('TTFT 慢于参考，建议原生 A/B','TTFT is below reference; compare with Native'), className:'performance-warn'};
+  if (tps != null && tps < 44) return {text:tr('TPS 低于参考，建议原生 A/B','TPS is below reference; compare with Native'), className:'performance-warn'};
+  return {text:tr('未发现明显 EMP 准备延迟','No obvious EMP preparation delay'), className:'performance-good'};
+}
 function renderDiagnostics(payload) {
   const records = Array.isArray(payload.records) ? payload.records : [];
-  $('diagnostics_summary').textContent = records.length ? tr(`最近保留 ${records.length} 条状态（最多 ${Number(payload.capacity || records.length)} 条）`,`${records.length} recent records (maximum ${Number(payload.capacity || records.length)})`) : tr('还没有请求状态。','No request diagnostics yet.');
+  const calls = records.filter(record => record && record.model_id && record.route === 'responses').slice().reverse().slice(0, 8);
+  $('diagnostics_summary').textContent = calls.length ? tr(`最近 ${calls.length} 次模型调用`,`Latest ${calls.length} model calls`) : tr('还没有模型调用记录。','No model calls recorded yet.');
+  $('performance_records').innerHTML = calls.length ? `<div class="performance-table"><table><tr><th>${tr('时间','Time')}</th><th>${tr('模型','Model')}</th><th>TTFT</th><th>TPS</th><th>${tr('EMP 准备','EMP prepare')}</th><th>${tr('判断','Assessment')}</th></tr>${calls.map(record => { const ttft = performanceNumber(record.ttft_ms); const tps = performanceNumber(record.tokens_per_second); const prepare = performanceNumber(record.local_prepare_ms); const assessment = performanceAssessment(record); return `<tr><td>${esc(performanceTime(record.observed_at))}</td><td><code>${esc(record.model_id)}</code></td><td>${ttft == null ? '—' : (ttft / 1000).toFixed(2) + ' s'}</td><td>${tps == null ? '—' : tps.toFixed(1) + ' token/s'}</td><td>${prepare == null ? '—' : prepare.toLocaleString() + ' ms'}</td><td class="${assessment.className}">${esc(assessment.text)}</td></tr>`; }).join('')}</table></div>` : '';
   if (!records.length) { $('diagnostics_records').innerHTML = ''; return; }
   $('diagnostics_records').innerHTML = `<table><tr><th>${tr('模型','Model')}</th><th>${tr('结果','Result')}</th><th>${tr('上下文','Context')}</th><th>${tr('协议 / 通道','Protocol / transport')}</th><th>${tr('耗时','Duration')}</th></tr>${records.slice().reverse().slice(0, 8).map(record => { const success = record.error_class === 'none' && Number(record.status) >= 200 && Number(record.status) < 300; const result = success ? tr('成功','Success') : (record.error_class === 'client_disconnect' ? tr('客户端中断','Client disconnected') : tr('需要关注','Needs attention')); const fallback = record.fallback ? tr(' · 已自动切换',' · fallback used') : ''; return `<tr><td><code>${esc(record.model_id || tr('未知模型','Unknown model'))}</code></td><td>${esc(result)}${fallback}</td><td>${esc(diagnosticsContextLabel(record))}</td><td>${esc(diagnosticsProtocolLabel(record.protocol))} · ${esc(diagnosticsTransportLabel(record.transport))}</td><td>${Number(record.duration_ms || 0).toLocaleString()} ms</td></tr>`; }).join('')}</table>`;
 }
 async function loadDiagnostics() { try { renderDiagnostics(await api('/api/diagnostics')); return true; } catch (error) { if ($('diagnostics_summary')) $('diagnostics_summary').textContent = language === 'en' ? 'Diagnostics are unavailable.' : '运行状态暂时不可用。'; return false; } }
-function openDiagnostics() { openModal(t('diagnostics'), `<p class="muted">${esc(t('diagnostics_privacy'))}</p><div class="toolbar"><button type="button" class="secondary" onclick="loadDiagnostics()">${esc(t('refresh'))}</button></div><div id="diagnostics_summary" class="muted"></div><div id="diagnostics_records"></div>`, '', null); loadDiagnostics(); }
+function openDiagnostics() { openModal(tr('性能诊断','Performance diagnostics'), `<div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics()">${esc(t('refresh'))}</button></div><div class="performance-reference"><strong>${tr('SOL 原生参考：TTFT 约 5 s · TPS 约 55 token/s','SOL Native reference: TTFT about 5 s · TPS about 55 token/s')}</strong><span>${tr('TTFT 是请求到首个实际输出的时间；TPS 是首个输出到完成期间的平均生成速度。上下文、Effort 和网络会影响结果。','TTFT runs from request start to first actual output. TPS is average generation speed from first output to completion. Context, Effort, and network affect both.')}</span><span>${tr('EMP 准备耗时可直接定位本地等待；TPS 是否由 EMP 造成，需要用同模型、同会话做原生 A/B。','EMP preparation time identifies local waiting directly. TPS attribution requires a Native A/B with the same model and conversation.')}</span></div><div id="diagnostics_summary" class="muted"></div><div id="performance_records"></div><details class="diagnostics-details"><summary>${tr('请求详情','Request details')}</summary><div id="diagnostics_records"></div></details>`, '', null); loadDiagnostics(); }
 function confirmIntegrationAction(action) {
   const actions = language === 'en' ? {
-    enable: ['Enable for Codex', 'EMP will write the target files, then read the catalog currently loaded by the shared backend.'],
-    restore: ['Restore native Codex', 'EMP will restore the native files, then read the catalog currently loaded by the shared backend.'],
-    reload: ['Check loaded catalog', 'EMP will only read the catalog currently loaded by the shared backend.']
+    enable: ['Apply EMP to Codex', 'Apply the current EMP settings. Restart Codex when it finishes.'],
+    restore: ['Restore native Codex', 'Restore the Native Codex settings. Restart Codex when it finishes.'],
+    reload: ['Check Codex', 'Check whether Codex loaded the latest models.']
   } : {
-    enable: ['启用默认 Codex', 'EMP 将写入目标文件，然后只读检查共享后端当前加载的目录。'],
-    restore: ['恢复原生 Codex', 'EMP 将恢复原生文件，然后只读检查共享后端当前加载的目录。'],
-    reload: ['检查已加载目录', 'EMP 只会读取共享后端当前加载的模型目录。']
+    enable: ['将 EMP 应用于 Codex', '应用当前 EMP 设置。完成后请重启 Codex。'],
+    restore: ['恢复原生 Codex', '恢复原生 Codex 设置。完成后请重启 Codex。'],
+    reload: ['检查 Codex', '检查 Codex 是否已加载最新模型。']
   };
   const selected = actions[action]; if (!selected) return;
-  const body = `<p>${esc(selected[1])}</p><p class="muted">${tr('EMP 不会停止、重启或另行启动 Codex；现有会话和请求不受本操作影响。若目录仍旧，请等待后端所有者在安全维护窗口重启。','EMP will not stop, restart, or start Codex. Existing sessions and requests are unaffected. If the catalog is stale, wait for the backend owner to restart it in a safe maintenance window.')}</p>`;
-  openModal(selected[0], body, selected[0], () => submitIntegrationAction(action));
+  openModal(selected[0], `<p>${esc(selected[1])}</p>`, selected[0], () => submitIntegrationAction(action));
 }
-function integrationOutcomeMessage(info) {
-  const runtime = info && info.runtime || {};
-  if (runtime.state === 'emp_loaded') return tr('已观测到全部预期 EMP 模型 ID；其他启动设置未验证','All expected EMP model IDs were observed; other startup settings were not verified');
-  if (runtime.state === 'native_loaded') return tr('未观测到预期 EMP 模型 ID；其他启动设置未验证','No expected EMP model IDs were observed; other startup settings were not verified');
-  if (runtime.state === 'stopped_waiting_for_start') return tr('文件已保存；共享 Codex 后端当前不可用，等待其所有者启动','Files saved; the shared Codex backend is unavailable and must be started by its owner');
-  return runtime.detail || tr('操作已完成','Operation complete');
+function integrationOutcomeMessage(info, action) {
+  if (action === 'enable') return tr('EMP已启动，请重启Codex','EMP is ready. Restart Codex.');
+  if (action === 'restore') return tr('已恢复原生 Codex，请重启 Codex。','Native Codex restored. Restart Codex.');
+  return tr('检查完成。','Check complete.');
 }
 async function submitIntegrationAction(action) {
-  const progress = tr('正在保存目标文件 · 只读检查共享 Codex 后端','Saving target files · checking the shared Codex backend read-only');
+  const progress = tr('正在应用设置…','Applying settings…');
   $('modal_status').textContent = progress;
   notice(progress);
   try {
@@ -479,12 +508,13 @@ async function submitIntegrationAction(action) {
     }
     const refreshed = await loadIntegration();
     if (!refreshed) throw new Error(tr('集成状态刷新失败','Failed to refresh integration status'));
-    const message = integrationOutcomeMessage(refreshed);
+    const message = integrationOutcomeMessage(refreshed, action);
     $('modal_status').textContent = message;
     closeModal();
     notice(message);
   } catch (error) {
     if (error.payload && error.payload.configuration && error.payload.runtime) renderIntegration(error.payload);
+    if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；可在账户的“编辑”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Restore visibility under the account Edit action, or add a model.');
     $('modal_status').textContent = error.message;
     notice(error.message, true);
     throw error;
@@ -506,16 +536,50 @@ function renderAccounts() {
     const duplicateCurrent = a.duplicate && a.duplicate_of === '当前 Codex 登录';
     const duplicateText = a.duplicate ? (duplicateCurrent ? tr('与当前 Codex 登录重复；模型显示由原生账户管理','Duplicates the current Codex login; model visibility is managed by Native') : `${tr('与','Duplicates ')}${esc(a.duplicate_of)}${tr('重复；不生成重复前缀模型','; duplicate prefixed routes are omitted')}`) : '';
     const status = a.native ? (a.credential_set ? tr('使用 .codex 当前登录','Using current .codex login') : tr('未检测到 .codex 登录','No .codex login detected')) : (a.credential_set ? tr('凭据已保存','Credentials saved') : tr('未导入凭据','No credentials'));
-    const remove = a.native ? '' : `<button class="danger" onclick="removeAccount('${esc(a.id)}')">${tr('删除','Delete')}</button>`;
-    const edit = duplicateCurrent ? `<button class="secondary" disabled title="${esc(tr('模型显示由原生账户管理','Model visibility is managed by Native'))}">${tr('编辑','Edit')}</button>` : `<button class="secondary" onclick="editAccount('${esc(a.id)}')">${tr('编辑','Edit')}</button>`;
-    return `<tr${duplicateCurrent ? ' class="account-duplicate"' : ''}><td>${a.native ? tr('当前 Codex 登录','Current Codex login') : `<code>${esc(a.id)}</code>${a.name && a.name !== a.id ? '<br>'+esc(a.name) : ''}`}${a.quota && a.quota.account_label ? '<br><span class="muted">'+esc(a.quota.account_label)+'</span>' : ''}</td><td><span class="pill">${a.native ? 'Native' : esc(a.name || a.prefix)}</span></td><td><span class="quota">${esc(quotaText(a))}</span><br><span class="muted">${esc(creditText(a))}</span>${error ? `<br><span class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</span>` : ''}</td><td>${status}${duplicateText ? '<br><span class="muted">'+duplicateText+'</span>' : ''}</td><td>${edit}<button class="secondary" ${busy || !a.credential_set ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" onclick="openQuotaHistory('${esc(a.id)}')">${tr('趋势','Trend')}</button>${remove}</td></tr>`;
+    const remove = a.native ? '' : `<button class="danger" data-icon="trash" onclick="removeAccount('${esc(a.id)}')">${tr('删除','Delete')}</button>`;
+    const edit = duplicateCurrent ? `<button class="secondary" data-icon="edit" disabled title="${esc(tr('模型显示由原生账户管理','Model visibility is managed by Native'))}">${tr('编辑','Edit')}</button>` : `<button class="secondary" data-icon="edit" onclick="editAccount('${esc(a.id)}')">${tr('编辑','Edit')}</button>`;
+    return `<tr${duplicateCurrent ? ' class="account-duplicate"' : ''}><td>${a.native ? tr('当前 Codex 登录','Current Codex login') : `<code>${esc(a.id)}</code>${a.name && a.name !== a.id ? '<br>'+esc(a.name) : ''}`}${a.quota && a.quota.account_label ? '<br><span class="muted">'+esc(a.quota.account_label)+'</span>' : ''}</td><td><span class="pill">${a.native ? 'Native' : esc(a.name || a.prefix)}</span></td><td>${quotaMetersHtml(a, busy)}<div class="muted quota-credit">${esc(creditText(a))}</div>${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</td><td>${status}${duplicateText ? '<br><span class="muted">'+duplicateText+'</span>' : ''}</td><td>${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" onclick="openQuotaHistory('${esc(a.id)}')">${tr('趋势','Trend')}</button>${remove}</td></tr>`;
   }).join('');
   $('accounts').innerHTML = `<table><tr><th>${tr('账户','Account')}</th><th>${tr('前缀','Prefix')}</th><th>${tr('余量','Quota')}</th><th>${tr('状态','Status')}</th><th>${tr('操作','Actions')}</th></tr>${rows}</table>`;
 }
 function utcOffsetLabel(date) { const minutes = -date.getTimezoneOffset(); const sign = minutes >= 0 ? '+' : '-'; const absolute = Math.abs(minutes); const hours = Math.floor(absolute / 60); const remainder = absolute % 60; return `UTC${sign}${hours}${remainder ? ':' + String(remainder).padStart(2, '0') : ''}`; }
 function localTimeText(value) { const timestamp = Number(value); if (!Number.isFinite(timestamp) || timestamp <= 0) return ''; const date = new Date((timestamp > 100000000000 ? timestamp : timestamp * 1000)); if (Number.isNaN(date.getTime())) return ''; const pad = number => String(number).padStart(2, '0'); return `${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())} (${utcOffsetLabel(date)})`; }
 function compactWindowText(minutes) { const value = Number(minutes); if (!Number.isFinite(value) || value <= 0) return '?'; for (const [unit, label] of [[1440, 'day'], [60, 'hour']]) if (value % unit === 0) return `${value / unit}${label[0]}`; return `${value}m`; }
-function quotaText(account) { const limits = account.quota && account.quota.rate_limits; if (!limits) return tr('未刷新','Not refreshed'); const windows = [limits.primary, limits.secondary].filter(limit => limit && typeof limit.usedPercent === 'number').sort((a,b) => Number(b.windowDurationMins || 0) - Number(a.windowDurationMins || 0)); if (!windows.length) return tr('未刷新','Not refreshed'); return windows.map(limit => `${Math.min(100, Math.max(0, 100 - limit.usedPercent))}%/${compactWindowText(limit.windowDurationMins)}${localTimeText(limit.resetsAt) ? ' ' + localTimeText(limit.resetsAt) : ''}`).join('\n'); }
+function quotaBuckets(account) {
+  const quota = account?.quota; if (!quota) return [];
+  const byLimitId = quota.rate_limits_by_limit_id || quota.rateLimitsByLimitId;
+  const grouped = byLimitId && typeof byLimitId === 'object' && Object.keys(byLimitId).length ? Object.entries(byLimitId) : [['codex', quota.rate_limits]];
+  const buckets = [];
+  for (const [limitId, limits] of grouped) for (const windowKind of ['primary','secondary']) {
+    const limit = limits && limits[windowKind]; const used = Number(limit?.usedPercent ?? limit?.used_percent);
+    if (!Number.isFinite(used)) continue;
+    buckets.push({limitId, windowKind, remaining:Math.round(Math.max(0, Math.min(100, 100 - used)) * 10) / 10, windowMinutes:Number(limit.windowDurationMins ?? limit.window_duration_mins ?? 0), resetsAt:limit.resetsAt ?? limit.resets_at});
+  }
+  return buckets.sort((left,right) => (right.windowMinutes - left.windowMinutes) || String(left.limitId).localeCompare(String(right.limitId)) || left.windowKind.localeCompare(right.windowKind));
+}
+function quotaText(account) { const buckets = quotaBuckets(account); if (!buckets.length) return tr('未刷新','Not refreshed'); return buckets.map(item => `${item.remaining}%/${compactWindowText(item.windowMinutes)}${localTimeText(item.resetsAt) ? ' ' + localTimeText(item.resetsAt) : ''}`).join('\n'); }
+function quotaMetersHtml(account, busy = false) {
+  const buckets = quotaBuckets(account);
+  if (!buckets.length) return busy ? `<div class="quota-meter quota-pending is-refreshing"><div class="quota-meter-head"><span class="quota-window">${tr('正在获取余量','Fetching quota')}</span></div><div class="quota-battery" role="status" aria-label="${esc(tr('正在获取余量','Fetching quota'))}"><span class="quota-battery-fill"></span></div></div>` : `<span class="muted">${tr('未刷新','Not refreshed')}</span>`;
+  return `<div class="quota-stack">${buckets.map(item => { const levelClass = item.remaining <= 20 ? 'is-low' : item.remaining <= 50 ? 'is-medium' : 'is-high'; const duration = compactWindowText(item.windowMinutes); const limitLabel = item.limitId && item.limitId !== 'codex' ? `${item.limitId} · ${duration}` : duration; const reset = localTimeText(item.resetsAt); const aria = tr(`${limitLabel} 剩余 ${item.remaining}%`, `${limitLabel} ${item.remaining}% remaining`); return `<div class="quota-meter ${levelClass}${busy ? ' is-refreshing' : ''}"><div class="quota-meter-head"><span class="quota-window">${esc(limitLabel)}</span><strong class="quota-value">${esc(item.remaining)}%</strong></div><div class="quota-battery" role="progressbar" aria-label="${esc(aria)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(item.remaining)}" style="--quota-level:${esc(item.remaining)}%"><span class="quota-battery-fill"></span></div>${reset ? `<span class="quota-reset">${tr('重置','Resets')} ${esc(reset)}</span>` : ''}</div>`; }).join('')}</div>`;
+}
+function accountQuotaSignature(account) { return JSON.stringify(account?.quota || null); }
+async function refreshQuotaState() {
+  if (quotaStateBusy || !state || document.visibilityState === 'hidden') return false;
+  quotaStateBusy = true;
+  try {
+    const snapshot = await api('/api/accounts');
+    const previous = [...(state.native_account ? [state.native_account] : []), ...(state.accounts || [])];
+    const next = [...(snapshot.native_account ? [snapshot.native_account] : []), ...(snapshot.accounts || [])];
+    const previousById = new Map(previous.map(account => [account.id, account]));
+    const changed = JSON.stringify({native_account:state.native_account || null,accounts:state.accounts || []}) !== JSON.stringify({native_account:snapshot.native_account || null,accounts:snapshot.accounts || []});
+    for (const account of next) if (accountQuotaSignature(previousById.get(account.id)) !== accountQuotaSignature(account)) delete refreshErrors[account.id];
+    state.native_account = snapshot.native_account || null; state.accounts = Array.isArray(snapshot.accounts) ? snapshot.accounts : [];
+    if (changed) renderAccounts();
+    return changed;
+  } catch (_) { return false; }
+  finally { quotaStateBusy = false; }
+}
 function integerCredit(value) { const number = Number(value); return Number.isFinite(number) ? String(Math.round(number)) : String(value); }
 function creditText(account) { const quota = account.quota; if (!quota) return tr('credit 未查询','credit not checked'); const credit = quota.credits; if (!credit) return tr('credit 未提供','credit unavailable'); const parts = []; if (credit.unlimited === true) parts.push('credit unlimited'); else if (credit.balance !== undefined) parts.push(`credit ${integerCredit(credit.balance)}`); if (credit.individual_limit && typeof credit.individual_limit.remaining_percent === 'number') parts.push(`monthly ${credit.individual_limit.remaining_percent}% left`); if (credit.reset_credits && Number.isInteger(credit.reset_credits.available_count)) parts.push(`reset ${credit.reset_credits.available_count}`); const expires = credit.reset_credits && Array.isArray(credit.reset_credits.credits) ? credit.reset_credits.credits.map(item => localTimeText(item && item.expires_at)).filter(Boolean) : []; expires.forEach(value => parts.push(`expire ${value}`)); if (credit.spend_control_reached === true) parts.push('spend limit reached'); return parts.length ? parts.join(' · ') : tr('credit 未提供','credit unavailable'); }
 
@@ -537,15 +601,16 @@ function quotaChartSvg(series) {
 }
 function renderQuotaHistory(payload, rangeName) {
   const content = $('quota_history_content'); if (!content) return; const series = (payload.series || []).filter(item => Array.isArray(item.points) && item.points.length);
-  if (!series.length) { content.innerHTML = `<div class="quota-empty">${tr('暂无额度历史；刷新额度或等待下一次自动采样。','No quota history yet. Refresh quota or wait for the next automatic sample.')}</div>`; return; }
+  if (!series.length) { content.innerHTML = `<div class="quota-empty">${tr('暂无额度历史，请先刷新余量。','No quota history yet. Refresh quota first.')}</div>`; return; }
   const legend = series.map((item,index) => { const last = item.points[item.points.length - 1]; const color = quotaChartColors[index % quotaChartColors.length]; const sampledAt = localTimeText(last.observed_at); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(quotaSeriesLabel(item))} · ${esc(last.remaining_percent)}%${sampledAt ? ' · ' + esc(sampledAt) : ''}</span>`; }).join('');
-  content.innerHTML = `<div class="quota-chart">${quotaChartSvg(series)}</div><div class="quota-legend">${legend}</div><p class="muted">${tr('每 5 分钟自动采样，最多保留 15 天。当前范围：','Sampled every 5 minutes and retained for up to 15 days. Current range: ')}${esc(quotaRangeLabel(rangeName))}</p>`;
+  content.innerHTML = `<div class="quota-chart">${quotaChartSvg(series)}</div><div class="quota-legend">${legend}</div>`;
 }
 async function loadQuotaHistory(accountId, rangeName) {
   activeQuotaRange = rangeName;
   document.querySelectorAll('.quota-ranges button').forEach(button => button.classList.toggle('active', button.dataset.range === rangeName)); const content = $('quota_history_content'); if (content) content.innerHTML = `<div class="quota-empty">${tr('加载中…','Loading…')}</div>`;
   try { renderQuotaHistory(await api('/api/accounts/' + encodeURIComponent(accountId) + '/quota-history?range=' + encodeURIComponent(rangeName)), rangeName); }
   catch (error) { if (content) content.innerHTML = `<div class="quota-empty danger-text">${esc(error.message)}</div>`; }
+  await refreshQuotaState();
 }
 function openQuotaHistory(accountId) { activeQuotaAccountId = accountId; activeQuotaRange = '1d'; const ranges = ['1h','1d','1w','all']; openModal(tr('Subscription 余量趋势','Subscription quota trend'), `<div class="quota-ranges">${ranges.map(rangeName => `<button type="button" class="secondary" data-range="${rangeName}" onclick="loadQuotaHistory(activeQuotaAccountId,'${rangeName}')">${esc(quotaRangeLabel(rangeName))}</button>`).join('')}</div><div id="quota_history_content"></div>`, '', null); loadQuotaHistory(accountId, activeQuotaRange); quotaHistoryTimer = setInterval(() => loadQuotaHistory(activeQuotaAccountId, activeQuotaRange), 5 * 60 * 1000); }
 
@@ -588,7 +653,7 @@ function quotaErrorText(error, id) {
     quota_rate_limited: tr('额度查询过于频繁（429），请稍后再试。','Quota queries are rate limited (429). Try again later.'),
     quota_fetch_failed: tr('额度服务查询失败，请检查网络后重试。','Quota service query failed. Check network connectivity and retry.'),
     quota_account_read_failed: tr('Codex 无法读取账号登录状态。','Codex could not read the account login state.'),
-    quota_initialize_failed: tr('Codex runtime 初始化失败，请检查集成中的 runtime 状态。','Codex runtime initialization failed. Check the runtime status under Integration.'),
+    quota_initialize_failed: tr('无法读取额度，请重新扫描 Codex 后重试。','Could not read quota. Rescan Codex and try again.'),
     quota_timeout: tr('额度查询超时，请稍后再试。','Quota query timed out. Try again later.'),
     quota_credentials_save_failed: tr('无法保存刷新后的登录凭据，请检查本地凭据存储后重新导入账号。','Could not save refreshed credentials. Check local credential storage, then re-import the account.'),
   };
@@ -603,7 +668,7 @@ function renderProviders() {
   if (!providers.length) { $('providers').innerHTML = `<p class="muted">${tr('还没有 Provider。','No Providers yet.')}</p>`; return; }
   $('providers').innerHTML = `<table><tr><th>ID</th><th>Endpoint</th><th>${tr('协议','Protocol')}</th><th>${tr('认证','Authentication')}</th><th>${tr('操作','Actions')}</th></tr>${providers.map(p => {
     const models = (state.models || []).filter(model => model.provider === p.id); const allHidden = models.length > 0 && models.every(model => !model.enabled);
-    return `<tr><td><code>${esc(p.id)}</code><br>${esc(p.name)}</td><td>${esc(p.base_url)}</td><td>${esc(protocolLabel(p.protocol))}</td><td>${esc(authLabel(p.auth_mode))}${p.api_key_set ? tr(' · key已设置',' · key set') : ''}</td><td><button class="secondary" onclick="discoverProvider('${esc(p.id)}')">${tr('拉取模型','Fetch models')}</button><button class="secondary" onclick="editProvider('${esc(p.id)}')">${tr('编辑','Edit')}</button><button class="secondary" ${models.length ? '' : 'disabled'} onclick="toggleProviderModels('${esc(p.id)}', ${allHidden})">${allHidden ? tr('显示全部模型','Show all models') : tr('隐藏全部模型','Hide all models')}</button><button class="danger" onclick="removeProvider('${esc(p.id)}')">${tr('删除','Delete')}</button></td></tr>`;
+    return `<tr><td><code>${esc(p.id)}</code><br>${esc(p.name)}</td><td>${esc(p.base_url)}</td><td>${esc(protocolLabel(p.protocol))}</td><td>${esc(authLabel(p.auth_mode))}${p.api_key_set ? tr(' · key已设置',' · key set') : ''}</td><td><button class="secondary" data-icon="download" onclick="discoverProvider('${esc(p.id)}')">${tr('拉取模型','Fetch models')}</button><button class="secondary" data-icon="edit" onclick="editProvider('${esc(p.id)}')">${tr('编辑','Edit')}</button><button class="secondary" ${models.length ? '' : 'disabled'} onclick="toggleProviderModels('${esc(p.id)}', ${allHidden})">${allHidden ? tr('显示全部模型','Show all models') : tr('隐藏全部模型','Hide all models')}</button><button class="danger" data-icon="trash" onclick="removeProvider('${esc(p.id)}')">${tr('删除','Delete')}</button></td></tr>`;
   }).join('')}</table>`;
 }
 async function toggleProviderModels(id, enabled) {
@@ -627,7 +692,7 @@ function chooseOfficialProvider(key) {
 }
 function openCustomProviderForm(existing) {
   existing = existing || {};
-  openModal(existing.id ? tr('编辑自建 Provider','Edit custom Provider') : tr('添加自建 Provider','Add custom Provider'), `<div class="grid"><div><label>${tr('ID（必填）','ID (required)')}</label><input id="modal_provider_id" value="${esc(existing.id || '')}" placeholder="${tr('例如 my-provider','for example my-provider')}" ${existing.id ? 'readonly' : ''}></div><div><label>${tr('显示名称（可选）','Display name (optional)')}</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="${tr('留空使用 ID','Leave blank to use the ID')}"></div><div class="wide"><label>${tr('Base URL（必填）','Base URL (required)')}</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com/v1"></div><div><label>${tr('协议','Protocol')}</label><select id="modal_provider_protocol"><option value="auto">${tr('自动检测','Auto detect')}</option><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></div><div><label>${tr('认证','Authentication')}</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option></select></div><div class="wide"><label>API Key${existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : tr('（必填）',' (required)')}</label><input id="modal_provider_key" type="password"></div></div><p class="muted">${tr('自动检测不会额外生成测试内容：首次真实请求优先使用兼容性更广的 Chat Completions，端点明确不支持时回退 Responses，并保存成功协议。Base URL 已明确以 /responses 结尾时会优先 Responses。Anthropic Provider 请选择 Anthropic 认证。','Automatic detection does not generate a probe request. The first real request starts with the broadly compatible Chat Completions protocol, falls back to Responses when explicitly unsupported, and saves the working protocol. A Base URL ending in /responses prefers Responses. Choose Anthropic authentication for Anthropic Providers.')}</p>`, tr('保存 Provider','Save Provider'), async () => {
+  openModal(existing.id ? tr('编辑自建 Provider','Edit custom Provider') : tr('添加自建 Provider','Add custom Provider'), `<div class="grid"><div><label>${tr('ID（必填）','ID (required)')}</label><input id="modal_provider_id" value="${esc(existing.id || '')}" placeholder="${tr('例如 my-provider','for example my-provider')}" ${existing.id ? 'readonly' : ''}></div><div><label>${tr('显示名称（可选）','Display name (optional)')}</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="${tr('留空使用 ID','Leave blank to use the ID')}"></div><div class="wide"><label>${tr('Base URL（必填）','Base URL (required)')}</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com/v1"></div><div><label>${tr('协议','Protocol')}</label><select id="modal_provider_protocol"><option value="auto">${tr('自动检测','Auto detect')}</option><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></div><div><label>${tr('认证','Authentication')}</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option></select></div><div class="wide"><label>API Key${existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : tr('（必填）',' (required)')}</label><input id="modal_provider_key" type="password"></div></div>`, tr('保存 Provider','Save Provider'), async () => {
     const id = $('modal_provider_id').value.trim(); const base = $('modal_provider_base').value.trim(); if (!id || !base) throw new Error(tr('ID 和 Base URL 不能为空','ID and Base URL are required')); const keyValue = $('modal_provider_key').value.trim();
     if (!keyValue && !existing.api_key_set) throw new Error(tr('请填写 API Key','Enter an API Key'));
     await saveProvider({id, name:$('modal_provider_name').value.trim() || id, base_url:base, protocol:$('modal_provider_protocol').value, auth_mode:$('modal_provider_auth').value, api_key:keyValue}); closeModal();
@@ -649,7 +714,7 @@ function renderModels() {
   const providerNames = Object.fromEntries((state.providers || []).map(p => [p.id, p.name || p.id])); const groups = {};
   models.forEach(model => { (groups[model.provider] ||= []).push(model); });
   const configuredOrder = (state.providers || []).map(provider => provider.id); const groupOrder = [...configuredOrder.filter(provider => groups[provider]), ...Object.keys(groups).filter(provider => !configuredOrder.includes(provider))];
-  $('models').innerHTML = groupOrder.map(provider => { const items = groups[provider]; const expanded = expandedModelGroups.has(provider); const shown = expanded ? items : items.slice(0, 6); const rows = shown.map(m => { const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : []; const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? tr('支持推理，档位未知','reasoning supported; levels unknown') : tr('无推理档位控制','no reasoning level control')); const capabilities = capabilitySummary(m); return `<tr class="${m.enabled ? '' : 'model-hidden'}"><td><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, m.context_window))}</strong><br><code>${esc(m.id)}</code><br><span class="muted">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? '<br>' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</span></td><td><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</td><td><button class="secondary" onclick="openManualModelModal('${esc(m.id)}')">${tr('编辑','Edit')}</button><button class="secondary" onclick="testModel('${esc(m.id)}')">${tr('测试','Test')}</button><button class="danger" onclick="removeModel('${esc(m.id)}')">${tr('删除','Delete')}</button></td></tr>`; }).join(''); const toggle = items.length > 6 ? `<button type="button" class="secondary" onclick="toggleModelGroup('${esc(provider)}')">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : ''; return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><table><tr><th>${tr('模型','Model')}</th><th>${tr('显示','Visibility')}</th><th>${tr('操作','Actions')}</th></tr>${rows}</table>${toggle}</div>`; }).join('');
+  $('models').innerHTML = groupOrder.map(provider => { const items = groups[provider]; const expanded = expandedModelGroups.has(provider); const shown = expanded ? items : items.slice(0, 6); const rows = shown.map(m => { const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : []; const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? tr('支持推理，档位未知','reasoning supported; levels unknown') : tr('无推理档位控制','no reasoning level control')); const capabilities = capabilitySummary(m); return `<tr class="${m.enabled ? '' : 'model-hidden'}"><td><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, m.context_window))}</strong><br><code>${esc(m.id)}</code><br><span class="muted">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? '<br>' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</span></td><td><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</td><td><button class="secondary" data-icon="edit" onclick="openManualModelModal('${esc(m.id)}')">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" onclick="testModel('${esc(m.id)}')">${tr('测试','Test')}</button><button class="danger" data-icon="trash" onclick="removeModel('${esc(m.id)}')">${tr('删除','Delete')}</button></td></tr>`; }).join(''); const toggle = items.length > 6 ? `<button type="button" class="secondary" onclick="toggleModelGroup('${esc(provider)}')">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : ''; return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><table><tr><th>${tr('模型','Model')}</th><th>${tr('显示','Visibility')}</th><th>${tr('操作','Actions')}</th></tr>${rows}</table>${toggle}</div>`; }).join('');
 }
 function toggleModelGroup(provider) { if (expandedModelGroups.has(provider)) expandedModelGroups.delete(provider); else expandedModelGroups.add(provider); renderModels(); }
 async function discoverProvider(id) { try { notice(tr(`正在拉取 ${id} 的模型列表 …`,`Fetching models from ${id}…`)); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider:id})}); openModelImportModal(id, result.models || []); } catch (error) { notice(tr('拉取失败：','Fetch failed: ') + error.message, true); } }
@@ -657,7 +722,7 @@ function openModelImportModal(provider, models) {
   const sorted = [...models].sort(modelSort);
   const imported = new Set((state.models || []).filter(model => model.provider === provider).map(model => model.upstream_id));
   const body = `<p class="muted">${tr(`${esc(provider)} 发现 ${sorted.length} 个模型。已导入的模型默认保留，新发现的模型默认不选。`,`${esc(provider)} returned ${sorted.length} models. Imported models stay selected; newly discovered models start unselected.`)}</p><div class="toolbar"><input id="discovered_search" placeholder="${tr('搜索模型名称或 ID','Search model name or ID')}" oninput="filterDiscoveredModels(this.value)"><button id="discovered_select_all" type="button" class="secondary" onclick="setDiscoveredChecks(true)">${tr('全选','Select all')}</button><button id="discovered_clear_all" type="button" class="secondary" onclick="setDiscoveredChecks(false)">${tr('全不选','Select none')}</button><span id="discovered_count" class="muted"></span></div><div id="discovered_models" class="model-selection">${sorted.map(m => { const id = m.upstream_id || ''; const text = (m.display_name || id) + ' ' + id; const capabilities = capabilitySummary(m); return `<label class="model-option" data-discovered-option data-search="${esc(text.toLowerCase())}"><input type="checkbox" name="discovered_model" value="${esc(id)}" ${imported.has(id) ? 'checked' : ''} onchange="updateDiscoveredCount()"><span><strong>${esc(m.display_name || id)}</strong><small>${esc(id)} · context ${Number(m.context_window || 0).toLocaleString()}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</small></span></label>`; }).join('')}</div>`;
-  openModal(tr('选择要导入的模型','Select models to import'), body, tr('导入选中模型','Import selected models'), async () => { const selected = [...document.querySelectorAll('input[name="discovered_model"]:checked')].map(input => input.value); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider, selected})}); closeModal(); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); const integration = await loadIntegration(); notice(tr(`${provider} 已导入 ${result.added} 个模型、隐藏 ${result.hidden || 0} 个${integration && integration.runtime && integration.runtime.action_required ? '；等待共享后端所有者安全重启后加载' : ''}`,`${provider}: ${result.added} models imported, ${result.hidden || 0} hidden${integration && integration.runtime && integration.runtime.action_required ? '; waiting for the shared backend owner to restart it safely' : ''}`)); });
+  openModal(tr('选择要导入的模型','Select models to import'), body, tr('导入选中模型','Import selected models'), async () => { const selected = [...document.querySelectorAll('input[name="discovered_model"]:checked')].map(input => input.value); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider, selected})}); closeModal(); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice(tr(`${provider} 已导入 ${result.added} 个模型，请重启 Codex。`,`${provider}: ${result.added} models imported. Restart Codex.`)); });
   filterDiscoveredModels('');
 }
 function filterDiscoveredModels(value) { const query = String(value || '').trim().toLowerCase(); document.querySelectorAll('[data-discovered-option]').forEach(option => { option.hidden = Boolean(query) && !String(option.dataset.search || '').includes(query); }); const select = $('discovered_select_all'); const clear = $('discovered_clear_all'); if (select) select.textContent = query ? tr('全选搜索结果','Select all results') : tr('全选','Select all'); if (clear) clear.textContent = query ? tr('全不选搜索结果','Select no results') : tr('全不选','Select none'); updateDiscoveredCount(); }
@@ -683,6 +748,7 @@ function openModal(title, body, submitLabel, submit) { clearQuotaHistoryTimer();
 function closeModal() { clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 function handleModalKeydown(event) { if (event.key === 'Escape' && !$('modal_backdrop').classList.contains('hidden')) closeModal(); }
 document.addEventListener('keydown', handleModalKeydown);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshQuotaState(); });
 load();
 </script>
 </body>

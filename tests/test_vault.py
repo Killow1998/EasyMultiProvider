@@ -26,7 +26,8 @@ class VaultTests(unittest.TestCase):
                 write_encrypted_json(path, value)
                 self.assertNotIn("do-not-store-plain", path.read_text(encoding="utf-8"))
                 self.assertEqual(read_encrypted_json(path), value)
-                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                if os.name != "nt":
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_missing_master_key_is_created_privately_and_reused(self):
         with tempfile.TemporaryDirectory() as directory:

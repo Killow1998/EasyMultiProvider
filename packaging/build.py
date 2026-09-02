@@ -12,6 +12,7 @@ import plistlib
 import re
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -187,6 +188,23 @@ def _terminate_process_tree(process: subprocess.Popen) -> None:
             process.wait(timeout=5)
 
 
+def _smoke_tls(executable: Path, target: Target) -> None:
+    result = subprocess.run(
+        (str(executable), "--emp-package-tls-check"),
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    report = json.loads(result.stdout)
+    if report.get("openssl") != ssl.OPENSSL_VERSION:
+        raise RuntimeError("packaged OpenSSL differs from the build interpreter")
+    if not report.get("verify_required") or not report.get("check_hostname"):
+        raise RuntimeError("packaged TLS certificate verification is disabled")
+    if target.system == "Windows" and not report.get("certificates"):
+        raise RuntimeError("packaged TLS could not load Windows CA certificates")
+
+
 def _smoke_executable(executable: Path, version: str, target: Target) -> None:
     version_result = subprocess.run(
         (str(executable), "--version"),
@@ -198,6 +216,8 @@ def _smoke_executable(executable: Path, version: str, target: Target) -> None:
     expected = "%s %s" % (PRODUCT_NAME, version)
     if version_result.stdout.strip() != expected:
         raise RuntimeError("packaged version probe returned an unexpected value")
+
+    _smoke_tls(executable, target)
 
     temporary_parent = Path(tempfile.gettempdir()).resolve()
     with tempfile.TemporaryDirectory(
@@ -331,7 +351,12 @@ def _copy_release_files(destination: Path, executable: Path, target: Target) -> 
     shutil.copy2(str(executable), str(binary))
     if target.system != "Windows":
         binary.chmod(0o755)
-    for name in ("README.md", "README.zh-CN.md", "LICENSE"):
+    for name in (
+        "README.md",
+        "README.zh-CN.md",
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.md",
+    ):
         shutil.copy2(str(PROJECT_ROOT / name), str(destination / name))
 
 
@@ -396,6 +421,10 @@ def _write_deb(
         str(PROJECT_ROOT / "README.zh-CN.md"), str(docs_dir / "README.zh-CN.md")
     )
     shutil.copy2(str(PROJECT_ROOT / "LICENSE"), str(docs_dir / "copyright"))
+    shutil.copy2(
+        str(PROJECT_ROOT / "THIRD_PARTY_NOTICES.md"),
+        str(docs_dir / "THIRD_PARTY_NOTICES.md"),
+    )
     shutil.copy2(
         str(PROJECT_ROOT / "assets" / "branding" / "easy-multi-provider-icon.svg"),
         str(scalable_icon_dir / "easy-multi-provider.svg"),
@@ -526,7 +555,12 @@ def _write_dmg(
     _remove_managed_tree(stage, build_root)
     stage.mkdir(parents=True)
     _write_macos_app(stage / (PRODUCT_NAME + ".app"), executable, version, icons)
-    for name in ("README.md", "README.zh-CN.md", "LICENSE"):
+    for name in (
+        "README.md",
+        "README.zh-CN.md",
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.md",
+    ):
         shutil.copy2(str(PROJECT_ROOT / name), str(stage / name))
     (stage / "Applications").symlink_to("/Applications")
     _run(

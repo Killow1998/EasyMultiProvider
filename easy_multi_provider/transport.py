@@ -14,18 +14,45 @@ import zstandard
 
 
 WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+# Full Codex history (including attachments) must fit through either local
+# transport. Keep response/event limits separate and decompression bounded.
+MAX_PROXY_REQUEST_BYTES = 64 * 1024 * 1024
 MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024 * 1024
 MAX_SSE_EVENT_BYTES = 1024 * 1024
+_WEBSOCKET_XOR_TABLES = tuple(
+    bytes(value ^ key for value in range(256)) for key in range(256)
+)
 
 
 class TransportError(ValueError):
     pass
 
 
+class RequestBodyTooLarge(TransportError):
+    def __init__(self, limit: int, *, decoded: bool = False, reason: str = "size_limit"):
+        self.limit = limit
+        self.decoded = decoded
+        self.reason = reason
+        super().__init__(
+            "%srequest body is too large (EMP limit: %d bytes)"
+            % ("decoded " if decoded else "", limit)
+            + ("; insufficient available memory for automatic expansion" if reason == "memory_limit" else "")
+        )
+
+
 class WebSocketProtocolError(TransportError):
     def __init__(self, message: str, code: int = 1002):
         super().__init__(message)
         self.code = code
+
+
+class WebSocketRequestTooLarge(WebSocketProtocolError):
+    def __init__(self, limit: int, reason: str = "size_limit"):
+        self.limit = limit
+        self.reason = reason
+        super().__init__(
+            str(RequestBodyTooLarge(limit, reason=reason)), 1009
+        )
 
 
 def zstd_encode(value: bytes) -> bytes:
@@ -35,40 +62,55 @@ def zstd_encode(value: bytes) -> bytes:
         raise TransportError("zstd request compression failed") from exc
 
 
-def _zlib_decode(value: bytes, wbits: int, max_length: int) -> bytes:
+def _check_decoded_size(size: int, max_length: int, budget=None) -> None:
+    if budget is not None:
+        try:
+            budget.ensure(size)
+        except RequestBodyTooLarge as exc:
+            exc.decoded = True
+            raise
+    elif size > max_length:
+        raise RequestBodyTooLarge(max_length, decoded=True)
+
+
+def _zlib_decode(value: bytes, wbits: int, max_length: int, budget=None) -> bytes:
     decoder = zlib.decompressobj(wbits)
     decoded = bytearray()
     pending = value
     while pending:
-        piece = decoder.decompress(pending, max_length + 1 - len(decoded))
+        limit = budget.limit if budget is not None else max_length
+        piece = decoder.decompress(pending, limit + 1 - len(decoded))
+        _check_decoded_size(len(decoded) + len(piece), max_length, budget)
         decoded.extend(piece)
-        if len(decoded) > max_length or decoder.unconsumed_tail:
-            if len(decoded) > max_length:
-                raise TransportError("decoded request body is too large")
+        if decoder.unconsumed_tail:
             pending = decoder.unconsumed_tail
             continue
         pending = b""
-    decoded.extend(decoder.flush(max_length + 1 - len(decoded)))
-    if len(decoded) > max_length:
-        raise TransportError("decoded request body is too large")
+    limit = budget.limit if budget is not None else max_length
+    decoded.extend(decoder.flush(limit + 1 - len(decoded)))
+    _check_decoded_size(len(decoded), max_length, budget)
     if not decoder.eof:
         raise TransportError("compressed request body is incomplete")
     return bytes(decoded)
 
 
-def _zstd_decode(value: bytes, max_length: int) -> bytes:
+def _zstd_decode(value: bytes, max_length: int, budget=None) -> bytes:
+    decoded = bytearray()
     try:
         with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(value)) as reader:
-            decoded = reader.read(max_length + 1)
-            extra = reader.read(1)
+            while True:
+                limit = budget.limit if budget is not None else max_length
+                piece = reader.read(min(1024 * 1024, limit + 1 - len(decoded)))
+                if not piece:
+                    break
+                _check_decoded_size(len(decoded) + len(piece), max_length, budget)
+                decoded.extend(piece)
     except zstandard.ZstdError as exc:
         raise TransportError("invalid zstd request body: %s" % exc) from exc
-    if len(decoded) > max_length or extra:
-        raise TransportError("decoded request body is too large")
-    return decoded
+    return bytes(decoded)
 
 
-def decode_content(value: bytes, content_encoding: str, max_length: int) -> bytes:
+def decode_content(value: bytes, content_encoding: str, max_length: int, budget=None) -> bytes:
     encodings = [
         item.strip().lower()
         for item in str(content_encoding or "").split(",")
@@ -77,15 +119,14 @@ def decode_content(value: bytes, content_encoding: str, max_length: int) -> byte
     decoded = value
     for encoding in reversed(encodings):
         if encoding == "zstd":
-            decoded = _zstd_decode(decoded, max_length)
+            decoded = _zstd_decode(decoded, max_length, budget)
         elif encoding in ("gzip", "x-gzip"):
-            decoded = _zlib_decode(decoded, zlib.MAX_WBITS | 16, max_length)
+            decoded = _zlib_decode(decoded, zlib.MAX_WBITS | 16, max_length, budget)
         elif encoding == "deflate":
-            decoded = _zlib_decode(decoded, zlib.MAX_WBITS, max_length)
+            decoded = _zlib_decode(decoded, zlib.MAX_WBITS, max_length, budget)
         else:
             raise TransportError("unsupported Content-Encoding: %s" % encoding)
-    if len(decoded) > max_length:
-        raise TransportError("decoded request body is too large")
+    _check_decoded_size(len(decoded), max_length, budget)
     return decoded
 
 
@@ -110,10 +151,22 @@ def _read_exact(stream: Any, length: int) -> bytes:
     return bytes(value)
 
 
+def _unmask_websocket_payload(encoded: bytes, mask: bytes) -> bytes:
+    """Decode a client frame in bulk instead of looping over every byte."""
+
+    if mask == b"\0\0\0\0":
+        return encoded
+    decoded = bytearray(len(encoded))
+    for offset, key in enumerate(mask):
+        decoded[offset::4] = encoded[offset::4].translate(_WEBSOCKET_XOR_TABLES[key])
+    return bytes(decoded)
+
+
 class WebSocketConnection:
-    def __init__(self, reader: Any, writer: Any):
+    def __init__(self, reader: Any, writer: Any, set_read_timeout=None):
         self.reader = reader
         self.writer = writer
+        self.set_read_timeout = set_read_timeout
         self.closed = False
         self.peer_close_code: Optional[int] = None
 
@@ -147,7 +200,17 @@ class WebSocketConnection:
         finally:
             self.closed = True
 
-    def receive_text(self) -> Optional[str]:
+    def receive_text(self, budget=None) -> Optional[str]:
+        try:
+            return self._receive_text(budget)
+        finally:
+            if self.set_read_timeout is not None:
+                try:
+                    self.set_read_timeout(None)
+                except OSError:
+                    pass
+
+    def _receive_text(self, budget=None) -> Optional[str]:
         message = bytearray()
         started = False
         while True:
@@ -156,6 +219,10 @@ class WebSocketConnection:
             if first & 0x70:
                 raise WebSocketProtocolError("unsupported websocket extension")
             opcode = first & 0x0F
+            if opcode < 8 and self.set_read_timeout is not None:
+                # Idle connections remain unlimited, but an unfinished message
+                # must not reserve a large allowance forever.
+                self.set_read_timeout(30)
             masked = bool(second & 0x80)
             length = second & 0x7F
             if length == 126:
@@ -166,11 +233,17 @@ class WebSocketConnection:
                 raise WebSocketProtocolError("invalid websocket control frame")
             if not masked:
                 raise WebSocketProtocolError("client websocket frames must be masked")
-            if len(message) + length > MAX_WEBSOCKET_MESSAGE_BYTES:
-                raise WebSocketProtocolError("websocket request is too large", 1009)
+            if opcode < 8:
+                if budget is not None:
+                    try:
+                        budget.ensure(len(message) + length)
+                    except RequestBodyTooLarge as exc:
+                        raise WebSocketRequestTooLarge(exc.limit, exc.reason) from exc
+                elif len(message) + length > MAX_PROXY_REQUEST_BYTES:
+                    raise WebSocketRequestTooLarge(MAX_PROXY_REQUEST_BYTES)
             mask = _read_exact(self.reader, 4)
             encoded = _read_exact(self.reader, length)
-            payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(encoded))
+            payload = _unmask_websocket_payload(encoded, mask)
             if opcode == 8:
                 if len(payload) == 1:
                     raise WebSocketProtocolError("invalid websocket close payload")

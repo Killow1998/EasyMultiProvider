@@ -7,6 +7,7 @@ import socket
 import struct
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from http.client import HTTPConnection
@@ -24,6 +25,7 @@ from easy_multi_provider.config import ConfigError, api_key, load, normalize, sa
 from easy_multi_provider.codex_runtime import (
     STOPPED_WAITING_FOR_START,
     CodexRuntimeController,
+    RuntimeSyncError,
     RuntimeSyncResult,
 )
 from easy_multi_provider.codex_history import (
@@ -59,29 +61,6 @@ from easy_multi_provider.management_views import management_config
 
 
 ensure_test_master_key()
-
-
-def _write_recording_fake_codex(path: Path) -> Path:
-    path.write_text(
-        """#!/usr/bin/env python3
-import json
-import os
-import sys
-from pathlib import Path
-
-args = sys.argv[1:]
-with Path(os.environ["EMP_FAKE_CODEX_LOG"]).open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps({"args": args}) + "\\n")
-if args == ["--version"]:
-    print("codex-cli 0.150.1")
-    raise SystemExit(0)
-print("unexpected command", file=sys.stderr)
-raise SystemExit(97)
-""",
-        encoding="utf-8",
-    )
-    path.chmod(0o700)
-    return path
 
 
 def _integration_test_config(root: Path):
@@ -310,7 +289,6 @@ class ServerAccountTests(unittest.TestCase):
             root = Path(directory)
             codex_home = root / "private-home-marker"
             config_path = root / "config.json"
-            log_path = root / "fake-codex.jsonl"
             save(_integration_test_config(root), config_path)
             manager = IntegrationManager(
                 codex_home / "config.toml",
@@ -320,42 +298,42 @@ class ServerAccountTests(unittest.TestCase):
             normalized_home = os.path.normcase(
                 os.path.realpath(str(codex_home.resolve()))
             )
+            class UnavailableProbe:
+                def model_list(self, codex_home, timeout):
+                    raise RuntimeSyncError(
+                        "The shared Codex backend is unavailable", "unavailable"
+                    )
+
             runtime = CodexRuntimeController(
-                codex_executable=str(_write_recording_fake_codex(root / "codex-fake")),
                 target_codex_home=codex_home,
                 control_timeout=0.1,
                 observation_timeout=0,
+                model_catalog_probe=UnavailableProbe(),
             )
             state = AppState(
                 config_path,
                 integration_manager=manager,
                 runtime_controller=runtime,
             )
+            state.codex_compatibility_snapshot = lambda: {"status": "unknown"}
             state.mark_service_ready()
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                with patch.dict(
-                    os.environ,
+                connection = HTTPConnection(*server.server_address)
+                connection.request(
+                    "POST",
+                    "/api/integration/enable",
+                    json.dumps({"confirm_reload": True}),
                     {
-                        "CODEX_HOME": str(codex_home),
-                        "EMP_FAKE_CODEX_LOG": str(log_path),
+                        "Cookie": "emp_session=" + state.session_token,
+                        "Content-Type": "application/json",
                     },
-                ):
-                    connection = HTTPConnection(*server.server_address)
-                    connection.request(
-                        "POST",
-                        "/api/integration/enable",
-                        json.dumps({"confirm_reload": True}),
-                        {
-                            "Cookie": "emp_session=" + state.session_token,
-                            "Content-Type": "application/json",
-                        },
-                    )
-                    response = connection.getresponse()
-                    payload_text = response.read().decode("utf-8")
-                    connection.close()
+                )
+                response = connection.getresponse()
+                payload_text = response.read().decode("utf-8")
+                connection.close()
 
                 self.assertEqual(response.status, 200)
                 payload = json.loads(payload_text)
@@ -375,11 +353,6 @@ class ServerAccountTests(unittest.TestCase):
                     self.assertNotIn("private-home-marker", rendered)
                     self.assertNotIn("CODEX_HOME", rendered)
                     self.assertNotIn("UNRELATED", rendered)
-                commands = [
-                    json.loads(line)["args"]
-                    for line in log_path.read_text(encoding="utf-8").splitlines()
-                ]
-                self.assertEqual(commands, [["--version"]])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -388,15 +361,14 @@ class ServerAccountTests(unittest.TestCase):
             root = Path(directory)
             codex_home = root / "codex"
             config_path = root / "config.json"
-            log_path = root / "fake-codex.jsonl"
-            save(normalize({}), config_path)
+            save(normalize({"native_catalog_path": str(root / "missing-native.json")}), config_path)
             manager = IntegrationManager(
                 codex_home / "config.toml",
                 codex_home / "easy-multi-provider" / "integration" / "lease.json",
                 instance_id="empty-enable",
             )
             runtime = CodexRuntimeController(
-                codex_executable=str(_write_recording_fake_codex(root / "codex-fake")),
+                target_codex_home=codex_home,
                 control_timeout=0.1,
                 observation_timeout=0.01,
             )
@@ -405,18 +377,15 @@ class ServerAccountTests(unittest.TestCase):
                 integration_manager=manager,
                 runtime_controller=runtime,
             )
+            state.codex_compatibility_snapshot = lambda: {"status": "unknown"}
             state.mark_service_ready()
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                with patch.dict(
-                    os.environ,
-                    {
-                        "CODEX_HOME": str(codex_home),
-                        "EMP_FAKE_CODEX_LOG": str(log_path),
-                    },
-                ):
+                with patch.object(
+                    runtime, "reload", side_effect=AssertionError("empty catalog must not inspect runtime")
+                ) as reload_runtime:
                     connection = HTTPConnection(*server.server_address)
                     connection.request(
                         "POST",
@@ -434,19 +403,15 @@ class ServerAccountTests(unittest.TestCase):
                 self.assertEqual(response.status, 409)
                 self.assertEqual(payload["error"]["code"], "empty_emp_catalog")
                 self.assertFalse((codex_home / "config.toml").exists())
-                runtime_calls = [
-                    json.loads(line)["args"]
-                    for line in log_path.read_text(encoding="utf-8").splitlines()
-                ]
-                self.assertEqual(runtime_calls, [["--version"]])
+                reload_runtime.assert_not_called()
             finally:
                 server.shutdown()
                 server.server_close()
 
     def test_web_exposes_runtime_sync_and_large_model_picker_controls(self):
         html = WEB_FILE.read_text(encoding="utf-8")
-        self.assertIn("检查已加载目录", html)
-        self.assertIn("EMP 不会停止、重启或另行启动 Codex", html)
+        self.assertIn("重新检查", html)
+        self.assertNotIn("EMP 不会停止、重启或另行启动 Codex", html)
         self.assertNotIn("安全关闭当前 Codex", html)
         self.assertIn("/api/integration/reload", html)
         self.assertIn('id="discovered_select_all"', html)
@@ -521,7 +486,8 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("<h1>EMP</h1>", html)
         self.assertIn('name="subscription_model"', html)
         self.assertIn("hidden_models", html)
-        self.assertIn("模型显示统一由原生账户管理", html)
+        self.assertNotIn("模型显示统一由原生账户管理", html)
+        self.assertIn("编辑原生模型", html)
         self.assertIn("toggleProviderModels", html)
         self.assertIn("隐藏全部模型", html)
 
@@ -1260,7 +1226,7 @@ class ServerAccountTests(unittest.TestCase):
 
     def test_web_codex_integration_uses_safe_state_actions(self):
         html = WEB_FILE.read_text(encoding="utf-8")
-        for label in ("Native", "Recovery needed", "Conflict"):
+        for label in ("Native", "Needs recovery", "Needs attention"):
             self.assertIn(label, html)
         self.assertNotIn('id="native_catalog_path"', html)
         self.assertNotIn('id="listen_info"', html)
@@ -1268,7 +1234,9 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("confirmIntegrationAction('restore')", html)
         self.assertIn("/api/integration/enable", html)
         self.assertIn("/api/integration/restore", html)
-        self.assertIn("检查已加载目录", html)
+        self.assertIn("重新检查", html)
+        self.assertIn("EMP已启动，请重启Codex", html)
+        self.assertNotIn("EMP 不会停止、重启或另行启动 Codex", html)
         self.assertNotIn("应用模型变化到 Codex", html)
         self.assertIn("/api/integration/reload", html)
         self.assertIn("await loadIntegration()", html)
@@ -1290,7 +1258,10 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("/api/diagnostics", html)
         self.assertIn("openDiagnostics", html)
         self.assertIn("loadDiagnostics", html)
-        self.assertIn("不保存消息内容、响应内容或凭据", html)
+        self.assertIn("性能诊断", html)
+        self.assertIn("SOL 原生参考：TTFT 约 5 s · TPS 约 55 token/s", html)
+        self.assertIn("EMP 准备耗时", html)
+        self.assertNotIn("不保存消息内容、响应内容或凭据", html)
         self.assertIn("diagnosticsContextLabel", html)
         self.assertIn("context_decision", html)
         self.assertIn("safe_input_limit", html)
@@ -1868,6 +1839,11 @@ class ServerAccountTests(unittest.TestCase):
                 "request_bytes": index,
                 "response_bytes": index + 1,
                 "duration_ms": 1,
+                "ttft_ms": 5000,
+                "upstream_first_token_ms": 4800,
+                "generation_ms": 2000,
+                "output_tokens": 110,
+                "tokens_per_second": 55.0,
                 "status": 200,
                 "error_class": "none",
                 "decision": "explicit",
@@ -1917,6 +1893,11 @@ class ServerAccountTests(unittest.TestCase):
             "duration_ms",
             "local_prepare_ms",
             "upstream_first_event_ms",
+            "ttft_ms",
+            "upstream_first_token_ms",
+            "generation_ms",
+            "output_tokens",
+            "tokens_per_second",
             "connection_reused",
             "status",
             "error_class",
@@ -2022,6 +2003,11 @@ class ServerAccountTests(unittest.TestCase):
                     "duration_ms",
                     "local_prepare_ms",
                     "upstream_first_event_ms",
+                    "ttft_ms",
+                    "upstream_first_token_ms",
+                    "generation_ms",
+                    "output_tokens",
+                    "tokens_per_second",
                     "connection_reused",
                     "status",
                     "error_class",
@@ -2050,7 +2036,12 @@ class ServerAccountTests(unittest.TestCase):
             config_path = Path(directory) / "config.json"
             _save_responses_route(config_path, "demo/model")
             state = AppState(config_path)
-            success = iter([b'event: response.completed\ndata: {"type":"response.completed"}\n\n'])
+            def success_stream():
+                yield b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"private"}\n\n'
+                time.sleep(0.05)
+                yield b'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"output_tokens":1}}}\n\n'
+
+            success = success_stream()
             failure = iter([b'event: response.failed\ndata: {"type":"response.failed"}\n\n'])
             partial = iter([b'data: partial\n\n', b'data: never\n\n'])
             with patch(
@@ -2102,6 +2093,10 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(len(records), 3)
             self.assertEqual(records[0]["error_class"], "none")
             self.assertEqual(records[0]["status"], 200)
+            self.assertIsNotNone(records[0]["ttft_ms"])
+            self.assertEqual(records[0]["output_tokens"], 1)
+            self.assertGreater(records[0]["generation_ms"], 0)
+            self.assertGreater(records[0]["tokens_per_second"], 0)
             self.assertEqual(records[1]["error_class"], "stream_error")
             self.assertEqual(records[1]["status"], 502)
             self.assertEqual(records[2]["error_class"], "client_disconnect")
@@ -2414,7 +2409,8 @@ class ServerAccountTests(unittest.TestCase):
                     config_text,
                 )
                 self.assertIn(
-                    'model_catalog_json = "%s"' % str(catalog_path.resolve()),
+                    "model_catalog_json = %s"
+                    % json.dumps(str(catalog_path.resolve())),
                     config_text,
                 )
                 self.assertFalse((codex_home / "emp.config.toml").exists())
@@ -2691,7 +2687,8 @@ class ServerAccountTests(unittest.TestCase):
         cases = (
             (
                 "mixed",
-                lambda old_catalog: 'model_catalog_json = "%s"\n' % old_catalog,
+                lambda old_catalog: "model_catalog_json = %s\n"
+                % json.dumps(old_catalog),
                 ("mixed_state",),
             ),
             (

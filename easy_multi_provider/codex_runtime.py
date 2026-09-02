@@ -11,6 +11,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import platform
 import shutil
 import socket
 import subprocess
@@ -35,6 +36,7 @@ from .integration import atomic_write_text
 
 
 NOT_CHECKED = "not_checked"
+CATALOG_UNVERIFIED = "catalog_unverified"
 RELOAD_REQUIRED = "reload_required"
 STOPPING = "stopping"
 EMP_LOADED = "emp_loaded"
@@ -47,6 +49,7 @@ UNSUPPORTED = "unsupported"
 RUNTIME_STATE_SCHEMA = "easy-multi-provider.runtime-recovery"
 RUNTIME_STATE_VERSION = 1
 _RUNTIME_STATES = {
+    CATALOG_UNVERIFIED,
     NOT_CHECKED,
     RELOAD_REQUIRED,
     STOPPING,
@@ -66,7 +69,6 @@ _APP_SERVER_CONTROL_SOCKET_NAME = "app-server-control.sock"
 _WINDOWS_APP_RUNTIME_PARTS = ("OpenAI", "Codex", "bin")
 _MAX_WINDOWS_APP_RUNTIMES = 64
 _MAX_EDITOR_EXTENSIONS = 64
-_MAX_EDITOR_PLATFORMS = 32
 _SELECTABLE_COMPATIBILITY = frozenset(("recommended", "supported", "unverified"))
 _COMPATIBILITY_PRIORITY = {"recommended": 0, "supported": 1, "unverified": 2}
 _RUNTIME_SOURCES = frozenset(
@@ -245,8 +247,8 @@ class UnixSocketModelCatalogProbe:
     def model_list(self, codex_home: Path, timeout: float) -> Tuple[str, ...]:
         if not hasattr(socket, "AF_UNIX"):
             raise RuntimeSyncError(
-                "Unix Codex control sockets are unsupported on this platform",
-                "unsupported",
+                "The shared Codex backend is unavailable on this platform",
+                "unavailable",
             )
         socket_path = self._socket_path(codex_home)
         raw_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1017,6 +1019,18 @@ class CodexRuntimeController:
         return None
 
     def _editor_codex_executable(self, extensions_root: Path) -> Optional[str]:
+        system = {"Windows": "windows", "Linux": "linux", "Darwin": "darwin"}.get(
+            platform.system()
+        )
+        machine = platform.machine().casefold()
+        architecture = {
+            "amd64": "x86_64",
+            "x86_64": "x86_64",
+            "arm64": "aarch64",
+            "aarch64": "aarch64",
+        }.get(machine)
+        if system is None or architecture is None:
+            return None
         try:
             root = extensions_root.resolve(strict=True)
             extensions = tuple(
@@ -1030,28 +1044,23 @@ class CodexRuntimeController:
             return None
 
         candidates = []
-        names = ("codex.exe", "codex") if os.name == "nt" else ("codex", "codex.exe")
+        name = "codex.exe" if system == "windows" else "codex"
         for extension in extensions:
             bin_root = extension / "bin"
-            try:
-                platform_dirs = tuple(bin_root.iterdir())
-            except OSError:
-                platform_dirs = ()
-            if len(platform_dirs) > _MAX_EDITOR_PLATFORMS:
-                continue
-            locations = (bin_root, *platform_dirs)
+            # Extensions can bundle Windows and WSL binaries together. Only
+            # inspect this host's platform, regardless of other files' mtimes.
+            locations = (bin_root, bin_root / (system + "-" + architecture))
             for location in locations:
-                for name in names:
-                    executable = self._runtime_file(location / name)
-                    if executable is None:
+                executable = self._runtime_file(location / name)
+                if executable is None:
+                    continue
+                try:
+                    resolved = Path(executable)
+                    if root not in resolved.parents:
                         continue
-                    try:
-                        resolved = Path(executable)
-                        if root not in resolved.parents:
-                            continue
-                        candidates.append((resolved.stat().st_mtime_ns, executable))
-                    except OSError:
-                        continue
+                    candidates.append((resolved.stat().st_mtime_ns, executable))
+                except OSError:
+                    continue
         if not candidates:
             return None
         return max(candidates, key=lambda item: (item[0], item[1]))[1]
@@ -1142,10 +1151,17 @@ class CodexRuntimeController:
         return (self.executable(), *parts)
 
     def _observe_compatibility(self, executable: str) -> CodexCompatibility:
-        result = self.runner.run(
-            (executable, "--version"),
-            timeout=min(self.control_timeout, 2.0),
-        )
+        try:
+            result = self.runner.run(
+                (executable, "--version"),
+                timeout=min(self.control_timeout, 2.0),
+            )
+        except FileNotFoundError:
+            return unavailable_compatibility()
+        except (OSError, ValueError):
+            # A broken or inaccessible client must not discard healthy clients
+            # from the concurrent inventory. Do not expose raw OS error paths.
+            return CodexCompatibility(None, "unknown")
         if result.returncode == 0:
             return classify_codex_version(result.stdout)
         if result.returncode == 127 or "not found" in (
@@ -1380,15 +1396,21 @@ class CodexRuntimeController:
         expected = {
             model for model in expected_models if isinstance(model, str) and model
         }
+        if not expected:
+            return RuntimeSyncResult(
+                CATALOG_UNVERIFIED,
+                target,
+                False,
+                "Catalog settings are saved. Without distinct EMP model IDs, "
+                "this check cannot verify native model visibility or display names. "
+                "Restart active Codex clients safely, then check their model picker.",
+                observed,
+            )
         observed_set = set(observed)
         if target == "emp":
             missing = sorted(expected - observed_set)
-            if not expected or missing:
-                detail = (
-                    "EMP catalog has no expected visible models"
-                    if not expected
-                    else "Codex is missing %d expected EMP model(s)" % len(missing)
-                )
+            if missing:
+                detail = "Codex is missing %d expected EMP model(s)" % len(missing)
                 return RuntimeSyncResult(
                     VERIFICATION_FAILED, target, False, detail, observed
                 )
@@ -1434,6 +1456,8 @@ class CodexRuntimeController:
                 False,
                 "Confirmation is required before checking the shared Codex backend",
             )
+        if not expected_models:
+            return self._validate_models((), expected_models, target)
         try:
             observed_models = self._model_list()
         except RuntimeSyncError as error:
@@ -1472,6 +1496,8 @@ class CodexRuntimeController:
         """Verify the live catalog without stopping or mutating Codex."""
         if target not in ("emp", "native"):
             return RuntimeSyncResult(UNSUPPORTED, target, False, "Unknown runtime target")
+        if not expected_models:
+            return self._validate_models((), expected_models, target)
         try:
             observed = self._model_list()
         except RuntimeSyncError as error:

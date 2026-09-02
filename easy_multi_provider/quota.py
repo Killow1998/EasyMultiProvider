@@ -459,6 +459,8 @@ def _run_quota_query(
         # Keep only process settings needed by Codex and network/TLS proxy
         # settings. Do not inherit API keys or unrelated host state.
         for key in (
+            # Windows networking needs this even for an otherwise isolated env.
+            "SYSTEMROOT",
             "LANG",
             "LC_ALL",
             "TERM",

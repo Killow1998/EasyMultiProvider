@@ -24,6 +24,8 @@ The current source version is `v0.9.5`.
   existing model slug; Codex continues to own the child task and permissions.
 - Keep credentials encrypted on the local machine.
 - Keep a private, bounded diagnostic journal for later troubleshooting.
+- Inspect recent model TTFT, TPS, and EMP preparation time in the Performance
+  view without storing prompt or response content.
 - Export and import password-protected `.emp` migration files.
 - Preserve native Codex sessions, `resume`, WebSockets, compression, and MCP.
 - Continue compacted tasks when switching between the current login, imported
@@ -58,7 +60,7 @@ check proves only the observed model ID set, not that endpoints, display names,
 or every other startup setting were hot-reloaded. This live probe is verified
 on Linux for this release; macOS and Windows remain unverified for this path.
 
-EMP supports Codex CLI `0.149.x` through `0.151.x`; `0.151.x` is recommended.
+EMP supports Codex CLI `0.149.x` through `0.152.x`; `0.152.x` is recommended.
 The Web UI shows the installed version and marks newer versions as not yet
 verified or older versions as unsupported.
 
@@ -155,8 +157,16 @@ The terminal prints a one-use browser URL. Open it and:
 1. Import a Codex subscription account or add an API Provider.
 2. Pull the Provider model list and import the models you want.
 3. Adjust model visibility or context windows when needed.
-4. Click **Enable Default Codex**.
+4. Click **Apply EMP to Codex**.
 5. Start Codex normally and select a model from `/model` or the App model menu.
+
+With only the current native account, skip account and Provider import. Hide
+models under **Current Codex login → Edit**, rename model families under
+**Model list display**, save, and click **Apply EMP to Codex**. Keep at least
+one model visible. Display names do not change model IDs. Safely restart active
+Codex clients as needed and check their model picker: model IDs alone cannot
+verify native visibility or names. EMP reports the catalog as saved but display
+verification as pending, and **Restore native Codex** remains available.
 
 EMP listens on `http://127.0.0.1:4200` by default. Use `--port` only when that
 port is already occupied.

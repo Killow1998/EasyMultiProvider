@@ -61,6 +61,7 @@ from .config import (
     save,
 )
 from .codex_runtime import (
+    CATALOG_UNVERIFIED,
     EMP_LOADED,
     NATIVE_LOADED,
     NOT_CHECKED,
@@ -115,6 +116,7 @@ from .quota_history import (
     quota_history_path,
 )
 from .provider_replay import ProviderReplayCache
+from .performance import ResponsesPerformanceTracker
 from .history_continuity import (
     CodexHomeHistoryReader,
     HistoryContinuityEngine,
@@ -128,14 +130,18 @@ from .router import (
     model_metadata,
 )
 from .transport import (
+    MAX_PROXY_REQUEST_BYTES,
+    RequestBodyTooLarge,
     TransportError,
     WebSocketConnection,
     WebSocketProtocolError,
+    WebSocketRequestTooLarge,
     decode_content,
     sse_json_events,
     websocket_accept,
 )
 from .transport_failures import status_error_class
+from .request_limits import RequestLimits
 from .transport_continuity import (
     PREVIOUS_RESPONSE_NOT_FOUND_CODE,
     PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
@@ -538,6 +544,18 @@ def _safe_diagnostic_float(value: Any) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _safe_diagnostic_rate(value: Any, maximum: float = 100_000.0) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if value != value or value in (float("inf"), float("-inf")):
+        return None
+    return round(max(0.0, min(float(maximum), value)), 2)
+
+
 def _safe_transport_ratio(value: Any, decoded_bytes: Optional[int]) -> Optional[float]:
     if decoded_bytes == 0 or isinstance(value, bool):
         return None
@@ -634,6 +652,17 @@ class ObservationRing:
         upstream_first_event_ms = _safe_diagnostic_int(
             event.get("upstream_first_event_ms"), 3_600_000
         )
+        ttft_ms = _safe_diagnostic_int(event.get("ttft_ms"), 3_600_000)
+        upstream_first_token_ms = _safe_diagnostic_int(
+            event.get("upstream_first_token_ms"), 3_600_000
+        )
+        generation_ms = _safe_diagnostic_int(
+            event.get("generation_ms"), 3_600_000
+        )
+        output_tokens = _safe_diagnostic_int(
+            event.get("output_tokens"), 10_000_000
+        )
+        tokens_per_second = _safe_diagnostic_rate(event.get("tokens_per_second"))
         tool_pairing = event.get("tool_pairing_status", "none")
         if tool_pairing not in _DIAGNOSTIC_TOOL_PAIRING:
             tool_pairing = "invalid"
@@ -697,6 +726,11 @@ class ObservationRing:
             "duration_ms": duration,
             "local_prepare_ms": local_prepare_ms,
             "upstream_first_event_ms": upstream_first_event_ms,
+            "ttft_ms": ttft_ms,
+            "upstream_first_token_ms": upstream_first_token_ms,
+            "generation_ms": generation_ms,
+            "output_tokens": output_tokens,
+            "tokens_per_second": tokens_per_second,
             "connection_reused": bool(event.get("connection_reused", False)),
             "status": status,
             "error_class": error_class,
@@ -922,6 +956,7 @@ class AppState:
         self.bootstrap_used = False
         self.session_token = secrets.token_urlsafe(32)
         self.journal = journal if journal is not None else NullJournal()
+        self.request_limits = RequestLimits(self.journal)
         self.diagnostics = (
             diagnostics
             if diagnostics is not None
@@ -1334,8 +1369,15 @@ class AppState:
     ) -> IntegrationResult:
         manager = self.ensure_integration_manager()
         config = self.snapshot()
-        if not self._runtime_model_ids():
-            raise EmptyEmpCatalog("EMP has no visible models to expose to Codex")
+        # Distinct prefixed IDs are useful for runtime observation, but native
+        # models also need this catalog to apply visibility and display names.
+        if not any(
+            isinstance(item.get("slug"), str)
+            and item["slug"]
+            and item.get("visibility", "list") == "list"
+            for item in build_catalog(config).get("models", [])
+        ):
+            raise EmptyEmpCatalog("The catalog has no visible native or additional models")
         # Catalog creation is deliberately before the lease transaction.  The
         # Codex config never points at a catalog that EMP failed to write.
         catalog_path = write_catalog(config, self.integration_catalog_path)
@@ -1628,6 +1670,7 @@ class AppState:
         started: float,
         transport: str,
         route: str,
+        performance: Optional[ResponsesPerformanceTracker] = None,
     ):
         response_bytes = 0
         natural_end = False
@@ -1661,6 +1704,8 @@ class AppState:
                 except Exception:
                     pass
             event = dict(metadata)
+            if performance is not None:
+                event.update(performance.diagnostics())
             event.update(terminal or {
                 "status": 502 if natural_end else None,
                 "success": False,
@@ -1714,6 +1759,7 @@ class AppState:
         recovery_mode: str = "none",
         recovery_succeeded: bool = False,
         protocol_fallback: bool = False,
+        performance: Optional[Mapping[str, Any]] = None,
     ) -> None:
         try:
             upstream_request_bytes = len(
@@ -1746,6 +1792,8 @@ class AppState:
             "output_emitted": output_emitted,
             "tool_activity": tool_activity,
         }
+        if isinstance(performance, Mapping):
+            event.update(dict(performance))
         event.update(dict(terminal))
         self._record_route_event(
             event, body, started, "websocket", "responses"
@@ -2150,6 +2198,18 @@ def make_handler(state: AppState):
             except Exception:
                 pass
 
+        def _record_request_rejection(self, transport: str, reason: str, limit: int) -> None:
+            # Fixed classifications and counts only; never record history,
+            # attachments, caller headers, or arbitrary exception messages.
+            try:
+                state.journal.event(
+                    "warning", "request_rejected",
+                    transport=transport, reason=reason, limit_bytes=limit,
+                    request_bytes=self._declared_request_bytes(),
+                )
+            except Exception:
+                pass
+
         def _record_management_event(
             self,
             event_name: str,
@@ -2265,7 +2325,19 @@ def make_handler(state: AppState):
                 self._record_unexpected_exception(exc)
                 raise
             finally:
+                self._release_request_budget()
                 self._record_http_request_once()
+
+        def _release_request_budget(self) -> None:
+            budget = getattr(self, "_request_budget", None)
+            if budget is not None:
+                budget.release()
+                self._request_budget = None
+
+        def _begin_request_budget(self, transport: str) -> None:
+            self._release_request_budget()
+            limits = getattr(state, "request_limits", None)
+            self._request_budget = limits.request(transport) if limits is not None else None
 
         def finish(self) -> None:
             try:
@@ -2372,8 +2444,11 @@ def make_handler(state: AppState):
                 raise ConfigError("invalid Content-Length")
             if length < 0:
                 raise ConfigError("Content-Length cannot be negative")
-            if length > max_length:
-                raise ConfigError("request body is too large")
+            budget = getattr(self, "_request_budget", None)
+            if budget is not None:
+                budget.ensure(length)
+            elif length > max_length:
+                raise RequestBodyTooLarge(max_length)
             raw = self.rfile.read(length)
             if len(raw) != length:
                 raise ConfigError("request body is incomplete")
@@ -2382,7 +2457,10 @@ def make_handler(state: AppState):
                     raw,
                     self.headers.get("Content-Encoding", ""),
                     max_length,
+                    budget=budget,
                 )
+            except RequestBodyTooLarge:
+                raise
             except TransportError as exc:
                 raise ConfigError(str(exc)) from exc
             try:
@@ -2492,13 +2570,29 @@ def make_handler(state: AppState):
             # A fixed idle read timeout turns normal inactivity into a 1011
             # server failure and forces a visible client reconnect.
             self.connection.settimeout(None)
-            websocket = WebSocketConnection(self.rfile, self.wfile)
+            websocket = WebSocketConnection(self.rfile, self.wfile, self.connection.settimeout)
             native_upstream = NativeWebSocketBridge()
             transport_continuity = TransportContinuityAdapter()
             last_native_response_id = None
+            acquire_websocket_slot = getattr(
+                self.server, "acquire_websocket_slot", None
+            )
+            websocket_slot_acquired = False
+            if callable(acquire_websocket_slot):
+                websocket_slot_acquired = acquire_websocket_slot()
+                if not websocket_slot_acquired:
+                    # Keep capacity for short proxy and management requests even
+                    # when many Codex tasks retain their control sockets.
+                    native_upstream.close()
+                    websocket.close(1013, "too many websocket connections")
+                    return
             try:
                 while True:
-                    text = websocket.receive_text()
+                    # Do not retain a large previous turn while the socket is
+                    # idle after releasing its temporary memory reservation.
+                    text = request = plan = probe = metadata = result = None
+                    self._begin_request_budget("websocket")
+                    text = websocket.receive_text(budget=self._request_budget)
                     if text is None:
                         return
                     try:
@@ -2565,10 +2659,15 @@ def make_handler(state: AppState):
                             tool_activity = False
                             pending_lifecycle_events = []
                             native_upstream_started = time.monotonic()
+                            performance = ResponsesPerformanceTracker(
+                                started=native_started
+                            )
+                            performance.mark_upstream_started(native_upstream_started)
                             try:
                                 for event in native_upstream.events(
                                     plan.target, plan.payload
                                 ):
+                                    performance.observe_event(event)
                                     if first_event_ms is None:
                                         first_event_ms = max(
                                             0,
@@ -2677,6 +2776,7 @@ def make_handler(state: AppState):
                                         native_upstream.last_connection_reused,
                                         output_emitted,
                                         tool_activity,
+                                        performance=performance.diagnostics(),
                                     )
                                     continue
                                 if not exc.retryable:
@@ -2704,6 +2804,7 @@ def make_handler(state: AppState):
                                         output_emitted,
                                         tool_activity,
                                         terminal_event_observed=False,
+                                        performance=performance.diagnostics(),
                                     )
                                     continue
                                 failure_terminal = {
@@ -2730,6 +2831,7 @@ def make_handler(state: AppState):
                                         terminal_event_observed=False,
                                         recovery_mode="previous_response_not_found",
                                         protocol_fallback=False,
+                                        performance=performance.diagnostics(),
                                     )
                                     self._previous_response_not_found(websocket)
                                     continue
@@ -2750,6 +2852,7 @@ def make_handler(state: AppState):
                                     terminal_event_observed=False,
                                     recovery_mode="native_http_fallback",
                                     protocol_fallback=True,
+                                    performance=performance.diagnostics(),
                                 )
                             else:
                                 state.mark_native_websocket_available(
@@ -2766,6 +2869,7 @@ def make_handler(state: AppState):
                                     native_upstream.last_connection_reused,
                                     output_emitted,
                                     tool_activity,
+                                    performance=performance.diagnostics(),
                                 )
                                 if terminal and terminal.get("success") is True:
                                     last_native_response_id = completed_native_id
@@ -2843,15 +2947,25 @@ def make_handler(state: AppState):
                         self._websocket_error(websocket, str(exc))
             except EOFError:
                 return
+            except WebSocketRequestTooLarge as exc:
+                self._record_request_rejection("websocket", "websocket_message_too_large", exc.limit)
+                try:
+                    self._websocket_error(websocket, str(exc), 413, "request_too_large")
+                except OSError:
+                    pass
+                websocket.close(exc.code, str(exc))
             except WebSocketProtocolError as exc:
                 websocket.close(exc.code, str(exc))
             except Exception as exc:
                 self._record_unexpected_exception(exc)
                 websocket.close(1011, "internal server error")
             finally:
+                self._release_request_budget()
                 last_native_response_id = None
                 native_upstream.close()
                 websocket.close()
+                if websocket_slot_acquired:
+                    self.server.release_websocket_slot()
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -2901,6 +3015,9 @@ def make_handler(state: AppState):
                 return
             if path == "/api/diagnostics":
                 self._send(200, _json_bytes(state.diagnostics.snapshot()))
+                return
+            if path == "/api/request-limits":
+                self._send(200, _json_bytes(state.request_limits.snapshot()))
                 return
             if path == "/api/accounts":
                 self._send(
@@ -3058,9 +3175,13 @@ def make_handler(state: AppState):
                         operation=path.rsplit("/", 1)[-1],
                     )
             try:
+                if path in ("/v1/responses", "/v1/responses/compact"):
+                    self._begin_request_budget("http")
                 body = self._body(
-                    32 * 1024 * 1024
-                    if path in ("/api/migration/import", "/v1/responses", "/v1/responses/compact")
+                    MAX_PROXY_REQUEST_BYTES
+                    if path in ("/v1/responses", "/v1/responses/compact")
+                    else 32 * 1024 * 1024
+                    if path == "/api/migration/import"
                     else 5 * 1024 * 1024
                 )
                 if path == "/v1/alpha/search":
@@ -3107,7 +3228,7 @@ def make_handler(state: AppState):
                         summary = integration_summary(state)
                         summary["error"] = {
                             "code": "empty_emp_catalog",
-                            "message": "Add or show at least one EMP model before enabling Codex",
+                            "message": "Keep at least one native or additional model visible before applying EMP to Codex",
                         }
                         emit_operation(
                             "integration_operation",
@@ -3161,6 +3282,7 @@ def make_handler(state: AppState):
                     result = state.sync_integration_runtime(confirm_reload)
                     summary = integration_summary(state)
                     successful = result.state in {
+                        CATALOG_UNVERIFIED,
                         EMP_LOADED,
                         NATIVE_LOADED,
                         RELOAD_REQUIRED,
@@ -3440,6 +3562,20 @@ def make_handler(state: AppState):
                     self.close_connection = True
                 else:
                     self._send(409, _json_bytes(_history_error_body(exc)))
+            except RequestBodyTooLarge as exc:
+                emit_operation_failure(exc)
+                self._record_request_rejection(
+                    "http", "decoded_body_too_large" if exc.decoded else "wire_body_too_large", exc.limit
+                )
+                self.close_connection = True
+                self._send(
+                    413,
+                    _json_bytes({"error": {
+                        "code": "request_too_large", "message": str(exc),
+                        "limit_bytes": exc.limit,
+                    }}),
+                    headers={"Connection": "close"},
+                )
             except (ConfigError, RouterError, QuotaError, ValueError) as exc:
                 emit_operation_failure(exc)
                 status = exc.status if isinstance(exc, RouterError) else 400
@@ -3494,11 +3630,22 @@ def make_handler(state: AppState):
 
 class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
-    request_limit = 32
+    # Codex keeps one Responses WebSocket open per active task. Bound those
+    # separately so long-lived idle sockets cannot exhaust every server thread
+    # and turn new proxy, health, and management requests into connection resets.
+    request_limit = 64
+    websocket_limit = 48
 
     def __init__(self, server_address, handler_cls):
         super().__init__(server_address, handler_cls)
         self._request_slots = threading.BoundedSemaphore(self.request_limit)
+        self._websocket_slots = threading.BoundedSemaphore(self.websocket_limit)
+
+    def acquire_websocket_slot(self) -> bool:
+        return self._websocket_slots.acquire(blocking=False)
+
+    def release_websocket_slot(self) -> None:
+        self._websocket_slots.release()
 
     def process_request(self, request, client_address):
         if not self._request_slots.acquire(blocking=False):

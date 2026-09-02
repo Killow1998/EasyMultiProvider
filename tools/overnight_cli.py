@@ -15,7 +15,6 @@ import json
 import os
 import random
 import re
-import resource
 import shutil
 import signal
 import socket
@@ -33,6 +32,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.sax.saxutils import escape
+
+try:
+    import resource
+except ModuleNotFoundError:  # Windows has no POSIX resource module.
+    resource = None
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -1818,7 +1822,12 @@ class Supervisor:
                 faults += 1
                 now = time.monotonic()
                 if now >= next_heartbeat:
-                    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                    if resource is None:
+                        import psutil
+
+                        rss = psutil.Process().memory_info().rss
+                    else:
+                        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
                     value = {"timestamp": time.time(), "cycles": cycles, "faults": faults, "duration_seconds": round(now - started, 3), "controller_max_rss": rss, "artifact_bytes": sum(path.stat().st_size for path in self.run_dir.rglob("*") if path.is_file())}
                     heartbeat_lines.append(json.dumps(value, sort_keys=True) + "\n")
                     atomic_write(heartbeat_path, "".join(heartbeat_lines))
