@@ -120,6 +120,30 @@ class ResponsesPerformanceTrackerTests(unittest.TestCase):
         )
         self.assertNotIn("tokens_per_second", tracker.diagnostics())
 
+    def test_short_buffered_output_burst_does_not_claim_tps(self):
+        clock = FakeClock()
+        tracker = ResponsesPerformanceTracker(started=clock(), clock=clock)
+        clock.advance(10.0)
+        tracker.observe_event(
+            {"type": "response.output_text.delta", "delta": "short answer"}
+        )
+        clock.advance(0.03)
+        tracker.observe_event(
+            {
+                "type": "response.completed",
+                "response": {
+                    "usage": {
+                        "output_tokens": 52,
+                        "output_tokens_details": {"reasoning_tokens": 0},
+                    }
+                },
+            }
+        )
+        diagnostics = tracker.diagnostics()
+        self.assertEqual(diagnostics["ttft_ms"], 10000)
+        self.assertEqual(diagnostics["generation_ms"], 30)
+        self.assertNotIn("tokens_per_second", diagnostics)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,7 @@ from easy_multi_provider.diagnostic_journal import (
     _absolute_path_prefixes,
     _is_forbidden_field_key,
     create_journal,
+    read_route_observations,
 )
 
 
@@ -68,6 +69,21 @@ class DiagnosticJournalTest(unittest.TestCase):
         self.assertEqual(journal.run_id, "fixed")
         with journal as ctx:
             self.assertIs(ctx, journal)
+
+    def test_recent_route_observations_span_runs_and_ignore_other_events(self):
+        first = self.make_journal()
+        first.event("info", "route_observation", model_id="sol", status=200)
+        first.event("info", "process_start", model_count=1)
+        first.close()
+        second = self.make_journal()
+        second.event("info", "route_observation", model_id="luna", status=502)
+
+        observations = read_route_observations(self.config_dir)
+
+        self.assertEqual(
+            [(item["model_id"], item["status"]) for item in observations],
+            [("sol", 200), ("luna", 502)],
+        )
 
     def test_path_prefixes_preserve_windows_drive_and_posix_root(self):
         self.assertEqual(

@@ -20,6 +20,7 @@ _TERMINAL_EVENT = re.compile(
 _OUTPUT_TOKENS = re.compile(br'"output_tokens"\s*:\s*(\d+)')
 _REASONING_TOKENS = re.compile(br'"reasoning_tokens"\s*:\s*(\d+)')
 _SCAN_TAIL_BYTES = 512
+_MIN_TPS_WINDOW_MS = 500
 
 
 def _output_tokens(event: Mapping[str, Any]) -> Optional[int]:
@@ -183,7 +184,12 @@ class ResponsesPerformanceTracker:
                 measured_tokens = max(
                     0, self._output_tokens - self._reasoning_tokens
                 )
-            if generation_ms > 0 and measured_tokens:
+            # A short answer can arrive in one buffered burst immediately before
+            # the terminal event. Dividing by that sub-second delivery gap
+            # reports transport batching as model generation speed. Keep TTFT,
+            # but only publish TPS when the observed output window is long
+            # enough to form a useful rate.
+            if generation_ms >= _MIN_TPS_WINDOW_MS and measured_tokens:
                 result["tokens_per_second"] = round(
                     measured_tokens * 1000.0 / generation_ms, 2
                 )

@@ -158,6 +158,78 @@ class NativeWebSocketTests(unittest.TestCase):
 
         self.assertFalse(bridge.can_continue(target))
 
+    def test_reuse_probe_keeps_a_live_socket(self):
+        connection = _FakeConnection(
+            [
+                {
+                    "type": "response.completed",
+                    "response": {"id": "one", "status": "completed"},
+                },
+                {
+                    "type": "response.completed",
+                    "response": {"id": "two", "status": "completed"},
+                },
+            ]
+        )
+        pings = []
+        connection.ping = pings.append
+
+        class Pong:
+            @property
+            def data(self):
+                return pings[-1].encode("ascii")
+
+        connection.recv_data_frame = lambda control_frame=False: (0xA, Pong())
+        calls = []
+        target = NativeWebSocketTarget(
+            "wss://example.invalid/v1/responses", {}, "sha256:route-a"
+        )
+        bridge = NativeWebSocketBridge(lambda item: calls.append(item) or connection)
+
+        list(bridge.events(target, {"type": "response.create", "input": []}))
+        self.assertTrue(bridge.can_continue(target))
+        list(bridge.events(target, {"type": "response.create", "input": []}))
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(pings), 1)
+        self.assertTrue(bridge.last_connection_reused)
+
+    def test_reuse_probe_discards_a_stale_socket_before_next_request(self):
+        first = _FakeConnection(
+            [
+                {
+                    "type": "response.completed",
+                    "response": {"id": "one", "status": "completed"},
+                },
+            ]
+        )
+        second = _FakeConnection(
+            [
+                {
+                    "type": "response.completed",
+                    "response": {"id": "two", "status": "completed"},
+                },
+            ]
+        )
+        first.ping = lambda _payload: None
+
+        class Close:
+            data = b""
+
+        first.recv_data_frame = lambda control_frame=False: (0x8, Close())
+        connections = iter((first, second))
+        target = NativeWebSocketTarget(
+            "wss://example.invalid/v1/responses", {}, "sha256:route-a"
+        )
+        bridge = NativeWebSocketBridge(lambda _target: next(connections))
+
+        list(bridge.events(target, {"type": "response.create", "input": []}))
+
+        self.assertFalse(bridge.can_continue(target))
+        self.assertTrue(first.closed)
+        list(bridge.events(target, {"type": "response.create", "input": []}))
+        self.assertFalse(bridge.last_connection_reused)
+
     def test_route_change_closes_old_connection(self):
         first = _FakeConnection(
             [{"type": "response.completed", "response": {"status": "completed"}}]

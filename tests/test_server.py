@@ -1268,13 +1268,13 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("/api/diagnostics", html)
         self.assertIn("openDiagnostics", html)
         self.assertIn("loadDiagnostics", html)
-        self.assertIn("性能诊断", html)
+        self.assertIn("性能与健康", html)
         self.assertNotIn("SOL 原生参考", html)
         self.assertNotIn("TTFT 慢于参考", html)
         self.assertNotIn("TPS 低于参考", html)
         self.assertIn("从发出请求到模型开始返回内容的时间", html)
         self.assertIn("平均每秒生成的回答 token 数", html)
-        self.assertIn("EMP 处理", html)
+        self.assertIn("本地排队超限", html)
         self.assertNotIn("不保存消息内容、响应内容或凭据", html)
         self.assertIn("diagnosticsContextLabel", html)
         self.assertIn("context_decision", html)
@@ -1884,6 +1884,7 @@ class ServerAccountTests(unittest.TestCase):
             "route",
             "provider_id",
             "model_id",
+            "speed_mode",
             "endpoint_fingerprint",
             "deployment_identity",
             "protocol",
@@ -1988,12 +1989,16 @@ class ServerAccountTests(unittest.TestCase):
                 payload = json.loads(response.read().decode("utf-8"))
                 connection.close()
                 self.assertEqual(response.status, 200)
-                self.assertEqual(set(payload), {"capacity", "records"})
+                self.assertEqual(
+                    set(payload),
+                    {"capacity", "sample_count", "records", "health", "models"},
+                )
                 self.assertEqual(set(payload["records"][0]), {
                     "observed_at",
                     "route",
                     "provider_id",
                     "model_id",
+                    "speed_mode",
                     "endpoint_fingerprint",
                     "deployment_identity",
                     "protocol",
@@ -2052,7 +2057,7 @@ class ServerAccountTests(unittest.TestCase):
             state = AppState(config_path)
             def success_stream():
                 yield b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"private"}\n\n'
-                time.sleep(0.05)
+                time.sleep(0.55)
                 yield b'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0}}}}\n\n'
 
             success = success_stream()
@@ -2109,12 +2114,39 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(records[0]["status"], 200)
             self.assertIsNotNone(records[0]["ttft_ms"])
             self.assertEqual(records[0]["output_tokens"], 1)
-            self.assertGreater(records[0]["generation_ms"], 0)
+            self.assertGreaterEqual(records[0]["generation_ms"], 500)
             self.assertGreater(records[0]["tokens_per_second"], 0)
             self.assertEqual(records[1]["error_class"], "stream_error")
             self.assertEqual(records[1]["status"], 502)
             self.assertEqual(records[2]["error_class"], "client_disconnect")
             self.assertIsNone(records[2]["status"])
+
+    def test_route_diagnostics_record_requested_fast_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+
+            state._record_route_event(
+                {"model_id": "gpt-5.6-sol", "status": 200, "error_class": "none"},
+                {"model": "gpt-5.6-sol", "service_tier": "priority"},
+                time.monotonic(),
+                "websocket",
+                "responses",
+            )
+            state._record_route_event(
+                {"model_id": "gpt-5.6-sol", "status": 200, "error_class": "none"},
+                {"model": "gpt-5.6-sol"},
+                time.monotonic(),
+                "websocket",
+                "responses",
+            )
+
+            records = state.diagnostics.snapshot()["records"]
+            self.assertEqual(
+                [record["speed_mode"] for record in records],
+                ["fast", "standard"],
+            )
 
     def test_route_replays_provider_signature_without_persisting_history(self):
         with tempfile.TemporaryDirectory() as directory:

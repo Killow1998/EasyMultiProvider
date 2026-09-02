@@ -78,7 +78,8 @@ Routing and reliability:
 - selected/resolved protocol, dialect, transport and fallback/retry decision;
 - HTTP status/error class, duration and request/response byte counts;
 - content-free performance facts: TTFT, upstream first-token time, generation
-  duration, output-token count, TPS and local preparation time when available;
+  duration, output-token count, TPS, local preparation time, and requested
+  standard/Fast mode when available;
 - stream terminal observation, close code, output/tool activity and recovery;
 - context estimate/limit/reserve/confidence/source and allow/warn/block result;
 - never persist the original request, SSE events, WebSocket frames, response
@@ -122,7 +123,10 @@ emitted for a disabled journal.
 - HTTP access and lifecycle events use the same journal instance.
 - Startup prints `Diagnostic log: <path>` after successful journal creation.
   It must not print or log the bootstrap/session secret.
-- No Web endpoint exposes raw log content in this slice.
+- The authenticated diagnostics endpoint revalidates recent route records from
+  managed log parts, aggregates at most 512 across runs, and returns only safe
+  health/model summaries plus the latest 64 normalized request facts. It never
+  returns raw JSONL records or conversation content.
 
 ## Current-checkout implementation map
 

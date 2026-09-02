@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.6 (2026-09-02)
 
 - Extend the tested Codex compatibility line through `0.152.x` and recommend
   `0.152.x`, based on the stable Windows `0.152.0` runtime used by Codex App
@@ -18,13 +18,22 @@
   while retaining the 300-second idle allowance after output starts. Never
   replay over HTTP once the WebSocket request may have reached the upstream;
   HTTP fallback remains limited to pre-dispatch handshake failures.
+- Probe an idle upstream WebSocket with a bounded ping/pong before reusing it.
+  Discard a stale channel before the next request is sent, so an unnoticed
+  remote close becomes a safe reconnect/full-context retry instead of a 502.
 - Keep the account quota display synchronized with EMP's background samples
   through a local-only account-state poll. Use accessible battery meters,
   animate only actual quota changes, and add nearest-point hover details to
   the quota trend chart.
 - Record content-free TTFT and TPS measurements from real Responses output and
-  terminal usage events. Exclude reasoning tokens from TPS, and show only the
-  latest measured timings without fixed model baselines or inferred verdicts.
+  terminal usage events. Exclude reasoning tokens from TPS, suppress TPS for
+  sub-second buffered output bursts, and omit internal requests without a valid
+  measurement. Aggregate recent safe logs across EMP restarts by model using
+  median TTFT/TPS, and keep OpenAI Fast requests separate from standard mode.
+- Add a compact health view over the same bounded, privacy-safe request log,
+  including observed success, 429, 502, and local queue-limit rates. Keep the
+  latest 512 route observations available for aggregation while returning only
+  the latest 64 request details to the browser.
 - Tighten the settings UI hierarchy with quieter secondary actions, compact
   spacing, restrained borders and locally embedded Phosphor action icons in
   both themes. Keep model display visible in a desktop side panel, update its

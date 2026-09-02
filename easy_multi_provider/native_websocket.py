@@ -22,6 +22,7 @@ MAX_NATIVE_WEBSOCKET_EVENTS = 100_000
 # zstd HTTP path instead of sending an uncompressed WebSocket frame.
 MAX_NATIVE_WEBSOCKET_REQUEST_BYTES = 4 * 1024 * 1024
 NATIVE_WEBSOCKET_CONNECT_TIMEOUT = 30
+NATIVE_WEBSOCKET_REUSE_PROBE_TIMEOUT = 2
 NATIVE_WEBSOCKET_IDLE_TIMEOUT = 300
 NATIVE_WEBSOCKET_FIRST_OUTPUT_TIMEOUT = 120
 _RETRYABLE_UPGRADE_STATUSES = frozenset(
@@ -203,6 +204,7 @@ class NativeWebSocketBridge:
         self._connection = None
         self._connection_key: Optional[str] = None
         self._last_connection_reused = False
+        self._probed_connection = None
 
     @property
     def connection_key(self) -> Optional[str]:
@@ -221,12 +223,57 @@ class NativeWebSocketBridge:
     def can_continue(self, target: NativeWebSocketTarget) -> bool:
         """Return whether incremental continuity can use the existing socket."""
 
-        return self._usable(target)
+        return self._usable(target) and self._probe_reused_connection()
+
+    def _probe_reused_connection(self) -> bool:
+        """Confirm that an idle upstream socket still answers before reuse."""
+
+        connection = self._connection
+        if connection is None:
+            return False
+        if self._probed_connection is connection:
+            return True
+        ping = getattr(connection, "ping", None)
+        receive = getattr(connection, "recv_data_frame", None)
+        setter = getattr(connection, "settimeout", None)
+        # Lightweight test doubles and alternate clients may not expose control
+        # frames. Their ordinary ``connected`` state remains the best signal.
+        if not callable(ping) or not callable(receive):
+            self._probed_connection = connection
+            return True
+        payload = uuid.uuid4().hex[:16]
+        try:
+            if callable(setter):
+                setter(NATIVE_WEBSOCKET_REUSE_PROBE_TIMEOUT)
+            ping(payload)
+            for _ in range(3):
+                opcode, frame = receive(control_frame=True)
+                if opcode == 0xA:  # WebSocket pong
+                    data = getattr(frame, "data", b"")
+                    if isinstance(data, bytes):
+                        data = data.decode("ascii", errors="ignore")
+                    if data == payload:
+                        self._probed_connection = connection
+                        return True
+                    break
+                if opcode == 0x9:  # peer ping; websocket-client already replied
+                    continue
+                break
+        except Exception:
+            pass
+        finally:
+            if callable(setter):
+                try:
+                    setter(NATIVE_WEBSOCKET_CONNECT_TIMEOUT)
+                except Exception:
+                    pass
+        self.close()
+        return False
 
     def connect(self, target: NativeWebSocketTarget) -> bool:
         """Return True when an existing connection was reused."""
 
-        if self._usable(target):
+        if self._usable(target) and self._probe_reused_connection():
             self._last_connection_reused = True
             return True
         self.close()
@@ -258,6 +305,7 @@ class NativeWebSocketBridge:
         self._connection = connection
         self._connection_key = target.connection_key
         self._last_connection_reused = False
+        self._probed_connection = None
         return False
 
     def events(
@@ -292,6 +340,7 @@ class NativeWebSocketBridge:
                 sender(payload)
             else:
                 connection.send(payload)
+            self._probed_connection = None
             for _ in range(MAX_NATIVE_WEBSOCKET_EVENTS):
                 if callable(setter):
                     # Match Codex's native transport: bound inactivity, not the
@@ -412,6 +461,7 @@ class NativeWebSocketBridge:
         connection = self._connection
         self._connection = None
         self._connection_key = None
+        self._probed_connection = None
         if connection is None:
             return
         try:

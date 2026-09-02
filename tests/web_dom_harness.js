@@ -428,20 +428,33 @@ function quotaHistoryBehavior() {
 }
 
 function performanceDiagnosticsBehavior() {
-  context.__performancePayload = {records:[
+  context.__performancePayload = {health:{sample_count:12,success_count:10,success_rate:83.3,status_429_count:1,status_429_rate:8.3,status_502_count:1,status_502_rate:8.3,local_capacity_count:0,local_capacity_rate:0,failure_classes:[{error_class:'upstream_close_pre_output',count:1,rate:8.3},{error_class:'rate_limit',count:1,rate:8.3}]},models:[
+    {model_id:'gpt-5.6-sol',speed_mode:'standard',call_count:5,ttft_ms:5000,ttft_samples:4,tokens_per_second:55,tps_samples:3},
+    {model_id:'gpt-5.6-sol',speed_mode:'fast',call_count:3,ttft_ms:3200,ttft_samples:3,tokens_per_second:82,tps_samples:2},
+    {model_id:'gemini-3.7-flash',speed_mode:'unknown',call_count:2,ttft_ms:1200,ttft_samples:2,tokens_per_second:90,tps_samples:2},
+  ],records:[
+    {observed_at:'2026-09-02T11:59:59Z',route:'responses',model_id:'codex-auto-review',status:200,error_class:'none',ttft_ms:null,tokens_per_second:null,local_prepare_ms:15,duration_ms:20,protocol:'responses',transport:'websocket',context_decision:'allowed'},
     {observed_at:'2026-09-02T12:00:00Z',route:'responses',model_id:'sol/native',status:200,error_class:'none',ttft_ms:5000,tokens_per_second:55,local_prepare_ms:120,upstream_first_token_ms:4880,duration_ms:7000,protocol:'responses',transport:'websocket',context_decision:'allowed'},
     {observed_at:'2026-09-02T12:01:00Z',route:'responses',model_id:'sol/slow',status:200,error_class:'none',ttft_ms:9000,tokens_per_second:30,local_prepare_ms:100,upstream_first_token_ms:8900,duration_ms:13000,protocol:'responses',transport:'websocket',context_decision:'allowed'},
   ]};
   run('renderDiagnostics(__performancePayload)');
-  assert.match(getElement('diagnostics_summary').textContent, /最近 2 次模型调用/);
+  assert.match(getElement('diagnostics_summary').textContent, /最近 12 次请求/);
+  assert.match(getElement('health_summary').innerHTML, /83\.3%/);
+  assert.match(getElement('health_summary').innerHTML, />502</);
+  assert.match(getElement('health_summary').innerHTML, /输出前断线 1/);
+  assert.match(getElement('health_summary').innerHTML, /上游限流 1/);
   const rendered = getElement('performance_records').innerHTML;
-  assert.match(rendered, /sol\/native/);
+  assert.match(rendered, /gpt-5\.6-sol/);
   assert.match(rendered, /5\.00 s/);
   assert.match(rendered, /55\.0 token\/s/);
-  assert.match(rendered, /120 ms/);
+  assert.match(rendered, />Fast</);
+  assert.match(rendered, /82\.0 token\/s/);
+  assert.match(rendered, /gemini-3\.7-flash/);
+  assert.match(rendered, /未标记/);
+  assert.doesNotMatch(rendered, /codex-auto-review/);
   assert.doesNotMatch(rendered, /判断|参考|原生 A\/B/);
   run('openDiagnostics()');
-  assert.match(getElement('modal_title').textContent, /性能诊断/);
+  assert.match(getElement('modal_title').textContent, /性能与健康/);
   assert.match(getElement('modal_body').innerHTML, /从发出请求到模型开始返回内容的时间/);
   assert.match(getElement('modal_body').innerHTML, /平均每秒生成的回答 token 数/);
   assert.doesNotMatch(getElement('modal_body').innerHTML, /SOL 原生参考|原生 A\/B/);
@@ -670,7 +683,7 @@ function presentationMigrationBehavior() {
   run("state.emp_version = '0.9.4'");
   assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.4.emp");
   run("state.emp_version = '../../unsafe'");
-  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.5.emp");
+  assert.strictEqual(run("migrationFilename()"), "easy-multi-provider-0.9.6.emp");
 }
 
 function modalDismissalBehavior() {

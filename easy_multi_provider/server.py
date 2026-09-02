@@ -77,7 +77,8 @@ from .codex_runtime import (
     offline_runtime_snapshot,
 )
 from .context_guard import ContextGuard
-from .diagnostic_journal import NullJournal, create_journal
+from .diagnostic_analytics import summarize_route_observations
+from .diagnostic_journal import NullJournal, create_journal, read_route_observations
 from .destination_summary import DestinationSummaryAdapter
 from .destination_context import DestinationContextCompactor
 from .integration import (
@@ -169,9 +170,12 @@ PROXY_ENV_KEYS = (
     "https_proxy",
     "all_proxy",
 )
-_DIAGNOSTIC_CAPACITY = 64
+_DIAGNOSTIC_CAPACITY = 512
 _DIAGNOSTIC_ID = re.compile(r"^[A-Za-z0-9._/:-]{1,256}$")
 _DIAGNOSTIC_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
+_DIAGNOSTIC_OBSERVED_AT = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$"
+)
 _DIAGNOSTIC_PROTOCOLS = frozenset(
     {"responses", "chat_completions", "anthropic_messages", "unknown"}
 )
@@ -679,6 +683,15 @@ class ObservationRing:
         recovery_mode = event.get("recovery_mode", "none")
         if recovery_mode not in _DIAGNOSTIC_RECOVERY_MODES:
             recovery_mode = "none"
+        speed_mode = event.get("speed_mode", "unknown")
+        if speed_mode not in ("standard", "fast", "unknown"):
+            speed_mode = "unknown"
+        observed_at = event.get("observed_at")
+        if (
+            not isinstance(observed_at, str)
+            or _DIAGNOSTIC_OBSERVED_AT.fullmatch(observed_at) is None
+        ):
+            observed_at = observed_at_now()
         decoded_request_bytes = _safe_diagnostic_int(
             event.get("decoded_request_bytes"), 64 * 1024 * 1024
         )
@@ -692,11 +705,12 @@ class ObservationRing:
             event.get("compression_ratio"), decoded_request_bytes
         )
         record = {
-            "observed_at": observed_at_now(),
+            "observed_at": observed_at,
             "route": _safe_diagnostic_text(event.get("route", ""), _DIAGNOSTIC_ID)
             or "unknown",
             "provider_id": _safe_diagnostic_text(event.get("provider_id"), _DIAGNOSTIC_ID),
             "model_id": _safe_diagnostic_text(event.get("model_id"), _DIAGNOSTIC_ID),
+            "speed_mode": speed_mode,
             "endpoint_fingerprint": _safe_diagnostic_text(
                 event.get("endpoint_fingerprint"), _DIAGNOSTIC_FINGERPRINT
             ),
@@ -1070,6 +1084,31 @@ class AppState:
 
     def _persist_route_observation(self, record: Mapping[str, Any]) -> None:
         self.journal.event("info", "route_observation", **record)
+
+    def diagnostics_snapshot(self) -> Dict[str, Any]:
+        """Return cross-run diagnostics plus user-facing health aggregates."""
+
+        persisted = read_route_observations(self.path.parent, _DIAGNOSTIC_CAPACITY)
+        restored = ObservationRing(capacity=_DIAGNOSTIC_CAPACITY)
+        for record in persisted:
+            restored.record(record)
+        candidates = restored.snapshot()["records"] + self.diagnostics.snapshot()["records"]
+        records = deque(maxlen=_DIAGNOSTIC_CAPACITY)
+        seen = set()
+        for record in candidates:
+            fingerprint = json.dumps(record, sort_keys=True, separators=(",", ":"))
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            records.append(record)
+        material = list(records)
+        summary = summarize_route_observations(material)
+        return {
+            "capacity": _DIAGNOSTIC_CAPACITY,
+            "sample_count": len(material),
+            "records": material[-64:],
+            **summary,
+        }
 
     def snapshot(self) -> Dict[str, Any]:
         with self.lock:
@@ -1573,6 +1612,12 @@ class AppState:
         safe_event["route"] = route
         safe_event["transport"] = transport
         safe_event["request_bytes"] = self._request_size(body)
+        requested_tier = body.get("service_tier")
+        safe_event["speed_mode"] = (
+            "fast"
+            if requested_tier in ("fast", "priority", "ultrafast")
+            else "standard"
+        )
         safe_event["duration_ms"] = max(0, int(round((time.monotonic() - started) * 1000)))
         context = safe_event.get("context_observation")
         if isinstance(context, Mapping):
@@ -3048,7 +3093,7 @@ def make_handler(state: AppState):
                     self._error(409, "capability state is unavailable")
                 return
             if path == "/api/diagnostics":
-                self._send(200, _json_bytes(state.diagnostics.snapshot()))
+                self._send(200, _json_bytes(state.diagnostics_snapshot()))
                 return
             if path == "/api/request-limits":
                 self._send(200, _json_bytes(state.request_limits.snapshot()))

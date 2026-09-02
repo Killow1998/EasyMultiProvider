@@ -12,6 +12,7 @@ import stat
 import sys
 import threading
 import traceback
+from collections import deque
 
 _MAX_RECORD_BYTES = 16 * 1024
 _DEFAULT_MAX_PART_BYTES = 2 * 1024 * 1024
@@ -486,3 +487,63 @@ def create_journal(config_path, max_part_bytes=None, max_dir_bytes=None):
     if not journal.open():
         return NullJournal(run_id)
     return journal
+
+
+def read_route_observations(config_path, limit: int = 512):
+    """Read recent safe route facts from every managed journal part.
+
+    Journal storage is already bounded and each record was sanitized before it
+    was written.  This reader still treats files as untrusted: it only accepts
+    EMP-managed regular files, bounded JSON lines, the exact event name, and a
+    mapping payload.  Callers must apply their own typed schema validation.
+    """
+
+    try:
+        limit = max(1, min(4096, int(limit)))
+    except (TypeError, ValueError):
+        limit = 512
+    logs_dir = os.path.join(str(config_path), "state", "logs")
+    recent = deque(maxlen=limit)
+    try:
+        _assert_no_symlink_components(logs_dir)
+        managed = []
+        for name in os.listdir(logs_dir):
+            if _PART_RE.match(name) is None:
+                continue
+            path = os.path.join(logs_dir, name)
+            info = os.lstat(path)
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+                continue
+            managed.append((info.st_mtime_ns, name))
+        names = [name for _, name in sorted(managed)]
+    except OSError:
+        return []
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    for name in names:
+        path = os.path.join(logs_dir, name)
+        descriptor = None
+        try:
+            descriptor = os.open(path, flags)
+            with os.fdopen(descriptor, "rb") as handle:
+                descriptor = None
+                for line in handle:
+                    if not line or len(line) > _MAX_RECORD_BYTES + 1:
+                        continue
+                    try:
+                        record = json.loads(line.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(record, dict) or record.get("event") != "route_observation":
+                        continue
+                    fields = record.get("fields")
+                    if isinstance(fields, dict):
+                        recent.append(dict(fields))
+        except OSError:
+            continue
+        finally:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+    return list(recent)

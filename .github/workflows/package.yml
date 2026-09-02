@@ -5,7 +5,7 @@ on:
     inputs:
       release_tag:
         description: >-
-          Optional exact source tag (for example v0.9.5); creates a Draft
+          Optional exact source tag (for example v0.9.6); creates a Draft
           Pre-release
         required: false
         default: ""
