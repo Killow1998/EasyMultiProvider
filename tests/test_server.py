@@ -4168,7 +4168,7 @@ class ContinuityAppStateTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
-    def test_native_websocket_pre_output_failure_falls_back_to_http_once(self):
+    def test_native_websocket_failure_after_acceptance_is_not_replayed(self):
         class FailingNativeBridge:
             connection_key = None
             last_connection_reused = False
@@ -4266,18 +4266,20 @@ class ContinuityAppStateTests(unittest.TestCase):
                     client.sendall(_masked_text_frame(json.dumps(request)))
                     _, raw = _read_text_frame(stream)
                     event = json.loads(raw)
-                    self.assertEqual(event["type"], "response.completed")
-                    self.assertEqual(event["response"]["id"], "resp_http_fallback")
-                self.assertEqual(len(fallback_calls), 1)
-                self.assertEqual(fallback_calls[0]["input"], request["input"])
-                fallback_records = [
+                    self.assertEqual(event["type"], "response.failed")
+                    self.assertEqual(
+                        event["response"]["error"]["code"],
+                        "upstream_close_pre_output",
+                    )
+                self.assertEqual(fallback_calls, [])
+                failure_records = [
                     item
                     for item in state.diagnostics.snapshot()["records"]
-                    if item["recovery_mode"] == "native_http_fallback"
+                    if item["error_class"] == "upstream_close_pre_output"
                 ]
-                self.assertEqual(len(fallback_records), 1)
-                self.assertTrue(fallback_records[0]["fallback"])
-                self.assertFalse(fallback_records[0]["terminal_event_observed"])
+                self.assertEqual(len(failure_records), 1)
+                self.assertFalse(failure_records[0]["fallback"])
+                self.assertFalse(failure_records[0]["terminal_event_observed"])
             finally:
                 if stream is not None:
                     stream.close()
@@ -4286,7 +4288,7 @@ class ContinuityAppStateTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
-    def test_native_incremental_transport_loss_requests_codex_full_retry(self):
+    def test_native_incremental_transport_loss_after_acceptance_is_not_replayed(self):
         class RejectingHistoryReader:
             calls = 0
 
@@ -4385,18 +4387,10 @@ class ContinuityAppStateTests(unittest.TestCase):
                     _, raw = _read_text_frame(stream)
                     event = json.loads(raw)
 
+                self.assertEqual(event["type"], "response.failed")
                 self.assertEqual(
-                    event,
-                    {
-                        "type": "error",
-                        "error": {
-                            "code": "previous_response_not_found",
-                            "message": (
-                                "Previous response was not found. "
-                                "Retrying the full request."
-                            ),
-                        },
-                    },
+                    event["response"]["error"]["code"],
+                    "upstream_close_pre_output",
                 )
                 self.assertEqual(reader.calls, 0)
             finally:

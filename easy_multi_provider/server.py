@@ -105,6 +105,7 @@ from .management_views import (
 from .native_websocket import (
     NativeWebSocketBridge,
     NativeWebSocketError,
+    native_websocket_event_activity,
     native_websocket_request_fits,
     terminal_observation as native_websocket_terminal,
 )
@@ -142,6 +143,10 @@ from .transport import (
 )
 from .transport_failures import status_error_class
 from .request_limits import RequestLimits
+from .upstream_admission import (
+    UpstreamAdmissionController,
+    UpstreamAdmissionError,
+)
 from .transport_continuity import (
     PREVIOUS_RESPONSE_NOT_FOUND_CODE,
     PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
@@ -195,6 +200,7 @@ _DIAGNOSTIC_ERRORS = frozenset(
         "timeout",
         "connect_timeout",
         "first_event_timeout",
+        "first_output_timeout",
         "idle_after_output",
         "local_deadline",
         "network",
@@ -207,6 +213,7 @@ _DIAGNOSTIC_ERRORS = frozenset(
         "upstream_close_pre_output",
         "upstream_close_after_output",
         "upstream_close_after_tool",
+        "upstream_capacity",
         "malformed_terminal",
         "proxy_reset",
         "output_limit",
@@ -1033,6 +1040,7 @@ class AppState:
         self.discovery_lock = threading.Lock()
         self._native_websocket_lock = threading.Lock()
         self._native_websocket_cooldowns: Dict[str, float] = {}
+        self.native_upstream_admission = UpstreamAdmissionController()
         self.config = load(self.path)
         if isinstance(self.runtime_controller, CodexRuntimeController):
             self.runtime_controller.set_runtime_preferences(
@@ -1057,6 +1065,7 @@ class AppState:
             lambda *args, **kwargs: self._record_route_event(*args, **kwargs),
             lambda *args, **kwargs: self._record_route_failure(*args, **kwargs),
             lambda *args, **kwargs: self._diagnostic_stream(*args, **kwargs),
+            self.native_upstream_admission,
         )
 
     def _persist_route_observation(self, record: Mapping[str, Any]) -> None:
@@ -2658,10 +2667,43 @@ def make_handler(state: AppState):
                             output_emitted = False
                             tool_activity = False
                             pending_lifecycle_events = []
-                            native_upstream_started = time.monotonic()
                             performance = ResponsesPerformanceTracker(
                                 started=native_started
                             )
+                            try:
+                                admission = state.native_upstream_admission.acquire(
+                                    plan.identity.auth_identity
+                                )
+                            except UpstreamAdmissionError as exc:
+                                terminal = {
+                                    "status": exc.status,
+                                    "success": False,
+                                    "error_class": exc.error_class,
+                                    "failure_reason": exc.failure_reason,
+                                }
+                                self._websocket_error(
+                                    websocket,
+                                    str(exc),
+                                    exc.status,
+                                    exc.error_class,
+                                )
+                                state.record_native_websocket(
+                                    plan,
+                                    request,
+                                    native_started,
+                                    native_prepare_ms,
+                                    None,
+                                    0,
+                                    terminal,
+                                    native_upstream.last_connection_reused,
+                                    False,
+                                    False,
+                                    terminal_event_observed=False,
+                                    performance=performance.diagnostics(),
+                                )
+                                continue
+                            native_prepare_ms += admission.snapshot.wait_ms
+                            native_upstream_started = time.monotonic()
                             performance.mark_upstream_started(native_upstream_started)
                             try:
                                 for event in native_upstream.events(
@@ -2687,34 +2729,8 @@ def make_handler(state: AppState):
                                         separators=(",", ":"),
                                     ).encode("utf-8")
                                     response_bytes += len(encoded_event)
-                                    event_type = str(event.get("type") or "")
-                                    item = event.get("item")
-                                    item_type = (
-                                        str(item.get("type") or "")
-                                        if isinstance(item, Mapping)
-                                        else ""
-                                    )
-                                    message_content = (
-                                        item.get("content")
-                                        if isinstance(item, Mapping)
-                                        and item_type == "message"
-                                        else None
-                                    )
-                                    event_output = (
-                                        "output_text" in event_type
-                                        or "output_image" in event_type
-                                        or (
-                                            isinstance(message_content, list)
-                                            and bool(message_content)
-                                        )
-                                        or "reasoning" in event_type
-                                        or item_type == "reasoning"
-                                    )
-                                    event_tool = (
-                                        "function_call" in event_type
-                                        or "custom_tool_call" in event_type
-                                        or item_type
-                                        in {"function_call", "custom_tool_call"}
+                                    event_output, event_tool = (
+                                        native_websocket_event_activity(event)
                                     )
                                     output_emitted = output_emitted or event_output
                                     tool_activity = tool_activity or event_tool
@@ -2741,14 +2757,38 @@ def make_handler(state: AppState):
                                     state.mark_native_websocket_unavailable(
                                         plan.target.connection_key
                                     )
-                                if output_emitted or tool_activity:
+                                if (
+                                    output_emitted
+                                    or tool_activity
+                                    or first_event_ms is not None
+                                    or exc.request_sent
+                                ):
+                                    error_class = exc.error_class or (
+                                        "upstream_close_after_output"
+                                        if output_emitted or tool_activity
+                                        else "upstream_close_pre_output"
+                                    )
                                     terminal = {
                                         "status": exc.status,
                                         "success": False,
-                                        "error_class": "upstream_close_after_output"
-                                        if output_emitted or tool_activity
-                                        else "upstream_close_pre_output",
+                                        "error_class": error_class,
                                     }
+                                    if exc.failure_reason:
+                                        terminal["failure_reason"] = exc.failure_reason
+                                    state.record_native_websocket(
+                                        plan,
+                                        request,
+                                        native_started,
+                                        native_prepare_ms,
+                                        first_event_ms,
+                                        response_bytes,
+                                        terminal,
+                                        native_upstream.last_connection_reused,
+                                        output_emitted,
+                                        tool_activity,
+                                        terminal_event_observed=False,
+                                        performance=performance.diagnostics(),
+                                    )
                                     failed_id = "resp_" + uuid.uuid4().hex
                                     websocket.send_json(
                                         {
@@ -2764,19 +2804,6 @@ def make_handler(state: AppState):
                                                 },
                                             },
                                         }
-                                    )
-                                    state.record_native_websocket(
-                                        plan,
-                                        request,
-                                        native_started,
-                                        native_prepare_ms,
-                                        first_event_ms,
-                                        response_bytes,
-                                        terminal,
-                                        native_upstream.last_connection_reused,
-                                        output_emitted,
-                                        tool_activity,
-                                        performance=performance.diagnostics(),
                                     )
                                     continue
                                 if not exc.retryable:
@@ -2874,6 +2901,8 @@ def make_handler(state: AppState):
                                 if terminal and terminal.get("success") is True:
                                     last_native_response_id = completed_native_id
                                 continue
+                            finally:
+                                admission.release()
                         if plan is not None:
                             # Native preparation may have rebuilt or compacted
                             # visible history already. Reuse that transient
@@ -2914,6 +2943,11 @@ def make_handler(state: AppState):
                             {key: value for key, value in self.headers.items()},
                             transport="websocket",
                             context_completeness="high",
+                            admission_identity=(
+                                plan.identity.auth_identity
+                                if plan is not None
+                                else None
+                            ),
                         )
                         first_event = True
                         for event in self._websocket_events(metadata, result):

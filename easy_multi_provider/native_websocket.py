@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import time
 import uuid
-from typing import Any, Callable, Dict, Iterator, Mapping, Optional
+from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Tuple
 
 
 MAX_NATIVE_WEBSOCKET_EVENT_BYTES = 16 * 1024 * 1024
@@ -22,6 +23,7 @@ MAX_NATIVE_WEBSOCKET_EVENTS = 100_000
 MAX_NATIVE_WEBSOCKET_REQUEST_BYTES = 4 * 1024 * 1024
 NATIVE_WEBSOCKET_CONNECT_TIMEOUT = 30
 NATIVE_WEBSOCKET_IDLE_TIMEOUT = 300
+NATIVE_WEBSOCKET_FIRST_OUTPUT_TIMEOUT = 120
 _RETRYABLE_UPGRADE_STATUSES = frozenset(
     {400, 404, 405, 415, 426, 501}
 )
@@ -49,7 +51,14 @@ class NativeWebSocketError(RuntimeError):
     """A bounded transport failure that never includes URLs or credentials."""
 
     def __init__(
-        self, message: str, status: int = 502, retryable: Optional[bool] = None
+        self,
+        message: str,
+        status: int = 502,
+        retryable: Optional[bool] = None,
+        *,
+        request_sent: bool = False,
+        error_class: Optional[str] = None,
+        failure_reason: Optional[str] = None,
     ):
         super().__init__(message)
         self.status = status if isinstance(status, int) else 502
@@ -58,6 +67,9 @@ class NativeWebSocketError(RuntimeError):
             if retryable is None
             else bool(retryable)
         )
+        self.request_sent = bool(request_sent)
+        self.error_class = error_class
+        self.failure_reason = failure_reason
 
 
 @dataclass(frozen=True)
@@ -154,6 +166,32 @@ def _safe_terminal_event(
     }
 
 
+def native_websocket_event_activity(event: Mapping[str, Any]) -> Tuple[bool, bool]:
+    """Return content/tool activity without retaining any event payload."""
+
+    event_type = str(event.get("type") or "")
+    item = event.get("item")
+    item_type = str(item.get("type") or "") if isinstance(item, Mapping) else ""
+    message_content = (
+        item.get("content")
+        if isinstance(item, Mapping) and item_type == "message"
+        else None
+    )
+    output = (
+        "output_text" in event_type
+        or "output_image" in event_type
+        or "reasoning" in event_type
+        or item_type == "reasoning"
+        or (isinstance(message_content, list) and bool(message_content))
+    )
+    tool = (
+        "function_call" in event_type
+        or "custom_tool_call" in event_type
+        or item_type in {"function_call", "custom_tool_call"}
+    )
+    return output, tool
+
+
 class NativeWebSocketBridge:
     """Reuse one upstream native socket while its route identity is unchanged."""
 
@@ -233,6 +271,11 @@ class NativeWebSocketBridge:
             raise NativeWebSocketError("native upstream websocket is unavailable")
         try:
             response_bytes = 0
+            request_sent = False
+            substantive_activity = False
+            first_output_deadline = (
+                time.monotonic() + NATIVE_WEBSOCKET_FIRST_OUTPUT_TIMEOUT
+            )
             setter = getattr(connection, "settimeout", None)
             payload = json.dumps(
                 dict(request), ensure_ascii=False, separators=(",", ":")
@@ -242,6 +285,9 @@ class NativeWebSocketBridge:
                     "native upstream websocket request is too large", 413, False
                 )
             sender = getattr(connection, "send_text", None)
+            # Sending may partially succeed before the transport reports an
+            # error. From this point onward replay is unsafe.
+            request_sent = True
             if callable(sender):
                 sender(payload)
             else:
@@ -250,7 +296,23 @@ class NativeWebSocketBridge:
                 if callable(setter):
                     # Match Codex's native transport: bound inactivity, not the
                     # total duration of a long-running reasoning request.
-                    setter(NATIVE_WEBSOCKET_IDLE_TIMEOUT)
+                    timeout = NATIVE_WEBSOCKET_IDLE_TIMEOUT
+                    if not substantive_activity:
+                        remaining = first_output_deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise NativeWebSocketError(
+                                "native upstream websocket produced no output before the timeout",
+                                504,
+                                False,
+                                request_sent=True,
+                                error_class="first_output_timeout",
+                                failure_reason="first_output_timeout",
+                            )
+                        timeout = min(
+                            timeout,
+                            max(0.1, remaining),
+                        )
+                    setter(timeout)
                 raw = connection.recv()
                 if raw in (None, "", b""):
                     raise NativeWebSocketError(
@@ -295,6 +357,8 @@ class NativeWebSocketBridge:
                     )
                 observation = terminal_observation(event)
                 event = _safe_terminal_event(event, observation)
+                output, tool = native_websocket_event_activity(event)
+                substantive_activity = substantive_activity or output or tool
                 yield event
                 if observation is not None:
                     return
@@ -303,19 +367,45 @@ class NativeWebSocketBridge:
             )
         except GeneratorExit:
             raise
-        except NativeWebSocketError:
+        except NativeWebSocketError as exc:
             self.close()
+            if request_sent and not exc.request_sent:
+                raise NativeWebSocketError(
+                    str(exc),
+                    exc.status,
+                    False,
+                    request_sent=True,
+                    error_class=exc.error_class,
+                    failure_reason=exc.failure_reason
+                    or "transport_closed_after_send",
+                ) from exc
             raise
         except Exception as exc:
             self.close()
             if isinstance(exc, TimeoutError) or "timeout" in exc.__class__.__name__.lower():
+                error_class = (
+                    "idle_after_output"
+                    if substantive_activity
+                    else "first_output_timeout"
+                )
                 raise NativeWebSocketError(
-                    "native upstream websocket was idle before a terminal event",
+                    "native upstream websocket became idle after output"
+                    if substantive_activity
+                    else "native upstream websocket produced no output before the timeout",
                     504,
-                    True,
+                    False,
+                    request_sent=request_sent,
+                    error_class=error_class,
+                    failure_reason=error_class,
                 ) from exc
             raise NativeWebSocketError(
-                "native upstream websocket transport failed"
+                "native upstream websocket transport failed",
+                502,
+                False if request_sent else None,
+                request_sent=request_sent,
+                failure_reason=(
+                    "transport_closed_after_send" if request_sent else None
+                ),
             ) from exc
 
     def close(self) -> None:

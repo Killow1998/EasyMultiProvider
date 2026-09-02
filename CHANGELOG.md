@@ -10,6 +10,14 @@
 - Reserve short-request capacity separately from long-lived Codex WebSockets,
   preventing many idle task connections from exhausting the listener and
   surfacing as repeated local `502 Bad Gateway` failures.
+- Admit at most four active generations per Subscription identity and queue
+  additional turns fairly, so one account cannot open unbounded upstream
+  channels. Fail a queue timeout before dispatch with an actionable capacity
+  error, and include the wait in EMP preparation timing.
+- End a native stream that produces no substantive output within 120 seconds,
+  while retaining the 300-second idle allowance after output starts. Never
+  replay over HTTP once the WebSocket request may have reached the upstream;
+  HTTP fallback remains limited to pre-dispatch handshake failures.
 - Keep the account quota display synchronized with EMP's background samples
   through a local-only account-state poll, and replace the stale text block
   with accessible battery meters and restrained refresh animation.

@@ -50,6 +50,24 @@ checks, and management requests. An additional WebSocket is closed with code
 1013 so idle Codex task connections cannot make the live EMP process reset every
 new request.
 
+## Subscription generation concurrency
+
+An idle local Codex WebSocket does not consume an upstream generation slot.
+When a turn starts, EMP admits at most four active generations for the same
+content-free Subscription identity. Additional turns wait in FIFO order for up
+to 45 seconds. If no slot becomes available, EMP returns status 503 with
+`upstream_capacity` before sending the request upstream, so a client retry
+cannot duplicate model or tool side effects. Different Subscription identities
+have independent limits.
+
+Native WebSocket requests wait at most 120 seconds for the first substantive
+model or tool event. After output starts, the existing 300-second inactivity
+allowance applies. A request that may already have reached the upstream is
+failed closed if the stream times out, closes, or omits its terminal event;
+EMP does not replay that request over HTTP. Native WebSocket-to-HTTP fallback
+is reserved for handshake failures that occur before the request is sent.
+Queue wait time is included in content-free EMP preparation diagnostics.
+
 An HTTP size rejection returns **413**, `error.code: request_too_large`, and
 `error.limit_bytes`, then closes the connection. An oversized incoming WebSocket
 message receives an error event with status 413 when the connection is writable,

@@ -264,7 +264,7 @@ class NativeWebSocketTests(unittest.TestCase):
         self.assertEqual(raised.exception.status, 400)
         self.assertTrue(raised.exception.retryable)
 
-    def test_long_stream_uses_idle_timeout_without_absolute_deadline(self):
+    def test_wait_for_first_output_uses_shorter_timeout(self):
         connection = _FakeConnection(
             [{"type": "response.completed", "response": {"status": "completed"}}]
         )
@@ -279,9 +279,9 @@ class NativeWebSocketTests(unittest.TestCase):
         )
 
         self.assertEqual(events[-1]["type"], "response.completed")
-        self.assertEqual(connection.timeout, 300)
+        self.assertEqual(connection.timeout, 120)
 
-    def test_idle_timeout_allows_http_fallback_before_output(self):
+    def test_timeout_after_send_never_allows_http_replay(self):
         connection = _FakeConnection([])
 
         def timed_out():
@@ -290,7 +290,7 @@ class NativeWebSocketTests(unittest.TestCase):
         connection.recv = timed_out
         bridge = NativeWebSocketBridge(lambda _target: connection)
 
-        with self.assertRaisesRegex(NativeWebSocketError, "idle") as raised:
+        with self.assertRaisesRegex(NativeWebSocketError, "no output") as raised:
             list(
                 bridge.events(
                     NativeWebSocketTarget(
@@ -301,7 +301,29 @@ class NativeWebSocketTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.status, 504)
-        self.assertTrue(raised.exception.retryable)
+        self.assertFalse(raised.exception.retryable)
+        self.assertTrue(raised.exception.request_sent)
+        self.assertEqual(raised.exception.error_class, "first_output_timeout")
+
+    def test_output_switches_to_long_stream_idle_timeout(self):
+        connection = _FakeConnection(
+            [
+                {"type": "response.output_text.delta", "delta": "x"},
+                {"type": "response.completed", "response": {"status": "completed"}},
+            ]
+        )
+        bridge = NativeWebSocketBridge(lambda _target: connection)
+
+        list(
+            bridge.events(
+                NativeWebSocketTarget(
+                    "wss://example.invalid/responses", {}, "route-a"
+                ),
+                {"type": "response.create", "input": []},
+            )
+        )
+
+        self.assertEqual(connection.timeout, 300)
 
     def test_cumulative_response_size_is_bounded(self):
         connection = _FakeConnection(

@@ -24,6 +24,7 @@ PHASE_TERMINAL = "terminal_validation"
 
 CONNECT_TIMEOUT = "connect_timeout"
 FIRST_EVENT_TIMEOUT = "first_event_timeout"
+FIRST_OUTPUT_TIMEOUT = "first_output_timeout"
 UPSTREAM_504 = "upstream_504"
 IDLE_AFTER_OUTPUT = "idle_after_output"
 LOCAL_DEADLINE = "local_deadline"
@@ -48,6 +49,7 @@ _KNOWN_ERROR_CLASSES = frozenset(
         UPSTREAM_504,
         CONNECT_TIMEOUT,
         FIRST_EVENT_TIMEOUT,
+        FIRST_OUTPUT_TIMEOUT,
         IDLE_AFTER_OUTPUT,
         LOCAL_DEADLINE,
         "network",
@@ -63,6 +65,7 @@ _KNOWN_ERROR_CLASSES = frozenset(
         "context_length_exceeded",
         "external_compaction_failed",
         "history_reconstruction_failed",
+        "upstream_capacity",
     }
 )
 
@@ -293,6 +296,7 @@ class TransportFailure(RouterError):
             status = 504 if error_class in {
                 CONNECT_TIMEOUT,
                 FIRST_EVENT_TIMEOUT,
+                FIRST_OUTPUT_TIMEOUT,
                 UPSTREAM_504,
                 IDLE_AFTER_OUTPUT,
                 LOCAL_DEADLINE,
@@ -304,6 +308,7 @@ class TransportFailure(RouterError):
         self.phase = phase or {
             CONNECT_TIMEOUT: PHASE_CONNECT,
             FIRST_EVENT_TIMEOUT: PHASE_FIRST_EVENT,
+            FIRST_OUTPUT_TIMEOUT: PHASE_FIRST_EVENT,
             IDLE_AFTER_OUTPUT: PHASE_STREAMING,
             LOCAL_DEADLINE: PHASE_TERMINAL,
             STREAM_INCOMPLETE: PHASE_TERMINAL,
