@@ -2,8 +2,9 @@ import json
 import unittest
 from unittest.mock import patch
 
+import easy_multi_provider.native_websocket as native_websocket
 from easy_multi_provider.native_websocket import (
-    MAX_NATIVE_WEBSOCKET_REQUEST_BYTES,
+    MAX_NATIVE_WEBSOCKET_UNCOMPRESSED_REQUEST_BYTES,
     NativeWebSocketBridge,
     NativeWebSocketError,
     NativeWebSocketTarget,
@@ -51,20 +52,141 @@ class _GatewayFailure(Exception):
 
 
 class NativeWebSocketTests(unittest.TestCase):
-    def test_large_uncompressed_request_uses_http_transport(self):
+    def test_large_request_requires_compressed_client(self):
         self.assertTrue(
             native_websocket_request_fits(
                 {"type": "response.create", "input": "small"}
             )
         )
-        self.assertFalse(
-            native_websocket_request_fits(
-                {
-                    "type": "response.create",
-                    "input": "x" * MAX_NATIVE_WEBSOCKET_REQUEST_BYTES,
-                }
+        large = {
+            "type": "response.create",
+            "input": "x" * MAX_NATIVE_WEBSOCKET_UNCOMPRESSED_REQUEST_BYTES,
+        }
+        with patch.object(
+            native_websocket,
+            "compressed_native_websocket_available",
+            return_value=False,
+        ):
+            self.assertFalse(native_websocket_request_fits(large))
+        with patch.object(
+            native_websocket,
+            "compressed_native_websocket_available",
+            return_value=True,
+        ):
+            self.assertTrue(native_websocket_request_fits(large))
+
+    @unittest.skipUnless(
+        native_websocket.compressed_native_websocket_available(),
+        "compressed WebSocket client is optional on Python 3.8",
+    )
+    def test_default_connector_enables_deflate_and_system_proxy(self):
+        class Response:
+            status_code = 101
+
+        class State:
+            name = "OPEN"
+
+        class Connection:
+            response = Response()
+            state = State()
+
+            def close(self):
+                pass
+
+        target = NativeWebSocketTarget(
+            "wss://example.invalid/responses",
+            {"Authorization": "Bearer test-only"},
+            "route-a",
+        )
+        connection = Connection()
+        with patch("websockets.sync.client.connect", return_value=connection) as opened:
+            wrapped = _default_connector(target)
+
+        self.assertTrue(wrapped.connected)
+        options = opened.call_args.kwargs
+        self.assertEqual(options["compression"], "deflate")
+        self.assertTrue(options["proxy"])
+        self.assertEqual(options["additional_headers"]["Authorization"], "Bearer test-only")
+        self.assertEqual(options["max_size"], native_websocket.MAX_NATIVE_WEBSOCKET_EVENT_BYTES)
+
+    def test_compressed_connection_adapter_supports_bridge_continuity(self):
+        class Response:
+            status_code = 101
+
+        class State:
+            name = "OPEN"
+
+        class Acknowledgement:
+            def __init__(self):
+                self.timeout = None
+
+            def wait(self, timeout):
+                self.timeout = timeout
+                return True
+
+        class Connection:
+            response = Response()
+            state = State()
+
+            def __init__(self):
+                self.sent = []
+                self.receive_timeouts = []
+                self.acknowledgement = Acknowledgement()
+                self.closed = False
+
+            def send(self, value):
+                self.sent.append(json.loads(value))
+
+            def recv(self, timeout):
+                self.receive_timeouts.append(timeout)
+                return json.dumps(
+                    {
+                        "type": "response.completed",
+                        "response": {"id": "resp_1", "status": "completed"},
+                    }
+                )
+
+            def ping(self, _payload):
+                return self.acknowledgement
+
+            def close(self):
+                self.closed = True
+
+        connection = Connection()
+        wrapped = native_websocket._CompressedWebSocketConnection(connection)
+        target = NativeWebSocketTarget(
+            "wss://example.invalid/responses", {}, "route-a"
+        )
+        bridge = NativeWebSocketBridge(lambda _target: wrapped)
+
+        events = list(
+            bridge.events(
+                target,
+                {"type": "response.create", "input": ["large-history"]},
             )
         )
+
+        self.assertEqual(events[-1]["response"]["id"], "resp_1")
+        self.assertEqual(connection.sent[0]["input"], ["large-history"])
+        self.assertTrue(connection.receive_timeouts)
+        self.assertTrue(bridge.can_continue(target))
+        self.assertEqual(
+            connection.acknowledgement.timeout,
+            native_websocket.NATIVE_WEBSOCKET_REUSE_PROBE_TIMEOUT,
+        )
+
+    def test_default_connector_falls_back_when_compressed_client_is_unavailable(self):
+        connection = _FakeConnection([])
+        target = NativeWebSocketTarget(
+            "wss://example.invalid/responses", {}, "route-a"
+        )
+        with patch.object(
+            native_websocket, "_compressed_connector", side_effect=ImportError
+        ), patch.object(
+            native_websocket, "_legacy_connector", return_value=connection
+        ) as legacy:
+            self.assertIs(_default_connector(target), connection)
+        legacy.assert_called_once_with(target)
 
     def test_gateway_failure_before_request_allows_http_fallback(self):
         def fail(_target):
@@ -81,20 +203,6 @@ class NativeWebSocketTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status, 502)
         self.assertTrue(raised.exception.retryable)
-
-    def test_default_connector_disables_credential_redirects(self):
-        target = NativeWebSocketTarget(
-            "wss://example.invalid/responses",
-            {"Authorization": "Bearer test-only"},
-            "route-a",
-        )
-        connection = _FakeConnection([])
-        with patch("websocket.create_connection", return_value=connection) as opened:
-            self.assertIs(_default_connector(target), connection)
-        options = opened.call_args.kwargs
-        self.assertEqual(options["redirect_limit"], 0)
-        self.assertTrue(options["suppress_origin"])
-        self.assertEqual(options["header"]["Authorization"], "Bearer test-only")
 
     def test_reuses_matching_connection_and_preserves_incremental_request(self):
         connection = _FakeConnection(
@@ -336,7 +444,7 @@ class NativeWebSocketTests(unittest.TestCase):
         self.assertEqual(raised.exception.status, 400)
         self.assertTrue(raised.exception.retryable)
 
-    def test_wait_for_first_output_uses_shorter_timeout(self):
+    def test_first_output_uses_codex_idle_timeout(self):
         connection = _FakeConnection(
             [{"type": "response.completed", "response": {"status": "completed"}}]
         )
@@ -351,7 +459,7 @@ class NativeWebSocketTests(unittest.TestCase):
         )
 
         self.assertEqual(events[-1]["type"], "response.completed")
-        self.assertEqual(connection.timeout, 120)
+        self.assertEqual(connection.timeout, 300)
 
     def test_timeout_after_send_never_allows_http_replay(self):
         connection = _FakeConnection([])
@@ -397,7 +505,7 @@ class NativeWebSocketTests(unittest.TestCase):
 
         self.assertEqual(connection.timeout, 300)
 
-    def test_cumulative_response_size_is_bounded(self):
+    def test_response_has_no_extra_cumulative_size_limit(self):
         connection = _FakeConnection(
             [
                 {"type": "response.created", "padding": "x" * 80},
@@ -406,19 +514,16 @@ class NativeWebSocketTests(unittest.TestCase):
             ]
         )
         bridge = NativeWebSocketBridge(lambda _target: connection)
-        with patch(
-            "easy_multi_provider.native_websocket.MAX_NATIVE_WEBSOCKET_RESPONSE_BYTES",
-            180,
-        ):
-            with self.assertRaisesRegex(NativeWebSocketError, "response is too large"):
-                list(
-                    bridge.events(
-                        NativeWebSocketTarget(
-                            "wss://example.invalid/responses", {}, "route-a"
-                        ),
-                        {"type": "response.create", "input": []},
-                    )
-                )
+        events = list(
+            bridge.events(
+                NativeWebSocketTarget(
+                    "wss://example.invalid/responses", {}, "route-a"
+                ),
+                {"type": "response.create", "input": []},
+            )
+        )
+
+        self.assertEqual(events[-1]["type"], "response.completed")
 
     def test_contradictory_completed_event_is_failure(self):
         terminal = terminal_observation(
@@ -469,6 +574,18 @@ class NativeWebSocketTests(unittest.TestCase):
 
         self.assertFalse(terminal["success"])
         self.assertEqual(terminal["error_class"], "stream_error")
+
+    def test_wrapped_error_preserves_upstream_status(self):
+        terminal = terminal_observation(
+            {
+                "type": "error",
+                "status": 429,
+                "error": {"code": "rate_limit_exceeded"},
+            }
+        )
+
+        self.assertEqual(terminal["status"], 429)
+        self.assertEqual(terminal["error_class"], "rate_limit")
 
 
 if __name__ == "__main__":

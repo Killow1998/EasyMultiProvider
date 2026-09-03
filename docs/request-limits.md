@@ -39,10 +39,13 @@ The process retains at most 20 notices containing only times, transport, sizes,
 and fixed reasons. Notices are not inserted into model output or the Codex chat,
 and do not claim that inference has completed. Restarting EMP clears notices.
 
-The existing 4 MiB upstream native WebSocket threshold is unchanged. Larger
-native requests continue through EMP's existing compressed HTTP forwarding
-path. Upstream response/event limits are unchanged. Management requests retain
-their 5 MiB limit, or 32 MiB for migration imports.
+Packaged builds forward accepted native requests over a permessage-deflate
+WebSocket without adding a second outbound request-size cutoff. The Python 3.8
+compatibility fallback still uses compressed HTTP for native requests above
+4 MiB because its legacy WebSocket client cannot negotiate compression.
+Incoming upstream WebSocket messages use Codex's 64 MiB per-message boundary;
+EMP does not add a cumulative response-size or event-count ceiling. Management
+requests retain their 5 MiB limit, or 32 MiB for migration imports.
 
 EMP starts with capacity for 48 long-lived local Responses WebSockets within a
 64-request listener budget. When demand reaches either boundary, the listener
@@ -51,24 +54,10 @@ ceilings leave 32 slots for new proxy turns, health checks, and management
 requests. Only a connection beyond the expanded ceiling is closed, so ordinary
 bursts do not turn idle Codex task connections into resets.
 
-## Subscription generation concurrency
-
-An idle local Codex WebSocket does not consume an upstream generation slot.
-When a turn starts, EMP begins with four active generations for the same
-content-free Subscription identity. While requests are waiting, a complete
-successful window raises that identity's limit one slot at a time, up to 16.
-An upstream 429 immediately halves the current limit. Additional turns wait in
-FIFO order, with a bounded queue of 128, for up to 45 seconds. If no slot becomes
-available, EMP returns status 503 with
-`upstream_capacity` before sending the request upstream, so a client retry
-cannot duplicate model or tool side effects. Different Subscription identities
-have independent limits.
-
-These limits belong to EMP, not Python and not the OpenAI service. They are
-adaptive safety boundaries: local listener capacity grows from 64 to 256 under
-demand, while a busy Subscription identity grows from 4 to 16 active
-generations after successful windows and contracts after a 429. EMP cannot
-raise a provider's own quota or concurrency allowance.
+EMP doesn't impose a separate per-account generation queue. Accepted turns are
+forwarded immediately, and the upstream remains responsible for its own account
+concurrency and 429 policy. The process-wide listener boundaries above still
+protect the local Python service from exhausting threads and memory.
 
 ## Failure status classification
 
@@ -80,13 +69,14 @@ responses remain 502. Proxy-generated HTTP errors are identified only from
 explicit proxy evidence such as CONNECT/proxy response markers. Ambiguous
 origin responses are kept as upstream 5xx rather than guessed.
 
-Native WebSocket requests wait at most 120 seconds for the first substantive
-model or tool event. After output starts, the existing 300-second inactivity
-allowance applies. A request that may already have reached the upstream is
-failed closed if the stream times out, closes, or omits its terminal event;
-EMP does not replay that request over HTTP. Native WebSocket-to-HTTP fallback
-is reserved for handshake failures that occur before the request is sent.
-Queue wait time is included in content-free EMP preparation diagnostics.
+Native WebSocket requests apply the same 300-second per-message inactivity
+allowance as Codex, including while waiting for the first response event. A
+request that may already have reached the upstream is failed closed if the
+stream times out, closes, or omits its terminal event; EMP does not replay that
+request over HTTP. Native WebSocket-to-HTTP fallback is reserved for handshake
+failures that occur before the request is sent. Wrapped WebSocket error events
+preserve explicit upstream statuses such as 429 instead of being recorded as a
+generic 502.
 
 An HTTP size rejection returns **413**, `error.code: request_too_large`, and
 `error.limit_bytes`, then closes the connection. An oversized incoming WebSocket

@@ -13,20 +13,17 @@ import time
 import uuid
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Tuple
 
-from .transport_failures import PHASE_CONNECT, network_failure
+from .transport_failures import PHASE_CONNECT, network_failure, status_error_class
 
 
-MAX_NATIVE_WEBSOCKET_EVENT_BYTES = 16 * 1024 * 1024
-MAX_NATIVE_WEBSOCKET_RESPONSE_BYTES = 16 * 1024 * 1024
-MAX_NATIVE_WEBSOCKET_EVENTS = 100_000
-# websocket-client does not negotiate the permessage-deflate extension used by
-# Codex's native transport.  Large full-history requests therefore use EMP's
-# zstd HTTP path instead of sending an uncompressed WebSocket frame.
-MAX_NATIVE_WEBSOCKET_REQUEST_BYTES = 4 * 1024 * 1024
-NATIVE_WEBSOCKET_CONNECT_TIMEOUT = 30
+MAX_NATIVE_WEBSOCKET_EVENT_BYTES = 64 * 1024 * 1024
+# Keep the legacy uncompressed client as a compatibility path for Python 3.8.
+# Packaged builds use ``websockets`` with permessage-deflate and can establish
+# a native incremental chain even when the first turn contains a large history.
+MAX_NATIVE_WEBSOCKET_UNCOMPRESSED_REQUEST_BYTES = 4 * 1024 * 1024
+NATIVE_WEBSOCKET_CONNECT_TIMEOUT = 15
 NATIVE_WEBSOCKET_REUSE_PROBE_TIMEOUT = 2
 NATIVE_WEBSOCKET_IDLE_TIMEOUT = 300
-NATIVE_WEBSOCKET_FIRST_OUTPUT_TIMEOUT = 120
 _RETRYABLE_UPGRADE_STATUSES = frozenset(
     {400, 404, 405, 415, 426, 501}
 )
@@ -40,14 +37,27 @@ def _http_fallback_before_request(status: int) -> bool:
     return _retryable_upgrade_status(status) or 500 <= status <= 599
 
 
+def compressed_native_websocket_available() -> bool:
+    try:
+        from websockets.sync.client import connect as _connect
+    except ImportError:
+        return False
+    return callable(_connect)
+
+
 def native_websocket_request_fits(request: Mapping[str, Any]) -> bool:
+    # Codex's native WebSocket client doesn't impose an outbound message-size
+    # limit.  Keep the small legacy cutoff only for the Python 3.8 fallback,
+    # which cannot negotiate permessage-deflate.
+    if compressed_native_websocket_available():
+        return True
     try:
         encoded = json.dumps(
             dict(request), ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")
     except (RecursionError, TypeError, ValueError, OverflowError):
         return False
-    return len(encoded) <= MAX_NATIVE_WEBSOCKET_REQUEST_BYTES
+    return len(encoded) <= MAX_NATIVE_WEBSOCKET_UNCOMPRESSED_REQUEST_BYTES
 
 
 class NativeWebSocketError(RuntimeError):
@@ -84,7 +94,80 @@ class NativeWebSocketTarget:
     connection_key: str
 
 
-def _default_connector(target: NativeWebSocketTarget):
+@dataclass(frozen=True)
+class _HandshakeResponse:
+    status: int
+
+
+class _CompressedWebSocketConnection:
+    """Adapt ``websockets`` to the small interface used by the bridge."""
+
+    def __init__(self, connection: Any):
+        self._connection = connection
+        response = getattr(connection, "response", None)
+        status = getattr(response, "status_code", 101)
+        self.handshake_response = _HandshakeResponse(
+            status if isinstance(status, int) and not isinstance(status, bool) else 101
+        )
+        self._timeout = float(NATIVE_WEBSOCKET_CONNECT_TIMEOUT)
+
+    @property
+    def connected(self) -> bool:
+        state = getattr(self._connection, "state", None)
+        name = getattr(state, "name", None)
+        return True if name is None else name == "OPEN"
+
+    def settimeout(self, value: Any) -> None:
+        self._timeout = max(0.1, float(value))
+
+    def send_text(self, value: str) -> None:
+        self._connection.send(value)
+
+    def send(self, value: str) -> None:
+        self.send_text(value)
+
+    def recv(self):
+        return self._connection.recv(timeout=self._timeout)
+
+    def probe(self, payload: str, timeout: float) -> bool:
+        acknowledgement = self._connection.ping(payload)
+        return bool(acknowledgement.wait(max(0.1, float(timeout))))
+
+    def close(self) -> None:
+        self._connection.close()
+
+
+def _compressed_connector(target: NativeWebSocketTarget):
+    from websockets.sync.client import connect
+
+    try:
+        connection = connect(
+            target.url,
+            compression="deflate",
+            additional_headers=dict(target.headers),
+            user_agent_header=None,
+            proxy=True,
+            open_timeout=NATIVE_WEBSOCKET_CONNECT_TIMEOUT,
+            ping_interval=20,
+            ping_timeout=20,
+            close_timeout=5,
+            max_size=MAX_NATIVE_WEBSOCKET_EVENT_BYTES,
+            max_queue=16,
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int) and not isinstance(status, bool):
+            raise NativeWebSocketError(
+                "native upstream websocket upgrade was rejected",
+                status,
+                _http_fallback_before_request(status),
+            ) from exc
+        raise
+    return _CompressedWebSocketConnection(connection)
+
+
+def _legacy_connector(target: NativeWebSocketTarget):
     try:
         from websocket import create_connection
     except ImportError as exc:  # pragma: no cover - packaging regression guard
@@ -103,6 +186,13 @@ def _default_connector(target: NativeWebSocketTarget):
     )
 
 
+def _default_connector(target: NativeWebSocketTarget):
+    try:
+        return _compressed_connector(target)
+    except ImportError:
+        return _legacy_connector(target)
+
+
 def _handshake_status(connection: Any) -> int:
     response = getattr(connection, "handshake_response", None)
     status = getattr(response, "status", 101)
@@ -118,7 +208,14 @@ def terminal_observation(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     nested_status = response.get("status")
     nested_error = response.get("error")
     if event_type == "error":
-        return {"status": 502, "success": False, "error_class": "stream_error"}
+        status = event.get("status", event.get("status_code"))
+        if not isinstance(status, int) or isinstance(status, bool) or not 400 <= status <= 599:
+            status = 502
+        return {
+            "status": status,
+            "success": False,
+            "error_class": status_error_class(status),
+        }
     if event_type == "response.failed":
         return {"status": 502, "success": False, "error_class": "stream_error"}
     if event_type == "response.incomplete":
@@ -235,6 +332,19 @@ class NativeWebSocketBridge:
             return False
         if self._probed_connection is connection:
             return True
+        probe = getattr(connection, "probe", None)
+        if callable(probe):
+            try:
+                if probe(
+                    uuid.uuid4().hex[:16],
+                    NATIVE_WEBSOCKET_REUSE_PROBE_TIMEOUT,
+                ):
+                    self._probed_connection = connection
+                    return True
+            except Exception:
+                pass
+            self.close()
+            return False
         ping = getattr(connection, "ping", None)
         receive = getattr(connection, "recv_data_frame", None)
         setter = getattr(connection, "settimeout", None)
@@ -333,20 +443,12 @@ class NativeWebSocketBridge:
         if connection is None:  # defensive; connect either succeeds or raises
             raise NativeWebSocketError("native upstream websocket is unavailable")
         try:
-            response_bytes = 0
             request_sent = False
             substantive_activity = False
-            first_output_deadline = (
-                time.monotonic() + NATIVE_WEBSOCKET_FIRST_OUTPUT_TIMEOUT
-            )
             setter = getattr(connection, "settimeout", None)
             payload = json.dumps(
                 dict(request), ensure_ascii=False, separators=(",", ":")
             )
-            if len(payload.encode("utf-8")) > MAX_NATIVE_WEBSOCKET_EVENT_BYTES:
-                raise NativeWebSocketError(
-                    "native upstream websocket request is too large", 413, False
-                )
             sender = getattr(connection, "send_text", None)
             # Sending may partially succeed before the transport reports an
             # error. From this point onward replay is unsafe.
@@ -356,27 +458,11 @@ class NativeWebSocketBridge:
             else:
                 connection.send(payload)
             self._probed_connection = None
-            for _ in range(MAX_NATIVE_WEBSOCKET_EVENTS):
+            while True:
                 if callable(setter):
-                    # Match Codex's native transport: bound inactivity, not the
-                    # total duration of a long-running reasoning request.
-                    timeout = NATIVE_WEBSOCKET_IDLE_TIMEOUT
-                    if not substantive_activity:
-                        remaining = first_output_deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise NativeWebSocketError(
-                                "native upstream websocket produced no output before the timeout",
-                                504,
-                                False,
-                                request_sent=True,
-                                error_class="first_output_timeout",
-                                failure_reason="first_output_timeout",
-                            )
-                        timeout = min(
-                            timeout,
-                            max(0.1, remaining),
-                        )
-                    setter(timeout)
+                    # Match Codex: apply one idle timeout to each incoming
+                    # WebSocket message, including the first response event.
+                    setter(NATIVE_WEBSOCKET_IDLE_TIMEOUT)
                 raw = connection.recv()
                 if raw in (None, "", b""):
                     raise NativeWebSocketError(
@@ -400,14 +486,9 @@ class NativeWebSocketBridge:
                     raise NativeWebSocketError(
                         "native upstream websocket returned an unsupported frame", 502, False
                     )
-                response_bytes += len(raw_bytes)
                 if len(raw_bytes) > MAX_NATIVE_WEBSOCKET_EVENT_BYTES:
                     raise NativeWebSocketError(
                         "native upstream websocket event is too large", 502, False
-                    )
-                if response_bytes > MAX_NATIVE_WEBSOCKET_RESPONSE_BYTES:
-                    raise NativeWebSocketError(
-                        "native upstream websocket response is too large", 502, False
                     )
                 try:
                     event = json.loads(raw)
@@ -426,9 +507,6 @@ class NativeWebSocketBridge:
                 yield event
                 if observation is not None:
                     return
-            raise NativeWebSocketError(
-                "native upstream websocket exceeded the event limit", 502, False
-            )
         except GeneratorExit:
             raise
         except NativeWebSocketError as exc:

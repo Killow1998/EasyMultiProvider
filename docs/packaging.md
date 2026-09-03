@@ -84,7 +84,7 @@ Run the **Package** workflow manually from GitHub Actions:
 
 - leave `release_tag` blank to build and retain the four platform bundles as
   workflow artifacts for 14 days;
-- on the `main` branch, enter the exact source tag, such as `v0.9.6`, to wait
+- on the `main` branch, enter the exact source tag, such as `v0.9.7`, to wait
   for all four builds, merge their outputs, verify the complete 22-file
   manifest and every SHA-256 sidecar, and create a GitHub Draft Pre-release.
 

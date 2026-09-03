@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.9.7 (2026-09-02)
+
+- Align native Responses WebSocket forwarding with the current Codex transport:
+  negotiate permessage-deflate, respect the system proxy, use a 15-second
+  connection timeout and one 300-second per-message idle timeout, and keep
+  connection continuity for incremental `previous_response_id` turns.
+- Remove EMP's 64 MiB outbound native request cutoff. Accepted long-history
+  requests stay on the compressed WebSocket path instead of falling back to a
+  full-history HTTP replay. Keep Codex's 64 MiB incoming message boundary.
+- Remove the extra 16 MiB cumulative response ceiling and fixed event-count
+  ceiling, which could terminate otherwise healthy long reasoning and tool
+  streams.
+- Remove the EMP-only four-generation Subscription gate and 45-second queue.
+  Accepted turns now reach the upstream immediately; the provider remains the
+  authority for account concurrency and 429 responses. Keep the process-wide
+  adaptive listener guard for local thread and memory safety.
+- Preserve explicit status codes from native WebSocket error events, so 429,
+  authentication failures, and upstream 5xx responses are no longer recorded
+  as a generic 502.
+- Keep Codex as the sole owner of post-dispatch retries. EMP never replays a
+  request that may already have reached the upstream, avoiding duplicate model
+  generations and tool side effects.
+
 ## 0.9.6 (2026-09-02)
 
 - Name the installed executable and desktop application `EMP` on Windows,

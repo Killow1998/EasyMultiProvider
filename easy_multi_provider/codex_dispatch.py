@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import time
-from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from .codex_history import HistoryError
 from .context_guard import ContextGuardBlocked
@@ -12,7 +11,6 @@ from .history_continuity import request_history_anchor
 from .protocol_adapters import protocol_adapter
 from .provider_replay import ProviderReplayScope
 from .performance import ResponsesPerformanceTracker
-from .native_identity import NativeIdentityError, derive_native_route_identity
 from .route_plan import ResolvedRoute, resolve_route
 from .router import (
     RouterError,
@@ -21,55 +19,6 @@ from .router import (
     proxy_compact,
 )
 from .transport_failures import failure_from_exception
-from .upstream_admission import UpstreamAdmissionController
-
-
-def _fallback_admission_identity(route: ResolvedRoute) -> str:
-    digest = hashlib.sha256()
-    digest.update(b"emp-subscription-admission\x00")
-    digest.update(route.provider_id.encode("utf-8"))
-    digest.update(b"\x00")
-    digest.update(route.endpoint_fingerprint.encode("ascii"))
-    return "sha256:" + digest.hexdigest()
-
-
-def _subscription_admission_identity(
-    route: ResolvedRoute, incoming: Mapping[str, str]
-) -> Optional[str]:
-    provider = route.provider
-    if route.dialect != "codex_native" or provider.get("auth_mode") not in {
-        "account",
-        "forward",
-    }:
-        return None
-    if provider.get("auth_mode") == "forward":
-        try:
-            return derive_native_route_identity(
-                incoming,
-                provider.get("base_url"),
-                route.deployment_identity,
-                route.upstream_model,
-            ).auth_identity
-        except NativeIdentityError:
-            pass
-    return _fallback_admission_identity(route)
-
-
-def _release_admission_when_done(result: Any, lease: Any) -> Iterator[Any]:
-    try:
-        yield from result
-    except GeneratorExit:
-        # Client cancellation is not evidence about upstream capacity.
-        lease.release()
-        raise
-    except BaseException as exc:
-        lease.release(
-            success=False,
-            status=failure_from_exception(exc).status,
-        )
-        raise
-    else:
-        lease.release(success=True)
 
 
 def provider_replay_scope(
@@ -117,7 +66,6 @@ class CodexRequestDispatcher:
         record_route_event: Callable[..., None],
         record_route_failure: Callable[..., None],
         diagnostic_stream: Callable[..., Any],
-        upstream_admission: UpstreamAdmissionController,
     ) -> None:
         self._routing_snapshot = routing_snapshot
         self.context_guard = context_guard
@@ -127,7 +75,6 @@ class CodexRequestDispatcher:
         self._record_route_event = record_route_event
         self._record_route_failure = record_route_failure
         self._diagnostic_stream = diagnostic_stream
-        self.upstream_admission = upstream_admission
 
     def _context_check(self, completeness: str):
         def check(provider, model, protocol, payload, stream, operation):
@@ -219,7 +166,6 @@ class CodexRequestDispatcher:
         incoming: Dict[str, str],
         transport: Optional[str] = None,
         context_completeness: str = "high",
-        admission_identity: Optional[str] = None,
     ) -> Tuple[Dict[str, Any], Any]:
         snapshot = self._routing_snapshot()
         started = time.monotonic()
@@ -229,17 +175,11 @@ class CodexRequestDispatcher:
         performance = ResponsesPerformanceTracker(started=started)
         observed = False
         replay_scope = None
-        admission = None
-        admission_wait_ms = 0
 
         def on_observation(event: Dict[str, Any]) -> None:
             nonlocal observed
             observed = True
             event = {**event, **performance.diagnostics()}
-            if admission_wait_ms:
-                event["local_prepare_ms"] = max(
-                    0, int(event.get("local_prepare_ms") or 0)
-                ) + admission_wait_ms
             self._record_route_event(
                 event, body, started, selected_transport, "responses"
             )
@@ -248,12 +188,6 @@ class CodexRequestDispatcher:
             route = self._route(snapshot, body)
             replay_scope = provider_replay_scope(route, body, incoming)
             body = self.provider_replay.prepare(body, replay_scope)
-            identity = admission_identity or _subscription_admission_identity(
-                route, incoming
-            )
-            if identity is not None:
-                admission = self.upstream_admission.acquire(identity)
-                admission_wait_ms = admission.snapshot.wait_ms
             performance.mark_upstream_started()
             metadata, result = proxy(
                 snapshot,
@@ -266,12 +200,6 @@ class CodexRequestDispatcher:
                 resolved_route=route,
             )
         except Exception as exc:
-            if admission is not None:
-                admission.release(
-                    success=False,
-                    status=failure_from_exception(exc).status,
-                )
-                admission = None
             if not observed:
                 self._record_failure(
                     exc, body, started, selected_transport, "responses"
@@ -290,9 +218,6 @@ class CodexRequestDispatcher:
                 )
             result = self.provider_replay.observe_stream(replay_scope, result)
             result = performance.observe_stream(result)
-            if admission is not None:
-                result = _release_admission_when_done(result, admission)
-                admission = None
         else:
             self.provider_replay.observe_bytes(replay_scope, result)
             performance.observe_bytes(result)
@@ -304,9 +229,6 @@ class CodexRequestDispatcher:
                 self._record_route_event(
                     event, body, started, selected_transport, "responses"
                 )
-            if admission is not None:
-                admission.release(success=True)
-                admission = None
         return metadata, result
 
     def route_compact(

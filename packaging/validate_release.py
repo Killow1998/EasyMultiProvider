@@ -148,7 +148,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Validate a complete EasyMultiProvider release asset set"
     )
-    parser.add_argument("--tag", required=True, help="release tag, for example v0.9.6")
+    parser.add_argument("--tag", required=True, help="release tag, for example v0.9.7")
     parser.add_argument("--artifacts", required=True, type=Path)
     parser.add_argument(
         "--public-manifest",

@@ -144,10 +144,6 @@ from .transport import (
 )
 from .transport_failures import public_failure_message, status_error_class
 from .request_limits import RequestLimits
-from .upstream_admission import (
-    UpstreamAdmissionController,
-    UpstreamAdmissionError,
-)
 from .transport_continuity import (
     PREVIOUS_RESPONSE_NOT_FOUND_CODE,
     PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
@@ -1063,7 +1059,6 @@ class AppState:
         self.discovery_lock = threading.Lock()
         self._native_websocket_lock = threading.Lock()
         self._native_websocket_cooldowns: Dict[str, float] = {}
-        self.native_upstream_admission = UpstreamAdmissionController()
         self.config = load(self.path)
         if isinstance(self.runtime_controller, CodexRuntimeController):
             self.runtime_controller.set_runtime_preferences(
@@ -1088,7 +1083,6 @@ class AppState:
             lambda *args, **kwargs: self._record_route_event(*args, **kwargs),
             lambda *args, **kwargs: self._record_route_failure(*args, **kwargs),
             lambda *args, **kwargs: self._diagnostic_stream(*args, **kwargs),
-            self.native_upstream_admission,
         )
 
     def _persist_route_observation(self, record: Mapping[str, Any]) -> None:
@@ -2724,39 +2718,6 @@ def make_handler(state: AppState):
                             performance = ResponsesPerformanceTracker(
                                 started=native_started
                             )
-                            try:
-                                admission = state.native_upstream_admission.acquire(
-                                    plan.identity.auth_identity
-                                )
-                            except UpstreamAdmissionError as exc:
-                                terminal = {
-                                    "status": exc.status,
-                                    "success": False,
-                                    "error_class": exc.error_class,
-                                    "failure_reason": exc.failure_reason,
-                                }
-                                self._websocket_error(
-                                    websocket,
-                                    str(exc),
-                                    exc.status,
-                                    exc.error_class,
-                                )
-                                state.record_native_websocket(
-                                    plan,
-                                    request,
-                                    native_started,
-                                    native_prepare_ms,
-                                    None,
-                                    0,
-                                    terminal,
-                                    native_upstream.last_connection_reused,
-                                    False,
-                                    False,
-                                    terminal_event_observed=False,
-                                    performance=performance.diagnostics(),
-                                )
-                                continue
-                            native_prepare_ms += admission.snapshot.wait_ms
                             native_upstream_started = time.monotonic()
                             performance.mark_upstream_started(native_upstream_started)
                             try:
@@ -2964,24 +2925,6 @@ def make_handler(state: AppState):
                                 if terminal and terminal.get("success") is True:
                                     last_native_response_id = completed_native_id
                                 continue
-                            finally:
-                                terminal_status = (
-                                    terminal.get("status")
-                                    if isinstance(terminal, Mapping)
-                                    else None
-                                )
-                                admission.release(
-                                    success=(
-                                        terminal.get("success") is True
-                                        if isinstance(terminal, Mapping)
-                                        else False
-                                    ),
-                                    status=(
-                                        terminal_status
-                                        if isinstance(terminal_status, int)
-                                        else None
-                                    ),
-                                )
                         if plan is not None:
                             # Native preparation may have rebuilt or compacted
                             # visible history already. Reuse that transient
@@ -3022,11 +2965,6 @@ def make_handler(state: AppState):
                             {key: value for key, value in self.headers.items()},
                             transport="websocket",
                             context_completeness="high",
-                            admission_identity=(
-                                plan.identity.auth_identity
-                                if plan is not None
-                                else None
-                            ),
                         )
                         first_event = True
                         for event in self._websocket_events(metadata, result):
