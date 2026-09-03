@@ -203,8 +203,8 @@ def _smoke_tls(executable: Path, target: Target) -> None:
         raise RuntimeError("packaged OpenSSL differs from the build interpreter")
     if not report.get("verify_required") or not report.get("check_hostname"):
         raise RuntimeError("packaged TLS certificate verification is disabled")
-    if target.system == "Windows" and not report.get("certificates"):
-        raise RuntimeError("packaged TLS could not load Windows CA certificates")
+    if report.get("trust_source") != "system":
+        raise RuntimeError("packaged TLS could not load the operating system trust store")
 
 
 def _smoke_executable(executable: Path, version: str, target: Target) -> None:

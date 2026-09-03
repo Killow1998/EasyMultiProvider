@@ -295,6 +295,9 @@ def _run_restore(args: argparse.Namespace) -> int:
 
 def _run_serve(args: argparse.Namespace) -> int:
     # Keep the service import lazy so doctor/restore remain offline operations.
+    from .tls_runtime import configure_system_trust
+
+    configure_system_trust()
     from .server import serve
 
     serve(args.config, args.host, args.port, open_browser=args.open_browser)

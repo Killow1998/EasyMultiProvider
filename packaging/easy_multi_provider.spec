@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules
 
 sys.path.insert(0, SPECPATH)
 from windows_tls import collect_windows_tls_binaries
@@ -23,7 +24,7 @@ analysis = Analysis(
             "easy_multi_provider/data",
         ),
     ],
-    hiddenimports=[],
+    hiddenimports=collect_submodules("truststore"),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

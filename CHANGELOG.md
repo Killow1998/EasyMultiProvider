@@ -2,6 +2,12 @@
 
 ## 0.9.7 (2026-09-02)
 
+- Use the operating system TLS trust store in packaged builds, including the
+  macOS Keychain. Fail packaging when the frozen executable cannot activate
+  that backend, preventing a DMG that turns every upstream request into a TLS
+  502 while the local EMP service remains healthy.
+- Verify the complete v0.9.0-v0.9.7 `.emp` migration matrix and keep a regression
+  test for importing bundles that predate newer catalog presentation fields.
 - Align native Responses WebSocket forwarding with the current Codex transport:
   negotiate permessage-deflate, respect the system proxy, use a 15-second
   connection timeout and one 300-second per-message idle timeout, and keep

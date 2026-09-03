@@ -37,14 +37,15 @@ class PackageTlsTests(unittest.TestCase):
             "openssl": ssl.OPENSSL_VERSION,
             "verify_required": True,
             "check_hostname": True,
-            "certificates": 1,
+            "certificates": None,
+            "trust_source": "system",
         }
         self._probe(healthy)
         for field, value in (
             ("openssl", "foreign OpenSSL"),
             ("verify_required", False),
             ("check_hostname", False),
-            ("certificates", 0),
+            ("trust_source", "openssl"),
         ):
             with self.subTest(field=field), self.assertRaises(RuntimeError):
                 self._probe(dict(healthy, **{field: value}))

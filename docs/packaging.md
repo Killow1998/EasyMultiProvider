@@ -29,16 +29,19 @@ Artifacts and their `.sha256` sidecars are written under `artifacts/`. The
 builder performs three checks before packaging:
 
 1. the frozen executable reports the source version through `--version`;
-2. the frozen executable loads its default TLS trust store with certificate and
-   hostname verification enabled and uses the same OpenSSL version as the build
-   interpreter;
+2. the frozen executable activates the operating system trust store (macOS
+   Keychain, Windows CryptoAPI, or the Linux system CA bundle), keeps certificate
+   and hostname verification enabled, and uses the same OpenSSL version as the
+   build interpreter;
 3. the frozen service starts from a temporary config and Codex home and serves
    its Web UI over loopback.
 
 The smoke test does not enable Codex integration and does not use Provider or
 subscription credentials.
 
-On Windows, the spec explicitly collects the OpenSSL DLLs loaded by Python.
+Packaged builds use `truststore` before importing any network client so the
+standalone executable does not depend on a certificate path from the CI runner.
+On Windows, the spec also explicitly collects the OpenSSL DLLs loaded by Python.
 This prevents unrelated DLLs on `PATH` from shadowing Python's TLS dependencies
 in Conda or virtual-environment builds. No TLS verification is disabled and no
 system certificates are modified. The offline check can also be run directly:

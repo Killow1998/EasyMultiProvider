@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -13,6 +14,84 @@ from easy_multi_provider.migration import MigrationError, export_bundle, import_
 
 
 class MigrationTests(unittest.TestCase):
+    def test_current_import_accepts_a_v0_9_0_style_bundle(self):
+        """Version-1 bundles remain readable when newer config fields are absent."""
+
+        password = "legacy-migration-pass"
+        salt = b"v0.9.0-fixture!!"
+        payload = {
+            "schema": migration_module.SCHEMA,
+            "version": 1,
+            "config": {
+                "host": "127.0.0.1",
+                "port": 4200,
+                "native_catalog_path": "~/.codex/models_cache.json",
+                "account_store_path": "state/accounts",
+                "secret_store_path": "state/secrets",
+                "codex_base_url": "http://127.0.0.1:4200/v1",
+                "accounts": [],
+                "providers": [
+                    {
+                        "id": "legacy",
+                        "name": "Legacy",
+                        "base_url": "https://example.com/v1",
+                        "api_key": "",
+                    }
+                ],
+                "models": [{"id": "legacy/model", "provider": "legacy"}],
+                "catalog_presentations": {
+                    "legacy/model": {"catalog_alias": "Legacy model"}
+                },
+                "subscription_search": {"enabled": False, "account_id": ""},
+            },
+            "accounts": [],
+            "provider_keys": {"legacy": "legacy-provider-secret"},
+        }
+        encrypted = migration_module._fernet(password, salt).encrypt(
+            migration_module._json_bytes(payload)
+        )
+        envelope = {
+            "schema": migration_module.SCHEMA,
+            "version": 1,
+            "kdf": "scrypt",
+            "scrypt": {"n": 2**14, "r": 8, "p": 1},
+            "salt": migration_module._b64(salt),
+            "payload": migration_module._b64(encrypted),
+        }
+        bundle = (
+            migration_module.MAGIC
+            + json.dumps(envelope, separators=(",", ":")).encode("utf-8")
+            + b"\n"
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            target_path = Path(directory) / "config.json"
+            key = Fernet.generate_key().decode("ascii")
+            with patch.dict(
+                os.environ,
+                {"EASY_MULTI_PROVIDER_MASTER_KEY": key},
+                clear=False,
+            ):
+                save(normalize({}), target_path)
+                imported, summary = import_bundle(
+                    load(target_path), bundle, password, target_path
+                )
+                self.assertEqual(
+                    summary, {"accounts": 0, "providers": 1, "models": 1}
+                )
+                self.assertEqual(
+                    api_key(imported["providers"][0]), "legacy-provider-secret"
+                )
+                self.assertEqual(imported["models"][0]["id"], "legacy/model")
+                self.assertEqual(
+                    imported["catalog_presentations"]["legacy/model"][
+                        "catalog_alias"
+                    ],
+                    "Legacy model",
+                )
+                self.assertEqual(imported["catalog_family_presentations"], {})
+                self.assertEqual(imported["native_hidden_models"], [])
+
     def test_bundle_is_encrypted_and_round_trips_to_a_new_machine(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

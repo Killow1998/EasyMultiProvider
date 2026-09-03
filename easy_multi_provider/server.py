@@ -143,6 +143,7 @@ from .transport import (
     websocket_accept,
 )
 from .transport_failures import public_failure_message, status_error_class
+from .tls_runtime import tls_trust_source
 from .request_limits import RequestLimits
 from .transport_continuity import (
     PREVIOUS_RESPONSE_NOT_FOUND_CODE,
@@ -4018,6 +4019,7 @@ def _serve_owned(
                 emp_version=__version__,
                 python_version=platform.python_version(),
                 platform_family=(platform.system() or "unknown").lower(),
+                tls_trust_source=tls_trust_source(),
                 pid=os.getpid(),
                 host=bind_host,
                 port=bind_port,

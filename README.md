@@ -155,6 +155,16 @@ uv run python -m easy_multi_provider serve --config config.json
 On first start, EMP automatically creates a private local encryption key. No
 environment variable or manual key-generation command is required.
 
+### `.emp` version compatibility
+
+EMP v0.9.0 through v0.9.7 use the same encrypted migration format. A current
+EMP can import files exported by any of those versions, and the complete
+v0.9.0-v0.9.7 cross-version matrix preserves accounts and credentials,
+Providers and API keys, models, and model display aliases. Use the same or a
+newer EMP version for a lossless migration of settings: an older application
+cannot preserve settings introduced after it was released, such as model-family
+presentation and native-model visibility added in v0.9.3.
+
 The terminal prints a one-use browser URL. Open it and:
 
 1. Import a Codex subscription account or add an API Provider.
