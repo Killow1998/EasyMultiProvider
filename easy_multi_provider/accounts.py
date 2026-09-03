@@ -18,6 +18,7 @@ _MAX_AUTH_BYTES = 1024 * 1024
 _MAX_HIDDEN_MODELS = 1000
 _MAX_MODEL_ID_BYTES = 256
 NATIVE_ACCOUNT_ID = "@native"
+_CREDENTIAL_STATUSES = frozenset({"unknown", "valid", "invalid"})
 
 
 class AccountError(ValueError):
@@ -111,11 +112,15 @@ def normalize_account(raw: Dict[str, Any]) -> Dict[str, Any]:
     auth_file = raw.get("auth_file", "")
     if not isinstance(auth_file, str):
         raise AccountError("account.auth_file must be a string")
+    credential_status = raw.get("credential_status", "unknown")
+    if credential_status not in _CREDENTIAL_STATUSES:
+        raise AccountError("account.credential_status is invalid")
     return {
         "id": account_id,
         "name": _name(raw.get("name"), account_id),
         "prefix": prefix,
         "auth_file": auth_file.strip(),
+        "credential_status": credential_status,
         "enabled": bool(raw.get("enabled", True)),
         "hidden_models": normalize_hidden_models(raw.get("hidden_models")),
         "quota": copy.deepcopy(raw.get("quota")) if isinstance(raw.get("quota"), dict) else None,
@@ -175,6 +180,7 @@ def public_accounts(accounts: Iterable[Dict[str, Any]]) -> list:
                 "enabled": account["enabled"],
                 "hidden_models": account["hidden_models"],
                 "credential_set": bool(account["auth_file"]),
+                "credential_status": account["credential_status"],
                 "quota": account["quota"],
                 "duplicate": account["id"] in duplicates,
                 "duplicate_of": duplicates.get(account["id"], ""),

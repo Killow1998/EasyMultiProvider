@@ -2017,21 +2017,42 @@ class AppState:
             duplicates = duplicate_account_status([target])
             executable = getattr(self.runtime_controller, "executable", None)
             codex_binary = executable() if callable(executable) else "codex"
-            if account_id in duplicates:
-                quota = read_native_login_quota(
-                    codex_binary=codex_binary, auth_path=self.codex_home / "auth.json"
-                )
-            else:
-                quota = refresh_account_quota(target, codex_binary=codex_binary)
+            try:
+                if account_id in duplicates:
+                    quota = read_native_login_quota(
+                        codex_binary=codex_binary, auth_path=self.codex_home / "auth.json"
+                    )
+                else:
+                    quota = refresh_account_quota(target, codex_binary=codex_binary)
+            except QuotaError as exc:
+                if exc.code == "quota_auth_required":
+                    catalog_changed = False
+                    with self.lock:
+                        for item in self.config.get("accounts", []):
+                            if (
+                                item.get("id") == account_id
+                                and item.get("auth_file") == target.get("auth_file")
+                            ):
+                                catalog_changed = item.get("credential_status") != "invalid"
+                                item["credential_status"] = "invalid"
+                                save(self.config, self.path)
+                                break
+                    if catalog_changed:
+                        self.refresh_catalog()
+                raise
             with self.lock:
                 for item in self.config.get("accounts", []):
                     if item.get("id") == account_id and item.get("auth_file") == target.get("auth_file"):
+                        catalog_changed = item.get("credential_status") == "invalid"
+                        item["credential_status"] = "valid"
                         item["quota"] = quota
                         save(self.config, self.path)
                         result = dict(item)
                         break
                 else:
                     raise QuotaError("account changed during quota refresh")
+            if catalog_changed:
+                self.refresh_catalog()
             self._record_quota_snapshot(account_id, quota)
             return result
 

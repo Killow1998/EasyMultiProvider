@@ -112,7 +112,12 @@ def presentation_for_route(
     family_verified: bool = False,
 ) -> Dict[str, Any]:
     model = model or {}
-    family = model_family_identity(model, route)
+    # build_catalog resolves the family before rewriting native models into
+    # account/provider routes.  Keep that canonical identity here: current
+    # Codex model caches commonly omit family_id/upstream_id, so recomputing
+    # from an account route would incorrectly produce e.g.
+    # ``killow/gpt-5.6-sol`` instead of ``gpt-5.6-sol``.
+    family = str(model.get("_emp_family") or model_family_identity(model, route))
     if family_verified:
         presentation = _family_presentation(config, family)
         if presentation:
@@ -403,6 +408,7 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
         if (
             not account.get("enabled", True)
             or not account.get("auth_file")
+            or account.get("credential_status") == "invalid"
             or account.get("id") in duplicate_accounts
         ):
             continue

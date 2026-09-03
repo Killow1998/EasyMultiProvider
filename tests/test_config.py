@@ -496,6 +496,23 @@ class ConfigTests(unittest.TestCase):
             self.assertNotIn("do-not-leak", encoded)
             self.assertNotIn("refresh_token", encoded)
             self.assertNotIn("auth_file", safe[0])
+            self.assertEqual(safe[0]["credential_status"], "unknown")
+
+    def test_account_credential_status_is_normalized_and_public(self):
+        account = normalize(
+            {
+                "accounts": [
+                    {
+                        "id": "primary",
+                        "prefix": "primary",
+                        "credential_status": "invalid",
+                    }
+                ]
+            }
+        )["accounts"][0]
+
+        self.assertEqual(account["credential_status"], "invalid")
+        self.assertEqual(public_accounts([account])[0]["credential_status"], "invalid")
 
     def test_account_hidden_models_are_normalized_and_public(self):
         account = normalize({

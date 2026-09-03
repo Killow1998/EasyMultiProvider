@@ -508,6 +508,11 @@ function quotaMeterBehavior() {
   assert.match(html, /@media\(prefers-reduced-motion:reduce\)/);
 }
 
+function invalidCredentialAccountBehavior() {
+  run("state = {native_account:null,accounts:[{id:'expired',name:'expired',prefix:'expired',credential_set:true,credential_status:'invalid',quota:null}],providers:[],models:[]}; renderAccounts()");
+  assert.match(getElement("accounts").innerHTML, /登录已失效/);
+}
+
 async function quotaStateSyncBehavior() {
   const calls = [];
   context.__quotaSyncState = {native_account:null,accounts:[{id:'sync',name:'sync',prefix:'sync',credential_set:true,quota:{rate_limits:{primary:{usedPercent:40,windowDurationMins:300}}}}]};
@@ -828,6 +833,7 @@ async function runtimeSettingsIsolationBehavior() {
   performanceDiagnosticsBehavior();
   providerDiscoveryErrorBehavior();
   quotaMeterBehavior();
+  invalidCredentialAccountBehavior();
   await quotaStateSyncBehavior();
   await nativeAccountBehavior();
   await nativeOnlyIntegrationBehavior();

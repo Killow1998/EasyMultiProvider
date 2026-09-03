@@ -3487,6 +3487,57 @@ class ServerAccountTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_quota_auth_state_removes_and_restores_imported_catalog_routes(self):
+        from easy_multi_provider.quota import QuotaError
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(
+                normalize(
+                    {
+                        "account_store_path": str(root / "state" / "accounts"),
+                    }
+                ),
+                config_path,
+            )
+            state = AppState(config_path)
+            state.import_account(
+                {"id": "primary", "name": "Primary", "prefix": "primary"},
+                {"auth_mode": "chatgpt", "tokens": {"access_token": "account-secret"}},
+            )
+
+            with patch(
+                "easy_multi_provider.server.refresh_account_quota",
+                side_effect=QuotaError("Sign in again", "quota_auth_required"),
+            ), patch.object(state, "refresh_catalog") as refresh_catalog:
+                with self.assertRaises(QuotaError):
+                    state.refresh_account("primary")
+
+            stored = next(
+                item for item in state.config["accounts"] if item["id"] == "primary"
+            )
+            self.assertEqual(stored["credential_status"], "invalid")
+            self.assertEqual(
+                load(config_path)["accounts"][0]["credential_status"], "invalid"
+            )
+            refresh_catalog.assert_called_once_with()
+
+            snapshot = {
+                "account_label": "s***@example.com",
+                "plan_type": "plus",
+                "rate_limits": {"primary": {"usedPercent": 8}},
+                "updated_at": 789,
+            }
+            with patch(
+                "easy_multi_provider.server.refresh_account_quota",
+                return_value=snapshot,
+            ), patch.object(state, "refresh_catalog") as refresh_catalog:
+                account = state.refresh_account("primary")
+
+            self.assertEqual(account["credential_status"], "valid")
+            refresh_catalog.assert_called_once_with()
+
     def test_quota_failure_returns_safe_error_code_and_retains_snapshot(self):
         from easy_multi_provider.quota import QuotaError
 

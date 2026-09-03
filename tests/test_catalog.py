@@ -85,6 +85,67 @@ class CatalogTests(unittest.TestCase):
             by_slug["or/gpt-5.6-sol"]["display_name"], "OpenRouter · 将军"
         )
 
+    def test_family_presentation_applies_to_account_routes_without_native_family_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "gpt-5.6-sol",
+                                "display_name": "GPT-5.6-Sol",
+                                "context_window": 258000,
+                                "visibility": "list",
+                            },
+                            {
+                                "slug": "gpt-5.6-luna",
+                                "display_name": "GPT-5.6-Luna",
+                                "context_window": 258000,
+                                "visibility": "list",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = normalize(
+                {
+                    "native_catalog_path": str(native_path),
+                    "accounts": [
+                        {
+                            "id": "killow",
+                            "name": "killow",
+                            "prefix": "killow",
+                            "auth_file": str(Path(directory) / "killow.enc"),
+                        }
+                    ],
+                    "catalog_family_presentations": {
+                        "gpt-5.6-sol": {
+                            "catalog_alias": "🌙",
+                            "show_context": False,
+                        },
+                        "gpt-5.6-luna": {
+                            "catalog_alias": "将军",
+                            "show_context": False,
+                        },
+                    },
+                }
+            )
+
+            by_slug = {
+                model["slug"]: model for model in build_catalog(config)["models"]
+            }
+
+        self.assertEqual(by_slug["gpt-5.6-sol"]["display_name"], "🌙")
+        self.assertEqual(by_slug["killow/gpt-5.6-sol"]["display_name"], "killow · 🌙")
+        self.assertEqual(by_slug["gpt-5.6-luna"]["display_name"], "将军")
+        self.assertEqual(
+            by_slug["killow/gpt-5.6-luna"]["display_name"], "killow · 将军"
+        )
+        for model in by_slug.values():
+            self.assertNotIn("[258K]", model["display_name"])
+
     def test_native_visibility_is_owned_without_importing_a_duplicate_account(self):
         with tempfile.TemporaryDirectory() as directory:
             native_path = Path(directory) / "native.json"
@@ -671,6 +732,43 @@ class CatalogTests(unittest.TestCase):
             "models": [{"id": "demo/hidden", "provider": "demo", "enabled": False}],
             })
             self.assertEqual(build_catalog(config)["models"], [])
+
+    def test_invalid_subscription_credentials_are_not_exported_to_codex(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "gpt-native",
+                                "display_name": "Native",
+                                "visibility": "list",
+                                "supported_in_api": True,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = normalize(
+                {
+                    "native_catalog_path": str(native_path),
+                    "accounts": [
+                        {
+                            "id": "expired",
+                            "name": "Expired",
+                            "prefix": "expired",
+                            "auth_file": str(Path(directory) / "expired.enc"),
+                            "credential_status": "invalid",
+                        }
+                    ],
+                }
+            )
+
+            slugs = [item["slug"] for item in build_catalog(config)["models"]]
+
+        self.assertEqual(slugs, ["gpt-native"])
 
     def test_external_models_group_by_provider_order_and_newest_first(self):
         with tempfile.TemporaryDirectory() as directory:
