@@ -517,6 +517,7 @@ class RolloutReader:
         projection_ordinal: Optional[int] = None,
         projection_offset: Optional[int] = None,
         max_bytes: int = _MAX_ROLLOUT_BYTES,
+        compaction_item: Optional[Mapping] = None,
     ) -> None:
         if path is not None and rollout_path is not None and Path(path) != Path(rollout_path):
             raise HistoryUnavailableError("conflicting_rollout_source", source="rollout")
@@ -525,6 +526,7 @@ class RolloutReader:
         self.source_model = _model(source_model) or _model(model)
         self.projection_ordinal = projection_ordinal
         self.projection_offset = projection_offset
+        self.compaction_item = compaction_item
         try:
             self.max_bytes = max(1, min(int(max_bytes), _MAX_ROLLOUT_BYTES))
         except (TypeError, ValueError):
@@ -594,7 +596,21 @@ class RolloutReader:
         if len(set(session_ids)) != 1:
             raise HistoryMismatchError("thread_identity_conflict", source="rollout")
 
-        anchor_position = _anchor_position(records, anchor)
+        if self.compaction_item is None:
+            anchor_position = _anchor_position(records, anchor)
+        else:
+            # Ephemeral forks have no rollout of their own. Their inherited
+            # ciphertext identifies an exact, already-persisted parent checkpoint;
+            # never substitute the parent's latest checkpoint or current history.
+            encoded = self.compaction_item.get("encrypted_content")
+            if self.compaction_item.get("type") != "compaction" or not isinstance(encoded, str) or not encoded:
+                raise HistoryUnavailableError("compaction_identity_missing", source="rollout")
+            matches = [index for index, record in enumerate(records)
+                       if any(item.get("type") == "compaction" and item.get("encrypted_content") == encoded
+                              for item in (_replacement_history(record.value) or []))]
+            if len(matches) != 1:
+                raise HistoryAmbiguousError("compaction_identity_ambiguous" if matches else "compaction_identity_missing", source="rollout")
+            anchor_position = matches[0] + 1
         history_records = records[:anchor_position]
         history_boundary = (
             records[anchor_position].start
@@ -602,6 +618,12 @@ class RolloutReader:
             else complete_boundary
         )
         successful_turns = _successful_turn_ids(history_records)
+        if self.compaction_item is not None:
+            # A checkpoint may be committed before the containing turn finishes.
+            # Only its captured prefix is eligible, never later turn records.
+            checkpoint_turn = _record_turn_ids(history_records)[-1]
+            if checkpoint_turn is not None:
+                successful_turns.add(checkpoint_turn)
 
         explicit_seen = False
         last_explicit = None

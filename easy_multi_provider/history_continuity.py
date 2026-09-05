@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -12,13 +13,16 @@ from typing import Any, Dict, Optional, Tuple
 
 from .codex_history import (
     HistoryAnchor,
+    HistoryAmbiguousError,
     HistoryError,
     HistoryInputError,
     HistoryMismatchError,
     HistorySnapshot,
     HistoryUnavailableError,
     SQLiteReader,
+    RolloutReader,
 )
+from .diagnostic_journal import NullJournal
 from .dialects import CODEX_NATIVE, classify_dialect
 from .portable_checkpoint import (
     PortableCheckpointError,
@@ -277,7 +281,9 @@ class HistoryContinuityEngine:
         if not anchor.turn_id:
             raise HistoryReconstructionError("turn_identity_missing")
         try:
-            snapshot = self.reader.read_visible_history(anchor)
+            read_compaction = getattr(self.reader, "read_compaction_history", None)
+            snapshot = (read_compaction(anchor, _input_items(decoded)[_opaque_compaction_index(decoded)])
+                        if read_compaction is not None else self.reader.read_visible_history(anchor))
         except HistoryError as exc:
             raise HistoryReconstructionError(exc.reason) from None
         except Exception:
@@ -318,9 +324,80 @@ class HistoryContinuityEngine:
 class CodexHomeHistoryReader:
     """Resolve the current Codex state DB lazily and read it without writes."""
 
-    def __init__(self, codex_home: Path, app_server_reader: Any = None):
-        self.codex_home = Path(codex_home)
+    def __init__(self, codex_home: Path, app_server_reader: Any = None, *, journal=None):
+        self.codex_home = Path(codex_home).resolve()
         self.app_server_reader = app_server_reader
+        self.journal = journal if journal is not None else NullJournal()
+
+    def _lookup_event(self, anchor, source, result, reason="", *, fallback=False):
+        try:
+            self.journal.event(
+                "info" if result == "found" else "warning", "history_lookup",
+                thread_ref=self.journal.pseudonym(anchor.thread_id or "missing"),
+                turn_ref=self.journal.pseudonym(anchor.turn_id or "missing"),
+                codex_home_ref=self.journal.pseudonym(str(self.codex_home)),
+                source=source, result=result, reason=reason,
+                anchor_found=result == "found", fallback=fallback,
+            )
+        except Exception:
+            pass
+
+    def read_compaction_history(self, anchor: HistoryAnchor, compaction: Mapping) -> HistorySnapshot:
+        try:
+            return self.read_visible_history(anchor)
+        except HistoryUnavailableError as original:
+            if original.reason != "thread_missing" or not anchor.forked_from_thread_id:
+                raise
+        # Codex's fork metadata names the parent. Restrict lookup to that UUID in
+        # the configured home and require the exact inherited encrypted checkpoint.
+        # No global scan, active app-server attachment, or parent-tail guessing.
+        try:
+            parent_id = str(uuid.UUID(anchor.forked_from_thread_id))
+            if parent_id == anchor.thread_id:
+                raise HistoryMismatchError("fork_parent_invalid", source="rollout")
+            parent_anchor = HistoryAnchor(thread_id=parent_id)
+            location = self._sqlite_reader().locate(parent_anchor)
+            if not location.rollout_path.resolve().is_relative_to(self.codex_home):
+                raise HistoryMismatchError("rollout_outside_codex_home", source="rollout")
+            snapshot = RolloutReader(location.rollout_path, history_mode=location.history_mode,
+                                     source_model=location.source_model,
+                                     compaction_item=compaction).read_visible_history(parent_anchor)
+            snapshot = replace(snapshot, anchor=anchor,
+                               cursor=replace(snapshot.cursor, thread_id=anchor.thread_id))
+            self._lookup_event(anchor, "fork_checkpoint", "found", fallback=True)
+            return snapshot
+        except (ValueError, AttributeError):
+            raise HistoryMismatchError("fork_parent_invalid", source="rollout") from None
+        except HistoryError as failure:
+            self._lookup_event(anchor, "fork_checkpoint", "rejected", failure.reason, fallback=True)
+            raise
+
+    def _rollout_fallback(self, anchor: HistoryAnchor, original: HistoryError) -> HistorySnapshot:
+        # SQLite is an index, not the conversation itself. Only inspect canonical
+        # paths within this configured home; never guess a Side chat's parent or
+        # scan another user's/home's history. RolloutReader verifies both the
+        # session metadata and the exact turn/window before exposing any content.
+        try:
+            thread_id = str(uuid.UUID(anchor.thread_id or ""))
+        except (ValueError, AttributeError):
+            raise original
+        candidates = set()
+        patterns = (
+            "sessions/*/*/*/rollout-*-%s.jsonl" % thread_id,
+            "archived_sessions/rollout-*-%s.jsonl" % thread_id,
+        )
+        for pattern in patterns:
+            for path in self.codex_home.glob(pattern):
+                resolved = path.resolve()
+                if not resolved.is_relative_to(self.codex_home):
+                    raise HistoryMismatchError("rollout_outside_codex_home", source="rollout")
+                if resolved.is_file():
+                    candidates.add(resolved)
+                if len(candidates) > 1:
+                    raise HistoryAmbiguousError("multiple_rollout_sources", source="rollout")
+        if not candidates:
+            raise original
+        return RolloutReader(next(iter(candidates))).read_visible_history(anchor)
 
     def _sqlite_reader(self) -> SQLiteReader:
         candidates = []
@@ -358,10 +435,25 @@ class CodexHomeHistoryReader:
                         metadata = None
                     if isinstance(metadata, HistorySnapshot) and metadata.source_model is not None:
                         snapshot = replace(snapshot, source_model=metadata.source_model)
+                self._lookup_event(anchor, "app_server", "found")
                 return snapshot
         try:
-            return self._sqlite_reader().read_visible_history(anchor)
-        except HistoryError:
+            snapshot = self._sqlite_reader().read_visible_history(anchor)
+            self._lookup_event(anchor, "sqlite", "found")
+            return snapshot
+        except HistoryError as exc:
+            self._lookup_event(anchor, "sqlite", "missing" if exc.reason == "thread_missing" else "rejected", exc.reason)
+            if isinstance(exc, HistoryUnavailableError) and exc.reason in {
+                "state_database_missing", "database_missing", "thread_missing",
+                "rollout_path_missing", "source_missing",
+            }:
+                try:
+                    snapshot = self._rollout_fallback(anchor, exc)
+                except HistoryError as failure:
+                    self._lookup_event(anchor, "rollout", "rejected", failure.reason, fallback=True)
+                    raise
+                self._lookup_event(anchor, "rollout", "found", fallback=True)
+                return snapshot
             raise
         except Exception:
             raise HistoryUnavailableError("history_unavailable", source="sqlite") from None

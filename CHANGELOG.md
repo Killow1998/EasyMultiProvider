@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.9.8 (2026-09-05)
+
+- Measure first output only from nonempty text/tool deltas. Estimate streamed TPS
+  from the first-to-last output interval, excluding reasoning and the first token;
+  suppress single-burst, incomplete and unmeasurable samples. Keep old observations
+  for health/history without mixing their older measurement schema into new speed
+  aggregates.
+- Keep quota histories grouped by actual window duration when primary/secondary
+  positions change. Label 5h/7d explicitly, break lines across replenishment and
+  sampling gaps, and show each point's reset time. Ignore stale trend responses
+  after switching accounts or ranges; preserve multi-bucket quota snapshots.
+- Add Astra API capability metadata while preserving native Codex context,
+  reasoning levels and model presentation. Prevent native service tiers and
+  routing metadata from leaking into unrelated external model entries.
+- Preserve explicitly requested Fast/Standard service tiers through portable
+  Responses forwarding. Review Codex 0.153.4 catalog and transport contracts.
+- Project complete external function/custom-tool pairs back to native Responses
+  without their incompatible optional item IDs. Preserve `call_id` associations,
+  visible context and native-only history; reject ambiguous foreign pairs before
+  contacting the upstream (#9).
+- Recover a missing SQLite history index from an exact, uniquely matched rollout
+  in the same Codex home, with session/turn/window validation. Add content-free
+  lookup diagnostics and actionable errors for missing Side chat history. A
+  parent task is never guessed when a transient Side chat has no local source (#8).
+- Reconstruct inherited native checkpoints for ephemeral Side chats using Codex's
+  explicit fork-parent metadata and an exact encrypted-checkpoint match. Preserve
+  the client's reference-only boundary and active messages without adding later
+  parent turns; reject missing or ambiguous checkpoint identities.
+- Add compact update and GitHub controls to the page header. Packaged apps can
+  download a newer stable release in the background, verify the GitHub asset
+  SHA-256 digest, drain active requests, replace the installed executable/app,
+  and restart. Failed startup rolls the binary back; protected install directories
+  are not modified through privilege escalation.
+- Return Windows process-launch errors to the background updater instead of
+  waiting on an unattended OS error dialog. Preserve content-free worker phases
+  and verify replacement and rollback with real packaged executables.
+
+- Detect the Codex runtime published by the unified ChatGPT desktop app under
+  `.codex/plugins/.plugin-appserver`, while retaining the earlier Windows App
+  runtime layouts as fallbacks. Label this client as ChatGPT App (Codex) in the
+  integration UI.
+- Discover macOS ChatGPT/Codex app bundles before the plugin fallback and report
+  their actual runtime version separately from older managed runtimes. Rescanning
+  after an app update invalidates the cached version.
+- Load Codex integration status independently from the other management panels,
+  so a browser-specific rendering failure cannot leave the status card stuck at
+  “Reading status”.
+- Correlate privacy-safe HTTP starts/completions, browser integration phases,
+  and local/upstream WebSocket handshake, send, first-event, terminal, and close
+  phases without recording URLs, headers, prompts, responses, or credentials.
+- Keep performance history across restarts while calculating each model and
+  speed mode from its latest 20 successful samples within seven days. Compare
+  that median with the preceding 20 samples so recent TTFT/TPS changes are not
+  hidden by the entire retained history.
+- Publish successful tagged package builds as stable GitHub Releases instead of
+  Pre-releases. Existing published versions remain immutable.
+
 ## 0.9.7 (2026-09-02)
 
 - Use the operating system TLS trust store in packaged builds, including the

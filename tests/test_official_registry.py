@@ -714,7 +714,7 @@ class TestBundledRegistry(unittest.TestCase):
         self.assertIn("llama-4-scout", meta_models)
         self.assertIn("llama-4-maverick", meta_models)
 
-    def test_each_provider_has_two_to_four_models(self):
+    def test_each_provider_has_a_bounded_curated_model_set(self):
         from collections import Counter
 
         counts = Counter(m["provider_key"] for m in self.registry["models"])
@@ -726,7 +726,8 @@ class TestBundledRegistry(unittest.TestCase):
                     count, 2, msg="%s has only %d models" % (key, count)
                 )
                 self.assertLessEqual(
-                    count, 4, msg="%s has %d models" % (key, count)
+                    count, 5 if key == "openai" else 4,
+                    msg="%s has %d models" % (key, count)
                 )
 
 

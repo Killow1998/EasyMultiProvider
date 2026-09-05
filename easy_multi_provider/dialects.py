@@ -31,6 +31,7 @@ _PORTABLE_TOP_LEVEL = frozenset(
         "reasoning",
         "text",
         "truncation",
+        "service_tier",
     }
 )
 _TEXT_PART_TYPES = frozenset({"input_text", "output_text", "text"})
@@ -372,11 +373,49 @@ def _portable_input(
     return result, instructions
 
 
+def _external_tool_item_indices(source: list) -> set[int]:
+    """Strip optional foreign item IDs, never the call_id linking a tool pair.
+
+    Native item IDs use a different namespace than Chat Completions tool IDs.
+    Only project complete, unambiguous foreign pairs. Native-only history may
+    reference a call inside opaque state and must keep its existing behavior.
+    """
+    prefixes = {"function_call": "fc", "custom_tool_call": "ctc"}
+    pairs = {}
+    foreign = []
+    for index, item in enumerate(source):
+        if not isinstance(item, Mapping):
+            continue
+        kind = item.get("type")
+        if kind not in {*prefixes, "function_call_output", "custom_tool_call_output"}:
+            continue
+        call_id = item.get("call_id")
+        if isinstance(call_id, str) and call_id:
+            pairs.setdefault(call_id, []).append((index, kind))
+        if kind in prefixes and item.get("id") is not None:
+            item_id = item["id"]
+            if not isinstance(item_id, str) or not item_id.startswith(prefixes[kind]):
+                foreign.append((index, kind, call_id))
+    stripped = set()
+    for index, kind, call_id in foreign:
+        pair = pairs.get(call_id, []) if isinstance(call_id, str) else []
+        if len(pair) != 2 or pair[0] != (index, kind) or pair[1][1] != kind + "_output":
+            raise ProjectionError(index, kind, (), "incompatible_tool_history")
+        stripped.update(position for position, _ in pair)
+    return stripped
+
+
 def _native_input(source: Any) -> Any:
     if not isinstance(source, list):
         return copy.deepcopy(source)
+    foreign_items = _external_tool_item_indices(source)
     result = []
     for index, item in enumerate(source):
+        if index in foreign_items:
+            projected = copy.deepcopy(dict(item))
+            projected.pop("id", None)
+            result.append(projected)
+            continue
         if isinstance(item, Mapping) and item.get("type") == "compaction":
             encoded = item.get("encrypted_content")
             if isinstance(encoded, str) and encoded.startswith(_COMPACTION_PREFIX):

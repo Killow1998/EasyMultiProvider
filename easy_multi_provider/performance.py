@@ -3,24 +3,12 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 from typing import Any, Dict, Iterable, Iterator, Mapping, Optional
 
-from .transport_failures import event_activity
-
-
-_OUTPUT_EVENT = re.compile(
-    br'"type"\s*:\s*"response\.(?:output_text|function_call_arguments|'
-    br'custom_tool_call_input)\.(?:delta|done)"'
-)
-_TERMINAL_EVENT = re.compile(
-    br'"type"\s*:\s*"response\.(?:completed|incomplete|failed)"'
-)
-_OUTPUT_TOKENS = re.compile(br'"output_tokens"\s*:\s*(\d+)')
-_REASONING_TOKENS = re.compile(br'"reasoning_tokens"\s*:\s*(\d+)')
-_SCAN_TAIL_BYTES = 512
+_MAX_EVENT_BYTES = 1024 * 1024
 _MIN_TPS_WINDOW_MS = 500
+PERFORMANCE_SCHEMA = 2
 
 
 def _output_tokens(event: Mapping[str, Any]) -> Optional[int]:
@@ -34,7 +22,7 @@ def _output_tokens(event: Mapping[str, Any]) -> Optional[int]:
         return None
     try:
         value = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return value if 0 <= value <= 10_000_000 else None
 
@@ -53,7 +41,7 @@ def _reasoning_tokens(event: Mapping[str, Any]) -> Optional[int]:
         return None
     try:
         value = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return value if 0 <= value <= 10_000_000 else None
 
@@ -61,13 +49,10 @@ def _reasoning_tokens(event: Mapping[str, Any]) -> Optional[int]:
 def _measured_output_activity(event: Mapping[str, Any]) -> bool:
     """Return activity covered by non-reasoning output token usage."""
 
-    event_type = str(event.get("type") or "")
-    item = event.get("item")
-    item_type = str(item.get("type") or "") if isinstance(item, Mapping) else ""
-    if "reasoning" in event_type or item_type == "reasoning":
-        return False
-    visible, tool = event_activity(event)
-    return visible or tool
+    return str(event.get("type") or "") in {
+        "response.output_text.delta", "response.refusal.delta",
+        "response.function_call_arguments.delta", "response.custom_tool_call_input.delta",
+    } and isinstance(event.get("delta"), str) and bool(event["delta"])
 
 
 class ResponsesPerformanceTracker:
@@ -78,10 +63,15 @@ class ResponsesPerformanceTracker:
         self._started = clock() if started is None else float(started)
         self._upstream_started: Optional[float] = None
         self._first_token_at: Optional[float] = None
+        self._last_token_at: Optional[float] = None
         self._terminal_at: Optional[float] = None
         self._output_tokens: Optional[int] = None
         self._reasoning_tokens: Optional[int] = None
-        self._tail = b""
+        self._pending = bytearray()
+        self._data_lines = []
+        self._data_bytes = 0
+        self._valid_stream = True
+        self._completed = False
 
     def mark_upstream_started(self, value: Optional[float] = None) -> None:
         self._upstream_started = self._clock() if value is None else float(value)
@@ -90,8 +80,12 @@ class ResponsesPerformanceTracker:
         if not isinstance(event, Mapping):
             return
         now = self._clock()
-        if _measured_output_activity(event) and self._first_token_at is None:
-            self._first_token_at = now
+        if self._terminal_at is not None:
+            return
+        if _measured_output_activity(event):
+            if self._first_token_at is None:
+                self._first_token_at = now
+            self._last_token_at = now
         event_type = str(event.get("type") or "")
         if event_type in {
             "response.completed",
@@ -99,6 +93,7 @@ class ResponsesPerformanceTracker:
             "response.failed",
         }:
             self._terminal_at = now
+            self._completed = event_type == "response.completed"
             value = _output_tokens(event)
             if value is not None:
                 self._output_tokens = value
@@ -107,24 +102,39 @@ class ResponsesPerformanceTracker:
                 self._reasoning_tokens = reasoning
 
     def observe_chunk(self, chunk: Any) -> None:
+        if not self._valid_stream:
+            return
         raw = chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8")
-        scan = self._tail + raw
-        now = self._clock()
-        if self._first_token_at is None and _OUTPUT_EVENT.search(scan):
-            self._first_token_at = now
-        if _TERMINAL_EVENT.search(scan):
-            self._terminal_at = now
-        matches = _OUTPUT_TOKENS.findall(scan)
-        if matches:
-            value = int(matches[-1])
-            if value <= 10_000_000:
-                self._output_tokens = value
-        reasoning_matches = _REASONING_TOKENS.findall(scan)
-        if reasoning_matches:
-            value = int(reasoning_matches[-1])
-            if value <= 10_000_000:
-                self._reasoning_tokens = value
-        self._tail = scan[-_SCAN_TAIL_BYTES:]
+        # Observe complete SSE events, never regex-match fields inside output.
+        # Bound transient JSON buffering; measurement failure must not stop relay.
+        for fragment in raw.splitlines(keepends=True):
+            if len(self._pending) + self._data_bytes + len(fragment) > _MAX_EVENT_BYTES:
+                self._valid_stream = False
+                break
+            self._pending.extend(fragment)
+            if not self._pending.endswith(b"\n"):
+                continue
+            line = bytes(self._pending).rstrip(b"\r\n")
+            self._pending.clear()
+            if line.startswith(b"data:"):
+                value = line[5:].lstrip(b" ")
+                self._data_lines.append(value)
+                self._data_bytes += len(value) + 1
+            elif not line and self._data_lines:
+                data = b"\n".join(self._data_lines)
+                self._data_lines.clear()
+                self._data_bytes = 0
+                if data == b"[DONE]":
+                    continue
+                try:
+                    self.observe_event(json.loads(data))
+                except (ValueError, UnicodeDecodeError, RecursionError):
+                    self._valid_stream = False
+                    break
+        if not self._valid_stream:
+            self._pending.clear()
+            self._data_lines.clear()
+            self._data_bytes = 0
 
     def observe_bytes(self, value: Any) -> None:
         raw = value if isinstance(value, bytes) else bytes(value or b"")
@@ -147,6 +157,9 @@ class ResponsesPerformanceTracker:
                 self.observe_chunk(chunk)
                 yield chunk
         finally:
+            self._pending.clear()
+            self._data_lines.clear()
+            self._data_bytes = 0
             close = getattr(result, "close", None)
             if callable(close):
                 try:
@@ -155,7 +168,7 @@ class ResponsesPerformanceTracker:
                     pass
 
     def diagnostics(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {}
+        result: Dict[str, Any] = {"performance_schema": PERFORMANCE_SCHEMA}
         if self._first_token_at is not None:
             result["ttft_ms"] = max(
                 0, int(round((self._first_token_at - self._started) * 1000))
@@ -171,9 +184,9 @@ class ResponsesPerformanceTracker:
                 )
         if self._output_tokens is not None:
             result["output_tokens"] = self._output_tokens
-        if self._first_token_at is not None and self._terminal_at is not None:
+        if self._first_token_at is not None and self._last_token_at is not None:
             generation_ms = max(
-                0, int(round((self._terminal_at - self._first_token_at) * 1000))
+                0, int(round((self._last_token_at - self._first_token_at) * 1000))
             )
             result["generation_ms"] = generation_ms
             measured_tokens = None
@@ -181,15 +194,15 @@ class ResponsesPerformanceTracker:
                 self._output_tokens is not None
                 and self._reasoning_tokens is not None
             ):
-                measured_tokens = max(
-                    0, self._output_tokens - self._reasoning_tokens
-                )
+                measured_tokens = self._output_tokens - self._reasoning_tokens - 1
             # A short answer can arrive in one buffered burst immediately before
             # the terminal event. Dividing by that sub-second delivery gap
             # reports transport batching as model generation speed. Keep TTFT,
             # but only publish TPS when the observed output window is long
             # enough to form a useful rate.
-            if generation_ms >= _MIN_TPS_WINDOW_MS and measured_tokens:
+            if (self._valid_stream and self._completed
+                    and generation_ms >= _MIN_TPS_WINDOW_MS
+                    and measured_tokens is not None and measured_tokens > 0):
                 result["tokens_per_second"] = round(
                     measured_tokens * 1000.0 / generation_ms, 2
                 )

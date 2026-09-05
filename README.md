@@ -6,7 +6,7 @@ EMP is a local, browser-configured model router for Codex.
 It keeps the native Codex experience while adding multiple ChatGPT
 subscriptions, API providers, and external models to the same model list.
 
-The current source version is `v0.9.7`.
+The current source version is `v0.9.8`.
 
 ## Features
 
@@ -24,8 +24,10 @@ The current source version is `v0.9.7`.
   existing model slug; Codex continues to own the child task and permissions.
 - Keep credentials encrypted on the local machine.
 - Keep a private, bounded diagnostic journal for later troubleshooting.
-- Inspect median TTFT/TPS by recently used model. OpenAI speed modes appear
-  only after a Fast request is actually observed. EMP also shows observed
+- Inspect rolling median TTFT/TPS from the latest 20 valid calls per recently
+  used model and compare it with the preceding window. History survives EMP
+  restarts, and OpenAI speed modes appear only after a Fast request is actually
+  observed. EMP also shows observed
   success, 429, 502, 503, and 504 rates without storing prompt or response
   content.
 - Export and import password-protected `.emp` migration files.
@@ -63,7 +65,7 @@ check proves only the observed model ID set, not that endpoints, display names,
 or every other startup setting were hot-reloaded. This live probe is verified
 on Linux for this release; macOS and Windows remain unverified for this path.
 
-EMP supports Codex CLI `0.149.x` through `0.152.x`; `0.152.x` is recommended.
+EMP supports Codex CLI `0.149.x` through `0.153.x`; `0.153.4` is recommended.
 The Web UI shows the installed version and marks newer versions as not yet
 verified or older versions as unsupported.
 
@@ -157,7 +159,7 @@ environment variable or manual key-generation command is required.
 
 ### `.emp` version compatibility
 
-EMP v0.9.0 through v0.9.7 use the same encrypted migration format. A current
+EMP v0.9.0 through v0.9.8 use the same encrypted migration format. A current
 EMP can import files exported by any of those versions, and the complete
 v0.9.0-v0.9.7 cross-version matrix preserves accounts and credentials,
 Providers and API keys, models, and model display aliases. Use the same or a

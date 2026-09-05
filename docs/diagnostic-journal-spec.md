@@ -66,7 +66,8 @@ Lifecycle:
 
 HTTP management surface:
 
-- method, query-free path, status, request byte count, and duration;
+- one random correlation ID joins a request-start record with its terminal
+  method, query-free path, status, request byte count, and duration record;
 - dynamic account path segments are replaced by the constant `{account}`;
 - no request/response body and no client headers;
 - unexpected handler errors include only stage/path/exception class.
@@ -74,6 +75,8 @@ HTTP management surface:
 Routing and reliability:
 
 - persist the already-normalized `ObservationRing` record for each route;
+- assign each observation a random content-free ID so disk/in-memory copies can
+  be joined without collapsing distinct calls that share a timestamp;
 - provider/model safe IDs, endpoint fingerprint, deployment identity;
 - selected/resolved protocol, dialect, transport and fallback/retry decision;
 - HTTP status/error class, duration and request/response byte counts;
@@ -84,6 +87,26 @@ Routing and reliability:
 - context estimate/limit/reserve/confidence/source and allow/warn/block result;
 - never persist the original request, SSE events, WebSocket frames, response
   text, image URLs/base64, or tool payloads.
+- record content-free downstream/upstream WebSocket phases so an in-flight hang
+  can be located before a terminal route observation exists: local upgrade,
+  client message, upstream handshake, send, first event, terminal, and close.
+- accept only fixed browser integration phase/failure classes from the
+  authenticated local UI; never accept an exception message, stack, URL, DOM
+  content, or arbitrary browser field.
+
+Performance schema 2 measures TTFT from EMP dispatch to the first nonempty text,
+refusal or tool-argument delta. Empty items, reasoning summaries and done-only
+buffered output are not first-token samples. TPS estimates per-request delivery
+speed as `(output_tokens - reasoning_tokens - 1) / (last_delta - first_delta)`;
+it requires a completed stream, an explicit reasoning breakdown, a positive token
+count and at least 500 ms between output deltas. Terminal-event waiting is excluded.
+SSE JSON is buffered transiently up to 1 MiB per event and cleared on stream close;
+oversize/malformed measurements suppress TPS without altering forwarded bytes.
+No output content is persisted. Chunk batching means this is an observed estimate,
+not a measurement of GPU generation or proof that EMP caused a slowdown.
+Older schema observations remain available for health/history, but do not enter
+current speed aggregates. See the [NVIDIA metric definitions](https://docs.nvidia.com/nim/benchmarking/llm/1.0.0/metrics.html)
+for the distinction between TTFT, per-user token speed and system throughput.
 
 Low-frequency management operations should record only outcome metadata:
 
@@ -127,6 +150,9 @@ emitted for a disabled journal.
   managed log parts, aggregates at most 512 across runs, and returns only safe
   health/model summaries plus the latest 64 normalized request facts. It never
   returns raw JSONL records or conversation content.
+- Speed summaries use at most the latest 20 successful samples per model and
+  speed mode within seven days, plus the preceding 20-sample comparison window.
+  The retained route history remains cross-run and bounded independently.
 
 ## Current-checkout implementation map
 
@@ -183,6 +209,12 @@ third-party logs, redirect stdout/stderr, or change request retry, WebSocket,
 compaction, authentication, catalog, or integration behavior.
 
 ## Acceptance tests
+
+History lookup emits `history_lookup` with per-run pseudonyms for the task,
+turn, and Codex home, plus source, result/reason, fallback and anchor status.
+No raw task IDs, paths or history content are recorded. Background updates emit
+`update_state` with state, version and a fixed result class, including rollback
+on the recovered process. Download URLs and release payloads are not logged.
 
 1. One serve run creates a uniquely named JSONL run file under `state/logs`.
 2. Every line is valid JSON with required run/timestamp/sequence/event fields.

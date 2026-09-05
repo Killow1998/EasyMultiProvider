@@ -255,6 +255,30 @@
   "models": [
     {
       "provider_key": "openai",
+      "model_id": "gpt-6-astra",
+      "display_name": "GPT-6 Astra",
+      "reviewed_at": "2026-09-04",
+      "context_window": 1050000,
+      "max_input_tokens": 922000,
+      "max_output_tokens": 128000,
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "supports_reasoning": true,
+      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_control": "reasoning.effort enum: low, medium, high, xhigh, max",
+      "tool_calling": true,
+      "parallel_tool_calling": null,
+      "structured_output": true,
+      "streaming": true,
+      "web_search": true,
+      "protocols": ["responses", "chat_completions"],
+      "aliases": [],
+      "sources_by_field": {
+        "all": ["https://developers.openai.com/api/docs/models/gpt-6-astra"]
+      }
+    },
+    {
+      "provider_key": "openai",
       "model_id": "gpt-5.6-sol",
       "display_name": "GPT-5.6 Sol",
       "context_window": 1050000,

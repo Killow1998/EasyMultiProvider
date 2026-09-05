@@ -1272,8 +1272,8 @@ class ServerAccountTests(unittest.TestCase):
         self.assertNotIn("SOL 原生参考", html)
         self.assertNotIn("TTFT 慢于参考", html)
         self.assertNotIn("TPS 低于参考", html)
-        self.assertIn("从发出请求到模型开始返回内容的时间", html)
-        self.assertIn("平均每秒生成的回答 token 数", html)
+        self.assertIn("到收到首段正文或工具参数的时间", html)
+        self.assertIn("输出期间每秒接收的 token 数估计", html)
         self.assertIn("本地排队超限", html)
         self.assertNotIn("不保存消息内容、响应内容或凭据", html)
         self.assertIn("diagnosticsContextLabel", html)
@@ -1880,6 +1880,7 @@ class ServerAccountTests(unittest.TestCase):
         self.assertLessEqual(len(snapshot["records"]), 3)
         self.assertTrue(snapshot["records"])
         expected = {
+            "observation_id",
             "observed_at",
             "route",
             "provider_id",
@@ -1909,6 +1910,7 @@ class ServerAccountTests(unittest.TestCase):
             "local_prepare_ms",
             "upstream_first_event_ms",
             "ttft_ms",
+            "performance_schema",
             "upstream_first_token_ms",
             "generation_ms",
             "output_tokens",
@@ -1991,9 +1993,20 @@ class ServerAccountTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual(
                     set(payload),
-                    {"capacity", "sample_count", "records", "health", "models"},
+                    {
+                        "capacity",
+                        "sample_count",
+                        "records",
+                        "health",
+                        "performance_window",
+                        "models",
+                    },
+                )
+                self.assertEqual(
+                    payload["performance_window"], {"calls": 20, "days": 7}
                 )
                 self.assertEqual(set(payload["records"][0]), {
+                    "observation_id",
                     "observed_at",
                     "route",
                     "provider_id",
@@ -2023,6 +2036,7 @@ class ServerAccountTests(unittest.TestCase):
                     "local_prepare_ms",
                     "upstream_first_event_ms",
                     "ttft_ms",
+            "performance_schema",
                     "upstream_first_token_ms",
                     "generation_ms",
                     "output_tokens",
@@ -2114,8 +2128,8 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(records[0]["status"], 200)
             self.assertIsNotNone(records[0]["ttft_ms"])
             self.assertEqual(records[0]["output_tokens"], 1)
-            self.assertGreaterEqual(records[0]["generation_ms"], 500)
-            self.assertGreater(records[0]["tokens_per_second"], 0)
+            self.assertEqual(records[0]["generation_ms"], 0)
+            self.assertIsNone(records[0]["tokens_per_second"])
             self.assertEqual(records[1]["error_class"], "stream_error")
             self.assertEqual(records[1]["status"], 502)
             self.assertEqual(records[2]["error_class"], "client_disconnect")
@@ -2886,6 +2900,9 @@ class ServerAccountTests(unittest.TestCase):
                 def serve_forever(self):
                     raise _GracefulShutdown()
 
+                def shutdown(self):
+                    pass
+
                 def server_close(self):
                     self.closed = True
 
@@ -2942,6 +2959,9 @@ class ServerAccountTests(unittest.TestCase):
 
                 def serve_forever(self):
                     raise _GracefulShutdown()
+
+                def shutdown(self):
+                    pass
 
                 def server_close(self):
                     pass
@@ -4269,6 +4289,9 @@ class ContinuityAppStateTests(unittest.TestCase):
         class FailingNativeBridge:
             connection_key = None
             last_connection_reused = False
+
+            def __init__(self, observer=None):
+                self.observer = observer
 
             def events(self, target, payload):
                 yield {

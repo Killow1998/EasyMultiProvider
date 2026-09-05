@@ -184,6 +184,21 @@ class QuotaTests(unittest.TestCase):
         self.assertEqual(value["plan_type"], "plus")
         self.assertEqual(value["rate_limits"]["primary"]["usedPercent"], 21)
 
+    def test_multi_bucket_snapshot_and_partial_notification_stay_consistent(self):
+        output = '\n'.join(json.dumps(message) for message in [
+            {"id": 1, "result": {"rateLimits": {"primary": {"usedPercent": 99}},
+                "rateLimitsByLimitId": {
+                    "codex": {"primary": {"usedPercent": 20}},
+                    "other": {"primary": {"usedPercent": 40}},
+                }}},
+            {"method": "account/rateLimits/updated", "params": {
+                "rateLimits": {"limitId": "codex", "primary": {"usedPercent": 21}}}},
+        ])
+        parsed = parse_app_server_output(output)
+        self.assertEqual(parsed["rate_limits"]["primary"]["usedPercent"], 21)
+        self.assertEqual(parsed["rate_limits_by_limit_id"]["other"]["primary"]["usedPercent"], 40)
+        self.assertEqual(parsed["rate_limits_by_limit_id"]["codex"], parsed["rate_limits"])
+
     def test_quota_process_is_pinned_to_account_directory(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             account_dir = Path(directory) / "primary"

@@ -955,36 +955,57 @@ class CodexRuntimeController:
         return TargetedCodexHostStopper(Path(self.target_codex_home))
 
     def _windows_app_codex_executable(self) -> Optional[str]:
-        local_app_data = self._windows_local_app_data
-        if local_app_data is None:
-            return None
-        runtime_root = local_app_data.joinpath(*_WINDOWS_APP_RUNTIME_PARTS)
-        try:
-            resolved_root = runtime_root.resolve(strict=True)
-            entries = tuple(runtime_root.iterdir())
-        except (OSError, RuntimeError):
-            return None
-        if len(entries) > _MAX_WINDOWS_APP_RUNTIMES:
+        if platform.system() != "Windows":
             return None
 
+        # The unified ChatGPT desktop app publishes its active Codex runtime at
+        # this exact path. Fresh installs may have no legacy build directory
+        # under LOCALAPPDATA yet.
+        if self.target_codex_home is not None:
+            plugin_runtime = (
+                Path(self.target_codex_home)
+                / "plugins"
+                / ".plugin-appserver"
+                / "codex.exe"
+            )
+            executable = self._runtime_file(plugin_runtime)
+            if executable is not None:
+                return executable
+
         candidates = []
-        for entry in entries:
-            candidate = entry / "codex.exe"
+        local_app_data = self._windows_local_app_data
+        if local_app_data is not None:
+            runtime_root = local_app_data.joinpath(*_WINDOWS_APP_RUNTIME_PARTS)
             try:
-                resolved = candidate.resolve(strict=True)
-                if (
-                    not candidate.is_file()
-                    or candidate.is_symlink()
-                    or resolved.parent.parent != resolved_root
-                ):
-                    continue
-                candidates.append((candidate.stat().st_mtime_ns, str(resolved)))
+                resolved_root = runtime_root.resolve(strict=True)
+                entries = tuple(runtime_root.iterdir())
             except (OSError, RuntimeError):
-                continue
+                entries = ()
+                resolved_root = None
+            if len(entries) <= _MAX_WINDOWS_APP_RUNTIMES and resolved_root is not None:
+                # Current builds can place codex.exe directly in bin. Older
+                # builds use one build-identity directory below it.
+                locations = (runtime_root / "codex.exe",) + tuple(
+                    entry / "codex.exe" for entry in entries if entry.is_dir()
+                )
+                for candidate in locations:
+                    executable = self._runtime_file(candidate)
+                    if executable is None:
+                        continue
+                    try:
+                        resolved = Path(executable)
+                        if (
+                            resolved.parent != resolved_root
+                            and resolved.parent.parent != resolved_root
+                        ):
+                            continue
+                        candidates.append((resolved.stat().st_mtime_ns, executable))
+                    except (OSError, RuntimeError):
+                        continue
         if not candidates:
             return None
-        # Codex App stores each runtime below a build-identity directory. Prefer
-        # the most recently installed direct child when several builds remain.
+        # Prefer the most recently installed known App runtime when several
+        # layouts or builds remain.
         return max(candidates, key=lambda item: (item[0], item[1]))[1]
 
     @staticmethod
@@ -1016,6 +1037,20 @@ class CodexRuntimeController:
                     return str(candidate)
             except OSError:
                 continue
+        return None
+
+    def _mac_app_codex_executable(self) -> Optional[str]:
+        if platform.system() != "Darwin":
+            return None
+        # Read the signed app's actual binary, not a standalone package or
+        # models_cache.json version left behind by a previous installation.
+        for root in (self._runtime_user_home / "Applications", Path("/Applications")):
+            for name in ("ChatGPT.app", "Codex.app"):
+                executable = self._runtime_file(root / name / "Contents" / "Resources" / "codex")
+                if executable is not None:
+                    return executable
+        if self.target_codex_home is not None:
+            return self._runtime_file(Path(self.target_codex_home) / "plugins" / ".plugin-appserver" / "codex")
         return None
 
     def _editor_codex_executable(self, extensions_root: Path) -> Optional[str]:
@@ -1073,10 +1108,12 @@ class CodexRuntimeController:
                     "configured", "Configured Codex", self._configured_codex_executable
                 )
             )
-        windows_app = self._windows_app_codex_executable()
-        if windows_app:
+        app_executable = self._windows_app_codex_executable() or self._mac_app_codex_executable()
+        if app_executable:
             candidates.append(
-                CodexRuntimeCandidate("codex_app", "Codex App", windows_app)
+                CodexRuntimeCandidate(
+                    "codex_app", "ChatGPT App (Codex)", app_executable
+                )
             )
         managed = self._codex_home_managed_executable()
         if managed:

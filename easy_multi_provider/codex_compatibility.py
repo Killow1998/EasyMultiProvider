@@ -13,10 +13,11 @@ from typing import Any, Dict, Optional, Tuple
 
 
 SUPPORTED_MIN = (0, 149)
-SUPPORTED_MAX = (0, 152)
-RECOMMENDED = (0, 152)
-SUPPORTED_RANGE_LABEL = "0.149.x–0.152.x"
-RECOMMENDED_LABEL = "0.152.x"
+SUPPORTED_MAX = (0, 153)
+RECOMMENDED = (0, 153)
+RECOMMENDED_PATCH = 4
+SUPPORTED_RANGE_LABEL = "0.149.x–0.153.x"
+RECOMMENDED_LABEL = "0.153.4"
 
 _VERSION_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_.])v?(\d{1,4})\.(\d{1,4})\.(\d{1,6})"
@@ -54,7 +55,7 @@ def classify_codex_version(output: str) -> CodexCompatibility:
         status = "unverified"
     elif release_line > SUPPORTED_MAX:
         status = "unverified"
-    elif release_line == RECOMMENDED:
+    elif release_line == RECOMMENDED and patch >= RECOMMENDED_PATCH:
         status = "recommended"
     else:
         status = "supported"

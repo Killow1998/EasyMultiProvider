@@ -52,6 +52,43 @@ class _GatewayFailure(Exception):
 
 
 class NativeWebSocketTests(unittest.TestCase):
+    def test_bridge_reports_sanitized_transport_phases(self):
+        phases = []
+        connection = _FakeConnection(
+            [
+                {"type": "response.output_text.delta", "delta": "private output"},
+                {
+                    "type": "response.completed",
+                    "response": {"id": "resp_1", "status": "completed"},
+                },
+            ]
+        )
+        target = NativeWebSocketTarget(
+            "wss://private.example/responses",
+            {"Authorization": "Bearer private-token"},
+            "private-route",
+        )
+        bridge = NativeWebSocketBridge(
+            lambda _target: connection,
+            observer=lambda phase, **fields: phases.append((phase, fields)),
+        )
+
+        list(bridge.events(target, {"type": "response.create", "input": "secret"}))
+
+        self.assertEqual(
+            [phase for phase, _ in phases],
+            [
+                "upstream_handshake_started",
+                "upstream_handshake_accepted",
+                "upstream_request_sent",
+                "upstream_first_event_received",
+                "upstream_terminal_received",
+            ],
+        )
+        self.assertEqual(phases[1][1]["status"], 101)
+        self.assertGreater(phases[2][1]["request_bytes"], 0)
+        self.assertNotIn("private", json.dumps(phases))
+
     def test_large_request_requires_compressed_client(self):
         self.assertTrue(
             native_websocket_request_fits(

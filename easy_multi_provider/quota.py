@@ -360,6 +360,27 @@ def parse_app_server_output(output: str) -> Dict[str, Any]:
     account = {}
     rate_limits = None
     rate_limits_result = {}
+    buckets = {}
+
+    def read_limits(payload):
+        nonlocal rate_limits, rate_limits_result, buckets
+        if not isinstance(payload, dict):
+            return
+        by_id = payload.get("rateLimitsByLimitId")
+        if isinstance(by_id, dict):
+            current = {key: value for key, value in by_id.items()
+                       if isinstance(key, str) and key and isinstance(value, dict)}
+            if current:
+                buckets = current
+                rate_limits = buckets.get("codex", next(iter(buckets.values())))
+                rate_limits_result = payload
+                return
+        candidate = payload.get("rateLimits")
+        if isinstance(candidate, dict):
+            limit_id = candidate.get("limitId") or candidate.get("limit_id") or "codex"
+            buckets[str(limit_id)] = candidate
+            rate_limits = buckets.get("codex", candidate)
+            rate_limits_result = payload
     for line in output.splitlines():
         try:
             message = json.loads(line)
@@ -369,24 +390,10 @@ def parse_app_server_output(output: str) -> Dict[str, Any]:
         if isinstance(result, dict):
             if isinstance(result.get("account"), dict):
                 account = result["account"]
-            candidate = result.get("rateLimits")
-            if not isinstance(candidate, dict):
-                by_limit_id = result.get("rateLimitsByLimitId")
-                candidate = (
-                    by_limit_id.get("codex")
-                    if isinstance(by_limit_id, dict)
-                    else None
-                )
-            if isinstance(candidate, dict):
-                rate_limits = candidate
-                rate_limits_result = result
+            read_limits(result)
 
         if message.get("method") == "account/rateLimits/updated":
-            params = message.get("params")
-            candidate = params.get("rateLimits") if isinstance(params, dict) else None
-            if isinstance(candidate, dict):
-                rate_limits = candidate
-                rate_limits_result = params
+            read_limits(message.get("params"))
     if rate_limits is None:
         raise QuotaError("Codex did not return account rate limits")
     return {
@@ -399,6 +406,7 @@ def parse_app_server_output(output: str) -> Dict[str, Any]:
             else None
         ),
         "rate_limits": rate_limits,
+        "rate_limits_by_limit_id": buckets,
         "credits": _safe_credit_snapshot(rate_limits, rate_limits_result),
         "updated_at": int(time.time()),
     }

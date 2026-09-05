@@ -323,6 +323,9 @@ def _safe_error_message(error: BaseException) -> str:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
+    if len(raw_args) == 2 and raw_args[0] == "--emp-apply-update":
+        from .self_update import run_update_worker
+        return run_update_worker(raw_args[1])
     if not raw_args and bool(getattr(sys, "frozen", False)):
         raw_args = [
             "serve",

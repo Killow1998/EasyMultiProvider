@@ -5,8 +5,8 @@ on:
     inputs:
       release_tag:
         description: >-
-          Optional exact source tag (for example v0.9.7); publishes a
-          Pre-release
+          Optional exact source tag (for example v0.9.8); publishes a
+          stable Release
         required: false
         default: ""
         type: string
@@ -78,6 +78,11 @@ jobs:
       - name: Build and smoke-test native package
         run: uv run --frozen --group package python packaging/build.py
 
+      - name: Verify native background update and rollback
+        env:
+          EMP_PACKAGE_UPDATE_SMOKE: "1"
+        run: uv run --frozen --group package python -m unittest tests.test_packaged_self_update -v
+
       - name: Upload package artifacts
         uses: actions/upload-artifact@v7.0.1
         with:
@@ -87,7 +92,7 @@ jobs:
           retention-days: 14
 
   release:
-    name: Publish Pre-release
+    name: Publish Release
     if: >-
       ${{ (github.event_name == 'workflow_dispatch' &&
            github.ref == 'refs/heads/main' &&
@@ -143,7 +148,7 @@ jobs:
             fi
           fi
 
-      - name: Publish Pre-release
+      - name: Publish Release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: >-
@@ -177,5 +182,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "EMP $RELEASE_TAG" \
             --generate-notes \
-            --prerelease \
-            --latest=false
+            --latest

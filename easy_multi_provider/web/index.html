@@ -10,7 +10,7 @@
 @media(prefers-color-scheme:light){:root:not([data-theme="dark"]){color-scheme:light;--bg:#f5f6f8;--panel:#fff;--panel-soft:#f8f9fb;--input:#fff;--text:#202632;--muted:#667284;--border:#e0e4ea;--border-strong:#c4cbd5;--accent:#2867d7;--accent-hover:#1f59bd;--accent-soft:#eaf1fc;--secondary-hover:#f0f2f5;--danger:#b94141;--danger-soft:#fff1f1;--danger-text:#a73535;--warning:#a66a18;--warning-soft:#fff7e8;--success:#2f7d48;--code:#285fae}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-size:14px}main{max-width:1120px;margin:auto;padding:24px 18px 40px}
 h1{margin:0 0 2px;font-size:23px;letter-spacing:-.01em}h2{font-size:16px;margin:0 0 10px}h3{font-size:14px;margin:0 0 8px}p{color:var(--muted);margin:4px 0 14px}.brand-title{display:flex;align-items:baseline;gap:7px}.brand-version{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
-.page-header{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;padding-bottom:12px;border-bottom:1px solid var(--border)}.page-header-controls{display:flex;gap:6px;align-items:center}.page-header-controls select{width:auto;min-width:98px;padding:6px 28px 6px 8px}.page-utilities{justify-content:flex-end;margin:8px 0 14px}
+.page-header{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;padding-bottom:12px;border-bottom:1px solid var(--border)}.page-header-controls{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.page-header-controls select{width:auto;min-width:98px;padding:6px 28px 6px 8px}.page-header-controls button{margin:0;font-weight:400}.repo-link{display:inline-flex;align-items:center;padding:6px 10px;border:1px solid var(--border-strong);border-radius:4px;color:var(--text);text-decoration:none;font-size:13px}.repo-link:hover{background:var(--secondary-hover)}.update-progress{width:100%;height:8px;accent-color:var(--accent);margin-top:12px}.page-utilities{justify-content:flex-end;margin:8px 0 14px}
 section{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:16px;margin:12px 0}
 .toolbar{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}.toolbar button{margin:0}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.wide{grid-column:1/-1}
@@ -40,8 +40,8 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 .integration-card{border:1px solid var(--border);border-radius:4px;padding:13px}.integration-card-header{display:flex;align-items:center;gap:7px}.integration-card-header h3{margin:0}.integration-card[data-state="conflict"]{border-left:3px solid var(--danger)}.integration-card[data-state="active"]{border-left:3px solid var(--success)}.integration-card[data-state="prepared"],.integration-card[data-state="restoring"]{border-left:3px solid var(--warning)}
 .display-list{border:1px solid var(--border);border-radius:4px;overflow:hidden}.display-row{display:grid;grid-template-columns:minmax(180px,1.25fr) minmax(160px,1fr) auto auto auto;gap:9px;align-items:center;padding:9px;border-bottom:1px solid var(--border)}.display-row:last-child{border-bottom:0}.display-row .route{min-width:0}.display-row .route code{display:block;overflow:hidden;text-overflow:ellipsis}.display-row label{margin:0}.inline-check{display:flex;align-items:center;gap:6px;white-space:nowrap}.inline-check input{width:auto}.section-tools{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px}.section-tools input{max-width:300px}.section-tools .spacer{flex:1}
 .modal-backdrop{position:fixed;inset:0;background:rgba(6,9,14,.58);display:flex;align-items:center;justify-content:center;padding:18px;z-index:20}.modal-backdrop.hidden{display:none}.modal{width:min(760px,100%);max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 16px 48px rgba(0,0,0,.32);padding:18px}.modal-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.modal-header h2{margin:0}.modal-close{background:transparent;border-color:transparent;color:var(--muted);font-size:22px;line-height:1;padding:1px 6px;margin:0}.modal-close:hover{color:var(--text);background:var(--secondary-hover);border-color:var(--border)}.modal-status{margin-top:10px;color:var(--danger-text)}.modal-status:empty{display:none}.modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:14px}.modal-actions button{margin:0}.choice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.choice{display:block;text-align:left;background:transparent;border:1px solid var(--border);border-radius:4px;padding:11px;color:var(--text);font-weight:400}.choice:hover{background:var(--secondary-hover);border-color:var(--border-strong)}.choice strong{display:block}.choice small{display:block;color:var(--muted);margin-top:3px}
-.quota-ranges{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px}.quota-ranges button{margin:0}.quota-ranges button.active{background:var(--accent);color:#fff;border-color:var(--accent)}.quota-chart{width:100%;min-height:250px;border:1px solid var(--border);border-radius:4px;background:var(--panel-soft);padding:7px}.quota-chart svg{display:block;width:100%;height:auto}.quota-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:12px}.quota-legend span{display:inline-flex;align-items:center;gap:5px}.quota-swatch{width:9px;height:9px;border-radius:50%}.quota-empty{display:grid;place-items:center;min-height:220px;color:var(--muted)}
-.performance-help{border:1px solid var(--border);border-radius:4px;padding:9px 10px;margin:8px 0 12px;background:var(--panel-soft);color:var(--muted);font-size:12px}.performance-help span{display:block}.performance-help strong{color:var(--text)}.health-grid{display:grid;grid-template-columns:repeat(3,minmax(90px,1fr));gap:8px;margin:10px 0 14px}.health-stat{border:1px solid var(--border);border-radius:4px;padding:8px 10px;background:var(--panel)}.health-stat span{display:block;color:var(--muted);font-size:11px}.health-stat strong{display:block;margin-top:2px;font-size:18px;font-weight:650}.health-stat small{color:var(--muted);font-size:10px}.performance-table{overflow:auto}.performance-table table{min-width:560px}.diagnostics-details{margin-top:14px;border-top:1px solid var(--border);padding-top:10px}.diagnostics-details summary{cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:8px}
+.quota-ranges{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px}.quota-ranges button{margin:0}.quota-ranges button.active{background:var(--accent);color:#fff;border-color:var(--accent)}.quota-chart{width:100%;min-height:250px;border:1px solid var(--border);border-radius:4px;background:var(--panel-soft);padding:7px}.quota-chart svg{display:block;width:100%;height:auto}.quota-legend{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;font-size:12px}.quota-legend span{display:inline-flex;align-items:center;gap:5px}.quota-swatch{width:9px;height:9px;border-radius:50%}.quota-empty{display:grid;place-items:center;min-height:220px;color:var(--muted)}
+.performance-help{border:1px solid var(--border);border-radius:4px;padding:9px 10px;margin:8px 0 12px;background:var(--panel-soft);color:var(--muted);font-size:12px}.performance-help span{display:block}.performance-help strong{color:var(--text)}.health-grid{display:grid;grid-template-columns:repeat(3,minmax(90px,1fr));gap:8px;margin:10px 0 14px}.health-stat{border:1px solid var(--border);border-radius:4px;padding:8px 10px;background:var(--panel)}.health-stat span{display:block;color:var(--muted);font-size:11px}.health-stat strong{display:block;margin-top:2px;font-size:18px;font-weight:650}.health-stat small{color:var(--muted);font-size:10px}.performance-table{overflow:auto}.performance-table table{min-width:620px}.metric-trend{display:inline-block;margin-left:4px;font-size:11px;font-weight:650}.metric-trend.good{color:var(--success)}.metric-trend.bad{color:var(--danger)}.diagnostics-details{margin-top:14px;border-top:1px solid var(--border);padding-top:10px}.diagnostics-details summary{cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:8px}
 main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(470px,.88fr);gap:12px;align-items:start}.workspace-column>section,.workspace-side>section{margin:12px 0}.workspace-side{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto}.integration-actions{display:grid;gap:8px;margin-top:10px}.action-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.action-group-label{width:68px;color:var(--muted);font-size:12px}.search-toggle{padding-top:8px;border-top:1px solid var(--border)}
 .display-row{grid-template-columns:minmax(150px,1.15fr) minmax(130px,1fr) auto auto}.quota-battery-fill{animation:none}.quota-meter.is-updated .quota-battery-fill{animation:quota-level-in .5s ease-out both}
 .quota-chart{position:relative}.quota-hover-target{fill:transparent;pointer-events:all}.quota-chart-guide{stroke:var(--border-strong);stroke-dasharray:3 3}.quota-chart-point{stroke:var(--panel-soft);stroke-width:2}.quota-chart-tooltip{position:absolute;z-index:2;max-width:260px;padding:6px 8px;border:1px solid var(--border-strong);border-radius:4px;background:var(--panel);box-shadow:0 3px 12px rgba(0,0,0,.18);font-size:12px;pointer-events:none;transform:translate(-50%,calc(-100% - 8px));white-space:nowrap}.quota-chart-tooltip[hidden]{display:none}
@@ -56,6 +56,8 @@ main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minma
 <header class="page-header">
   <div><div class="brand-title"><h1>EMP</h1><span id="emp_version" class="brand-version"></span></div><p data-i18n="subtitle">管理 Codex 的账号和模型。</p></div>
   <div class="page-header-controls">
+    <button type="button" class="secondary" data-icon="download" onclick="openUpdate()" data-i18n="check_update">检查更新</button>
+    <a class="repo-link" href="https://github.com/Killow1998/EasyMultiProvider" target="_blank" rel="noopener noreferrer">GitHub</a>
     <select id="language_select" aria-label="Language" onchange="setLanguage(this.value)"><option value="zh-CN">中文</option><option value="en">English</option></select>
     <select id="theme_select" aria-label="Theme" onchange="setTheme(this.value)"><option value="system" data-i18n="theme_system">跟随系统</option><option value="light" data-i18n="theme_light">浅色</option><option value="dark" data-i18n="theme_dark">深色</option></select>
   </div>
@@ -132,6 +134,7 @@ let editingModelId = '';
 let activeQuotaAccountId = '';
 let activeQuotaRange = '1d';
 let quotaHistoryTimer = null;
+let quotaHistoryRequest = 0;
 let quotaStateTimer = null;
 let quotaStateBusy = false;
 let catalogDisplayExpanded = false;
@@ -141,6 +144,7 @@ const refreshErrors = {};
 const refreshingAccounts = new Set();
 const quotaAnimationAccounts = new Set();
 const integrationVerificationAttempts = new Set();
+const webPageId = `${Date.now().toString(36)}-${Math.random().toString(16).slice(2,10)}`;
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const translations = {
@@ -153,6 +157,7 @@ const translations = {
 };
 Object.assign(translations['zh-CN'], {client_scope:'客户端', emp_scope:'EMP', search_scope:'工具'});
 Object.assign(translations.en, {client_scope:'Clients', emp_scope:'EMP', search_scope:'Tools'});
+translations['zh-CN'].check_update = '检查更新'; translations.en.check_update = 'Check updates';
 let language = 'zh-CN';
 function storedPreference(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch (_) { return fallback; } }
 function savePreference(key, value) { try { localStorage.setItem(key, value); } catch (_) {} }
@@ -212,6 +217,23 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+function webFailureClass(error) {
+  const message = String(error?.message || '').toLowerCase();
+  if (error?.status) return 'http_error';
+  if (message.includes('failed to fetch') || message.includes('network')) return 'network';
+  if (message.includes('null') || message.includes('undefined') || message.includes('not a function')) return 'missing_element';
+  if (error?.name === 'SyntaxError') return 'syntax_error';
+  if (error?.name === 'TypeError') return 'type_error';
+  return 'unknown';
+}
+function reportWebClientPhase(kind, phase, error = null, extra = {}) {
+  const payload = Object.assign({kind, phase, page_id:webPageId, failure_class:error ? webFailureClass(error) : 'none'}, extra);
+  fetch('/api/client-events', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), keepalive:true}).catch(() => {});
+}
+if (typeof window?.addEventListener === 'function') {
+  window.addEventListener('error', event => reportWebClientPhase('window_error', 'failed', event.error || new Error('window error'), {line:Number(event.lineno)||0,column:Number(event.colno)||0}));
+  window.addEventListener('unhandledrejection', event => reportWebClientPhase('unhandled_rejection', 'failed', event.reason instanceof Error ? event.reason : new Error('unhandled rejection')));
 }
 function bytesToBase64(bytes) { let binary = ''; const chunk = 0x8000; for (let index = 0; index < bytes.length; index += chunk) binary += String.fromCharCode(...bytes.subarray(index, index + chunk)); return btoa(binary); }
 async function exportMigration() {
@@ -346,7 +368,21 @@ async function saveSubscriptionSearch() {
 function fill() {
   applyTranslations(); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
 }
-async function load() { applyPreferences(); try { state = await api('/api/config'); fill(); if (quotaStateTimer === null) quotaStateTimer = setInterval(refreshQuotaState, 60 * 1000); if (await loadIntegration()) notice(language === 'en' ? 'Configuration loaded' : '配置已加载'); } catch (error) { notice(error.message, true); } }
+async function load() {
+  applyPreferences();
+  try {
+    state = await api('/api/config');
+    const integration = loadIntegration();
+    let renderError = null;
+    try {
+      fill();
+      if (quotaStateTimer === null) quotaStateTimer = setInterval(refreshQuotaState, 60 * 1000);
+    } catch (error) { renderError = error; }
+    const loaded = await integration;
+    if (renderError) { reportWebClientPhase('window_error', 'failed', renderError); throw renderError; }
+    if (loaded) notice(language === 'en' ? 'Configuration loaded' : '配置已加载');
+  } catch (error) { notice(error.message, true); }
+}
 function renderIntegration(info) {
   const configuration = info.configuration || {};
   const runtime = info.runtime || {};
@@ -385,7 +421,7 @@ function renderIntegration(info) {
   $('integration_reload').disabled = !runtime.action_required || runtimeState === 'unsupported';
 }
 function runtimeSourceLabel(source) {
-  return ({codex_app:'Codex App',managed:tr('Codex 托管 runtime','Managed Codex runtime'),vscode:tr('VS Code Codex 插件','VS Code Codex plugin'),vscode_insiders:tr('VS Code Insiders Codex 插件','VS Code Insiders Codex plugin'),cursor:tr('Cursor Codex 插件','Cursor Codex plugin'),configured:tr('指定 Codex','Configured Codex'),path_cli:'Codex CLI'}[source] || tr('Codex runtime','Codex runtime'));
+  return ({codex_app:tr('ChatGPT App（Codex）','ChatGPT App (Codex)'),managed:tr('Codex 托管 runtime','Managed Codex runtime'),vscode:tr('VS Code Codex 插件','VS Code Codex plugin'),vscode_insiders:tr('VS Code Insiders Codex 插件','VS Code Insiders Codex plugin'),cursor:tr('Cursor Codex 插件','Cursor Codex plugin'),configured:tr('指定 Codex','Configured Codex'),path_cli:'Codex CLI'}[source] || tr('Codex runtime','Codex runtime'));
 }
 function renderCodexRuntimes(compatibility) {
   const runtimes = Array.isArray(compatibility.runtimes) ? compatibility.runtimes : [];
@@ -435,6 +471,7 @@ async function scanCodexRuntimes() {
   finally { $('codex_runtime_scan').disabled = false; }
 }
 async function loadIntegration() {
+  const started = Date.now();
   try {
     let info = await api('/api/integration');
     const configuration = info.configuration || {};
@@ -447,8 +484,10 @@ async function loadIntegration() {
       catch (_) {}
     }
     renderIntegration(info);
+    reportWebClientPhase('integration_load', 'render_completed', null, {duration_ms:Date.now()-started,http_status:200});
     return info;
   } catch (error) {
+    reportWebClientPhase('integration_load', 'failed', error, {duration_ms:Date.now()-started,http_status:Number(error.status)||0});
     renderIntegration({configuration:{state:'unavailable', stale:true},runtime:{state:'not_checked'},error:{message:error.message}});
     notice(error.message, true);
     return false;
@@ -461,6 +500,7 @@ function diagnosticsErrorLabel(value) { const labels = language === 'en' ? {rate
 function performanceNumber(value) { if (value === null || value === undefined || value === '') return null; const number = Number(value); return Number.isFinite(number) && number >= 0 ? number : null; }
 function performanceMode(value) { return value === 'fast' ? 'Fast' : (value === 'standard' ? tr('普通','Standard') : '—'); }
 function performanceRate(value) { const number = performanceNumber(value); return number == null ? '—' : number.toFixed(1) + '%'; }
+function performanceTrend(value, kind) { const change = performanceNumber(Math.abs(Number(value))); if (value === null || value === undefined || change == null || Number(value) === 0) return ''; const improved = Number(value) > 0; const arrow = kind === 'ttft' ? (improved ? '↓' : '↑') : (improved ? '↑' : '↓'); const title = kind === 'ttft' ? tr('与此前样本相比的首字延迟变化','First-token latency change from the previous window') : tr('与此前样本相比的生成速度变化','Generation speed change from the previous window'); return `<span class="metric-trend ${improved ? 'good' : 'bad'}" title="${esc(title)}">${arrow}${change.toFixed(1)}%</span>`; }
 function renderDiagnostics(payload) {
   const records = Array.isArray(payload.records) ? payload.records : [];
   const models = Array.isArray(payload.models) ? payload.models : [];
@@ -469,12 +509,13 @@ function renderDiagnostics(payload) {
   $('diagnostics_summary').textContent = healthSamples ? tr(`最近 ${healthSamples} 次请求的运行情况`,`Health across the latest ${healthSamples} requests`) : tr('完成几次模型调用后，这里会显示汇总结果。','Aggregates appear here after a few model calls.');
   $('health_summary').innerHTML = healthSamples ? `<div class="health-grid"><div class="health-stat"><span>${tr('成功率','Success rate')}</span><strong>${performanceRate(health.success_rate)}</strong><small>${Number(health.success_count || 0).toLocaleString()} / ${Number(health.sample_count || 0).toLocaleString()}</small></div><div class="health-stat"><span>429</span><strong>${performanceRate(health.status_429_rate)}</strong><small>${Number(health.status_429_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>502</span><strong>${performanceRate(health.status_502_rate)}</strong><small>${Number(health.status_502_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>503</span><strong>${performanceRate(health.status_503_rate)}</strong><small>${Number(health.status_503_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>504</span><strong>${performanceRate(health.status_504_rate)}</strong><small>${Number(health.status_504_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>${tr('本地排队超限','Local queue limit')}</span><strong>${performanceRate(health.local_capacity_rate)}</strong><small>${Number(health.local_capacity_count || 0).toLocaleString()} ${tr('次','calls')}</small></div></div>` : '';
   const showSpeedMode = models.some(model => model.speed_mode === 'fast');
-  $('performance_records').innerHTML = models.length ? `<div class="performance-table"><table><tr><th>${tr('模型','Model')}</th>${showSpeedMode ? `<th>${tr('模式','Mode')}</th>` : ''}<th>${tr('调用','Calls')}</th><th>TTFT</th><th>TPS</th></tr>${models.map(model => { const ttft = performanceNumber(model.ttft_ms); const tps = performanceNumber(model.tokens_per_second); return `<tr><td><code>${esc(model.model_id)}</code></td>${showSpeedMode ? `<td>${esc(performanceMode(model.speed_mode))}</td>` : ''}<td>${Number(model.call_count || 0).toLocaleString()}</td><td>${ttft == null ? '—' : (ttft / 1000).toFixed(2) + ' s'} <span class="muted">(${Number(model.ttft_samples || 0)})</span></td><td>${tps == null ? '—' : tps.toFixed(1) + ' token/s'} <span class="muted">(${Number(model.tps_samples || 0)})</span></td></tr>`; }).join('')}</table><div class="muted">${tr('显示各模型近期有效样本的中位数；括号内为样本数。','Median of recent valid samples per model; sample count is shown in parentheses.')}</div></div>` : '';
+  const windowCalls = Number(payload.performance_window?.calls) || 20;
+  $('performance_records').innerHTML = models.length ? `<div class="performance-table"><table><tr><th>${tr('模型','Model')}</th>${showSpeedMode ? `<th>${tr('模式','Mode')}</th>` : ''}<th>${tr('调用','Calls')}</th><th>TTFT</th><th>TPS</th></tr>${models.map(model => { const ttft = performanceNumber(model.ttft_ms); const tps = performanceNumber(model.tokens_per_second); return `<tr><td><code>${esc(model.model_id)}</code></td>${showSpeedMode ? `<td>${esc(performanceMode(model.speed_mode))}</td>` : ''}<td>${Number(model.call_count || 0).toLocaleString()}</td><td>${ttft == null ? '—' : (ttft / 1000).toFixed(2) + ' s'} <span class="muted">(${Number(model.ttft_samples || 0)})</span>${performanceTrend(model.ttft_change_percent,'ttft')}</td><td>${tps == null ? '—' : tps.toFixed(1) + ' token/s'} <span class="muted">(${Number(model.tps_samples || 0)})</span>${performanceTrend(model.tps_change_percent,'tps')}</td></tr>`; }).join('')}</table><div class="muted">${tr(`最近 ${windowCalls} 次有效调用的中位数；箭头与此前 ${windowCalls} 次比较。`,`Median of the latest ${windowCalls} valid calls; arrows compare with the preceding ${windowCalls}.`)}</div></div>` : '';
   if (!records.length) { $('diagnostics_records').innerHTML = ''; return; }
   $('diagnostics_records').innerHTML = `<table><tr><th>${tr('模型','Model')}</th><th>${tr('结果','Result')}</th><th>${tr('上下文','Context')}</th><th>${tr('协议 / 通道','Protocol / transport')}</th><th>${tr('耗时','Duration')}</th></tr>${records.slice().reverse().slice(0, 8).map(record => { const success = record.error_class === 'none' && Number(record.status) >= 200 && Number(record.status) < 300; const status = Number(record.status); const result = success ? tr('成功','Success') : (record.error_class === 'client_disconnect' ? tr('客户端中断','Client disconnected') : `${Number.isFinite(status) && status > 0 ? status + ' · ' : ''}${diagnosticsErrorLabel(record.error_class)}`); const fallback = record.fallback ? tr(' · 已自动切换',' · fallback used') : ''; return `<tr><td><code>${esc(record.model_id || tr('未知模型','Unknown model'))}</code></td><td>${esc(result)}${fallback}</td><td>${esc(diagnosticsContextLabel(record))}</td><td>${esc(diagnosticsProtocolLabel(record.protocol))} · ${esc(diagnosticsTransportLabel(record.transport))}</td><td>${Number(record.duration_ms || 0).toLocaleString()} ms</td></tr>`; }).join('')}</table>`;
 }
 async function loadDiagnostics() { try { renderDiagnostics(await api('/api/diagnostics')); return true; } catch (error) { if ($('diagnostics_summary')) $('diagnostics_summary').textContent = language === 'en' ? 'Diagnostics are unavailable.' : '运行状态暂时不可用。'; return false; } }
-function openDiagnostics() { openModal(tr('性能与健康','Performance and health'), `<div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics()">${esc(t('refresh'))}</button></div><div class="performance-help"><span><strong>TTFT</strong> · ${tr('从发出请求到模型开始返回内容的时间。','Time from sending the request until the model starts returning output.')}</span><span><strong>TPS</strong> · ${tr('模型开始输出后，平均每秒生成的回答 token 数。','Average answer tokens generated per second after output begins.')}</span></div><div id="diagnostics_summary" class="muted"></div><div id="health_summary"></div><div id="performance_records"></div><div id="diagnostics_records" hidden></div>`, '', null); loadDiagnostics(); }
+function openDiagnostics() { openModal(tr('性能与健康','Performance and health'), `<div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics()">${esc(t('refresh'))}</button></div><div class="performance-help"><span><strong>TTFT</strong> · ${tr('请求进入 EMP 后，到收到首段正文或工具参数的时间。','Time from EMP receiving the request to the first text or tool-argument output.')}</span><span><strong>TPS</strong> · ${tr('输出期间每秒接收的 token 数估计，不含推理 token；短回答可能不显示。','Estimated output tokens received per second, excluding reasoning; short replies may show no value.')}</span></div><div id="diagnostics_summary" class="muted"></div><div id="health_summary"></div><div id="performance_records"></div><div id="diagnostics_records" hidden></div>`, '', null); loadDiagnostics(); }
 function confirmIntegrationAction(action) {
   const actions = language === 'en' ? {
     enable: ['Apply EMP to Codex', 'Apply the current EMP settings. Restart Codex when it finishes.'],
@@ -555,7 +596,7 @@ function quotaBuckets(account) {
   for (const [limitId, limits] of grouped) for (const windowKind of ['primary','secondary']) {
     const limit = limits && limits[windowKind]; const used = Number(limit?.usedPercent ?? limit?.used_percent);
     if (!Number.isFinite(used)) continue;
-    buckets.push({limitId, windowKind, remaining:Math.round(Math.max(0, Math.min(100, 100 - used)) * 10) / 10, windowMinutes:Number(limit.windowDurationMins ?? limit.window_duration_mins ?? 0), resetsAt:limit.resetsAt ?? limit.resets_at});
+    buckets.push({limitId, windowKind, remaining:Math.round(Math.max(0, Math.min(100, 100 - used)) * 10) / 10, windowMinutes:Number(limit.windowDurationMins ?? limit.window_duration_mins ?? limit.window_minutes ?? 0), resetsAt:limit.resetsAt ?? limit.resets_at});
   }
   return buckets.sort((left,right) => (right.windowMinutes - left.windowMinutes) || String(left.limitId).localeCompare(String(right.limitId)) || left.windowKind.localeCompare(right.windowKind));
 }
@@ -587,9 +628,18 @@ function creditText(account) { const quota = account.quota; if (!quota) return t
 
 const quotaChartColors = ['#3b82f6','#f59e0b','#10b981','#a855f7','#ef4444','#06b6d4'];
 function quotaRangeLabel(value) { return ({'1h':tr('1 小时','1 hour'),'1d':tr('1 天','1 day'),'1w':tr('1 周','1 week'),'all':tr('全部 15 天','All 15 days')})[value] || value; }
-function quotaSeriesLabel(series) { const windowName = series.window_kind === 'primary' ? tr('主窗口','Primary') : tr('次窗口','Secondary'); const duration = compactWindowText(series.window_minutes); return `${series.limit_id === 'codex' ? '' : series.limit_id + ' · '}${windowName}${duration === '?' ? '' : ' · ' + duration}`; }
+function quotaSeriesLabel(series) { const duration = compactWindowText(series.window_minutes); const label = duration === '?' ? (series.window_kind === 'primary' ? tr('主窗口','Primary') : tr('次窗口','Secondary')) : duration; return `${!series.limit_id || series.limit_id === 'codex' ? '' : series.limit_id + ' · '}${label}`; }
+function quotaPointBreak(previous, point) {
+  if (!previous) return '';
+  const priorReset = Number(previous.resets_at), reset = Number(point.resets_at);
+  if (priorReset > 0 && reset > priorReset + 60) return tr('新的额度周期','New quota period');
+  if (Number(point.remaining_percent) > Number(previous.remaining_percent) + .1) return tr('额度回升','Quota replenished');
+  if (Number(point.observed_at) - Number(previous.observed_at) > 15 * 60) return tr('采样间隔','Sampling gap');
+  return '';
+}
+function quotaValidPoint(point) { return point.observed_at != null && point.remaining_percent != null && Number.isFinite(Number(point.observed_at)) && Number.isFinite(Number(point.remaining_percent)); }
 function quotaChartSvg(series) {
-  const points = series.flatMap(item => item.points || []).filter(point => Number.isFinite(Number(point.observed_at)) && Number.isFinite(Number(point.remaining_percent))); if (!points.length) return '';
+  const points = series.flatMap(item => item.points || []).filter(quotaValidPoint); if (!points.length) return '';
   const minTime = Math.min(...points.map(point => Number(point.observed_at))); const maxTime = Math.max(...points.map(point => Number(point.observed_at))); const span = Math.max(1, maxTime - minTime);
   const percent = value => Math.max(0, Math.min(100, Number(value)));
   const values = points.map(point => percent(point.remaining_percent)); const minValue = Math.min(...values); const maxValue = Math.max(...values);
@@ -597,7 +647,14 @@ function quotaChartSvg(series) {
   const axisMin = Math.max(0, Math.floor(minValue - padding)); const axisMax = Math.min(100, Math.ceil(maxValue + padding)); const axisSpan = axisMax - axisMin;
   const left = 46, right = 610, top = 18, bottom = 218; const x = time => left + ((Number(time) - minTime) / span) * (right - left); const y = value => bottom - ((percent(value) - axisMin) / axisSpan) * (bottom - top);
   const grid = Array.from({length:5}, (_, index) => axisMin + axisSpan * index / 4).map(value => `<line x1="${left}" y1="${y(value)}" x2="${right}" y2="${y(value)}" stroke="var(--border)"/><text x="${left-7}" y="${y(value)+4}" text-anchor="end" fill="var(--muted)" font-size="11">${Number(value.toFixed(2))}%</text>`).join('');
-  const lines = series.map((item, index) => { const color = quotaChartColors[index % quotaChartColors.length]; const samples = (item.points || []).filter(point => Number.isFinite(Number(point.observed_at)) && Number.isFinite(Number(point.remaining_percent))); if (!samples.length) return ''; const path = samples.map((point, pointIndex) => `${pointIndex ? 'L' : 'M'}${x(point.observed_at).toFixed(1)},${y(point.remaining_percent).toFixed(1)}`).join(' '); const dots = samples.map(point => `<circle class="quota-chart-point" data-quota-point data-x="${x(point.observed_at).toFixed(1)}" data-y="${y(point.remaining_percent).toFixed(1)}" data-time="${esc(point.observed_at)}" data-value="${esc(percent(point.remaining_percent))}" data-label="${esc(quotaSeriesLabel(item))}" cx="${x(point.observed_at).toFixed(1)}" cy="${y(point.remaining_percent).toFixed(1)}" r="3" fill="${color}"/>`).join(''); return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>${dots}`; }).join('');
+  const lines = series.map((item, index) => {
+    const color = quotaChartColors[index % quotaChartColors.length];
+    const samples = (item.points || []).filter(quotaValidPoint).slice().sort((a,b) => Number(a.observed_at) - Number(b.observed_at));
+    if (!samples.length) return '';
+    const path = samples.map((point, i) => `${i && !quotaPointBreak(samples[i-1], point) ? 'L' : 'M'}${x(point.observed_at).toFixed(1)},${y(point.remaining_percent).toFixed(1)}`).join(' ');
+    const dots = samples.map((point, i) => `<circle class="quota-chart-point" data-quota-point data-x="${x(point.observed_at).toFixed(1)}" data-y="${y(point.remaining_percent).toFixed(1)}" data-time="${esc(point.observed_at)}" data-value="${esc(percent(point.remaining_percent))}" data-label="${esc(quotaSeriesLabel(item))}" data-reset="${esc(point.resets_at ?? '')}" data-break="${esc(quotaPointBreak(samples[i-1], point))}" cx="${x(point.observed_at).toFixed(1)}" cy="${y(point.remaining_percent).toFixed(1)}" r="3" fill="${color}"/>`).join('');
+    return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>${dots}`;
+  }).join('');
   const start = new Date(minTime * 1000).toLocaleString(); const end = new Date(maxTime * 1000).toLocaleString();
   return `<svg viewBox="0 0 628 252" role="img" aria-label="${esc(tr('Subscription 余量趋势','Subscription quota trend'))}">${grid}${lines}<line class="quota-chart-guide" x1="${left}" y1="${top}" x2="${left}" y2="${bottom}" hidden/><rect class="quota-hover-target" x="${left}" y="${top}" width="${right-left}" height="${bottom-top}" onpointermove="quotaChartHover(event)" onpointerleave="quotaChartLeave(event)"/><text x="${left}" y="242" fill="var(--muted)" font-size="11">${esc(start)}</text><text x="${right}" y="242" text-anchor="end" fill="var(--muted)" font-size="11">${esc(end)}</text></svg>`;
 }
@@ -613,20 +670,21 @@ function quotaChartHover(event) {
   const guide = svg.querySelector('.quota-chart-guide'); if (guide) { guide.hidden = false; guide.setAttribute('x1', nearestX); guide.setAttribute('x2', nearestX); }
   const tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip'); if (!tooltip) return;
   const topY = Math.min(...active.map(point => Number(point.dataset.y))); tooltip.hidden = false; tooltip.style.left = `${nearestX / 628 * 100}%`; tooltip.style.top = `${topY / 252 * 100}%`;
-  tooltip.innerHTML = `<strong>${esc(quotaObservedTimeText(nearest.dataset.time))}</strong><br>${active.map(point => `${esc(point.dataset.label)} · ${esc(point.dataset.value)}%`).join('<br>')}`;
+  tooltip.innerHTML = `<strong>${esc(quotaObservedTimeText(nearest.dataset.time))}</strong><br>${active.map(point => { const reset = localTimeText(point.dataset.reset); return `${esc(point.dataset.label)} · ${esc(point.dataset.value)}%${point.dataset.break ? ' · ' + esc(point.dataset.break) : ''}${reset ? '<br>' + tr('重置时间：','Resets: ') + esc(reset) : ''}`; }).join('<br>')}`;
 }
 function quotaChartLeave(event) { const svg = event.currentTarget?.ownerSVGElement; if (!svg) return; const guide = svg.querySelector('.quota-chart-guide'); if (guide) guide.hidden = true; svg.querySelectorAll('[data-quota-point]').forEach(point => point.setAttribute('r','3')); const tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip'); if (tooltip) tooltip.hidden = true; }
 function renderQuotaHistory(payload, rangeName) {
   const content = $('quota_history_content'); if (!content) return; const series = (payload.series || []).filter(item => Array.isArray(item.points) && item.points.length);
   if (!series.length) { content.innerHTML = `<div class="quota-empty">${tr('暂无额度历史，请先刷新余量。','No quota history yet. Refresh quota first.')}</div>`; return; }
   const legend = series.map((item,index) => { const last = item.points[item.points.length - 1]; const color = quotaChartColors[index % quotaChartColors.length]; const sampledAt = localTimeText(last.observed_at); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(quotaSeriesLabel(item))} · ${esc(last.remaining_percent)}%${sampledAt ? ' · ' + esc(sampledAt) : ''}</span>`; }).join('');
-  content.innerHTML = `<div class="quota-chart">${quotaChartSvg(series)}<div class="quota-chart-tooltip" role="status" hidden></div></div><div class="quota-legend">${legend}</div>`;
+  content.innerHTML = `<div class="quota-legend">${legend}</div><div class="quota-chart">${quotaChartSvg(series)}<div class="quota-chart-tooltip" role="status" hidden></div></div>`;
 }
 async function loadQuotaHistory(accountId, rangeName) {
+  const request = ++quotaHistoryRequest;
   activeQuotaRange = rangeName;
   document.querySelectorAll('.quota-ranges button').forEach(button => button.classList.toggle('active', button.dataset.range === rangeName)); const content = $('quota_history_content'); if (content) content.innerHTML = `<div class="quota-empty">${tr('加载中…','Loading…')}</div>`;
-  try { renderQuotaHistory(await api('/api/accounts/' + encodeURIComponent(accountId) + '/quota-history?range=' + encodeURIComponent(rangeName)), rangeName); }
-  catch (error) { if (content) content.innerHTML = `<div class="quota-empty danger-text">${esc(error.message)}</div>`; }
+  try { const payload = await api('/api/accounts/' + encodeURIComponent(accountId) + '/quota-history?range=' + encodeURIComponent(rangeName)); if (request === quotaHistoryRequest) renderQuotaHistory(payload, rangeName); }
+  catch (error) { if (content && request === quotaHistoryRequest) content.innerHTML = `<div class="quota-empty danger-text">${esc(error.message)}</div>`; }
   await refreshQuotaState();
 }
 function openQuotaHistory(accountId) { activeQuotaAccountId = accountId; activeQuotaRange = '1d'; const ranges = ['1h','1d','1w','all']; openModal(tr('Subscription 余量趋势','Subscription quota trend'), `<div class="quota-ranges">${ranges.map(rangeName => `<button type="button" class="secondary" data-range="${rangeName}" onclick="loadQuotaHistory(activeQuotaAccountId,'${rangeName}')">${esc(quotaRangeLabel(rangeName))}</button>`).join('')}</div><div id="quota_history_content"></div>`, '', null); loadQuotaHistory(accountId, activeQuotaRange); quotaHistoryTimer = setInterval(() => loadQuotaHistory(activeQuotaAccountId, activeQuotaRange), 5 * 60 * 1000); }
@@ -761,9 +819,72 @@ async function toggleModel(id, enabled) { const candidate = cloneState(); const 
 async function removeModel(id) { const candidate = cloneState(); candidate.models = candidate.models.filter(m => m.id !== id); try { await persistState(tr('模型已删除','Model deleted'), candidate); } catch (error) { notice(error.message, true); } }
 async function testModel(id) { try { notice(tr(`正在测试 ${id} …`,`Testing ${id}…`)); const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr('测试成功：','Test succeeded: ') + (result.output_text || tr('已收到模型响应','model response received'))); } catch (error) { notice(tr('测试失败：','Test failed: ') + error.message, true); } }
 
-function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; }
-function openModal(title, body, submitLabel, submit) { clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; button.onclick = submit ? async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { button.disabled = false; button.textContent = label; } } : null; $('modal_backdrop').classList.remove('hidden'); }
-function closeModal() { clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
+function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryRequest++; }
+function openModal(title, body, submitLabel, submit) { stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; button.onclick = submit ? async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { button.disabled = false; button.textContent = label; } } : null; $('modal_backdrop').classList.remove('hidden'); }
+function closeModal() { stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
+
+let updatePollTimer = null;
+let updatePollGeneration = 0;
+function stopUpdatePoll() { updatePollGeneration++; if (updatePollTimer) clearTimeout(updatePollTimer); updatePollTimer = null; }
+function updateErrorLabel(code) {
+  const messages = {
+    directory_not_writable:tr('安装目录没有写权限，请将 EMP 移到可写目录后重试。','The installation directory is not writable. Move EMP to a writable folder and retry.'),
+    requests_busy:tr('当前请求尚未结束，已取消安装，请稍后重试。','Requests are still running. Installation was cancelled; try again later.'),
+    checksum_missing:tr('新版本缺少文件校验信息，暂时无法自动更新。','The release has no file checksum; automatic update is unavailable.'),
+    checksum_mismatch:tr('下载文件校验失败，请重试。','Download verification failed. Please retry.'),
+    package_missing:tr('新版本尚未提供此平台的安装包。','The release does not yet include a package for this platform.'),
+    unsupported_installation:tr('当前安装方式不支持自动更新。','This installation does not support automatic updates.'),
+    unsupported_platform:tr('此平台暂不支持自动更新。','Automatic updates are not available for this platform.'),
+    install_rolled_back:tr('新版本未能启动，已恢复旧版本。','The new version could not start. The previous version has been restored.'),
+  };
+  return messages[code] || tr('更新失败，当前版本未受影响，请重试。','Update failed; the current version is unchanged. Please retry.');
+}
+function renderUpdate(info) {
+  const labels = {
+    idle:tr('检查可用版本。','Check for an available version.'), checking:tr('正在检查…','Checking…'),
+    no_release:tr('暂无正式版更新。','No stable release is available.'), current:tr('当前已是最新版本。','You are up to date.'),
+    available:tr(`发现新版本 v${info.latest_version}。`,`Version ${info.latest_version} is available.`),
+    downloading:tr(`正在后台下载 ${info.progress}%…`,`Downloading in the background: ${info.progress}%…`),
+    verifying:tr('正在校验安装包…','Verifying the package…'), waiting:tr('下载完成，正在等待当前请求结束…','Download complete. Waiting for current requests to finish…'),
+    installing:tr('正在安装并重启 EMP，完成后会打开新页面。','Installing and restarting EMP. A new page will open when ready.'),
+    error:updateErrorLabel(info.error),
+  };
+  $('update_status').textContent = labels[info.state] || labels.idle;
+  $('update_version').textContent = tr(`当前版本 v${info.current_version}`,`Current version: ${info.current_version}`);
+  $('update_progress').hidden = !['downloading','verifying'].includes(info.state);
+  $('update_progress').value = Number(info.progress) || 0;
+  const install = $('update_install'); install.hidden = info.state !== 'available' || !info.supported;
+  $('update_recheck').hidden = ['checking','downloading','verifying','waiting','installing'].includes(info.state);
+  if (info.state === 'available' && !info.supported) $('update_status').textContent += tr(' 请使用 EMP 安装包启动后更新。',' Launch the packaged EMP app to update.');
+}
+async function pollUpdate(generation) {
+  try {
+    const info = await api('/api/updates');
+    if (generation !== updatePollGeneration) return;
+    renderUpdate(info);
+    if (['checking','downloading','verifying','waiting','installing'].includes(info.state)) updatePollTimer = setTimeout(() => pollUpdate(generation), 1000);
+  } catch (_) {
+    if (generation === updatePollGeneration) $('update_status').textContent = tr('连接已断开。若正在更新，请等待 EMP 重新打开页面。','Connection closed. If updating, wait for EMP to reopen the page.');
+  }
+}
+async function requestUpdate(operation) {
+  stopUpdatePoll(); const generation = updatePollGeneration;
+  $('update_install').disabled = true;
+  try { const info = await api('/api/updates/' + operation, {method:'POST', body:'{}'}); if (generation === updatePollGeneration) { renderUpdate(info); pollUpdate(generation); } }
+  catch (error) { $('update_status').textContent = error.message; }
+  finally { $('update_install').disabled = false; }
+}
+async function openUpdate() {
+  stopUpdatePoll();
+  openModal(tr('更新 EMP','Update EMP'), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite"></div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div class="modal-actions"><button id="update_recheck" type="button" class="secondary" data-icon="refresh" onclick="requestUpdate('check')">${esc(t('check_update'))}</button><button id="update_install" type="button" data-icon="download" hidden onclick="requestUpdate('install')">${tr('后台更新','Update in background')}</button></div>`, '', null);
+  const generation = updatePollGeneration;
+  try {
+    const info = await api('/api/updates');
+    if (generation !== updatePollGeneration) return;
+    if (info.state === 'idle') requestUpdate('check');
+    else { renderUpdate(info); pollUpdate(generation); }
+  } catch (error) { if (generation === updatePollGeneration) $('update_status').textContent = error.message; }
+}
 function handleModalKeydown(event) { if (event.key === 'Escape' && !$('modal_backdrop').classList.contains('hidden')) closeModal(); }
 document.addEventListener('keydown', handleModalKeydown);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshQuotaState(); });

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 from pathlib import Path
 import sqlite3
 import threading
@@ -31,7 +32,7 @@ def quota_history_path(config_path: Path) -> Path:
 def _number(value: Any) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    return float(value) if math.isfinite(value) else None
 
 
 def _integer(value: Any) -> Optional[int]:
@@ -40,7 +41,7 @@ def _integer(value: Any) -> Optional[int]:
 
 
 def _rate_limit_buckets(snapshot: Mapping[str, Any]) -> Iterable[Tuple[str, Mapping[str, Any]]]:
-    by_limit_id = snapshot.get("rate_limits_by_limit_id")
+    by_limit_id = snapshot.get("rate_limits_by_limit_id", snapshot.get("rateLimitsByLimitId"))
     if isinstance(by_limit_id, Mapping):
         valid = [
             (str(limit_id), value)
@@ -74,7 +75,7 @@ def _snapshot_rows(snapshot: Mapping[str, Any]) -> List[Tuple[str, str, Optional
                     window_kind,
                     _integer(
                         window.get(
-                            "windowDurationMins", window.get("window_minutes")
+                            "windowDurationMins", window.get("window_duration_mins", window.get("window_minutes"))
                         )
                     ),
                     min(100.0, max(0.0, used_percent)),
@@ -180,7 +181,7 @@ class QuotaHistoryStore:
             raise QuotaHistoryError("unsupported quota history range")
         timestamp = int(time.time() if now is None else now)
         cutoff = timestamp - RANGE_SECONDS[range_name]
-        grouped: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        grouped: Dict[Tuple[str, Any], Dict[str, Any]] = {}
         if self.path.exists():
             with self._lock:
                 if self.path.is_symlink():
@@ -193,21 +194,23 @@ class QuotaHistoryStore:
                     rows = connection.execute(
                         "SELECT observed_at, limit_id, window_kind, window_minutes, "
                         "used_percent, resets_at FROM quota_samples "
-                        "WHERE account_key = ? AND observed_at >= ? "
+                        "WHERE account_key = ? AND observed_at >= ? AND observed_at <= ? "
                         "ORDER BY observed_at, limit_id, window_kind",
-                        (account_key, cutoff),
+                        (account_key, cutoff, timestamp),
                     ).fetchall()
                 except sqlite3.Error as exc:
                     raise QuotaHistoryError("quota history is unavailable") from exc
                 finally:
                     connection.close()
             for observed_at, limit_id, kind, minutes, used, resets_at in rows:
-                key = (str(limit_id), str(kind))
+                # Primary/secondary positions can swap between upstream versions.
+                # A quota window's duration, not its position, identifies its series.
+                key = (str(limit_id), minutes if minutes is not None else str(kind))
                 series = grouped.setdefault(
                     key,
                     {
                         "limit_id": key[0],
-                        "window_kind": key[1],
+                        "window_kind": str(kind),
                         "window_minutes": minutes,
                         "points": [],
                     },

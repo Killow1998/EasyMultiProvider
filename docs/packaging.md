@@ -55,7 +55,7 @@ icon generator creates a multi-size Windows ICO, a macOS ICNS, and a 256-pixel
 Linux PNG inside the managed build directory. These generated derivatives are
 never runtime dependencies.
 
-Desktop launch is intentionally foreground-only:
+Manual desktop launch is foreground-only (the update helper is detached):
 
 - the Windows console executable starts desktop mode when opened without
   arguments;
@@ -87,9 +87,9 @@ Run the **Package** workflow manually from GitHub Actions:
 
 - leave `release_tag` blank to build and retain the four platform bundles as
   workflow artifacts for 14 days;
-- on the `main` branch, enter the exact source tag, such as `v0.9.7`, to wait
+- on the `main` branch, enter the exact source tag, such as `v0.9.8`, to wait
   for all four builds, merge their outputs, verify the complete 22-file
-  manifest and every SHA-256 sidecar, and create a GitHub Draft Pre-release.
+  manifest and every SHA-256 sidecar, and publish a stable GitHub Release.
 
 Checksums and alternate wrappers are CI-only verification evidence. The Release
 attaches exactly five versionless installation downloads: `EMP.exe`, Linux DEB
@@ -105,11 +105,10 @@ mismatch, a missing or unexpected asset, an invalid checksum, or an existing
 tag that targets a different commit. The build jobs retain read-only repository
 access; only the gated release job receives `contents: write`.
 
-The release remains private as a draft until a maintainer reviews the generated
-notes and assets and clicks **Publish release** on GitHub. The workflow requires
-the tag to target the exact commit it built. Re-running a draft release replaces
-that draft and its assets, but a published release is never replaced.
+The workflow requires the tag to target the exact commit it built and refuses to
+replace an existing published release. A successful tagged build is published as
+the latest stable release.
 
-Current macOS outputs are unsigned development artifacts. Keep their release
-marked as a pre-release until Developer ID signing and notarization are
-configured.
+Current macOS outputs are unsigned development artifacts, so users may need to
+approve EMP in macOS Privacy & Security until Developer ID signing and
+notarization are configured.

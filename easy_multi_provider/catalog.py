@@ -21,6 +21,7 @@ EFFORT_DESCRIPTIONS = {
     "high": "Greater reasoning depth for complex tasks",
     "xhigh": "Extra high reasoning depth for hard tasks",
     "max": "Maximum reasoning depth",
+    "ultra": "Maximum reasoning with automatic task delegation",
 }
 _CONTEXT_SUFFIX = re.compile(r"\s+\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]$")
 _CONTEXT_PREFIX = re.compile(r"^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+")
@@ -261,6 +262,21 @@ def _external_entry(
         entry.pop(field, None)
     entry.pop("default_reasoning_level", None)
     entry.pop("supported_reasoning_levels", None)
+    # Native routing and plan metadata belong to the source model, not to
+    # arbitrary external providers that reuse its coding-tool template.
+    for field in ("minimal_client_version", "comp_hash", "available_in_plans"):
+        entry.pop(field, None)
+    entry.update({
+        "service_tiers": [],
+        "additional_speed_tiers": [],
+        "default_service_tier": None,
+        "availability_nux": None,
+        "upgrade": None,
+        "model_specialty": None,
+        "experimental_supported_tools": [],
+        "multi_agent_reasoning_effort": None,
+        "use_responses_lite": False,
+    })
     levels = normalize_reasoning_levels(model.get("reasoning_levels"))
     friendly_name = str(model.get("display_name") or "").strip()
     description = str(model.get("description") or "").strip()

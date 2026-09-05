@@ -14,6 +14,7 @@ from unittest.mock import patch
 import zstandard
 
 from easy_multi_provider import server, transport
+from easy_multi_provider.self_update import UpdateGate
 
 
 MiB = 1024 * 1024
@@ -44,6 +45,7 @@ class Journal:
 def serving(route):
     state = SimpleNamespace(
         mark_service_ready=lambda: None,
+        updater=SimpleNamespace(gate=UpdateGate()),
         session_token="request-limit-test",
         journal=Journal(),
         codex=SimpleNamespace(

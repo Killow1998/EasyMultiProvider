@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import getproxies
 
 from . import __version__
+from .self_update import UpdateError, UpdateManager, mark_update_ready
 from .accounts import (
     NATIVE_ACCOUNT_ID,
     account_root,
@@ -186,6 +187,38 @@ _DIAGNOSTIC_DIALECTS = frozenset(
     }
 )
 _DIAGNOSTIC_TRANSPORTS = frozenset({"http", "sse", "websocket", "unknown"})
+_WEBSOCKET_PHASES = frozenset({
+    "local_upgrade_accepted",
+    "client_message_received",
+    "client_connection_closed",
+    "upstream_connection_reused",
+    "upstream_handshake_started",
+    "upstream_handshake_accepted",
+    "upstream_handshake_rejected",
+    "upstream_handshake_failed",
+    "upstream_request_sent",
+    "upstream_first_event_received",
+    "upstream_terminal_received",
+    "connection_closed",
+})
+_WEB_CLIENT_KINDS = frozenset({
+    "integration_load",
+    "window_error",
+    "unhandled_rejection",
+})
+_WEB_CLIENT_PHASES = frozenset({
+    "render_completed",
+    "failed",
+})
+_WEB_CLIENT_FAILURES = frozenset({
+    "none",
+    "network",
+    "http_error",
+    "missing_element",
+    "type_error",
+    "syntax_error",
+    "unknown",
+})
 _DISCOVERY_CAPABILITY_SOURCES = frozenset(
     {"official", "advertised", "inferred", "unknown"}
 )
@@ -711,6 +744,10 @@ class ObservationRing:
             event.get("compression_ratio"), decoded_request_bytes
         )
         record = {
+            "observation_id": (
+                _safe_diagnostic_text(event.get("observation_id"), _DIAGNOSTIC_ID)
+                or uuid.uuid4().hex
+            ),
             "observed_at": observed_at,
             "route": _safe_diagnostic_text(event.get("route", ""), _DIAGNOSTIC_ID)
             or "unknown",
@@ -754,6 +791,7 @@ class ObservationRing:
             "local_prepare_ms": local_prepare_ms,
             "upstream_first_event_ms": upstream_first_event_ms,
             "ttft_ms": ttft_ms,
+            "performance_schema": _safe_diagnostic_int(event.get("performance_schema"), 100),
             "upstream_first_token_ms": upstream_first_token_ms,
             "generation_ms": generation_ms,
             "output_tokens": output_tokens,
@@ -912,12 +950,21 @@ def configure_proxy_environment() -> str:
         return "system"
     return "direct"
 
+def _history_error_message(exc) -> str:
+    if getattr(exc, "reason", "") in {"thread_missing", "thread_identity_missing"}:
+        return ("This task's local history is unavailable. For a Side chat, "
+                "continue in the original task or start a new task.")
+    if getattr(exc, "reason", "") in {"state_database_missing", "database_missing"}:
+        return "Local Codex history was not found. Use the same Codex data directory as your client."
+    return "History reconstruction failed. Continue in the original task or start a new task."
+
+
 def _history_error_body(exc) -> Dict[str, Any]:
     """Build one content-free structured history reconstruction error."""
     return {
         "error": {
             "code": "history_reconstruction_failed",
-            "message": "History reconstruction failed.",
+            "message": _history_error_message(exc),
             "error_class": getattr(exc, "error_class", "history_reconstruction_failed"),
             "reason": getattr(exc, "reason", "history_unavailable"),
         }
@@ -960,7 +1007,7 @@ def _history_stream_error(exc) -> Dict[str, Any]:
     return {
         "type": "invalid_request_error",
         "code": "invalid_prompt",
-        "message": "History reconstruction failed.",
+        "message": _history_error_message(exc),
         "error_class": getattr(exc, "error_class", "history_reconstruction_failed"),
         "reason": getattr(exc, "reason", "history_unavailable"),
     }
@@ -983,6 +1030,7 @@ class AppState:
         self.bootstrap_used = False
         self.session_token = secrets.token_urlsafe(32)
         self.journal = journal if journal is not None else NullJournal()
+        self.updater = UpdateManager(self.path, journal=self.journal)
         self.request_limits = RequestLimits(self.journal)
         self.diagnostics = (
             diagnostics
@@ -1011,7 +1059,7 @@ class AppState:
         self._quota_sampler_stop = threading.Event()
         self._quota_sampler_thread: Optional[threading.Thread] = None
         self.history_continuity = HistoryContinuityEngine(
-            history_reader or CodexHomeHistoryReader(codex_home)
+            history_reader or CodexHomeHistoryReader(codex_home, journal=self.journal)
         )
         self.destination_context = DestinationContextCompactor(
             DestinationSummaryAdapter()
@@ -1100,10 +1148,16 @@ class AppState:
         records = deque(maxlen=_DIAGNOSTIC_CAPACITY)
         seen = set()
         for record in candidates:
-            fingerprint = json.dumps(record, sort_keys=True, separators=(",", ":"))
-            if fingerprint in seen:
+            observation_id = record.get("observation_id")
+            identity = (
+                "id:" + observation_id
+                if isinstance(observation_id, str) and observation_id
+                else "legacy:"
+                + json.dumps(record, sort_keys=True, separators=(",", ":"))
+            )
+            if identity in seen:
                 continue
-            seen.add(fingerprint)
+            seen.add(identity)
             records.append(record)
         material = list(records)
         summary = summarize_route_observations(material)
@@ -2210,7 +2264,9 @@ def make_handler(state: AppState):
         def setup(self) -> None:
             super().setup()
             self._request_started_at = time.monotonic()
+            self._request_id = uuid.uuid4().hex[:16]
             self._response_status = None
+            self._http_request_start_logged = False
             self._http_request_logged = False
             self._unexpected_exception_logged = False
             self.connection.settimeout(30)
@@ -2220,12 +2276,34 @@ def make_handler(state: AppState):
 
         def _begin_http_request(self) -> None:
             self._request_started_at = time.monotonic()
+            self._request_id = uuid.uuid4().hex[:16]
             self._response_status = None
+            self._http_request_start_logged = False
             self._http_request_logged = False
             self._unexpected_exception_logged = False
             self.command = ""
             self.path = ""
             self.raw_requestline = b""
+
+        def _record_http_request_start_once(self) -> None:
+            if getattr(self, "_http_request_start_logged", False):
+                return
+            self._http_request_start_logged = True
+            if not getattr(self, "_request_id", ""):
+                self._request_id = uuid.uuid4().hex[:16]
+            try:
+                state.journal.event(
+                    "info",
+                    "http_request_started",
+                    request_id=self._request_id,
+                    method=self.command if isinstance(self.command, str) else "",
+                    path=_diagnostic_http_path(
+                        self.path if isinstance(self.path, str) else ""
+                    ),
+                    request_bytes=self._declared_request_bytes(),
+                )
+            except Exception:
+                pass
 
         def _declared_request_bytes(self) -> int:
             headers = getattr(self, "headers", None)
@@ -2254,6 +2332,7 @@ def make_handler(state: AppState):
                 state.journal.event(
                     "info",
                     "http_request",
+                    request_id=self._request_id,
                     method=method,
                     path=path,
                     status=status,
@@ -2262,6 +2341,55 @@ def make_handler(state: AppState):
                 )
             except Exception:
                 pass
+
+        def _record_websocket_phase(
+            self, connection_id: str, phase: str, **fields: Any
+        ) -> None:
+            if phase not in _WEBSOCKET_PHASES:
+                return
+            safe_fields: Dict[str, Any] = {
+                "connection_id": connection_id,
+                "phase": phase,
+            }
+            for name in ("status", "duration_ms", "request_bytes"):
+                value = fields.get(name)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    safe_fields[name] = min(value, 64 * 1024 * 1024)
+            for name in ("reused", "success"):
+                if isinstance(fields.get(name), bool):
+                    safe_fields[name] = fields[name]
+            try:
+                state.journal.event("info", "websocket_phase", **safe_fields)
+            except Exception:
+                pass
+
+        def _record_web_client_phase(self, body: Mapping[str, Any]) -> None:
+            kind = body.get("kind")
+            phase = body.get("phase")
+            failure_class = body.get("failure_class", "none")
+            if kind not in _WEB_CLIENT_KINDS or phase not in _WEB_CLIENT_PHASES:
+                raise ConfigError("invalid web client diagnostic event")
+            if failure_class not in _WEB_CLIENT_FAILURES:
+                failure_class = "unknown"
+            fields: Dict[str, Any] = {
+                "kind": kind,
+                "phase": phase,
+                "failure_class": failure_class,
+            }
+            page_id = _safe_diagnostic_text(body.get("page_id"), _DIAGNOSTIC_ID)
+            if page_id:
+                fields["page_id"] = page_id
+            for name, limit in (
+                ("duration_ms", 3_600_000),
+                ("http_status", 599),
+                ("line", 10_000_000),
+                ("column", 10_000_000),
+            ):
+                value = _safe_diagnostic_int(body.get(name), limit)
+                if value is not None:
+                    fields[name] = value
+            level = "warning" if phase == "failed" else "info"
+            state.journal.event(level, "web_client_phase", **fields)
 
         def _record_unexpected_exception(self, exception: BaseException) -> None:
             if self._unexpected_exception_logged:
@@ -2634,6 +2762,7 @@ def make_handler(state: AppState):
             except TransportError as exc:
                 self._error(400, str(exc))
                 return
+            connection_id = uuid.uuid4().hex[:16]
             self.wfile.write(
                 (
                     "HTTP/1.1 101 Switching Protocols\r\n"
@@ -2644,13 +2773,20 @@ def make_handler(state: AppState):
             )
             self._response_status = 101
             self.wfile.flush()
+            self._record_websocket_phase(
+                connection_id, "local_upgrade_accepted", status=101
+            )
             self.close_connection = True
             # Codex keeps one local control connection open between turns.
             # A fixed idle read timeout turns normal inactivity into a 1011
             # server failure and forces a visible client reconnect.
             self.connection.settimeout(None)
             websocket = WebSocketConnection(self.rfile, self.wfile, self.connection.settimeout)
-            native_upstream = NativeWebSocketBridge()
+            native_upstream = NativeWebSocketBridge(
+                observer=lambda phase, **fields: self._record_websocket_phase(
+                    connection_id, phase, **fields
+                )
+            )
             transport_continuity = TransportContinuityAdapter()
             last_native_response_id = None
             acquire_websocket_slot = getattr(
@@ -2673,7 +2809,20 @@ def make_handler(state: AppState):
                     self._begin_request_budget("websocket")
                     text = websocket.receive_text(budget=self._request_budget)
                     if text is None:
+                        self._record_websocket_phase(
+                            connection_id,
+                            "client_connection_closed",
+                            status=websocket.peer_close_code or 1005,
+                        )
                         return
+                    self._record_websocket_phase(
+                        connection_id,
+                        "client_message_received",
+                        request_bytes=len(text.encode("utf-8")),
+                    )
+                    if not state.updater.gate.enter():
+                        self._websocket_error(websocket, "EMP is installing an update. Please retry shortly.", 503, "updating")
+                        continue
                     try:
                         request = json.loads(text)
                         if not isinstance(request, dict):
@@ -3018,6 +3167,8 @@ def make_handler(state: AppState):
                         self._websocket_error(websocket, str(exc), exc.status, "router_error")
                     except (TransportError, ValueError) as exc:
                         self._websocket_error(websocket, str(exc))
+                    finally:
+                        state.updater.gate.leave()
             except EOFError:
                 return
             except WebSocketRequestTooLarge as exc:
@@ -3037,10 +3188,12 @@ def make_handler(state: AppState):
                 last_native_response_id = None
                 native_upstream.close()
                 websocket.close()
+                self._record_websocket_phase(connection_id, "connection_closed")
                 if websocket_slot_acquired:
                     self.server.release_websocket_slot()
 
         def do_GET(self) -> None:
+            self._record_http_request_start_once()
             parsed = urlparse(self.path)
             path = parsed.path
             if path == "/v1/responses" and self.headers.get("Upgrade", "").lower() == "websocket":
@@ -3076,6 +3229,9 @@ def make_handler(state: AppState):
                 return
             if path == "/healthz":
                 self._send(200, _json_bytes({"status": "ok"}))
+                return
+            if path == "/api/updates":
+                self._send(200, _json_bytes(state.updater.snapshot()))
                 return
             if path == "/api/config":
                 self._send(200, _json_bytes(state.management_snapshot()))
@@ -3168,11 +3324,37 @@ def make_handler(state: AppState):
 
         def do_POST(self) -> None:
             path = urlparse(self.path).path
+            tracked = not path.startswith("/api/updates/")
+            if tracked and not state.updater.gate.enter():
+                self.close_connection = True
+                self._send(503, _json_bytes({"error": {"code": "updating", "message": "EMP is installing an update. Please retry shortly."}}), headers={"Retry-After": "2", "Connection": "close"})
+                return
+            try:
+                self._do_POST()
+            finally:
+                if tracked:
+                    state.updater.gate.leave()
+
+        def _do_POST(self) -> None:
+            self._record_http_request_start_once()
+            path = urlparse(self.path).path
             if path.startswith("/api/") and not self._management_allowed():
                 self._error(401 if self._same_origin() else 403, "management session is required")
                 return
             if path in ("/v1/responses", "/v1/responses/compact", "/v1/alpha/search") and not self._proxy_allowed():
                 self._error(401 if self._same_origin() else 403, "proxy caller authentication is required")
+                return
+            if path in {"/api/updates/check", "/api/updates/install"}:
+                try:
+                    self._body()
+                    self._send(202, _json_bytes(state.updater.start(path.rsplit("/", 1)[-1])))
+                except UpdateError as exc:
+                    self._error(409, str(exc))
+                except RequestBodyTooLarge:
+                    self.close_connection = True
+                    self._error(413, "update request is too large")
+                except (ConfigError, ValueError):
+                    self._error(400, "invalid update request")
                 return
             operation_started = time.monotonic()
             operation_logged = False
@@ -3257,6 +3439,10 @@ def make_handler(state: AppState):
                     if path == "/api/migration/import"
                     else 5 * 1024 * 1024
                 )
+                if path == "/api/client-events":
+                    self._record_web_client_phase(body)
+                    self._send(200, _json_bytes({"ok": True}))
+                    return
                 if path == "/v1/alpha/search":
                     status, content_type, raw = forward_native_search(
                         state._routing_snapshot(),
@@ -3662,6 +3848,16 @@ def make_handler(state: AppState):
                 self._error(500, "internal server error")
 
         def do_DELETE(self) -> None:
+            if not state.updater.gate.enter():
+                self._error(503, "EMP is installing an update. Please retry shortly.")
+                return
+            try:
+                self._do_DELETE()
+            finally:
+                state.updater.gate.leave()
+
+        def _do_DELETE(self) -> None:
+            self._record_http_request_start_once()
             path = urlparse(self.path).path
             if path.startswith("/api/") and not self._management_allowed():
                 self._error(401 if self._same_origin() else 403, "management session is required")
@@ -4053,6 +4249,9 @@ def _serve_owned(
                 **reconcile_fields,
             )
             listening_host, listening_port = server.server_address[:2]
+            state.updater.shutdown = server.shutdown
+            state.updater.restart_args = ["serve", "--config", str(effective_config_path),
+                                          "--host", str(listening_host), "--port", str(listening_port), "--open-browser"]
             _journal_event(
                 journal,
                 "info",
@@ -4090,6 +4289,7 @@ def _serve_owned(
 
         try:
             shutdown_reason = "server_stopped"
+            mark_update_ready()
             server.serve_forever()
         except KeyboardInterrupt:
             shutdown_reason = "keyboard_interrupt"
@@ -4116,7 +4316,8 @@ def _serve_owned(
             try:
                 if state is not None:
                     state.stop_quota_sampler()
-                    restore_result = state.shutdown_restore()
+                    if not state.updater.installing:
+                        restore_result = state.shutdown_restore()
             except Exception as exc:
                 restore_error = exc
             finally:

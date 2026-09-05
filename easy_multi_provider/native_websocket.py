@@ -298,12 +298,23 @@ class NativeWebSocketBridge:
     def __init__(
         self,
         connector: Optional[Callable[[NativeWebSocketTarget], Any]] = None,
+        observer: Optional[Callable[..., None]] = None,
     ):
         self._connector = connector or _default_connector
+        self._observer = observer
         self._connection = None
         self._connection_key: Optional[str] = None
         self._last_connection_reused = False
         self._probed_connection = None
+
+    def _observe(self, phase: str, **fields: Any) -> None:
+        if not callable(self._observer):
+            return
+        try:
+            self._observer(phase, **fields)
+        except Exception:
+            # Diagnostics must never affect the transport state machine.
+            pass
 
     @property
     def connection_key(self) -> Optional[str]:
@@ -387,12 +398,20 @@ class NativeWebSocketBridge:
 
         if self._usable(target) and self._probe_reused_connection():
             self._last_connection_reused = True
+            self._observe("upstream_connection_reused", reused=True)
             return True
         self.close()
         self._last_connection_reused = False
+        started = time.monotonic()
+        self._observe("upstream_handshake_started", reused=False)
         try:
             connection = self._connector(target)
-        except NativeWebSocketError:
+        except NativeWebSocketError as exc:
+            self._observe(
+                "upstream_handshake_failed",
+                status=exc.status,
+                duration_ms=max(0, int(round((time.monotonic() - started) * 1000))),
+            )
             raise
         except Exception as exc:
             explicit_status = getattr(exc, "status_code", None)
@@ -409,19 +428,30 @@ class NativeWebSocketBridge:
                 status = failure.status
                 error_class = failure.error_class
                 failure_reason = failure.failure_reason
-            raise NativeWebSocketError(
+            error = NativeWebSocketError(
                 "native upstream websocket connection failed",
                 status,
                 _http_fallback_before_request(status),
                 error_class=error_class,
                 failure_reason=failure_reason,
-            ) from exc
+            )
+            self._observe(
+                "upstream_handshake_failed",
+                status=error.status,
+                duration_ms=max(0, int(round((time.monotonic() - started) * 1000))),
+            )
+            raise error from exc
         status = _handshake_status(connection)
         if status != 101:
             try:
                 connection.close()
             except Exception:
                 pass
+            self._observe(
+                "upstream_handshake_rejected",
+                status=status,
+                duration_ms=max(0, int(round((time.monotonic() - started) * 1000))),
+            )
             raise NativeWebSocketError(
                 "native upstream websocket upgrade was rejected",
                 status,
@@ -431,6 +461,12 @@ class NativeWebSocketBridge:
         self._connection_key = target.connection_key
         self._last_connection_reused = False
         self._probed_connection = None
+        self._observe(
+            "upstream_handshake_accepted",
+            status=101,
+            reused=False,
+            duration_ms=max(0, int(round((time.monotonic() - started) * 1000))),
+        )
         return False
 
     def events(
@@ -457,7 +493,13 @@ class NativeWebSocketBridge:
                 sender(payload)
             else:
                 connection.send(payload)
+            self._observe(
+                "upstream_request_sent",
+                request_bytes=len(payload.encode("utf-8")),
+                reused=self._last_connection_reused,
+            )
             self._probed_connection = None
+            event_count = 0
             while True:
                 if callable(setter):
                     # Match Codex: apply one idle timeout to each incoming
@@ -504,6 +546,15 @@ class NativeWebSocketBridge:
                 event = _safe_terminal_event(event, observation)
                 output, tool = native_websocket_event_activity(event)
                 substantive_activity = substantive_activity or output or tool
+                event_count += 1
+                if event_count == 1:
+                    self._observe("upstream_first_event_received")
+                if observation is not None:
+                    self._observe(
+                        "upstream_terminal_received",
+                        success=bool(observation.get("success", False)),
+                        status=observation.get("status"),
+                    )
                 yield event
                 if observation is not None:
                     return

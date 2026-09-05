@@ -111,11 +111,13 @@ class HistoryAnchor:
     thread_id: Optional[str] = None
     turn_id: Optional[str] = None
     window_id: Optional[str] = None
+    forked_from_thread_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "thread_id", _identifier(self.thread_id, "thread_id"))
         object.__setattr__(self, "turn_id", _identifier(self.turn_id, "turn_id"))
         object.__setattr__(self, "window_id", _identifier(self.window_id, "window_id"))
+        object.__setattr__(self, "forked_from_thread_id", _identifier(self.forked_from_thread_id, "forked_from_thread_id"))
 
     @classmethod
     def from_headers(cls, headers: Mapping) -> "HistoryAnchor":
@@ -166,6 +168,7 @@ class HistoryAnchor:
             thread_id=header_thread_id or header_session_id or metadata_thread_id,
             turn_id=metadata.get("turn_id", metadata.get("turnId")),
             window_id=header_window_id or metadata_window_id,
+            forked_from_thread_id=metadata.get("forked_from_thread_id"),
         )
 
     def __repr__(self) -> str:

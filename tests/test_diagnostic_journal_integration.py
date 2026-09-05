@@ -122,6 +122,7 @@ def fake_lifecycle_state(order=None, restore_result=None, restore_error=None):
         ):
             self.path = Path(path)
             self.journal = journal
+            self.updater = SimpleNamespace(installing=False)
             self.bootstrap_token = "BOOTSTRAP-LIFECYCLE-SECRET"
             self.session_token = "SESSION-LIFECYCLE-SECRET"
             self.config = {
@@ -153,6 +154,9 @@ def fake_lifecycle_state(order=None, restore_result=None, restore_error=None):
 
 def fake_lifecycle_server(order=None, serve_error=None):
     class FakeServer:
+        def shutdown(self):
+            pass
+
         def __init__(self, address, handler):
             self.requested_address = address
             self.handler = handler
@@ -329,6 +333,36 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
             self.assertEqual(persisted["upstream_content_encoding"], "zstd")
             self.assertEqual(persisted["compression_ratio"], 0.25)
 
+    def test_performance_windows_survive_restart_without_folding_old_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            journal = create_journal(root)
+            state = self.make_state(root, journal=journal)
+            for index in range(40):
+                state.diagnostics.record({
+                    "route": "responses",
+                    "model_id": "gpt-5.6-sol",
+                    "speed_mode": "standard",
+                    "resolved_protocol": "responses",
+                    "transport": "websocket",
+                    "status": 200,
+                    "error_class": "none",
+                    "ttft_ms": 6000 if index < 20 else 4000,
+                    "tokens_per_second": 50 if index < 20 else 80,
+                    "performance_schema": 2,
+                })
+            journal.close()
+
+            restarted = self.make_state(root)
+            model = restarted.diagnostics_snapshot()["models"][0]
+
+            self.assertEqual(model["call_count"], 20)
+            self.assertEqual(model["retained_call_count"], 40)
+            self.assertEqual(model["ttft_ms"], 4000.0)
+            self.assertEqual(model["previous_ttft_ms"], 6000.0)
+            self.assertEqual(model["tokens_per_second"], 80.0)
+            self.assertEqual(model["previous_tokens_per_second"], 50.0)
+
     def test_transport_metadata_sanitizer_rejects_nonfinite_unbounded_and_content(self):
         ring = ObservationRing()
         ring.record(
@@ -401,12 +435,91 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
 
             self.assertEqual(status, 200)
             events = http_events(journal)
+            starts = management_events(journal, "http_request_started")
             self.assertEqual(len(events), 1)
+            self.assertEqual(len(starts), 1)
+            self.assertEqual(starts[0]["request_id"], events[0]["request_id"])
+            self.assertEqual(starts[0]["path"], "/healthz")
             self.assertEqual(events[0]["method"], "GET")
             self.assertEqual(events[0]["path"], "/healthz")
             self.assertEqual(events[0]["status"], 200)
             self.assertEqual(events[0]["request_bytes"], 0)
             self.assertNotIn("TOPSECRET", repr(journal.events))
+
+    def test_web_client_phases_are_bounded_and_drop_messages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            journal = CapturingJournal()
+            state = self.make_state(root, journal=journal)
+            body = json.dumps(
+                {
+                    "kind": "integration_load",
+                    "phase": "failed",
+                    "failure_class": "type_error",
+                    "page_id": "page-1234",
+                    "duration_ms": 321,
+                    "http_status": 503,
+                    "message": "PRIVATE-BROWSER-MESSAGE",
+                    "stack": "PRIVATE-BROWSER-STACK",
+                }
+            )
+            with running_server(state) as server:
+                status, _ = request(
+                    server,
+                    "POST",
+                    "/api/client-events",
+                    body,
+                    {
+                        "Content-Type": "application/json",
+                        "Cookie": "emp_session=" + state.session_token,
+                    },
+                )
+
+            self.assertEqual(status, 200)
+            events = management_events(journal, "web_client_phase")
+            self.assertEqual(
+                events,
+                [{
+                    "kind": "integration_load",
+                    "phase": "failed",
+                    "failure_class": "type_error",
+                    "page_id": "page-1234",
+                    "duration_ms": 321,
+                    "http_status": 503,
+                }],
+            )
+            self.assertNotIn("PRIVATE-BROWSER", repr(journal.events))
+
+    def test_websocket_phases_use_fixed_fields_without_transport_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            journal = CapturingJournal()
+            state = self.make_state(root, journal=journal)
+            handler = object.__new__(make_handler(state))
+
+            handler._record_websocket_phase(
+                "connection-1234",
+                "upstream_request_sent",
+                request_bytes=4096,
+                reused=True,
+                prompt="PRIVATE-PROMPT",
+                url="wss://private.example",
+            )
+            handler._record_websocket_phase(
+                "connection-1234", "untrusted-phase", request_bytes=1
+            )
+
+            events = management_events(journal, "websocket_phase")
+            self.assertEqual(
+                events,
+                [{
+                    "connection_id": "connection-1234",
+                    "phase": "upstream_request_sent",
+                    "request_bytes": 4096,
+                    "reused": True,
+                }],
+            )
+            self.assertNotIn("PRIVATE", repr(journal.events))
 
     def test_http_path_normalizer_only_replaces_account_route_segments(self):
         self.assertEqual(

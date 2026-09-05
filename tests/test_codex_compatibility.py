@@ -45,22 +45,29 @@ class CodexCompatibilityTests(unittest.TestCase):
         environment = patch.dict(os.environ, {"LOCALAPPDATA": ""})
         environment.start()
         self.addCleanup(environment.stop)
+        mac_app = patch.object(CodexRuntimeController, "_mac_app_codex_executable", return_value=None)
+        mac_app.start()
+        self.addCleanup(mac_app.stop)
 
     def test_supported_release_lines_are_classified_without_source_metadata(self):
         cases = (
             ("codex-cli 0.149.0", "0.149.0", "supported"),
             ("codex-cli 0.150.8", "0.150.8", "supported"),
             ("codex-cli 0.151.2", "0.151.2", "supported"),
-            ("codex-cli 0.152.0", "0.152.0", "recommended"),
-            ("codex-cli 0.152.1+vendor.1", "0.152.1+vendor.1", "recommended"),
+            ("codex-cli 0.152.0", "0.152.0", "supported"),
+            ("codex-cli 0.152.1+vendor.1", "0.152.1+vendor.1", "supported"),
+            ("codex-cli 0.153.0", "0.153.0", "supported"),
+            ("codex-cli 0.153.3", "0.153.3", "supported"),
+            ("codex-cli 0.153.4", "0.153.4", "recommended"),
+            ("codex-cli 0.153.4+vendor.1", "0.153.4+vendor.1", "recommended"),
         )
         for output, installed, status in cases:
             with self.subTest(output=output):
                 public = classify_codex_version(output).public()
                 self.assertEqual(public["installed"], installed)
                 self.assertEqual(public["status"], status)
-                self.assertEqual(public["supported_range"], "0.149.x–0.152.x")
-                self.assertEqual(public["recommended"], "0.152.x")
+                self.assertEqual(public["supported_range"], "0.149.x–0.153.x")
+                self.assertEqual(public["recommended"], "0.153.4")
                 self.assertEqual(
                     set(public),
                     {"installed", "status", "supported_range", "recommended"},
@@ -70,7 +77,7 @@ class CodexCompatibilityTests(unittest.TestCase):
         cases = (
             ("codex-cli 0.148.9", "unsupported"),
             ("codex-cli 0.131.0-alpha.9", "unsupported"),
-            ("codex-cli 0.153.0", "unverified"),
+            ("codex-cli 0.154.0", "unverified"),
             ("codex-cli 1.0.0", "unverified"),
             ("codex-cli 0.152.0-rc.1", "unverified"),
             ("not a version", "unknown"),
@@ -121,7 +128,7 @@ class CodexCompatibilityTests(unittest.TestCase):
 
     def test_managed_runtime_is_selected_and_path_cli_is_listed_separately(self):
         with tempfile.TemporaryDirectory() as temporary:
-            codex_home = Path(temporary)
+            codex_home = Path(temporary).resolve()
             managed = (
                 codex_home
                 / "packages"
@@ -228,6 +235,84 @@ class CodexCompatibilityTests(unittest.TestCase):
         self.assertEqual(selected["helper_source"], "cursor")
         self.assertEqual(selected_executable, cursor_executable)
 
+    def test_unified_chatgpt_app_runtime_is_discovered_from_codex_home(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app_runtime = (
+                root
+                / "codex-home"
+                / "plugins"
+                / ".plugin-appserver"
+                / "codex.exe"
+            )
+            app_runtime.parent.mkdir(parents=True)
+            app_runtime.write_bytes(b"chatgpt-app")
+            legacy_runtime = (
+                root
+                / "local-app-data"
+                / "OpenAI"
+                / "Codex"
+                / "bin"
+                / "older-build"
+                / "codex.exe"
+            )
+            legacy_runtime.parent.mkdir(parents=True)
+            legacy_runtime.write_bytes(b"legacy-app")
+            executable = str(app_runtime.resolve())
+            runner = VersionRunner({executable: "0.152.1"})
+
+            with patch(
+                "easy_multi_provider.codex_runtime.shutil.which", return_value=None
+            ), patch(
+                "easy_multi_provider.codex_runtime.platform.system",
+                return_value="Windows",
+            ):
+                result = CodexRuntimeController(
+                    runner=runner,
+                    target_codex_home=root / "codex-home",
+                    windows_local_app_data=root / "local-app-data",
+                    runtime_user_home=root / "home",
+                ).compatibility()
+
+        self.assertEqual(result["source"], "codex_app")
+        self.assertEqual(result["installed"], "0.152.1")
+        self.assertEqual(result["status"], "supported")
+        self.assertEqual(result["helper_source"], "codex_app")
+        self.assertEqual(result["runtimes"][0]["path"], executable)
+
+    def test_windows_app_runtime_is_discovered_directly_under_bin(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app_runtime = (
+                root
+                / "local-app-data"
+                / "OpenAI"
+                / "Codex"
+                / "bin"
+                / "codex.exe"
+            )
+            app_runtime.parent.mkdir(parents=True)
+            app_runtime.write_bytes(b"chatgpt-app")
+            executable = str(app_runtime.resolve())
+            runner = VersionRunner({executable: "0.152.0"})
+
+            with patch(
+                "easy_multi_provider.codex_runtime.shutil.which", return_value=None
+            ), patch(
+                "easy_multi_provider.codex_runtime.platform.system",
+                return_value="Windows",
+            ):
+                result = CodexRuntimeController(
+                    runner=runner,
+                    windows_local_app_data=root / "local-app-data",
+                    runtime_user_home=root / "home",
+                ).compatibility()
+
+        self.assertEqual(result["source"], "codex_app")
+        self.assertEqual(result["installed"], "0.152.0")
+        self.assertEqual(result["status"], "supported")
+        self.assertEqual(result["runtimes"][0]["path"], executable)
+
     def test_editor_scan_ignores_newer_foreign_platform_and_architecture(self):
         cases = (
             ("Windows", "AMD64", "windows-x86_64", "codex.exe"),
@@ -312,7 +397,7 @@ class CodexCompatibilityTests(unittest.TestCase):
 
     def test_legacy_managed_runtime_path_remains_a_fallback(self):
         with tempfile.TemporaryDirectory() as temporary:
-            codex_home = Path(temporary)
+            codex_home = Path(temporary).resolve()
             legacy = (
                 codex_home
                 / "packages"

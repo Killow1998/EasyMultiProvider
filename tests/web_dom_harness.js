@@ -145,6 +145,8 @@ const html = fs.readFileSync(process.argv[2], "utf8");
 assert.doesNotMatch(html, /实际调用时自动使用其中兼容性最可靠的一个/);
 assert.match(html, /class="workspace-layout"/);
 assert.match(html, /<aside class="workspace-side">/);
+assert.match(html, /onclick="openUpdate\(\)"/);
+assert.match(html, /href="https:\/\/github.com\/Killow1998\/EasyMultiProvider" target="_blank" rel="noopener noreferrer"/);
 assert.doesNotMatch(html, /id="subscription_search_account"/);
 assert.doesNotMatch(html, /data-catalog-summary/);
 assert.match(html, /@phosphor-icons\/core 2\.1\.1, Regular weight, MIT/);
@@ -377,7 +379,7 @@ function quotaHistoryBehavior() {
   run("renderQuotaHistory(__quotaPayload, '1h')");
   const html = getElement("quota_history_content").innerHTML;
   assert.match(html, /<svg/);
-  assert.match(html, /主窗口/);
+  assert.match(html, /7d/);
   assert.match(html, /75%/);
   assert.match(html, /data-quota-point/);
   assert.match(html, /quota-hover-target/);
@@ -401,6 +403,20 @@ function quotaHistoryBehavior() {
     assert.doesNotMatch(svg, /NaN|Infinity/);
   }
   assert.strictEqual(run("quotaChartSvg([])"), "");
+  context.__resetSeries = [{limit_id:'codex',window_minutes:300,points:[
+    {observed_at:1000,remaining_percent:5,resets_at:1200},
+    {observed_at:1300,remaining_percent:100,resets_at:19200},
+    {observed_at:1600,remaining_percent:95,resets_at:19200},
+    {observed_at:5000,remaining_percent:90,resets_at:19200},
+  ]}];
+  const resetSvg = run('quotaChartSvg(__resetSeries)');
+  const resetPath = resetSvg.match(/<path d="([^"]+)"/)[1];
+  assert.strictEqual((resetPath.match(/M/g) || []).length, 3);
+  assert.strictEqual((resetPath.match(/L/g) || []).length, 1);
+  assert.match(resetSvg, /data-label="5h"/);
+  assert.match(resetSvg, /data-break="新的额度周期"/);
+  assert.match(resetSvg, /data-reset="19200"/);
+  assert.strictEqual(run('quotaChartSvg([{points:[{observed_at:10,remaining_percent:null}]}])'), '');
 
   const first = {dataset:{x:'90',y:'80',time:'1000',value:'80',label:'主窗口'},radius:'',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
   const second = {dataset:{x:'90.1',y:'100',time:'1000',value:'60',label:'次窗口'},radius:'',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
@@ -427,9 +443,32 @@ function quotaHistoryBehavior() {
   assert.strictEqual(tooltip.hidden, true);
 }
 
+async function quotaHistoryRaceBehavior() {
+  const waiting = [];
+  context.__historyApi = () => new Promise(resolve => waiting.push(resolve));
+  run('__savedHistoryApi = api; __savedQuotaSync = refreshQuotaState; api = __historyApi; refreshQuotaState = async () => {}');
+  try {
+    const oldRequest = run("loadQuotaHistory('first','1h')");
+    const newRequest = run("loadQuotaHistory('second','1d')");
+    waiting[1]({series:[{limit_id:'codex',window_minutes:10080,points:[{observed_at:1000,remaining_percent:73}]}]});
+    await newRequest;
+    const latest = getElement('quota_history_content').innerHTML;
+    waiting[0]({series:[]});
+    await oldRequest;
+    assert.strictEqual(getElement('quota_history_content').innerHTML, latest);
+    assert.match(latest, /73%/);
+    const closingRequest = run("loadQuotaHistory('second','1h')");
+    run('clearQuotaHistoryTimer()');
+    getElement('quota_history_content').innerHTML = 'closed';
+    waiting[2]({series:[]});
+    await closingRequest;
+    assert.strictEqual(getElement('quota_history_content').innerHTML, 'closed');
+  } finally { run('api = __savedHistoryApi; refreshQuotaState = __savedQuotaSync'); }
+}
+
 function performanceDiagnosticsBehavior() {
-  context.__performancePayload = {health:{sample_count:12,success_count:10,success_rate:83.3,status_429_count:1,status_429_rate:8.3,status_502_count:1,status_502_rate:8.3,local_capacity_count:0,local_capacity_rate:0,failure_classes:[{error_class:'upstream_close_pre_output',count:1,rate:8.3},{error_class:'rate_limit',count:1,rate:8.3}]},models:[
-    {model_id:'gpt-5.6-sol',speed_mode:'standard',call_count:5,ttft_ms:5000,ttft_samples:4,tokens_per_second:55,tps_samples:3},
+  context.__performancePayload = {performance_window:{calls:20,days:7},health:{sample_count:12,success_count:10,success_rate:83.3,status_429_count:1,status_429_rate:8.3,status_502_count:1,status_502_rate:8.3,local_capacity_count:0,local_capacity_rate:0,failure_classes:[{error_class:'upstream_close_pre_output',count:1,rate:8.3},{error_class:'rate_limit',count:1,rate:8.3}]},models:[
+    {model_id:'gpt-5.6-sol',speed_mode:'standard',call_count:20,ttft_ms:5000,ttft_samples:20,ttft_change_percent:10,tokens_per_second:55,tps_samples:18,tps_change_percent:22.5},
     {model_id:'gpt-5.6-sol',speed_mode:'fast',call_count:3,ttft_ms:3200,ttft_samples:3,tokens_per_second:82,tps_samples:2},
     {model_id:'gemini-3.7-flash',speed_mode:'unknown',call_count:2,ttft_ms:1200,ttft_samples:2,tokens_per_second:90,tps_samples:2},
   ],records:[
@@ -444,6 +483,9 @@ function performanceDiagnosticsBehavior() {
   assert.doesNotMatch(getElement('health_summary').innerHTML, /失败原因|输出前断线|上游限流/);
   const rendered = getElement('performance_records').innerHTML;
   assert.match(rendered, /gpt-5\.6-sol/);
+  assert.match(rendered, /最近 20 次有效调用/);
+  assert.match(rendered, /↓10\.0%/);
+  assert.match(rendered, /↑22\.5%/);
   assert.match(rendered, /5\.00 s/);
   assert.match(rendered, /55\.0 token\/s/);
   assert.match(rendered, />Fast</);
@@ -454,8 +496,8 @@ function performanceDiagnosticsBehavior() {
   assert.doesNotMatch(rendered, /判断|参考|原生 A\/B/);
   run('openDiagnostics()');
   assert.match(getElement('modal_title').textContent, /性能与健康/);
-  assert.match(getElement('modal_body').innerHTML, /从发出请求到模型开始返回内容的时间/);
-  assert.match(getElement('modal_body').innerHTML, /平均每秒生成的回答 token 数/);
+  assert.match(getElement('modal_body').innerHTML, /到收到首段正文或工具参数的时间/);
+  assert.match(getElement('modal_body').innerHTML, /输出期间每秒接收的 token 数估计/);
   assert.doesNotMatch(getElement('modal_body').innerHTML, /SOL 原生参考|原生 A\/B/);
   assert.doesNotMatch(getElement('modal_body').innerHTML, /最近请求|失败原因/);
   run('closeModal()');
@@ -825,11 +867,45 @@ async function runtimeSettingsIsolationBehavior() {
   assert.strictEqual(getElement('codex_runtime_dirty').hidden, true);
 }
 
+async function initialRenderIsolationBehavior() {
+  const calls = [];
+  context.__initialLoadApi = async path => {
+    calls.push(path);
+    if (path === "/api/config") return {accounts:[], providers:[], models:[]};
+    if (path === "/api/integration") return {
+      configuration:{state:"native"},
+      runtime:{state:"not_checked"},
+      codex_compatibility:{status:"unavailable", runtimes:[]},
+    };
+    throw new Error("unexpected initial load API " + path);
+  };
+  run("api = __initialLoadApi; fill = () => { throw new Error('panel render failed'); }");
+  await run("load()");
+  assert.deepStrictEqual(calls, ["/api/config", "/api/integration"], "Codex status must load even when another panel cannot render");
+  assert.strictEqual(getElement("integration_badge").textContent, "Native");
+  assert.strictEqual(getElement("status").textContent, "panel render failed");
+}
+
+function updateBehavior() {
+  run("setLanguage('zh-CN'); renderUpdate({state:'available',current_version:'0.9.8',latest_version:'0.9.9',supported:true})");
+  assert.match(getElement('update_status').textContent, /0\.9\.9/);
+  assert.strictEqual(getElement('update_install').hidden, false);
+  run("renderUpdate({state:'available',current_version:'0.9.8',latest_version:'0.9.9',supported:false})");
+  assert.strictEqual(getElement('update_install').hidden, true);
+  run("renderUpdate({state:'waiting',current_version:'0.9.8',supported:true})");
+  assert.match(getElement('update_status').textContent, /等待当前请求结束/);
+  run("renderUpdate({state:'error',error:'checksum_mismatch',current_version:'0.9.8',supported:true})");
+  assert.match(getElement('update_status').textContent, /校验失败/);
+  run("setLanguage('zh-CN')");
+}
+
 (async () => {
+  updateBehavior();
   await integrationBehavior();
   pickerBehavior();
   duplicateAccountBehavior();
   quotaHistoryBehavior();
+  await quotaHistoryRaceBehavior();
   performanceDiagnosticsBehavior();
   providerDiscoveryErrorBehavior();
   quotaMeterBehavior();
@@ -847,6 +923,7 @@ async function runtimeSettingsIsolationBehavior() {
   modalDismissalBehavior();
   await atomicStateBehavior();
   await runtimeSettingsIsolationBehavior();
+  await initialRenderIsolationBehavior();
   process.stdout.write("web DOM behavior: ok\n");
 })().catch(error => {
   console.error(error.stack || error);
