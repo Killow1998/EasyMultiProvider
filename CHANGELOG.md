@@ -1,12 +1,10 @@
 # Changelog
 
-## 0.9.9beta (2026-09-07)
+## 0.9.91 (2026-09-07)
 
 - Fix update controls remaining visible when hidden: an up-to-date installation
   no longer shows the background-install button. Preserve hidden states while
   checking or installing updates.
-- This is a preview of the UI fix after 0.9.9; stable update checks continue to
-  offer the existing 0.9.9 release.
 
 ## 0.9.9 (2026-09-07)
 
