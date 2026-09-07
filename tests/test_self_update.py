@@ -22,6 +22,10 @@ def release(name="EMP.exe"):
 
 
 class SelfUpdateTests(unittest.TestCase):
+    def test_beta_can_check_stable_updates_without_reinstalling_its_base(self):
+        self.assertIsNone(release_asset(release(), "EMP.exe", "0.9.9beta"))
+        self.assertEqual(release_asset(release(), "EMP.exe", "0.9.8beta")["version"], "0.9.9")
+
     @unittest.skipUnless(os.name == "nt", "Windows error mode")
     def test_failed_launch_restores_calling_threads_windows_error_mode(self):
         import ctypes

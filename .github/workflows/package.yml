@@ -177,9 +177,13 @@ jobs:
             gh release delete "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" --yes
           fi
+          release_flags=(--latest)
+          if [[ "$RELEASE_TAG" =~ (alpha|beta|rc) ]]; then
+            release_flags=(--prerelease --latest=false)
+          fi
           gh release create "$RELEASE_TAG" "${public_assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "EMP $RELEASE_TAG" \
             --generate-notes \
-            --latest
+            "${release_flags[@]}"

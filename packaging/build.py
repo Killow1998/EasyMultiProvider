@@ -525,6 +525,7 @@ def _write_macos_app(
     )
     terminal_command.chmod(0o755)
 
+    bundle_version = re.match(r"\d+\.\d+\.\d+", version).group()
     info = {
         "CFBundleDevelopmentRegion": "en",
         "CFBundleDisplayName": PRODUCT_NAME,
@@ -534,8 +535,8 @@ def _write_macos_app(
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": PRODUCT_NAME,
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": version,
-        "CFBundleVersion": version,
+        "CFBundleShortVersionString": bundle_version,
+        "CFBundleVersion": bundle_version,
         "NSHighResolutionCapable": True,
     }
     with (contents / "Info.plist").open("wb") as handle:

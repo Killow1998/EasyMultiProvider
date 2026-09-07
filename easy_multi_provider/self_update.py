@@ -60,7 +60,9 @@ def release_asset(release, name, current=__version__):
         raise UpdateError("invalid_release")
     tag = release.get("tag_name", "")
     latest = version_tuple(tag)
-    if latest <= version_tuple(current):
+    # Patch previews keep the stable update channel and do not reinstall their
+    # existing base release. A later stable patch remains eligible.
+    if latest <= version_tuple(re.sub(r"beta\d*$", "", str(current))):
         return None
     matches = [item for item in release.get("assets", []) if isinstance(item, dict) and item.get("name") == name]
     if len(matches) != 1:
