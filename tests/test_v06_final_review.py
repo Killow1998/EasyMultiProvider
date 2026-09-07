@@ -11,7 +11,6 @@ from easy_multi_provider.model_discovery import created_timestamp
 from easy_multi_provider.protocol_adapters import protocol_adapter
 from easy_multi_provider.dialects import PORTABLE_RESPONSES
 from easy_multi_provider.protocol_projection import (
-    _advance_textual_protocol_probe,
     _anthropic_incomplete_reason,
     _chat_incomplete_reason,
     responses_terminal_observation,
@@ -163,10 +162,6 @@ class FinalReviewRegressionTests(unittest.TestCase):
             _chat_incomplete_reason("error")
         with self.assertRaises(ExternalProtocolError):
             _anthropic_incomplete_reason("pause_turn")
-
-    def test_long_text_fragment_cannot_hide_protocol_markup(self):
-        with self.assertRaises(RouterError):
-            _advance_textual_protocol_probe("", "x" * 1024 + "<think>secret")
 
     def test_responses_json_rejects_unknown_status_and_invalid_output(self):
         with self.assertRaises(ExternalProtocolError):
@@ -340,7 +335,7 @@ class FinalReviewRegressionTests(unittest.TestCase):
                 {"type": "message", "role": "user", "content": "continue"},
             ],
         }
-        prepared = router._prepare_reasoning_summary_route(
+        prepared = router._prepare_model_request(
             {}, provider, model, body["model"], body
         )
         payload = protocol_adapter(PORTABLE_RESPONSES).project_request(

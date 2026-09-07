@@ -23,15 +23,6 @@ from .router_errors import (
 )
 
 
-_TEXTUAL_PROTOCOL_MARKERS = (
-    "<think>",
-    "</think>",
-    "<tool_call>",
-    "</tool_call>",
-    "<|tool_call|>",
-    "<|tool_calls|>",
-)
-_TEXTUAL_PROTOCOL_PROBE_BYTES = max(len(marker) for marker in _TEXTUAL_PROTOCOL_MARKERS) - 1
 _COMPACTION_SUMMARY_PREFIX = (
     "Another language model started this task and produced a continuation summary. "
     "Use it to continue without repeating completed work:"
@@ -295,7 +286,7 @@ def _chat_content(content: Any) -> Any:
     if not isinstance(content, list):
         raise RouterError("request projection failed: invalid message content", 422)
     result = []
-    has_image = False
+    has_nontext = False
     for item in content:
         if isinstance(item, str):
             result.append({"type": "text", "text": item})
@@ -303,6 +294,13 @@ def _chat_content(content: Any) -> Any:
         if not isinstance(item, Mapping):
             raise RouterError("request projection failed: invalid message content", 422)
         item_type = item.get("type")
+        if item_type == "refusal":
+            refusal = item.get("refusal")
+            if not isinstance(refusal, str):
+                raise RouterError("request projection failed: invalid refusal", 422)
+            result.append({"type": "refusal", "refusal": refusal})
+            has_nontext = True
+            continue
         if item_type in _TEXT_PART_TYPES:
             text = item.get("text")
             if not isinstance(text, str):
@@ -320,8 +318,8 @@ def _chat_content(content: Any) -> Any:
         if item.get("detail") in {"auto", "low", "high", "original"}:
             projected_image["detail"] = item["detail"]
         result.append({"type": "image_url", "image_url": projected_image})
-        has_image = True
-    if has_image:
+        has_nontext = True
+    if has_nontext:
         return result
     return "".join(item["text"] for item in result if item["type"] == "text")
 
@@ -527,6 +525,9 @@ def _anthropic_content(content: Any) -> list:
         if not isinstance(item, dict):
             raise RouterError("request projection failed: invalid Anthropic content", 422)
         item_type = item.get("type")
+        if item_type == "refusal" and isinstance(item.get("refusal"), str):
+            result.append({"type": "text", "text": item["refusal"]})
+            continue
         if item_type in _TEXT_PART_TYPES:
             text = item.get("text")
             if not isinstance(text, str):
@@ -840,15 +841,22 @@ def _response_from_chat(
         raise ExternalProtocolError(
             "Chat Completions upstream returned invalid message content"
         )
-    _validate_textual_protocol(text)
+    content = []
     if text:
+        content.append({"type": "output_text", "text": text, "annotations": []})
+    refusal = message.get("refusal")
+    if refusal is not None and not isinstance(refusal, str):
+        raise ExternalProtocolError("Chat Completions upstream returned invalid refusal")
+    if refusal:
+        content.append({"type": "refusal", "refusal": refusal})
+    if content:
         output.append(
             {
                 "id": "msg_" + uuid.uuid4().hex,
                 "type": "message",
                 "status": "completed",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": text, "annotations": []}],
+                "content": content,
             }
         )
     tool_calls = message.get("tool_calls", [])
@@ -916,7 +924,7 @@ def _response_from_chat(
     if incomplete_reason:
         response["incomplete_details"] = {"reason": incomplete_reason}
     if value.get("usage") is not None:
-        response["usage"] = value["usage"]
+        response["usage"] = _chat_usage(value["usage"])
     return response
 
 
@@ -926,24 +934,24 @@ def _upstream_error_text(error: Any) -> str:
     return str(error)
 
 
-def _validate_textual_protocol(value: Any) -> None:
-    text = str(value or "")
-    if any(marker in text for marker in _TEXTUAL_PROTOCOL_MARKERS):
-        raise RouterError(
-            "upstream returned textual reasoning/tool-call markup; "
-            "this endpoint must return structured tool calls for Codex",
-            502,
-        )
-
-
-def _advance_textual_protocol_probe(previous: str, piece: str) -> str:
-    """Validate a full new text fragment while retaining only boundary suffix."""
-
-    combined = str(previous or "") + str(piece or "")
-    _validate_textual_protocol(combined)
-    if _TEXTUAL_PROTOCOL_PROBE_BYTES <= 0:
-        return ""
-    return combined[-_TEXTUAL_PROTOCOL_PROBE_BYTES:]
+def _chat_usage(usage: Any) -> Dict[str, Any]:
+    """Project reported Chat token counts without inventing missing measurements."""
+    if not isinstance(usage, Mapping):
+        raise ExternalProtocolError("Chat Completions upstream returned invalid usage")
+    fields = {
+        "prompt_tokens": "input_tokens",
+        "completion_tokens": "output_tokens",
+        "total_tokens": "total_tokens",
+    }
+    projected = {target: usage[source] for source, target in fields.items() if source in usage}
+    for source, target, detail in (
+        ("prompt_tokens_details", "input_tokens_details", "cached_tokens"),
+        ("completion_tokens_details", "output_tokens_details", "reasoning_tokens"),
+    ):
+        value = usage.get(source)
+        if isinstance(value, Mapping) and detail in value:
+            projected[target] = {detail: value[detail]}
+    return projected
 
 
 def _anthropic_tool_arguments(value: Any) -> str:
@@ -977,7 +985,6 @@ def _response_from_anthropic(
                 raise ExternalProtocolError(
                     "Anthropic upstream returned invalid content"
                 )
-            _validate_textual_protocol(block_text)
             text.append(block_text)
             if block_text:
                 output.append(

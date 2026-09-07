@@ -194,7 +194,7 @@ class CapabilityTruthTests(unittest.TestCase):
             model["capability_sources"]["reasoning_levels"]["source"], "unknown"
         )
 
-    def test_unknown_effort_levels_are_omitted_from_all_external_protocols(self):
+    def test_unknown_effort_levels_preserve_selection_for_chat_and_responses(self):
         captured = []
 
         class Response:
@@ -268,8 +268,8 @@ class CapabilityTruthTests(unittest.TestCase):
                 {},
             )
 
-        self.assertNotIn("reasoning_effort", captured[0])
-        self.assertNotIn("reasoning", captured[1])
+        self.assertEqual(captured[0]["reasoning_effort"], "high")
+        self.assertEqual(captured[1]["reasoning"]["effort"], "high")
 
     def test_manual_reasoning_context_and_visibility_survive_refresh(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -434,13 +434,29 @@ function quotaHistoryBehavior() {
   assert.strictEqual(guide.hidden, false);
   assert.strictEqual(first.radius, '4');
   assert.strictEqual(second.radius, '4');
-  assert.strictEqual(distant.radius, '3');
+  assert.strictEqual(distant.radius, '1.8');
   assert.strictEqual(tooltip.hidden, false);
   assert.match(tooltip.innerHTML, /主窗口 · 80%/);
   assert.match(tooltip.innerHTML, /次窗口 · 60%/);
   run("quotaChartLeave({currentTarget:__quotaHoverTarget})");
   assert.strictEqual(guide.hidden, true);
   assert.strictEqual(tooltip.hidden, true);
+
+  context.__groupedQuota = {series: ['codex','codex_bengalfox'].flatMap(limit_id => [300,10080].map(window_minutes => ({limit_id,window_minutes,points:[{observed_at:1000,remaining_percent:window_minutes === 300 ? 42 : 88}]})))};
+  run("activeQuotaLimit='codex'; activeQuotaWindow='300'; renderQuotaHistory(__groupedQuota,'1d')");
+  let grouped = elements.get('quota_history_content').innerHTML;
+  assert.match(grouped, />Codex Spark<\/button>/);
+  assert.match(grouped, /data-label="5h"/);
+  assert.doesNotMatch(grouped, /data-label="7d"|data-label="Codex Spark/);
+  run("selectQuotaHistoryWindow('10080')");
+  grouped = elements.get('quota_history_content').innerHTML;
+  assert.match(grouped, /data-label="7d"/);
+  assert.doesNotMatch(grouped, /data-label="5h"/);
+  run("selectQuotaHistoryGroup('codex_bengalfox')");
+  grouped = elements.get('quota_history_content').innerHTML;
+  assert.match(grouped, /data-label="Codex Spark · 7d"/);
+  assert.doesNotMatch(grouped, />codex_bengalfox|data-label="7d"/);
+  assert.strictEqual(run("quotaLimitLabel('unrecognized')"), 'unrecognized');
 }
 
 async function quotaHistoryRaceBehavior() {

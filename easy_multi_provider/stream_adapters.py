@@ -16,13 +16,11 @@ from .dialects import (
     custom_tool_names,
 )
 from .protocol_projection import (
-    _advance_textual_protocol_probe,
     _anthropic_incomplete_reason,
     _anthropic_tool_arguments,
     _chat_incomplete_reason,
-    _content_text,
     _upstream_tool_arguments,
-    _validate_textual_protocol,
+    _chat_usage,
     responses_terminal_observation,
     responses_to_anthropic,
     responses_to_chat,
@@ -587,26 +585,24 @@ def _response_json_stream(
             {"type": "response.output_item.added", "output_index": index, "item": added},
         )
         if item_type == "message":
-            text = _content_text(item.get("content", ""))
-            _validate_textual_protocol(text)
-            if text:
-                content_part = {"type": "output_text", "text": text, "annotations": []}
-                yield _sse_frame(
-                    "response.content_part.added",
-                    {"type": "response.content_part.added", "item_id": item["id"], "output_index": index, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}},
-                )
-                yield _sse_frame(
-                    "response.output_text.delta",
-                    {"type": "response.output_text.delta", "item_id": item["id"], "output_index": index, "content_index": 0, "delta": text},
-                )
-                yield _sse_frame(
-                    "response.output_text.done",
-                    {"type": "response.output_text.done", "item_id": item["id"], "output_index": index, "content_index": 0, "text": text},
-                )
-                yield _sse_frame(
-                    "response.content_part.done",
-                    {"type": "response.content_part.done", "item_id": item["id"], "output_index": index, "content_index": 0, "part": content_part},
-                )
+            for content_index, part in enumerate(item.get("content", [])):
+                kind = part.get("type")
+                if kind not in {"output_text", "refusal"}:
+                    continue
+                field = "text" if kind == "output_text" else "refusal"
+                empty = dict(part)
+                empty[field] = ""
+                common = {"item_id": item["id"], "output_index": index, "content_index": content_index}
+                yield _sse_frame("response.content_part.added", {
+                    "type": "response.content_part.added", **common, "part": empty,
+                })
+                event = "response." + kind + ".delta"
+                yield _sse_frame(event, {"type": event, **common, "delta": part[field]})
+                event = "response." + kind + ".done"
+                yield _sse_frame(event, {"type": event, **common, field: part[field]})
+                yield _sse_frame("response.content_part.done", {
+                    "type": "response.content_part.done", **common, "part": part,
+                })
         elif item_type == "function_call":
             arguments = item.get("arguments", "{}")
             if not isinstance(arguments, str):
@@ -811,11 +807,13 @@ def stream_chat_completion(
     body = io.body_with_supported_effort(provider, body, model)
     payload = responses_to_chat(body, upstream_model)
     payload["stream"] = True
+    payload["stream_options"] = {"include_usage": True}
     response_id = "resp_" + uuid.uuid4().hex
     message_id = "msg_" + uuid.uuid4().hex
     text = []
     text_bytes = 0
-    protocol_probe = ""
+    content_parts = {}
+    usage = None
     tool_calls = {}
     tool_call_ids = set()
     custom_names = custom_tool_names(body)
@@ -873,6 +871,8 @@ def stream_chat_completion(
                     "Chat Completions upstream returned an error",
                     502,
                 )
+            if chunk.get("usage") is not None:
+                usage = _chat_usage(chunk["usage"])
             choices = chunk.get("choices")
             if not isinstance(choices, list):
                 raise ExternalProtocolError(
@@ -926,44 +926,41 @@ def stream_chat_completion(
                 raise ExternalProtocolError(
                     "Chat Completions upstream returned invalid message content"
                 )
-            if piece:
-                protocol_probe = _advance_textual_protocol_probe(protocol_probe, piece)
-                piece_bytes = len(piece.encode("utf-8"))
+            refusal = delta.get("refusal")
+            if refusal is not None and not isinstance(refusal, str):
+                raise ExternalProtocolError("Chat Completions upstream returned invalid refusal")
+            for kind, fragment in (("output_text", piece), ("refusal", refusal)):
+                if not fragment:
+                    continue
+                piece_bytes = len(fragment.encode("utf-8"))
                 if text_bytes + piece_bytes > MAX_STREAM_TEXT_BYTES:
                     raise RouterError("upstream streamed text is too large", 502)
                 text_bytes += piece_bytes
-                text.append(piece)
+                if kind == "output_text":
+                    text.append(fragment)
                 saw_output = True
                 if not message_started:
                     message_started = True
-                    yield frame(
-                        "response.output_item.added",
-                        {
-                            "type": "response.output_item.added",
-                            "output_index": 0,
-                            "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []},
-                        },
-                    )
-                    yield frame(
-                        "response.content_part.added",
-                        {
-                            "type": "response.content_part.added",
-                            "item_id": message_id,
-                            "output_index": 0,
-                            "content_index": 0,
-                            "part": {"type": "output_text", "text": "", "annotations": []},
-                        },
-                    )
-                yield frame(
-                    "response.output_text.delta",
-                    {
-                        "type": "response.output_text.delta",
-                        "item_id": message_id,
-                        "output_index": 0,
-                        "content_index": 0,
-                        "delta": piece,
-                    },
-                )
+                    yield frame("response.output_item.added", {
+                        "type": "response.output_item.added", "output_index": 0,
+                        "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []},
+                    })
+                if kind not in content_parts:
+                    part = {"type": kind, "text" if kind == "output_text" else "refusal": ""}
+                    if kind == "output_text":
+                        part["annotations"] = []
+                    content_parts[kind] = part
+                    yield frame("response.content_part.added", {
+                        "type": "response.content_part.added", "item_id": message_id,
+                        "output_index": 0, "content_index": list(content_parts).index(kind),
+                        "part": dict(part),
+                    })
+                content_parts[kind]["text" if kind == "output_text" else "refusal"] += fragment
+                event = "response." + kind + ".delta"
+                yield frame(event, {
+                    "type": event, "item_id": message_id, "output_index": 0,
+                    "content_index": list(content_parts).index(kind), "delta": fragment,
+                })
             raw_calls = delta.get("tool_calls", [])
             if not isinstance(raw_calls, list):
                 raise ExternalProtocolError(
@@ -1053,7 +1050,7 @@ def stream_chat_completion(
             "type": "message",
             "status": "completed",
             "role": "assistant",
-            "content": [{"type": "output_text", "text": final_text, "annotations": []}],
+            "content": list(content_parts.values()),
         }
         function_outputs = []
         tool_output_base = 1 if message_started else 0
@@ -1147,27 +1144,20 @@ def stream_chat_completion(
         response["output_text"] = final_text
         if incomplete_reason:
             response["incomplete_details"] = {"reason": incomplete_reason}
+        if usage is not None:
+            response["usage"] = usage
         if message_started:
-            yield frame(
-                "response.output_text.done",
-                {
-                    "type": "response.output_text.done",
-                    "item_id": message_id,
-                    "output_index": 0,
-                    "content_index": 0,
-                    "text": final_text,
-                },
-            )
-            yield frame(
-                "response.content_part.done",
-                {
-                    "type": "response.content_part.done",
-                    "item_id": message_id,
-                    "output_index": 0,
-                    "content_index": 0,
-                    "part": {"type": "output_text", "text": final_text, "annotations": []},
-                },
-            )
+            for content_index, (kind, part) in enumerate(content_parts.items()):
+                field = "text" if kind == "output_text" else "refusal"
+                event = "response." + kind + ".done"
+                yield frame(event, {
+                    "type": event, "item_id": message_id, "output_index": 0,
+                    "content_index": content_index, field: part[field],
+                })
+                yield frame("response.content_part.done", {
+                    "type": "response.content_part.done", "item_id": message_id,
+                    "output_index": 0, "content_index": content_index, "part": part,
+                })
             yield frame(
                 "response.output_item.done",
                 {
@@ -1290,7 +1280,6 @@ def stream_anthropic_completion(
                         "output_index": output_index,
                         "id": "msg_" + uuid.uuid4().hex,
                         "parts": [],
-                        "probe": "",
                         "explicit": True,
                         "closed": False,
                     }
@@ -1433,7 +1422,6 @@ def stream_anthropic_completion(
                         "output_index": len(ordered_blocks),
                         "id": "msg_" + uuid.uuid4().hex,
                         "parts": [],
-                        "probe": "",
                         "explicit": False,
                         "closed": False,
                     }
@@ -1485,9 +1473,6 @@ def stream_anthropic_completion(
                     if text_bytes + piece_bytes > MAX_STREAM_TEXT_BYTES:
                         raise RouterError("upstream streamed text is too large", 502)
                     text_bytes += piece_bytes
-                    state["probe"] = _advance_textual_protocol_probe(
-                        state["probe"], piece
-                    )
                     state["parts"].append(piece)
                     all_text.append(piece)
                     yield frame(

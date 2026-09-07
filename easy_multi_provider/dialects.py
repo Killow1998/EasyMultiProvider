@@ -103,6 +103,9 @@ def _project_content(content: Any, index: int) -> Any:
         if part_type in _TEXT_PART_TYPES and isinstance(part.get("text"), str):
             result.append({"type": part_type, "text": part["text"]})
             continue
+        if part_type == "refusal" and isinstance(part.get("refusal"), str):
+            result.append({"type": "refusal", "refusal": part["refusal"]})
+            continue
         if part_type in {"input_image", "output_image"}:
             image_url = part.get("image_url")
             if isinstance(image_url, Mapping):
@@ -251,6 +254,20 @@ def _portable_input(
         if not isinstance(item, Mapping):
             raise ProjectionError(index, "unknown", (), "invalid_item")
         item_type = str(item.get("type") or "message")
+        if item_type == "agent_message":
+            content = item.get("content", [])
+            parts = content if isinstance(content, list) else []
+            if item.get("encrypted_content") is not None or any(
+                isinstance(part, Mapping) and part.get("type") == "encrypted_content"
+                for part in parts
+            ):
+                # The task itself may exist only in native backend ciphertext.
+                # Forwarding just its visible envelope silently loses the task.
+                raise ProjectionError(index, item_type, ("encrypted_content",),
+                                      "encrypted_agent_task_requires_plaintext")
+            result.append({"type": "message", "role": "user",
+                           "content": _project_content(content, index)})
+            continue
         if item_type == "reasoning":
             opaque = item.get("encrypted_content")
             if preserve_reasoning_state and isinstance(opaque, str) and opaque:

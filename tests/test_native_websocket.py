@@ -52,6 +52,19 @@ class _GatewayFailure(Exception):
 
 
 class NativeWebSocketTests(unittest.TestCase):
+    def test_incremental_collaboration_restores_plaintext_without_tools(self):
+        terminal = {"type": "response.completed", "response": {"status": "completed"}}
+        item = {"type": "function_call", "namespace": "emp_collaboration",
+                "name": "spawn_agent", "arguments": '{"message":"test"}'}
+        connection = _FakeConnection([terminal,
+            {"type": "response.output_item.done", "item": item}, terminal])
+        bridge = NativeWebSocketBridge(lambda _target: connection)
+        target = NativeWebSocketTarget("wss://example.test/responses", {}, "route")
+        list(bridge.events(target, {"tools": [{"type": "namespace", "name": "emp_collaboration"}]}))
+        result = list(bridge.events(target, {"previous_response_id": "resp_1", "input": []}))
+        self.assertEqual(result[0]["item"]["namespace"], "collaboration")
+        self.assertEqual(result[0]["item"]["encrypted_function_args"], [])
+
     def test_bridge_reports_sanitized_transport_phases(self):
         phases = []
         connection = _FakeConnection(

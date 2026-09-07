@@ -24,6 +24,31 @@ from easy_multi_provider.transport import sse_json_events
 
 
 class ResponsesDialectTests(unittest.TestCase):
+    def test_agent_message_plaintext_preserves_task_without_mutation(self):
+        body = {"input": [{"type": "agent_message", "author": "/root",
+                           "recipient": "/root/writer", "content": [
+                               {"type": "input_text", "text": "Write the assigned section."}]}]}
+        original = copy.deepcopy(body)
+        result = project_request({"protocol": "responses", "auth_mode": "api_key"}, body)
+        self.assertEqual(result["input"], [{"type": "message", "role": "user",
+                                          "content": body["input"][0]["content"]}])
+        self.assertEqual(body, original)
+
+    def test_encrypted_agent_task_is_not_silently_discarded(self):
+        for opaque in ("", "private-task-ciphertext"):
+            item = {"type": "agent_message", "content": [
+                {"type": "input_text", "text": "Payload:"},
+                {"type": "encrypted_content", "encrypted_content": opaque}]}
+            with self.assertRaises(ProjectionError) as raised:
+                project_request({"protocol": "responses", "auth_mode": "api_key"},
+                                {"input": [item]})
+            self.assertEqual(raised.exception.failure_class,
+                             "encrypted_agent_task_requires_plaintext")
+            self.assertNotIn("private-task-ciphertext", str(raised.exception))
+            native = project_request({"protocol": "responses", "auth_mode": "forward"},
+                                     {"input": [item]})
+            self.assertEqual(native["input"], [item])
+
     def test_portable_projection_always_sends_a_boolean_stream_flag(self):
         provider = {"protocol": "responses", "auth_mode": "api_key"}
 

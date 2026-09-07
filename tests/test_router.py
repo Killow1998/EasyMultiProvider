@@ -75,7 +75,7 @@ class RouterTests(unittest.TestCase):
         }
 
         show_model = {"supports_reasoning_summaries": True}
-        shown = router._prepare_reasoning_summary_route(
+        shown = router._prepare_model_request(
             {
                 "catalog_presentations": {
                     "external/model": {"reasoning_summary": "show"}
@@ -90,7 +90,7 @@ class RouterTests(unittest.TestCase):
         self.assertTrue(show_model["_emp_preserve_reasoning_summary"])
 
         hidden_model = {"supports_reasoning_summaries": True}
-        hidden = router._prepare_reasoning_summary_route(
+        hidden = router._prepare_model_request(
             {
                 "catalog_presentations": {
                     "external/model": {"reasoning_summary": "hide"}
@@ -108,7 +108,7 @@ class RouterTests(unittest.TestCase):
             "upstream_id": "shared-family",
             "supports_reasoning_summaries": True,
         }
-        family_hidden = router._prepare_reasoning_summary_route(
+        family_hidden = router._prepare_model_request(
             {
                 "catalog_family_presentations": {
                     "shared-family": {"reasoning_summary": "hide"}
@@ -123,7 +123,7 @@ class RouterTests(unittest.TestCase):
         self.assertFalse(family_model["_emp_preserve_reasoning_summary"])
 
         chat_model = {"supports_reasoning_summaries": True}
-        chat_body = router._prepare_reasoning_summary_route(
+        chat_body = router._prepare_model_request(
             {},
             {
                 "id": "chat",
@@ -138,7 +138,7 @@ class RouterTests(unittest.TestCase):
         self.assertFalse(chat_model["_emp_preserve_reasoning_summary"])
 
         native_model = {}
-        native_body = router._prepare_reasoning_summary_route(
+        native_body = router._prepare_model_request(
             {},
             {"protocol": "responses", "auth_mode": "forward"},
             native_model,
@@ -3366,12 +3366,12 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(result["output_text"], "Hello")
         self.assertEqual(result["output"][0]["content"][0]["text"], "Hello")
 
-    def test_chat_response_rejects_textual_tool_markup(self):
-        with self.assertRaises(RouterError) as raised:
-            _response_from_chat({
-                "choices": [{"message": {"content": "<tool_call>exec</tool_call>"}}]
-            }, "demo/model")
-        self.assertEqual(raised.exception.status, 502)
+    def test_chat_response_preserves_literal_tool_markup(self):
+        result = _response_from_chat({
+            "choices": [{"message": {"content": "<tool_call>exec</tool_call>"}, "finish_reason": "stop"}]
+        }, "demo/model")
+        self.assertEqual(result["output_text"], "<tool_call>exec</tool_call>")
+        self.assertEqual([item["type"] for item in result["output"]], ["message"])
 
     def test_chat_response_surfaces_json_error(self):
         with self.assertRaises(RouterError) as raised:
@@ -4047,12 +4047,14 @@ class RouterTests(unittest.TestCase):
                 ]
                 self.assertEqual(terminals, ["response.failed"])
 
-    def test_stream_rejects_textual_tool_markup(self):
+    def test_stream_preserves_literal_tool_markup(self):
         class FakeResponse:
             def __iter__(self):
                 return iter([
                     b'data: {"choices":[{"delta":{"content":"<tool_call>"}}]}\n',
                     b'\n',
+                    b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n', b'\n',
+                    b'data: [DONE]\n', b'\n',
                 ])
 
             def close(self):
@@ -4063,7 +4065,8 @@ class RouterTests(unittest.TestCase):
         body = {"model": "demo/model", "input": "Run pwd", "stream": True}
         with patch.object(router, "_request", return_value=FakeResponse()):
             output = b"".join(router.stream_chat_completion(provider, body, model, {})).decode("utf-8")
-        self.assertIn("textual reasoning/tool-call markup", output)
+        self.assertIn("<tool_call>", output)
+        self.assertIn("response.completed", output)
 
     def test_stream_accepts_non_sse_chat_response(self):
         class FakeResponse:

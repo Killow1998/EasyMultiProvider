@@ -45,7 +45,10 @@ def body_with_supported_effort(
         return projected
     levels = model.get("reasoning_levels")
     effort = reasoning.get("effort")
-    if isinstance(levels, list) and effort in levels:
+    unsupported = model.get("supports_reasoning") is False or (
+        isinstance(levels, list) and bool(levels) and effort not in levels
+    )
+    if not unsupported:
         return projected
     reasoning = dict(reasoning)
     reasoning.pop("effort", None)
@@ -57,6 +60,17 @@ def body_with_supported_effort(
 
 
 def _request_projection_error(exc: ProjectionError) -> RouterError:
+    if exc.failure_class == "encrypted_agent_task_requires_plaintext":
+        return RouterError(
+            "encrypted_agent_task_requires_plaintext: The subagent task contains "
+            "encrypted_content that EMP and the external model cannot decrypt. "
+            "The request was not forwarded. Create a new delegation with a plaintext "
+            "task through a plaintext-capable collaboration tool/runtime; retrying "
+            "the same encrypted payload will fail. Changing the wording alone does "
+            "not disable runtime encryption. Do not discard the encrypted task or "
+            "treat its ciphertext as plaintext.",
+            422,
+        )
     if exc.failure_class in {"opaque_compaction", "invalid_compaction"}:
         return HistoryReconstructionError("history_projection_incomplete")
     return RouterError(str(exc), 422)
@@ -123,6 +137,16 @@ class _ResponsesAdapter(ProtocolAdapter):
 
 
 class CodexNativeAdapter(_ResponsesAdapter):
+    def project_request(self, provider, body, model, upstream_model):
+        from .collaboration_transport import prepare_collaboration
+        payload = super().project_request(provider, body, model, upstream_model)
+        if model.get("_emp_plaintext_collaboration"):
+            try:
+                payload, _ = prepare_collaboration(payload)
+            except ValueError as exc:
+                raise RouterError(str(exc), 422) from exc
+        return payload
+
     def __init__(self) -> None:
         super().__init__(CODEX_NATIVE, "responses", native=True, replay_safe=False)
 
@@ -134,6 +158,9 @@ class CodexNativeAdapter(_ResponsesAdapter):
         body: Mapping[str, Any],
         model: Mapping[str, Any],
     ) -> bytes:
+        if model.get("_emp_plaintext_collaboration"):
+            from .collaboration_transport import restore_collaboration
+            return json.dumps(restore_collaboration(json.loads(raw))).encode("utf-8")
         return raw
 
 

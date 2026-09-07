@@ -76,7 +76,6 @@ from .protocol_projection import (
     _messages,
     _normalize_compaction_input,
     _tools,
-    _validate_textual_protocol,
     responses_terminal_observation,
 )
 from .protocol_adapters import body_with_supported_effort, protocol_adapter
@@ -927,7 +926,21 @@ def forward_responses_stream(
             preserve_reasoning_state=model.get("_emp_preserve_reasoning_state")
             is True,
         )
+    if model.get("_emp_plaintext_collaboration"):
+        return _collaboration_stream(validated)
     return validated
+
+
+def _collaboration_stream(chunks):
+    from .collaboration_transport import restore_collaboration
+    try:
+        for event in sse_json_events(chunks):
+            projected = restore_collaboration(event)
+            yield _sse_frame(str(projected.get("type") or "message"), projected)
+    finally:
+        close = getattr(chunks, "close", None)
+        if callable(close):
+            close()
 
 
 def _observing_stream(
@@ -1069,16 +1082,21 @@ def _reasoning_summary_policy(
     return policy if policy in {"auto", "show", "hide"} else "auto"
 
 
-def _prepare_reasoning_summary_route(
+def _prepare_model_request(
     config: Mapping[str, Any],
     provider: Mapping[str, Any],
     model: Dict[str, Any],
     route: str,
     body: Mapping[str, Any],
 ) -> Dict[str, Any]:
-    """Apply a structured-summary policy without touching native requests."""
+    """Prepare route-specific collaboration and reasoning-summary settings."""
 
     if classify_dialect(provider) == CODEX_NATIVE:
+        if any(
+            isinstance(item, Mapping) and item.get("auth_mode") == "api_key"
+            for item in config.get("providers", [])
+        ):
+            model["_emp_plaintext_collaboration"] = True
         return dict(body)
     policy = _reasoning_summary_policy(config, route, model)
     supported = model.get("supports_reasoning_summaries") is True
@@ -1260,7 +1278,7 @@ def prepare_native_websocket_request(
     model = route.model_copy()
     if route.protocol != "responses" or route.dialect != CODEX_NATIVE:
         return None
-    prepared = _prepare_reasoning_summary_route(
+    prepared = _prepare_model_request(
         config, provider, model, model_id, body
     )
     if not transport_incremental:
@@ -2320,7 +2338,7 @@ def proxy(
         raise RouterError("resolved route does not match request.model", 500)
     provider = route.provider_copy()
     model = route.model_copy()
-    body = _prepare_reasoning_summary_route(
+    body = _prepare_model_request(
         config, provider, model, model_id, body
     )
     try:

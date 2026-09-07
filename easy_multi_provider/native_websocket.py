@@ -555,6 +555,10 @@ class NativeWebSocketBridge:
                         success=bool(observation.get("success", False)),
                         status=observation.get("status"),
                     )
+                # Incremental requests may omit tools inherited upstream.
+                # Restore only our explicit namespace, regardless of that omission.
+                from .collaboration_transport import restore_collaboration
+                event = restore_collaboration(event)
                 yield event
                 if observation is not None:
                     return

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.9 (2026-09-07)
+
+### Fixed
+
+- Fix external subagent delegation in Codex Responses Lite, including follow-up
+  tasks and tool calls. Verify Gemini 3.7 Flash and 3.8 Flash high with Codex
+  runtime 0.153.4. Report encrypted tasks that cannot be forwarded explicitly.
+- Preserve plaintext collaboration markers on incremental WebSocket requests.
+- Preserve literal reasoning and tool markup in answers instead of rejecting
+  ordinary text with a 502 error.
+- Preserve Chat refusal messages in Responses output and streaming events.
+- Translate Chat token usage, including cached and reasoning tokens, and retain
+  usage reported at the end of a stream.
+- Preserve the requested reasoning effort when model capabilities are unknown.
+- Label Codex Spark quotas and let users view Codex/Spark and 5h/7d histories
+  separately. Keep dense sampling points from obscuring trend lines.
+
+### Maintenance
+
+- Remove text-marker rejection and its rolling stream probes; protocol handling
+  uses structured events instead of guessing from answer text.
+- Keep runtime compatibility labels derived from one version definition and
+  avoid copying ordinary text deltas in the collaboration adapter.
+
 ## 0.9.8 (2026-09-05)
 
 ### Added
