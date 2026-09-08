@@ -6,7 +6,7 @@ EMP is a local, browser-configured model router for Codex.
 It keeps the native Codex experience while adding multiple ChatGPT
 subscriptions, API providers, and external models to the same model list.
 
-The current source version is `v0.9.91`.
+The current source version is `v0.9.92`.
 
 ## Features
 
@@ -182,10 +182,14 @@ The terminal prints a one-use browser URL. Open it and:
 With only the current native account, skip account and Provider import. Hide
 models under **Current Codex login → Edit**, rename model families under
 **Model display**, save, and click **Apply EMP to Codex**. Keep at least
-one model visible. Display names do not change model IDs. Safely restart active
-Codex clients as needed and check their model picker: model IDs alone cannot
-verify native visibility or names. EMP reports the catalog as saved but display
-verification as pending, and **Restore native Codex** remains available.
+one model visible. Display names do not change model IDs.
+
+With a ChatGPT login, model names, visibility, and additions refresh while Codex
+is running. Runtime 0.153.4 refreshes about every 4.5 minutes; reopen the model
+picker after the refresh. Restart Codex once after upgrading from an older EMP
+static catalog or changing Codex's Base URL. Clients without ChatGPT model
+discovery continue to use the static catalog. Restore Native Codex before
+rolling back to EMP 0.9.91 or earlier.
 
 EMP listens on `http://127.0.0.1:4200` by default. Use `--port` only when that
 port is already occupied.

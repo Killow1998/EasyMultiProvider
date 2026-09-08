@@ -151,7 +151,7 @@ assert.doesNotMatch(html, /id="subscription_search_account"/);
 assert.doesNotMatch(html, /data-catalog-summary/);
 assert.match(html, /@phosphor-icons\/core 2\.1\.1, Regular weight, MIT/);
 assert.strictEqual(
-  Array.from(html.matchAll(/button\[data-icon="[^"]+"\]\{--button-icon:url\("data:image\/svg\+xml,%3Csvg%20/g)).length,
+  Array.from(html.matchAll(/button\[data-icon="[^"]+"\](?:,\.quota-reset)?\{--button-icon:url\("data:image\/svg\+xml,%3Csvg%20/g)).length,
   13,
   "all action icons must come from the embedded Phosphor set",
 );

@@ -7,6 +7,7 @@ import base64
 from collections import deque
 import json
 import hmac
+import hashlib
 import os
 import platform
 import re
@@ -28,6 +29,8 @@ from . import __version__
 from .self_update import UpdateError, UpdateManager, mark_update_ready
 from .accounts import (
     NATIVE_ACCOUNT_ID,
+    AccountError,
+    load_native_auth,
     account_root,
     duplicate_account_status,
     import_account,
@@ -38,6 +41,7 @@ from .accounts import (
 from .catalog import (
     build_catalog,
     generated_catalog_path,
+    preserve_native_catalog,
     write_catalog,
 )
 from .capabilities import (
@@ -1470,6 +1474,14 @@ class AppState:
         self._persist_runtime_recovery()
         return result
 
+    def dynamic_model_catalog(self) -> bool:
+        """Codex fetches remote catalogs when using its ChatGPT login."""
+        try:
+            load_native_auth(self.codex_home / "auth.json")
+            return True
+        except AccountError:
+            return False
+
     def enable_integration(
         self, base_url: str, *, confirm_reload: bool
     ) -> IntegrationResult:
@@ -1484,13 +1496,22 @@ class AppState:
             for item in build_catalog(config).get("models", [])
         ):
             raise EmptyEmpCatalog("The catalog has no visible native or additional models")
-        # Catalog creation is deliberately before the lease transaction.  The
-        # Codex config never points at a catalog that EMP failed to write.
+        # Retain the disk catalog for clients without ChatGPT model discovery.
         catalog_path = write_catalog(config, self.integration_catalog_path)
+        dynamic = self.dynamic_model_catalog()
         with manager.operation_lock():
+            status = manager.status()
+            if (dynamic and status.relation == "applied" and status.lease is not None
+                    and status.lease.fields["openai_base_url"].applied.value == base_url
+                    and status.lease.fields["model_catalog_json"].applied.value == str(catalog_path.resolve())):
+                # Restore through the existing lease before changing its managed target.
+                # This preserves the user's original catalog for EMP shutdown recovery.
+                restored = manager.restore()
+                if not restored.ok:
+                    return restored
             result = manager.enable(
                 base_url,
-                str(catalog_path.resolve()),
+                None if dynamic else str(catalog_path.resolve()),
                 service_ready=self.service_ready,
             )
             if result.ok and result.state == "active":
@@ -3292,13 +3313,18 @@ def make_handler(state: AppState):
                     )
                 return
             if path == "/v1/models":
-                catalog = build_catalog(state.snapshot())
+                config = state.snapshot()
                 query = parse_qs(urlparse(self.path).query)
+                if "client_version" in query:
+                    preserve_native_catalog(config)
+                catalog = build_catalog(config)
                 if "client_version" in query:
                     # Codex's models manager uses its own rich ModelsResponse
                     # schema at this endpoint. Other OpenAI-compatible clients
                     # still receive the conventional object/data model list.
-                    self._send(200, _json_bytes(catalog))
+                    payload = _json_bytes(catalog)
+                    etag = '"emp-' + hashlib.sha256(payload).hexdigest() + '"'
+                    self._send(200, payload, headers={"ETag": etag})
                     return
                 data = [
                     {
@@ -4054,6 +4080,8 @@ def startup_reconcile(state: AppState, server: BoundedThreadingHTTPServer) -> In
     result = state.reconcile_startup(state.service_ready)
     if result.action == "re_adopted" and result.state == "active":
         state.refresh_catalog()
+        if state.dynamic_model_catalog() and result.lease.fields["model_catalog_json"].applied.present:
+            result = state.enable_integration(base_url, confirm_reload=False)
     return result
 
 

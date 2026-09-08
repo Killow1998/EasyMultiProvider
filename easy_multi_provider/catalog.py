@@ -6,13 +6,13 @@ import copy
 import json
 import os
 import re
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .accounts import duplicate_account_status
 from .capabilities import codex_input_modalities, normalize_reasoning_levels
 from .config import MAX_CONTEXT_WINDOW
+from .integration import atomic_write_text
 
 EFFORT_DESCRIPTIONS = {
     "minimal": "Fast responses with minimal reasoning",
@@ -213,7 +213,22 @@ def load_native_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
         return {"models": []}
     if not isinstance(value, dict) or not isinstance(value.get("models"), list):
         return {"models": []}
+    if str(value.get("etag", "")).strip('"').startswith("emp-"):
+        try:
+            value = json.loads((path.parent / "easy-multi-provider" / "native-catalog.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"models": []}
+        if not isinstance(value, dict) or not isinstance(value.get("models"), list):
+            return {"models": []}
     return value
+
+
+def preserve_native_catalog(config: Dict[str, Any]) -> None:
+    """Keep native metadata separate from Codex's cache of EMP's merged catalog."""
+    value = load_native_catalog(config)
+    if value.get("models"):
+        path = native_path(config).parent / "easy-multi-provider" / "native-catalog.json"
+        atomic_write_text(path, json.dumps(value, ensure_ascii=False))
 
 
 def _reasoning_levels(values: List[str]) -> List[Dict[str, str]]:
@@ -547,19 +562,7 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def write_catalog(config: Dict[str, Any], path: Path) -> Path:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=".codex-models-", dir=str(path.parent))
-    try:
-        os.chmod(temporary, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(build_catalog(config), handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
-        os.replace(temporary, str(path))
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-    return path
+    return atomic_write_text(path, json.dumps(build_catalog(config), indent=2, ensure_ascii=False) + "\n")
 
 
 def generated_catalog_path(codex_home: Optional[Path] = None) -> Path:

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.92 (2026-09-08)
+
+- Refresh model names, visibility, and added models without restarting after
+  enabling the dynamic catalog with a ChatGPT login. Codex runtime 0.153.4
+  refreshes the catalog automatically about every 4.5 minutes. Restart Codex
+  once when upgrading from the static catalog.
+- Keep the original native catalog separate from the merged model cache so
+  hidden models can be restored and renamed models do not overwrite defaults.
+- Show compact quota reset countdowns with a refresh icon, updated every minute.
+- Reuse the existing atomic file writer for model catalogs.
+
 ## 0.9.91 (2026-09-07)
 
 - Fix update controls remaining visible when hidden: an up-to-date installation

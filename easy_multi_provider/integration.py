@@ -406,7 +406,7 @@ def _lease_from_dict(raw: Any, config_path: Path) -> LeaseRecord:
             raise LeaseError("invalid lease recovery field: %s" % field)
         original = _field_state(recovery["original"], field)
         applied = _field_state(recovery["applied"], field)
-        if not applied.present:
+        if field == "openai_base_url" and not applied.present:
             raise LeaseError("lease applied field is absent: %s" % field)
         fields[field] = FieldRecovery(original=original, applied=applied)
     for key in ("lease_id", "instance_id", "created_at", "updated_at"):
@@ -687,14 +687,15 @@ class IntegrationManager:
     def enable(
         self,
         openai_base_url: str,
-        model_catalog_json: str,
+        model_catalog_json: Optional[str],
         service_ready: ServiceReady = False,
     ) -> IntegrationResult:
         """Prepare a lease, apply TOML, then commit the lease as active."""
 
         desired = {
             "openai_base_url": FieldState(True, _toml_value(openai_base_url, "openai_base_url")),
-            "model_catalog_json": FieldState(True, _toml_value(model_catalog_json, "model_catalog_json")),
+            "model_catalog_json": (FieldState(False, None) if model_catalog_json is None else
+                                   FieldState(True, _toml_value(model_catalog_json, "model_catalog_json"))),
         }
         self._confirm_service(service_ready)
         self._assert_safe_paths()
@@ -827,7 +828,7 @@ def enable(
     config_path: Path,
     lease_path: Path,
     openai_base_url: str,
-    model_catalog_json: str,
+    model_catalog_json: Optional[str],
     service_ready: ServiceReady = False,
     instance_id: Optional[str] = None,
     lock_timeout: float = 5.0,

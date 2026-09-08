@@ -140,6 +140,37 @@ class NativeCatalogIntegrationTests(unittest.TestCase):
         self.assertFalse(self.state.integration_catalog_path.exists())
         self.assert_native_files_untouched()
 
+    def test_dynamic_catalog_removes_static_override_and_restores_original(self):
+        self.auth_path.write_text(json.dumps({"tokens": {"access_token": "fixture"}}), encoding="utf-8")
+        self.config_path.write_bytes(b'model_catalog_json = "user-catalog.json"\n')
+        original = self.config_path.read_bytes()
+        status, _ = self.request("/api/integration/enable", {"confirm_reload": True})
+        self.assertEqual(status, 200)
+        self.assertNotIn("model_catalog_json", self.config_path.read_text(encoding="utf-8"))
+        self.state.restore_integration()
+        self.assertEqual(self.config_path.read_bytes(), original)
+
+    def test_existing_static_lease_can_migrate_without_losing_original_config(self):
+        self.request("/api/integration/enable", {"confirm_reload": True})
+        self.auth_path.write_text(json.dumps({"tokens": {"access_token": "fixture"}}), encoding="utf-8")
+        status, _ = self.request("/api/integration/enable", {"confirm_reload": True})
+        self.assertEqual(status, 200)
+        self.assertNotIn("model_catalog_json", self.config_path.read_text(encoding="utf-8"))
+        self.state.restore_integration()
+        self.assertEqual(self.config_path.read_bytes(), self.original_config)
+
+    def test_dynamic_cache_does_not_feed_renamed_or_hidden_models_back_into_native(self):
+        from easy_multi_provider.catalog import build_catalog, preserve_native_catalog
+        config = self.state.snapshot()
+        preserve_native_catalog(config)
+        self.save_display(["gpt-native-b"], "Changed")
+        merged = build_catalog(self.state.snapshot())
+        self.native_path.write_text(json.dumps({**merged, "etag": '\"emp-fixture\"'}), encoding="utf-8")
+        self.save_display([], "")
+        restored = {m["slug"]: m for m in build_catalog(self.state.snapshot())["models"]}
+        self.assertIn("gpt-native-b", restored)
+        self.assertEqual(restored["gpt-native-a"]["display_name"], "Native A")
+
     def test_empty_or_fully_hidden_catalog_is_rejected_without_writing(self):
         for missing in (False, True):
             with self.subTest(missing=missing):

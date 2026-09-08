@@ -133,7 +133,7 @@ def startup_target_conflict(
     conflicts = []
     if lease.fields["openai_base_url"].applied.value != base_url:
         conflicts.append("listener_mismatch")
-    if lease.fields["model_catalog_json"].applied.value != catalog_path:
+    if lease.fields["model_catalog_json"].applied.value not in (None, catalog_path):
         conflicts.append("catalog_mismatch")
     if not conflicts:
         return None
