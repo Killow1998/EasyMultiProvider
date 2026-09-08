@@ -496,6 +496,7 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
             journal = CapturingJournal()
             state = self.make_state(root, journal=journal)
             handler = object.__new__(make_handler(state))
+            handler._request_id = "0123456789abcdef"
 
             handler._record_websocket_phase(
                 "connection-1234",
@@ -514,6 +515,7 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
                 events,
                 [{
                     "connection_id": "connection-1234",
+                    "request_id": "0123456789abcdef",
                     "phase": "upstream_request_sent",
                     "request_bytes": 4096,
                     "reused": True,
@@ -540,6 +542,35 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
             "/api/accounts/account/quota/extra",
         ):
             self.assertEqual(_diagnostic_http_path(path), path)
+
+    def test_model_request_records_claimed_source_and_hidden_state_without_content(self):
+        from easy_multi_provider.diagnostic_journal import request_source
+        thread_id = "01a0805c-52c3-75d1-bc77-6ee95d3aff50"
+        with tempfile.TemporaryDirectory() as directory:
+            journal = CapturingJournal()
+            state = self.make_state(Path(directory), journal=journal)
+            state.config["native_hidden_models"] = ["gpt-5.6-terra"]
+            body = {"model": "gpt-5.6-terra", "input": "BODYSECRET"}
+            with patch("easy_multi_provider.server.valid_caller_authorization", return_value=True), patch.object(state.codex, "route", return_value=({"kind": "bytes", "status": 200}, b"{}")):
+                with running_server(state) as server:
+                    status, _ = request(server, "POST", "/v1/responses", json.dumps(body).encode(), {
+                        "Content-Type": "application/json", "Session-ID": thread_id,
+                        "originator": "codex_cli_rs", "Authorization": "Bearer SECRET",
+                    })
+            self.assertEqual(status, 200)
+            event = next(fields for _, name, fields in journal.events if name == "model_request_received")
+            self.assertEqual(event["session_id"], thread_id)
+            self.assertTrue(event["model_hidden"])
+            self.assertEqual(event["request_id"], http_events(journal)[0]["request_id"])
+            self.assertNotIn("SECRET", repr(journal.events))
+        self.assertEqual(request_source({"metadata": {"thread_id": "prompt-secret"}}, {
+            "session-id": "Bearer SECRET", "originator": "private-path", "x-emp-request-id": "invalid",
+        }), {"client_kind": "unknown"})
+        ring = ObservationRing()
+        ring.record({**unsafe_route_event(), **event})
+        row = ring.snapshot()["records"][0]
+        self.assertEqual(row["session_id"], thread_id)
+        self.assertEqual(row["request_id"], event["request_id"])
 
     def test_post_logs_declared_bytes_without_body_or_headers(self):
         with tempfile.TemporaryDirectory() as directory:

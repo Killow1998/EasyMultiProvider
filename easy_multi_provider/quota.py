@@ -493,6 +493,14 @@ def _run_quota_query(
             windows_ca_bundle = _write_windows_root_ca_bundle(codex_home)
             if windows_ca_bundle is not None:
                 env["SSL_CERT_FILE"] = str(windows_ca_bundle)
+        from .network_proxy import current_proxies
+        proxies = current_proxies()
+        for scheme in ("http", "https", "all", "no"):
+            key = "no_proxy" if scheme == "no" else scheme + "_proxy"
+            for spelling in (key, key.upper()):
+                env.pop(spelling, None)
+                if proxies.get(scheme):
+                    env[spelling] = proxies[scheme]
         process = None
         try:
             _verify_codex_binary(binary, identity)

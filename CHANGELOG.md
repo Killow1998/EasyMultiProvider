@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.93 (2026-09-08)
+
+- Trace model calls to client-provided task/session IDs, including hidden-model
+  requests, without recording conversation content or credentials.
+- Resolve system proxy settings for each new upstream connection and quota query;
+  invalidate native WebSocket reuse when the proxy endpoint changes.
+- Keep loopback providers direct even when a proxy is enabled while EMP runs.
+- Correlate upstream requests with NA2H using an opaque request ID.
+- Record structured TLS causes and WebSocket receive state on transport failures.
+
 ## 0.9.92 (2026-09-08)
 
 - Refresh model names, visibility, and added models without restarting after

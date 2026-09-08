@@ -93,6 +93,34 @@ _FORBIDDEN_KEY_SUFFIXES = (
 )
 
 
+def exception_details(exception: BaseException):
+    """Record machine-readable causes, never arbitrary exception messages."""
+    result, seen = [], set()
+    current = exception
+    while isinstance(current, BaseException) and id(current) not in seen and len(result) < 8:
+        seen.add(id(current))
+        item = {"type": type(current).__name__}
+        for name in ("errno", "winerror", "verify_code"):
+            value = getattr(current, name, None)
+            if isinstance(value, int):
+                item[name] = value
+        for name in ("library", "reason"):
+            value = getattr(current, name, None)
+            if isinstance(value, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,95}", value):
+                item[name] = value
+        for name in ("sent", "rcvd"):
+            close = getattr(current, name, None)
+            code = getattr(close, "code", None)
+            if isinstance(code, int):
+                item[name + "_close_code"] = code
+            if getattr(close, "reason", None) == "keepalive ping timeout":
+                item["heartbeat_timeout"] = True
+        result.append(item)
+        reason = getattr(current, "reason", None)
+        current = reason if isinstance(reason, BaseException) else current.__cause__ or current.__context__
+    return result
+
+
 def _utc_now() -> str:
     return (
         datetime.datetime.now(datetime.timezone.utc)
@@ -547,3 +575,31 @@ def read_route_observations(config_path, limit: int = 512):
                 except OSError:
                     pass
     return list(recent)
+
+
+def request_source(body, headers):
+    """Content-free client claims for local correlation, not authenticated identity."""
+    import uuid
+
+    incoming = {str(key).lower(): value for key, value in headers.items()}
+    metadata = body.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    result = {}
+    request_id = incoming.get("x-emp-request-id", "")
+    if isinstance(request_id, str) and re.fullmatch(r"[0-9a-f]{16,32}", request_id):
+        result["request_id"] = request_id
+    for name, value in (
+        ("thread_id", incoming.get("thread-id") or metadata.get("thread_id") or metadata.get("threadId")),
+        ("session_id", incoming.get("session-id")),
+    ):
+        if isinstance(value, str):
+            try:
+                if str(uuid.UUID(value)) == value.lower():
+                    result[name] = value.lower()
+            except ValueError:
+                pass
+    originator = incoming.get("originator", "")
+    result["client_kind"] = originator if originator in {
+        "codex_cli_rs", "codex_vscode", "codex_desktop", "codex_app",
+    } else "unknown"
+    return result

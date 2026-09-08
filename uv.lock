@@ -359,7 +359,7 @@ wheels = [
 
 [[package]]
 name = "easy-multi-provider"
-version = "0.9.92"
+version = "0.9.93"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },

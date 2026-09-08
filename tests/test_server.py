@@ -1127,16 +1127,16 @@ class ServerAccountTests(unittest.TestCase):
             "no": "localhost,127.0.0.1",
         }
         with patch.dict(os.environ, clean_environment, clear=True), patch(
-            "easy_multi_provider.server.getproxies", return_value={}
+            "easy_multi_provider.server._current_system_proxies", return_value=settings
         ), patch("easy_multi_provider.server._gnome_proxy_settings", return_value=settings):
             self.assertEqual(configure_proxy_environment(), "system")
             self.assertEqual(os.environ["HTTPS_PROXY"], settings["https"])
             self.assertEqual(os.environ["ALL_PROXY"], settings["all"])
-            self.assertEqual(os.environ["NO_PROXY"], settings["no"])
+            self.assertTrue(set(settings["no"].split(",")).issubset(os.environ["NO_PROXY"].split(",")))
 
     def test_explicit_proxy_environment_wins(self):
         with patch.dict(os.environ, {"HTTPS_PROXY": "http://proxy.invalid"}, clear=True), patch(
-            "easy_multi_provider.server.getproxies"
+            "easy_multi_provider.server._current_system_proxies"
         ) as system_proxies:
             self.assertEqual(configure_proxy_environment(), "environment")
             system_proxies.assert_not_called()
@@ -1880,6 +1880,7 @@ class ServerAccountTests(unittest.TestCase):
         self.assertLessEqual(len(snapshot["records"]), 3)
         self.assertTrue(snapshot["records"])
         expected = {
+            "client_kind",
             "observation_id",
             "observed_at",
             "route",
@@ -2006,7 +2007,8 @@ class ServerAccountTests(unittest.TestCase):
                     payload["performance_window"], {"calls": 20, "days": 7}
                 )
                 self.assertEqual(set(payload["records"][0]), {
-                    "observation_id",
+                    "client_kind",
+            "observation_id",
                     "observed_at",
                     "route",
                     "provider_id",

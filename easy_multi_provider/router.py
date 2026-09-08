@@ -10,7 +10,7 @@ import uuid
 from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from . import __version__
 from .accounts import AccountError, auth_headers, native_auth_headers
@@ -21,6 +21,7 @@ from .capabilities import (
     observed_at_now,
 )
 from .catalog import has_explicit_family_identity, presentation_for_route
+from .network_proxy import current_proxies, is_loopback, proxy_identity
 from .config import api_key
 from .context_guard import (
     ContextAssessment,
@@ -162,8 +163,9 @@ class _NoRedirectHandler(HTTPRedirectHandler):
 
 # Credential-bearing requests must never replay headers to a redirected URL.
 def urlopen(request: Request, timeout: float):
-    """Build after startup so automatically imported system proxies are used."""
-    return build_opener(_NoRedirectHandler()).open(request, timeout=timeout)
+    """Local providers stay local, regardless of proxy mode or environment changes."""
+    proxies = {} if is_loopback(request.full_url) else current_proxies()
+    return build_opener(_NoRedirectHandler(), ProxyHandler(proxies)).open(request, timeout=timeout)
 
 
 MAX_UPSTREAM_BODY_BYTES = 16 * 1024 * 1024
@@ -570,6 +572,9 @@ def _headers(
         "Accept": "text/event-stream" if stream else "application/json",
         "User-Agent": "EMP/%s" % __version__,
     }
+    request_id = incoming.get("X-EMP-Request-ID", "")
+    if re.fullmatch(r"[0-9a-f]{16}", request_id):
+        headers["X-EMP-Request-ID"] = request_id
     if provider.get("auth_mode") == "api_key":
         key = api_key(provider)
         if not key:
@@ -1326,7 +1331,7 @@ def prepare_native_websocket_request(
         if key.lower() in {"authorization", "chatgpt-account-id"}:
             headers[key] = value
     payload["type"] = "response.create"
-    connection_key = identity.connection_key
+    connection_key = identity.connection_key + ":" + proxy_identity(websocket_url)
     return NativeWebSocketPlan(
         target=NativeWebSocketTarget(websocket_url, headers, connection_key),
         provider=provider,

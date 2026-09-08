@@ -243,3 +243,19 @@ on the recovered process. Download URLs and release payloads are not logged.
   in this slice. The journal is already private and content-free; encryption can
   be reconsidered only if future records need sensitive content (they should
   not).
+
+
+### Request source correlation
+
+`model_request_received` records the EMP-owned request ID, requested model,
+transport, and whether the native model was hidden when received. A hidden model
+remains callable by ID. Valid UUID `thread-id` / `session-id` headers and thread
+metadata are retained for local task lookup; known `originator` values identify
+the client kind. These are client claims, not authenticated caller identities.
+Missing IDs remain absent and unknown clients are labelled `unknown`.
+
+Route observations and transport failures carry the same request ID. WebSocket
+messages receive separate IDs even when they reuse one connection. EMP forwards
+the opaque ID to NA2H for cross-service correlation. Prompts, responses, arbitrary
+headers, credentials, and task titles are not included. Old records cannot be
+retroactively attributed.

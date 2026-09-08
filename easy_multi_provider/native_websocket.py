@@ -13,6 +13,8 @@ import time
 import uuid
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Tuple
 
+from .network_proxy import proxy_for_url
+from .diagnostic_journal import exception_details
 from .transport_failures import PHASE_CONNECT, network_failure, status_error_class
 
 
@@ -110,6 +112,8 @@ class _CompressedWebSocketConnection:
             status if isinstance(status, int) and not isinstance(status, bool) else 101
         )
         self._timeout = float(NATIVE_WEBSOCKET_CONNECT_TIMEOUT)
+        self._last_sent = None
+        self._last_received = None
 
     @property
     def connected(self) -> bool:
@@ -122,12 +126,30 @@ class _CompressedWebSocketConnection:
 
     def send_text(self, value: str) -> None:
         self._connection.send(value)
+        self._last_sent = time.monotonic()
 
     def send(self, value: str) -> None:
         self.send_text(value)
 
     def recv(self):
-        return self._connection.recv(timeout=self._timeout)
+        value = self._connection.recv(timeout=self._timeout)
+        self._last_received = time.monotonic()
+        return value
+
+    def diagnostic_state(self) -> Dict[str, Any]:
+        connection = self._connection
+        assembler = getattr(connection, "recv_messages", None)
+        frames = getattr(assembler, "frames", None)
+        thread = getattr(connection, "recv_events_thread", None)
+        result = {
+            "receive_thread_alive": thread.is_alive() if thread is not None else None,
+            "receive_queue_size": frames.qsize() if frames is not None else None,
+            "receive_paused": getattr(assembler, "paused", None),
+        }
+        now = time.monotonic()
+        for name, stamp in (("last_send_age_ms", self._last_sent), ("last_receive_age_ms", self._last_received)):
+            result[name] = int((now - stamp) * 1000) if stamp is not None else None
+        return result
 
     def probe(self, payload: str, timeout: float) -> bool:
         acknowledgement = self._connection.ping(payload)
@@ -146,7 +168,7 @@ def _compressed_connector(target: NativeWebSocketTarget):
             compression="deflate",
             additional_headers=dict(target.headers),
             user_agent_header=None,
-            proxy=True,
+            proxy=proxy_for_url(target.url),
             open_timeout=NATIVE_WEBSOCKET_CONNECT_TIMEOUT,
             ping_interval=20,
             ping_timeout=20,
@@ -410,6 +432,7 @@ class NativeWebSocketBridge:
             self._observe(
                 "upstream_handshake_failed",
                 status=exc.status,
+                exception_chain=exception_details(exc),
                 duration_ms=max(0, int(round((time.monotonic() - started) * 1000))),
             )
             raise
@@ -438,6 +461,7 @@ class NativeWebSocketBridge:
             self._observe(
                 "upstream_handshake_failed",
                 status=error.status,
+                exception_chain=exception_details(exc),
                 duration_ms=max(0, int(round((time.monotonic() - started) * 1000))),
             )
             raise error from exc
@@ -565,6 +589,7 @@ class NativeWebSocketBridge:
         except GeneratorExit:
             raise
         except NativeWebSocketError as exc:
+            self._observe_failure(exc, request_sent)
             self.close()
             if request_sent and not exc.request_sent:
                 raise NativeWebSocketError(
@@ -578,6 +603,7 @@ class NativeWebSocketBridge:
                 ) from exc
             raise
         except Exception as exc:
+            self._observe_failure(exc, request_sent)
             self.close()
             if isinstance(exc, TimeoutError) or "timeout" in exc.__class__.__name__.lower():
                 error_class = (
@@ -604,6 +630,15 @@ class NativeWebSocketBridge:
                     "transport_closed_after_send" if request_sent else None
                 ),
             ) from exc
+
+    def _observe_failure(self, exc: BaseException, request_sent: bool) -> None:
+        snapshot = getattr(self._connection, "diagnostic_state", None)
+        try:
+            details = snapshot() if callable(snapshot) else {}
+        except Exception:
+            details = {}
+        self._observe("upstream_transport_failed", request_sent=request_sent,
+                      exception_chain=exception_details(exc), **details)
 
     def close(self) -> None:
         connection = self._connection

@@ -23,7 +23,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
-from urllib.request import getproxies
+import urllib.request
+from .network_proxy import follow_system_proxy
 
 from . import __version__
 from .self_update import UpdateError, UpdateManager, mark_update_ready
@@ -83,7 +84,7 @@ from .codex_runtime import (
 )
 from .context_guard import ContextGuard
 from .diagnostic_analytics import summarize_route_observations
-from .diagnostic_journal import NullJournal, create_journal, read_route_observations
+from .diagnostic_journal import request_source, exception_details, NullJournal, create_journal, read_route_observations
 from .destination_summary import DestinationSummaryAdapter
 from .destination_context import DestinationContextCompactor
 from .integration import (
@@ -192,6 +193,7 @@ _DIAGNOSTIC_DIALECTS = frozenset(
 )
 _DIAGNOSTIC_TRANSPORTS = frozenset({"http", "sse", "websocket", "unknown"})
 _WEBSOCKET_PHASES = frozenset({
+    "upstream_transport_failed",
     "local_upgrade_accepted",
     "client_message_received",
     "client_connection_closed",
@@ -752,6 +754,11 @@ class ObservationRing:
                 _safe_diagnostic_text(event.get("observation_id"), _DIAGNOSTIC_ID)
                 or uuid.uuid4().hex
             ),
+            **request_source({"metadata": {"thread_id": event.get("thread_id")}}, {
+                "X-EMP-Request-ID": event.get("request_id"),
+                "session-id": event.get("session_id"),
+                "originator": event.get("client_kind"),
+            }),
             "observed_at": observed_at,
             "route": _safe_diagnostic_text(event.get("route", ""), _DIAGNOSTIC_ID)
             or "unknown",
@@ -939,18 +946,35 @@ def _apply_proxy_settings(settings: Dict[str, Any]) -> bool:
         applied = True
     ignored = settings.get("no")
     if applied and isinstance(ignored, str) and ignored:
-        os.environ.setdefault("no_proxy", ignored)
-        os.environ.setdefault("NO_PROXY", ignored)
+        bypass = ",".join(dict.fromkeys(
+            item.strip() for item in (os.environ.get("no_proxy", "") + "," + ignored).split(",") if item.strip()
+        ))
+        os.environ["no_proxy"] = os.environ["NO_PROXY"] = bypass
     return applied
+
+
+def _current_system_proxies():
+    if sys.platform == "win32":
+        return urllib.request.getproxies_registry()
+    if sys.platform == "darwin":
+        return urllib.request.getproxies_macosx_sysconf()
+    return _gnome_proxy_settings()
 
 
 def configure_proxy_environment() -> str:
     """Prefer explicit environment proxies, then safe operating-system settings."""
+    # Child Codex quota processes must never proxy their loopback connections.
+    ignored = []
+    for key in ("no_proxy", "NO_PROXY"):
+        ignored.extend(value.strip() for value in os.environ.get(key, "").split(",") if value.strip())
+    ignored.extend(("localhost", "127.0.0.1", "::1"))
+    bypass = ",".join(dict.fromkeys(ignored))
+    os.environ["no_proxy"] = os.environ["NO_PROXY"] = bypass
+    follow_system_proxy(None)
     if any(os.environ.get(key) for key in PROXY_ENV_KEYS):
         return "environment"
-    if _apply_proxy_settings(getproxies()):
-        return "system"
-    if _apply_proxy_settings(_gnome_proxy_settings()):
+    follow_system_proxy(_current_system_proxies)
+    if _apply_proxy_settings(_current_system_proxies()):
         return "system"
     return "direct"
 
@@ -1745,6 +1769,7 @@ class AppState:
         context_observation: Optional[Mapping[str, Any]] = None,
         error_class: Optional[str] = None,
         failure_reason: Optional[str] = None,
+        source: Optional[Mapping[str, Any]] = None,
     ) -> None:
         model_id = body.get("model") if isinstance(body.get("model"), str) else ""
         provider_id = ""
@@ -1775,6 +1800,7 @@ class AppState:
             protocol = context["protocol"]
         self._record_route_event(
             {
+                **(source or {}),
                 "provider_id": provider_id,
                 "model_id": model_id,
                 "endpoint_fingerprint": endpoint,
@@ -1903,6 +1929,7 @@ class AppState:
         except (TypeError, ValueError, OverflowError):
             upstream_request_bytes = 0
         event = {
+            **request_source(body, plan.target.headers),
             "provider_id": plan.provider.get("id", ""),
             "model_id": plan.requested_slug,
             "endpoint_fingerprint": plan.identity.endpoint_fingerprint,
@@ -2363,6 +2390,16 @@ def make_handler(state: AppState):
             except Exception:
                 pass
 
+        def _record_model_request(self, body, transport):
+            try:
+                fields = request_source(body, {**dict(self.headers.items()), "X-EMP-Request-ID": self._request_id})
+                fields["model_id"] = _safe_diagnostic_text(body.get("model"), _DIAGNOSTIC_ID)
+                fields["transport"] = transport
+                fields["model_hidden"] = body.get("model") in state.snapshot().get("native_hidden_models", [])
+                state.journal.event("info", "model_request_received", **fields)
+            except Exception:
+                pass
+
         def _record_websocket_phase(
             self, connection_id: str, phase: str, **fields: Any
         ) -> None:
@@ -2370,16 +2407,19 @@ def make_handler(state: AppState):
                 return
             safe_fields: Dict[str, Any] = {
                 "connection_id": connection_id,
+                "request_id": self._request_id,
                 "phase": phase,
             }
-            for name in ("status", "duration_ms", "request_bytes"):
+            for name in ("status", "duration_ms", "request_bytes", "receive_queue_size", "last_send_age_ms", "last_receive_age_ms"):
                 value = fields.get(name)
                 if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                     safe_fields[name] = min(value, 64 * 1024 * 1024)
-            for name in ("reused", "success"):
+            for name in ("reused", "success", "request_sent", "receive_thread_alive", "receive_paused"):
                 if isinstance(fields.get(name), bool):
                     safe_fields[name] = fields[name]
             try:
+                if "exception_chain" in fields:
+                    safe_fields["exception_chain"] = fields["exception_chain"]
                 state.journal.event("info", "websocket_phase", **safe_fields)
             except Exception:
                 pass
@@ -2836,6 +2876,7 @@ def make_handler(state: AppState):
                             status=websocket.peer_close_code or 1005,
                         )
                         return
+                    self._request_id = uuid.uuid4().hex[:16]
                     self._record_websocket_phase(
                         connection_id,
                         "client_message_received",
@@ -2850,8 +2891,9 @@ def make_handler(state: AppState):
                             raise TransportError("websocket request must be a JSON object")
                         if request.pop("type", None) != "response.create":
                             raise TransportError("websocket request.type must be response.create")
+                        self._record_model_request(request, "websocket")
                         incoming_headers = {
-                            key: value for key, value in self.headers.items()
+                            **dict(self.headers.items()), "X-EMP-Request-ID": self._request_id
                         }
                         previous_hint = request.get("previous_response_id")
                         if previous_hint is not None:
@@ -3154,7 +3196,7 @@ def make_handler(state: AppState):
                             continue
                         metadata, result = state.codex.route(
                             request,
-                            {key: value for key, value in self.headers.items()},
+                            {**dict(self.headers.items()), "X-EMP-Request-ID": self._request_id},
                             transport="websocket",
                             context_completeness="high",
                         )
@@ -3465,6 +3507,8 @@ def make_handler(state: AppState):
                     if path == "/api/migration/import"
                     else 5 * 1024 * 1024
                 )
+                if path in ("/v1/responses", "/v1/responses/compact"):
+                    self._record_model_request(body, "sse" if body.get("stream") else "http")
                 if path == "/api/client-events":
                     self._record_web_client_phase(body)
                     self._send(200, _json_bytes({"ok": True}))
@@ -3473,7 +3517,7 @@ def make_handler(state: AppState):
                     status, content_type, raw = forward_native_search(
                         state._routing_snapshot(),
                         body,
-                        {key: value for key, value in self.headers.items()},
+                        {**dict(self.headers.items()), "X-EMP-Request-ID": self._request_id},
                     )
                     self._send(status, raw, content_type)
                     return
@@ -3745,7 +3789,7 @@ def make_handler(state: AppState):
                 if path == "/v1/responses/compact":
                     metadata, result = state.codex.route_compact(
                         body,
-                        {key: value for key, value in self.headers.items()},
+                        {**dict(self.headers.items()), "X-EMP-Request-ID": self._request_id},
                         transport="http",
                     )
                     self._send(
@@ -3757,7 +3801,7 @@ def make_handler(state: AppState):
                 if path == "/v1/responses":
                     metadata, result = state.codex.route(
                         body,
-                        {key: value for key, value in self.headers.items()},
+                        {**dict(self.headers.items()), "X-EMP-Request-ID": self._request_id},
                         transport="sse" if body.get("stream") else "http",
                     )
                     if metadata["kind"] == "stream":
@@ -3863,6 +3907,10 @@ def make_handler(state: AppState):
                 )
             except (ConfigError, RouterError, QuotaError, ValueError) as exc:
                 emit_operation_failure(exc)
+                if isinstance(exc, RouterError):
+                    state.journal.event("warning", "upstream_request_failed",
+                                        request_id=self._request_id,
+                                        exception_chain=exception_details(exc))
                 status = exc.status if isinstance(exc, RouterError) else 400
                 if isinstance(exc, QuotaError):
                     self._send(503, _json_bytes({"error": {"code": exc.code, "message": str(exc)}}))

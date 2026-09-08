@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
+from .diagnostic_journal import request_source
 from .codex_history import HistoryError
 from .context_guard import ContextGuardBlocked
 from .history_continuity import request_history_anchor
@@ -106,6 +107,7 @@ class CodexRequestDispatcher:
         started: float,
         transport: str,
         route: str,
+        source=None,
     ) -> None:
         failure = failure_from_exception(exc)
         self._record_route_failure(
@@ -117,6 +119,7 @@ class CodexRequestDispatcher:
             getattr(exc, "context_observation", None),
             failure.error_class,
             failure_reason=failure.failure_reason,
+            source=source,
         )
 
     def prepare_native_websocket(
@@ -154,7 +157,7 @@ class CodexRequestDispatcher:
             )
         except RouterError as exc:
             self._record_failure(
-                exc, body, started, "websocket", "responses"
+                exc, body, started, "websocket", "responses", request_source(body, incoming)
             )
             raise
         prepare_ms = max(0, int(round((time.monotonic() - started) * 1000)))
@@ -173,13 +176,14 @@ class CodexRequestDispatcher:
             "sse" if body.get("stream") else "http"
         )
         performance = ResponsesPerformanceTracker(started=started)
+        source = request_source(body, incoming)
         observed = False
         replay_scope = None
 
         def on_observation(event: Dict[str, Any]) -> None:
             nonlocal observed
             observed = True
-            event = {**event, **performance.diagnostics()}
+            event = {**event, **performance.diagnostics(), **source}
             self._record_route_event(
                 event, body, started, selected_transport, "responses"
             )
@@ -202,9 +206,10 @@ class CodexRequestDispatcher:
         except Exception as exc:
             if not observed:
                 self._record_failure(
-                    exc, body, started, selected_transport, "responses"
+                    exc, body, started, selected_transport, "responses", source
                 )
             raise
+        metadata.update(source)
         if metadata.get("kind") == "stream":
             if not metadata.get("observation_attached"):
                 result = self._diagnostic_stream(
@@ -240,13 +245,14 @@ class CodexRequestDispatcher:
     ) -> Tuple[Dict[str, Any], bytes]:
         started = time.monotonic()
         selected_transport = transport or "http"
+        source = request_source(body, incoming)
         observed = False
 
         def on_observation(event: Dict[str, Any]) -> None:
             nonlocal observed
             observed = True
             self._record_route_event(
-                event, body, started, selected_transport, "compact"
+                {**event, **source}, body, started, selected_transport, "compact"
             )
 
         try:
@@ -265,7 +271,7 @@ class CodexRequestDispatcher:
         except Exception as exc:
             if not observed:
                 self._record_failure(
-                    exc, body, started, selected_transport, "compact"
+                    exc, body, started, selected_transport, "compact", source
                 )
             raise
         if not observed:
@@ -274,6 +280,6 @@ class CodexRequestDispatcher:
                 len(result) if isinstance(result, (bytes, bytearray)) else 0
             )
             self._record_route_event(
-                event, body, started, selected_transport, "compact"
+                {**event, **source}, body, started, selected_transport, "compact"
             )
         return metadata, result

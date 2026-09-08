@@ -125,6 +125,32 @@ class NativeWebSocketTests(unittest.TestCase):
         ):
             self.assertTrue(native_websocket_request_fits(large))
 
+    def test_failure_diagnostics_preserve_tls_cause_without_private_text(self):
+        import ssl
+        from urllib.error import URLError
+        from easy_multi_provider.diagnostic_journal import exception_details
+        cause = ssl.SSLCertVerificationError(1, "private prompt bearer secret")
+        cause.verify_code = 20
+        wrapped = URLError(cause)
+        details = exception_details(wrapped)
+        self.assertEqual(details[1]["verify_code"], 20)
+        self.assertEqual(details[1]["type"], "SSLCertVerificationError")
+        self.assertNotIn("private", str(details))
+        wrapped.__cause__ = wrapped
+        self.assertLessEqual(len(exception_details(wrapped)), 8)
+
+    def test_transport_failure_snapshot_precedes_connection_cleanup(self):
+        events = []
+        bridge = NativeWebSocketBridge(observer=lambda phase, **fields: events.append((phase, fields)))
+        class Connection:
+            def diagnostic_state(self):
+                return {"receive_queue_size": 17, "receive_paused": True}
+        bridge._connection = Connection()
+        bridge._observe_failure(TimeoutError(), True)
+        self.assertEqual(events[0][0], "upstream_transport_failed")
+        self.assertEqual(events[0][1]["receive_queue_size"], 17)
+        self.assertTrue(events[0][1]["request_sent"])
+
     @unittest.skipUnless(
         native_websocket.compressed_native_websocket_available(),
         "compressed WebSocket client is optional on Python 3.8",
@@ -149,13 +175,15 @@ class NativeWebSocketTests(unittest.TestCase):
             "route-a",
         )
         connection = Connection()
-        with patch("websockets.sync.client.connect", return_value=connection) as opened:
+        with patch("websockets.sync.client.connect", return_value=connection) as opened, patch("easy_multi_provider.native_websocket.proxy_for_url", return_value="http://127.0.0.1:7890"):
             wrapped = _default_connector(target)
 
         self.assertTrue(wrapped.connected)
         options = opened.call_args.kwargs
         self.assertEqual(options["compression"], "deflate")
-        self.assertTrue(options["proxy"])
+        self.assertEqual(options["proxy"], "http://127.0.0.1:7890")
+        self.assertEqual(options["ping_timeout"], 20)
+        self.assertEqual(options["ping_interval"], 20)
         self.assertEqual(options["additional_headers"]["Authorization"], "Bearer test-only")
         self.assertEqual(options["max_size"], native_websocket.MAX_NATIVE_WEBSOCKET_EVENT_BYTES)
 
