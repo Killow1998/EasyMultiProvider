@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.96 (2026-09-09)
+
+- Remember Web UI login for 30 days across EMP restarts.
+- Show a readable sign-in page when the browser session is missing or expired.
+- Reject non-ASCII bootstrap and cookie values without crashing HTTP requests.
+
 ## 0.9.95 (2026-09-09)
 
 - Add an authenticated Exit EMP action that restores native configuration before stopping.

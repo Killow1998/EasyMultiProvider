@@ -47,6 +47,7 @@ def serving(route):
         mark_service_ready=lambda: None,
         updater=SimpleNamespace(gate=UpdateGate()),
         session_token="request-limit-test",
+        session_expires_at=float("inf"),
         journal=Journal(),
         codex=SimpleNamespace(
             route=route, route_compact=route,
@@ -91,6 +92,7 @@ class RequestLimitTests(unittest.TestCase):
         state = SimpleNamespace(
             mark_service_ready=lambda: None,
             session_token="request-limit-test",
+            session_expires_at=float("inf"),
             journal=Journal(),
             codex=SimpleNamespace(
                 route=lambda *args, **kwargs: self.fail("idle websocket must not route"),

@@ -3648,13 +3648,62 @@ class ServerAccountTests(unittest.TestCase):
                 response.read()
                 connection.close()
 
+                for path, headers in (
+                    ("/?bootstrap=%E4%B8%AD%E6%96%87", {}),
+                    ("/?bootstrap=%FF", {}),
+                    ("/", {"Cookie": 'emp_session="\u00e9"'}),
+                ):
+                    with self.subTest(path=path, headers=headers):
+                        connection = HTTPConnection(*server.server_address)
+                        connection.request("GET", path, headers=headers)
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, 401)
+                        self.assertIsNone(response.getheader("Set-Cookie"))
+                        response.read()
+                        connection.close()
+                        self.assertFalse(state.bootstrap_used)
+
                 connection = HTTPConnection(*server.server_address)
                 connection.request("GET", "/?bootstrap=" + state.bootstrap_token)
                 response = connection.getresponse()
                 self.assertEqual(response.status, 303)
                 self.assertIn("emp_session=", response.getheader("Set-Cookie"))
+                self.assertIn("Max-Age=", response.getheader("Set-Cookie"))
                 response.read()
                 connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_web_session_survives_restart_and_expires(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            save(normalize({}), path)
+            original = AppState(path)
+            restarted = AppState(path)
+            self.assertEqual(original.session_token, restarted.session_token)
+            self.assertEqual(original.session_expires_at, restarted.session_expires_at)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(restarted))
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                headers = {"Cookie": "emp_session=" + original.session_token}
+                for expired, expected in ((False, 200), (True, 401)):
+                    if expired:
+                        restarted.session_expires_at = 0
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request("GET", "/", headers=headers)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, expected)
+                    body = response.read().decode("utf-8")
+                    if expired:
+                        self.assertIn("请从 EMP 打开管理页", body)
+                    connection.close()
+                session_path = path.parent / "state" / "web-session.json"
+                saved = json.loads(session_path.read_text(encoding="utf-8"))
+                saved["expires_at"] = 0
+                session_path.write_text(json.dumps(saved), encoding="utf-8")
+                renewed = AppState(path)
+                self.assertNotEqual(original.session_token, renewed.session_token)
             finally:
                 server.shutdown()
                 server.server_close()

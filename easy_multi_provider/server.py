@@ -88,6 +88,7 @@ from .diagnostic_journal import request_source, exception_details, NullJournal, 
 from .destination_summary import DestinationSummaryAdapter
 from .destination_context import DestinationContextCompactor
 from .integration import (
+    atomic_write_text,
     IntegrationError,
     IntegrationManager,
     IntegrationResult,
@@ -1042,6 +1043,27 @@ def _history_stream_error(exc) -> Dict[str, Any]:
 
 
 class AppState:
+    def _load_web_session(self) -> None:
+        path = self.path.parent / "state" / "web-session.json"
+        now = time.time()
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            saved = {}
+        token = saved.get("token") if isinstance(saved, dict) else None
+        expires = saved.get("expires_at") if isinstance(saved, dict) else None
+        if not (
+            isinstance(token, str)
+            and re.fullmatch(r"[A-Za-z0-9_-]{43}", token)
+            and isinstance(expires, (int, float))
+            and now < expires <= now + 30 * 86400
+        ):
+            token = secrets.token_urlsafe(32)
+            expires = now + 30 * 86400
+            atomic_write_text(path, json.dumps({"token": token, "expires_at": expires}))
+        self.session_token = token
+        self.session_expires_at = expires
+
     def __init__(
         self,
         path: Optional[Path] = None,
@@ -1056,7 +1078,7 @@ class AppState:
         self.lock = threading.RLock()
         self.bootstrap_token = secrets.token_urlsafe(32)
         self.bootstrap_used = False
-        self.session_token = secrets.token_urlsafe(32)
+        self._load_web_session()
         self.journal = journal if journal is not None else NullJournal()
         self.updater = UpdateManager(self.path, journal=self.journal)
         self.request_limits = RequestLimits(self.journal)
@@ -2657,17 +2679,25 @@ def make_handler(state: AppState):
             supplied = cookie.get("emp_session")
             return bool(
                 supplied
+                and time.time() < state.session_expires_at
+                and supplied.value.isascii()
                 and hmac.compare_digest(supplied.value, state.session_token)
             )
 
         def _has_bootstrap(self) -> bool:
             query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
             values = query.get("bootstrap", [])
-            if len(values) != 1 or not hmac.compare_digest(values[0], state.bootstrap_token):
+            if (
+                len(values) != 1
+                or not values[0].isascii()
+                or not hmac.compare_digest(values[0], state.bootstrap_token)
+            ):
                 return False
             with state.lock:
                 if state.bootstrap_used:
                     return False
+                if time.time() >= state.session_expires_at:
+                    state._load_web_session()
                 state.bootstrap_used = True
                 return True
 
@@ -2681,7 +2711,9 @@ def make_handler(state: AppState):
             )
 
         def _session_header(self) -> str:
-            return "emp_session=%s; HttpOnly; SameSite=Strict; Path=/" % state.session_token
+            return "emp_session=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=%d" % (
+                state.session_token, max(0, int(state.session_expires_at - time.time()))
+            )
 
         def _send(
             self,
@@ -3271,7 +3303,19 @@ def make_handler(state: AppState):
             if path in ("/", "/index.html"):
                 if not self._has_session():
                     if not self._has_bootstrap():
-                        self._error(401, "open the management URL printed by EMP")
+                        self._send(401, (
+                            '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+                            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                            '<title>登录 EMP</title><body style="font-family:system-ui;max-width:36rem;'
+                            'margin:12vh auto;padding:24px;line-height:1.7">'
+                            '<h1>请从 EMP 打开管理页</h1>'
+                            '<p>此浏览器尚未登录，或登录已过期。</p>'
+                            '<p>请打开 EMP 启动时自动弹出的网页；也可以使用终端中 '
+                            'Open in browser 后的完整链接。</p>'
+                            '<p>登录有效期为 30 天，期间重启 EMP 无需重新登录。</p>'
+                            '</body></html>'
+                        ).encode("utf-8"), "text/html; charset=utf-8",
+                            headers={"Cache-Control": "no-store"})
                         return
                     self._send(
                         303,
