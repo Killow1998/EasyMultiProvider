@@ -1040,9 +1040,11 @@ def _project_responses_stream(
         )
         raise ExternalProtocolError(message) from exc
     except TransportError as exc:
-        raise StreamBoundaryError(
+        failure = StreamBoundaryError(
             "upstream Responses stream projection failed", "malformed_terminal"
-        ) from exc
+        )
+        failure.failure_reason = exc.failure_reason
+        raise failure from exc
 
 
 def forward_responses_compact(

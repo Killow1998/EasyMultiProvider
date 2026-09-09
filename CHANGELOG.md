@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.94 (2026-09-09)
+
+- Parse coalesced SSE events before applying per-event size limits, avoiding false
+  502 errors when multiple valid events arrive together.
+- Preserve content-free stream parsing reasons in diagnostics and client errors,
+  distinguishing invalid JSON, oversized events and unexpected terminal states.
+
+
 ## 0.9.93 (2026-09-08)
 
 - Trace model calls to client-provided task/session IDs, including hidden-model

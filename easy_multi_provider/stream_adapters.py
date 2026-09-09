@@ -249,6 +249,7 @@ def _stream_terminal(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
                 "success": False,
                 "status": 502,
                 "error_class": "malformed_terminal",
+                "failure_reason": "unexpected_terminal_status",
             }
         return {"success": True, "status": 200, "error_class": "none"}
     if event_type == "response.incomplete":
@@ -410,7 +411,7 @@ def _reliable_responses_stream(
                 )
                 if isinstance(exc, TransportError):
                     failure = UpstreamFailure(
-                        "malformed_terminal", 502, lifecycle.phase
+                        "malformed_terminal", 502, lifecycle.phase, failure_reason=exc.failure_reason
                     )
                 if retry_allowed(
                     failure,

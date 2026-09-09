@@ -211,6 +211,14 @@ def public_failure_message(
         return "The upstream rejected the account credentials."
     if error_class == "upstream_5xx":
         return "The upstream service returned HTTP %d." % status
+    if error_class == "malformed_terminal":
+        return {
+            "sse_event_too_large": "An upstream stream event exceeded EMP's event size limit.",
+            "sse_invalid_json": "The upstream stream contained invalid JSON.",
+            "sse_non_object": "The upstream stream contained a non-object event.",
+            "sse_non_bytes": "The upstream stream returned an invalid data type.",
+            "unexpected_terminal_status": "The upstream completion event had an unexpected status.",
+        }.get(failure_reason, "EMP could not parse the upstream response stream.")
     return "The upstream request failed before producing output."
 
 

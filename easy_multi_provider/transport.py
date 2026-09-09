@@ -25,7 +25,9 @@ _WEBSOCKET_XOR_TABLES = tuple(
 
 
 class TransportError(ValueError):
-    pass
+    def __init__(self, message, *, failure_reason=None):
+        super().__init__(message)
+        self.failure_reason = failure_reason
 
 
 class RequestBodyTooLarge(TransportError):
@@ -281,7 +283,7 @@ def sse_json_events(chunks: Iterable[bytes]) -> Iterator[Dict[str, Any]]:
         nonlocal data_bytes
         projected = data_bytes + len(value) + (1 if data_lines else 0)
         if projected > MAX_SSE_EVENT_BYTES:
-            raise TransportError("upstream SSE event is too large")
+            raise TransportError("upstream SSE event is too large", failure_reason="sse_event_too_large")
         data_lines.append(value)
         data_bytes = projected
 
@@ -297,20 +299,22 @@ def sse_json_events(chunks: Iterable[bytes]) -> Iterator[Dict[str, Any]]:
         try:
             value = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError) as exc:
-            raise TransportError("upstream SSE event is not valid JSON") from exc
+            raise TransportError("upstream SSE event is not valid JSON", failure_reason="sse_invalid_json") from exc
         if not isinstance(value, dict):
-            raise TransportError("upstream SSE event must be a JSON object")
+            raise TransportError("upstream SSE event must be a JSON object", failure_reason="sse_non_object")
         return value
 
     for chunk in chunks:
         if not isinstance(chunk, (bytes, bytearray)):
-            raise TransportError("upstream stream returned non-bytes data")
+            raise TransportError("upstream stream returned non-bytes data", failure_reason="sse_non_bytes")
         pending.extend(chunk)
+        lines = pending.split(b"\n")
+        pending = lines.pop()
         if len(pending) > MAX_SSE_EVENT_BYTES:
-            raise TransportError("upstream SSE event is too large")
-        while b"\n" in pending:
-            raw_line, _, remainder = pending.partition(b"\n")
-            pending = bytearray(remainder)
+            raise TransportError("upstream SSE event is too large", failure_reason="sse_event_too_large")
+        for raw_line in lines:
+            if len(raw_line) > MAX_SSE_EVENT_BYTES:
+                raise TransportError("upstream SSE event is too large", failure_reason="sse_event_too_large")
             line = raw_line.rstrip(b"\r")
             if not line:
                 event = finish_event()
