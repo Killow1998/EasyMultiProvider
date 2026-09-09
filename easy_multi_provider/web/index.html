@@ -57,6 +57,7 @@ main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minma
 <header class="page-header">
   <div><div class="brand-title"><h1>EMP</h1><span id="emp_version" class="brand-version"></span></div><p data-i18n="subtitle">管理 Codex 的账号和模型。</p></div>
   <div class="page-header-controls">
+    <button type="button" class="secondary" onclick="quitEmp()">退出 EMP</button>
     <button type="button" class="secondary" data-icon="download" onclick="openUpdate()" data-i18n="check_update">检查更新</button>
     <a class="repo-link" href="https://github.com/Killow1998/EasyMultiProvider" target="_blank" rel="noopener noreferrer">GitHub</a>
     <select id="language_select" aria-label="Language" onchange="setLanguage(this.value)"><option value="zh-CN">中文</option><option value="en">English</option></select>
@@ -912,6 +913,14 @@ async function requestUpdate(operation) {
   catch (error) { $('update_status').textContent = error.message; }
   finally { $('update_install').disabled = false; }
 }
+async function quitEmp() {
+  if (!confirm(tr('退出 EMP 并恢复原生 Codex？', 'Exit EMP and restore native Codex?'))) return;
+  try {
+    await api('/api/quit', {method:'POST', body:'{}'});
+    openModal(tr('EMP 已退出', 'EMP has exited'), `<p>${tr('已恢复原生配置，可以关闭此页面。', 'Native configuration restored. You can close this page.')}</p>`, '', null);
+  } catch (error) { notice(error.message); }
+}
+
 async function openUpdate() {
   stopUpdatePoll();
   openModal(tr('更新 EMP','Update EMP'), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite"></div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div class="modal-actions"><button id="update_recheck" type="button" class="secondary" data-icon="refresh" onclick="requestUpdate('check')">${esc(t('check_update'))}</button><button id="update_install" type="button" data-icon="download" hidden onclick="requestUpdate('install')">${tr('后台更新','Update in background')}</button></div>`, '', null);

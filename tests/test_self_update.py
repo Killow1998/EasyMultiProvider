@@ -129,6 +129,7 @@ class SelfUpdateTests(unittest.TestCase):
             self.assertEqual((job / "failed").read_bytes(), b"new")
             self.assertEqual(spawn.call_count, 2)
             self.assertEqual(spawn.call_args.kwargs['env']['EMP_UPDATE_RESULT'], 'rolled_back')
+            self.assertTrue(all(call.kwargs['visible'] for call in spawn.call_args_list))
 
     def test_locked_installation_relaunches_old_binary_without_moving_it(self):
         with tempfile.TemporaryDirectory() as temporary:

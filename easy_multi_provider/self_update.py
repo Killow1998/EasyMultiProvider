@@ -231,13 +231,14 @@ def _quiet_launch():
         kernel.SetThreadErrorMode(previous.value, None)
 
 
-def _spawn(command, **kwargs):
-    kwargs.setdefault("stdin", subprocess.DEVNULL)
-    kwargs.setdefault("stdout", subprocess.DEVNULL)
-    kwargs.setdefault("stderr", subprocess.DEVNULL)
+def _spawn(command, *, visible=False, **kwargs):
+    if not (visible and os.name == "nt"):
+        kwargs.setdefault("stdin", subprocess.DEVNULL)
+        kwargs.setdefault("stdout", subprocess.DEVNULL)
+        kwargs.setdefault("stderr", subprocess.DEVNULL)
     kwargs.setdefault("env", _child_environment())
     if os.name == "nt":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        kwargs["creationflags"] = (subprocess.CREATE_NEW_CONSOLE if visible else subprocess.CREATE_NO_WINDOW) | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
     with _quiet_launch():
@@ -338,7 +339,7 @@ class UpdateManager:
             if probe.returncode or probe.stdout.decode("utf-8", "replace").strip() != "EMP " + self.asset["version"]:
                 raise UpdateError("version_mismatch")
             helper = job / ("worker.exe" if os.name == "nt" else "worker")
-            shutil.copy2(self.executable, helper)
+            shutil.copy2(binary, helper)
             process = psutil.Process()
             parents = [{"pid": process.pid, "created": process.create_time()}]
             parent = process.parent()
@@ -424,7 +425,7 @@ def run_update_worker(plan_path):
         environment = _child_environment()
         environment["EMP_UPDATE_READY"] = str(job / "ready.json")
         phase("starting")
-        child = _spawn([str(binary), *plan["args"]], env=environment)
+        child = _spawn([str(binary), *plan["args"]], env=environment, visible=True)
         phase("waiting_for_startup")
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
@@ -454,7 +455,7 @@ def run_update_worker(plan_path):
             environment = _child_environment()
             environment["EMP_UPDATE_RESULT"] = "rolled_back"
             phase("restarting_previous")
-            _spawn([str(binary), *plan["args"]], env=environment)
+            _spawn([str(binary), *plan["args"]], env=environment, visible=True)
             phase("rolled_back")
             (job / "rolled-back").touch()
         except Exception:

@@ -572,6 +572,25 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
         self.assertEqual(row["session_id"], thread_id)
         self.assertEqual(row["request_id"], event["request_id"])
 
+    def test_quit_requires_auth_and_restores_before_stopping(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            state = self.make_state(Path(directory))
+            events = []
+            state.shutdown_restore = Mock(side_effect=lambda: (events.append("restore") or SimpleNamespace(ok=True)))
+            stopped = threading.Event()
+            state.updater.shutdown = lambda: (events.append("stop"), stopped.set())
+            with running_server(state) as server:
+                status, _ = request(server, "POST", "/api/quit", b"", {"Content-Type": "application/json"})
+                self.assertEqual(status, 401)
+                self.assertEqual(events, [])
+                status, _ = request(server, "POST", "/api/quit", b"{}", {
+                    "Content-Type": "application/json", "Cookie": "emp_session=" + state.session_token,
+                })
+                self.assertEqual(status, 200)
+                self.assertTrue(stopped.wait(2))
+                self.assertEqual(events, ["restore", "stop"])
+
     def test_post_logs_declared_bytes_without_body_or_headers(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

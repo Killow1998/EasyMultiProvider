@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.95 (2026-09-09)
+
+- Add an authenticated Exit EMP action that restores native configuration before stopping.
+- Relaunch Windows EMP in a visible console after updates and rollback.
+- Restore owned integration settings on Windows console close and normal shutdown notifications.
+- Use the verified candidate for the update worker on subsequent updates.
+
+
 ## 0.9.94 (2026-09-09)
 
 - Parse coalesced SSE events before applying per-event size limits, avoiding false

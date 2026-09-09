@@ -3509,6 +3509,17 @@ def make_handler(state: AppState):
                 )
                 if path in ("/v1/responses", "/v1/responses/compact"):
                     self._record_model_request(body, "sse" if body.get("stream") else "http")
+                if path == "/api/quit":
+                    if state.updater.snapshot()["state"] in {"downloading", "verifying", "waiting", "installing"}:
+                        self._error(409, "Wait for the update to finish before exiting EMP")
+                        return
+                    result = state.shutdown_restore()
+                    if not result.ok:
+                        self._error(409, "Native configuration could not be restored; EMP is still running")
+                        return
+                    self._send(200, _json_bytes({"status": "stopping"}))
+                    threading.Thread(target=state.updater.shutdown, daemon=True, name="emp-quit").start()
+                    return
                 if path == "/api/client-events":
                     self._record_web_client_phase(body)
                     self._send(200, _json_bytes({"ok": True}))
@@ -4090,6 +4101,30 @@ def _raise_graceful_shutdown(signum: int, frame: Any) -> None:
     raise _GracefulShutdown()
 
 
+def _install_console_shutdown_handler(state, server):
+    """Restore the owned integration before Windows closes a console process."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+
+    def handle(event):
+        if event not in (2, 5, 6):  # console close, logoff, shutdown
+            return False
+        try:
+            state.shutdown_restore()
+        except Exception as exc:
+            _journal_event(state.journal, "warning", "console_restore_failed", exception_class=type(exc).__name__)
+        server.shutdown()
+        return True
+
+    callback = callback_type(handle)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    if not kernel.SetConsoleCtrlHandler(callback, True):
+        return None
+    return kernel, callback
+
+
 def _install_sigterm_handler() -> Optional[Tuple[Any, Any]]:
     """Install SIGTERM handling only where Python permits signal handlers."""
 
@@ -4238,6 +4273,7 @@ def _serve_owned(
     state = None
     server = None
     previous_sigterm = None
+    console_handler = None
     shutdown_reason = "startup_failure"
     stage = "host_validation"
     try:
@@ -4326,6 +4362,7 @@ def _serve_owned(
             )
             listening_host, listening_port = server.server_address[:2]
             state.updater.shutdown = server.shutdown
+            console_handler = _install_console_shutdown_handler(state, server)
             state.updater.restart_args = ["serve", "--config", str(effective_config_path),
                                           "--host", str(listening_host), "--port", str(listening_port), "--open-browser"]
             _journal_event(
@@ -4388,6 +4425,9 @@ def _serve_owned(
         close_error = None
         try:
             _restore_sigterm_handler(previous_sigterm)
+            if console_handler is not None:
+                kernel, callback = console_handler
+                kernel.SetConsoleCtrlHandler(callback, False)
         finally:
             try:
                 if state is not None:
