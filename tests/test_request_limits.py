@@ -45,6 +45,7 @@ class Journal:
 def serving(route):
     state = SimpleNamespace(
         mark_service_ready=lambda: None,
+        catalog_etag=lambda: '"emp-request-limit-fixture"',
         updater=SimpleNamespace(gate=UpdateGate()),
         session_token="request-limit-test",
         session_expires_at=float("inf"),

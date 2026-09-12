@@ -818,6 +818,7 @@ def _request(
                 failure.status,
                 failure.failure_reason or "upstream_rejected",
                 failure.error_class,
+                failure.retry_after_seconds,
             )
         except URLError as exc:
             if transport_retry_allowed and attempt == 0:

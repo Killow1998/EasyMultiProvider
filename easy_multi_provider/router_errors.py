@@ -37,6 +37,7 @@ class UpstreamHTTPError(RouterError):
         status: int,
         failure_reason: str,
         error_class: Optional[str] = None,
+        retry_after_seconds: Optional[int] = None,
     ):
         self.failure_reason = (
             failure_reason
@@ -44,6 +45,7 @@ class UpstreamHTTPError(RouterError):
             else "upstream_rejected"
         )
         self.error_class = error_class
+        self.retry_after_seconds = retry_after_seconds
         super().__init__(message, status)
 
 

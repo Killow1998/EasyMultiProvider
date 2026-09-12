@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from email.utils import parsedate_to_datetime
+import math
 import json
 import os
 import re
@@ -300,6 +302,7 @@ class UpstreamFailure:
     failure_reason: Optional[str] = None
     public_message: Optional[str] = None
     context_observation: Optional[Mapping[str, Any]] = None
+    retry_after_seconds: Optional[int] = None
 
     def terminal(self) -> Dict[str, Any]:
         value: Dict[str, Any] = {
@@ -313,7 +316,28 @@ class UpstreamFailure:
             value["context_observation"] = dict(self.context_observation)
         if self.phase:
             value["phase"] = self.phase
+        if self.retry_after_seconds is not None:
+            value["retry_after_seconds"] = self.retry_after_seconds
         return value
+
+
+def parse_retry_after(value: Any) -> Optional[int]:
+    """Normalize upstream delay/date headers without forwarding arbitrary text."""
+    if not isinstance(value, str) or not value.strip() or len(value) > 128:
+        return None
+    try:
+        delay = float(value)
+    except ValueError:
+        try:
+            date = parsedate_to_datetime(value)
+            if date.tzinfo is None:
+                return None
+            delay = max(0, date.timestamp() - time.time())
+        except (ValueError, TypeError, OverflowError):
+            return None
+    if not math.isfinite(delay) or delay < 0:
+        return None
+    return math.ceil(delay)
 
 
 def http_error_detail(
@@ -440,7 +464,11 @@ def upstream_http_failure(
             PROXY_UNAVAILABLE,
             "Configured proxy is unavailable.",
         )
-    return http_failure(error.code, content_type, detail, model)
+    failure = http_failure(error.code, content_type, detail, model)
+    if error.code in (429, 503):
+        headers = error.headers or {}
+        return replace(failure, retry_after_seconds=parse_retry_after(headers.get("Retry-After")))
+    return failure
 
 
 class TransportFailure(RouterError):
@@ -518,6 +546,7 @@ def failure_from_exception(
             False,
             reason,
             public_failure_message(error_class, reason, exc.status),
+            retry_after_seconds=exc.retry_after_seconds,
         )
     if isinstance(exc, StreamBoundaryError):
         error_class = normalize_error_class(

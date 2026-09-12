@@ -6,7 +6,7 @@ EMP is a local, browser-configured model router for Codex.
 It keeps the native Codex experience while adding multiple ChatGPT
 subscriptions, API providers, and external models to the same model list.
 
-The current source version is `v0.9.92`.
+The current source version is `v0.9.97`.
 
 ## Features
 
@@ -58,14 +58,15 @@ client receives the shared configuration.
 
 EMP treats a persistent Codex App Server as externally owned. Enabling,
 restoring, refreshing, or checking integration files never stops, starts, or
-restarts Codex. EMP reads `model/list` from an existing shared Unix WebSocket
-listener; if the saved files differ from the loaded model IDs, the Web UI asks
-the backend owner to restart it in a safe maintenance window. A successful
-check proves only the observed model ID set, not that endpoints, display names,
-or every other startup setting were hot-reloaded. This live probe is verified
-on Linux for this release; macOS and Windows remain unverified for this path.
+restarts Codex. EMP reads `model/list` from the existing local control socket
+on Windows, macOS and Linux. The check compares visible models, display names
+and descriptions with the saved catalog. A stale catalog stays pending; a
+successful check does not mean that Base URLs or other startup settings changed.
+Linux App discovery recognizes the runtime at
+`$CODEX_HOME/plugins/.plugin-appserver/codex`, alongside managed, editor and PATH
+runtimes. Other Linux App packaging layouts require separate verification.
 
-EMP supports Codex CLI `0.149.x` through `0.153.x`; `0.153.4` is recommended.
+EMP supports Codex CLI `0.149.x` through `0.154.x`; `0.154.0` is recommended.
 The Web UI shows the installed version and marks newer versions as not yet
 verified or older versions as unsupported.
 
@@ -185,8 +186,11 @@ models under **Current Codex login → Edit**, rename model families under
 one model visible. Display names do not change model IDs.
 
 With a ChatGPT login, model names, visibility, and additions refresh while Codex
-is running. Runtime 0.153.4 refreshes about every 4.5 minutes; reopen the model
-picker after the refresh. Restart Codex once after upgrading from an older EMP
+is running. EMP sends its catalog revision on Responses HTTP streams and
+WebSocket metadata, allowing Codex to fetch changes on subsequent requests.
+Codex also refreshes periodically (about every 4.5 minutes in 0.154.0); an idle
+App menu is not guaranteed to update immediately. Reopen the model picker after
+the refresh. Restart Codex once after upgrading from an older EMP
 static catalog or changing Codex's Base URL. Clients without ChatGPT model
 discovery continue to use the static catalog. Restore Native Codex before
 rolling back to EMP 0.9.91 or earlier.

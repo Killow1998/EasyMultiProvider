@@ -6,7 +6,7 @@ EMP 是一个通过浏览器配置的 Codex 本地模型路由器。它在
 保留 Codex 原生使用体验的同时，把多个 ChatGPT Subscription、API Provider
 和外部模型加入同一个模型列表。
 
-当前源码版本为 `v0.9.92`。
+当前源码版本为 `v0.9.97`。
 
 ## 功能
 
@@ -47,13 +47,14 @@ Codex App runtime、当前 `.codex` 托管 runtime、OpenAI 的 VS Code/Cursor
 配置目录，也不会阻止其他客户端读取这份共享配置。
 
 EMP 把持久运行的 Codex App Server 视为外部所有者管理的共享后端。启用、恢复、
-刷新或检查集成时，EMP 都不会停止、启动或重启 Codex。EMP 只会通过现有 Unix
-WebSocket listener 读取 `model/list`；如果已保存文件与后端当前暴露的模型 ID 不同，
-Web UI 会提示等待后端所有者在安全维护窗口重启。检查成功只证明观测到的模型 ID
-集合，不证明 endpoint、显示名称或其他启动配置已经热加载。本轮只在 Linux 验证了
-这条真实探测路径；macOS 与 Windows 尚未验证。
+刷新或检查集成时，EMP 都不会停止、启动或重启 Codex。EMP 通过现有本地控制通道
+读取 `model/list`，核对可见模型、显示名称和描述；目录未刷新时保持待确认状态，
+连接或权限失败则显示对应错误。这条只读探测路径已在 Windows、Intel macOS
+和 Linux 的官方 Codex 0.154.0 后台验证。检查成功不代表 Base URL 或其他启动配置
+已经热加载。Linux 同时支持扫描当前 `CODEX_HOME/plugins/.plugin-appserver/codex`，
+其他 AppImage 或发行版的安装布局仍需单独验证。
 
-EMP 支持 Codex CLI `0.149.x` 至 `0.153.x`，推荐使用 `0.153.4`。Web UI 会显示
+EMP 支持 Codex CLI `0.149.x` 至 `0.154.x`，推荐使用 `0.154.0`。Web UI 会显示
 当前安装版本；更高版本会标记为“尚未验证”，更旧版本会标记为“不再支持”。
 
 已在 runtime `0.153.4` 上验证 Gemini 3.7 Flash、3.8 Flash 的子任务委派、
@@ -163,7 +164,9 @@ EMP v0.9.0 至 v0.9.9 使用同一种加密迁移格式。当前版本可以导�
 Codex”。至少保留一个可见模型，显示名称不会改变模型 ID。
 
 使用 ChatGPT 登录时，名称、隐藏状态和新增模型可在 Codex 运行期间自动更新。
-已验证 runtime 0.153.4 约每 4.5 分钟刷新一次；刷新后重新打开模型菜单查看。
+EMP 会通过 Responses HTTP 和 WebSocket 通知模型目录版本变化，Codex 可在后续
+请求时拉取更新。Codex 0.154.0 也会约每 4.5 分钟定期刷新；空闲 App 菜单不保证
+保存后立即更新，刷新后可重新打开模型菜单查看。
 从旧版静态目录升级，或修改 Codex 的 Base URL 后，需要重启 Codex 一次。
 没有 ChatGPT 模型发现能力的客户端继续使用静态目录。
 回退至 EMP 0.9.91 或更早版本前，请先恢复原生 Codex。

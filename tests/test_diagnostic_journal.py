@@ -74,9 +74,12 @@ class DiagnosticJournalTest(unittest.TestCase):
         first = self.make_journal()
         first.event("info", "route_observation", model_id="sol", status=200)
         first.event("info", "process_start", model_count=1)
+        first_path = first.current_path
         first.close()
         second = self.make_journal()
         second.event("info", "route_observation", model_id="luna", status=502)
+        os.utime(first_path, (200, 200))
+        os.utime(second.current_path, (100, 100))
 
         observations = read_route_observations(self.config_dir)
 
@@ -84,6 +87,7 @@ class DiagnosticJournalTest(unittest.TestCase):
             [(item["model_id"], item["status"]) for item in observations],
             [("sol", 200), ("luna", 502)],
         )
+        self.assertEqual(read_route_observations(self.config_dir, limit=1)[0]["model_id"], "luna")
 
     def test_path_prefixes_preserve_windows_drive_and_posix_root(self):
         self.assertEqual(

@@ -31,6 +31,7 @@ from .router_errors import (
     ExternalProtocolError,
     RouterError,
     StreamBoundaryError,
+    UpstreamHTTPError,
 )
 from .transport import TransportError, sse_json_events
 from .transport_failures import (
@@ -125,6 +126,7 @@ def _response_failure_frame(
     error_class: Optional[str] = None,
     failure_reason: Optional[str] = None,
     transport_failure: bool = False,
+    retry_after_seconds: Optional[int] = None,
 ) -> bytes:
     failure_class = normalize_error_class(error_class or status_error_class(status))
     safe_message = _content_free_failure_message(message)
@@ -162,6 +164,10 @@ def _response_failure_frame(
             response["error"]["failure_reason"] = safe_reason
     if transport_failure:
         response["error"]["transport_failure"] = True
+    if retry_after_seconds is not None:
+        response["error"]["retry_after_seconds"] = retry_after_seconds
+        if failure_class == "rate_limit":
+            response["error"]["message"] += " Please try again in %ds." % retry_after_seconds
     return _sse_frame("response.failed", {"type": "response.failed", "response": response})
 
 
@@ -423,13 +429,7 @@ def _reliable_responses_stream(
                     lifecycle.retry_count += 1
                     continue
                 lifecycle.phase = failure.phase
-                terminal = {
-                    "success": False,
-                    "status": failure.status,
-                    "error_class": failure.error_class,
-                }
-                if failure.failure_reason:
-                    terminal["failure_reason"] = failure.failure_reason
+                terminal = failure.terminal()
                 report(terminal, False)
                 yield _response_failure_frame(
                     "upstream stream failed",
@@ -437,6 +437,7 @@ def _reliable_responses_stream(
                     failure.error_class,
                     failure.failure_reason,
                     transport_failure=True,
+                    retry_after_seconds=failure.retry_after_seconds,
                 )
                 return
             finally:
@@ -778,7 +779,7 @@ def _validated_responses_stream(
                 terminal=terminal,
             )
     except RouterError as exc:
-        if isinstance(exc, TransportFailure):
+        if isinstance(exc, (TransportFailure, UpstreamHTTPError)):
             raise
         if isinstance(exc, ContextLengthError):
             report(exc.status, "context_length_exceeded", exc.context_observation)
@@ -1178,7 +1179,7 @@ def stream_chat_completion(
             }.get(incomplete_reason, "none"),
         )
     except RouterError as exc:
-        if isinstance(exc, TransportFailure):
+        if isinstance(exc, (TransportFailure, UpstreamHTTPError)):
             raise
         terminal = failure_from_exception(exc).terminal()
         _notify_terminal(
@@ -1719,7 +1720,7 @@ def stream_anthropic_completion(
             }.get(incomplete_reason, "none"),
         )
     except RouterError as exc:
-        if isinstance(exc, TransportFailure):
+        if isinstance(exc, (TransportFailure, UpstreamHTTPError)):
             raise
         terminal = failure_from_exception(exc).terminal()
         _notify_terminal(

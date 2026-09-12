@@ -24,7 +24,7 @@ class RecordingRuntimeController:
         )
         self.calls = []
 
-    def reload(self, expected_models, target, *, confirm_reload):
+    def reload(self, expected_models, target, *, confirm_reload, expected_catalog=None):
         self.calls.append((tuple(expected_models), target, confirm_reload))
         return RuntimeSyncResult(
             self.result.state,
@@ -34,7 +34,7 @@ class RecordingRuntimeController:
             self.result.observed_models,
         )
 
-    def observe(self, expected_models, target):
+    def observe(self, expected_models, target, *, expected_catalog=None):
         self.calls.append((tuple(expected_models), target, "observe"))
         return RuntimeSyncResult(
             self.result.state,

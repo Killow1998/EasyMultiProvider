@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,12 @@ _CONTEXT_PREFIX = re.compile(r"^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+")
 _DESCRIPTION_CONTEXT_SUFFIX = re.compile(
     r"(?:\s+·\s+)?Context\s+(?:\d+(?:\.\d+)?(?:K|M)?|\?)$"
 )
+
+
+def catalog_etag(catalog: Dict[str, Any]) -> str:
+    """Use the same catalog revision for discovery and Responses notifications."""
+    payload = json.dumps(catalog, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return '"emp-' + hashlib.sha256(payload.encode("utf-8")).hexdigest() + '"'
 
 
 def _usable_context_window(model: Dict[str, Any]) -> int:

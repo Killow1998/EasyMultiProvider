@@ -41,6 +41,7 @@ from .accounts import (
 )
 from .catalog import (
     build_catalog,
+    catalog_etag,
     generated_catalog_path,
     preserve_native_catalog,
     write_catalog,
@@ -149,7 +150,8 @@ from .transport import (
     sse_json_events,
     websocket_accept,
 )
-from .transport_failures import public_failure_message, status_error_class
+from .transport_failures import failure_from_exception, public_failure_message, status_error_class
+from .router_errors import UpstreamHTTPError
 from .tls_runtime import tls_trust_source
 from .request_limits import RequestLimits
 from .transport_continuity import (
@@ -288,7 +290,7 @@ def _pre_output_http_failure(event: Any) -> Optional[Tuple[int, Dict[str, Any]]]
     error_class = str(error.get("error_class") or "upstream_error")
     code = str(error.get("code") or error_class or "upstream_error")
     failure_reason = error.get("failure_reason")
-    return status, {
+    payload = {
         "error": {
             "type": error_class,
             "code": code,
@@ -300,6 +302,38 @@ def _pre_output_http_failure(event: Any) -> Optional[Tuple[int, Dict[str, Any]]]
             "param": None,
         }
     }
+    if isinstance(failure_reason, str) and (
+        failure_reason in _DIAGNOSTIC_ERRORS or failure_reason in UpstreamHTTPError._REASONS
+    ):
+        payload["error"]["failure_reason"] = failure_reason
+    delay = error.get("retry_after_seconds")
+    if isinstance(delay, int) and not isinstance(delay, bool) and delay >= 0:
+        payload["error"]["retry_after_seconds"] = delay
+    return status, payload
+
+
+def _router_error_body(exc: RouterError) -> Dict[str, Any]:
+    failure = failure_from_exception(exc)
+    code = "rate_limit_exceeded" if failure.error_class == "rate_limit" else (
+        failure.failure_reason or failure.error_class
+    )
+    error = {
+        "code": code,
+        "type": failure.error_class,
+        "message": failure.public_message or str(exc),
+    }
+    if failure.failure_reason:
+        error["failure_reason"] = failure.failure_reason
+    if failure.retry_after_seconds is not None:
+        error["retry_after_seconds"] = failure.retry_after_seconds
+    return {"error": error}
+
+
+def _retry_headers(payload: Mapping[str, Any]) -> Dict[str, str]:
+    delay = payload.get("error", {}).get("retry_after_seconds")
+    return {"Retry-After": str(delay)} if delay is not None else {}
+
+
 _DIAGNOSTIC_DECISIONS = frozenset(
     {"explicit", "normal_order", "observed_priority", "fallback_rejection", "unknown"}
 )
@@ -1378,6 +1412,9 @@ class AppState:
             and item.get("visibility", "list") == "list"
         )
 
+    def catalog_etag(self) -> str:
+        return catalog_etag(build_catalog(self.snapshot()))
+
     def _mark_runtime_pending(self, intent: str, detail: str) -> None:
         """Record a saved file change separately from the loaded runtime."""
 
@@ -1481,7 +1518,9 @@ class AppState:
                 with self.lock:
                     expected_models = self._runtime_expected_models
                 expected_models = expected_models or self._runtime_model_ids()
-                result = self.runtime_controller.observe(expected_models, "emp")
+                result = self.runtime_controller.observe(
+                    expected_models, "emp", expected_catalog=build_catalog(self.snapshot())
+                )
                 with self.lock:
                     self._runtime_expected_models = tuple(expected_models)
                     self._runtime_should_be_present = True
@@ -1507,6 +1546,7 @@ class AppState:
             expected_models,
             target,
             confirm_reload=confirm_reload,
+            expected_catalog=build_catalog(self.snapshot()) if target == "emp" else None,
         )
         with self.lock:
             self._runtime_sync = {
@@ -2832,6 +2872,19 @@ def make_handler(state: AppState):
                 )
             )
 
+        @staticmethod
+        def _catalog_event(event: Dict[str, Any], etag: str) -> Dict[str, Any]:
+            if event.get("type") != "codex.response.metadata":
+                return event
+            # Upstream catalogs don't include EMP aliases or visibility settings.
+            headers = event.get("headers")
+            headers = headers if isinstance(headers, dict) else {}
+            return {**event, "headers": {
+                **{key: value for key, value in headers.items()
+                   if key.lower() != "x-models-etag"},
+                "x-models-etag": etag,
+            }}
+
         def _serve_responses_websocket(self) -> None:
             if not self._proxy_allowed():
                 self._error(
@@ -2923,6 +2976,11 @@ def make_handler(state: AppState):
                             raise TransportError("websocket request must be a JSON object")
                         if request.pop("type", None) != "response.create":
                             raise TransportError("websocket request.type must be response.create")
+                        etag = state.catalog_etag()
+                        websocket.send_json({
+                            "type": "codex.response.metadata",
+                            "headers": {"x-models-etag": etag},
+                        })
                         self._record_model_request(request, "websocket")
                         incoming_headers = {
                             **dict(self.headers.items()), "X-EMP-Request-ID": self._request_id
@@ -2990,6 +3048,7 @@ def make_handler(state: AppState):
                                 for event in native_upstream.events(
                                     plan.target, plan.payload
                                 ):
+                                    event = self._catalog_event(event, etag)
                                     performance.observe_event(event)
                                     if first_event_ms is None:
                                         first_event_ms = max(
@@ -3247,7 +3306,7 @@ def make_handler(state: AppState):
                                     )
                                     break
                             first_event = False
-                            websocket.send_json(event)
+                            websocket.send_json(self._catalog_event(event, etag))
                     except HistoryReconstructionError as exc:
                         websocket.send_json(_history_ws_event(exc))
                         continue
@@ -3259,7 +3318,8 @@ def make_handler(state: AppState):
                             "context_length_exceeded",
                         )
                     except RouterError as exc:
-                        self._websocket_error(websocket, str(exc), exc.status, "router_error")
+                        payload = _router_error_body(exc)
+                        websocket.send_json({"type": "error", "status": exc.status, **payload})
                     except (TransportError, ValueError) as exc:
                         self._websocket_error(websocket, str(exc))
                     finally:
@@ -3409,7 +3469,7 @@ def make_handler(state: AppState):
                     # schema at this endpoint. Other OpenAI-compatible clients
                     # still receive the conventional object/data model list.
                     payload = _json_bytes(catalog)
-                    etag = '"emp-' + hashlib.sha256(payload).hexdigest() + '"'
+                    etag = catalog_etag(catalog)
                     self._send(200, payload, headers={"ETag": etag})
                     return
                 data = [
@@ -3873,13 +3933,14 @@ def make_handler(state: AppState):
                                 status,
                                 _json_bytes(payload),
                                 "application/json",
-                                {"Connection": "close"},
+                                {"Connection": "close", **_retry_headers(payload)},
                             )
                             self.close_connection = True
                             return
                         close_after_stream = b'"type": "response.failed"' in first_chunk
                         self.send_response(200)
                         self.send_header("Content-Type", metadata["content_type"])
+                        self.send_header("X-Models-Etag", state.catalog_etag())
                         self.send_header("Cache-Control", "no-cache")
                         self.send_header("Connection", "close" if close_after_stream else "keep-alive")
                         self.end_headers()
@@ -3903,6 +3964,7 @@ def make_handler(state: AppState):
                     elif metadata["kind"] == "raw_stream":
                         self.send_response(metadata.get("status", 200))
                         self.send_header("Content-Type", metadata["content_type"])
+                        self.send_header("X-Models-Etag", state.catalog_etag())
                         self.send_header("Cache-Control", "no-cache")
                         self.send_header("Connection", "keep-alive")
                         self.end_headers()
@@ -3920,6 +3982,7 @@ def make_handler(state: AppState):
                             metadata.get("status", 200),
                             result,
                             metadata.get("content_type", "application/json"),
+                            headers={"X-Models-Etag": state.catalog_etag()},
                         )
                     return
                 self._error(404, "not found")
@@ -3969,6 +4032,9 @@ def make_handler(state: AppState):
                 status = exc.status if isinstance(exc, RouterError) else 400
                 if isinstance(exc, QuotaError):
                     self._send(503, _json_bytes({"error": {"code": exc.code, "message": str(exc)}}))
+                elif isinstance(exc, RouterError):
+                    payload = _router_error_body(exc)
+                    self._send(status, _json_bytes(payload), headers=_retry_headers(payload))
                 else:
                     self._error(status, str(exc))
             except Exception as exc:  # Keep server alive and avoid leaking request details.

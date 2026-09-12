@@ -12,6 +12,7 @@ import errno
 import json
 import os
 import platform
+import select
 import shutil
 import socket
 import subprocess
@@ -183,12 +184,50 @@ def _normalize_runtime_preferences(
 
 
 class ModelCatalogProbe(Protocol):
-    def model_list(self, codex_home: Path, timeout: float) -> Tuple[str, ...]:
+    def model_list(self, codex_home: Path, timeout: float) -> Tuple[Dict[str, Any], ...]:
         """Read the catalog loaded by an existing shared Codex backend."""
 
 
+def _connect_control_socket(path: Path, timeout: float) -> socket.socket:
+    """Connect locally; Windows supports AF_UNIX even when Python omits it."""
+    path.stat()  # Windows reports a missing rendezvous file as WSAENETDOWN.
+    raw_socket = socket.socket(getattr(socket, "AF_UNIX", 1), socket.SOCK_STREAM)
+    try:
+        raw_socket.settimeout(timeout)
+        if os.name != "nt" or hasattr(socket, "AF_UNIX"):
+            raw_socket.connect(str(path))
+        else:
+            import ctypes
+
+            class SockaddrUnix(ctypes.Structure):
+                _fields_ = [("family", ctypes.c_ushort), ("path", ctypes.c_char * 108)]
+
+            encoded_path = str(path).encode("utf-8")
+            if len(encoded_path) >= 108:
+                raise OSError(errno.ENAMETOOLONG, "Codex control socket path is too long")
+            address = SockaddrUnix(1, encoded_path)
+            winsock = ctypes.WinDLL("ws2_32")
+            winsock.connect.argtypes = [ctypes.c_size_t, ctypes.c_void_p, ctypes.c_int]
+            winsock.connect.restype = ctypes.c_int
+            winsock.WSAGetLastError.restype = ctypes.c_int
+            if winsock.connect(raw_socket.fileno(), ctypes.byref(address), ctypes.sizeof(address)):
+                error = winsock.WSAGetLastError()
+                if error not in (10035, 10036, 10037):  # nonblocking connect in progress
+                    raise OSError(error, "Codex control socket connection failed")
+                _, writable, exceptional = select.select([], [raw_socket], [raw_socket], timeout)
+                if not writable and not exceptional:
+                    raise socket.timeout("Codex control socket connection timed out")
+                error = raw_socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                if error:
+                    raise OSError(error, "Codex control socket connection failed")
+        return raw_socket
+    except BaseException:
+        raw_socket.close()
+        raise
+
+
 class UnixSocketModelCatalogProbe:
-    """Read ``model/list`` over Codex's Unix WebSocket control socket."""
+    """Read ``model/list`` over Codex's local WebSocket control socket."""
 
     @staticmethod
     def _socket_path(codex_home: Path) -> Path:
@@ -244,18 +283,12 @@ class UnixSocketModelCatalogProbe:
             "Codex did not return a usable model catalog", "malformed"
         )
 
-    def model_list(self, codex_home: Path, timeout: float) -> Tuple[str, ...]:
-        if not hasattr(socket, "AF_UNIX"):
-            raise RuntimeSyncError(
-                "The shared Codex backend is unavailable on this platform",
-                "unavailable",
-            )
+    def model_list(self, codex_home: Path, timeout: float) -> Tuple[Dict[str, Any], ...]:
         socket_path = self._socket_path(codex_home)
-        raw_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        raw_socket = None
         websocket_connection = None
         try:
-            raw_socket.settimeout(timeout)
-            raw_socket.connect(str(socket_path))
+            raw_socket = _connect_control_socket(socket_path, timeout)
             # websocket-client does not advertise compression extensions.  The
             # preconnected socket keeps this a local, read-only Unix transport.
             websocket_connection = websocket.create_connection(
@@ -306,7 +339,7 @@ class UnixSocketModelCatalogProbe:
                         "Codex returned an invalid model catalog", "malformed"
                     )
                 models.extend(
-                    item["id"]
+                    dict(item)
                     for item in data
                     if isinstance(item, Mapping) and isinstance(item.get("id"), str)
                 )
@@ -316,7 +349,7 @@ class UnixSocketModelCatalogProbe:
                     )
                 next_cursor = result.get("nextCursor")
                 if next_cursor in (None, ""):
-                    return tuple(dict.fromkeys(models))
+                    return tuple(models)
                 if (
                     not isinstance(next_cursor, str)
                     or len(next_cursor) > 1024
@@ -348,7 +381,7 @@ class UnixSocketModelCatalogProbe:
                 "Codex rejected the WebSocket catalog probe", "malformed"
             ) from exc
         except OSError as exc:
-            if exc.errno in (errno.ENOENT, errno.ECONNREFUSED):
+            if exc.errno in (errno.ENOENT, errno.ECONNREFUSED, 10061):
                 raise RuntimeSyncError(
                     "The shared Codex backend is unavailable", "unavailable"
                 ) from exc
@@ -361,7 +394,7 @@ class UnixSocketModelCatalogProbe:
                     websocket_connection.close()
                 except OSError:
                     pass
-            else:
+            elif raw_socket is not None:
                 raw_socket.close()
 
 
@@ -961,16 +994,9 @@ class CodexRuntimeController:
         # The unified ChatGPT desktop app publishes its active Codex runtime at
         # this exact path. Fresh installs may have no legacy build directory
         # under LOCALAPPDATA yet.
-        if self.target_codex_home is not None:
-            plugin_runtime = (
-                Path(self.target_codex_home)
-                / "plugins"
-                / ".plugin-appserver"
-                / "codex.exe"
-            )
-            executable = self._runtime_file(plugin_runtime)
-            if executable is not None:
-                return executable
+        executable = self._plugin_app_executable()
+        if executable is not None:
+            return executable
 
         candidates = []
         local_app_data = self._windows_local_app_data
@@ -1039,6 +1065,12 @@ class CodexRuntimeController:
                 continue
         return None
 
+    def _plugin_app_executable(self) -> Optional[str]:
+        if self.target_codex_home is None:
+            return None
+        name = "codex.exe" if platform.system() == "Windows" else "codex"
+        return self._runtime_file(Path(self.target_codex_home) / "plugins" / ".plugin-appserver" / name)
+
     def _mac_app_codex_executable(self) -> Optional[str]:
         if platform.system() != "Darwin":
             return None
@@ -1049,9 +1081,7 @@ class CodexRuntimeController:
                 executable = self._runtime_file(root / name / "Contents" / "Resources" / "codex")
                 if executable is not None:
                     return executable
-        if self.target_codex_home is not None:
-            return self._runtime_file(Path(self.target_codex_home) / "plugins" / ".plugin-appserver" / "codex")
-        return None
+        return self._plugin_app_executable()
 
     def _editor_codex_executable(self, extensions_root: Path) -> Optional[str]:
         system = {"Windows": "windows", "Linux": "linux", "Darwin": "darwin"}.get(
@@ -1109,6 +1139,8 @@ class CodexRuntimeController:
                 )
             )
         app_executable = self._windows_app_codex_executable() or self._mac_app_codex_executable()
+        if platform.system() == "Linux":
+            app_executable = self._plugin_app_executable()
         if app_executable:
             candidates.append(
                 CodexRuntimeCandidate(
@@ -1414,7 +1446,7 @@ class CodexRuntimeController:
             )
         return None
 
-    def _model_list(self) -> Tuple[str, ...]:
+    def _model_list(self) -> Tuple[Dict[str, Any], ...]:
         if self.target_codex_home is None:
             raise RuntimeSyncError(
                 "The active Codex integration home is unavailable", "unsupported"
@@ -1425,11 +1457,36 @@ class CodexRuntimeController:
 
     @staticmethod
     def _validate_models(
-        observed_models: Iterable[str],
+        observed_models: Iterable[Mapping[str, Any]],
         expected_models: Sequence[str],
         target: str,
+        expected_catalog: Optional[Mapping[str, Any]] = None,
     ) -> RuntimeSyncResult:
-        observed = tuple(dict.fromkeys(observed_models))
+        entries = {item["id"]: item for item in observed_models}
+        observed = tuple(entries)
+        if target == "emp" and expected_catalog is not None:
+            visible = {
+                item["slug"]: item for item in expected_catalog.get("models", [])
+                if item.get("visibility", "list") == "list"
+            }
+            if set(visible) != set(entries):
+                return RuntimeSyncResult(
+                    RELOAD_REQUIRED, target, False,
+                    "The running Codex model list has not refreshed yet", observed,
+                )
+            if any(
+                entries[model_id].get("displayName") != model.get("display_name", model_id)
+                or entries[model_id].get("description") != (model.get("description") or "")
+                for model_id, model in visible.items()
+            ):
+                return RuntimeSyncResult(
+                    RELOAD_REQUIRED, target, False,
+                    "The running Codex model display settings have not refreshed yet", observed,
+                )
+            return RuntimeSyncResult(
+                EMP_LOADED, target, True,
+                "Codex has loaded the current model names, descriptions and visibility", observed,
+            )
         expected = {
             model for model in expected_models if isinstance(model, str) and model
         }
@@ -1447,9 +1504,10 @@ class CodexRuntimeController:
         if target == "emp":
             missing = sorted(expected - observed_set)
             if missing:
-                detail = "Codex is missing %d expected EMP model(s)" % len(missing)
+                detail = ("Codex is missing %d expected EMP model(s); wait for its owner "
+                          "to refresh the catalog, or restart Codex safely") % len(missing)
                 return RuntimeSyncResult(
-                    VERIFICATION_FAILED, target, False, detail, observed
+                    RELOAD_REQUIRED, target, False, detail, observed
                 )
             return RuntimeSyncResult(
                 EMP_LOADED,
@@ -1462,7 +1520,7 @@ class CodexRuntimeController:
         remaining = sorted(expected.intersection(observed_set))
         if remaining:
             return RuntimeSyncResult(
-                VERIFICATION_FAILED,
+                RELOAD_REQUIRED,
                 target,
                 False,
                 "Codex still exposes %d EMP model(s)" % len(remaining),
@@ -1483,6 +1541,7 @@ class CodexRuntimeController:
         target: str,
         *,
         confirm_reload: bool,
+        expected_catalog: Optional[Mapping[str, Any]] = None,
     ) -> RuntimeSyncResult:
         if target not in ("emp", "native"):
             return RuntimeSyncResult(UNSUPPORTED, target, False, "Unknown runtime target")
@@ -1493,47 +1552,19 @@ class CodexRuntimeController:
                 False,
                 "Confirmation is required before checking the shared Codex backend",
             )
-        if not expected_models:
-            return self._validate_models((), expected_models, target)
-        try:
-            observed_models = self._model_list()
-        except RuntimeSyncError as error:
-            if error.kind == "unavailable":
-                return RuntimeSyncResult(
-                    STOPPED_WAITING_FOR_START,
-                    target,
-                    False,
-                    "The shared Codex backend is unavailable; configuration is saved "
-                    "and will load when its owner starts it",
-                )
-            return RuntimeSyncResult(
-                UNSUPPORTED if error.kind == "unsupported" else VERIFICATION_FAILED,
-                target,
-                False,
-                str(error),
-            )
-        observed = self._validate_models(observed_models, expected_models, target)
-        if not observed.verified:
-            return RuntimeSyncResult(
-                RELOAD_REQUIRED,
-                target,
-                False,
-                "Configuration is saved, but the shared Codex backend still has the "
-                "previous catalog; wait for its owner to restart it in a safe "
-                "maintenance window",
-                observed.observed_models,
-            )
-        return observed
+        return self.observe(expected_models, target, expected_catalog=expected_catalog)
 
     def observe(
         self,
         expected_models: Sequence[str],
         target: str,
+        *,
+        expected_catalog: Optional[Mapping[str, Any]] = None,
     ) -> RuntimeSyncResult:
         """Verify the live catalog without stopping or mutating Codex."""
         if target not in ("emp", "native"):
             return RuntimeSyncResult(UNSUPPORTED, target, False, "Unknown runtime target")
-        if not expected_models:
+        if not expected_models and expected_catalog is None:
             return self._validate_models((), expected_models, target)
         try:
             observed = self._model_list()
@@ -1552,4 +1583,4 @@ class CodexRuntimeController:
                 False,
                 str(error),
             )
-        return self._validate_models(observed, expected_models, target)
+        return self._validate_models(observed, expected_models, target, expected_catalog)

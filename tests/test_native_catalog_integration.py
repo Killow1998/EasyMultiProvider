@@ -11,12 +11,13 @@ from easy_multi_provider.integration import IntegrationManager
 from easy_multi_provider.server import AppState, make_handler
 
 
-class _ForbiddenRuntimeAccess:
+class _ReadOnlyRuntimeAccess:
+    models = ()
     def run(self, *_args, **_kwargs):
         raise AssertionError("native display settings must not run Codex commands")
 
     def model_list(self, *_args, **_kwargs):
-        raise AssertionError("model IDs cannot verify native display settings")
+        return self.models
 
     def stop_stale_codex_hosts(self):
         raise AssertionError("native display settings must not stop Codex")
@@ -52,7 +53,7 @@ class NativeCatalogIntegrationTests(unittest.TestCase):
             self.codex_home / "easy-multi-provider/integration/lease.json",
             instance_id="native-catalog-test",
         )
-        forbidden = _ForbiddenRuntimeAccess()
+        forbidden = _ReadOnlyRuntimeAccess()
         self.state = AppState(
             self.emp_path,
             integration_manager=manager,
@@ -98,7 +99,7 @@ class NativeCatalogIntegrationTests(unittest.TestCase):
         status, payload = self.request("/api/integration/enable", {"confirm_reload": True})
         self.assertEqual(status, 200)
         self.assertEqual(payload["configuration"]["state"], "emp_applied")
-        self.assertEqual(payload["runtime"]["state"], "catalog_unverified")
+        self.assertEqual(payload["runtime"]["state"], "reload_required")
         self.assertFalse(payload["runtime"]["verified"])
         self.assertTrue(payload["runtime"]["action_required"])
         catalog = json.loads(self.state.integration_catalog_path.read_text(encoding="utf-8"))
@@ -109,13 +110,14 @@ class NativeCatalogIntegrationTests(unittest.TestCase):
         self.assertIn("model_catalog_json", self.config_path.read_text(encoding="utf-8"))
         self.assert_native_files_untouched()
         record = self.state.runtime_recovery_store.load()
-        self.assertEqual(record.state, "catalog_unverified")
+        self.assertEqual(record.state, "reload_required")
         self.assertEqual(record.expected_models, ())
 
         for operation in ("reload", "verify", "restore"):
             status, payload = self.request("/api/integration/" + operation, {"confirm_reload": True})
             self.assertEqual(status, 200)
-            self.assertEqual(payload["runtime"]["state"], "catalog_unverified")
+            self.assertEqual(payload["runtime"]["state"],
+                             "catalog_unverified" if operation == "restore" else "reload_required")
             self.assertFalse(payload["runtime"]["verified"])
         self.assertEqual(self.config_path.read_bytes(), self.original_config)
         self.assert_native_files_untouched()

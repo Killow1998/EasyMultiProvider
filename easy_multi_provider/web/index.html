@@ -402,7 +402,7 @@ function renderIntegration(info) {
   const runtimeState = runtime.state || 'not_checked';
   $('integration_summary').textContent = view[1];
   const runtimes = Array.isArray(compatibility.runtimes) ? compatibility.runtimes : [];
-  const recommended = compatibility.recommended || '0.152.x';
+  const recommended = compatibility.recommended || '0.154.0';
   const installed = compatibility.installed ? ` ${compatibility.installed}` : '';
   const compatibilityMessage = compatibility.status === 'unsupported'
     ? tr(`Codex${installed} 版本过旧，请升级到 ${recommended}。`, `Codex${installed} is too old. Update to ${recommended}.`)

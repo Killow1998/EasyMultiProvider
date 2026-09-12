@@ -118,7 +118,7 @@ def _save_responses_route(
 
 
 class _WaitingRuntimeController:
-    def reload(self, _expected_models, target, *, confirm_reload):
+    def reload(self, _expected_models, target, *, confirm_reload, expected_catalog=None):
         if not confirm_reload:
             raise AssertionError("test transaction must be explicitly confirmed")
         return RuntimeSyncResult(
@@ -149,15 +149,20 @@ def _read_exact(stream, length):
     return bytes(value)
 
 
-def _read_text_frame(stream):
-    first, second = _read_exact(stream, 2)
-    length = second & 0x7F
-    if length == 126:
-        length = struct.unpack("!H", _read_exact(stream, 2))[0]
-    elif length == 127:
-        length = struct.unpack("!Q", _read_exact(stream, 8))[0]
-    payload = _read_exact(stream, length)
-    return first & 0x0F, payload.decode("utf-8")
+def _read_text_frame(stream, *, include_metadata=False):
+    while True:
+        first, second = _read_exact(stream, 2)
+        length = second & 0x7F
+        if length == 126:
+            length = struct.unpack("!H", _read_exact(stream, 2))[0]
+        elif length == 127:
+            length = struct.unpack("!Q", _read_exact(stream, 8))[0]
+        text = _read_exact(stream, length).decode("utf-8")
+        opcode = first & 0x0F
+        # Codex consumes catalog metadata separately from the response lifecycle.
+        if not include_metadata and opcode == 1 and json.loads(text).get("type") == "codex.response.metadata":
+            continue
+        return opcode, text
 
 
 class _CountingHistoryReader:
@@ -1450,7 +1455,7 @@ class ServerAccountTests(unittest.TestCase):
 
             class VerificationWarningRuntime:
                 @staticmethod
-                def reload(_expected_models, target, *, confirm_reload):
+                def reload(_expected_models, target, *, confirm_reload, expected_catalog=None):
                     return RuntimeSyncResult(
                         "verification_failed",
                         target,
@@ -1513,7 +1518,7 @@ class ServerAccountTests(unittest.TestCase):
 
             class VerificationWarningRuntime:
                 @staticmethod
-                def reload(_expected_models, target, *, confirm_reload):
+                def reload(_expected_models, target, *, confirm_reload, expected_catalog=None):
                     return RuntimeSyncResult(
                         "verification_failed",
                         target,
@@ -1566,7 +1571,7 @@ class ServerAccountTests(unittest.TestCase):
 
             class VerificationWarningRuntime:
                 @staticmethod
-                def reload(_expected_models, target, *, confirm_reload):
+                def reload(_expected_models, target, *, confirm_reload, expected_catalog=None):
                     return RuntimeSyncResult(
                         "verification_failed",
                         target,

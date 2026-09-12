@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.97 (2026-09-11)
+
+- Notify Codex when EMP model names, visibility or available models change.
+- Verify loaded display names and descriptions, not only model IDs.
+- Read the existing Windows Codex control socket and discover Linux App plugin runtimes.
+- Preserve safe upstream error categories and retry delays across HTTP and WebSocket responses.
+- Restore recent performance records in event-time order, even when log file timestamps tie or change.
+- Extend Codex compatibility through 0.154.x, with 0.154.0 recommended.
+
 ## 0.9.96 (2026-09-09)
 
 - Remember Web UI login for 30 days across EMP restarts.

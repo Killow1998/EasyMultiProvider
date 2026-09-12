@@ -55,3 +55,13 @@ class MacRuntimeDiscoveryTests(unittest.TestCase):
         controller = self.controller({}, system="Linux")
         self.assertIsNone(controller._mac_app_codex_executable())
         controller._runtime_file.assert_not_called()
+
+    def test_linux_discovers_the_app_plugin_runtime_in_the_target_codex_home(self):
+        files = {}
+        controller = self.controller(files, system="Linux")
+        binary = str(Path(controller.target_codex_home) / "plugins/.plugin-appserver/codex")
+        files[binary] = binary
+        controller.runner = VersionRunner({binary: "0.154.0"})
+        with patch.object(controller, "_codex_home_managed_executable", return_value=None):
+            runtimes = controller.compatibility()["runtimes"]
+        self.assertEqual([(r["source"], r["installed"]) for r in runtimes], [("codex_app", "0.154.0")])

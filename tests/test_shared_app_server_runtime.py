@@ -15,6 +15,7 @@ from easy_multi_provider.codex_runtime import (
     RuntimeSyncError,
 )
 from easy_multi_provider.config import normalize, save
+from easy_multi_provider.catalog import build_catalog
 from easy_multi_provider.integration import IntegrationManager
 from easy_multi_provider.server import AppState, make_handler
 from easy_multi_provider.transport import WebSocketConnection, websocket_accept
@@ -34,7 +35,7 @@ class _ForbiddenHostStopper:
 
 class _StaticModelCatalogProbe:
     def __init__(self, models):
-        self.models = tuple(models)
+        self.models = tuple({"id": model} if isinstance(model, str) else model for model in models)
         self.calls = []
 
     def model_list(self, codex_home, timeout):
@@ -284,6 +285,11 @@ class SharedAppServerRuntimeTests(unittest.TestCase):
             root = Path(directory)
             probe = _StaticModelCatalogProbe(("external/model-a",))
             state, codex_home = self._state(root, probe)
+            probe.models = tuple({
+                "id": item["slug"], "displayName": item["display_name"],
+                "description": item.get("description") or "",
+            } for item in build_catalog(state.snapshot())["models"]
+                if item.get("visibility", "list") == "list")
             state.enable_integration(
                 "http://127.0.0.1:4201/v1", confirm_reload=True
             )

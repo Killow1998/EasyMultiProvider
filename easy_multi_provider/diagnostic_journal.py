@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -12,7 +13,6 @@ import stat
 import sys
 import threading
 import traceback
-from collections import deque
 
 _MAX_RECORD_BYTES = 16 * 1024
 _DEFAULT_MAX_PART_BYTES = 2 * 1024 * 1024
@@ -531,7 +531,8 @@ def read_route_observations(config_path, limit: int = 512):
     except (TypeError, ValueError):
         limit = 512
     logs_dir = os.path.join(str(config_path), "state", "logs")
-    recent = deque(maxlen=limit)
+    recent = []
+    record_order = 0
     try:
         _assert_no_symlink_components(logs_dir)
         managed = []
@@ -565,7 +566,16 @@ def read_route_observations(config_path, limit: int = 512):
                         continue
                     fields = record.get("fields")
                     if isinstance(fields, dict):
-                        recent.append(dict(fields))
+                        # File mtimes can tie or change during backup/restore.
+                        # Keep the newest records by their own UTC timestamps.
+                        timestamp = record.get("timestamp")
+                        timestamp = timestamp if isinstance(timestamp, str) else ""
+                        entry = (timestamp, record_order, dict(fields))
+                        record_order += 1
+                        if len(recent) < limit:
+                            heapq.heappush(recent, entry)
+                        else:
+                            heapq.heappushpop(recent, entry)
         except OSError:
             continue
         finally:
@@ -574,7 +584,7 @@ def read_route_observations(config_path, limit: int = 512):
                     os.close(descriptor)
                 except OSError:
                     pass
-    return list(recent)
+    return [fields for _, _, fields in sorted(recent)]
 
 
 def request_source(body, headers):
