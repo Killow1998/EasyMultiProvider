@@ -2,7 +2,10 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,6 +26,11 @@ ensure_test_master_key()
 
 
 class QuotaTests(unittest.TestCase):
+    def setUp(self):
+        cache = patch.object(quota_module, "_recent_refreshes", OrderedDict())
+        cache.start()
+        self.addCleanup(cache.stop)
+
     @unittest.skipIf(os.name == "nt", "Unix path permission checks do not apply")
     def test_trusts_owner_managed_group_writable_codex_path(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
@@ -37,8 +45,48 @@ class QuotaTests(unittest.TestCase):
             self.assertEqual(trusted, binary.resolve())
             self.assertEqual(identity, (binary.stat().st_dev, binary.stat().st_ino))
 
-    def test_account_refresh_lock_does_not_retain_identifier_keys(self):
-        self.assertIs(account_refresh_lock("one"), account_refresh_lock("two"))
+    def test_slow_account_does_not_block_another_account(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def read(account, **_kwargs):
+            if account["id"] == "slow":
+                entered.set()
+                self.assertTrue(release.wait(3))
+            return {"id": account["id"]}
+
+        with patch.object(quota_module, "read_account_quota", side_effect=read):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                slow = pool.submit(quota_module.refresh_account_quota, {"id": "slow"})
+                try:
+                    self.assertTrue(entered.wait(3))
+                    fast = pool.submit(quota_module.refresh_account_quota, {"id": "fast"})
+                    self.assertEqual(fast.result(2), {"id": "fast"})
+                finally:
+                    release.set()
+                self.assertEqual(slow.result(2), {"id": "slow"})
+
+    def test_same_account_waiters_share_result_without_rotating_twice(self):
+        ready = threading.Barrier(4)
+        with patch.object(quota_module, "read_account_quota", return_value={"remaining": 50}) as query:
+            def refresh():
+                ready.wait(3)
+                return quota_module.refresh_account_quota({"id": "one"})
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(pool.map(lambda _: refresh(), range(4)))
+        self.assertEqual(query.call_count, 1)
+        results[0]["remaining"] = 0
+        self.assertEqual(results[1]["remaining"], 50)
+
+    def test_account_lock_is_retained_only_while_in_use(self):
+        import gc
+        import weakref
+        lock = account_refresh_lock("one")
+        reference = weakref.ref(lock)
+        self.assertIs(lock, account_refresh_lock("one"))
+        del lock
+        gc.collect()
+        self.assertIsNone(reference())
 
     def test_windows_root_export_is_bounded_to_server_auth_certificates(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory, patch.object(
@@ -65,9 +113,7 @@ class QuotaTests(unittest.TestCase):
             )
 
     def test_refreshes_different_accounts_without_cross_account_cooldown(self):
-        with patch.object(quota_module, "_last_refresh", 0.0), patch.object(
-            quota_module, "_last_refresh_key", b"", create=True
-        ), patch.object(
+        with patch.object(
             quota_module, "read_account_quota", side_effect=[{"id": "one"}, {"id": "two"}]
         ), patch.object(
             quota_module.time, "monotonic", side_effect=[100.0, 100.0, 100.0, 100.0]
@@ -79,15 +125,33 @@ class QuotaTests(unittest.TestCase):
                 quota_module.refresh_account_quota({"id": "two"}), {"id": "two"}
             )
 
-    def test_repeated_same_account_still_respects_cooldown(self):
-        with patch.object(quota_module, "_last_refresh", 0.0), patch.object(
-            quota_module, "_last_refresh_key", b"", create=True
-        ), patch.object(
+    def test_recent_result_replaces_cooldown_error_and_expires(self):
+        with patch.object(
             quota_module, "read_account_quota", return_value={"id": "one"}
-        ), patch.object(quota_module.time, "monotonic", side_effect=[100.0, 100.0, 100.0]):
+        ) as query, patch.object(quota_module.time, "monotonic", return_value=100.0) as clock:
             quota_module.refresh_account_quota({"id": "one"})
-            with self.assertRaisesRegex(quota_module.QuotaError, "cooling down"):
-                quota_module.refresh_account_quota({"id": "one"})
+            self.assertEqual(quota_module.refresh_account_quota({"id": "one"}), {"id": "one"})
+            self.assertEqual(query.call_count, 1)
+            clock.return_value = 103.0
+            quota_module.refresh_account_quota({"id": "one"})
+            self.assertEqual(query.call_count, 2)
+
+    def test_reimport_invalidates_recent_auth_error(self):
+        with patch.object(quota_module, "read_account_quota", side_effect=[
+            quota_module.QuotaError("Sign in again", "quota_auth_required"), {"remaining": 50}
+        ]) as query:
+            for _ in range(2):
+                with self.assertRaises(quota_module.QuotaError):
+                    quota_module.refresh_account_quota({"id": "one"})
+            self.assertEqual(query.call_count, 1)
+            quota_module.clear_account_quota_cache("one")
+            self.assertEqual(quota_module.refresh_account_quota({"id": "one"}), {"remaining": 50})
+
+    def test_recent_results_are_bounded(self):
+        with patch.object(quota_module, "read_account_quota", return_value={}):
+            for index in range(200):
+                quota_module.refresh_account_quota({"id": str(index)})
+        self.assertLessEqual(len(quota_module._recent_refreshes), quota_module._MAX_RECENT_REFRESHES)
 
     def test_parser_keeps_quota_and_masks_account_identity(self):
         output = "\n".join(

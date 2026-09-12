@@ -11,6 +11,28 @@ _MIN_TPS_WINDOW_MS = 500
 PERFORMANCE_SCHEMA = 2
 
 
+def token_count(value: Any) -> Optional[int]:
+    """Accept reported counts, not estimates, clamped values or missing fields."""
+    return value if type(value) is int and 0 <= value <= 10_000_000 else None
+
+
+def input_cache_usage(event: Mapping[str, Any]) -> Dict[str, int]:
+    response = event.get("response")
+    response = response if isinstance(response, Mapping) else event
+    usage = response.get("usage")
+    if not isinstance(usage, Mapping):
+        return {}
+    total = token_count(usage.get("input_tokens"))
+    if total is None:
+        return {}
+    result = {"input_tokens": total}
+    details = usage.get("input_tokens_details")
+    cached = token_count(details.get("cached_tokens")) if isinstance(details, Mapping) else None
+    if cached is not None and cached <= total:
+        result["cached_input_tokens"] = cached
+    return result
+
+
 def _output_tokens(event: Mapping[str, Any]) -> Optional[int]:
     response = event.get("response")
     response = response if isinstance(response, Mapping) else event
@@ -67,6 +89,7 @@ class ResponsesPerformanceTracker:
         self._terminal_at: Optional[float] = None
         self._output_tokens: Optional[int] = None
         self._reasoning_tokens: Optional[int] = None
+        self._input_usage: Dict[str, int] = {}
         self._pending = bytearray()
         self._data_lines = []
         self._data_bytes = 0
@@ -94,6 +117,7 @@ class ResponsesPerformanceTracker:
         }:
             self._terminal_at = now
             self._completed = event_type == "response.completed"
+            self._input_usage = input_cache_usage(event)
             value = _output_tokens(event)
             if value is not None:
                 self._output_tokens = value
@@ -144,6 +168,7 @@ class ResponsesPerformanceTracker:
             self.observe_chunk(raw)
             return
         if isinstance(payload, Mapping):
+            self._input_usage = input_cache_usage(payload)
             count = _output_tokens(payload)
             if count is not None:
                 self._output_tokens = count
@@ -168,7 +193,7 @@ class ResponsesPerformanceTracker:
                     pass
 
     def diagnostics(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {"performance_schema": PERFORMANCE_SCHEMA}
+        result: Dict[str, Any] = {"performance_schema": PERFORMANCE_SCHEMA, **self._input_usage}
         if self._first_token_at is not None:
             result["ttft_ms"] = max(
                 0, int(round((self._first_token_at - self._started) * 1000))

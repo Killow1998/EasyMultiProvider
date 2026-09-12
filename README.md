@@ -6,7 +6,7 @@ EMP is a local, browser-configured model router for Codex.
 It keeps the native Codex experience while adding multiple ChatGPT
 subscriptions, API providers, and external models to the same model list.
 
-The current source version is `v0.9.99`.
+The current source version is `v0.10.1`.
 
 ## Features
 
@@ -24,6 +24,9 @@ The current source version is `v0.9.99`.
   existing model slug; Codex continues to own the child task and permissions.
 - Keep credentials encrypted on the local machine.
 - Keep a private, bounded diagnostic journal for later troubleshooting.
+- View upstream-reported prompt cache hit rates for native and external models
+  in Performance and health, grouped into token-weighted 10-minute periods.
+  Idle periods are omitted and missing cache usage is shown as unavailable.
 - Inspect rolling median TTFT/TPS from the latest 20 valid calls per recently
   used model and compare it with the preceding window. History survives EMP
   restarts, and OpenAI speed modes appear only after a Fast request is actually

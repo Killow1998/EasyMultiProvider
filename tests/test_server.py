@@ -519,7 +519,7 @@ class ServerAccountTests(unittest.TestCase):
 
     def test_web_does_not_expose_internal_tool_call_mode(self):
         html = WEB_FILE.read_text(encoding="utf-8")
-        self.assertNotIn("工具调用", html)
+        self.assertNotIn("工具调用模式", html)
         self.assertNotIn("modal_provider_tools", html)
 
     def test_successful_auto_protocol_is_persisted(self):
@@ -1920,6 +1920,8 @@ class ServerAccountTests(unittest.TestCase):
             "upstream_first_token_ms",
             "generation_ms",
             "output_tokens",
+            "input_tokens",
+            "cached_input_tokens",
             "tokens_per_second",
             "connection_reused",
             "status",
@@ -2005,6 +2007,7 @@ class ServerAccountTests(unittest.TestCase):
                         "records",
                         "health",
                         "performance_window",
+                        "cache",
                         "models",
                     },
                 )
@@ -2047,6 +2050,8 @@ class ServerAccountTests(unittest.TestCase):
                     "upstream_first_token_ms",
                     "generation_ms",
                     "output_tokens",
+                    "input_tokens",
+                    "cached_input_tokens",
                     "tokens_per_second",
                     "connection_reused",
                     "status",

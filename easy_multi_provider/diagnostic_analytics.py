@@ -7,11 +7,12 @@ from datetime import datetime, timedelta, timezone
 from statistics import median
 from typing import Any, Dict, Iterable, Mapping, Optional
 
-from .performance import PERFORMANCE_SCHEMA
+from .performance import PERFORMANCE_SCHEMA, token_count
 
 
 _PERFORMANCE_WINDOW_CALLS = 20
 _PERFORMANCE_WINDOW_DAYS = 7
+_CACHE_BUCKET_SECONDS = 10 * 60
 
 
 _CLIENT_ENDINGS = frozenset({
@@ -82,6 +83,67 @@ def _change_percent(current: Optional[float], previous: Optional[float], lower_i
         return None
     raw = (previous - current) if lower_is_better else (current - previous)
     return round(raw * 100.0 / previous, 1)
+
+
+def _cache_totals(records):
+    pairs = []
+    for item in records:
+        total = token_count(item.get("input_tokens"))
+        cached = token_count(item.get("cached_input_tokens"))
+        if total is not None and total > 0 and cached is not None and cached <= total:
+            pairs.append((total, cached))
+    total = sum(pair[0] for pair in pairs)
+    cached = sum(pair[1] for pair in pairs)
+    return {
+        "call_count": len(records),
+        "sample_count": len(pairs),
+        "hit_count": sum(pair[1] > 0 for pair in pairs),
+        "input_tokens": total,
+        "cached_input_tokens": cached,
+        "rate": _rate(cached, total) if total else None,
+    }
+
+
+def summarize_cache_usage(records, reference: datetime, max_models: int = 5):
+    """Weight reported cache reads by input tokens; leave idle periods absent.
+
+    These are retained request observations, not a complete billing ledger.
+    A failed request with reported usage still counts; a missing usage does not.
+    """
+    cutoff = reference - timedelta(days=_PERFORMANCE_WINDOW_DAYS)
+    groups = {}
+    for item in records:
+        model = item.get("model_id")
+        observed = _observed_at(item.get("observed_at"))
+        if (item.get("route") != "responses" or not isinstance(model, str) or not model
+                or model.startswith("codex-auto-") or observed is None
+                or not cutoff <= observed <= reference):
+            continue
+        mode = item.get("speed_mode")
+        mode = mode if mode in {"fast", "standard"} else "unknown"
+        key = (model, item.get("provider_id") or "", mode, item.get("endpoint_fingerprint") or "")
+        groups.setdefault(key, []).append((observed, item))
+    ordered = sorted(groups.items(), key=lambda pair: max(row[0] for row in pair[1]), reverse=True)
+    result = []
+    for (model, provider, mode, _endpoint), rows in ordered[:max(1, int(max_models))]:
+        buckets = {}
+        for observed, item in rows:
+            start = int(observed.timestamp()) // _CACHE_BUCKET_SECONDS * _CACHE_BUCKET_SECONDS
+            buckets.setdefault(start, []).append(item)
+        result.append({
+            "model_id": model, "provider_id": provider, "speed_mode": mode,
+            "endpoint_fingerprint": _endpoint,
+            **_cache_totals([item for _, item in rows]),
+            "first_seen": min(row[0] for row in rows).isoformat(),
+            "last_seen": max(row[0] for row in rows).isoformat(),
+            "periods": [
+                {"start": start, "end": start + _CACHE_BUCKET_SECONDS,
+                 "complete": start + _CACHE_BUCKET_SECONDS <= reference.timestamp(),
+                 **_cache_totals(items)}
+                for start, items in sorted(buckets.items(), reverse=True)
+            ],
+        })
+    return {"bucket_minutes": 10, "days": _PERFORMANCE_WINDOW_DAYS, "models": result}
 
 
 def summarize_route_observations(
@@ -239,4 +301,5 @@ def summarize_route_observations(
             "days": _PERFORMANCE_WINDOW_DAYS,
         },
         "models": models,
+        "cache": summarize_cache_usage(relevant, reference, max_models),
     }

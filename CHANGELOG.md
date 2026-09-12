@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.10.1 (2026-09-12)
+
+- Show upstream-reported prompt cache hit rates by model, account/provider and
+  speed mode in Performance and health, with token-weighted 10-minute periods.
+  Skip idle periods and distinguish missing measurements from zero cache hits.
+- Preserve cache usage through Responses, Chat Completions (including DeepSeek)
+  and Anthropic Messages, for streaming and non-streaming requests. Retain the
+  numeric counts in diagnostic logs across restarts without storing prompt content.
+- Refresh account quotas independently and share overlapping reads for the same
+  account, including short-lived failure results, without repeating token refreshes.
+- Notify the Web UI when background quota reads finish, preserving the open trend
+  view and keeping periodic synchronization available if notifications disconnect.
+- Add collapsible recent failure details with the selected service, connection,
+  output progress and diagnostic ID, without displaying conversation content.
+- Move data import and export into the top toolbar, group related actions and
+  preferences, and keep controls aligned as the window narrows.
+
 ## 0.9.99 (2026-09-12)
 
 - Divide quota trends by recorded reset periods, with local calendar-day divisions

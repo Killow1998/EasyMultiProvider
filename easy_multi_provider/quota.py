@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections import OrderedDict
 import json
 import os
 import queue
@@ -14,11 +15,12 @@ import stat
 import tempfile
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from . import __version__
-from .accounts import AccountError, load_auth, load_native_auth, validate_auth_json
+from .accounts import NATIVE_ACCOUNT_ID, AccountError, load_auth, load_native_auth, validate_auth_json
 from .vault import VaultError, write_encrypted_json
 
 
@@ -54,11 +56,12 @@ def _quota_rpc_error(method: str, error: Any) -> QuotaError:
     return QuotaError("Codex app-server initialization failed", "quota_initialize_failed")
 
 
-# ponytail: one bounded lock is enough for the low-frequency quota path;
-# replace with a bounded per-account pool only if measured quota contention matters.
-_refresh_lock = threading.RLock()
-_last_refresh = 0.0
-_last_refresh_key = b""
+_refresh_guard = threading.Lock()
+# Locks live only while an import, deletion or refresh is using them. Never
+# evict an active lock: a second lock for the same account would race token rotation.
+_refresh_locks = weakref.WeakValueDictionary()
+_recent_refreshes = OrderedDict()
+_MAX_RECENT_REFRESHES = 128
 _REFRESH_COOLDOWN_SECONDS = 2.0
 _SERVER_AUTH_OID = "1.3.6.1.5.5.7.3.1"
 
@@ -147,26 +150,56 @@ def _write_windows_root_ca_bundle(directory: Path) -> Optional[Path]:
 
 
 def account_refresh_lock(account_id: Any) -> threading.RLock:
-    return _refresh_lock
+    key = hashlib.sha256(str(account_id).encode("utf-8")).digest()
+    with _refresh_guard:
+        lock = _refresh_locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _refresh_locks[key] = lock
+        return lock
 
 
-def _account_refresh_key(account: Dict[str, Any]) -> bytes:
-    # Retain one digest instead of a raw, user-controlled account identifier.
-    return hashlib.sha256(str(account.get("id", "")).encode("utf-8")).digest()
+def clear_account_quota_cache(account_id: Any) -> None:
+    """Discard short-lived results when credentials are imported or removed."""
+    key = hashlib.sha256(str(account_id).encode("utf-8")).digest()
+    with _refresh_guard:
+        for cache_key in list(_recent_refreshes):
+            if cache_key[0] == key:
+                del _recent_refreshes[cache_key]
+
+
+def _cached_quota_query(account_id, identity, query):
+    key = (hashlib.sha256(str(account_id).encode("utf-8")).digest(), identity)
+    with account_refresh_lock(account_id):
+        now = time.monotonic()
+        with _refresh_guard:
+            for expired in [k for k, value in _recent_refreshes.items() if value[0] <= now]:
+                del _recent_refreshes[expired]
+            cached = _recent_refreshes.get(key)
+        if cached is None:
+            result, error = None, None
+            try:
+                result = query()
+            except QuotaError as exc:
+                # Do not retain an exception traceback (which may own credentials).
+                error = (str(exc), exc.code)
+            cached = (time.monotonic() + _REFRESH_COOLDOWN_SECONDS, result, error)
+            with _refresh_guard:
+                _recent_refreshes[key] = cached
+                _recent_refreshes.move_to_end(key)
+                while len(_recent_refreshes) > _MAX_RECENT_REFRESHES:
+                    _recent_refreshes.popitem(last=False)
+        if cached[2] is not None:
+            raise QuotaError(*cached[2])
+        return json.loads(json.dumps(cached[1]))
 
 
 def refresh_account_quota(account: Dict[str, Any], codex_binary: str = "codex") -> Dict[str, Any]:
-    """Serialize and cool down explicit and automatic account refreshes."""
-    global _last_refresh, _last_refresh_key
-    with account_refresh_lock(account.get("id")):
-        now = time.monotonic()
-        refresh_key = _account_refresh_key(account)
-        if refresh_key == _last_refresh_key and now - _last_refresh < _REFRESH_COOLDOWN_SECONDS:
-            raise QuotaError("account quota refresh is cooling down")
-        result = read_account_quota(account, codex_binary=codex_binary)
-        _last_refresh = time.monotonic()
-        _last_refresh_key = refresh_key
-        return result
+    """Share recent results without serializing unrelated accounts."""
+    return _cached_quota_query(
+        account.get("id"), (str(account.get("auth_file", "")), str(codex_binary)),
+        lambda: read_account_quota(account, codex_binary=codex_binary),
+    )
 
 
 def _enqueue_lines(stream: Any, output: Any) -> None:
@@ -574,10 +607,10 @@ def read_native_login_quota(
         auth = load_native_auth(auth_path)
     except AccountError as exc:
         raise QuotaError(str(exc)) from exc
-    return _run_quota_query(
-        auth,
-        codex_binary,
-        timeout,
-        allow_refresh=False,
-        persist_path=None,
+    identity = hashlib.sha256(json.dumps(auth, sort_keys=True).encode("utf-8")).digest()
+    return _cached_quota_query(
+        NATIVE_ACCOUNT_ID, (identity, str(codex_binary)),
+        lambda: _run_quota_query(
+            auth, codex_binary, timeout, allow_refresh=False, persist_path=None,
+        ),
     )

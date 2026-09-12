@@ -18,6 +18,7 @@ from .dialects import (
 from .protocol_projection import (
     _anthropic_incomplete_reason,
     _anthropic_tool_arguments,
+    _anthropic_usage,
     _chat_incomplete_reason,
     _upstream_tool_arguments,
     _chat_usage,
@@ -1214,6 +1215,7 @@ def stream_anthropic_completion(
     text_bytes = 0
     stop_reason = None
     saw_message_stop = False
+    usage = {}
     response = {
         "id": response_id,
         "object": "response",
@@ -1249,7 +1251,14 @@ def stream_anthropic_completion(
             event_type = str(event.get("type") or "")
             if event_type == "error":
                 raise ExternalProtocolError("Anthropic upstream returned an error event")
+            if event_type == "message_start":
+                message = event.get("message")
+                if isinstance(message, Mapping) and isinstance(message.get("usage"), Mapping):
+                    usage.update(message["usage"])
+                continue
             if event_type == "message_delta":
+                if isinstance(event.get("usage"), Mapping):
+                    usage.update(event["usage"])
                 delta = event.get("delta")
                 delta = delta if isinstance(delta, Mapping) else {}
                 if delta.get("stop_reason"):
@@ -1707,6 +1716,8 @@ def stream_anthropic_completion(
         response["status"] = "incomplete" if incomplete_reason else "completed"
         response["output"] = output
         response["output_text"] = "".join(all_text)
+        if usage:
+            response["usage"] = _anthropic_usage(usage)
         if incomplete_reason:
             response["incomplete_details"] = {"reason": incomplete_reason}
         terminal_event = "response.incomplete" if incomplete_reason else "response.completed"

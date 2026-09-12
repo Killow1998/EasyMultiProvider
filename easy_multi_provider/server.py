@@ -118,7 +118,7 @@ from .native_websocket import (
     native_websocket_request_fits,
     terminal_observation as native_websocket_terminal,
 )
-from .quota import QuotaError, account_refresh_lock, read_native_login_quota, refresh_account_quota
+from .quota import QuotaError, account_refresh_lock, clear_account_quota_cache, read_native_login_quota, refresh_account_quota
 from .quota_history import (
     QuotaHistoryError,
     QuotaHistoryStore,
@@ -126,7 +126,7 @@ from .quota_history import (
     quota_history_path,
 )
 from .provider_replay import ProviderReplayCache
-from .performance import ResponsesPerformanceTracker
+from .performance import ResponsesPerformanceTracker, token_count
 from .history_continuity import (
     CodexHomeHistoryReader,
     HistoryContinuityEngine,
@@ -753,6 +753,10 @@ class ObservationRing:
         output_tokens = _safe_diagnostic_int(
             event.get("output_tokens"), 10_000_000
         )
+        input_tokens = token_count(event.get("input_tokens"))
+        cached_input_tokens = token_count(event.get("cached_input_tokens"))
+        if input_tokens is None or (cached_input_tokens is not None and cached_input_tokens > input_tokens):
+            cached_input_tokens = None
         tokens_per_second = _safe_diagnostic_rate(event.get("tokens_per_second"))
         tool_pairing = event.get("tool_pairing_status", "none")
         if tool_pairing not in _DIAGNOSTIC_TOOL_PAIRING:
@@ -841,6 +845,8 @@ class ObservationRing:
             "upstream_first_token_ms": upstream_first_token_ms,
             "generation_ms": generation_ms,
             "output_tokens": output_tokens,
+            "input_tokens": input_tokens,
+            "cached_input_tokens": cached_input_tokens,
             "tokens_per_second": tokens_per_second,
             "connection_reused": bool(event.get("connection_reused", False)),
             "status": status,
@@ -1142,6 +1148,12 @@ class AppState:
         self.quota_history = QuotaHistoryStore(quota_history_path(self.path))
         self._quota_sampler_stop = threading.Event()
         self._quota_sampler_thread: Optional[threading.Thread] = None
+        self._quota_condition = threading.Condition()
+        self._quota_revision = 0
+        self._quota_refresh_errors: Dict[str, str] = {}
+        # HTTP/1 browsers commonly allow six connections per origin. Reserve
+        # room for API calls as well as the server's model request threads.
+        self._quota_event_slots = threading.BoundedSemaphore(4)
         self.history_continuity = HistoryContinuityEngine(
             history_reader or CodexHomeHistoryReader(codex_home, journal=self.journal)
         )
@@ -1255,6 +1267,24 @@ class AppState:
     def snapshot(self) -> Dict[str, Any]:
         with self.lock:
             return json.loads(json.dumps(self.config))
+
+    def notify_quota_update(self, account_id: str, error: Optional[str] = None) -> None:
+        with self._quota_condition:
+            if error:
+                self._quota_refresh_errors[account_id] = error
+            else:
+                self._quota_refresh_errors.pop(account_id, None)
+            self._quota_revision += 1
+            self._quota_condition.notify_all()
+
+    def accounts_snapshot(self) -> Dict[str, Any]:
+        with self._quota_condition:
+            errors = dict(self._quota_refresh_errors)
+        return {
+            "native_account": self.native_account_snapshot(),
+            "accounts": public_accounts(self.snapshot().get("accounts", [])),
+            "refresh_errors": errors,
+        }
 
     def native_account_snapshot(self) -> Dict[str, Any]:
         auth_path = self.codex_home / "auth.json"
@@ -2159,6 +2189,8 @@ class AppState:
                     duplicate_account_status(self.config.get("accounts", [])),
                 )
                 save(self.config, self.path)
+                clear_account_quota_cache(account_id)
+                self.notify_quota_update(account_id)
                 return account
 
     def refresh_account(self, account_id: str) -> Dict[str, Any]:
@@ -2204,6 +2236,7 @@ class AppState:
                                 break
                     if catalog_changed:
                         self.refresh_catalog()
+                self.notify_quota_update(account_id, exc.code)
                 raise
             with self.lock:
                 for item in self.config.get("accounts", []):
@@ -2219,19 +2252,25 @@ class AppState:
             if catalog_changed:
                 self.refresh_catalog()
             self._record_quota_snapshot(account_id, quota)
+            self.notify_quota_update(account_id)
             return result
 
     def refresh_native_account(self) -> Dict[str, Any]:
         with account_refresh_lock(NATIVE_ACCOUNT_ID):
             executable = getattr(self.runtime_controller, "executable", None)
             codex_binary = executable() if callable(executable) else "codex"
-            quota = read_native_login_quota(
-                codex_binary=codex_binary,
-                auth_path=self.codex_home / "auth.json",
-            )
+            try:
+                quota = read_native_login_quota(
+                    codex_binary=codex_binary,
+                    auth_path=self.codex_home / "auth.json",
+                )
+            except QuotaError as exc:
+                self.notify_quota_update(NATIVE_ACCOUNT_ID, exc.code)
+                raise
             with self.lock:
                 self._native_quota = quota
             self._record_quota_snapshot(NATIVE_ACCOUNT_ID, quota)
+            self.notify_quota_update(NATIVE_ACCOUNT_ID)
         return self.native_account_snapshot()
 
     def _quota_owner_key(self, account_id: str) -> str:
@@ -2267,26 +2306,44 @@ class AppState:
         with self.lock:
             accounts = [dict(item) for item in self.config.get("accounts", [])]
         duplicates = duplicate_account_status(accounts)
-        sampled = 0
-        failed = 0
+        targets = []
         if self.native_account_snapshot().get("credential_set"):
-            try:
-                self.refresh_native_account()
-                sampled += 1
-            except (OSError, QuotaError, ValueError):
-                failed += 1
+            targets.append(NATIVE_ACCOUNT_ID)
         for account in accounts:
             account_id = account.get("id")
             if not isinstance(account_id, str) or not account.get("auth_file"):
                 continue
             if account_id in duplicates:
                 continue
-            try:
-                self.refresh_account(account_id)
-                sampled += 1
-            except (OSError, QuotaError, ValueError):
-                failed += 1
-        return {"sampled": sampled, "failed": failed}
+            targets.append(account_id)
+        counts = {"sampled": 0, "failed": 0}
+        counts_lock = threading.Lock()
+
+        def sample_batch(batch):
+            for account_id in batch:
+                if self._quota_sampler_stop.is_set():
+                    return
+                try:
+                    if account_id == NATIVE_ACCOUNT_ID:
+                        self.refresh_native_account()
+                    else:
+                        self.refresh_account(account_id)
+                    outcome = "sampled"
+                except (OSError, QuotaError, ValueError):
+                    outcome = "failed"
+                with counts_lock:
+                    counts[outcome] += 1
+
+        # Quota reads start isolated Codex processes. Bound background work,
+        # independently of model generation, and don't hold up application exit.
+        workers = [threading.Thread(target=sample_batch, args=(targets[i::4],),
+                                    name="emp-quota-refresh", daemon=True)
+                   for i in range(min(4, len(targets)))]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        return counts
 
     def _quota_sampler_loop(self) -> None:
         while not self._quota_sampler_stop.wait(SAMPLE_INTERVAL_SECONDS):
@@ -2306,6 +2363,8 @@ class AppState:
 
     def stop_quota_sampler(self) -> None:
         self._quota_sampler_stop.set()
+        with self._quota_condition:
+            self._quota_condition.notify_all()
         thread = self._quota_sampler_thread
         self._quota_sampler_thread = None
         if thread is not None:
@@ -2317,6 +2376,8 @@ class AppState:
                 raise ConfigError("unknown account: %s" % account_id)
         with account_refresh_lock(account_id):
             self._delete_account(account_id)
+            clear_account_quota_cache(account_id)
+            self.notify_quota_update(account_id)
 
     def _delete_account(self, account_id: str) -> None:
         owner = self._quota_owner_key(account_id)
@@ -3345,6 +3406,40 @@ def make_handler(state: AppState):
                 if websocket_slot_acquired:
                     self.server.release_websocket_slot()
 
+        def _serve_quota_events(self) -> None:
+            if not state._quota_event_slots.acquire(blocking=False):
+                self._send(503, _json_bytes({"error": {"message": "Too many quota subscribers"}}),
+                           headers={"Retry-After": "15"})
+                return
+            try:
+                self.close_connection = True
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                revision = -1
+                while not state._quota_sampler_stop.is_set():
+                    with state._quota_condition:
+                        state._quota_condition.wait_for(
+                            lambda: state._quota_revision != revision or state._quota_sampler_stop.is_set(),
+                            timeout=15,
+                        )
+                        current = state._quota_revision
+                    if state._quota_sampler_stop.is_set() or not self._has_session():
+                        break
+                    frame = (
+                        "event: quota-updated\ndata: {}\n\n" if current != revision
+                        else ": keep-alive\n\n"
+                    )
+                    revision = current
+                    self.wfile.write(frame.encode("ascii"))
+                    self.wfile.flush()
+            except (OSError, TimeoutError):
+                pass  # A closed browser tab is an ordinary subscription end.
+            finally:
+                state._quota_event_slots.release()
+
         def do_GET(self) -> None:
             self._record_http_request_start_once()
             parsed = urlparse(self.path)
@@ -3413,18 +3508,11 @@ def make_handler(state: AppState):
             if path == "/api/request-limits":
                 self._send(200, _json_bytes(state.request_limits.snapshot()))
                 return
+            if path == "/api/accounts/events":
+                self._serve_quota_events()
+                return
             if path == "/api/accounts":
-                self._send(
-                    200,
-                    _json_bytes(
-                        {
-                            "native_account": state.native_account_snapshot(),
-                            "accounts": public_accounts(
-                                state.snapshot().get("accounts", [])
-                            ),
-                        }
-                    ),
-                )
+                self._send(200, _json_bytes(state.accounts_snapshot()))
                 return
             account_prefix = "/api/accounts/"
             history_suffix = "/quota-history"

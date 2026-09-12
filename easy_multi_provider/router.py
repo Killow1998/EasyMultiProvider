@@ -49,6 +49,7 @@ from .dialects import (
     request_shape,
 )
 from .quota import QuotaError, refresh_account_quota
+from .performance import input_cache_usage
 from .native_websocket import NativeWebSocketTarget
 from .model_discovery import (
     DiscoveryIO,
@@ -2302,23 +2303,21 @@ def _finish_nonstream(
         return
     response_bytes = len(result) if isinstance(result, (bytes, bytearray)) else 0
     terminal: Dict[str, Any] = {}
-    if metadata.get("dialect") != CODEX_NATIVE and isinstance(
-        result, (bytes, bytearray)
-    ):
+    usage = {}
+    if isinstance(result, (bytes, bytearray)):
         try:
-            terminal = responses_terminal_observation(
-                json.loads(bytes(result).decode("utf-8", errors="strict"))
-            )
-        except (UnicodeDecodeError, ValueError, RouterError):
-            terminal = {
-                "status": 502,
-                "success": False,
-                "error_class": "stream_error",
-            }
+            payload = json.loads(bytes(result).decode("utf-8", errors="strict"))
+            if isinstance(payload, Mapping):
+                usage = input_cache_usage(payload)
+            if metadata.get("dialect") != CODEX_NATIVE:
+                terminal = responses_terminal_observation(payload)
+        except (UnicodeDecodeError, ValueError, RecursionError, RouterError):
+            if metadata.get("dialect") != CODEX_NATIVE:
+                terminal = {"status": 502, "success": False, "error_class": "stream_error"}
     _emit_observation(
         callback,
         _route_event(
-            metadata,
+            {**metadata, **usage},
             provider,
             model,
             terminal=terminal,

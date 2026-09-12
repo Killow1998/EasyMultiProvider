@@ -21,6 +21,7 @@ from .router_errors import (
     HistoryReconstructionError,
     RouterError,
 )
+from .performance import token_count
 
 
 _COMPACTION_SUMMARY_PREFIX = (
@@ -951,7 +952,30 @@ def _chat_usage(usage: Any) -> Dict[str, Any]:
         value = usage.get(source)
         if isinstance(value, Mapping) and detail in value:
             projected[target] = {detail: value[detail]}
+    if "input_tokens_details" not in projected and "prompt_cache_hit_tokens" in usage:
+        projected["input_tokens_details"] = {"cached_tokens": usage["prompt_cache_hit_tokens"]}
     return projected
+
+
+def _anthropic_usage(usage: Mapping[str, Any]) -> Dict[str, Any]:
+    """Messages input_tokens excludes cache reads and writes; Responses includes both."""
+    result = {}
+    output = token_count(usage.get("output_tokens"))
+    if output is not None:
+        result["output_tokens"] = output
+    total = token_count(usage.get("input_tokens"))
+    if "cache_read_input_tokens" in usage or "cache_creation_input_tokens" in usage:
+        read = token_count(usage.get("cache_read_input_tokens"))
+        written = token_count(usage.get("cache_creation_input_tokens"))
+        if total is None or read is None or written is None:
+            return result
+        total += read + written
+        result["input_tokens_details"] = {"cached_tokens": read}
+    if total is not None:
+        result["input_tokens"] = total
+        if output is not None:
+            result["total_tokens"] = total + output
+    return result
 
 
 def _anthropic_tool_arguments(value: Any) -> str:
@@ -1056,9 +1080,5 @@ def _response_from_anthropic(
         response["incomplete_details"] = {"reason": incomplete_reason}
     usage = value.get("usage")
     if isinstance(usage, dict):
-        response["usage"] = {
-            "input_tokens": usage.get("input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
-            "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
-        }
+        response["usage"] = _anthropic_usage(usage)
     return response

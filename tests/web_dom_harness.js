@@ -645,6 +645,45 @@ function performanceDiagnosticsBehavior() {
   assert.doesNotMatch(getElement('performance_records').innerHTML, />模式<|>Mode<|未标记|Unmarked/);
 }
 
+async function cacheUsageBehavior() {
+  const period = {start:1789214400,end:1789215000,complete:false,rate:80,call_count:3,sample_count:2,hit_count:1};
+  const model = {model_id:'external/gemini-3.8-flash',provider_id:'NA2H',speed_mode:'unknown',rate:80,input_tokens:1000,cached_input_tokens:800,call_count:3,sample_count:2,hit_count:1,periods:[period]};
+  context.__cachePayload = {capacity:512,cache:{models:[model, {...model, model_id:'<img onerror=bad>',rate:null,sample_count:0,periods:[{...period,rate:null,sample_count:0}]}, {...model,model_id:'deepseek',rate:0,hit_count:0,periods:[{...period,rate:0,hit_count:0,complete:true}]}]}};
+  run('renderDiagnostics(__cachePayload)');
+  const html = getElement('cache_records').innerHTML;
+  assert.match(html, /external\/gemini-3.8-flash · NA2H/);
+  assert.match(html, /80\.0%/);
+  assert.match(html, />0\.0%</);
+  assert.match(html, /未提供/);
+  assert.match(html, /统计中/);
+  assert.match(html, /有效记录 2 \/ 3/);
+  assert.match(html, /命中请求 1 \/ 2/);
+  assert.match(html, /800 \/ 1,000 token/);
+  assert.match(html, /每 10 分钟汇总，空闲时段不显示/);
+  assert.match(html, /不代表与原生调用的差异/);
+  assert.doesNotMatch(html, /<img|NaN|Infinity|未标记/);
+  const target = getElement('cache_records');
+  const query = target.querySelectorAll;
+  target.querySelectorAll = () => [{dataset:{cacheKey:JSON.stringify([model.model_id,model.provider_id,model.speed_mode,model.endpoint_fingerprint])}}];
+  run('renderCacheUsage(__cachePayload)');
+  assert.match(target.innerHTML, /data-cache-key="[^"]*" open/);
+  target.querySelectorAll = query;
+  run("renderCacheUsage({cache:{models:[]}})");
+  assert.match(target.innerHTML, /还没有模型调用记录/);
+
+  let resolveRequest;
+  context.__cacheApi = () => new Promise(resolve => { resolveRequest = resolve; });
+  run('var __savedCacheApi = api; api = __cacheApi');
+  const pending = run('loadDiagnostics()');
+  run('closeModal()');
+  target.innerHTML = 'closed';
+  resolveRequest(context.__cachePayload);
+  await pending;
+  assert.strictEqual(target.innerHTML, 'closed', 'late metrics must not redraw a closed modal');
+  run('api = __savedCacheApi');
+  assert.strictEqual(run('diagnosticsTimer'), null);
+}
+
 function providerDiscoveryErrorBehavior() {
   context.__badKey = Object.assign(new Error('upstream 401'), {status:401});
   context.__badRequestKey = Object.assign(new Error('upstream 400'), {status:400});
@@ -705,6 +744,79 @@ async function quotaStateSyncBehavior() {
   assert.deepStrictEqual(calls, ['/api/accounts'], 'quota display sync must only read EMP local account state');
   assert.match(getElement("accounts").innerHTML, /aria-valuenow="75"/);
   assert.strictEqual(await run("refreshQuotaState()"), false);
+}
+
+async function quotaNotificationBehavior() {
+  const instances = [];
+  context.EventSource = class {
+    constructor(url) { this.url = url; this.listeners = {}; this.closed = false; instances.push(this); }
+    addEventListener(name, listener) { this.listeners[name] = listener; }
+    close() { this.closed = true; }
+  };
+  let resolveFirst;
+  let reads = 0;
+  const snapshot = remaining => ({native_account:null, accounts:[{id:'live',prefix:'live',credential_set:true,quota:{rate_limits:{primary:{usedPercent:100-remaining,windowDurationMins:300}}}}], refresh_errors:{}});
+  context.__liveQuotaApi = async path => {
+    assert.strictEqual(path, '/api/accounts');
+    reads++;
+    return reads === 1 ? new Promise(resolve => { resolveFirst = resolve; }) : snapshot(70);
+  };
+  run("closeModal(); state={accounts:[],providers:[],models:[]}; api=__liveQuotaApi; startQuotaEvents(); startQuotaEvents()");
+  assert.strictEqual(instances.length, 1, 'reloading the page state must not add subscribers');
+  const source = instances[0];
+  assert.strictEqual(source.url, '/api/accounts/events');
+  source.onopen();
+  assert.strictEqual(run('quotaEventsConnected'), true);
+  const pending = run('requestQuotaSync()');
+  source.listeners['quota-updated']();
+  source.listeners['quota-updated']();
+  resolveFirst(snapshot(20));
+  await pending;
+  assert.strictEqual(reads, 2, 'events during a read must coalesce into a fresh read');
+  assert.match(getElement('accounts').innerHTML, /aria-valuenow="70"/);
+  source.onerror();
+  assert.strictEqual(run('quotaEventsConnected'), false, 'disconnect enables polling fallback');
+  run('stopQuotaEvents()');
+  assert.strictEqual(source.closed, true);
+  source.onopen();
+  assert.strictEqual(run('quotaEventsConnected'), false, 'closed subscriptions cannot change state');
+  document.visibilityState = 'hidden';
+  run('startQuotaEvents()');
+  assert.strictEqual(instances.length, 1, 'hidden pages must release their subscription');
+  document.visibilityState = 'visible';
+  run('startQuotaEvents()');
+  assert.strictEqual(instances.length, 2);
+  run('stopQuotaEvents()');
+  delete context.EventSource;
+
+  context.__liveQuotaApi = async () => ({...snapshot(70),refresh_errors:{live:'quota_auth_required'}});
+  run('api=__liveQuotaApi');
+  await run('requestQuotaSync()');
+  assert.match(getElement('accounts').innerHTML, /刷新失败/);
+  context.__liveQuotaApi = async () => snapshot(70);
+  run('api=__liveQuotaApi; quotaHistoryLoading=true; quotaUpdatePending=true; closeModal()');
+  await run('drainQuotaUpdates()');
+  assert.strictEqual(run('quotaHistoryLoading'), false, 'closing a loading chart cannot block account updates');
+  assert.doesNotMatch(getElement('accounts').innerHTML, /刷新失败/);
+}
+
+function failureDetailsBehavior() {
+  context.__failurePayload = {records:[
+    {model_id:'model-ok',status:200,error_class:'none'},
+    {model_id:'cancelled-model',error_class:'client_cancelled'},
+    {model_id:'<img src=x onerror=alert(1)>',provider_id:'test-provider',status:502,error_class:'tls_failure',protocol:'responses',transport:'websocket',request_id:'0123456789abcdef',observed_at:'2026-09-12T12:00:00Z',duration_ms:2300,prompt:'private-test-prompt',response_text:'private-test-answer'},
+    {model_id:'model-with-tool',status:502,error_class:'upstream_close_after_tool',tool_activity:true},
+  ]};
+  run('renderDiagnostics(__failurePayload)');
+  const details = getElement('diagnostics_records').innerHTML;
+  assert.match(details, /test-provider/);
+  assert.match(details, /0123456789abcdef/);
+  assert.match(details, /0912-/);
+  assert.match(details, /&lt;img/);
+  assert.match(details, /请先检查任务进度/);
+  assert.doesNotMatch(details, /<img|private-test-prompt|private-test-answer|cancelled-model|model-ok/);
+  assert.match(html, /<details class="failure-list"><summary>/);
+  assert.doesNotMatch(html, /<details class="failure-list" open/);
 }
 
 async function nativeOnlyIntegrationBehavior() {
@@ -1086,10 +1198,13 @@ function updateBehavior() {
   await quotaHistorySwitchingBehavior();
   await quotaHistoryRaceBehavior();
   performanceDiagnosticsBehavior();
+  await cacheUsageBehavior();
   providerDiscoveryErrorBehavior();
   quotaMeterBehavior();
   invalidCredentialAccountBehavior();
   await quotaStateSyncBehavior();
+  await quotaNotificationBehavior();
+  failureDetailsBehavior();
   await nativeAccountBehavior();
   await nativeOnlyIntegrationBehavior();
   await accountEmojiBehavior();
