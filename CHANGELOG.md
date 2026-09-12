@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.2 (2026-09-12)
+
+- Move notifications away from the header and add a dismiss button. Success
+  messages close automatically; errors remain available until dismissed.
+- Use a dedicated upgrade icon, distinct from data import, export and quota refresh.
+- Keep transient native WebSocket TLS and gateway failures in Codex's retry
+  flow instead of immediately disabling the route and replaying over HTTP.
+  Preserve HTTP fallback for unsupported WebSocket upgrades.
+- Count pre-fallback connection attempts separately from final request health
+  and cache metrics, while retaining the failure details in diagnostic history.
+
 ## 0.10.1 (2026-09-12)
 
 - Show upstream-reported prompt cache hit rates by model, account/provider and

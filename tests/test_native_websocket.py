@@ -1,6 +1,7 @@
 import json
+import ssl
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import easy_multi_provider.native_websocket as native_websocket
 from easy_multi_provider.native_websocket import (
@@ -266,7 +267,7 @@ class NativeWebSocketTests(unittest.TestCase):
             self.assertIs(_default_connector(target), connection)
         legacy.assert_called_once_with(target)
 
-    def test_gateway_failure_before_request_allows_http_fallback(self):
+    def test_gateway_failure_does_not_imply_websocket_is_unsupported(self):
         def fail(_target):
             raise _GatewayFailure()
 
@@ -280,7 +281,32 @@ class NativeWebSocketTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.status, 502)
-        self.assertTrue(raised.exception.retryable)
+        self.assertFalse(raised.exception.retryable)
+
+    def test_tls_handshake_failure_can_be_retried_by_the_client(self):
+        connection = _FakeConnection([{
+            "type": "response.completed", "response": {"id": "resp_retried", "status": "completed"},
+        }])
+        target = NativeWebSocketTarget("wss://example.invalid/responses", {}, "route-a")
+        connector = Mock(side_effect=[ssl.SSLEOFError(8, "unexpected EOF"), connection])
+        bridge = NativeWebSocketBridge(connector)
+        request = {"type": "response.create", "model": "m", "input": ["hello"]}
+        with self.assertRaises(NativeWebSocketError) as raised:
+            list(bridge.events(target, request))
+        self.assertEqual(raised.exception.error_class, "tls_failure")
+        self.assertFalse(raised.exception.retryable)
+        self.assertFalse(raised.exception.request_sent)
+        self.assertEqual(connection.sent, [])
+        self.assertEqual(list(bridge.events(target, request))[-1]["response"]["id"], "resp_retried")
+        self.assertEqual(len(connection.sent), 1)
+
+    def test_only_upgrade_incompatibility_allows_immediate_http_fallback(self):
+        for status in [400, 404, 405, 415, 426, 501]:
+            with self.subTest(status=status):
+                self.assertTrue(NativeWebSocketError("upgrade unavailable", status).retryable)
+        for status in [401, 403, 429, 500, 502, 503, 504]:
+            with self.subTest(status=status):
+                self.assertFalse(NativeWebSocketError("request failed", status).retryable)
 
     def test_reuses_matching_connection_and_preserves_incremental_request(self):
         connection = _FakeConnection(

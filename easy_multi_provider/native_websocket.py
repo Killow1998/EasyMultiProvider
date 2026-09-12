@@ -31,12 +31,11 @@ _RETRYABLE_UPGRADE_STATUSES = frozenset(
 )
 
 
-def _retryable_upgrade_status(status: int) -> bool:
-    return status in _RETRYABLE_UPGRADE_STATUSES
-
-
 def _http_fallback_before_request(status: int) -> bool:
-    return _retryable_upgrade_status(status) or 500 <= status <= 599
+    # A transient gateway/TLS failure doesn't establish that WebSocket is
+    # unsupported. Let Codex own its retry budget instead of disabling the
+    # upstream route and immediately replaying the request over HTTP.
+    return status in _RETRYABLE_UPGRADE_STATUSES
 
 
 def compressed_native_websocket_available() -> bool:

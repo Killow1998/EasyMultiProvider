@@ -155,7 +155,11 @@ def summarize_route_observations(
     """Summarize recent health and median model speed without inventing data."""
 
     material = [dict(item) for item in records if isinstance(item, Mapping)]
-    relevant = [item for item in material if item.get("route") == "responses"]
+    attempts = [item for item in material if item.get("route") == "responses"]
+    # A pre-request WS handshake failure is journaled before HTTP fallback.
+    # The HTTP outcome is the request result; retain the earlier attempt in
+    # diagnostics without counting it as a second request (or cache sample).
+    relevant = [item for item in attempts if item.get("recovery_mode") != "native_http_fallback"]
     cancellations = [
         item for item in relevant if item.get("error_class") in _CLIENT_ENDINGS
     ]
@@ -287,6 +291,7 @@ def summarize_route_observations(
             "local_capacity_count": local_capacity,
             "local_capacity_rate": _rate(local_capacity, total),
             "cancelled_count": len(cancellations),
+            "fallback_attempt_count": len(attempts) - len(relevant),
             "failure_classes": [
                 {
                     "error_class": error_class,

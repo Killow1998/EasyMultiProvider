@@ -1231,7 +1231,7 @@ class ServerAccountTests(unittest.TestCase):
 
     def test_modal_submission_errors_are_visible_inside_modal(self):
         html = WEB_FILE.read_text(encoding="utf-8")
-        self.assertIn('<div id="status"', html)
+        self.assertIn('id="status" class="muted" role="status"', html)
         self.assertIn('id="modal_status"', html)
         self.assertIn("catch (error) { $('modal_status').textContent = error.message; }", html)
         self.assertIn("position:fixed", html)
@@ -4360,8 +4360,7 @@ class ContinuityAppStateTests(unittest.TestCase):
             def events(self, target, payload):
                 websocket_requests.append(payload)
                 raise NativeWebSocketError(
-                    "native TLS handshake failed", error_class="tls_failure",
-                    failure_reason="tls_failure",
+                    "native websocket upgrade required", status=426,
                 )
 
             def close(self):
@@ -4442,6 +4441,76 @@ class ContinuityAppStateTests(unittest.TestCase):
                     self.assertEqual(payload["input"][0]["tools"][0]["name"], "emp_collaboration")
                     message = payload["input"][0]["tools"][0]["tools"][0]["parameters"]["properties"]["message"]
                     self.assertNotIn("encrypted", message)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_transient_tls_failure_does_not_disable_the_native_route(self):
+        import ssl
+        from tests.test_native_websocket import _FakeConnection
+
+        completed = {"type": "response.completed", "response": {
+            "id": "resp_recovered", "status": "completed", "output": [],
+        }}
+        upstream = _FakeConnection([completed])
+        response_recorded = threading.Event()
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path)
+            record = state.diagnostics.record
+
+            def record_response(event):
+                record(event)
+                if event.get("status") == 200:
+                    response_recorded.set()
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with patch("easy_multi_provider.native_websocket._default_connector",
+                           side_effect=[ssl.SSLEOFError(8, "unexpected EOF"), upstream]) as connector, \
+                        patch("easy_multi_provider.codex_dispatch.proxy") as http, \
+                        patch.object(state.diagnostics, "record", side_effect=record_response), \
+                        socket.create_connection(server.server_address, timeout=5) as client, \
+                        client.makefile("rb") as stream:
+                    client.sendall((
+                        "GET /v1/responses HTTP/1.1\r\n"
+                        "Host: 127.0.0.1:%d\r\n"
+                        "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                        "Sec-WebSocket-Version: 13\r\n"
+                        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                        "Authorization: Bearer test-only\r\n"
+                        "chatgpt-account-id: account-fixture\r\n"
+                        "Cookie: emp_session=%s\r\n\r\n"
+                        % (server.server_address[1], state.session_token)
+                    ).encode("ascii"))
+                    self.assertIn(b" 101 ", stream.readline())
+                    while stream.readline() not in (b"\r\n", b"\n", b""):
+                        pass
+                    request = {"type": "response.create", "model": "native/model-a", "stream": True,
+                               "input": [{"type": "message", "role": "user", "content": "hello"}]}
+                    client.sendall(_masked_text_frame(json.dumps(request)))
+                    _, raw = _read_text_frame(stream)
+                    failure = json.loads(raw)
+                    self.assertEqual(failure["type"], "error")
+                    self.assertEqual(failure["status"], 502)
+                    self.assertEqual(failure["error"]["code"], "tls_failure")
+                    self.assertEqual(state._native_websocket_cooldowns, {})
+                    # Codex retries the turn. EMP still tries WS, without an
+                    # extra model request on HTTP or replay after output.
+                    client.sendall(_masked_text_frame(json.dumps(request)))
+                    _, raw = _read_text_frame(stream)
+                    self.assertEqual(json.loads(raw)["type"], "response.completed")
+                    self.assertEqual(connector.call_count, 2)
+                    self.assertEqual(len(upstream.sent), 1)
+                    http.assert_not_called()
+                    self.assertTrue(response_recorded.wait(2))
+                health = state.diagnostics_snapshot()["health"]
+                self.assertEqual(health["sample_count"], 2)
+                self.assertEqual(health["status_502_count"], 1)
+                self.assertEqual(health["fallback_attempt_count"], 0)
             finally:
                 server.shutdown()
                 server.server_close()

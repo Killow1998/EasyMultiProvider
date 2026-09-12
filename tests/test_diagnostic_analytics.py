@@ -7,6 +7,31 @@ from easy_multi_provider.diagnostic_analytics import summarize_route_observation
 class DiagnosticAnalyticsTest(unittest.TestCase):
     NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 
+    def test_fallback_attempt_is_not_an_additional_failed_request(self):
+        attempt = self.record("model-a", "standard", 502, None, None, "tls_failure")
+        attempt.update(request_id="same-request", recovery_mode="native_http_fallback")
+        for status, error in [(200, "none"), (502, "tls_failure")]:
+            with self.subTest(status=status):
+                final = self.record("model-a", "standard", status, 1000, 40, error)
+                final.update(request_id="same-request", input_tokens=1000, cached_input_tokens=800)
+                result = summarize_route_observations([attempt, final], now=self.NOW)
+                self.assertEqual(result["health"]["sample_count"], 1)
+                self.assertEqual(result["health"]["fallback_attempt_count"], 1)
+                self.assertEqual(result["health"]["status_502_count"], int(status == 502))
+                self.assertEqual(result["cache"]["models"][0]["call_count"], 1)
+        pending = summarize_route_observations([attempt], now=self.NOW)
+        self.assertEqual(pending["health"]["sample_count"], 0)
+        self.assertEqual(pending["health"]["fallback_attempt_count"], 1)
+
+    def test_independent_client_retries_still_count_as_separate_requests(self):
+        first = self.record("model-a", "standard", 502, None, None, "tls_failure")
+        second = self.record("model-a", "standard", 200, 1000, 40)
+        first["request_id"] = second["request_id"] = "reused-client-id"
+        health = summarize_route_observations([first, second], now=self.NOW)["health"]
+        self.assertEqual(health["sample_count"], 2)
+        self.assertEqual(health["status_502_rate"], 50)
+        self.assertEqual(health["fallback_attempt_count"], 0)
+
     def test_old_measurements_remain_health_history_not_current_speed(self):
         old = self.record("old-model", "standard", 200, 10, 9000)
         old.pop("performance_schema")

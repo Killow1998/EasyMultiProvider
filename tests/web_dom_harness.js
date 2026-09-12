@@ -174,7 +174,7 @@ assert.doesNotMatch(html, /data-catalog-summary/);
 assert.match(html, /@phosphor-icons\/core 2\.1\.1, Regular weight, MIT/);
 assert.strictEqual(
   Array.from(html.matchAll(/button\[data-icon="[^"]+"\](?:,\.quota-reset)?\{--button-icon:url\("data:image\/svg\+xml,%3Csvg%20/g)).length,
-  13,
+  14,
   "all action icons must come from the embedded Phosphor set",
 );
 for (const unwantedDefaultTip of [
@@ -615,6 +615,9 @@ function performanceDiagnosticsBehavior() {
   ]};
   run('renderDiagnostics(__performancePayload)');
   assert.match(getElement('diagnostics_summary').textContent, /最近 12 次请求/);
+  run('__performancePayload.health.fallback_attempt_count = 2; renderDiagnostics(__performancePayload)');
+  assert.match(getElement('diagnostics_summary').textContent, /另有 2 次连接回退尝试/);
+  assert.match(run('diagnosticFailureHtml({recovery_mode:"native_http_fallback",status:502,error_class:"tls_failure"})'), /回退前尝试/);
   assert.match(getElement('health_summary').innerHTML, /83\.3%/);
   assert.match(getElement('health_summary').innerHTML, />502</);
   assert.doesNotMatch(getElement('health_summary').innerHTML, /失败原因|输出前断线|上游限流/);
