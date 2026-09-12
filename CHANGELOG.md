@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.98 (2026-09-11)
+
+- Fix collaboration namespace collisions when native WebSocket requests fall back
+  to HTTP, including subsequent requests while WebSocket connections cool down.
+- Finish Subscription edits once settings are saved; refresh the model catalog
+  and Codex status in the background, reporting synchronization failures separately.
+- Identify collaboration namespace errors and record content-free tool namespace
+  counts and incremental-request markers for troubleshooting.
+
 ## 0.9.97 (2026-09-11)
 
 - Notify Codex when EMP model names, visibility or available models change.

@@ -550,7 +550,11 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
             journal = CapturingJournal()
             state = self.make_state(Path(directory), journal=journal)
             state.config["native_hidden_models"] = ["gpt-5.6-terra"]
-            body = {"model": "gpt-5.6-terra", "input": "BODYSECRET"}
+            body = {"model": "gpt-5.6-terra", "input": [
+                {"type": "message", "role": "user", "content": "BODYSECRET"},
+                {"type": "additional_tools", "tools": [
+                    {"type": "namespace", "name": "emp_collaboration", "description": "SCHEMASECRET"}]},
+            ], "tools": [{"type": "namespace", "name": "collaboration"}]}
             with patch("easy_multi_provider.server.valid_caller_authorization", return_value=True), patch.object(state.codex, "route", return_value=({"kind": "bytes", "status": 200}, b"{}")):
                 with running_server(state) as server:
                     status, _ = request(server, "POST", "/v1/responses", json.dumps(body).encode(), {
@@ -561,6 +565,8 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
             event = next(fields for _, name, fields in journal.events if name == "model_request_received")
             self.assertEqual(event["session_id"], thread_id)
             self.assertTrue(event["model_hidden"])
+            self.assertEqual(event["collaboration"], {"native": 1, "emp": 1, "emp_in_history": 1})
+            self.assertFalse(event["incremental"])
             self.assertEqual(event["request_id"], http_events(journal)[0]["request_id"])
             self.assertNotIn("SECRET", repr(journal.events))
         self.assertEqual(request_source({"metadata": {"thread_id": "prompt-secret"}}, {

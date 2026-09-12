@@ -4341,6 +4341,106 @@ class ContinuityAppStateTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_native_http_fallback_projects_collaboration_once(self):
+        websocket_requests = []
+        http_requests = []
+
+        class HandshakeFailureBridge:
+            connection_key = None
+            last_connection_reused = False
+
+            def __init__(self, observer=None):
+                pass
+
+            def events(self, target, payload):
+                websocket_requests.append(payload)
+                raise NativeWebSocketError(
+                    "native TLS handshake failed", error_class="tls_failure",
+                    failure_reason="tls_failure",
+                )
+
+            def close(self):
+                pass
+
+        class Response(io.BytesIO):
+            status = 200
+            headers = {"Content-Type": "text/event-stream"}
+
+        def upstream(_provider, payload, *_args, **_kwargs):
+            http_requests.append(payload)
+            event = {"type": "response.completed", "response": {
+                "id": "resp_http", "status": "completed", "output": [{
+                    "type": "function_call", "id": "fc_reply", "call_id": "call_reply",
+                    "namespace": "emp_collaboration", "name": "spawn_agent",
+                    "arguments": '{"message":"hello"}', "status": "completed",
+                }],
+            }}
+            return Response(("event: response.completed\ndata: " + json.dumps(event) + "\n\n").encode())
+
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            self._write_config(config_path)
+            config = load(config_path)
+            config["providers"].append({
+                "id": "external", "auth_mode": "api_key", "protocol": "responses",
+                "base_url": "https://external.example/v1",
+            })
+            save(normalize(config), config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with patch("easy_multi_provider.server.NativeWebSocketBridge", HandshakeFailureBridge), \
+                        patch("easy_multi_provider.router._request", side_effect=upstream), \
+                        socket.create_connection(server.server_address, timeout=5) as client, \
+                        client.makefile("rb") as stream:
+                    client.sendall((
+                        "GET /v1/responses HTTP/1.1\r\n"
+                        "Host: 127.0.0.1:%d\r\n"
+                        "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                        "Sec-WebSocket-Version: 13\r\n"
+                        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                        "Authorization: Bearer test-only\r\n"
+                        "chatgpt-account-id: account-fixture\r\n"
+                        "Cookie: emp_session=%s\r\n\r\n"
+                        % (server.server_address[1], state.session_token)
+                    ).encode("ascii"))
+                    self.assertIn(b" 101 ", stream.readline())
+                    while stream.readline() not in (b"\r\n", b"\n", b""):
+                        pass
+                    request = {"type": "response.create", "model": "native/model-a", "stream": True,
+                               "input": [{"type": "additional_tools", "id": "at_client",
+                                          "tools": [{"type": "namespace", "name": "collaboration", "tools": [{
+                                              "type": "function", "name": "spawn_agent", "parameters": {
+                                                  "type": "object", "properties": {
+                                                      "message": {"type": "string", "encrypted": True},
+                                                  },
+                                              },
+                                          }]}]},
+                                         {"type": "message", "role": "user", "content": "hello"}]}
+                    # The first request fails its WS handshake; the next uses
+                    # the HTTP route while that upstream is in WS cooldown.
+                    for attempt in range(2):
+                        client.sendall(_masked_text_frame(json.dumps(request)))
+                        _, raw = _read_text_frame(stream)
+                        event = json.loads(raw)
+                        self.assertEqual(event["type"], "response.completed", (attempt, event))
+                        item = event["response"]["output"][0]
+                        self.assertEqual(item["namespace"], "collaboration")
+                        self.assertEqual(item["encrypted_function_args"], [])
+                self.assertEqual(len(websocket_requests), 1)
+                self.assertEqual(len(http_requests), 2)
+                for payload in http_requests:
+                    self.assertEqual(payload["input"], websocket_requests[0]["input"])
+                    self.assertNotEqual(payload["input"][0]["id"], "at_client")
+                    self.assertEqual(payload["input"][0]["tools"][0]["name"], "emp_collaboration")
+                    message = payload["input"][0]["tools"][0]["tools"][0]["parameters"]["properties"]["message"]
+                    self.assertNotIn("encrypted", message)
+            finally:
+                server.shutdown()
+                server.server_close()
+
     def test_native_websocket_failure_after_acceptance_is_not_replayed(self):
         class FailingNativeBridge:
             connection_key = None

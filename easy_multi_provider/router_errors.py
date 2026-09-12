@@ -13,6 +13,13 @@ class RouterError(Exception):
         self.status = status
 
 
+class CollaborationNamespaceCollision(RouterError):
+    failure_reason = "collaboration_namespace_collision"
+
+    def __init__(self):
+        super().__init__("reserved EMP collaboration namespace collision", 422)
+
+
 class UpstreamHTTPError(RouterError):
     """An upstream rejection with a content-free diagnostic category."""
 

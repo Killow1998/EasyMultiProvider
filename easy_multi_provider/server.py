@@ -2454,10 +2454,13 @@ def make_handler(state: AppState):
 
         def _record_model_request(self, body, transport):
             try:
+                from .collaboration_transport import collaboration_summary
                 fields = request_source(body, {**dict(self.headers.items()), "X-EMP-Request-ID": self._request_id})
                 fields["model_id"] = _safe_diagnostic_text(body.get("model"), _DIAGNOSTIC_ID)
                 fields["transport"] = transport
                 fields["model_hidden"] = body.get("model") in state.snapshot().get("native_hidden_models", [])
+                fields["collaboration"] = collaboration_summary(body)
+                fields["incremental"] = body.get("previous_response_id") is not None
                 state.journal.event("info", "model_request_received", **fields)
             except Exception:
                 pass
@@ -3250,14 +3253,9 @@ def make_handler(state: AppState):
                                 if terminal and terminal.get("success") is True:
                                     last_native_response_id = completed_native_id
                                 continue
-                        if plan is not None:
-                            # Native preparation may have rebuilt or compacted
-                            # visible history already. Reuse that transient
-                            # body for HTTP instead of reading/summarizing the
-                            # same Codex history a second time.
-                            request = plan.payload
-                            request.pop("type", None)
-                            request["model"] = plan.requested_slug
+                        # HTTP dispatch projects the client request itself.
+                        # Reusing plan.payload would adapt upstream tool
+                        # namespaces and history IDs a second time.
                         request.pop("previous_response_id", None)
                         generate = request.pop("generate", None)
                         if generate is False:

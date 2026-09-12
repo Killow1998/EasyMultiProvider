@@ -785,8 +785,10 @@ async function atomicStateBehavior() {
     throw new Error("unexpected API " + path);
   };
   run("api = __apiStub");
-  await assert.rejects(run("persistState('save', __candidate)"), /refresh rejected/);
+  await run("persistState('save', __candidate)");
+  await run("catalogSync");
   assert.strictEqual(run("state.accounts[0].prefix"), "saved", "a persisted save remains authoritative when catalog refresh fails");
+  assert.match(getElement("status").textContent, /设置已保存.*同步失败.*refresh rejected/);
 
   run("state = {catalog_presentations:{},accounts:[],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',supports_reasoning_summaries:false}]}; openManualModelModal('provider-a/model')");
   getElement("modal_model_provider").value = "provider-a";
@@ -809,6 +811,44 @@ async function atomicStateBehavior() {
     "a colliding model rename must preserve both routes",
   );
   assert.strictEqual(run("state.catalog_presentations['provider-a/b'].catalog_alias"), "B");
+}
+
+async function accountSaveDoesNotWaitForCatalog() {
+  run("state = {accounts:[{id:'account-a',name:'Original',prefix:'a',hidden_models:[]}],subscription_models:[],providers:[],models:[]}; editAccount('account-a')");
+  getElement('modal_account_alias').value = 'Updated';
+  let finishSave, finishCatalog;
+  let catalogCalls = 0;
+  const saving = new Promise(resolve => { finishSave = resolve; });
+  const refreshing = new Promise(resolve => { finishCatalog = resolve; });
+  context.__apiStub = async (path, options) => {
+    if (path === '/api/config') { await saving; return JSON.parse(options.body); }
+    if (path === '/api/catalog/refresh') { catalogCalls++; return refreshing; }
+    if (path === '/api/integration') return {};
+    throw new Error('unexpected API ' + path);
+  };
+  run('api = __apiStub');
+  const submitted = getElement('modal_submit').click();
+  assert.strictEqual(getElement('modal_submit').disabled, true);
+  assert.strictEqual(run('state.accounts[0].name'), 'Original', 'do not announce an unsaved change');
+  finishSave();
+  let saved = false;
+  submitted.then(() => { saved = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  try {
+    assert.strictEqual(saved, true, 'a slow catalog sync must not keep the save modal busy');
+    assert.strictEqual(getElement('modal_submit').disabled, false);
+    assert(getElement('modal_backdrop').classList.contains('hidden'));
+    assert.strictEqual(run('state.accounts[0].name'), 'Updated');
+    assert.strictEqual(catalogCalls, 1);
+    assert.match(getElement('status').textContent, /账户信息已保存/);
+    await run("persistState('', cloneState())");
+    assert.strictEqual(catalogCalls, 1, 'background catalog writes must stay ordered');
+  } finally {
+    finishCatalog({});
+    await submitted;
+    await run('catalogSync');
+  }
+  assert.strictEqual(catalogCalls, 2);
 }
 
 async function runtimeSettingsIsolationBehavior() {
@@ -938,6 +978,7 @@ function updateBehavior() {
   presentationMigrationBehavior();
   modalDismissalBehavior();
   await atomicStateBehavior();
+  await accountSaveDoesNotWaitForCatalog();
   await runtimeSettingsIsolationBehavior();
   await initialRenderIsolationBehavior();
   process.stdout.write("web DOM behavior: ok\n");

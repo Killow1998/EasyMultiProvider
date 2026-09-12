@@ -567,12 +567,23 @@ async function submitIntegrationAction(action) {
     throw error;
   }
 }
+let catalogSync = Promise.resolve();
+function syncSavedCatalog() {
+  catalogSync = catalogSync.then(async () => {
+    try {
+      await api('/api/catalog/refresh', {method:'POST', body:'{}'});
+      await loadIntegration();
+    } catch (error) {
+      notice(tr('设置已保存，但模型目录同步失败：','Settings saved, but model catalog sync failed: ') + error.message, true);
+    }
+  });
+  return catalogSync;
+}
 async function persistState(message, candidate = state) {
   const saved = await api('/api/config', {method:'POST', body:JSON.stringify(candidate)});
   state = saved;
-  try { await api('/api/catalog/refresh', {method:'POST', body:'{}'}); }
-  catch (error) { fill(); await loadIntegration(); throw error; }
-  fill(); await loadIntegration(); if (message) notice(message);
+  fill(); if (message) notice(message);
+  void syncSavedCatalog();
 }
 
 function renderAccounts() {

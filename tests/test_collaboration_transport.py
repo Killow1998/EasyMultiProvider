@@ -1,11 +1,40 @@
 import copy
 import unittest
 
-from easy_multi_provider.collaboration_transport import prepare_collaboration, restore_collaboration
+from easy_multi_provider.collaboration_transport import (
+    collaboration_summary, prepare_collaboration, restore_collaboration,
+)
 from easy_multi_provider.dialects import project_request
 
 
 class CollaborationTransportTests(unittest.TestCase):
+    def test_collision_has_a_content_free_error_code_and_namespace_counts(self):
+        from easy_multi_provider.protocol_adapters import CodexNativeAdapter
+        from easy_multi_provider.router_errors import RouterError
+        from easy_multi_provider.server import _router_error_body
+        from easy_multi_provider.transport_failures import failure_from_exception
+
+        body = {"tools": None, "input": [{"type": "additional_tools", "tools": [
+            {"type": "namespace", "name": "collaboration", "tools": [
+                {"type": "function", "name": "spawn_agent", "parameters": {
+                    "properties": {"message": {"type": "string", "encrypted": True,
+                                              "description": "PRIVATE_DESCRIPTION"}}}}]}]}],
+            "instructions": "PRIVATE_INSTRUCTIONS"}
+        projected, _ = prepare_collaboration(body)
+        self.assertEqual(collaboration_summary(body), {"native": 1, "emp": 0, "emp_in_history": 0})
+        self.assertEqual(collaboration_summary(projected), {"native": 0, "emp": 1, "emp_in_history": 1})
+        with self.assertRaises(RouterError) as raised:
+            CodexNativeAdapter().project_request(
+                {"auth_mode": "forward", "protocol": "responses"}, projected,
+                {"_emp_plaintext_collaboration": True}, "test-model",
+            )
+        self.assertEqual(raised.exception.status, 422)
+        self.assertEqual(failure_from_exception(raised.exception).failure_reason,
+                         "collaboration_namespace_collision")
+        response = _router_error_body(raised.exception)
+        self.assertEqual(response["error"]["code"], "collaboration_namespace_collision")
+        self.assertNotIn("PRIVATE", repr((response, collaboration_summary(projected))))
+
     def test_responses_lite_additional_tools_are_projected(self):
         body = {"tools": None, "input": [{"type": "additional_tools", "id": "at_original",
             "role": "developer", "tools": [{"type": "namespace", "name": "collaboration",

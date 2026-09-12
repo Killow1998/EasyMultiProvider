@@ -8,9 +8,31 @@ import copy
 import json
 import uuid
 
+from .router_errors import CollaborationNamespaceCollision
+
 
 NAMESPACE = "emp_collaboration"
 MESSAGE_TOOLS = {"spawn_agent", "send_message", "followup_task"}
+
+
+def collaboration_summary(body):
+    """Count known transport namespaces without logging tool schemas or text."""
+    counts = {"native": 0, "emp": 0, "emp_in_history": 0}
+    containers = [(body, False)]
+    if isinstance(body.get("input"), list):
+        containers.extend((item, True) for item in body["input"]
+                          if isinstance(item, dict) and item.get("type") == "additional_tools")
+    for container, in_history in containers:
+        tools = container.get("tools")
+        for tool in tools if isinstance(tools, list) else []:
+            if not isinstance(tool, dict):
+                continue
+            if tool.get("name") == "collaboration":
+                counts["native"] += 1
+            elif tool.get("name") == NAMESPACE:
+                counts["emp"] += 1
+                counts["emp_in_history"] += int(in_history)
+    return counts
 
 
 def prepare_collaboration(body):
@@ -22,7 +44,7 @@ def prepare_collaboration(body):
     tools = [tool for container in containers
              for tool in (container.get("tools") or [])]
     if any(tool.get("name") == NAMESPACE for tool in tools if isinstance(tool, dict)):
-        raise ValueError("reserved EMP collaboration namespace collision")
+        raise CollaborationNamespaceCollision()
     changed = False
     for tool in tools:
         if not isinstance(tool, dict) or tool.get("type") != "namespace" or tool.get("name") != "collaboration":

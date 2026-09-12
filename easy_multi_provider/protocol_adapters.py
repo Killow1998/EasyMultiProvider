@@ -141,10 +141,7 @@ class CodexNativeAdapter(_ResponsesAdapter):
         from .collaboration_transport import prepare_collaboration
         payload = super().project_request(provider, body, model, upstream_model)
         if model.get("_emp_plaintext_collaboration"):
-            try:
-                payload, _ = prepare_collaboration(payload)
-            except ValueError as exc:
-                raise RouterError(str(exc), 422) from exc
+            payload, _ = prepare_collaboration(payload)
         return payload
 
     def __init__(self) -> None:
