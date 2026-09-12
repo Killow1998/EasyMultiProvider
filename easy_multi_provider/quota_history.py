@@ -226,6 +226,8 @@ class QuotaHistoryStore:
                 )
         return {
             "range": range_name,
+            "start_at": cutoff,
+            "end_at": timestamp,
             "sample_interval_seconds": SAMPLE_INTERVAL_SECONDS,
             "retention_days": RETENTION_SECONDS // (24 * 60 * 60),
             "series": list(grouped.values()),

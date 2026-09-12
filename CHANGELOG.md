@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.99 (2026-09-12)
+
+- Divide quota trends by recorded reset periods, with local calendar-day divisions
+  in the weekly view. Click a period to inspect it and go back without reopening the chart.
+- Switch time ranges and quota windows using the loaded history, keeping the chart
+  frame stable and preserving the inspected period during background refreshes.
+- Show the hover guide at the nearest quota sample.
+
 ## 0.9.98 (2026-09-11)
 
 - Fix collaboration namespace collisions when native WebSocket requests fall back

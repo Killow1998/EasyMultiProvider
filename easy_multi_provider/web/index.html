@@ -45,7 +45,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 .performance-help{border:1px solid var(--border);border-radius:4px;padding:9px 10px;margin:8px 0 12px;background:var(--panel-soft);color:var(--muted);font-size:12px}.performance-help span{display:block}.performance-help strong{color:var(--text)}.health-grid{display:grid;grid-template-columns:repeat(3,minmax(90px,1fr));gap:8px;margin:10px 0 14px}.health-stat{border:1px solid var(--border);border-radius:4px;padding:8px 10px;background:var(--panel)}.health-stat span{display:block;color:var(--muted);font-size:11px}.health-stat strong{display:block;margin-top:2px;font-size:18px;font-weight:650}.health-stat small{color:var(--muted);font-size:10px}.performance-table{overflow:auto}.performance-table table{min-width:620px}.metric-trend{display:inline-block;margin-left:4px;font-size:11px;font-weight:650}.metric-trend.good{color:var(--success)}.metric-trend.bad{color:var(--danger)}.diagnostics-details{margin-top:14px;border-top:1px solid var(--border);padding-top:10px}.diagnostics-details summary{cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:8px}
 main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(470px,.88fr);gap:12px;align-items:start}.workspace-column>section,.workspace-side>section{margin:12px 0}.workspace-side{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto}.integration-actions{display:grid;gap:8px;margin-top:10px}.action-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.action-group-label{width:68px;color:var(--muted);font-size:12px}.search-toggle{padding-top:8px;border-top:1px solid var(--border)}
 .display-row{grid-template-columns:minmax(150px,1.15fr) minmax(130px,1fr) auto auto}.quota-battery-fill{animation:none}.quota-meter.is-updated .quota-battery-fill{animation:quota-level-in .5s ease-out both}
-.quota-chart{position:relative}.quota-hover-target{fill:transparent;pointer-events:all}.quota-chart-guide{stroke:var(--border-strong);stroke-dasharray:3 3}.quota-chart-point{stroke:none}.quota-chart-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.quota-chart-toolbar .quota-ranges button.active{background:var(--panel-soft);color:var(--text);border-color:var(--accent)}.quota-chart-tooltip{position:absolute;z-index:2;max-width:260px;padding:6px 8px;border:1px solid var(--border-strong);border-radius:4px;background:var(--panel);box-shadow:0 3px 12px rgba(0,0,0,.18);font-size:12px;pointer-events:none;transform:translate(-50%,calc(-100% - 8px));white-space:nowrap}.quota-chart-tooltip[hidden]{display:none}
+.quota-chart{position:relative;aspect-ratio:628/280;min-height:0}.quota-chart .quota-empty{position:absolute;inset:0;min-height:0}.quota-hover-target{fill:transparent;pointer-events:all}.quota-segment{cursor:zoom-in}.quota-segment:hover,.quota-segment:focus-visible{fill:var(--accent);fill-opacity:.06;outline:none}.quota-period-divider{stroke:var(--border-strong);stroke-dasharray:3 4;vector-effect:non-scaling-stroke}.quota-period-divider.observed{stroke-dasharray:1 3}.quota-chart-guide{stroke:var(--muted);stroke-dasharray:3 3;pointer-events:none}.quota-chart-point{stroke:none}.quota-chart-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;min-height:44px}.quota-chart-toolbar .quota-ranges button.active{background:var(--panel-soft);color:var(--text);border-color:var(--accent)}.quota-history-navigation{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;min-height:36px;margin-bottom:8px;font-size:12px;color:var(--muted)}.quota-history-navigation button{padding:4px 9px;font-size:12px}.quota-history-navigation span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#quota_history_legend{min-height:18px}.quota-chart-tooltip{position:absolute;z-index:2;max-width:260px;padding:6px 8px;border:1px solid var(--border-strong);border-radius:4px;background:var(--panel);box-shadow:0 3px 12px rgba(0,0,0,.18);font-size:12px;pointer-events:none;transform:translate(-50%,calc(-100% - 8px));white-space:nowrap}.quota-chart-tooltip[hidden]{display:none}
 @keyframes quota-level-in{from{width:0;opacity:.6}}@keyframes quota-charge{from{transform:translateX(-120%)}to{transform:translateX(120%)}}@keyframes quota-pending{0%,100%{width:18%;opacity:.55}50%{width:70%;opacity:1}}
 @media(prefers-reduced-motion:reduce){.quota-battery-fill,.quota-meter.is-updated .quota-battery-fill,.quota-meter.is-refreshing .quota-battery-fill::after,.quota-pending .quota-battery-fill{animation:none;transition:none}}
 @media(max-width:1040px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}}
@@ -140,6 +140,8 @@ let quotaHistoryRequest = 0;
 let quotaHistoryPayload = null;
 let activeQuotaLimit = 'codex';
 let activeQuotaWindow = '300';
+let quotaHistoryZoom = [];
+let quotaHistoryLoading = false;
 let quotaStateTimer = null;
 let quotaStateBusy = false;
 let catalogDisplayExpanded = false;
@@ -670,15 +672,69 @@ function quotaSeriesColor(series, index) { return Number(series.window_minutes) 
 function quotaPointBreak(previous, point) {
   if (!previous) return '';
   const priorReset = Number(previous.resets_at), reset = Number(point.resets_at);
-  if (priorReset > 0 && reset > priorReset + 60) return tr('新的额度周期','New quota period');
+  if (priorReset > 0 && reset > 0 && Math.abs(reset-priorReset) > 60) return tr('新的额度周期','New quota period');
   if (Number(point.remaining_percent) > Number(previous.remaining_percent) + .1) return tr('额度回升','Quota replenished');
   if (Number(point.observed_at) - Number(previous.observed_at) > 15 * 60) return tr('采样间隔','Sampling gap');
   return '';
 }
 function quotaValidPoint(point) { return point.observed_at != null && point.remaining_percent != null && Number.isFinite(Number(point.observed_at)) && Number.isFinite(Number(point.remaining_percent)); }
-function quotaChartSvg(series) {
-  const points = series.flatMap(item => item.points || []).filter(quotaValidPoint); if (!points.length) return '';
-  const minTime = Math.min(...points.map(point => Number(point.observed_at))); const maxTime = Math.max(...points.map(point => Number(point.observed_at))); const span = Math.max(1, maxTime - minTime);
+const quotaRangeSeconds = {'1h':3600, '1d':86400, '1w':7*86400, 'all':15*86400};
+function quotaHistoryView(series, rangeName) {
+  if (quotaHistoryZoom.length) return quotaHistoryZoom[quotaHistoryZoom.length - 1];
+  const times = series.flatMap(item => item.points || []).filter(quotaValidPoint).map(point => Number(point.observed_at));
+  const end = Number(quotaHistoryPayload?.end_at) || (times.length ? Math.max(...times) : Date.now()/1000);
+  return {start:end-quotaRangeSeconds[rangeName], end, mode:rangeName === '1w' ? 'day' : 'reset'};
+}
+function quotaResetBoundaries(series, start, end) {
+  const boundaries = new Map();
+  for (const item of series) {
+    let previous = null;
+    const samples = (item.points || []).filter(quotaValidPoint).slice().sort((a,b) => a.observed_at-b.observed_at);
+    for (const point of samples) {
+      const reset = Number(point.resets_at);
+      if (!(reset > 0)) continue;
+      if (previous && Math.abs(reset-Number(previous.resets_at)) > 60) {
+        const priorReset = Number(previous.resets_at);
+        // A reset inside the observation gap is timed by the prior deadline.
+        // Early resets can only be located at the first changed observation.
+        const scheduled = priorReset > Number(previous.observed_at) && priorReset <= Number(point.observed_at);
+        const at = scheduled ? priorReset : Number(point.observed_at);
+        if (at > start && at < end) boundaries.set(at, {at, kind:scheduled ? 'reset' : 'observed'});
+      }
+      previous = point;
+    }
+  }
+  return [...boundaries.values()].sort((a,b) => a.at-b.at);
+}
+function quotaChartSections(series, view) {
+  let boundaries = [];
+  if (view.mode === 'reset') boundaries = quotaResetBoundaries(series, view.start, view.end);
+  else if (view.mode === 'day') {
+    const next = new Date(view.start*1000); next.setHours(0,0,0,0); next.setDate(next.getDate()+1);
+    while (next.getTime()/1000 < view.end) {
+      boundaries.push({at:next.getTime()/1000, kind:'day'});
+      next.setDate(next.getDate()+1);
+    }
+  } else {
+    const step = view.mode === 'hour' ? 3600 : 900;
+    for (let at = Math.floor(view.start/step)*step+step; at < view.end; at += step) boundaries.push({at, kind:'time'});
+  }
+  const edges = [{at:view.start}, ...boundaries, {at:view.end}];
+  const sections = edges.slice(0,-1).map((edge,index) => {
+    const end = edges[index+1].at;
+    const mode = view.mode === 'day' ? 'reset' : view.mode === 'reset' ? (end-edge.at > 86400 ? 'day' : end-edge.at > 3600 ? 'hour' : 'quarter') : 'quarter';
+    return {start:edge.at, end, mode, zoomable:view.mode !== 'quarter' && end-edge.at > 900};
+  });
+  return {boundaries, sections};
+}
+function quotaTimeRangeText(start, end) {
+  const options = {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false};
+  return `${new Date(start*1000).toLocaleString([],options)} — ${new Date(end*1000).toLocaleString([],options)}`;
+}
+function quotaChartSvg(series, view = null) {
+  const visible = point => quotaValidPoint(point) && (!view || (Number(point.observed_at) >= view.start && Number(point.observed_at) <= view.end));
+  const points = series.flatMap(item => item.points || []).filter(visible); if (!points.length) return '';
+  const minTime = view ? view.start : Math.min(...points.map(point => Number(point.observed_at))); const maxTime = view ? view.end : Math.max(...points.map(point => Number(point.observed_at))); const span = Math.max(1, maxTime - minTime);
   const percent = value => Math.max(0, Math.min(100, Number(value)));
   const values = points.map(point => percent(point.remaining_percent)); const minValue = Math.min(...values); const maxValue = Math.max(...values);
   const padding = Math.max(1, (maxValue - minValue) * 0.1);
@@ -687,33 +743,52 @@ function quotaChartSvg(series) {
   const grid = Array.from({length:5}, (_, index) => axisMin + axisSpan * index / 4).map(value => `<line x1="${left}" y1="${y(value)}" x2="${right}" y2="${y(value)}" stroke="var(--border)"/><text x="${left-7}" y="${y(value)+4}" text-anchor="end" fill="var(--muted)" font-size="11">${Number(value.toFixed(2))}%</text>`).join('');
   const lines = series.map((item, index) => {
     const color = quotaSeriesColor(item, index);
-    const samples = (item.points || []).filter(quotaValidPoint).slice().sort((a,b) => Number(a.observed_at) - Number(b.observed_at));
+    const samples = (item.points || []).filter(visible).slice().sort((a,b) => Number(a.observed_at) - Number(b.observed_at));
     if (!samples.length) return '';
     const path = samples.map((point, i) => `${i && !quotaPointBreak(samples[i-1], point) ? 'L' : 'M'}${x(point.observed_at).toFixed(1)},${y(point.remaining_percent).toFixed(1)}`).join(' ');
     const dots = samples.map((point, i) => `<circle class="quota-chart-point" data-quota-point data-x="${x(point.observed_at).toFixed(1)}" data-y="${y(point.remaining_percent).toFixed(1)}" data-time="${esc(point.observed_at)}" data-value="${esc(Number(percent(point.remaining_percent).toFixed(2)))}" data-label="${esc(quotaSeriesLabel(item))}" data-reset="${esc(point.resets_at ?? '')}" data-break="${esc(quotaPointBreak(samples[i-1], point))}" cx="${x(point.observed_at).toFixed(1)}" cy="${y(point.remaining_percent).toFixed(1)}" r="1.8" fill="${color}"/>`).join('');
     return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>${dots}`;
   }).join('');
-  const start = new Date(minTime * 1000).toLocaleString(); const end = new Date(maxTime * 1000).toLocaleString();
-  return `<svg viewBox="0 0 628 252" role="img" aria-label="${esc(tr('Subscription 余量趋势','Subscription quota trend'))}">${grid}${lines}<line class="quota-chart-guide" x1="${left}" y1="${top}" x2="${left}" y2="${bottom}" hidden/><rect class="quota-hover-target" x="${left}" y="${top}" width="${right-left}" height="${bottom-top}" onpointermove="quotaChartHover(event)" onpointerleave="quotaChartLeave(event)"/><text x="${left}" y="242" fill="var(--muted)" font-size="11">${esc(start)}</text><text x="${right}" y="242" text-anchor="end" fill="var(--muted)" font-size="11">${esc(end)}</text></svg>`;
+  const {boundaries, sections} = quotaChartSections(series, view || {start:minTime,end:maxTime,mode:'reset'});
+  const dividers = boundaries.map(({at,kind}) => `<line class="quota-period-divider${kind === 'observed' ? ' observed' : ''}" x1="${x(at)}" y1="${top}" x2="${x(at)}" y2="${bottom}"/>`).join('');
+  let lastLabelX = left;
+  const ticks = [minTime, ...boundaries.map(item => item.at).filter(at => { const position = x(at); if (position-lastLabelX < 66 || right-position < 66) return false; lastLabelX = position; return true; }), maxTime];
+  const labels = ticks.map((at,index) => {
+    const date = new Date(at*1000); const anchor = index === 0 ? 'start' : index === ticks.length-1 ? 'end' : 'middle';
+    const time = date.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false});
+    const day = date.toLocaleDateString([], {month:'numeric',day:'numeric'});
+    return `<text x="${x(at)}" y="237" text-anchor="${anchor}" fill="var(--muted)" font-size="10">${esc(view?.mode === 'day' ? day : time)}<tspan x="${x(at)}" dy="14">${esc(view?.mode === 'day' ? '' : day)}</tspan></text>`;
+  }).join('');
+  const targets = sections.map(section => {
+    const canZoom = view && section.zoomable;
+    const label = quotaTimeRangeText(section.start,section.end);
+    return `<rect class="quota-hover-target${canZoom ? ' quota-segment' : ''}" x="${x(section.start)}" y="${top}" width="${Math.max(0,x(section.end)-x(section.start))}" height="${bottom-top}" data-start="${section.start}" data-end="${section.end}" data-mode="${section.mode}" onpointermove="quotaChartHover(event)" onpointerleave="quotaChartLeave(event)"${canZoom ? ` role="button" tabindex="0" aria-label="${esc(tr('查看 ','View ') + label)}" onclick="zoomQuotaHistory(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();zoomQuotaHistory(this)}"` : ''}><title>${esc(label)}</title></rect>`;
+  }).join('');
+  return `<svg viewBox="0 0 628 266" role="group" aria-label="${esc(tr('Subscription 余量趋势','Subscription quota trend'))}">${grid}${dividers}${lines}<line class="quota-chart-guide" x1="${left}" y1="${top}" x2="${left}" y2="${bottom}" hidden/>${targets}${labels}</svg>`;
 }
 function quotaObservedTimeText(value) { const timestamp = Number(value); if (!Number.isFinite(timestamp)) return ''; const date = new Date(timestamp * 1000); return `${date.toLocaleString([], {hour12:false})} (${utcOffsetLabel(date)})`; }
 function quotaChartHover(event) {
   const svg = event.currentTarget?.ownerSVGElement; if (!svg) return;
   const bounds = svg.getBoundingClientRect(); if (!(bounds.width > 0)) return;
   const cursorX = Math.max(46, Math.min(610, ((event.clientX - bounds.left) / bounds.width) * 628));
-  const points = [...svg.querySelectorAll('[data-quota-point]')]; if (!points.length) return;
+  const points = svg.quotaPoints || (svg.quotaPoints = [...svg.querySelectorAll('[data-quota-point]')]); if (!points.length) return;
   const nearest = points.reduce((best, point) => Math.abs(Number(point.dataset.x) - cursorX) < Math.abs(Number(best.dataset.x) - cursorX) ? point : best, points[0]);
-  const nearestX = Number(nearest.dataset.x); const active = points.filter(point => Math.abs(Number(point.dataset.x) - nearestX) < .2);
-  points.forEach(point => point.setAttribute('r', active.includes(point) ? '4' : '1.8'));
-  const guide = svg.querySelector('.quota-chart-guide'); if (guide) { guide.hidden = false; guide.setAttribute('x1', nearestX); guide.setAttribute('x2', nearestX); }
+  if (svg.quotaNearest === nearest) return;
+  svg.quotaNearest = nearest;
+  const nearestX = Number(nearest.dataset.x); const active = points.filter(point => point.dataset.time === nearest.dataset.time);
+  (svg.quotaActive || []).forEach(point => point.setAttribute('r','1.8'));
+  active.forEach(point => point.setAttribute('r','4')); svg.quotaActive = active;
+  const guide = svg.querySelector('.quota-chart-guide'); if (guide) { guide.removeAttribute('hidden'); guide.setAttribute('x1', nearestX); guide.setAttribute('x2', nearestX); }
   const tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip'); if (!tooltip) return;
-  const topY = Math.min(...active.map(point => Number(point.dataset.y))); tooltip.hidden = false; tooltip.style.left = `${nearestX / 628 * 100}%`; tooltip.style.top = `${topY / 252 * 100}%`;
+  const topY = Math.min(...active.map(point => Number(point.dataset.y))); tooltip.hidden = false; tooltip.style.left = `${Math.max(20,Math.min(80,nearestX / 628 * 100))}%`; tooltip.style.top = `${Math.max(70,topY) / 266 * 100}%`;
   tooltip.innerHTML = `<strong>${esc(quotaObservedTimeText(nearest.dataset.time))}</strong><br>${active.map(point => { const reset = localTimeText(point.dataset.reset); return `${esc(point.dataset.label)} · ${esc(point.dataset.value)}%${point.dataset.break ? ' · ' + esc(point.dataset.break) : ''}${reset ? '<br>' + tr('重置时间：','Resets: ') + esc(reset) : ''}`; }).join('<br>')}`;
 }
-function quotaChartLeave(event) { const svg = event.currentTarget?.ownerSVGElement; if (!svg) return; const guide = svg.querySelector('.quota-chart-guide'); if (guide) guide.hidden = true; svg.querySelectorAll('[data-quota-point]').forEach(point => point.setAttribute('r','1.8')); const tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip'); if (tooltip) tooltip.hidden = true; }
+function quotaChartLeave(event) { const svg = event.currentTarget?.ownerSVGElement; if (!svg) return; const guide = svg.querySelector('.quota-chart-guide'); if (guide) guide.setAttribute('hidden',''); (svg.quotaActive || []).forEach(point => point.setAttribute('r','1.8')); svg.quotaActive = []; svg.quotaNearest = null; const tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip'); if (tooltip) tooltip.hidden = true; }
 function renderQuotaHistory(payload, rangeName) {
   quotaHistoryPayload = payload;
+  activeQuotaRange = rangeName;
   const content = $('quota_history_content'); if (!content) return; const allSeries = (payload.series || []).filter(item => Array.isArray(item.points) && item.points.length);
+  if (!content.querySelector('#quota_history_plot')) content.innerHTML = `<div id="quota_history_controls" class="quota-chart-toolbar"></div><div class="quota-history-navigation"><button id="quota_history_back" class="secondary" type="button" onclick="backQuotaHistory()">${tr('返回','Back')}</button><span id="quota_history_range"></span><span id="quota_history_loading" class="muted" role="status" hidden>${tr('更新中…','Updating…')}</span></div><div id="quota_history_legend" class="quota-legend"></div><div id="quota_history_plot" class="quota-chart"></div>`;
   const groups = [...new Set(allSeries.map(item => item.limit_id || 'codex'))];
   if (!groups.includes(activeQuotaLimit)) activeQuotaLimit = groups.includes('codex') ? 'codex' : groups[0];
   const groupSeries = allSeries.filter(item => (item.limit_id || 'codex') === activeQuotaLimit);
@@ -721,23 +796,36 @@ function renderQuotaHistory(payload, rangeName) {
   const windows = [...new Set(groupSeries.map(windowKey))].sort((a,b) => Number(a) - Number(b));
   if (!windows.includes(activeQuotaWindow)) activeQuotaWindow = windows[0];
   const series = groupSeries.filter(item => windowKey(item) === activeQuotaWindow);
-  if (!series.length) { content.innerHTML = `<div class="quota-empty">${tr('暂无额度历史，请先刷新余量。','No quota history yet. Refresh quota first.')}</div>`; return; }
-  const tabs = groups.length > 1 ? `<div class="quota-ranges quota-groups" aria-label="${esc(tr('额度组','Quota group'))}">${groups.map(id => `<button type="button" class="secondary${id === activeQuotaLimit ? ' active' : ''}" aria-pressed="${id === activeQuotaLimit}" data-limit-id="${esc(id)}" onclick="selectQuotaHistoryGroup(this.dataset.limitId)">${esc(quotaLimitLabel(id))}</button>`).join('')}</div>` : '';
-  const windowTabs = windows.length > 1 ? `<div class="quota-ranges quota-windows" aria-label="${esc(tr('额度周期','Quota window'))}">${windows.map(key => `<button type="button" class="secondary${key === activeQuotaWindow ? ' active' : ''}" aria-pressed="${key === activeQuotaWindow}" data-window="${esc(key)}" onclick="selectQuotaHistoryWindow(this.dataset.window)">${esc(compactWindowText(key))}</button>`).join('')}</div>` : '';
-  const legend = series.map((item,index) => { const last = item.points.reduce((latest, point) => Number(point.observed_at) > Number(latest.observed_at) ? point : latest); const color = quotaSeriesColor(item,index); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(compactWindowText(item.window_minutes))}<strong>${esc(Number(Number(last.remaining_percent).toFixed(2)))}%</strong></span>`; }).join('');
-  content.innerHTML = `<div class="quota-chart-toolbar">${tabs}${windowTabs}</div><div class="quota-legend">${legend}</div><div class="quota-chart">${quotaChartSvg(series)}<div class="quota-chart-tooltip" role="status" hidden></div></div>`;
+  const view = quotaHistoryView(allSeries,rangeName);
+  const tabs = groups.length > 1 ? `<div class="quota-ranges quota-groups" aria-label="${esc(tr('额度组','Quota group'))}">${groups.map(id => `<button type="button" class="secondary" data-limit-id="${esc(id)}" onclick="selectQuotaHistoryGroup(this.dataset.limitId)">${esc(quotaLimitLabel(id))}</button>`).join('')}</div>` : '';
+  const windowTabs = windows.length > 1 ? `<div class="quota-ranges quota-windows" aria-label="${esc(tr('额度周期','Quota window'))}">${windows.map(key => `<button type="button" class="secondary" data-window="${esc(key)}" onclick="selectQuotaHistoryWindow(this.dataset.window)">${esc(compactWindowText(key))}</button>`).join('')}</div>` : '';
+  const legend = series.map((item,index) => { const samples = item.points.filter(point => quotaValidPoint(point) && point.observed_at >= view.start && point.observed_at <= view.end); const last = samples.length ? samples.reduce((latest, point) => Number(point.observed_at) > Number(latest.observed_at) ? point : latest) : null; const color = quotaSeriesColor(item,index); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(compactWindowText(item.window_minutes))}<strong>${last ? esc(Number(Number(last.remaining_percent).toFixed(2))) + '%' : '—'}</strong></span>`; }).join('');
+  const chart = quotaChartSvg(series,view);
+  const plot = chart ? `${chart}<div class="quota-chart-tooltip" role="status" hidden></div>` : `<div class="quota-empty">${tr('此时间段暂无额度记录。','No quota records in this period.')}</div>`;
+  for (const [id, markup] of [['quota_history_controls',tabs+windowTabs],['quota_history_legend',legend],['quota_history_plot',plot]]) { const node = $(id); if (node.quotaMarkup !== markup) { node.innerHTML = markup; node.quotaMarkup = markup; } }
+  content.querySelectorAll('[data-limit-id], [data-window]').forEach(button => { const selected = button.dataset.limitId ? button.dataset.limitId === activeQuotaLimit : button.dataset.window === activeQuotaWindow; button.classList.toggle('active',selected); button.setAttribute('aria-pressed',String(selected)); });
+  $('quota_history_range').textContent = quotaTimeRangeText(view.start,view.end);
+  $('quota_history_back').disabled = !quotaHistoryZoom.length;
+  $('quota_history_loading').hidden = !quotaHistoryLoading;
 }
 function selectQuotaHistoryGroup(limitId) { activeQuotaLimit = limitId; if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload, activeQuotaRange); }
 function selectQuotaHistoryWindow(windowKey) { activeQuotaWindow = windowKey; if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload, activeQuotaRange); }
+function selectQuotaHistoryRange(rangeName) { activeQuotaRange = rangeName; quotaHistoryZoom = []; document.querySelectorAll('.quota-ranges button[data-range]').forEach(button => button.classList.toggle('active',button.dataset.range === rangeName)); if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload,rangeName); }
+function zoomQuotaHistory(target) { quotaHistoryZoom.push({start:Number(target.dataset.start),end:Number(target.dataset.end),mode:target.dataset.mode}); if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload,activeQuotaRange); }
+function backQuotaHistory() { quotaHistoryZoom.pop(); if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload,activeQuotaRange); }
 async function loadQuotaHistory(accountId, rangeName) {
   const request = ++quotaHistoryRequest;
-  activeQuotaRange = rangeName;
-  document.querySelectorAll('.quota-ranges button[data-range]').forEach(button => button.classList.toggle('active', button.dataset.range === rangeName)); const content = $('quota_history_content'); if (content) content.innerHTML = `<div class="quota-empty">${tr('加载中…','Loading…')}</div>`;
-  try { const payload = await api('/api/accounts/' + encodeURIComponent(accountId) + '/quota-history?range=' + encodeURIComponent(rangeName)); if (request === quotaHistoryRequest) renderQuotaHistory(payload, rangeName); }
-  catch (error) { if (content && request === quotaHistoryRequest) content.innerHTML = `<div class="quota-empty danger-text">${esc(error.message)}</div>`; }
-  await refreshQuotaState();
+  activeQuotaRange = rangeName; quotaHistoryLoading = true;
+  const loading = $('quota_history_loading'); if (loading) loading.hidden = false;
+  try {
+    // One bounded snapshot supplies all range/window switches and drill-downs.
+    const payload = await api('/api/accounts/' + encodeURIComponent(accountId) + '/quota-history?range=all');
+    if (request === quotaHistoryRequest) { quotaHistoryLoading = false; $('modal_status').textContent = ''; renderQuotaHistory(payload,activeQuotaRange); }
+  } catch (error) { if (request === quotaHistoryRequest) $('modal_status').textContent = error.message; }
+  finally { if (request === quotaHistoryRequest) { quotaHistoryLoading = false; const indicator = $('quota_history_loading'); if (indicator) indicator.hidden = true; } }
+  if (request === quotaHistoryRequest) await refreshQuotaState();
 }
-function openQuotaHistory(accountId) { activeQuotaAccountId = accountId; activeQuotaRange = '1d'; activeQuotaLimit = 'codex'; activeQuotaWindow = '300'; quotaHistoryPayload = null; const ranges = ['1h','1d','1w','all']; openModal(tr('Subscription 余量趋势','Subscription quota trend'), `<div class="quota-ranges">${ranges.map(rangeName => `<button type="button" class="secondary" data-range="${rangeName}" onclick="loadQuotaHistory(activeQuotaAccountId,'${rangeName}')">${esc(quotaRangeLabel(rangeName))}</button>`).join('')}</div><div id="quota_history_content"></div>`, '', null); loadQuotaHistory(accountId, activeQuotaRange); quotaHistoryTimer = setInterval(() => loadQuotaHistory(activeQuotaAccountId, activeQuotaRange), 5 * 60 * 1000); }
+function openQuotaHistory(accountId) { activeQuotaAccountId = accountId; activeQuotaRange = '1d'; activeQuotaLimit = 'codex'; activeQuotaWindow = '300'; quotaHistoryZoom = []; quotaHistoryPayload = null; quotaHistoryLoading = true; const ranges = ['1h','1d','1w','all']; openModal(tr('Subscription 余量趋势','Subscription quota trend'), `<div class="quota-ranges">${ranges.map(rangeName => `<button type="button" class="secondary${rangeName === '1d' ? ' active' : ''}" data-range="${rangeName}" onclick="selectQuotaHistoryRange('${rangeName}')">${esc(quotaRangeLabel(rangeName))}</button>`).join('')}</div><div id="quota_history_content"></div>`, '', null); renderQuotaHistory({series:[]},activeQuotaRange); loadQuotaHistory(accountId, activeQuotaRange); quotaHistoryTimer = setInterval(() => { if (!quotaHistoryLoading) loadQuotaHistory(activeQuotaAccountId, activeQuotaRange); }, 5 * 60 * 1000); }
 
 function selectAccountFile() { $('a_auth_json').click(); }
 async function accountFileChosen(input) {

@@ -9,6 +9,7 @@ class ClassList {
   add(value) { this.values.add(value); }
   remove(value) { this.values.delete(value); }
   contains(value) { return this.values.has(value); }
+  toggle(value, force) { if (force) this.add(value); else this.remove(value); }
 }
 
 const elements = new Map();
@@ -18,6 +19,8 @@ let catalogContexts = [];
 let catalogPreviews = [];
 let subscriptionModelInputs = [];
 let runtimeInputs = [];
+let quotaControls = [];
+let quotaRangeButtons = [];
 
 class Element {
   constructor(id = "") {
@@ -33,20 +36,38 @@ class Element {
     this.onclick = null;
     this.classList = new ClassList(id === "modal_backdrop" ? ["hidden"] : []);
     this._innerHTML = "";
+    this.innerHTMLWrites = 0;
+    this.attributes = {};
   }
   set innerHTML(value) {
     this._innerHTML = String(value);
-    if (this.id === "modal_body") { parseDiscoveredOptions(this._innerHTML); parseSubscriptionOptions(this._innerHTML); }
+    this.innerHTMLWrites++;
+    if (this.id === "modal_body") { parseDiscoveredOptions(this._innerHTML); parseSubscriptionOptions(this._innerHTML); quotaRangeButtons = parseQuotaButtons(this._innerHTML); }
     if (this.id === "catalog_display_models") parseCatalogDisplay(this._innerHTML);
     if (this.id === "codex_runtimes") parseRuntimeInputs(this._innerHTML);
+    if (this.id === "quota_history_controls") quotaControls = parseQuotaButtons(this._innerHTML);
+    if (this.id === "quota_history_content") for (const match of this._innerHTML.matchAll(/\bid="([^"]+)"/g)) elements.set(match[1], new Element(match[1]));
   }
   get innerHTML() { return this._innerHTML; }
   querySelector(selector) {
     if (selector === 'input[name="discovered_model"]') return this.input || null;
+    if (selector.startsWith('#') && this._innerHTML.includes(`id="${selector.slice(1)}"`)) return getElement(selector.slice(1));
     return null;
   }
+  querySelectorAll(selector) { return selector === '[data-limit-id], [data-window]' ? quotaControls : []; }
+  setAttribute(name, value) { this.attributes[name] = value; }
+  getAttribute(name) { return this.attributes[name]; }
   click() { if (this.onclick) return this.onclick(); }
   remove() {}
+}
+
+function parseQuotaButtons(html) {
+  return [...html.matchAll(/<button[^>]*data-(limit-id|window|range)="([^"]+)"[^>]*>/g)].map(match => {
+    const button = new Element();
+    button.dataset[match[1] === 'limit-id' ? 'limitId' : match[1]] = match[2];
+    if (/class="[^"]* active/.test(match[0])) button.classList.add('active');
+    return button;
+  });
 }
 
 function parseCatalogDisplay(html) {
@@ -109,6 +130,7 @@ function getElement(id) {
 const document = {
   getElementById: getElement,
   querySelectorAll(selector) {
+    if (selector === '.quota-ranges button[data-range]') return quotaRangeButtons;
     if (selector === "[data-discovered-option]") return discoveredOptions;
     if (selector === 'input[name="discovered_model"]') {
       return discoveredOptions.map(option => option.input);
@@ -372,12 +394,17 @@ function duplicateAccountBehavior() {
   assert.match(duplicateRow, /openQuotaHistory\('same-login-account'\)/);
 }
 
+function quotaHistoryHtml() {
+  const content = getElement('quota_history_content').innerHTML;
+  return content.includes('id="quota_history_plot"') ? content + ['quota_history_controls','quota_history_legend','quota_history_plot'].map(id => getElement(id).innerHTML).join('') : content;
+}
+
 function quotaHistoryBehavior() {
   run("renderQuotaHistory({series:[]}, '1d')");
-  assert.match(getElement("quota_history_content").innerHTML, /暂无额度历史/);
+  assert.match(quotaHistoryHtml(), /暂无额度记录/);
   context.__quotaPayload = {series:[{limit_id:'codex',window_kind:'primary',window_minutes:10080,points:[{observed_at:1000,remaining_percent:80},{observed_at:1300,remaining_percent:75}]}]};
   run("renderQuotaHistory(__quotaPayload, '1h')");
-  const html = getElement("quota_history_content").innerHTML;
+  const html = quotaHistoryHtml();
   assert.match(html, /<svg/);
   assert.match(html, /7d/);
   assert.match(html, /75%/);
@@ -420,8 +447,8 @@ function quotaHistoryBehavior() {
 
   const first = {dataset:{x:'90',y:'80',time:'1000',value:'80',label:'主窗口'},radius:'',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
   const second = {dataset:{x:'90.1',y:'100',time:'1000',value:'60',label:'次窗口'},radius:'',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
-  const distant = {dataset:{x:'300',y:'120',time:'1300',value:'50',label:'主窗口'},radius:'',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
-  const guide = {hidden:true,values:{},setAttribute(name,value) { this.values[name] = value; }};
+  const distant = {dataset:{x:'300',y:'120',time:'1300',value:'50',label:'主窗口'},radius:'1.8',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
+  const guide = {values:{hidden:''},setAttribute(name,value) { this.values[name] = value; },removeAttribute(name) { delete this.values[name]; }};
   const tooltip = {hidden:true,style:{},innerHTML:''};
   context.__quotaHoverSvg = {
     getBoundingClientRect: () => ({left:0,width:628}),
@@ -431,7 +458,7 @@ function quotaHistoryBehavior() {
   };
   context.__quotaHoverTarget = {ownerSVGElement:context.__quotaHoverSvg};
   run("quotaChartHover({currentTarget:__quotaHoverTarget,clientX:95})");
-  assert.strictEqual(guide.hidden, false);
+  assert.strictEqual('hidden' in guide.values, false);
   assert.strictEqual(first.radius, '4');
   assert.strictEqual(second.radius, '4');
   assert.strictEqual(distant.radius, '1.8');
@@ -439,24 +466,118 @@ function quotaHistoryBehavior() {
   assert.match(tooltip.innerHTML, /主窗口 · 80%/);
   assert.match(tooltip.innerHTML, /次窗口 · 60%/);
   run("quotaChartLeave({currentTarget:__quotaHoverTarget})");
-  assert.strictEqual(guide.hidden, true);
+  assert.strictEqual('hidden' in guide.values, true);
   assert.strictEqual(tooltip.hidden, true);
 
   context.__groupedQuota = {series: ['codex','codex_bengalfox'].flatMap(limit_id => [300,10080].map(window_minutes => ({limit_id,window_minutes,points:[{observed_at:1000,remaining_percent:window_minutes === 300 ? 42 : 88}]})))};
   run("activeQuotaLimit='codex'; activeQuotaWindow='300'; renderQuotaHistory(__groupedQuota,'1d')");
-  let grouped = elements.get('quota_history_content').innerHTML;
+  let grouped = quotaHistoryHtml();
   assert.match(grouped, />Codex Spark<\/button>/);
   assert.match(grouped, /data-label="5h"/);
   assert.doesNotMatch(grouped, /data-label="7d"|data-label="Codex Spark/);
   run("selectQuotaHistoryWindow('10080')");
-  grouped = elements.get('quota_history_content').innerHTML;
+  grouped = quotaHistoryHtml();
   assert.match(grouped, /data-label="7d"/);
   assert.doesNotMatch(grouped, /data-label="5h"/);
   run("selectQuotaHistoryGroup('codex_bengalfox')");
-  grouped = elements.get('quota_history_content').innerHTML;
+  grouped = quotaHistoryHtml();
   assert.match(grouped, /data-label="Codex Spark · 7d"/);
   assert.doesNotMatch(grouped, />codex_bengalfox|data-label="7d"/);
   assert.strictEqual(run("quotaLimitLabel('unrecognized')"), 'unrecognized');
+}
+
+function quotaHistoryPeriodsBehavior() {
+  context.__periodSeries = [{window_minutes:300,points:[
+    {observed_at:1000,remaining_percent:5,resets_at:1200},
+    {observed_at:1300,remaining_percent:100,resets_at:19200},
+    {observed_at:1600,remaining_percent:100,resets_at:18000},
+    {observed_at:19000,remaining_percent:100,resets_at:36000},
+    {observed_at:20000,remaining_percent:90,resets_at:36030},
+  ]}];
+  const boundaries = JSON.parse(JSON.stringify(run('quotaResetBoundaries(__periodSeries,1100,40000)')));
+  assert.deepStrictEqual(boundaries, [{at:1200,kind:'reset'},{at:1600,kind:'observed'},{at:18000,kind:'reset'}], 'use the recorded reset deadline, first observation for early resets, and ignore small deadline jitter');
+  assert.match(run('quotaPointBreak(__periodSeries[0].points[1],__periodSeries[0].points[2])'), /新的额度周期/);
+  assert.strictEqual(run('quotaResetBoundaries([{points:[{observed_at:1000,remaining_percent:90},{observed_at:20000,remaining_percent:80}]}],0,40000).length'), 0, 'missing reset times must not produce invented 5-hour periods');
+  assert.strictEqual(run('quotaResetBoundaries(__periodSeries,1200,18000).length'), 1, 'viewport edges must not produce duplicate or empty sections');
+
+  const previousTimezone = process.env.TZ;
+  process.env.TZ = 'America/Los_Angeles';
+  try {
+    for (const [start,end,dayLength] of [
+      ['2026-10-30T12:00:00-07:00','2026-11-04T12:00:00-08:00',25],
+      ['2026-03-06T12:00:00-08:00','2026-03-11T12:00:00-07:00',23],
+    ]) {
+      context.__dayView = {start:Date.parse(start)/1000,end:Date.parse(end)/1000,mode:'day'};
+      const days = run('quotaChartSections([],__dayView)');
+      assert(days.boundaries.every(item => new Date(item.at*1000).getHours() === 0));
+      assert(days.sections.some(item => item.end-item.start === dayLength*3600), 'week divisions must follow local calendar days across DST');
+    }
+  } finally { if (previousTimezone === undefined) delete process.env.TZ; else process.env.TZ = previousTimezone; }
+}
+
+async function quotaHistorySwitchingBehavior() {
+  const end = Date.parse('2026-09-12T12:00:00Z')/1000, start = end-86400;
+  context.__switchPayload = {end_at:end,series:[
+    {limit_id:'codex',window_minutes:300,points:[
+      {observed_at:start-300,remaining_percent:80,resets_at:start+7200},
+      {observed_at:start+7500,remaining_percent:100,resets_at:start+25200},
+      {observed_at:start+18000,remaining_percent:100,resets_at:start+36000},
+      {observed_at:end-300,remaining_percent:20,resets_at:end+600},
+    ]},
+    {limit_id:'codex',window_minutes:10080,points:[
+      {observed_at:start-300,remaining_percent:10,resets_at:start+30000},
+      {observed_at:start+31000,remaining_percent:100,resets_at:start+634800},
+      {observed_at:end-300,remaining_percent:90,resets_at:start+634800},
+    ]},
+  ]};
+  run("quotaHistoryZoom=[]; activeQuotaLimit='codex'; activeQuotaWindow='300'; renderQuotaHistory(__switchPayload,'1d')");
+  const frame = getElement('quota_history_content'), controls = getElement('quota_history_controls'), plot = getElement('quota_history_plot');
+  const frameWrites = frame.innerHTMLWrites, controlsWrites = controls.innerHTMLWrites, plotWrites = plot.innerHTMLWrites;
+  run("renderQuotaHistory(__switchPayload,'1d')");
+  assert.strictEqual(plot.innerHTMLWrites, plotWrites, 'an unchanged refresh must not replace the SVG or hover state');
+  assert.match(plot.innerHTML, new RegExp(`data-end="${start+7200}"`));
+  run("selectQuotaHistoryWindow('10080')");
+  assert.match(plot.innerHTML, new RegExp(`data-end="${start+30000}"`));
+  assert.doesNotMatch(plot.innerHTML, new RegExp(`data-end="${start+7200}"`));
+  assert.strictEqual(controls.innerHTMLWrites, controlsWrites, 'window switches must preserve the focused controls');
+  assert(quotaControls.find(button => button.dataset.window === '10080').classList.contains('active'));
+
+  const waiting = [], calls = [];
+  context.__switchApi = path => { calls.push(path); return new Promise((resolve,reject) => waiting.push({resolve,reject})); };
+  run('__savedSwitchApi=api; __savedSwitchSync=refreshQuotaState; api=__switchApi; refreshQuotaState=async () => {}');
+  try {
+    const beforeRefresh = plot.innerHTML;
+    const pending = run("loadQuotaHistory('test','1d')");
+    assert.strictEqual(plot.innerHTML, beforeRefresh, 'a pending fetch must leave the chart visible');
+    for (const range of ['1h','1d','1w','all']) run(`selectQuotaHistoryRange('${range}')`);
+    assert.strictEqual(calls.length, 1, 'range switches must reuse the loaded 15-day snapshot');
+    assert(calls[0].endsWith('range=all'));
+    waiting[0].resolve(context.__switchPayload); await pending;
+    assert.strictEqual(run('activeQuotaRange'), 'all', 'a late fetch must not undo the latest selected range');
+    run("selectQuotaHistoryRange('1d'); selectQuotaHistoryWindow('300')");
+    const segment = plot.innerHTML.match(/data-start="([^"]+)" data-end="([^"]+)" data-mode="([^"]+)"[^>]*role="button"/);
+    assert(segment, 'reset regions must offer click/keyboard drill-down');
+    context.__zoomTarget = {dataset:{start:segment[1],end:segment[2],mode:segment[3]}};
+    run('zoomQuotaHistory(__zoomTarget)');
+    assert.strictEqual(getElement('quota_history_back').disabled, false);
+    const zoomed = plot.innerHTML;
+    const zoomRefresh = run("loadQuotaHistory('test','1d')");
+    waiting[1].resolve({...context.__switchPayload,end_at:end+300}); await zoomRefresh;
+    assert.strictEqual(plot.innerHTML, zoomed, 'auto refresh must retain the drilled-down period');
+    const zoomRange = getElement('quota_history_range').textContent;
+    run("selectQuotaHistoryWindow('10080')");
+    assert.strictEqual(getElement('quota_history_range').textContent, zoomRange, 'changing the quota window must preserve the time interval under inspection');
+    run('backQuotaHistory()');
+    assert.strictEqual(run('quotaHistoryZoom.length'), 0);
+    assert.strictEqual(getElement('quota_history_back').disabled, true);
+    const beforeFailure = plot.innerHTML;
+    const failed = run("loadQuotaHistory('test','1d')");
+    waiting[2].reject(new Error('offline')); await failed;
+    assert.strictEqual(plot.innerHTML, beforeFailure, 'a failed refresh must not erase existing data');
+    assert.strictEqual(getElement('modal_status').textContent, 'offline');
+    assert.strictEqual(getElement('quota_history_loading').hidden, true);
+    assert.strictEqual(frame.innerHTMLWrites, frameWrites, 'switches and refreshes must preserve the chart frame');
+  } finally { run('api=__savedSwitchApi; refreshQuotaState=__savedSwitchSync'); }
 }
 
 async function quotaHistoryRaceBehavior() {
@@ -468,10 +589,10 @@ async function quotaHistoryRaceBehavior() {
     const newRequest = run("loadQuotaHistory('second','1d')");
     waiting[1]({series:[{limit_id:'codex',window_minutes:10080,points:[{observed_at:1000,remaining_percent:73}]}]});
     await newRequest;
-    const latest = getElement('quota_history_content').innerHTML;
+    const latest = quotaHistoryHtml();
     waiting[0]({series:[]});
     await oldRequest;
-    assert.strictEqual(getElement('quota_history_content').innerHTML, latest);
+    assert.strictEqual(quotaHistoryHtml(), latest);
     assert.match(latest, /73%/);
     const closingRequest = run("loadQuotaHistory('second','1h')");
     run('clearQuotaHistoryTimer()');
@@ -961,6 +1082,8 @@ function updateBehavior() {
   pickerBehavior();
   duplicateAccountBehavior();
   quotaHistoryBehavior();
+  quotaHistoryPeriodsBehavior();
+  await quotaHistorySwitchingBehavior();
   await quotaHistoryRaceBehavior();
   performanceDiagnosticsBehavior();
   providerDiscoveryErrorBehavior();

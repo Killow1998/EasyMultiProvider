@@ -63,6 +63,8 @@ class QuotaHistoryStoreTests(unittest.TestCase):
             result = store.query("@native", "1h", now=1_000_000)
 
         self.assertEqual(result["range"], "1h")
+        self.assertEqual(result["start_at"], 1_000_000 - 3600)
+        self.assertEqual(result["end_at"], 1_000_000)
         self.assertEqual(result["retention_days"], 15)
         self.assertEqual(result["series"], [])
 
