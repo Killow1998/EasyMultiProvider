@@ -926,6 +926,8 @@ def _response_from_chat(
         response["incomplete_details"] = {"reason": incomplete_reason}
     if value.get("usage") is not None:
         response["usage"] = _chat_usage(value["usage"])
+    if isinstance(value.get("service_tier"), str):
+        response["service_tier"] = value["service_tier"]
     return response
 
 
@@ -954,6 +956,11 @@ def _chat_usage(usage: Any) -> Dict[str, Any]:
             projected[target] = {detail: value[detail]}
     if "input_tokens_details" not in projected and "prompt_cache_hit_tokens" in usage:
         projected["input_tokens_details"] = {"cached_tokens": usage["prompt_cache_hit_tokens"]}
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, Mapping):
+        for key in ("cache_creation_tokens", "cache_creation_1h_tokens"):
+            if key in details:
+                projected.setdefault("input_tokens_details", {})[key] = details[key]
     return projected
 
 
@@ -970,7 +977,10 @@ def _anthropic_usage(usage: Mapping[str, Any]) -> Dict[str, Any]:
         if total is None or read is None or written is None:
             return result
         total += read + written
-        result["input_tokens_details"] = {"cached_tokens": read}
+        result["input_tokens_details"] = {"cached_tokens": read, "cache_creation_tokens": written}
+        creation = usage.get("cache_creation")
+        if isinstance(creation, Mapping) and "ephemeral_1h_input_tokens" in creation:
+            result["input_tokens_details"]["cache_creation_1h_tokens"] = creation["ephemeral_1h_input_tokens"]
     if total is not None:
         result["input_tokens"] = total
         if output is not None:

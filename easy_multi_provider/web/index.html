@@ -61,6 +61,7 @@ main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minma
 @media(max-width:760px){main{padding:18px 12px 32px}.header-group{padding-right:0;border-right:0}.grid,.choice-grid{grid-template-columns:1fr}.wide{grid-column:auto}section{padding:13px}table{display:block;overflow:auto;white-space:nowrap}.modal{padding:15px}.display-row{grid-template-columns:1fr}.display-row button{justify-self:start}.health-grid{grid-template-columns:repeat(2,minmax(90px,1fr))}}
 .failure-list{margin-top:16px;border-top:1px solid var(--border);padding-top:12px}.failure-list>summary{cursor:pointer;font-weight:600}.request-failure{margin-top:8px;border:1px solid var(--border);border-radius:6px;padding:10px 12px}.request-failure>summary{cursor:pointer;overflow-wrap:anywhere}.request-failure>summary span,.request-failure>summary time{margin-right:10px}.request-failure dl{display:grid;grid-template-columns:minmax(90px,auto) minmax(0,1fr);gap:6px 16px;font-size:13px}.request-failure dt{color:var(--muted)}.request-failure dd{margin:0;overflow-wrap:anywhere}.request-failure p{font-size:13px;margin-bottom:0}
 .cache-performance{margin-top:18px}.cache-performance h3{margin-bottom:6px}.cache-performance p{font-size:13px}.cache-model{margin-top:8px;border:1px solid var(--border);border-radius:6px;padding:10px 12px}.cache-model>summary{cursor:pointer;overflow-wrap:anywhere}.cache-model>summary span{margin-right:12px}.cache-periods{max-height:280px;overflow:auto}.cache-periods table{font-size:13px;min-width:450px}.cache-periods th{position:sticky;top:0;background:var(--panel)}.cache-model p{margin:10px 0}
+.usage-filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:12px 0}.usage-filters label{flex:1;min-width:145px}.usage-filters input,.usage-filters select{margin-top:4px}.usage-totals{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}.usage-total{background:var(--panel-soft);border:1px solid var(--border);border-radius:6px;padding:14px}.usage-total strong{display:block;font-size:25px;font-variant-numeric:tabular-nums}.usage-total span{color:var(--muted);font-size:12px}.usage-chart{width:100%;height:190px;display:block}.usage-chart text{fill:var(--muted);font-size:12px}.usage-chart rect{fill:var(--accent);cursor:pointer}.usage-chart rect:hover,.usage-chart rect:focus{fill:var(--success);outline:none}.usage-table{overflow:auto;max-height:370px}.usage-table table{font-size:12px;min-width:620px}.usage-table td small{display:block;color:var(--muted)}.usage-table td{font-variant-numeric:tabular-nums}.usage-notice{font-size:12px;color:var(--muted);margin:10px 0}.usage-warning{color:var(--warning)}
 </style>
 </head>
 <body>
@@ -97,7 +98,7 @@ main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minma
   <p id="codex_runtime_dirty" class="muted" hidden></p>
   <div class="integration-actions">
     <div class="action-group"><span class="action-group-label" data-i18n="client_scope">客户端</span><div class="runtime-controls"><button class="secondary" data-icon="check" onclick="useAutomaticCodexRuntimes()" data-i18n="automatic_runtimes">选择全部</button><button id="codex_runtime_save" class="secondary" data-icon="save" onclick="saveCodexRuntimeSelection()" data-i18n="save_runtimes">保存选择</button><button id="codex_runtime_scan" class="secondary" data-icon="refresh" onclick="scanCodexRuntimes()" data-i18n="rescan_runtimes">重新扫描</button></div></div>
-    <div class="action-group"><span class="action-group-label" data-i18n="emp_scope">EMP</span><div class="toolbar"><button id="integration_enable" data-icon="check" onclick="confirmIntegrationAction('enable')" data-i18n="enable_codex">启用 EMP</button><button id="integration_restore" class="secondary" data-icon="restore" onclick="confirmIntegrationAction('restore')" data-i18n="restore_codex">恢复原生</button><button id="integration_reload" class="secondary" data-icon="refresh" onclick="confirmIntegrationAction('reload')" hidden data-i18n="apply_models">重新检查</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">性能</button></div></div>
+    <div class="action-group"><span class="action-group-label" data-i18n="emp_scope">EMP</span><div class="toolbar"><button id="integration_enable" data-icon="check" onclick="confirmIntegrationAction('enable')" data-i18n="enable_codex">启用 EMP</button><button id="integration_restore" class="secondary" data-icon="restore" onclick="confirmIntegrationAction('restore')" data-i18n="restore_codex">恢复原生</button><button id="integration_reload" class="secondary" data-icon="refresh" onclick="confirmIntegrationAction('reload')" hidden data-i18n="apply_models">重新检查</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">性能</button><button class="secondary" onclick="openUsage()" data-i18n="usage">用量与估算</button></div></div>
     <div class="action-group search-toggle"><span class="action-group-label" data-i18n="search_scope">工具</span><label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="saveSubscriptionSearch()"><span data-i18n="enable_subscription_search">联网搜索</span></label></div>
   </div>
 </div>
@@ -181,10 +182,10 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const translations = {
   'zh-CN': {
-    subtitle:'管理 Codex 的账号和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', apply_models:'重新检查', diagnostics:'性能与健康', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', accounts_title:'Subscription 账号', import_account:'导入账号', refresh_quotas:'刷新余量', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
+    subtitle:'管理 Codex 的账号和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', apply_models:'重新检查', diagnostics:'性能与健康', usage:'用量与估算', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', accounts_title:'Subscription 账号', import_account:'导入账号', refresh_quotas:'刷新余量', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
   },
   en: {
-    subtitle:'Manage Codex accounts and models.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', apply_models:'Check again', diagnostics:'Performance & health', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', accounts_title:'Subscription accounts', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
+    subtitle:'Manage Codex accounts and models.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', apply_models:'Check again', diagnostics:'Performance & health', usage:'Usage & estimates', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', accounts_title:'Subscription accounts', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
   }
 };
 Object.assign(translations['zh-CN'], {client_scope:'客户端', emp_scope:'EMP', search_scope:'工具'});
@@ -234,6 +235,96 @@ function capabilitySummary(model) {
   const protocols = Array.isArray(confirmedField(model, 'supported_protocols')) ? confirmedField(model, 'supported_protocols') : [];
   if (protocols.length) parts.push(protocols.map(protocolLabel).map(esc).join('/'));
   return parts.join(' · ');
+}
+
+let usageRequest = 0, usagePayload = null, usagePreset = 'today', usagePoll = null;
+const usageSource = value => ({native:'Native', subscription:tr('其他 Subscription','Other Subscription'), external:'External Provider', unknown:tr('来源未确认','Unknown source')}[value] || value);
+const usageMoney = nanos => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN', {style:'currency', currency:'USD', minimumFractionDigits:2, maximumFractionDigits:4}).format(nanos / 1e9);
+const usageNumber = value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0);
+function usageLocalInput(date) { return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0,16); }
+function setUsagePeriod(preset) {
+  usagePreset = preset;
+  const start = new Date(), end = new Date();
+  if (preset === 'today') { start.setHours(0,0,0,0); end.setDate(end.getDate()+1); end.setHours(0,0,0,0); }
+  else if (preset === 'all') { start.setTime(0); end.setMinutes(end.getMinutes()+1); }
+  else { start.setDate(start.getDate() - (preset === '7d' ? 7 : 30)); end.setMinutes(end.getMinutes()+1); }
+  $('usage_start').value = usageLocalInput(start); $('usage_end').value = usageLocalInput(end);
+  $('usage_bucket').value = preset === 'today' ? 'hour' : 'day';
+  loadUsage();
+}
+function openUsage() {
+  usageRequest++; usagePayload = null;
+  openModal(tr('用量与 API 估算','Usage & API estimates'), `
+    <div class="toolbar"><button type="button" class="secondary" onclick="setUsagePeriod('today')">${tr('今天','Today')}</button><button type="button" class="secondary" onclick="setUsagePeriod('7d')">${tr('近 7 天','Last 7 days')}</button><button type="button" class="secondary" onclick="setUsagePeriod('30d')">${tr('近 30 天','Last 30 days')}</button><button type="button" class="secondary" onclick="setUsagePeriod('all')">${tr('全部历史','All history')}</button><button type="button" class="secondary" onclick="scanUsageHistory()">${tr('扫描历史','Scan history')}</button><button type="button" class="secondary" data-icon="refresh" onclick="usagePreset ? setUsagePeriod(usagePreset) : loadUsage()">${t('refresh')}</button></div>
+    <div class="usage-filters"><label>${tr('开始 · 本地时间','From · local time')}<input type="datetime-local" id="usage_start" onchange="usagePreset=''"></label><label>${tr('结束 · 不包含此时刻','Until · exclusive')}<input type="datetime-local" id="usage_end" onchange="usagePreset=''"></label><button type="button" onclick="usagePreset='';loadUsage()">${tr('查询','Apply')}</button></div>
+    <div class="usage-filters"><label>${tr('来源','Source')}<select id="usage_category" onchange="loadUsage()"><option value="all">${tr('全部来源','All sources')}</option><option value="native">Native</option><option value="subscription">${tr('其他 Subscription','Other Subscription')}</option><option value="external">External Provider</option><option value="unknown">${tr('来源未确认','Unknown source')}</option></select></label><label>${tr('时间粒度','Group by')}<select id="usage_bucket" onchange="renderUsage()"><option value="hour">${tr('小时','Hour')}</option><option value="day">${tr('天','Day')}</option></select></label></div>
+    <div id="usage_status" class="usage-notice" role="status"></div><div id="usage_result"></div>
+    <p class="usage-notice">${tr('扫描本机 Codex 历史，并记录 EMP 实时用量，跨重启保留。输入包含缓存，输出包含推理；子项不重复相加。','Scans local Codex history and records EMP usage across restarts. Input includes cache; output includes reasoning. Subsets are not added twice.')}</p>`, '', null);
+  setUsagePeriod('today');
+}
+async function scanUsageHistory() {
+  try { await api('/api/usage/scan', {method:'POST',body:'{}'}); loadUsage(); }
+  catch (error) { if ($('usage_status')) $('usage_status').textContent = error.message; }
+}
+async function loadUsage(background = false) {
+  clearTimeout(usagePoll);
+  const status = $('usage_status'); if (!status) return;
+  const id = ++usageRequest;
+  const start = usagePreset === 'all' ? 0 : new Date($('usage_start').value).getTime()/1000, end = new Date($('usage_end').value).getTime()/1000;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) { status.textContent = tr('请选择有效的时间段。','Choose a valid period.'); return; }
+  if (!background) status.textContent = tr('正在查询…','Loading…');
+  try {
+    const result = await api('/api/usage?' + new URLSearchParams({start,end,category:$('usage_category').value}));
+    if (id !== usageRequest || $('usage_status') !== status) return;
+    if (usagePreset === 'all' && result.first_record_at) {
+      const first = new Date(result.first_record_at*1000); first.setHours(0,0,0,0);
+      result.start = Math.max(0, first.getTime()/1000); $('usage_start').value = usageLocalInput(first);
+    }
+    usagePayload = result; status.textContent = ''; renderUsage();
+    if (result.history?.running || result.history?.queued) usagePoll = setTimeout(() => { if ($('usage_status') === status) loadUsage(true); }, 1500);
+  } catch (error) { if (id === usageRequest && $('usage_status') === status) status.textContent = error.message; }
+}
+function usagePeriods() {
+  const groups = new Map(), daily = $('usage_bucket').value === 'day';
+  for (const row of usagePayload.periods) {
+    const date = new Date(row.start*1000); if (daily) date.setHours(0,0,0,0); else date.setMinutes(0,0,0);
+    const start = date.getTime()/1000, until = new Date(date); if (daily) until.setDate(until.getDate()+1); else until.setTime(until.getTime()+3600000);
+    if (!groups.has(start)) groups.set(start, {start,end:until.getTime()/1000,input_tokens:0,output_tokens:0,cost_nanos:0,requests:0,priced_requests:0});
+    const group = groups.get(start); for (const key of ['input_tokens','output_tokens','cost_nanos','requests','priced_requests']) group[key] += row[key];
+  }
+  return [...groups.values()].sort((a,b) => a.start-b.start);
+}
+function zoomUsage(start,end) {
+  $('usage_start').value = usageLocalInput(new Date(Math.max(start,usagePayload.start)*1000));
+  $('usage_end').value = usageLocalInput(new Date(Math.min(end,usagePayload.end)*1000));
+  $('usage_bucket').value = 'hour'; usagePreset=''; loadUsage();
+}
+function renderUsage() {
+  const box = $('usage_result'); if (!box || !usagePayload) return;
+  const data = usagePayload, totals = data.totals, periods = usagePeriods();
+  const cost = row => row.priced_requests ? usageMoney(row.cost_nanos) + (row.priced_requests < row.requests ? '*' : '') : '—';
+  const price = data.pricing, missing = totals.requests - totals.priced_requests;
+  const max = Math.max(1,...periods.map(row=>row.input_tokens+row.output_tokens));
+  const width = 720, plot = 628, range = data.end-data.start;
+  const bars = periods.map(row => {
+    const x = 70 + (Math.max(data.start,row.start)-data.start)/range*plot;
+    const w = Math.max(1,(Math.min(data.end,row.end)-Math.max(data.start,row.start))/range*plot-2);
+    const tokens = row.input_tokens+row.output_tokens, h = tokens/max*130;
+    const label = new Date(row.start*1000).toLocaleString() + ' · ' + usageNumber(tokens) + ' tokens · ' + cost(row);
+    return `<rect x="${x}" y="${150-h}" width="${w}" height="${Math.max(1,h)}" rx="2" tabindex="0" role="button" aria-label="${esc(label)}" onclick="zoomUsage(${row.start},${row.end})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();zoomUsage(${row.start},${row.end});}"><title>${esc(label)}</title></rect>`;
+  }).join('');
+  const rows = data.groups.sort((a,b)=>(b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)).map(row => `<tr><td>${esc(usageSource(row.category))}<small>${esc(row.owner.startsWith('history:') ? tr('历史路由 · ','Historical route · ') + row.owner.slice(8) : row.category === 'native' ? tr('Codex 登录','Codex login') : (row.owner_name || row.owner))}</small></td><td>${esc(row.model)}<small>${row.service_tier === 'default' ? tr('普通','Standard') : esc(row.service_tier)}</small></td><td>${row.input_reports ? usageNumber(row.input_tokens) : '—'}<small>${tr('缓存 ','Cached ')}${row.cache_reports ? usageNumber(row.cached_input_tokens) : '—'}${row.cache_write_tokens ? ' · '+tr('写入 ','Write ')+usageNumber(row.cache_write_tokens) : ''}</small></td><td>${row.output_reports ? usageNumber(row.output_tokens) : '—'}<small>${tr('推理 ','Reasoning ')}${row.reasoning_reports ? usageNumber(row.reasoning_tokens) : '—'}</small></td><td>${cost(row)}</td><td>${usageNumber(row.requests)}</td></tr>`).join('');
+  const history = data.history || {}, historical = data.sources?.find(row => row.origin === 'history')?.requests || 0;
+  box.innerHTML = `<p class="usage-notice">${history.running || history.queued ? tr('正在后台扫描历史…','Scanning history in the background…') : history.last_scan_at ? tr('历史已扫描 · ','History scanned · ') + usageNumber(history.files) + tr(' 个文件',' files') : tr('等待历史扫描','Waiting for history scan')}${history.errors ? ' · ' + tr('部分文件读取失败','Some files could not be read') : ''}</p>
+    <div class="usage-totals"><div class="usage-total"><span>Tokens</span><strong>${totals.input_reports || totals.output_reports ? usageNumber(totals.input_tokens+totals.output_tokens) : '—'}</strong><span>${usageNumber(totals.reported_requests)} / ${usageNumber(totals.requests)} ${tr('次请求有完整用量','requests reported usage')}</span></div><div class="usage-total"><span>${tr('API 等价估算 · USD','API equivalent · USD')}</span><strong>${cost(totals)}</strong><span>${usageNumber(totals.priced_requests)} / ${usageNumber(totals.requests)} ${tr('次请求已计价','requests priced')}</span></div></div>
+    ${totals.requests ? `<svg class="usage-chart" viewBox="0 0 ${width} 190" aria-label="${tr('Token 用量，点击柱形查看明细','Token usage; select a bar to zoom')}"><path d="M70 20V150H698" fill="none" stroke="var(--border)"/><text x="60" y="28" text-anchor="end">${new Intl.NumberFormat('en',{notation:'compact'}).format(max)}</text><text x="60" y="153" text-anchor="end">0</text>${bars}<text x="70" y="178">${esc(new Date(data.start*1000).toLocaleString())}</text><text x="698" y="178" text-anchor="end">${esc(new Date(data.end*1000).toLocaleString())}</text></svg><div class="usage-table"><table><thead><tr><th>${tr('来源 / 账号','Source / account')}</th><th>${tr('模型','Model')}</th><th>${tr('输入','Input')}</th><th>${tr('输出','Output')}</th><th>USD</th><th>${tr('请求','Calls')}</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p>${tr('这个时间段还没有用量记录。','No usage recorded in this period.')}</p>`}
+    ${historical ? `<p class="usage-notice">${usageNumber(historical)} ${tr('条来自本机历史，按扫描时可用价格折算；旧账号身份未确认，类别仅依据历史模型路由和现有配置推断。未记录的服务档位按普通模式估算。','records from local history, estimated at available scan-time prices. Old account identities are unconfirmed; categories are inferred from model routes and current configuration. Unrecorded service tiers use standard rates.')}</p>` : ''}
+    ${data.unmatched_overlap || (historical && data.uncorrelated_realtime) ? `<p class="usage-notice usage-warning">${tr('部分历史与实时用量无法可靠匹配（缺少轮次信息或上报值不一致），合计可能包含重叠。','Some history and live usage cannot be reconciled (missing turn metadata or differing counts); totals may include overlap.')}</p>` : ''}
+    ${data.issues?.some(row => ['inconsistent_usage','aggregate_usage'].includes(row.price_issue)) ? `<p class="usage-notice usage-warning">${tr('部分旧记录的用量字段不一致，或只有累计值；保留上报 token，暂不计价。','Some old usage fields disagree or contain only cumulative counts. Reported tokens are retained without pricing.')}</p>` : ''}
+    ${missing ? `<p class="usage-notice usage-warning">* ${tr('仅为已计价部分。','Priced subtotal only.')} ${missing} ${tr('次请求缺少用量或可确认的费率，未按免费处理。','requests lack usage or confirmed rates; they are not treated as free.')}</p>` : ''}
+    ${price.stale || price.error ? `<p class="usage-notice usage-warning">${tr('价格未更新，已有费率仅供参考。','Prices are not up to date; saved rates are for reference.')}</p>` : ''}
+    ${data.write_error ? `<p class="usage-notice usage-warning">${tr('用量写入失败，当前统计可能不完整。请查看 EMP 日志。','Usage could not be saved; totals may be incomplete. Check the EMP log.')}</p>` : ''}
+    <details class="usage-notice"><summary>${tr('计价说明与价格更新时间','Pricing basis & updates')}</summary><p>${tr('按请求完成时的本地 API 价目估算，缺价时在价格补齐后计价，已计价历史不再改写。包含缓存折扣和可确认的长上下文、服务档位费率。并非订阅账单，不含工具调用费、缓存存储费、税费或转售加价。缺少缓存明细时无法精确计价。','Uses local API rates at request completion, or the first available rate if initially missing. Priced history is frozen. Includes cache discounts and known context/service tiers. Not a subscription bill; excludes tool fees, cache storage, tax and reseller markups. Missing cache details prevent a precise estimate.')}</p><p><a href="${esc(price.url)}" target="_blank" rel="noopener noreferrer">LiteLLM</a> · ${tr('每 24 小时后台更新','Updated in the background every 24 hours')} · ${price.fetched_at ? esc(new Date(price.fetched_at*1000).toLocaleString()) : tr('尚未获取价格','Prices not downloaded')}</p>${price.stale || price.error ? `<p class="usage-warning">${tr('价格尚未更新，暂用已有价目；没有价目的模型保留为未计价。','Prices are not up to date. Saved rates are used where available; other models remain unpriced.')}</p>` : ''}${data.first_record_at ? `<p>${tr('最早记录：','First record: ')}${esc(new Date(data.first_record_at*1000).toLocaleString())}</p>` : ''}</details>`;
 }
 
 async function api(path, options = {}) {

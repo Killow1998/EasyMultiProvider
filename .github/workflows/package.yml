@@ -181,9 +181,10 @@ jobs:
           if [[ "$RELEASE_TAG" =~ (alpha|beta|rc) ]]; then
             release_flags=(--prerelease --latest=false)
           fi
+          python packaging/release_notes.py "$RELEASE_TAG" > release-notes.md
           gh release create "$RELEASE_TAG" "${public_assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "EMP $RELEASE_TAG" \
-            --generate-notes \
+            --notes-file release-notes.md \
             "${release_flags[@]}"

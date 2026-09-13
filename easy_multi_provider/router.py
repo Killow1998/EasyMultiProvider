@@ -49,7 +49,8 @@ from .dialects import (
     request_shape,
 )
 from .quota import QuotaError, refresh_account_quota
-from .performance import input_cache_usage
+from .performance import reported_usage
+from .usage_ledger import usage_identity
 from .native_websocket import NativeWebSocketTarget
 from .model_discovery import (
     DiscoveryIO,
@@ -1689,6 +1690,7 @@ def _tag_route(
     tagged["protocol_decision"] = decision
     tagged["protocol_fallback"] = bool(fallback)
     tagged["dialect"] = classify_dialect(provider)
+    tagged.update(usage_identity(provider, model or {}))
     if isinstance(request, Mapping):
         tagged.update(request_shape(request))
     return tagged
@@ -1731,7 +1733,7 @@ def _route_event(
     )
     event["endpoint_fingerprint"] = endpoint_fingerprint(provider.get("base_url"))
     event["deployment_identity"] = deployment_identity(provider, model)
-    event["upstream_model"] = str(model.get("upstream_id") or "")
+    event.update(usage_identity(provider, model))
     context_observation = terminal.get("context_observation") or provider.get(
         "_context_observation"
     )
@@ -2308,7 +2310,7 @@ def _finish_nonstream(
         try:
             payload = json.loads(bytes(result).decode("utf-8", errors="strict"))
             if isinstance(payload, Mapping):
-                usage = input_cache_usage(payload)
+                usage = reported_usage(payload)
             if metadata.get("dialect") != CODEX_NATIVE:
                 terminal = responses_terminal_observation(payload)
         except (UnicodeDecodeError, ValueError, RecursionError, RouterError):

@@ -120,7 +120,7 @@ class CacheUsageTests(unittest.TestCase):
         response = _response_from_anthropic({"content": [{"type": "text", "text": "OK"}],
             "stop_reason": "end_turn", "usage": {"input_tokens": 100, "cache_read_input_tokens": 800,
                 "cache_creation_input_tokens": 100, "output_tokens": 10}}, "external/model")
-        self.assertEqual(response["usage"], {"input_tokens": 1000, "input_tokens_details": {"cached_tokens": 800},
+        self.assertEqual(response["usage"], {"input_tokens": 1000, "input_tokens_details": {"cached_tokens": 800, "cache_creation_tokens": 100},
                                             "output_tokens": 10, "total_tokens": 1010})
 
     def test_anthropic_stream_retains_start_usage_and_cumulative_output_delta(self):

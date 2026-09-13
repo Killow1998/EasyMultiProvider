@@ -6,9 +6,12 @@ EMP 是一个通过浏览器配置的 Codex 本地模型路由器。它在
 保留 Codex 原生使用体验的同时，把多个 ChatGPT Subscription、API Provider
 和外部模型加入同一个模型列表。
 
-当前源码版本为 `v0.10.1`。
+当前源码版本为 `v0.11.0`。
 
 ## 功能
+
+- 增量扫描本机 Codex 历史，按时间段、账号和服务查看历史及实时 token 用量与 API 等价金额，价格每天后台更新。
+  详见[用量统计说明](docs/usage-accounting.md)。
 
 - 在同一个 Codex 模型选择器中使用原生模型、其他 ChatGPT Subscription 和
   外部 API 模型。

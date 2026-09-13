@@ -123,6 +123,9 @@ def fake_lifecycle_state(order=None, restore_result=None, restore_error=None):
             self.path = Path(path)
             self.journal = journal
             self.updater = SimpleNamespace(installing=False)
+            self.usage_prices = SimpleNamespace(start=lambda **kwargs: None, stop=lambda: None)
+            self.usage_history = SimpleNamespace(start=lambda: None, stop=lambda: None)
+            self.usage = SimpleNamespace(price_pending=lambda: None)
             self.bootstrap_token = "BOOTSTRAP-LIFECYCLE-SECRET"
             self.session_token = "SESSION-LIFECYCLE-SECRET"
             self.config = {

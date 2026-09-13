@@ -13,6 +13,7 @@ import platform
 import re
 import secrets
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -127,6 +128,9 @@ from .quota_history import (
 )
 from .provider_replay import ProviderReplayCache
 from .performance import ResponsesPerformanceTracker, token_count
+from .usage_ledger import UsageLedger, usage_identity, usage_context
+from .usage_history import UsageHistoryScanner
+from .usage_pricing import PriceCatalog
 from .history_continuity import (
     CodexHomeHistoryReader,
     HistoryContinuityEngine,
@@ -1120,6 +1124,10 @@ class AppState:
         self.bootstrap_used = False
         self._load_web_session()
         self.journal = journal if journal is not None else NullJournal()
+        usage_state = self.path.resolve().parent / "state"
+        self.usage_prices = PriceCatalog(usage_state / "api_prices.json", self.journal)
+        self.usage = UsageLedger(usage_state / "usage.sqlite3", self.usage_prices, self.journal)
+        self.usage_history = UsageHistoryScanner(self.usage, lambda: self.codex_home, self.snapshot)
         self.updater = UpdateManager(self.path, journal=self.journal)
         self.request_limits = RequestLimits(self.journal)
         self.diagnostics = (
@@ -1814,6 +1822,8 @@ class AppState:
             else "standard"
         )
         safe_event["duration_ms"] = max(0, int(round((time.monotonic() - started) * 1000)))
+        safe_event.setdefault("service_tier", requested_tier or "default")
+        self.usage.record(safe_event)
         context = safe_event.get("context_observation")
         if isinstance(context, Mapping):
             safe_event["context_observation"] = dict(context)
@@ -2022,6 +2032,8 @@ class AppState:
             upstream_request_bytes = 0
         event = {
             **request_source(body, plan.target.headers),
+            **usage_context(body, plan.target.headers),
+            **usage_identity(plan.provider, plan.model),
             "provider_id": plan.provider.get("id", ""),
             "model_id": plan.requested_slug,
             "endpoint_fingerprint": plan.identity.endpoint_fingerprint,
@@ -3505,6 +3517,25 @@ def make_handler(state: AppState):
             if path == "/api/diagnostics":
                 self._send(200, _json_bytes(state.diagnostics_snapshot()))
                 return
+            if path == "/api/usage":
+                query = parse_qs(parsed.query)
+                try:
+                    now = time.time()
+                    payload = state.usage.query((query.get("start") or [now - 86400])[0],
+                                                (query.get("end") or [now])[0],
+                                                (query.get("category") or ["all"])[0])
+                    with state.lock:
+                        names = {kind: {item["id"]: item.get("name") or item["id"] for item in state.config.get(key, [])}
+                                 for kind, key in (("subscription", "accounts"), ("external", "providers"))}
+                    for row in payload["groups"]:
+                        row["owner_name"] = names.get(row["category"], {}).get(row["owner"], row["owner"])
+                    payload["history"] = dict(state.usage_history.status)
+                    self._send(200, _json_bytes(payload))
+                except (ValueError, TypeError, OverflowError):
+                    self._error(400, "Invalid usage period or category")
+                except (OSError, sqlite3.Error):
+                    self._error(503, "Usage history is unavailable")
+                return
             if path == "/api/request-limits":
                 self._send(200, _json_bytes(state.request_limits.snapshot()))
                 return
@@ -3721,6 +3752,10 @@ def make_handler(state: AppState):
                         {**dict(self.headers.items()), "X-EMP-Request-ID": self._request_id},
                     )
                     self._send(status, raw, content_type)
+                    return
+                if path == "/api/usage/scan":
+                    state.usage_history.refresh()
+                    self._send(202, _json_bytes(dict(state.usage_history.status)))
                     return
                 if path == "/api/integration/enable":
                     if body.get("confirm_reload") is not True:
@@ -4569,6 +4604,8 @@ def _serve_owned(
                 port=int(listening_port),
             )
             state.start_quota_sampler()
+            state.usage_prices.start(on_update=state.usage.price_pending)
+            state.usage_history.start()
 
             print("EMP listening on %s" % base_url, flush=True)
             print("Network proxy: %s" % proxy_source, flush=True)
@@ -4627,6 +4664,8 @@ def _serve_owned(
         finally:
             try:
                 if state is not None:
+                    state.usage_history.stop()
+                    state.usage_prices.stop()
                     state.stop_quota_sampler()
                     if not state.updater.installing:
                         restore_result = state.shutdown_restore()

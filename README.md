@@ -6,9 +6,12 @@ EMP is a local, browser-configured model router for Codex.
 It keeps the native Codex experience while adding multiple ChatGPT
 subscriptions, API providers, and external models to the same model list.
 
-The current source version is `v0.10.1`.
+The current source version is `v0.11.0`.
 
 ## Features
+
+- Track historical and live token usage and API-equivalent costs by time, account and provider,
+  with daily price updates. See [usage accounting](docs/usage-accounting.md).
 
 - Use native Codex models, additional ChatGPT subscriptions, and external API
   models from the same Codex model picker.

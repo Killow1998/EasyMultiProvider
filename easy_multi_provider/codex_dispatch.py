@@ -12,6 +12,7 @@ from .history_continuity import request_history_anchor
 from .protocol_adapters import protocol_adapter
 from .provider_replay import ProviderReplayScope
 from .performance import ResponsesPerformanceTracker
+from .usage_ledger import usage_context
 from .route_plan import ResolvedRoute, resolve_route
 from .router import (
     RouterError,
@@ -176,7 +177,7 @@ class CodexRequestDispatcher:
             "sse" if body.get("stream") else "http"
         )
         performance = ResponsesPerformanceTracker(started=started)
-        source = request_source(body, incoming)
+        source = {**request_source(body, incoming), **usage_context(body, incoming)}
         observed = False
         replay_scope = None
 
@@ -245,7 +246,7 @@ class CodexRequestDispatcher:
     ) -> Tuple[Dict[str, Any], bytes]:
         started = time.monotonic()
         selected_transport = transport or "http"
-        source = request_source(body, incoming)
+        source = {**request_source(body, incoming), **usage_context(body, incoming)}
         observed = False
 
         def on_observation(event: Dict[str, Any]) -> None:

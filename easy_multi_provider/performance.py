@@ -39,14 +39,7 @@ def _output_tokens(event: Mapping[str, Any]) -> Optional[int]:
     usage = response.get("usage")
     if not isinstance(usage, Mapping):
         return None
-    value = usage.get("output_tokens")
-    if isinstance(value, bool):
-        return None
-    try:
-        value = int(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return value if 0 <= value <= 10_000_000 else None
+    return token_count(usage.get("output_tokens"))
 
 
 def _reasoning_tokens(event: Mapping[str, Any]) -> Optional[int]:
@@ -58,14 +51,34 @@ def _reasoning_tokens(event: Mapping[str, Any]) -> Optional[int]:
     details = usage.get("output_tokens_details")
     if not isinstance(details, Mapping):
         return None
-    value = details.get("reasoning_tokens")
-    if isinstance(value, bool):
-        return None
-    try:
-        value = int(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return value if 0 <= value <= 10_000_000 else None
+    return token_count(details.get("reasoning_tokens"))
+
+
+def reported_usage(event: Mapping[str, Any]) -> Dict[str, Any]:
+    """Keep billing subsets separate, without adding them to token totals."""
+    result = input_cache_usage(event)
+    response = event.get("response")
+    response = response if isinstance(response, Mapping) else event
+    usage = response.get("usage")
+    if not isinstance(usage, Mapping):
+        return result
+    for name, value in (("output_tokens", token_count(usage.get("output_tokens"))),
+                        ("reasoning_tokens", _reasoning_tokens(event))):
+        if value is not None:
+            result[name] = value
+    details = usage.get("input_tokens_details")
+    if isinstance(details, Mapping):
+        for source, target in (("cache_creation_tokens", "cache_write_tokens"),
+                               ("cache_creation_1h_tokens", "cache_write_1h_tokens")):
+            if source in details:
+                result[target] = token_count(details[source])
+    response_id = response.get("id")
+    if isinstance(response_id, str) and 0 < len(response_id) <= 256:
+        result["usage_response_id"] = response_id
+    tier = response.get("service_tier")
+    if isinstance(tier, str) and 0 < len(tier) <= 32:
+        result["service_tier"] = tier
+    return result
 
 
 def _measured_output_activity(event: Mapping[str, Any]) -> bool:
@@ -117,7 +130,7 @@ class ResponsesPerformanceTracker:
         }:
             self._terminal_at = now
             self._completed = event_type == "response.completed"
-            self._input_usage = input_cache_usage(event)
+            self._input_usage = reported_usage(event)
             value = _output_tokens(event)
             if value is not None:
                 self._output_tokens = value
@@ -168,7 +181,7 @@ class ResponsesPerformanceTracker:
             self.observe_chunk(raw)
             return
         if isinstance(payload, Mapping):
-            self._input_usage = input_cache_usage(payload)
+            self._input_usage = reported_usage(payload)
             count = _output_tokens(payload)
             if count is not None:
                 self._output_tokens = count

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.11.0 (2026-09-13)
+
+- Add a persistent Usage & estimates view with local-time ranges, hourly/daily
+  bars and separate Native, other Subscription and External Provider totals.
+- Estimate API-equivalent USD token costs using a public price catalog refreshed
+  daily. Preserve historical rates, fill missing prices when available, and
+  distinguish unpriced requests from free usage.
+- Retain output, reasoning, cache-write lifetimes and reported service tiers
+  through response conversion; count cached and reasoning subsets only once.
+- Scan local Codex session and archive history in the background, then read
+  only changed files. Browse all available history without restarting Codex.
+- Deduplicate repeated usage updates, copied/archived rollouts and fork replay.
+  Match history with live EMP observations by turn, model and reported counts;
+  warn when overlapping records cannot be matched reliably.
+- Keep historical account identities separate from current logins. Show unknown
+  sources and inconsistent legacy usage instead of guessing accounts or prices.
+- Keep existing configuration and quota history unchanged. Usage stays local;
+  historical costs use available scan-time prices and are not actual invoices.
+
 ## 0.10.2 (2026-09-12)
 
 - Move notifications away from the header and add a dismiss button. Success

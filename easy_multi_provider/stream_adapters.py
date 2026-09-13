@@ -876,6 +876,8 @@ def stream_chat_completion(
                 )
             if chunk.get("usage") is not None:
                 usage = _chat_usage(chunk["usage"])
+            if isinstance(chunk.get("service_tier"), str):
+                response["service_tier"] = chunk["service_tier"]
             choices = chunk.get("choices")
             if not isinstance(choices, list):
                 raise ExternalProtocolError(
