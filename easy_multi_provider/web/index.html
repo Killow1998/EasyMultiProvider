@@ -98,7 +98,7 @@ main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minma
   <p id="codex_runtime_dirty" class="muted" hidden></p>
   <div class="integration-actions">
     <div class="action-group"><span class="action-group-label" data-i18n="client_scope">客户端</span><div class="runtime-controls"><button class="secondary" data-icon="check" onclick="useAutomaticCodexRuntimes()" data-i18n="automatic_runtimes">选择全部</button><button id="codex_runtime_save" class="secondary" data-icon="save" onclick="saveCodexRuntimeSelection()" data-i18n="save_runtimes">保存选择</button><button id="codex_runtime_scan" class="secondary" data-icon="refresh" onclick="scanCodexRuntimes()" data-i18n="rescan_runtimes">重新扫描</button></div></div>
-    <div class="action-group"><span class="action-group-label" data-i18n="emp_scope">EMP</span><div class="toolbar"><button id="integration_enable" data-icon="check" onclick="confirmIntegrationAction('enable')" data-i18n="enable_codex">启用 EMP</button><button id="integration_restore" class="secondary" data-icon="restore" onclick="confirmIntegrationAction('restore')" data-i18n="restore_codex">恢复原生</button><button id="integration_reload" class="secondary" data-icon="refresh" onclick="confirmIntegrationAction('reload')" hidden data-i18n="apply_models">重新检查</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">性能</button><button class="secondary" onclick="openUsage()" data-i18n="usage">用量与估算</button></div></div>
+    <div class="action-group"><span class="action-group-label" data-i18n="emp_scope">EMP</span><div class="toolbar"><button id="integration_toggle" data-icon="check" data-action="enable" onclick="confirmIntegrationAction(this.dataset.action)" data-i18n="enable_codex" disabled>启用 EMP</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">性能</button><button class="secondary" onclick="openUsage()" data-i18n="usage">用量与估算</button></div></div>
     <div class="action-group search-toggle"><span class="action-group-label" data-i18n="search_scope">工具</span><label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="saveSubscriptionSearch()"><span data-i18n="enable_subscription_search">联网搜索</span></label></div>
   </div>
 </div>
@@ -182,10 +182,10 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const translations = {
   'zh-CN': {
-    subtitle:'管理 Codex 的账号和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', apply_models:'重新检查', diagnostics:'性能与健康', usage:'用量与估算', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', accounts_title:'Subscription 账号', import_account:'导入账号', refresh_quotas:'刷新余量', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
+    subtitle:'管理 Codex 的账号和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', diagnostics:'性能与健康', usage:'用量与估算', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', accounts_title:'Subscription 账号', import_account:'导入账号', refresh_quotas:'刷新余量', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
   },
   en: {
-    subtitle:'Manage Codex accounts and models.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', apply_models:'Check again', diagnostics:'Performance & health', usage:'Usage & estimates', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', accounts_title:'Subscription accounts', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
+    subtitle:'Manage Codex accounts and models.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', diagnostics:'Performance & health', usage:'Usage & estimates', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', accounts_title:'Subscription accounts', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
   }
 };
 Object.assign(translations['zh-CN'], {client_scope:'客户端', emp_scope:'EMP', search_scope:'工具'});
@@ -517,9 +517,20 @@ async function load() {
     if (loaded) notice(language === 'en' ? 'Configuration loaded' : '配置已加载');
   } catch (error) { notice(error.message, true); }
 }
+let integrationBusy = false;
+function renderIntegrationToggle() {
+  const mode = $('integration').dataset.state;
+  const restore = ['emp_applied', 'prepared', 'restoring', 'conflict'].includes(mode);
+  const button = $('integration_toggle');
+  button.dataset.action = restore ? 'restore' : 'enable';
+  button.dataset.i18n = restore ? 'restore_codex' : 'enable_codex';
+  button.dataset.icon = restore ? 'restore' : 'check';
+  button.textContent = t(button.dataset.i18n);
+  button.classList.toggle('secondary', restore);
+  button.disabled = integrationBusy || (!restore && mode !== 'native');
+}
 function renderIntegration(info) {
   const configuration = info.configuration || {};
-  const runtime = info.runtime || {};
   const compatibility = info.codex_compatibility || {};
   const english = language === 'en';
   const views = english ? {
@@ -528,7 +539,6 @@ function renderIntegration(info) {
     native: ['Native', '当前使用原生 Codex。'], emp_applied: ['EMP', 'EMP已启动，请重启Codex'], prepared: ['需要恢复', 'EMP 设置未完成，请恢复后重试。'], restoring: ['正在恢复', '正在恢复原生 Codex…'], conflict: ['需要处理', 'Codex 设置已变化，请重新应用 EMP 或恢复原生 Codex。'], unavailable: ['不可用', '暂时无法读取 EMP 状态，请重试。']
   };
   const view = views[configuration.state] || views.unavailable;
-  const runtimeState = runtime.state || 'not_checked';
   $('integration_summary').textContent = view[1];
   const runtimes = Array.isArray(compatibility.runtimes) ? compatibility.runtimes : [];
   const recommended = compatibility.recommended || '0.154.0';
@@ -547,12 +557,7 @@ function renderIntegration(info) {
   $('integration').dataset.state = configuration.state || 'unknown';
   $('integration_badge').textContent = view[0];
   $('integration_title').textContent = t('integration_status');
-  const canEnable = configuration.state === 'native';
-  const canRestore = configuration.state === 'emp_applied' || configuration.state === 'prepared' || configuration.state === 'restoring' || configuration.state === 'conflict';
-  $('integration_enable').disabled = !canEnable;
-  $('integration_restore').disabled = !canRestore;
-  $('integration_reload').hidden = configuration.state !== 'emp_applied' || !runtime.action_required;
-  $('integration_reload').disabled = !runtime.action_required || runtimeState === 'unsupported';
+  renderIntegrationToggle();
 }
 function runtimeSourceLabel(source) {
   return ({codex_app:tr('ChatGPT App（Codex）','ChatGPT App (Codex)'),managed:tr('Codex 托管 runtime','Managed Codex runtime'),vscode:tr('VS Code Codex 插件','VS Code Codex plugin'),vscode_insiders:tr('VS Code Insiders Codex 插件','VS Code Insiders Codex plugin'),cursor:tr('Cursor Codex 插件','Cursor Codex plugin'),configured:tr('指定 Codex','Configured Codex'),path_cli:'Codex CLI'}[source] || tr('Codex runtime','Codex runtime'));
@@ -754,6 +759,9 @@ function integrationOutcomeMessage(info, action) {
   return tr('检查完成。','Check complete.');
 }
 async function submitIntegrationAction(action) {
+  if (integrationBusy) return;
+  integrationBusy = true;
+  renderIntegrationToggle();
   const progress = tr('正在应用设置…','Applying settings…');
   $('modal_status').textContent = progress;
   notice(progress);
@@ -779,6 +787,9 @@ async function submitIntegrationAction(action) {
     $('modal_status').textContent = error.message;
     notice(error.message, true);
     throw error;
+  } finally {
+    integrationBusy = false;
+    renderIntegrationToggle();
   }
 }
 let catalogSync = Promise.resolve();

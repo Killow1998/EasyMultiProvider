@@ -156,8 +156,7 @@ const document = {
 for (const id of [
   "status", "modal_backdrop", "modal_title", "modal_body", "modal_status",
   "modal_submit", "integration", "integration_badge", "integration_title",
-  "integration_summary", "integration_enable", "integration_restore",
-  "integration_reload", "codex_compatibility", "codex_runtime_save",
+  "integration_summary", "integration_toggle", "codex_compatibility", "codex_runtime_save",
   "codex_runtime_scan", "codex_runtimes", "language_select", "theme_select",
   "catalog_display_search", "catalog_display_toggle", "catalog_display_models",
   "diagnostics_summary", "performance_records", "diagnostics_records", "accounts", "providers", "models",
@@ -299,7 +298,7 @@ async function integrationBehavior() {
   await run("loadIntegration()");
   assert.strictEqual(passiveVerifyCalls, 1);
   assert.strictEqual(getElement("integration_summary").textContent, "EMP已启动，请重启Codex");
-  assert.strictEqual(getElement("integration_reload").hidden, true);
+  assert.strictEqual(getElement("integration_toggle").dataset.action, "restore");
 
   context.__apiStub = async (path, options = {}) => {
     if (path === "/api/integration/restore") throw new Error("restore failed safely");
@@ -346,7 +345,7 @@ async function integrationBehavior() {
   assert.strictEqual(getElement("integration_badge").textContent, "EMP");
   assert.strictEqual(getElement("integration_summary").textContent, "EMP已启动，请重启Codex");
   assert.doesNotMatch(getElement("integration_summary").textContent, /只读|未验证|无法确认|共享后端/);
-  assert.strictEqual(getElement("integration_reload").hidden, false);
+  assert.strictEqual(getElement("integration_toggle").dataset.action, "restore");
 }
 
 function pickerBehavior() {
@@ -838,7 +837,7 @@ async function nativeOnlyIntegrationBehavior() {
   assert(getElement('modal_backdrop').classList.contains('hidden'));
   assert.strictEqual(getElement('integration_summary').textContent, 'EMP已启动，请重启Codex');
   assert.doesNotMatch(getElement('integration_summary').textContent, /无法确认|仅凭|未验证|共享后端/);
-  assert.strictEqual(getElement('integration_reload').hidden, false);
+  assert.strictEqual(getElement('integration_toggle').dataset.action, 'restore');
   assert.doesNotMatch(getElement('integration_summary').textContent, /检查失败|仍加载旧目录/);
 
   context.__nativeIntegrationStub = async path => {

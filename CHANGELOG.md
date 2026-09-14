@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.1 (2026-09-13)
+
+- Combine Enable EMP and Restore Native into one button in the same position.
+  Its label and action follow the confirmed integration state.
+- Disable the button while applying settings and allow retry after a failure.
+  Keep the existing confirmation dialog and recovery action for conflicts.
+- Remove the Check again button while retaining automatic status verification.
+
 ## 0.11.0 (2026-09-13)
 
 - Add a persistent Usage & estimates view with local-time ranges, hourly/daily
