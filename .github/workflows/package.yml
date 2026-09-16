@@ -75,6 +75,17 @@ jobs:
       - name: Install locked packaging environment
         run: uv sync --frozen --group package
 
+      - name: Use a real temporary directory
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]).resolve() / "emp-package"
+          path.mkdir(exist_ok=True)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              for name in ("TMPDIR", "TMP", "TEMP"):
+                  env.write(f"{name}={path}\n")
+
       - name: Build and smoke-test native package
         run: uv run --frozen --group package python packaging/build.py
 

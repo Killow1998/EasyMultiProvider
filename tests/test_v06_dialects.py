@@ -1087,6 +1087,7 @@ class CanonicalCatalogLabelTests(unittest.TestCase):
                                 "slug": "native-model",
                                 "display_name": "Native Model [258K]",
                                 "context_window": 258000,
+                                "effective_context_window_percent": 100,
                             }
                         ]
                     }
