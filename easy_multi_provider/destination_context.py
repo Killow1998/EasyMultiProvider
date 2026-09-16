@@ -71,6 +71,7 @@ class DestinationContextCompactor:
         requested_slug: str,
         body: Mapping[str, Any],
         assessment: ContextAssessment,
+        *, on_diagnostic=None,
     ) -> Dict[str, Any]:
         safe_budget = _positive_int(assessment.safe_input_limit)
         if safe_budget is None:
@@ -119,7 +120,11 @@ class DestinationContextCompactor:
                 "active_start": active_start,
                 "source_items": len(source),
             },
+            on_diagnostic=on_diagnostic,
         )
+        if on_diagnostic is not None:
+            on_diagnostic("compact_metrics", "failed" if result.reason else "completed",
+                          **result.to_safe_dict())
         if result.status in {COMPACTION_COMPACTED, COMPACTION_NO_COMPACTION}:
             if result.body is not None:
                 result.body.pop(ACTIVE_INPUT_START_KEY, None)

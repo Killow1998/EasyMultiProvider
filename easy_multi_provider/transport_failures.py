@@ -41,7 +41,7 @@ MAX_UPSTREAM_ERROR_BYTES = 4096
 MAX_UPSTREAM_ERROR_TEXT_CHARS = 512
 
 PROTOCOL_REJECTION_STATUSES = frozenset({404, 405, 415, 501})
-_TOOL_TYPES = frozenset({"function_call", "custom_tool_call", "tool_call"})
+_TOOL_TYPES = frozenset({"function_call", "custom_tool_call", "tool_call", "tool_search_call"})
 _REPLAYABLE_TRANSPORT_CLASSES = frozenset(
     {CONNECT_TIMEOUT, FIRST_EVENT_TIMEOUT, "network", "proxy_reset"}
 )
@@ -211,6 +211,8 @@ def public_failure_message(
         return "The upstream rate limit was reached."
     if error_class == "auth":
         return "The upstream rejected the account credentials."
+    if error_class == "stream_incomplete":
+        return "The upstream stream ended without a valid completion event."
     if error_class == "upstream_5xx":
         return "The upstream service returned HTTP %d." % status
     if error_class == "malformed_terminal":

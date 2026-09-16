@@ -1221,6 +1221,14 @@ function stopUpdatePoll() { updatePollGeneration++; if (updatePollTimer) clearTi
 function updateErrorLabel(code) {
   const messages = {
     directory_not_writable:tr('安装目录没有写权限，请将 EMP 移到可写目录后重试。','The installation directory is not writable. Move EMP to a writable folder and retry.'),
+    authorization_cancelled:tr('已取消系统授权，EMP 继续运行。','System authorization cancelled. EMP is still running.'),
+    authorization_unavailable:tr('未能取得管理员授权。请在 Linux 桌面会话中重试，并确认已安装 Polkit 和认证代理；也可使用系统包管理器更新。','Administrator authorization was not available. Retry from a Linux desktop with Polkit and an authentication agent, or update using the system package manager.'),
+    update_requires_desktop_user:tr('请以普通用户启动 EMP，再通过系统授权更新。','Start EMP as your regular user, then authorize the update through the system dialog.'),
+    rollback_package_unavailable:tr('无法准备当前版本的恢复包，尚未修改安装。请检查网络，或使用系统包管理器更新。','Could not prepare the recovery package. The installation is unchanged. Check the network or use the system package manager.'),
+    package_query_failed:tr('无法确认系统安装包状态。请先在系统包管理器中检查 EMP。','Could not confirm the installed package state. Check EMP in the system package manager first.'),
+    installation_changed:tr('安装内容已改变，请重新检查更新。','The installation has changed. Check for updates again.'),
+    system_install_failed:tr('系统安装失败，EMP 仍在运行，已恢复原有安装。请检查包管理器是否正被占用。','System installation failed. EMP is still running and the previous installation was restored. Check whether the package manager is busy.'),
+    system_recovery_required:tr('系统安装未完成，恢复也未成功；恢复文件已保留。请使用系统包管理器重新安装 EMP，完成前不要退出当前实例。','System installation and recovery did not complete. Recovery files were retained. Reinstall EMP using the system package manager before closing this instance.'),
     requests_busy:tr('当前请求尚未结束，已取消安装，请稍后重试。','Requests are still running. Installation was cancelled; try again later.'),
     checksum_missing:tr('新版本缺少文件校验信息，暂时无法自动更新。','The release has no file checksum; automatic update is unavailable.'),
     checksum_mismatch:tr('下载文件校验失败，请重试。','Download verification failed. Please retry.'),
@@ -1238,6 +1246,8 @@ function renderUpdate(info) {
     available:tr(`发现新版本 v${info.latest_version}。`,`Version ${info.latest_version} is available.`),
     downloading:tr(`正在后台下载 ${info.progress}%…`,`Downloading in the background: ${info.progress}%…`),
     verifying:tr('正在校验安装包…','Verifying the package…'), waiting:tr('下载完成，正在等待当前请求结束…','Download complete. Waiting for current requests to finish…'),
+    authorizing:tr('请在系统弹窗中授权；授权后将安装更新。密码不会交给 EMP。','Authorize in the system dialog to install the update. EMP never receives your password.'),
+    restoring:tr('正在恢复旧版本；如系统请求授权，请在系统弹窗中确认。','Restoring the previous version. Confirm in the system dialog if authorization is requested.'),
     installing:tr('正在安装并重启 EMP，完成后会打开新页面。','Installing and restarting EMP. A new page will open when ready.'),
     error:updateErrorLabel(info.error),
   };
@@ -1246,7 +1256,6 @@ function renderUpdate(info) {
   $('update_progress').hidden = !['downloading','verifying'].includes(info.state);
   $('update_progress').value = Number(info.progress) || 0;
   const install = $('update_install'); install.hidden = info.state !== 'available' || !info.supported;
-  $('update_recheck').hidden = ['checking','downloading','verifying','waiting','installing'].includes(info.state);
   if (info.state === 'available' && !info.supported) $('update_status').textContent += tr(' 请使用 EMP 安装包启动后更新。',' Launch the packaged EMP app to update.');
 }
 async function pollUpdate(generation) {
@@ -1254,7 +1263,7 @@ async function pollUpdate(generation) {
     const info = await api('/api/updates');
     if (generation !== updatePollGeneration) return;
     renderUpdate(info);
-    if (['checking','downloading','verifying','waiting','installing'].includes(info.state)) updatePollTimer = setTimeout(() => pollUpdate(generation), 1000);
+    if (['checking','downloading','verifying','waiting','authorizing','restoring','installing'].includes(info.state)) updatePollTimer = setTimeout(() => pollUpdate(generation), 1000);
   } catch (_) {
     if (generation === updatePollGeneration) $('update_status').textContent = tr('连接已断开。若正在更新，请等待 EMP 重新打开页面。','Connection closed. If updating, wait for EMP to reopen the page.');
   }
@@ -1263,8 +1272,8 @@ async function requestUpdate(operation) {
   stopUpdatePoll(); const generation = updatePollGeneration;
   $('update_install').disabled = true;
   try { const info = await api('/api/updates/' + operation, {method:'POST', body:'{}'}); if (generation === updatePollGeneration) { renderUpdate(info); pollUpdate(generation); } }
-  catch (error) { $('update_status').textContent = error.message; }
-  finally { $('update_install').disabled = false; }
+  catch (error) { if (generation === updatePollGeneration) $('update_status').textContent = error.message; }
+  finally { if (generation === updatePollGeneration) $('update_install').disabled = false; }
 }
 async function quitEmp() {
   if (!confirm(tr('退出 EMP 并恢复原生 Codex？', 'Exit EMP and restore native Codex?'))) return;
@@ -1275,15 +1284,8 @@ async function quitEmp() {
 }
 
 async function openUpdate() {
-  stopUpdatePoll();
-  openModal(tr('更新 EMP','Update EMP'), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite"></div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div class="modal-actions"><button id="update_recheck" type="button" class="secondary" data-icon="update" onclick="requestUpdate('check')">${esc(t('check_update'))}</button><button id="update_install" type="button" data-icon="update" hidden onclick="requestUpdate('install')">${tr('后台更新','Update in background')}</button></div>`, '', null);
-  const generation = updatePollGeneration;
-  try {
-    const info = await api('/api/updates');
-    if (generation !== updatePollGeneration) return;
-    if (info.state === 'idle') requestUpdate('check');
-    else { renderUpdate(info); pollUpdate(generation); }
-  } catch (error) { if (generation === updatePollGeneration) $('update_status').textContent = error.message; }
+  openModal(tr('更新 EMP','Update EMP'), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite">${tr('正在检查…','Checking…')}</div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div class="modal-actions"><button id="update_install" type="button" data-icon="update" hidden onclick="requestUpdate('install')">${tr('后台更新','Update in background')}</button></div>`, '', null);
+  await requestUpdate('check');
 }
 function handleModalKeydown(event) { if (event.key === 'Escape' && !$('modal_backdrop').classList.contains('hidden')) closeModal(); }
 document.addEventListener('keydown', handleModalKeydown);

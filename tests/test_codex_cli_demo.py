@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -16,6 +17,7 @@ from tests.support import ensure_test_master_key
 from easy_multi_provider.catalog import write_catalog
 from easy_multi_provider.config import normalize, save
 from easy_multi_provider.server import AppState, make_handler
+from easy_multi_provider.tool_bridge import ExternalTools
 
 
 ensure_test_master_key()
@@ -127,24 +129,29 @@ def _fixed_response_stream(model):
     return "".join(events).encode("utf-8")
 
 
-def _tool_response_stream(model):
+def _tool_response_stream(model, tool_name="exec", wire_name=None, tool_arguments=None):
     response_id = "resp_" + uuid.uuid4().hex
     call_id = "call_" + uuid.uuid4().hex
     arguments = json.dumps(
         {
             "input": (
-                'const r = await tools.exec_command({cmd:"pwd", workdir:".", '
+                'const r = await tools.exec_command({cmd:"echo EMP_RUNTIME_TOOL_OK", workdir:".", '
                 'yield_time_ms:10000, max_output_tokens:1000}); text(r.output)'
             )
         },
         separators=(",", ":"),
     )
+    if tool_name != "exec":
+        arguments = json.dumps({"cmd": "echo EMP_RUNTIME_TOOL_OK"} if tool_name == "exec_command"
+                               else {"command": "echo EMP_RUNTIME_TOOL_OK"})
+    if tool_arguments is not None:
+        arguments = json.dumps(tool_arguments)
     item = {
         "id": call_id,
         "type": "function_call",
         "status": "completed",
         "call_id": call_id,
-        "name": "exec",
+        "name": wire_name or tool_name,
         "arguments": arguments,
     }
     response = {
@@ -212,18 +219,44 @@ class ToolResponsesHandler(FixedResponsesHandler):
             for item in source
         )
         self.server.request_count += 1
-        self.server.saw_exec_tool = self.server.saw_exec_tool or any(
-            isinstance(tool, dict)
-            and tool.get("type") == "function"
-            and tool.get("name") == "exec"
-            for tool in body.get("tools", []) or []
-        )
+        tool_names = {tool.get("name") for tool in body.get("tools", [])
+                      if isinstance(tool, dict) and tool.get("type") == "function"}
+        tool_name, wire_name = None, None
+        for candidate in ("exec_command", "shell_command", "exec"):
+            # Official runtimes may advertise plain tools or the functions
+            # namespace. Exercise the same real command in either contract.
+            alias = ExternalTools()._name(candidate, "functions")
+            if candidate in tool_names or alias in tool_names:
+                tool_name, wire_name = candidate, candidate if candidate in tool_names else alias
+                break
+        self.server.saw_exec_tool = self.server.saw_exec_tool or tool_name is not None
         self.server.saw_tool_output = self.server.saw_tool_output or saw_tool_output
+        self.server.saw_successful_tool = self.server.saw_successful_tool or any(
+            isinstance(item, dict) and item.get("type") == "function_call_output"
+            and "EMP_RUNTIME_TOOL_OK" in str(item.get("output", ""))
+            for item in source
+        )
+        self.server.tool_outputs = [str(item.get("output", ""))[:2000] for item in source
+                                    if isinstance(item, dict) and item.get("type") == "function_call_output"]
         payload = (
             _fixed_response_stream(body.get("model", "fixed-model"))
             if saw_tool_output
-            else _tool_response_stream(body.get("model", "fixed-model"))
+            else _tool_response_stream(body.get("model", "fixed-model"), tool_name or "exec", wire_name)
         )
+        if self.server.discovery:
+            search_tool = next((tool for tool in body.get("tools", [])
+                                if "Tool discovery" in tool.get("description", "")), None)
+            loaded_tool = next((tool for tool in body.get("tools", [])
+                                if "Lookup the fixture calendar" in tool.get("description", "")), None)
+            if self.server.request_count == 1 and search_tool:
+                self.server.saw_search_tool = True
+                payload = _tool_response_stream(body["model"], wire_name=search_tool["name"],
+                                                tool_arguments={"query": "fixture calendar lookup", "limit": 1})
+            elif loaded_tool and self.server.request_count == 2:
+                self.server.saw_loaded_tool = True
+                payload = _tool_response_stream(body["model"], wire_name=loaded_tool["name"], tool_arguments={})
+            else:
+                payload = _fixed_response_stream(body["model"])
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(payload)))
@@ -238,9 +271,16 @@ class ToolResponsesHandler(FixedResponsesHandler):
 )
 class CodexCliDemoTests(unittest.TestCase):
     def test_real_codex_cli_uses_temporary_demo_model(self):
-        codex = shutil.which("codex")
+        self._run_cli(False)
+
+    def test_real_codex_searches_loads_and_executes_deferred_tool(self):
+        self._run_cli(True)
+
+    def _run_cli(self, discovery):
+        codex = os.environ.get("EMP_CODEX_TEST_BINARY") or shutil.which("codex")
         self.assertIsNotNone(codex, "codex CLI is not installed")
-        native_catalog = Path.home() / ".codex" / "models_cache.json"
+        native_catalog = Path(os.environ.get("EMP_CODEX_TEST_CATALOG") or
+                              Path.home() / ".codex" / "models_cache.json")
         self.assertTrue(native_catalog.exists(), "Codex native model cache is unavailable")
 
         fake_server = ThreadingHTTPServer(("127.0.0.1", 0), ToolResponsesHandler)
@@ -248,6 +288,11 @@ class CodexCliDemoTests(unittest.TestCase):
         fake_server.request_count = 0
         fake_server.saw_exec_tool = False
         fake_server.saw_tool_output = False
+        fake_server.saw_successful_tool = False
+        fake_server.tool_outputs = []
+        fake_server.discovery = discovery
+        fake_server.saw_search_tool = False
+        fake_server.saw_loaded_tool = False
         fake_thread = threading.Thread(target=fake_server.serve_forever, daemon=True)
         fake_thread.start()
         router_server = None
@@ -258,6 +303,15 @@ class CodexCliDemoTests(unittest.TestCase):
                 config_path = root / "config.json"
                 catalog_path = root / "catalog.json"
                 output_path = root / "last-message.txt"
+                isolated_home = root / "codex-home"
+                isolated_home.mkdir()
+                runtime_temp = root / "runtime-temp"
+                runtime_temp.mkdir()
+                environment = dict(os.environ, CODEX_HOME=str(isolated_home),
+                                   TMPDIR=str(runtime_temp), TEMP=str(runtime_temp), TMP=str(runtime_temp),
+                                   OPENAI_API_KEY="fixture-only", CODEX_API_KEY="fixture-only",
+                                   HTTP_PROXY="http://127.0.0.1:1", HTTPS_PROXY="http://127.0.0.1:1",
+                                   ALL_PROXY="http://127.0.0.1:1", NO_PROXY="127.0.0.1,localhost,::1")
                 config = normalize(
                     {
                         "host": "127.0.0.1",
@@ -305,6 +359,11 @@ class CodexCliDemoTests(unittest.TestCase):
                 router_thread = threading.Thread(target=router_server.serve_forever, daemon=True)
                 router_thread.start()
                 router_url = "http://127.0.0.1:%d/v1" % router_server.server_address[1]
+                fixture_provider = (
+                    '{name="OpenAI", base_url=%s, wire_api="responses", '
+                    'env_key="OPENAI_API_KEY", supports_websockets=true, '
+                    'http_headers={Cookie=%s}}'
+                ) % (json.dumps(router_url), json.dumps("emp_session=" + state.session_token))
 
                 command = [
                     codex,
@@ -319,27 +378,33 @@ class CodexCliDemoTests(unittest.TestCase):
                     "-m",
                     "demo/fixed",
                     "-c",
-                    'model_provider="openai"',
+                    'model_provider="fixture"',
                     "-c",
-                    'model_catalog_json="%s"' % str(catalog_path),
+                    'model_catalog_json=' + json.dumps(str(catalog_path)),
                     "-c",
-                    'openai_base_url="%s"' % router_url,
+                    'model_providers.fixture=' + fixture_provider,
                     "-c",
                     'model_reasoning_effort="medium"',
                     "-c",
                     'approval_policy="never"',
                     "-c",
                     'sandbox_mode="read-only"',
+                    "-c",
+                    'web_search="disabled"',
                     "Return the model response without modification.",
                 ]
-                completed = subprocess.run(
-                    command,
-                    cwd=str(root),
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=60,
-                )
+                if discovery:
+                    fixture = Path(__file__).parent / "fixtures" / "mcp_tool_search.py"
+                    mcp = '{command=%s, args=[%s]}' % (json.dumps(sys.executable), json.dumps(str(fixture.resolve())))
+                    command[-1:-1] = ["-c", "mcp_servers.fixture=" + mcp]
+                try:
+                    completed = subprocess.run(
+                        command, env=environment, cwd=str(root), text=True,
+                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    self.fail("Codex fixture timed out after %s upstream calls\nstdout:\n%s\nstderr:\n%s"
+                              % (fake_server.request_count, exc.stdout, exc.stderr))
                 self.assertEqual(
                     completed.returncode,
                     0,
@@ -347,10 +412,18 @@ class CodexCliDemoTests(unittest.TestCase):
                     % (completed.stdout, completed.stderr),
                 )
                 self.assertEqual(output_path.read_text(encoding="utf-8").strip(), FIXED_REPLY)
-                self.assertEqual(fake_server.seen_models, ["fixed-model", "fixed-model"])
-                self.assertEqual(fake_server.request_count, 2)
-                self.assertTrue(fake_server.saw_exec_tool)
+                execution_details = "Codex fixture output:\n%s\n%s\nTool results: %s" % (
+                    completed.stdout, completed.stderr, fake_server.tool_outputs)
+                expected_count = 3 if discovery else 2
+                self.assertEqual(fake_server.seen_models, ["fixed-model"] * expected_count, execution_details)
+                self.assertEqual(fake_server.request_count, expected_count)
+                if discovery:
+                    self.assertTrue(fake_server.saw_search_tool)
+                    self.assertTrue(fake_server.saw_loaded_tool)
+                else:
+                    self.assertTrue(fake_server.saw_exec_tool)
                 self.assertTrue(fake_server.saw_tool_output)
+                self.assertTrue(fake_server.saw_successful_tool, execution_details)
                 self.assertGreater(router_server.websocket_upgrades, 0)
                 self.assertGreater(router_server.websocket_requests, 0)
         finally:

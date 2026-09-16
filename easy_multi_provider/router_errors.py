@@ -87,6 +87,7 @@ class HistoryReconstructionError(RouterError):
         safe = str(reason or "history_unavailable").strip().lower()
         safe = "".join(character if character.isalnum() or character == "_" else "_" for character in safe)
         self.reason = (safe or "history_unavailable")[:64]
+        self.failure_reason = self.reason
         self.error_class = "history_reconstruction_failed"
         super().__init__(
             "history_reconstruction_failed: reason=%s; Codex history was not modified"

@@ -150,12 +150,10 @@ class HistoryAnchor:
 
         header_thread_id = header("thread-id")
         header_session_id = header("session-id")
-        if header_thread_id and header_session_id and header_thread_id != header_session_id:
-            raise HistoryMismatchError("conflicting_thread_identity", source="anchor")
         metadata_thread_id = metadata.get("thread_id", metadata.get("threadId"))
         if metadata_thread_id is not None:
             metadata_thread_id = _identifier(metadata_thread_id, "thread_id")
-            explicit_thread_id = header_thread_id or header_session_id
+            explicit_thread_id = header_thread_id
             if explicit_thread_id is not None and metadata_thread_id != explicit_thread_id:
                 raise HistoryMismatchError("conflicting_thread_identity", source="anchor")
         header_window_id = header("x-codex-window-id")
@@ -164,9 +162,18 @@ class HistoryAnchor:
             metadata_window_id = _identifier(metadata_window_id, "window_id")
             if header_window_id is not None and metadata_window_id != header_window_id:
                 raise HistoryMismatchError("conflicting_window_identity", source="anchor")
+        # session-id is a cache-affinity key in newer Codex runtimes. A fork
+        # may share it with its parent; never use it to open that parent's file.
+        # Only positively identified legacy clients retain the old fallback.
+        legacy_thread_id = None
+        version = header("version")
+        if version and re.fullmatch(r"0\.\d+\.\d+", version):
+            if tuple(map(int, version.split("."))) <= (0, 154, 0):
+                legacy_thread_id = header_session_id
         return cls(
-            thread_id=header_thread_id or header_session_id or metadata_thread_id,
-            turn_id=metadata.get("turn_id", metadata.get("turnId")),
+            thread_id=header_thread_id or metadata_thread_id or legacy_thread_id,
+            # Startup prewarm precedes the first turn and sends an empty ID.
+            turn_id=metadata.get("turn_id", metadata.get("turnId")) or None,
             window_id=header_window_id or metadata_window_id,
             forked_from_thread_id=metadata.get("forked_from_thread_id"),
         )
@@ -407,12 +414,13 @@ def normalize_visible_item(
     elif token in ("assistant_message", "assistantmessage", "agent_message", "agentmessage"):
         kind = "assistant_message"
         content = _content(raw, "content", "message", "text")
-    elif token in ("function_call", "custom_tool_call", "tool_call"):
+    elif token in ("function_call", "custom_tool_call", "tool_call", "tool_search_call"):
         kind = "tool_call"
-        content = _content_map(raw, ("name", "arguments", "input", "tool", "status"))
+        content = _content_map(raw, ("name", "namespace", "arguments", "input", "tool", "status", "execution"))
     elif token in (
         "function_call_output",
         "custom_tool_call_output",
+        "tool_search_output",
         "tool_result",
         "tool_output",
         "mcp_tool_result",
@@ -432,6 +440,8 @@ def normalize_visible_item(
                 "result",
                 "content",
                 "status",
+                "execution",
+                "tools",
             ),
         )
     elif token in ("mcp_tool_call", "dynamic_tool_call", "collab_agent_tool_call"):

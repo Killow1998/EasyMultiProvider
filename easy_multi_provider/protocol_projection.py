@@ -11,6 +11,7 @@ from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlparse
 
 from .dialects import (
+    ProjectionError,
     custom_tool_arguments,
     custom_tool_ids,
     custom_tool_input,
@@ -33,7 +34,7 @@ _TEXT_PART_TYPES = frozenset({"input_text", "output_text", "text"})
 _INTENTIONALLY_OMITTED_INPUT_TYPES = frozenset({"reasoning", "additional_tools"})
 _RESPONSES_TERMINAL_STATUSES = frozenset({"completed", "incomplete", "failed"})
 _RESPONSES_OUTPUT_TYPES = frozenset(
-    {"message", "function_call", "custom_tool_call", "reasoning", "compaction"}
+    {"message", "function_call", "custom_tool_call", "tool_search_call", "reasoning", "compaction"}
 )
 _ANTHROPIC_IMAGE_MEDIA_TYPES = frozenset(
     {"image/jpeg", "image/png", "image/gif", "image/webp"}
@@ -95,6 +96,11 @@ def _validate_responses_output_item(item: Mapping[str, Any]) -> None:
         _response_string(item, "call_id")
         _response_string(item, "name")
         _response_string(item, "input")
+        return
+    if item_type == "tool_search_call":
+        _response_string(item, "call_id")
+        if item.get("execution") != "client" or not isinstance(item.get("arguments"), dict):
+            raise ExternalProtocolError("upstream Responses JSON contains invalid tool search")
         return
     if item_type == "reasoning":
         summary = item.get("summary")
@@ -461,7 +467,13 @@ def _messages(body: Dict[str, Any]) -> list:
 
 def _tools(body: Dict[str, Any]) -> list:
     result = []
-    for function in portable_tool_definitions(body):
+    # Keep external tool conversion failures in the request error boundary,
+    # rather than letting a ValueError become a gateway/server failure.
+    try:
+        functions = portable_tool_definitions(body)
+    except ProjectionError as exc:
+        raise RouterError(str(exc), 422) from exc
+    for function in functions:
         result.append(
             {
                 "type": "function",

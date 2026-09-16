@@ -74,6 +74,16 @@ HTTP management surface:
 
 Routing and reliability:
 
+- `history_phase` joins preparation, visible-history reading/projection, destination
+  compaction, each map/reduce summary call, and summary extraction by `request_id`.
+  Include stage/result, duration, item counts, context budget and compaction metrics;
+  distinguish an upstream call failure from a missing usable summary. The optional
+  `turn_ref` is pseudonymous. No summary text or opaque checkpoint is logged.
+- `request_failure` retains the normalized error class/reason and bounded exception
+  chain even when a route observation was already emitted or a lazy stream fails.
+  Causes include numeric HTTP/OS/TLS verification codes, fixed SSL reason codes, and
+  at most six basename/line/function frames per cause, without exception messages,
+  locals, source lines, full paths, or credentials.
 - persist the already-normalized `ObservationRing` record for each route;
 - assign each observation a random content-free ID so disk/in-memory copies can
   be joined without collapsing distinct calls that share a timestamp;

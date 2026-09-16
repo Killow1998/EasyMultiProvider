@@ -197,16 +197,19 @@ def custom_tool_ids(raw_id: Any, call_id: Any = None) -> tuple[str, str]:
 def _raw_tools(body: Mapping[str, Any]) -> list:
     collected = []
 
-    def visit(items: Any) -> None:
+    def visit(items: Any, namespace: tuple = ()) -> None:
         if not isinstance(items, list):
             return
         for item in items:
             if not isinstance(item, Mapping):
                 continue
             if item.get("type") == "namespace":
-                visit(item.get("tools"))
+                name = item.get("name")
+                if not isinstance(name, str) or not name:
+                    raise ProjectionError(0, "namespace", (), "invalid_tool_namespace")
+                visit(item.get("tools"), namespace + (name,))
             else:
-                collected.append(item)
+                collected.append(dict(item, _emp_namespace=namespace))
 
     visit(body.get("tools"))
     source = body.get("input")
@@ -485,7 +488,7 @@ def _portable_tools(source: Any) -> list:
     if not isinstance(source, list):
         raise ProjectionError(0, "tools", (), "invalid_tools")
     result = []
-    seen = set()
+    seen = {}
     for index, item in enumerate(source):
         if not isinstance(item, Mapping):
             raise ProjectionError(index, "unknown", (), "invalid_tool_definition")
@@ -501,9 +504,12 @@ def _portable_tools(source: Any) -> list:
         )
         if not isinstance(name, str) or not name or not isinstance(parameters, Mapping):
             raise ProjectionError(index, tool_type, (), "invalid_tool_definition")
+        identity = (item.get("_emp_namespace", ()), tool_type, dict(function))
         if name in seen:
+            if seen[name] != identity:
+                raise ProjectionError(index, tool_type, (), "tool_name_collision")
             continue
-        seen.add(name)
+        seen[name] = identity
         projected = {
             "type": "function",
             "name": name,

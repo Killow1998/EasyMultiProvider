@@ -81,7 +81,7 @@ jobs:
       - name: Verify native background update and rollback
         env:
           EMP_PACKAGE_UPDATE_SMOKE: "1"
-        run: uv run --frozen --group package python -m unittest tests.test_packaged_self_update -v
+        run: uv run --frozen --group package python -m unittest tests.test_self_update tests.test_linux_update tests.test_packaged_self_update -v
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v7.0.1

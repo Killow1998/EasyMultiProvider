@@ -49,6 +49,8 @@ def _quota_rpc_error(method: str, error: Any) -> QuotaError:
         return QuotaError("Codex quota access was denied (403); check account access and network", "quota_access_denied")
     if status_code == 429:
         return QuotaError("Codex quota queries are rate limited (429); try again later", "quota_rate_limited")
+    if method == "account/rateLimits/read" and "error sending request" in message.lower():
+        return QuotaError("Codex could not connect to the quota service; check the proxy and network connection", "quota_transport_error")
     if method == "account/rateLimits/read":
         return QuotaError("Codex quota service query failed; check network connectivity and try again", "quota_fetch_failed")
     if method == "account/read":
@@ -209,6 +211,10 @@ def _enqueue_lines(stream: Any, output: Any) -> None:
     try:
         for line in iter(stream.readline, ""):
             output.put(line)
+    except UnicodeError:
+        output.put(QuotaError("Codex app-server output is not valid UTF-8", "quota_output_encoding_error"))
+    except (OSError, ValueError):
+        output.put(QuotaError("Could not read Codex app-server output", "quota_output_read_error"))
     finally:
         output.put(None)
 
@@ -216,7 +222,16 @@ def _enqueue_lines(stream: Any, output: Any) -> None:
 def _drain_lines(stream: Any) -> None:
     if stream is None:
         return
-    for _line in iter(stream.readline, ""):
+    try:
+        # stderr is diagnostic data, not JSON-RPC. Drain raw bytes so arbitrary
+        # diagnostic encoding cannot kill the reader or block the child process.
+        if hasattr(stream, "buffer"):
+            while stream.buffer.read(64 * 1024):
+                pass
+        else:
+            for _line in iter(stream.readline, ""):
+                pass
+    except (OSError, ValueError):
         pass
 
 
@@ -252,6 +267,8 @@ def _query_app_server(process: Any, requests: list, timeout: int) -> str:
                 raise QuotaError("Codex account quota check timed out", "quota_timeout") from exc
             if line is None:
                 raise QuotaError("Codex did not return account rate limits")
+            if isinstance(line, QuotaError):
+                raise line
             lines.append(line)
             try:
                 message = json.loads(line)
@@ -545,6 +562,8 @@ def _run_quota_query(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="strict",
             )
             stdout = _query_app_server(process, requests, timeout)
         except (OSError, subprocess.TimeoutExpired) as exc:

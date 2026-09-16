@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
-from .diagnostic_journal import request_source
+from .diagnostic_journal import request_source, exception_details, NullJournal
 from .codex_history import HistoryError
 from .context_guard import ContextGuardBlocked
 from .history_continuity import request_history_anchor
@@ -68,6 +68,7 @@ class CodexRequestDispatcher:
         record_route_event: Callable[..., None],
         record_route_failure: Callable[..., None],
         diagnostic_stream: Callable[..., Any],
+        journal=None,
     ) -> None:
         self._routing_snapshot = routing_snapshot
         self.context_guard = context_guard
@@ -77,6 +78,58 @@ class CodexRequestDispatcher:
         self._record_route_event = record_route_event
         self._record_route_failure = record_route_failure
         self._diagnostic_stream = diagnostic_stream
+        self.journal = journal if journal is not None else NullJournal()
+
+    def _history_callbacks(self, body, incoming):
+        source = request_source(body, incoming)
+        source["model_id"] = body.get("model")
+        try:
+            anchor = request_history_anchor(body, incoming)
+            if anchor.turn_id:
+                source["turn_ref"] = self.journal.pseudonym(anchor.turn_id)
+        except Exception:
+            pass
+
+        def emit(stage, result, **facts):
+            try:
+                self.journal.event("warning" if result == "failed" else "info",
+                                   "history_phase", **source, stage=stage, result=result, **facts)
+            except Exception:
+                pass
+
+        def failed(stage, started, exc):
+            failure = failure_from_exception(exc)
+            emit(stage, "failed", duration_ms=round((time.monotonic() - started) * 1000),
+                 error_class=failure.error_class, reason=failure.failure_reason,
+                 status=failure.status, exception_chain=exception_details(exc))
+
+        def prepare(config, provider, model, slug, request, headers):
+            started = time.monotonic()
+            emit("prepare", "started")
+            try:
+                projected = self.history_continuity.prepare(config, provider, model, slug, request, headers,
+                                                            on_diagnostic=emit)
+            except Exception as exc:
+                failed("prepare", started, exc)
+                raise
+            emit("prepare", "completed", duration_ms=round((time.monotonic() - started) * 1000),
+                 input_items=len(request["input"]) if isinstance(request.get("input"), list) else 1,
+                 projected_items=len(projected["input"]) if isinstance(projected.get("input"), list) else 1)
+            return projected
+
+        def compact(provider, model, slug, request, assessment):
+            started = time.monotonic()
+            emit("compact", "started", context=assessment.to_safe_dict())
+            try:
+                result = self.destination_context.compact(provider, model, slug, request, assessment,
+                                                          on_diagnostic=emit)
+            except Exception as exc:
+                failed("compact", started, exc)
+                raise
+            emit("compact", "completed", duration_ms=round((time.monotonic() - started) * 1000))
+            return result
+
+        return prepare, compact
 
     def _context_check(self, completeness: str):
         def check(provider, model, protocol, payload, stream, operation):
@@ -123,6 +176,31 @@ class CodexRequestDispatcher:
             source=source,
         )
 
+    def _log_failure(self, exc, source, started):
+        failure = failure_from_exception(exc)
+        try:
+            self.journal.event("warning", "request_failure", **source,
+                               phase=failure.phase, status=failure.status,
+                               error_class=failure.error_class, reason=failure.failure_reason,
+                               duration_ms=round((time.monotonic() - started) * 1000),
+                               exception_chain=exception_details(exc))
+        except Exception:
+            pass
+
+    def _log_stream_failures(self, result, source, started):
+        try:
+            yield from result
+        except Exception as exc:
+            self._log_failure(exc, source, started)
+            raise
+        finally:
+            close = getattr(result, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+
     def prepare_native_websocket(
         self,
         body: Dict[str, Any],
@@ -133,6 +211,7 @@ class CodexRequestDispatcher:
         transport_probe: bool = False,
     ):
         started = time.monotonic()
+        history_prepare, history_compact = self._history_callbacks(body, incoming)
         try:
             snapshot = self._routing_snapshot()
             route = self._route(snapshot, body)
@@ -148,15 +227,16 @@ class CodexRequestDispatcher:
                 history_preparer=(
                     None
                     if transport_incremental
-                    else self.history_continuity.prepare
+                    else history_prepare
                 ),
                 destination_compactor=(
-                    None if transport_probe else self.destination_context.compact
+                    None if transport_probe else history_compact
                 ),
                 transport_incremental=transport_incremental,
                 resolved_route=route,
             )
         except RouterError as exc:
+            self._log_failure(exc, request_source(body, incoming), started)
             self._record_failure(
                 exc, body, started, "websocket", "responses", request_source(body, incoming)
             )
@@ -180,6 +260,7 @@ class CodexRequestDispatcher:
         source = {**request_source(body, incoming), **usage_context(body, incoming)}
         observed = False
         replay_scope = None
+        history_prepare, history_compact = self._history_callbacks(body, incoming)
 
         def on_observation(event: Dict[str, Any]) -> None:
             nonlocal observed
@@ -200,11 +281,12 @@ class CodexRequestDispatcher:
                 incoming,
                 on_observation,
                 self._context_check(context_completeness),
-                history_preparer=self.history_continuity.prepare,
-                destination_compactor=self.destination_context.compact,
+                history_preparer=history_prepare,
+                destination_compactor=history_compact,
                 resolved_route=route,
             )
         except Exception as exc:
+            self._log_failure(exc, source, started)
             if not observed:
                 self._record_failure(
                     exc, body, started, selected_transport, "responses", source
@@ -224,6 +306,7 @@ class CodexRequestDispatcher:
                 )
             result = self.provider_replay.observe_stream(replay_scope, result)
             result = performance.observe_stream(result)
+            result = self._log_stream_failures(result, source, started)
         else:
             self.provider_replay.observe_bytes(replay_scope, result)
             performance.observe_bytes(result)
@@ -249,6 +332,8 @@ class CodexRequestDispatcher:
         source = {**request_source(body, incoming), **usage_context(body, incoming)}
         observed = False
 
+        history_prepare, history_compact = self._history_callbacks(body, incoming)
+
         def on_observation(event: Dict[str, Any]) -> None:
             nonlocal observed
             observed = True
@@ -265,11 +350,12 @@ class CodexRequestDispatcher:
                 incoming,
                 on_observation,
                 self._context_check(context_completeness),
-                history_preparer=self.history_continuity.prepare,
-                destination_compactor=self.destination_context.compact,
+                history_preparer=history_prepare,
+                destination_compactor=history_compact,
                 resolved_route=route,
             )
         except Exception as exc:
+            self._log_failure(exc, source, started)
             if not observed:
                 self._record_failure(
                     exc, body, started, selected_transport, "compact", source

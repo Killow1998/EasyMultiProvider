@@ -100,7 +100,7 @@ def _open(url):
     if not _allowed_url(url):
         raise UpdateError("invalid_download_url")
     return build_opener(_ReleaseRedirect()).open(Request(url, headers={
-        "User-Agent": "EMP/" + __version__, "Accept": "application/vnd.github+json" if url == RELEASE_API else "application/octet-stream",
+        "User-Agent": "EMP/" + __version__, "Accept": "application/vnd.github+json" if url.startswith(RELEASE_API.rsplit("/", 1)[0] + "/") else "application/octet-stream",
     }), timeout=20)
 
 
@@ -279,7 +279,7 @@ class UpdateManager:
 
     def start(self, operation):
         with self.lock:
-            if self.data["state"] in {"checking", "downloading", "verifying", "waiting", "installing"}:
+            if self.data["state"] in {"checking", "downloading", "verifying", "waiting", "authorizing", "restoring", "installing"}:
                 return self.snapshot()
             if operation == "check":
                 self.asset = None
@@ -319,20 +319,36 @@ class UpdateManager:
                 self._set(state="no_release", latest_version=None)
                 return
             raise UpdateError("check_failed") from None
-        self.asset = release_asset(release, asset_name())
+        name = asset_name()
+        if sys.platform.startswith("linux") and self.supported:
+            from .linux_update import DEB_ASSET, package_version
+            if package_version(installation_target(self.executable)[0]):
+                name = DEB_ASSET
+        self.asset = release_asset(release, name)
         self._set(state="available" if self.asset else "current", latest_version=release["tag_name"].lstrip("v"))
 
     def _install(self):
         target, relative_binary = installation_target(self.executable)
-        if not target.exists() or not os.access(target.parent, os.W_OK):
+        installed_version = None
+        writable = os.access(target.parent, os.W_OK)
+        system_install = False
+        if sys.platform.startswith("linux"):
+            from .linux_update import (DEB_ASSET, apply_install, file_digest,
+                                       package_version, prepare_deb, prepare_rollback)
+            installed_version = package_version(target)
+            system_install = bool(installed_version or not writable)
+            if (self.asset["name"] == DEB_ASSET) != bool(installed_version):
+                raise UpdateError("installation_changed")
+        if not target.exists() or (not writable and not system_install):
             raise UpdateError("directory_not_writable")
-        job = Path(tempfile.mkdtemp(prefix=".emp-update-", dir=target.parent))
-        handed_off = False
+        job = Path(tempfile.mkdtemp(prefix=".emp-update-", dir=None if system_install else target.parent)).resolve()
+        handed_off = modified = retain_job = False
         try:
             package = job / self.asset["name"]
             download_package(self.asset, package, lambda value: self._set(progress=value), self.opener)
             self._set(state="verifying", progress=100)
-            candidate, binary = prepare_candidate(package, job, relative_binary)
+            candidate, binary = (prepare_deb(package, job, self.asset["version"]) if installed_version
+                                 else prepare_candidate(package, job, relative_binary))
             with _quiet_launch():
                 probe = subprocess.run([str(binary), "--version"], capture_output=True, timeout=30, env=_child_environment(),
                                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
@@ -347,9 +363,22 @@ class UpdateManager:
                 parents.append({"pid": parent.pid, "created": parent.create_time()})
             plan = {"target": str(target), "candidate": str(candidate), "relative_binary": relative_binary,
                     "parents": parents, "args": self.restart_args, "version": self.asset["version"], "nonce": uuid.uuid4().hex}
+            if system_install:
+                info = prepare_rollback(job, target, installed_version, self.opener)
+                info.update(package_digest=self.asset["sha256"], candidate_digest=file_digest(binary))
+                plan["linux_install"] = info
             (job / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
             self._set(state="waiting")
             self.gate.drain()
+            if system_install:
+                self._set(state="authorizing")
+                modified = True
+                try:
+                    apply_install(plan, job)
+                except UpdateError as exc:
+                    if str(exc) in {"authorization_cancelled", "authorization_unavailable", "checksum_mismatch"}:
+                        modified = False
+                    raise
             worker = _spawn([str(helper), "--emp-apply-update", str(job / "plan.json")])
             deadline = time.monotonic() + 30
             while not (job / "worker-ready").is_file():
@@ -362,7 +391,15 @@ class UpdateManager:
             self._set(state="installing")
             self.shutdown()
         finally:
-            if not handed_off:
+            if modified and not handed_off:
+                self._set(state="restoring")
+                try:
+                    apply_install(plan, job, rollback=True)
+                except Exception:
+                    retain_job = True
+                    (job / "recovery-required").touch()
+                    raise UpdateError("system_recovery_required") from None
+            if not handed_off and not retain_job:
                 shutil.rmtree(job, ignore_errors=True)
 
 
@@ -395,7 +432,13 @@ def run_update_worker(plan_path):
     job = plan_path.parent
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     target, candidate = Path(plan["target"]), Path(plan["candidate"])
-    if (not job.name.startswith(".emp-update-") or target.parent.resolve() != job.parent
+    system_install = "linux_install" in plan
+    system_job_valid = False
+    if system_install and sys.platform.startswith("linux"):
+        from .linux_update import apply_install, valid_user_job
+        system_job_valid = valid_user_job(job) and plan["relative_binary"] == ""
+    if (not job.name.startswith(".emp-update-") or (not system_job_valid and target.parent.resolve() != job.parent)
+            or (system_install and not system_job_valid)
             or candidate.parent.resolve() != job or target.is_symlink() or candidate.is_symlink()
             or plan["relative_binary"] not in {"", "Contents/Resources/EMP"}):
         raise UpdateError("invalid_update_plan")
@@ -420,8 +463,9 @@ def run_update_worker(plan_path):
     child = None
     try:
         phase("replacing")
-        target.rename(backup)
-        candidate.rename(target)
+        if not system_install:
+            target.rename(backup)
+            candidate.rename(target)
         environment = _child_environment()
         environment["EMP_UPDATE_READY"] = str(job / "ready.json")
         phase("starting")
@@ -448,7 +492,9 @@ def run_update_worker(plan_path):
         try:
             # If the first rename failed, the old installation is still in place.
             # Never rename or delete that working copy during rollback.
-            if backup.exists():
+            if system_install:
+                apply_install(plan, job, rollback=True)
+            elif backup.exists():
                 if target.exists():
                     target.rename(job / "failed")
                 backup.rename(target)
@@ -474,7 +520,12 @@ def mark_update_ready():
     job = ready.parent
     plan = json.loads((job / "plan.json").read_text(encoding="utf-8"))
     target, _ = installation_target(sys.executable)
-    if ready.name != "ready.json" or Path(plan["target"]).resolve() != target.resolve() or job.parent != target.parent or not job.name.startswith(".emp-update-"):
+    system_job_valid = False
+    if "linux_install" in plan and sys.platform.startswith("linux"):
+        from .linux_update import valid_user_job
+        system_job_valid = valid_user_job(job)
+    if (ready.name != "ready.json" or Path(plan["target"]).resolve() != target.resolve()
+            or (job.parent != target.parent and not system_job_valid) or not job.name.startswith(".emp-update-")):
         raise UpdateError("invalid_update_plan")
     pending = ready.with_suffix(".tmp")
     pending.write_text(json.dumps({"version": __version__, "nonce": plan["nonce"]}), encoding="utf-8")

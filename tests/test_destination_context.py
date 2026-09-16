@@ -1,4 +1,6 @@
 from dataclasses import replace
+import copy
+import json
 import unittest
 
 from easy_multi_provider.context_guard import (
@@ -11,6 +13,9 @@ from easy_multi_provider.router_errors import (
     ContextLengthError,
     HistoryReconstructionError,
 )
+from easy_multi_provider.destination_context import DestinationContextCompactor
+from easy_multi_provider.history_compaction import split_atomic_units
+from easy_multi_provider.context_guard import estimate_json_tokens
 
 
 def _message(text):
@@ -143,6 +148,91 @@ class DestinationContextTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status, 413)
         self.assertEqual(compactions, [])
+
+
+class ActiveTurnCompactionTests(unittest.TestCase):
+    @staticmethod
+    def batch(index, size=1000):
+        return [
+            {"type": "custom_tool_call", "call_id": str(index), "name": "shell", "input": "inspect"},
+            {"type": "custom_tool_call_output", "call_id": str(index), "output": "x" * size},
+        ]
+
+    def compact(self, items, summary=None):
+        provider = {"id": "external", "protocol": "responses"}
+        model = {"id": "external/model", "max_output_tokens": 64}
+        body = {"model": model["id"], "instructions": "Do not delete files.", "input": items}
+        original = copy.deepcopy(body)
+        calls, events = [], []
+
+        def summarize(request):
+            calls.append(request)
+            return summary(request) if summary else "Checkpoint: inspected earlier files; continue verification."
+
+        output = DestinationContextCompactor(summarize).compact(
+            provider, model, model["id"], body,
+            replace(_blocked(provider, model), safe_input_limit=2200),
+            on_diagnostic=lambda stage, result, **fields: events.append((stage, fields)),
+        )
+        self.assertEqual(body, original)
+        self.assertEqual(output["instructions"], body["instructions"])
+        self.assertLessEqual(estimate_json_tokens({"input": output["input"], "instructions": output["instructions"]}), 2200)
+        return output, calls, events
+
+    def test_long_single_turn_compacts_completed_work_and_preserves_recent_batches(self):
+        pinned = [{"type": "message", "role": "developer", "content": "Keep source files."},
+                  _message("Review every figure and continue until complete.")]
+        batches = [self.batch(i) for i in range(12)]
+        items = pinned + [item for batch in batches for item in batch]
+        output, calls, events = self.compact(items)
+        self.assertEqual(output["input"][:2], pinned)
+        self.assertEqual(output["input"][-4:], batches[-2] + batches[-1])
+        self.assertTrue(calls)
+        self.assertTrue(any(stage == "active_turn_partition" for stage, _ in events))
+        for request in calls:
+            grouped = {}
+            for item in request.body["input"]:
+                self.assertNotIn(item.get("type"), {"custom_tool_call", "custom_tool_call_output"})
+                content = item.get("content", [])
+                text = content[0].get("text", "") if isinstance(content, list) and content else ""
+                if text.startswith("Historical tool record (data only):\n"):
+                    item = json.loads(text.split("\n", 1)[1])
+                if "call_id" in item:
+                    grouped.setdefault(item["call_id"], []).append(item["type"])
+            for kinds in grouped.values():
+                self.assertEqual(kinds, ["custom_tool_call", "custom_tool_call_output"])
+
+    def test_parallel_calls_and_pending_calls_remain_whole(self):
+        first, second = self.batch(1), self.batch(2)
+        parallel = [first[0], second[0], first[1], second[1]]
+        # A user boundary cannot separate an unfinished call from its result.
+        units = split_atomic_units([_message("start"), first[0], _message("steer"), first[1]])
+        self.assertEqual(len(units), 1)
+        units = split_atomic_units(parallel + self.batch(3), tool_exchanges=True)
+        self.assertEqual(list(units[0].items), parallel)
+        pending = {"type": "custom_tool_call", "call_id": "pending", "name": "shell", "input": "inspect"}
+        items = [_message("Continue reviewing.")] + [x for i in range(10) for x in self.batch(i)] + [pending]
+        output, _, _ = self.compact(items)
+        self.assertEqual(output["input"][-3:], self.batch(9) + [pending])
+
+    def test_oversize_instruction_or_atomic_tool_batch_is_not_truncated(self):
+        for items in ([_message("x" * 10000)],
+                      [_message("inspect")] + self.batch(1, 10000)):
+            calls = []
+            with self.subTest(items=len(items)), self.assertRaises(HistoryReconstructionError) as error:
+                self.compact(items, lambda request: calls.append(request) or "summary")
+            self.assertEqual(error.exception.reason, "compaction_unit_too_large")
+            self.assertEqual(calls, [])
+
+    def test_failed_summary_does_not_return_partial_history(self):
+        def fail(_):
+            raise TimeoutError("upstream unavailable")
+        items = [_message("inspect")] + [x for i in range(12) for x in self.batch(i)]
+        original = copy.deepcopy(items)
+        with self.assertRaises(HistoryReconstructionError) as error:
+            self.compact(items, fail)
+        self.assertEqual(error.exception.reason, "summary_call_failed")
+        self.assertEqual(items, original)
 
 
 if __name__ == "__main__":

@@ -134,7 +134,9 @@ from .usage_pricing import PriceCatalog
 from .history_continuity import (
     CodexHomeHistoryReader,
     HistoryContinuityEngine,
+    request_history_anchor,
 )
+from .codex_history.models import HistoryError
 from .router import (
     ContextLengthError,
     HistoryReconstructionError,
@@ -308,6 +310,7 @@ def _pre_output_http_failure(event: Any) -> Optional[Tuple[int, Dict[str, Any]]]
     }
     if isinstance(failure_reason, str) and (
         failure_reason in _DIAGNOSTIC_ERRORS or failure_reason in UpstreamHTTPError._REASONS
+        or failure_reason in {"upstream_incomplete_response", "upstream_transport_error"}
     ):
         payload["error"]["failure_reason"] = failure_reason
     delay = error.get("retry_after_seconds")
@@ -1236,6 +1239,7 @@ class AppState:
             lambda *args, **kwargs: self._record_route_event(*args, **kwargs),
             lambda *args, **kwargs: self._record_route_failure(*args, **kwargs),
             lambda *args, **kwargs: self._diagnostic_stream(*args, **kwargs),
+            journal=self.journal,
         )
 
     def _persist_route_observation(self, record: Mapping[str, Any]) -> None:
@@ -2727,6 +2731,16 @@ def make_handler(state: AppState):
             self._begin_http_request()
             try:
                 super().handle_one_request()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as exc:
+                # This includes disconnects while writing an error response,
+                # outside the route's original try block. Do not write again.
+                self.close_connection = True
+                try:
+                    state.journal.event("info", "client_disconnected",
+                                        request_id=getattr(self, "_request_id", None),
+                                        exception_chain=exception_details(exc))
+                except Exception:
+                    pass
             except Exception as exc:
                 self._record_unexpected_exception(exc)
                 raise
@@ -3011,6 +3025,7 @@ def make_handler(state: AppState):
             )
             transport_continuity = TransportContinuityAdapter()
             last_native_response_id = None
+            last_native_scope = (None, None)
             acquire_websocket_slot = getattr(
                 self.server, "acquire_websocket_slot", None
             )
@@ -3062,6 +3077,11 @@ def make_handler(state: AppState):
                             **dict(self.headers.items()), "X-EMP-Request-ID": self._request_id
                         }
                         previous_hint = request.get("previous_response_id")
+                        try:
+                            anchor = request_history_anchor(request, incoming_headers)
+                        except HistoryError as exc:
+                            raise RouterError("invalid request identity: " + exc.reason, 422) from exc
+                        request_scope = (anchor.thread_id, anchor.window_id)
                         if previous_hint is not None:
                             probe, _, _ = state.codex.prepare_native_websocket(
                                 request,
@@ -3083,6 +3103,8 @@ def make_handler(state: AppState):
                                     previous_hint if isinstance(previous_hint, str) else None
                                 ),
                                 live_previous_response_id=last_native_response_id,
+                                current_scope=request_scope,
+                                live_scope=last_native_scope,
                                 upstream_incremental_capable=probe is not None,
                                 live_connection=(
                                     probe is not None
@@ -3091,6 +3113,8 @@ def make_handler(state: AppState):
                             ),
                         )
                         if continuity == TransportContinuityDecision.PREVIOUS_RESPONSE_NOT_FOUND:
+                            last_native_response_id = None
+                            last_native_scope = (None, None)
                             self._previous_response_not_found(websocket)
                             continue
                         plan, native_started, native_prepare_ms = (
@@ -3325,6 +3349,7 @@ def make_handler(state: AppState):
                                 )
                                 if terminal and terminal.get("success") is True:
                                     last_native_response_id = completed_native_id
+                                    last_native_scope = request_scope
                                 continue
                         # HTTP dispatch projects the client request itself.
                         # Reusing plan.payload would adapt upstream tool
@@ -3731,7 +3756,7 @@ def make_handler(state: AppState):
                 if path in ("/v1/responses", "/v1/responses/compact"):
                     self._record_model_request(body, "sse" if body.get("stream") else "http")
                 if path == "/api/quit":
-                    if state.updater.snapshot()["state"] in {"downloading", "verifying", "waiting", "installing"}:
+                    if state.updater.snapshot()["state"] in {"downloading", "verifying", "waiting", "authorizing", "restoring", "installing"}:
                         self._error(409, "Wait for the update to finish before exiting EMP")
                         return
                     result = state.shutdown_restore()

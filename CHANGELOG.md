@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+- Read Codex quota subprocess JSON-RPC as UTF-8 on every OS. Report invalid
+  output and pipe read failures explicitly instead of crashing reader threads;
+  drain diagnostic stderr as bytes without changing account credentials.
+- Support Linux system-directory updates through the desktop's administrator
+  authorization dialog. Use deb packages for deb installations, preserve the
+  normal user identity on restart, and retain package-aware recovery. Report
+  cancelled or unavailable authorization without stopping the existing service.
+- Restrict external model metadata inheritance to reviewed coding instructions
+  and tool settings; do not copy native experimental-context capabilities or
+  another subscription's access-program entitlements.
+- Separate Codex cache-affinity headers from history identity, handle startup
+  prewarm without a turn ID, and reject stale WebSocket thread/window chains.
+- Map namespaced external tools without merging same-name tools. Restore names
+  in full and streamed responses; preserve call IDs, history, and tool selection.
+- Support Codex client-executed tool search for external providers, including
+  discovered definitions, tool execution, and subsequent history reconstruction.
+  Reject conflicting definitions and unsupported server-executed searches.
+- Add independent Windows/macOS/Linux runtime compatibility CI with a fixed
+  official Codex binary, isolated homes, and local protocol fixtures.
+- Isolate TLS verification contexts between pooled connections to avoid mutable
+  Windows trust-store handshake state leaking across concurrent requests.
+- Handle browser disconnects while returning management errors without a second
+  response or an uncaught traceback. Distinguish quota connection failures.
+- Compact completed tool batches within oversized active turns while preserving
+  instructions, recent results, and pending tool calls. Send historical tool
+  records as data to the summary model rather than as executable tool calls.
+- Reuse verified HTTP connections for external providers and completed Responses
+  streams. Preserve immediate SSE delivery, proxy selection, cancellation safety,
+  and the prohibition on automatic request replay and credential redirects.
+- Preserve external stream failure reasons through HTTP error translation and
+  distinguish an unfinished stream from an upstream HTTP server error.
+- Trace history reconstruction and summary calls by request ID, including safe
+  failure causes and compaction metrics. Retain TLS/HTTP exception chains for
+  request and streaming failures without logging conversation content.
+- Accept standard Responses message content when extracting history summaries,
+  and preserve specific history failure reasons in diagnostic observations.
+- Check for a fresh release whenever Check updates is opened, while preserving
+  an update already in progress. Remove the duplicate check button in the dialog.
+
 ## 0.11.1 (2026-09-13)
 
 - Combine Enable EMP and Restore Native into one button in the same position.

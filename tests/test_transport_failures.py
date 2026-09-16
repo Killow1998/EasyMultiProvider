@@ -1,4 +1,5 @@
 import os
+import json
 import socket
 import ssl
 import unittest
@@ -25,6 +26,23 @@ from easy_multi_provider.transport_failures import (
 
 
 class TransportFailureClassificationTests(unittest.TestCase):
+    def test_external_missing_finish_reason_survives_http_translation(self):
+        event = {"type": "response.failed", "response": {
+            "status": "failed", "error": {
+                "code": "upstream_incomplete_response",
+                "error_class": "stream_incomplete",
+                "failure_reason": "upstream_incomplete_response",
+                "message": "private upstream detail",
+            },
+        }}
+        wire = ("data: " + json.dumps(event) + "\n\n").encode()
+        events = list(sse_json_events(_reliable_responses_stream(lambda: [wire])))
+        status, payload = _pre_output_http_failure(events[-1])
+        self.assertEqual(status, 502)
+        self.assertEqual(payload["error"]["failure_reason"], "upstream_incomplete_response")
+        self.assertIn("completion event", payload["error"]["message"])
+        self.assertNotIn("private upstream detail", str(payload))
+
     def test_retry_after_seconds_and_http_date_are_normalized(self):
         with patch("easy_multi_provider.transport_failures.time.time", return_value=0):
             self.assertEqual(parse_retry_after("Thu, 01 Jan 1970 00:00:30 GMT"), 30)

@@ -1,0 +1,72 @@
+name: Runtime compatibility
+
+on:
+  pull_request:
+    paths:
+      - "easy_multi_provider/**"
+      - "tests/**"
+      - "tools/test_codex_runtime.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/runtime-compatibility.yml"
+  push:
+    branches: [main]
+    paths:
+      - "easy_multi_provider/**"
+      - "tests/**"
+      - "tools/test_codex_runtime.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/runtime-compatibility.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  protocol:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uv sync --frozen
+      - name: Use a real temporary directory
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]).resolve() / "emp-contract"
+          path.mkdir(exist_ok=True)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              for name in ("TMPDIR", "TMP", "TEMP"):
+                  env.write(f"{name}={path}\n")
+      - name: Protocol regression tests
+        run: >-
+          uv run --frozen python -m unittest -q
+          tests.test_tool_bridge tests.test_review_boundaries tests.test_catalog tests.test_v06_dialects
+          tests.test_codex_history tests.test_history_continuity
+          tests.test_transport_continuity tests.test_native_websocket
+          tests.test_chat_projection_regressions
+          tests.test_server.ContinuityAppStateTests
+      - name: Install fixed official runtime
+        run: npm install --prefix runtime-fixture --no-audit --no-fund --ignore-scripts @openai/codex@0.154.0
+      - name: Official runtime contracts with local fixtures
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          names = {"codex.exe"} if os.name == "nt" else {"codex"}
+          binaries = [p for p in Path("runtime-fixture/node_modules/@openai").rglob("*")
+                      if p.is_file() and p.name in names and "vendor" in p.parts]
+          if len(binaries) != 1:
+              raise RuntimeError("expected one native Codex test binary")
+          subprocess.run(["uv", "run", "--frozen", "python", "tools/test_codex_runtime.py",
+                          str(binaries[0])], check=True)

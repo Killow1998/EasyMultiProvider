@@ -4,6 +4,7 @@ version = "0.11.1"
 description = "Web-configured local model router for Codex"
 requires-python = ">=3.8"
 dependencies = [
+    "urllib3[socks]>=2.2.3,<3",
     "cryptography>=2.8,<45",
     "psutil>=5.9,<8",
     "truststore>=0.10.4,<0.11 ; python_version >= '3.10'",

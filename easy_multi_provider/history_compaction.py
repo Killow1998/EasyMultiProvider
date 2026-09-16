@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from .context_guard import estimate_json_tokens
+from .diagnostic_journal import exception_details
+from .transport_failures import failure_from_exception
 
 
 _CHECKPOINT_PREFIX = (
@@ -39,7 +41,7 @@ state, failures, and remaining steps. Do not include hidden reasoning or invente
 details. Return only the checkpoint text."""
 _USER_MESSAGE_TYPE = "message"
 _TOOL_CALL_KINDS = frozenset(
-    {"tool_call", "tool_use", "function_call", "custom_tool_call", "command_call"}
+    {"tool_call", "tool_use", "function_call", "custom_tool_call", "command_call", "tool_search_call"}
 )
 _TOOL_RESULT_KINDS = frozenset(
     {
@@ -48,6 +50,7 @@ _TOOL_RESULT_KINDS = frozenset(
         "tool_return",
         "function_call_output",
         "custom_tool_call_output",
+        "tool_search_output",
         "function_result",
         "command_result",
     }
@@ -72,7 +75,8 @@ class HistoryCompactionError(Exception):
     """Content-free, fail-closed compaction failure."""
 
     _REASONS = frozenset(
-        {"history_compaction_failed", "compaction_unit_too_large"}
+        {"history_compaction_failed", "compaction_unit_too_large",
+         "summary_call_failed", "summary_text_missing", "summary_response_incomplete"}
     )
 
     def __init__(self, reason: str = "history_compaction_failed") -> None:
@@ -144,6 +148,7 @@ class CompactionResult:
 
 @dataclass
 class _MetricState:
+    on_diagnostic: Any = dataclasses.field(default=None, repr=False)
     source_units: int = 0
     mapped_units: int = 0
     retained_units: int = 0
@@ -152,10 +157,17 @@ class _MetricState:
     reduce_calls: int = 0
     cache_hit: bool = False
 
+    def report(self, stage, result, **facts):
+        if self.on_diagnostic is not None:
+            try:
+                self.on_diagnostic(stage, result, **facts)
+            except Exception:
+                pass
+
 
 @dataclass(frozen=True)
 class HistoryUnit:
-    """A complete turn-sized unit that is never split by map or tail packing."""
+    """A complete turn or tool batch that map and tail packing never split."""
 
     items: Tuple[Any, ...]
     turn_id: Optional[str] = None
@@ -381,44 +393,50 @@ def _visible_candidate(item: Any) -> bool:
     return True
 
 
-def split_atomic_units(items: Iterable[Any]) -> Tuple[HistoryUnit, ...]:
+def _is_instruction(item: Any) -> bool:
+    return isinstance(item, ABCMapping) and (
+        item.get("role") in {"system", "developer", "user"} or _is_user_item(item)
+    )
+
+
+def split_atomic_units(items: Iterable[Any], *, tool_exchanges: bool = False) -> Tuple[HistoryUnit, ...]:
     """Split visible items at complete turns while keeping tool pairs intact.
 
     Codex-normalized history normally supplies ``turn_id``.  The user-facing
     request body does not always expose it, so a user-message boundary is the
     conservative fallback.  An open tool call prevents a boundary until its
-    matching result is seen.
+    matching result is seen.  Compaction may also split after a completed
+    tool batch, so a single long-running turn can fit into summary requests.
     """
 
     current: List[Any] = []
     current_turn: Optional[str] = None
     open_calls = set()
     result: List[HistoryUnit] = []
+    completed_batch = False
 
     def flush() -> None:
-        nonlocal current, current_turn, open_calls
+        nonlocal current, current_turn, open_calls, completed_batch
         if current:
             result.append(HistoryUnit(tuple(current), current_turn))
         current = []
         current_turn = None
         open_calls = set()
+        completed_batch = False
 
     for raw in items:
         item = copy.deepcopy(raw)
         item_turn = _turn_id(item)
         boundary = False
         if current:
-            if item_turn is not None and current_turn is not None:
+            if tool_exchanges and completed_batch:
+                boundary = True
+            elif item_turn is not None and current_turn is not None:
                 boundary = item_turn != current_turn
             elif _is_user_item(item) and any(_is_user_item(value) for value in current):
                 boundary = True
             if boundary and open_calls:
-                call_id = _call_id(item)
-                boundary = not (
-                    _tool_role(item) == "result"
-                    and call_id is not None
-                    and call_id in open_calls
-                )
+                boundary = False
             if boundary:
                 flush()
         if current_turn is None and item_turn is not None:
@@ -429,7 +447,9 @@ def split_atomic_units(items: Iterable[Any]) -> Tuple[HistoryUnit, ...]:
         if role == "call" and call_id is not None:
             open_calls.add(call_id)
         elif role == "result" and call_id is not None:
+            matched = call_id in open_calls
             open_calls.discard(call_id)
+            completed_batch = matched and not open_calls
     flush()
     return tuple(result)
 
@@ -518,7 +538,14 @@ def _extract_summary(value: Any) -> str:
         raise HistoryCompactionError()
     status = value.get("status")
     if status in {"failed", "incomplete"}:
-        raise HistoryCompactionError()
+        raise HistoryCompactionError("summary_response_incomplete")
+    if value.get("type") == "message" and isinstance(value.get("content"), list):
+        return _extract_summary([
+            part["text"] for part in value["content"]
+            if isinstance(part, ABCMapping)
+            and part.get("type") == "output_text"
+            and isinstance(part.get("text"), str)
+        ])
     for key in ("output_text", "text", "summary", "checkpoint", "content"):
         if key not in value:
             continue
@@ -611,9 +638,20 @@ class HistoryCompactor:
         output_limit: int,
     ) -> Dict[str, Any]:
         model_id = model.get("upstream_id") or model.get("id") or requested_slug
+        history = []
+        for item in _flatten(units):
+            if _tool_role(item) is not None or (
+                isinstance(item, ABCMapping) and item.get("role") == "tool"
+            ):
+                # A summarizer has no tools. Past tool calls/results are data,
+                # not live protocol calls requiring declarations or execution.
+                history.append(_message("Historical tool record (data only):\n" +
+                                        json.dumps(item, ensure_ascii=False)))
+            else:
+                history.append(item)
         return {
             "model": model_id,
-            "input": _flatten(units) + [_message(prompt)],
+            "input": history + [_message(prompt)],
             "stream": False,
             "tools": [],
             "max_output_tokens": output_limit,
@@ -654,16 +692,36 @@ class HistoryCompactor:
             output_limit=output_limit,
             source_fingerprint=source_fp,
         )
+        started = time.monotonic()
+        call = {"summary_stage": stage, "summary_index": metric_state.map_calls + metric_state.reduce_calls,
+                "protocol": protocol, "input_items": len(request_body.get("input", [])),
+                "safe_input_budget": safe_budget, "output_limit": output_limit}
+        metric_state.report("summary_call", "started", **call)
         try:
             callback = getattr(self.summarizer, "summarize", None)
             raw = callback(request) if callable(callback) else self.summarizer(request)
-        except HistoryCompactionError:
-            raise
-        except Exception:
-            # The adapter's error details never cross the content-free history
-            # boundary and the deterministic failure is not retried.
-            raise HistoryCompactionError() from None
-        return _extract_summary(raw)
+        except Exception as exc:
+            failure = failure_from_exception(exc)
+            metric_state.report("summary_call", "failed", **call,
+                                duration_ms=round((time.monotonic() - started) * 1000),
+                                error_class=failure.error_class, reason=failure.failure_reason,
+                                status=failure.status, exception_chain=exception_details(exc))
+            if isinstance(exc, HistoryCompactionError):
+                raise
+            raise HistoryCompactionError("summary_call_failed") from exc
+        metric_state.report("summary_call", "completed", **call,
+                            duration_ms=round((time.monotonic() - started) * 1000),
+                            output_items=len(raw["output"]) if isinstance(raw, ABCMapping) and isinstance(raw.get("output"), list) else None,
+                            has_output_text=bool(raw.get("output_text")) if isinstance(raw, ABCMapping) else False)
+        try:
+            summary = _extract_summary(raw)
+        except HistoryCompactionError as exc:
+            reason = exc.reason if exc.reason != "history_compaction_failed" else "summary_text_missing"
+            metric_state.report("summary_extract", "failed", **call, reason=reason,
+                                exception_chain=exception_details(exc))
+            raise HistoryCompactionError(reason) from exc
+        metric_state.report("summary_extract", "completed", **call, summary_chars=len(summary))
+        return summary
 
     def _pack(
         self,
@@ -811,26 +869,42 @@ class HistoryCompactor:
         source_boundary: Any = None,
         metric_state: _MetricState,
     ) -> Dict[str, Any]:
-        """Compact older candidate units while retaining the active request verbatim."""
+        """Compact completed work while keeping instructions and the active tail."""
 
         if _positive_int(safe_budget) is None:
             raise HistoryCompactionError()
         visible_candidates = [
             copy.deepcopy(item) for item in candidate_items if _visible_candidate(item)
         ]
-        candidate_units = split_atomic_units(visible_candidates)
         active = tuple(copy.deepcopy(list(active_request)))
+        active_only = self._final_body(body, prefix_items, None, (), active, suffix_items)
+        if _estimate(_input_view(active_only, active_only.get("input", []))) > safe_budget:
+            # Keep instructions verbatim. Only completed tool work from the
+            # active turn can move into the checkpoint; the recent tail stays
+            # intact, including any tool calls still awaiting results.
+            pinned = [item for item in active if _is_instruction(item)]
+            work = [item for item in active if not _is_instruction(item)]
+            exchanges = split_atomic_units(work, tool_exchanges=True)
+            if len(exchanges) > 2:
+                promoted = _flatten(exchanges[:-2])
+                visible_candidates.extend(item for item in promoted if _visible_candidate(item))
+                prefix_items = tuple(prefix_items) + tuple(pinned)
+                active = tuple(_flatten(exchanges[-2:]))
+                metric_state.report("active_turn_partition", "completed",
+                                    promoted_items=len(promoted), pinned_items=len(pinned),
+                                    retained_items=len(active))
+        candidate_units = split_atomic_units(visible_candidates, tool_exchanges=True)
         metric_state.source_units = len(candidate_units)
         metric_state.active_items = len(active)
         output_limit = self._summary_output_limit(model, body, safe_budget)
         source_fp = source_fingerprint(
             source_boundary,
-            {"candidate": visible_candidates, "active_request": list(active)},
+            {"candidate": visible_candidates, "active_request": list(active), "prefix": list(prefix_items)},
         )
         cache_key = CheckpointCacheKey(
             source_boundary_fingerprint=_fingerprint(source_boundary),
             visible_prefix_fingerprint=_fingerprint(
-                {"candidate": visible_candidates, "active_request": list(active)}
+                {"candidate": visible_candidates, "active_request": list(active), "prefix": list(prefix_items)}
             ),
             destination_fingerprint=destination_fingerprint(
                 provider, model, protocol, safe_budget
@@ -985,11 +1059,12 @@ class HistoryCompactor:
         prefix_items: Sequence[Any] = (),
         suffix_items: Sequence[Any] = (),
         source_boundary: Any = None,
+        on_diagnostic=None,
     ) -> CompactionResult:
         """Return a classified result without performing transport itself."""
 
         started = time.monotonic()
-        state = _MetricState()
+        state = _MetricState(on_diagnostic=on_diagnostic)
         before: Optional[int] = None
         try:
             before = _estimate(_input_view(body, _body_items(body)))

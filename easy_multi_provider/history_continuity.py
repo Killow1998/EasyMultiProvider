@@ -258,6 +258,7 @@ class HistoryContinuityEngine:
         requested_slug: str,
         body: Mapping[str, Any],
         incoming: Mapping[str, str],
+        *, on_diagnostic=None,
     ) -> Dict[str, Any]:
         del config, model, requested_slug
         try:
@@ -281,6 +282,8 @@ class HistoryContinuityEngine:
         if not anchor.turn_id:
             raise HistoryReconstructionError("turn_identity_missing")
         try:
+            if on_diagnostic:
+                on_diagnostic("history_read", "started")
             read_compaction = getattr(self.reader, "read_compaction_history", None)
             snapshot = (read_compaction(anchor, _input_items(decoded)[_opaque_compaction_index(decoded)])
                         if read_compaction is not None else self.reader.read_visible_history(anchor))
@@ -292,6 +295,10 @@ class HistoryContinuityEngine:
             raise HistoryReconstructionError("invalid_history_snapshot")
         if snapshot.thread_id != anchor.thread_id:
             raise HistoryReconstructionError("thread_mismatch")
+        if on_diagnostic:
+            on_diagnostic("history_read", "completed", source=snapshot.source,
+                          visible_items=len(snapshot.items), fallback=snapshot.fallback,
+                          highest_ordinal=snapshot.cursor.highest_ordinal)
         try:
             source = list(_input_items(decoded))
             boundary = _opaque_compaction_index(decoded)
@@ -312,6 +319,9 @@ class HistoryContinuityEngine:
             projected[ACTIVE_INPUT_START_KEY] = (
                 len(source[:boundary]) + len(portable_history)
             )
+            if on_diagnostic:
+                on_diagnostic("history_project", "completed", replacement_items=len(portable_history),
+                              active_items=len(tail), opaque_boundaries=1)
             return projected
         except HistoryReconstructionError:
             raise

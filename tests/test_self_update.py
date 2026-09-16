@@ -182,6 +182,13 @@ class UpdateEndpointTests(unittest.TestCase):
                 status, _ = request(server, "GET", "/api/updates", headers=headers)
                 self.assertEqual(status, 200)
                 self.assertEqual(state.updater.gate.active, 0)
+                state.updater.gate.reopen()
+                with patch.object(state, "shutdown_restore") as restore:
+                    for phase in ("authorizing", "restoring"):
+                        state.updater._set(state=phase)
+                        status, _ = request(server, "POST", "/api/quit", b"{}", headers)
+                        self.assertEqual(status, 409)
+                    restore.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -331,6 +333,8 @@ class QuotaTests(unittest.TestCase):
                 )
             self.assertEqual(value["plan_type"], "plus")
             kwargs = started.call_args.kwargs
+            self.assertEqual(kwargs["encoding"], "utf-8")
+            self.assertEqual(kwargs["errors"], "strict")
             self.assertNotEqual(kwargs["env"]["CODEX_HOME"], str(account_dir))
             self.assertNotIn("EASY_MULTI_PROVIDER_MASTER_KEY", kwargs["env"])
             self.assertNotIn("OPENAI_API_KEY", kwargs["env"])
@@ -346,6 +350,63 @@ class QuotaTests(unittest.TestCase):
             self.assertEqual(rate_limit_request["method"], "account/rateLimits/read")
             self.assertIsNone(rate_limit_request["params"])
             self.assertTrue(process.stdin.closed)
+
+
+class QuotaOutputTests(unittest.TestCase):
+    requests = [
+        {"id": 1, "method": "initialize"}, {"method": "initialized"},
+        {"id": 2, "method": "account/read"},
+        {"id": 3, "method": "account/rateLimits/read"},
+    ]
+
+    def test_utf8_json_rpc_and_non_utf8_stderr_in_chinese_directory(self):
+        # Bytes travel through real process pipes; no StringIO mock can reveal
+        # the Windows locale-dependent decoder bug.
+        script = """
+import json, sys
+sys.stderr.buffer.write(b'\\xff' * (256 * 1024))
+sys.stderr.buffer.flush()
+for line in sys.stdin.buffer:
+    message = json.loads(line)
+    if 'id' not in message:
+        continue
+    result = {'name': '\\u4e2d\\u6587\\u7528\\u6237'}
+    if message['id'] == 3:
+        result = {'rateLimits': {'primary': {'usedPercent': 12}}}
+    sys.stdout.buffer.write((json.dumps({'id': message['id'], 'result': result}, ensure_ascii=False) + '\\n').encode('utf-8'))
+    sys.stdout.buffer.flush()
+"""
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary:
+            directory = Path(temporary) / "中文用户"
+            directory.mkdir()
+            with subprocess.Popen([sys.executable, "-c", script], cwd=directory,
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, encoding="utf-8", errors="strict") as process:
+                output = _query_app_server(process, self.requests, 5)
+            self.assertIn("中文用户", output)
+            self.assertEqual(parse_app_server_output(output)["rate_limits"]["primary"]["usedPercent"], 12)
+
+    def test_invalid_utf8_returns_specific_error_without_thread_traceback(self):
+        with patch.object(threading, "excepthook") as hook:
+            with subprocess.Popen([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\xff\\n'); sys.stdout.buffer.flush()"],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, encoding="utf-8", errors="strict") as process:
+                with self.assertRaises(quota_module.QuotaError) as raised:
+                    _query_app_server(process, self.requests, 5)
+            self.assertEqual(raised.exception.code, "quota_output_encoding_error")
+            hook.assert_not_called()
+
+    def test_read_failure_returns_specific_error_without_leaking_exception(self):
+        from unittest.mock import Mock
+        process = Mock(returncode=0, stdin=io.StringIO(), stderr=io.StringIO())
+        process.stdout.readline.side_effect = OSError("private-path-or-token")
+        with patch.object(threading, "excepthook") as hook:
+            with self.assertRaises(quota_module.QuotaError) as raised:
+                _query_app_server(process, self.requests, 2)
+            hook.assert_not_called()
+        self.assertEqual(raised.exception.code, "quota_output_read_error")
+        self.assertNotIn("private", str(raised.exception))
+        self.assertTrue(process.stdin.closed)
 
 
 class NativeLoginQuotaTests(unittest.TestCase):
@@ -408,6 +469,7 @@ class NativeLoginQuotaTests(unittest.TestCase):
             ("failed to fetch codex rate limits: GET https://example.invalid failed: 403 Forbidden; content-type=text/plain; body=private-token", "quota_access_denied"),
             ("failed to fetch codex rate limits: GET https://example.invalid failed: 429 Too Many Requests; content-type=text/plain; body=private-token", "quota_rate_limited"),
             ("failed to fetch codex rate limits: private-token", "quota_fetch_failed"),
+            ("failed to fetch codex rate limits: error sending request for url (https://example.invalid/private-token)", "quota_transport_error"),
         ):
             with self.subTest(code=code):
                 process, _ = self._fake_process_factory(True)

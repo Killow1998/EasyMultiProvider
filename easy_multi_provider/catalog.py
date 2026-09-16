@@ -274,20 +274,29 @@ def _supports_reasoning_summary_route(
 def _external_entry(
     model: Dict[str, Any], template: Dict[str, Any], provider: Dict[str, Any]
 ) -> Dict[str, Any]:
-    entry = copy.deepcopy(template)
-    for field in (
-        "context_window",
-        "max_context_window",
-        "effective_context_window_percent",
-        "auto_compact_token_limit",
-    ):
-        entry.pop(field, None)
-    entry.pop("default_reasoning_level", None)
-    entry.pop("supported_reasoning_levels", None)
-    # Native routing and plan metadata belong to the source model, not to
-    # arbitrary external providers that reuse its coding-tool template.
-    for field in ("minimal_client_version", "comp_hash", "available_in_plans"):
-        entry.pop(field, None)
+    # Reuse coding instructions, not arbitrary upstream capabilities or account
+    # entitlements. Newly introduced native fields must be reviewed explicitly.
+    entry = {
+        key: copy.deepcopy(template[key])
+        for key in (
+            "base_instructions", "shell_type", "truncation_policy",
+            "include_skills_usage_instructions", "include_plugin_usage_instructions",
+            "include_apps_usage_instructions", "node_repl_auto_review_required",
+            "node_repl_disabled",
+        )
+        if key in template
+    }
+    messages = template.get("model_messages")
+    if isinstance(messages, dict):
+        entry["model_messages"] = {
+            key: copy.deepcopy(messages[key])
+            for key in (
+                "instructions_template", "instructions_variables", "tools",
+                "approvals", "collaboration_modes", "auto_review", "permissions",
+                "multi_agent",
+            )
+            if key in messages
+        }
     entry.update({
         "service_tiers": [],
         "additional_speed_tiers": [],
@@ -298,6 +307,8 @@ def _external_entry(
         "experimental_supported_tools": [],
         "multi_agent_reasoning_effort": None,
         "use_responses_lite": False,
+        "supports_experimental_context": False,
+        "priority": 0,
     })
     levels = normalize_reasoning_levels(model.get("reasoning_levels"))
     friendly_name = str(model.get("display_name") or "").strip()
@@ -322,7 +333,7 @@ def _external_entry(
             ),
             "support_verbosity": False,
             "default_verbosity": None,
-            "supports_search_tool": False,
+            "supports_search_tool": True,
             "supports_image_detail_original": model.get(
                 "supports_image_detail_original", False
             )
@@ -359,6 +370,8 @@ def _external_entry(
 
 def _account_entry(account: Dict[str, Any], native: Dict[str, Any]) -> Dict[str, Any]:
     entry = copy.deepcopy(native)
+    # Missing means unknown, not an empty list of confirmed entitlements.
+    entry.pop("available_access_programs", None)
     slug = str(native.get("slug", ""))
     entry["slug"] = account["prefix"] + "/" + slug
     native_name = str(native.get("display_name") or slug)

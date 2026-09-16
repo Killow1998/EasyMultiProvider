@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Tuple
 
 
 PREVIOUS_RESPONSE_NOT_FOUND_CODE = "previous_response_not_found"
@@ -34,6 +34,8 @@ class TransportContinuityState:
     live_previous_response_id: Optional[str]
     upstream_incremental_capable: bool
     live_connection: bool
+    current_scope: Tuple[Optional[str], Optional[str]] = (None, None)
+    live_scope: Tuple[Optional[str], Optional[str]] = (None, None)
 
 
 class TransportContinuityAdapter:
@@ -58,6 +60,10 @@ class TransportContinuityAdapter:
         ):
             return TransportContinuityDecision.PREVIOUS_RESPONSE_NOT_FOUND
         if previous != state.live_previous_response_id:
+            return TransportContinuityDecision.PREVIOUS_RESPONSE_NOT_FOUND
+        # Only explicit thread/window identity scopes a Codex chain. A new turn
+        # alone is not proof that an otherwise valid previous response expired.
+        if state.current_scope != state.live_scope:
             return TransportContinuityDecision.PREVIOUS_RESPONSE_NOT_FOUND
         return TransportContinuityDecision.CONTINUE_INCREMENTAL
 

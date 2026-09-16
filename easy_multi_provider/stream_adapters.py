@@ -312,6 +312,8 @@ def _reliable_responses_stream(
     factory: Callable[[], Iterable[bytes]],
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     replay_safe: bool = False,
+    event_transform: Optional[Callable[[Mapping[str, Any]], Optional[Mapping[str, Any]]]] = None,
+    on_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Iterator[bytes]:
     """Enforce terminal truth and one explicitly safe pre-output retry."""
 
@@ -354,11 +356,20 @@ def _reliable_responses_stream(
                 iterator = iter(factory())
                 lifecycle.mark_iterator_created()
                 for event in sse_json_events(iterator):
+                    if event_transform is not None:
+                        event = event_transform(event)
+                        if event is None:
+                            continue
                     lifecycle.observe_event(event)
                     terminal = _stream_terminal(event)
                     if terminal is not None:
                         terminal = lifecycle.observe_terminal(event, terminal)
                         _validate_terminal_payload(event)
+                        if on_event is not None:
+                            try:
+                                on_event(event)
+                            except Exception:
+                                pass  # Observers must not break forwarding.
                         report(terminal, True)
                         if terminal.get("success") is True:
                             for buffered in pending:
@@ -376,6 +387,11 @@ def _reliable_responses_stream(
                                 terminal.get("failure_reason"),
                             )
                         return
+                    if on_event is not None:
+                        try:
+                            on_event(event)
+                        except Exception:
+                            pass
                     if lifecycle.output_emitted or lifecycle.tool_activity:
                         for buffered in pending:
                             yield buffered
@@ -637,6 +653,7 @@ def _validated_responses_stream(
 ) -> Iterator[bytes]:
     """Pass through valid Responses SSE and terminate malformed streams explicitly."""
     reported = False
+    saw_terminal = False
     lifecycle = StreamLifecycle()
 
     def report(
@@ -707,7 +724,6 @@ def _validated_responses_stream(
         line_buffer = ""
         pending_data = []
         saw_data = False
-        saw_terminal = False
         terminal_observation: Optional[Dict[str, Any]] = None
 
         def consume_line(line: str) -> None:
@@ -794,7 +810,10 @@ def _validated_responses_stream(
             else status_error_class(exc.status),
         )
     finally:
-        response.close()
+        if saw_terminal:
+            getattr(response, "finish", response.close)()
+        else:
+            response.close()
 
 
 def stream_chat_completion(

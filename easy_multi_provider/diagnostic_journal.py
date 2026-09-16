@@ -100,7 +100,11 @@ def exception_details(exception: BaseException):
     while isinstance(current, BaseException) and id(current) not in seen and len(result) < 8:
         seen.add(id(current))
         item = {"type": type(current).__name__}
-        for name in ("errno", "winerror", "verify_code"):
+        frames = traceback.extract_tb(current.__traceback__)[-6:]
+        if frames:
+            item["frames"] = [{"file": os.path.basename(frame.filename),
+                               "line": frame.lineno, "function": frame.name} for frame in frames]
+        for name in ("errno", "winerror", "verify_code", "status", "code"):
             value = getattr(current, name, None)
             if isinstance(value, int):
                 item[name] = value

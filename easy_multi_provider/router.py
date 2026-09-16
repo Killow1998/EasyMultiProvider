@@ -10,7 +10,7 @@ import uuid
 from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.request import Request
 
 from . import __version__
 from .accounts import AccountError, auth_headers, native_auth_headers
@@ -21,7 +21,8 @@ from .capabilities import (
     observed_at_now,
 )
 from .catalog import has_explicit_family_identity, presentation_for_route
-from .network_proxy import current_proxies, is_loopback, proxy_identity
+from .network_proxy import proxy_identity
+from .http_pool import open_request
 from .config import api_key
 from .context_guard import (
     ContextAssessment,
@@ -107,6 +108,7 @@ from .stream_adapters import (
     stream_chat_completion as _owned_stream_chat_completion,
 )
 from .transport import TransportError, sse_json_events, zstd_encode
+from .tool_bridge import ExternalTools
 from .transport_failures import (
     CONNECT_TIMEOUT,
     MAX_UPSTREAM_ERROR_BYTES,
@@ -158,16 +160,10 @@ class NativeWebSocketPlan:
     context_observation: Dict[str, Any]
 
 
-class _NoRedirectHandler(HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, msg, headers, newurl):
-        raise URLError("upstream redirects are disabled")
-
-
 # Credential-bearing requests must never replay headers to a redirected URL.
 def urlopen(request: Request, timeout: float):
     """Local providers stay local, regardless of proxy mode or environment changes."""
-    proxies = {} if is_loopback(request.full_url) else current_proxies()
-    return build_opener(_NoRedirectHandler(), ProxyHandler(proxies)).open(request, timeout=timeout)
+    return open_request(request, timeout)
 
 
 MAX_UPSTREAM_BODY_BYTES = 16 * 1024 * 1024
@@ -361,6 +357,9 @@ class _DeadlineResponse:
         if close:
             close()
 
+    def finish(self) -> None:
+        getattr(self._response, "finish", self.close)()
+
 
 class _LimitedResponse:
     def __init__(self, response: Any, limit: int):
@@ -403,6 +402,9 @@ class _LimitedResponse:
 
     def close(self) -> None:
         self._response.close()
+
+    def finish(self) -> None:
+        getattr(self._response, "finish", self.close)()
 
 
 def _bounded_stream_response(response: Any) -> _LimitedResponse:
@@ -2139,6 +2141,10 @@ def _proxy_resolved(
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Tuple[Dict[str, Any], Any]:
     adapter = protocol_adapter(route.dialect)
+    tools = None
+    if not adapter.native:
+        tools = ExternalTools()
+        body = tools.prepare(body)
     requested_slug = route.requested_model
     external_compaction = (
         _is_compaction_trigger(body)
@@ -2207,6 +2213,8 @@ def _proxy_resolved(
             ),
             terminal_callback,
             replay_safe=adapter.replay_safe,
+            event_transform=tools.restore_event if tools else None,
+            on_event=on_stream_event,
         )
     if body.get("stream") and adapter.protocol == "anthropic_messages":
         _preflight_history_projection(
@@ -2231,6 +2239,8 @@ def _proxy_resolved(
             ),
             terminal_callback,
             replay_safe=adapter.replay_safe,
+            event_transform=tools.restore_event if tools else None,
+            on_event=on_stream_event,
         )
     if adapter.protocol == "responses":
         if body.get("stream"):
@@ -2240,11 +2250,13 @@ def _proxy_resolved(
             upstream = _reliable_responses_stream(
                 lambda: forward_responses_stream(
                     provider, body, model, incoming, None, None,
-                    on_stream_event=on_stream_event,
+                    on_stream_event=on_stream_event if adapter.native else None,
                     upstream_model=route.upstream_model,
                 ),
                 terminal_callback,
                 replay_safe=adapter.replay_safe,
+                event_transform=tools.restore_event if tools else None,
+                on_event=on_stream_event if tools else None,
             )
             return _tag_route(
                 {
@@ -2284,6 +2296,8 @@ def _proxy_resolved(
             None,
             upstream_model=route.upstream_model,
         )
+    if tools and 200 <= status < 300 and "json" in content_type:
+        raw = json.dumps(tools.restore_response(json.loads(raw)), ensure_ascii=False).encode("utf-8")
     return _tag_route(
         {"kind": "body", "status": status, "content_type": content_type},
         provider,
