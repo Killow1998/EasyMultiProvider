@@ -37,6 +37,11 @@ The current source version is `v0.11.1`.
   success, 429, 502, 503, and 504 rates without storing prompt or response
   content.
 - Export and import password-protected `.emp` migration files.
+  Select Native, other subscriptions and/or external providers when exporting;
+  all categories are selected by default. Native includes display settings and
+  the machine's Codex login credentials, imported as an additional subscription
+  without replacing the current login. Shared model-family display settings
+  accompany the selected models.
 - Preserve native Codex sessions, `resume`, WebSockets, compression, and MCP.
 - Continue compacted tasks when switching between the current login, imported
   subscriptions, and external models, using Codex-owned visible history only.

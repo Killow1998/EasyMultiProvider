@@ -7,7 +7,7 @@ import copy
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -19,12 +19,14 @@ from .accounts import (
     validate_auth_json,
 )
 from .config import api_key, load, normalize, save
+from .catalog import load_native_catalog, model_family_identity
 from .vault import file_transaction, write_encrypted_json
 
 
 MAGIC = b"EMP-MIGRATION\x01\n"
 SCHEMA = "easy-multi-provider-migration"
 VERSION = 1
+EXPORT_GROUPS = frozenset({"native", "subscriptions", "external"})
 MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 MIN_PASSWORD_BYTES = 8
 MAX_PASSWORD_BYTES = 4096
@@ -98,9 +100,65 @@ def _portable_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def export_bundle(config: Dict[str, Any], config_path: Path, password: Any) -> bytes:
+def select_export_config(config: Dict[str, Any], groups: Any = None) -> Dict[str, Any]:
+    """Keep selected categories and their route/display dependencies only."""
+    if groups is None:
+        selected = EXPORT_GROUPS
+    elif (isinstance(groups, list) and groups
+          and all(isinstance(group, str) and group in EXPORT_GROUPS for group in groups)):
+        selected = set(groups)
+    else:
+        raise MigrationError("select at least one valid export category")
+    result = copy.deepcopy(config)
+    if selected == EXPORT_GROUPS:
+        return result
+    providers = {item["id"]: item for item in config.get("providers", [])}
+    provider_groups = {key: "native" if value.get("auth_mode") == "forward" else "external"
+                       for key, value in providers.items()}
+    account_prefixes = {item["prefix"] for item in config.get("accounts", [])}
+    models = {item["id"]: item for item in config.get("models", [])}
+    native_models = (load_native_catalog(config)["models"]
+                     if selected & {"native", "subscriptions"} else [])
+    native_slugs = {item.get("slug") for item in native_models if isinstance(item, dict)}
+
+    def route_group(route):
+        if route in models:
+            return provider_groups.get(models[route]["provider"])
+        prefix = route.split("/", 1)[0]
+        if prefix in account_prefixes:
+            return "subscriptions"
+        if prefix in provider_groups:
+            return provider_groups[prefix]
+        return "native" if "/" not in route or route in native_slugs else None
+
+    result["accounts"] = result.get("accounts", []) if "subscriptions" in selected else []
+    result["providers"] = [item for item in result.get("providers", []) if provider_groups[item["id"]] in selected]
+    result["models"] = [item for item in result.get("models", []) if route_group(item["id"]) in selected]
+    result["catalog_presentations"] = {route: value for route, value in result.get("catalog_presentations", {}).items()
+                                       if route_group(route) in selected}
+    families = {model_family_identity(item, item["id"]) for item in result["models"]}
+    if selected & {"native", "subscriptions"}:
+        families.update(model_family_identity(item, item.get("slug", ""))
+                        for item in native_models if isinstance(item, dict))
+        # Preserve subscription family settings even when its local model cache
+        # is absent; known external-only families stay out of this category.
+        external_families = {model_family_identity(item, item["id"]) for item in models.values()
+                             if provider_groups.get(item["provider"]) == "external"}
+        families.update(set(result.get("catalog_family_presentations", {})) - external_families)
+    result["catalog_family_presentations"] = {family: value for family, value in result.get("catalog_family_presentations", {}).items()
+                                              if family in families}
+    if "native" not in selected:
+        result["native_hidden_models"] = []
+    if not selected & {"native", "subscriptions"}:
+        result["subscription_search"] = {"enabled": False, "account_id": ""}
+    return result
+
+
+def export_bundle(config: Dict[str, Any], config_path: Path, password: Any, groups: Any = None,
+                  native_auth_path: Optional[Path] = None) -> bytes:
     """Return an encrypted bundle without writing any plaintext credential."""
     _password_bytes(password)
+    config = select_export_config(config, groups)
     accounts = []
     for raw in config.get("accounts", []):
         account = normalize_account(raw)
@@ -113,6 +171,32 @@ def export_bundle(config: Dict[str, Any], config_path: Path, password: Any) -> b
         metadata = dict(account)
         metadata.pop("auth_file", None)
         accounts.append({"metadata": metadata, "auth": auth})
+
+    if native_auth_path is not None and (groups is None or "native" in groups):
+        try:
+            auth = json.loads(Path(native_auth_path).read_text(encoding="utf-8-sig"))
+            auth = validate_auth_json(auth)
+        except FileNotFoundError:
+            auth = None
+        except Exception as exc:
+            raise MigrationError("Native login credentials are unavailable or invalid") from exc
+        if auth is not None:
+            # Use the existing portable account format. Importing never replaces
+            # the destination machine's current Codex login.
+            reserved = {item["id"] for item in config.get("providers", [])}
+            reserved.update(item["id"] for item in config.get("accounts", []))
+            reserved.update(item["prefix"] for item in config.get("accounts", []))
+            account_id = "native-login"
+            suffix = 2
+            while account_id in reserved:
+                account_id = "native-login-%d" % suffix
+                suffix += 1
+            account = normalize_account({"id": account_id, "prefix": account_id,
+                "name": "Native login", "hidden_models": config.get("native_hidden_models", [])})
+            config["accounts"].append(account)
+            metadata = dict(account)
+            metadata.pop("auth_file", None)
+            accounts.append({"metadata": metadata, "auth": auth})
 
     provider_keys = {}
     for provider in config.get("providers", []):

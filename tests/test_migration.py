@@ -1,4 +1,5 @@
 import json
+import itertools
 import os
 import tempfile
 import unittest
@@ -14,6 +15,127 @@ from easy_multi_provider.migration import MigrationError, export_bundle, import_
 
 
 class MigrationTests(unittest.TestCase):
+    def test_native_login_exports_as_portable_account_without_replacing_current_login(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            "EASY_MULTI_PROVIDER_MASTER_KEY": Fernet.generate_key().decode("ascii"),
+        }):
+            root = Path(directory)
+            native_path = root / "auth.json"
+            auth = {"tokens": {"access_token": "native-access", "refresh_token": "native-refresh"}}
+            native_path.write_text(json.dumps(auth), encoding="utf-8")
+            config = normalize({"providers": [{"id": "native-login", "base_url": "https://example.test/v1", "auth_mode": "forward", "protocol": "responses"}],
+                                "native_hidden_models": ["gpt-hidden"]})
+            bundle = export_bundle(config, root / "source.json", "migration-pass", ["native"], native_path)
+            payload = read_bundle(bundle, "migration-pass")
+            self.assertEqual(payload["accounts"][0]["auth"], auth)
+            self.assertEqual(payload["accounts"][0]["metadata"]["id"], "native-login-2")
+            self.assertEqual(config["accounts"], [])
+            self.assertNotIn(b"native-access", bundle)
+            self.assertNotIn(b"native-refresh", bundle)
+            target_path = root / "target" / "config.json"
+            save(normalize({}), target_path)
+            imported, summary = import_bundle(load(target_path), bundle, "migration-pass", target_path)
+            self.assertEqual(summary["accounts"], 1)
+            self.assertEqual(load_auth(imported["accounts"][0]), auth)
+            self.assertEqual(imported["accounts"][0]["hidden_models"], ["gpt-hidden"])
+            self.assertEqual(json.loads(native_path.read_text()), auth)
+            native_path.write_text("invalid-json", encoding="utf-8")
+            with self.assertRaises(MigrationError):
+                export_bundle(config, root / "source.json", "migration-pass", ["native"], native_path)
+            # An omitted Native category does not touch even a broken login file.
+            omitted = read_bundle(export_bundle(config, root / "source.json", "migration-pass", ["external"], native_path), "migration-pass")
+            self.assertEqual(omitted["accounts"], [])
+            native_path.unlink()
+            absent = read_bundle(export_bundle(config, root / "source.json", "migration-pass", ["native"], native_path), "migration-pass")
+            self.assertEqual(absent["accounts"], [])
+
+    def test_selected_categories_round_trip_without_unselected_credentials(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            "EASY_MULTI_PROVIDER_MASTER_KEY": Fernet.generate_key().decode("ascii"),
+        }):
+            root = Path(directory)
+            source_path = root / "source" / "config.json"
+            source = normalize({
+                "account_store_path": str(root / "source" / "accounts"),
+                "secret_store_path": str(root / "source" / "secrets"),
+                "native_catalog_path": str(root / "missing-catalog.json"),
+                "providers": [
+                    {"id": "external", "base_url": "https://example.test/v1", "api_key": "external-secret"},
+                    {"id": "bridge", "base_url": "https://native.test/v1", "auth_mode": "forward", "protocol": "responses"},
+                ],
+                "models": [
+                    {"id": "external/flash", "provider": "external", "family_id": "gemini"},
+                    {"id": "bridge/local", "provider": "bridge", "upstream_id": "gpt-x"},
+                ],
+                "native_hidden_models": ["gpt-hidden"],
+                "catalog_presentations": {
+                    "gpt-x": {"catalog_alias": "Native model"},
+                    "other/gpt-x": {"catalog_alias": "Other model"},
+                    "external/flash": {"catalog_alias": "External model"},
+                    "bridge/local": {"catalog_alias": "Native bridge"},
+                },
+                "catalog_family_presentations": {
+                    "gpt-x": {"show_context": False}, "gemini": {"show_context": True},
+                },
+            })
+            save(source, source_path)
+            source = load(source_path)
+            source["accounts"] = [import_account(source, {"id": "other", "prefix": "other"},
+                {"tokens": {"access_token": "subscription-secret"}}, source_path)]
+            save(source, source_path)
+            source = load(source_path)
+            groups = ["native", "subscriptions", "external"]
+            for size in range(1, 4):
+                for selected in itertools.combinations(groups, size):
+                    with self.subTest(selected=selected):
+                        bundle = export_bundle(source, source_path, "migration-pass", list(selected))
+                        payload = read_bundle(bundle, "migration-pass")
+                        native = "native" in selected
+                        subscriptions = "subscriptions" in selected
+                        external = "external" in selected
+                        self.assertEqual(len(payload["accounts"]), int(subscriptions))
+                        self.assertEqual(set(payload["provider_keys"]), {"external"} if external else set())
+                        self.assertEqual({p["id"] for p in payload["config"]["providers"]},
+                                         ({"bridge"} if native else set()) | ({"external"} if external else set()))
+                        expected_routes = ({"gpt-x", "bridge/local"} if native else set())
+                        expected_routes |= {"other/gpt-x"} if subscriptions else set()
+                        expected_routes |= {"external/flash"} if external else set()
+                        self.assertEqual(set(payload["config"]["catalog_presentations"]), expected_routes)
+                        self.assertEqual(payload["config"]["native_hidden_models"], ["gpt-hidden"] if native else [])
+                        expected_families = ({"gpt-x"} if native or subscriptions else set()) | ({"gemini"} if external else set())
+                        self.assertEqual(set(payload["config"]["catalog_family_presentations"]), expected_families)
+                        self.assertNotIn(b"external-secret", bundle)
+                        self.assertNotIn(b"subscription-secret", bundle)
+                        target_path = root / ("target-" + "-".join(selected)) / "config.json"
+                        current = normalize({
+                            "providers": [{"id": "retained", "base_url": "https://retained.test/v1", "api_key": "retained-secret"}],
+                            "models": [{"id": "retained/model", "provider": "retained"}],
+                            "native_hidden_models": ["retained-hidden"],
+                        })
+                        save(current, target_path)
+                        imported, summary = import_bundle(load(target_path), bundle, "migration-pass", target_path)
+                        self.assertEqual(summary["accounts"], int(subscriptions))
+                        retained = next(p for p in imported["providers"] if p["id"] == "retained")
+                        self.assertEqual(api_key(retained), "retained-secret")
+                        self.assertIn("retained/model", {m["id"] for m in imported["models"]})
+                        self.assertIn("retained-hidden", imported["native_hidden_models"])
+                        if subscriptions:
+                            self.assertEqual(load_auth(imported["accounts"][0])["tokens"]["access_token"], "subscription-secret")
+
+    def test_omitted_categories_never_read_credentials_and_invalid_selection_fails(self):
+        config = normalize({
+            "accounts": [{"id": "other", "prefix": "other", "auth_file": "unavailable-auth.json"}],
+            "providers": [{"id": "external", "base_url": "https://example.test/v1", "api_key_file": "unavailable-key"}],
+        })
+        with patch.object(migration_module, "load_auth", side_effect=AssertionError("unexpected account read")), \
+                patch.object(migration_module, "api_key", side_effect=AssertionError("unexpected key read")):
+            payload = read_bundle(export_bundle(config, Path("config.json"), "migration-pass", ["native"]), "migration-pass")
+            self.assertEqual(payload["accounts"], [])
+            self.assertEqual(payload["provider_keys"], {})
+        for selected in ([], "native", ["unknown"], [1], {}, ["native", "unknown"]):
+            with self.subTest(selected=selected), self.assertRaises(MigrationError):
+                export_bundle(config, Path("config.json"), "migration-pass", selected)
+
     def test_current_import_accepts_a_v0_9_0_style_bundle(self):
         """Version-1 bundles remain readable when newer config fields are absent."""
 

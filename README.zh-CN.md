@@ -32,6 +32,8 @@ EMP 是一个通过浏览器配置的 Codex 本地模型路由器。它在
   速度模式。同时显示成功、429、502、503 和 504 的观测比例；
   不保存提示词或回复内容。
 - 通过密码保护的 `.emp` 文件导入和导出数据。
+  导出时可多选 Native、其他 Subscription 和 External Provider，默认全选。
+  Native 包含模型显示配置和本机 Codex 登录凭据；导入后作为额外 Subscription 账号，不替换当前登录。选中模型的共享分组显示设置会一并导出。
 - 保留 Codex 原生会话、`resume`、WebSocket、压缩和 MCP 功能。
 - 在当前登录、其他 Subscription 和外部模型之间切换时，使用 Codex 自己保存的
   可见历史继续已经压缩过的任务。

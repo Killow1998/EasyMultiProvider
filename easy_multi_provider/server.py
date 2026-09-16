@@ -107,7 +107,7 @@ from .integration_views import (
     startup_target_conflict,
 )
 from .main import resolve_integration_paths
-from .migration import export_bundle, import_bundle
+from .migration import export_bundle, import_bundle, select_export_config
 from .management_views import (
     management_capabilities,
     management_config,
@@ -2069,9 +2069,10 @@ class AppState:
             event, body, started, "websocket", "responses"
         )
 
-    def export_migration(self, password: str) -> bytes:
+    def export_migration(self, password: str, groups: Any = None) -> bytes:
         with self.lock:
-            return export_bundle(self.config, self.path, password)
+            return export_bundle(self.config, self.path, password, groups,
+                                 native_auth_path=self.codex_home / "auth.json")
 
     def import_migration(self, bundle: bytes, password: str) -> Dict[str, int]:
         with self.lock:
@@ -3965,8 +3966,8 @@ def make_handler(state: AppState):
                     self._send(200, _json_bytes({"account": public_accounts([account])[0]}))
                     return
                 if path == "/api/migration/export":
-                    bundle = state.export_migration(body.get("password"))
-                    migration_snapshot = state.snapshot()
+                    bundle = state.export_migration(body.get("password"), body.get("groups"))
+                    migration_snapshot = select_export_config(state.snapshot(), body.get("groups"))
                     emit_operation(
                         "migration_operation",
                         "success",

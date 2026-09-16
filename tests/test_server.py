@@ -3078,6 +3078,7 @@ class ServerAccountTests(unittest.TestCase):
                 config_path,
             )
             state = AppState(config_path)
+            state.codex_home = root / "codex"
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -3105,6 +3106,29 @@ class ServerAccountTests(unittest.TestCase):
                         response.getheader("Content-Disposition"),
                     )
                     self.assertTrue(bundle.startswith(b"EMP-MIGRATION"))
+                    connection.close()
+
+                    # Selective export still uses the existing encrypted format.
+                    from easy_multi_provider.migration import read_bundle
+                    state.codex_home.mkdir()
+                    native_auth = {"tokens": {"access_token": "fixture-native-access"}}
+                    (state.codex_home / "auth.json").write_text(json.dumps(native_auth), encoding="utf-8")
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request("POST", "/api/migration/export",
+                        json.dumps({"password": "migration-pass-3", "groups": ["native"]}).encode(), headers)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    selected = read_bundle(response.read(), "migration-pass-3")
+                    self.assertEqual(selected["config"]["providers"], [])
+                    self.assertEqual(selected["provider_keys"], {})
+                    self.assertEqual(selected["accounts"][0]["auth"], native_auth)
+                    connection.close()
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request("POST", "/api/migration/export",
+                        json.dumps({"password": "migration-pass-3", "groups": []}).encode(), headers)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 400)
+                    response.read()
                     connection.close()
 
                     connection = HTTPConnection(*server.server_address)

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Choose Native, other subscriptions and external providers when exporting
+  encrypted `.emp` files. Include the selected routes, display settings and
+  managed credentials only; retain the existing migration format and full-export
+  default. Native includes the machine's Codex login credentials and imports them
+  as an additional subscription without replacing the destination login.
 - Bound incomplete HTTP SSE lines before they reach the outer parser; preserve
   complete UTF-8 lines and close oversized streams immediately.
 - Authenticate HTTP proxies using proxy-only headers, including CONNECT tunnels;
