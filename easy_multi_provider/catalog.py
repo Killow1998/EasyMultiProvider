@@ -10,10 +10,53 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .accounts import duplicate_account_status
+from .accounts import auth_headers, duplicate_account_status
 from .capabilities import codex_input_modalities, normalize_reasoning_levels
 from .config import MAX_CONTEXT_WINDOW
 from .integration import atomic_write_text
+
+RETIRED_SUBSCRIPTION_MODELS = frozenset({"gpt-5.5"})
+
+
+def subscription_context_max(model: Dict[str, Any]) -> int:
+    # A missing maximum permits the advertised default, not a guessed API limit.
+    value = model.get("max_context_window")
+    if value is None:
+        value = model.get("context_window")
+    return value if isinstance(value, int) and not isinstance(value, bool) and 0 < value <= MAX_CONTEXT_WINDOW else 0
+
+
+def _apply_subscription_context(model: Dict[str, Any], windows: Dict[str, int]) -> None:
+    # Codex defaults omitted/null percentages to 95; make that default explicit
+    # so EMP's label and context guard calculate the same usable window.
+    if model.get("effective_context_window_percent") is None:
+        model["effective_context_window_percent"] = 95
+    requested = windows.get(str(model.get("slug") or ""))
+    maximum = subscription_context_max(model)
+    if requested and maximum:
+        model["context_window"] = min(requested, maximum)
+        # Let Codex calculate compaction against the new window. Do not carry
+        # an absolute threshold from the smaller default context.
+        model.pop("auto_compact_token_limit", None)
+
+
+def account_catalog_owner(account: Dict[str, Any]) -> str:
+    headers = auth_headers(account)
+    identity = headers.get("ChatGPT-Account-ID") or headers.get("chatgpt-account-id") or headers.get("Authorization", "")
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _account_catalog(config: Dict[str, Any], account: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        path = Path(account["auth_file"]).parent / "models_cache.json"
+        if path.is_symlink() or path.stat().st_size > 4 * 1024 * 1024:
+            return load_native_catalog(config)
+        cached = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(cached, dict) and isinstance(cached.get("models"), list) and cached.get("account_owner") == account_catalog_owner(account) and cached.get("base_url") == config.get("codex_base_url"):
+            return cached
+    except (KeyError, OSError, ValueError):
+        pass
+    return load_native_catalog(config)
 
 EFFORT_DESCRIPTIONS = {
     "minimal": "Fast responses with minimal reasoning",
@@ -370,6 +413,7 @@ def _external_entry(
 
 def _account_entry(account: Dict[str, Any], native: Dict[str, Any]) -> Dict[str, Any]:
     entry = copy.deepcopy(native)
+    _apply_subscription_context(entry, account.get("model_context_windows", {}))
     # Missing means unknown, not an empty list of confirmed entitlements.
     entry.pop("available_access_programs", None)
     slug = str(native.get("slug", ""))
@@ -390,33 +434,62 @@ def _account_entry(account: Dict[str, Any], native: Dict[str, Any]) -> Dict[str,
     return entry
 
 
-def _subscription_native_models(config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    native = load_native_catalog(config)
+def _subscription_native_models(config: Dict[str, Any], account: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    native = _account_catalog(config, account) if account is not None else load_native_catalog(config)
     return [
         item
         for item in native["models"]
         if isinstance(item, dict)
         and str(item.get("slug", "")).strip()
+        and item.get("slug") not in RETIRED_SUBSCRIPTION_MODELS
         and item.get("visibility", "list") == "list"
         and item.get("supported_in_api", True) is not False
     ]
 
 
-def subscription_model_options(config: Dict[str, Any]) -> List[Dict[str, str]]:
+def subscription_model_options(config: Dict[str, Any], account: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Return native Coding Agent models that subscription aliases may expose."""
     return [
         {
             "id": str(model["slug"]),
             "display_name": str(model.get("display_name") or model["slug"]),
             "description": str(model.get("description") or ""),
-            "context_window": _usable_context_window(model),
+            "context_window": _usable_context_window({**model, "effective_context_window_percent": model.get("effective_context_window_percent") or 95}),
+            "default_context_window": model.get("context_window", 0),
+            "max_context_window": subscription_context_max(model),
+            "effective_context_window_percent": model.get("effective_context_window_percent") or 95,
             "supports_reasoning_summaries": (
                 model.get("supports_reasoning_summary_parameter") is True
                 or model.get("supports_reasoning_summaries") is True
             ),
         }
-        for model in _subscription_native_models(config)
+        for model in _subscription_native_models(config, account)
     ]
+
+
+def validate_subscription_contexts(config: Dict[str, Any], previous: Optional[Dict[str, Any]] = None) -> None:
+    sources = [(None, config.get("native_model_context_windows", {}), (previous or {}).get("native_model_context_windows", {}))]
+    old_accounts = {a["id"]: a for a in (previous or {}).get("accounts", [])}
+    sources.extend((a, a.get("model_context_windows", {}), old_accounts.get(a["id"], {}).get("model_context_windows", {})) for a in config.get("accounts", []))
+    for account, windows, old in sources:
+        limits = {m["id"]: m["max_context_window"] for m in subscription_model_options(config, account)}
+        for slug, tokens in windows.items():
+            if old.get(slug) == tokens:
+                continue
+            maximum = limits.get(slug, 0)
+            if not maximum or tokens > maximum:
+                raise ValueError("Context for %s exceeds the subscription catalog limit (%d tokens); refresh models first" % (slug, maximum))
+
+
+def subscription_route_model(config: Dict[str, Any], slug: str, account: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    catalog = _account_catalog(config, account) if account is not None else load_native_catalog(config)
+    for item in catalog.get("models", []):
+        if isinstance(item, dict) and item.get("slug") == slug and item.get("supported_in_api", True) is not False:
+            model = copy.deepcopy(item)
+            windows = account.get("model_context_windows", {}) if account is not None else config.get("native_model_context_windows", {})
+            _apply_subscription_context(model, windows)
+            return model
+    return None
 
 
 def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -433,6 +506,7 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
         copy.deepcopy(item)
         for item in native["models"]
         if isinstance(item, dict)
+        and item.get("slug") not in RETIRED_SUBSCRIPTION_MODELS
         and item.get("supported_in_api", True) is not False
         and not (
             item.get("slug") in native_hidden_models
@@ -440,6 +514,7 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
         )
     ]
     for model_index, model in enumerate(native_models):
+        _apply_subscription_context(model, config.get("native_model_context_windows", {}))
         slug = str(model.get("slug") or "")
         model["_emp_family"] = model_family_identity(model, slug)
         model["_emp_family_verified"] = True
@@ -454,7 +529,6 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
     }
     external_by_provider = {}
     account_aliases = []
-    subscription_models = _subscription_native_models(config)
     for account_index, account in enumerate(config.get("accounts", [])):
         if (
             not account.get("enabled", True)
@@ -464,7 +538,7 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
         ):
             continue
         hidden_models = set(account.get("hidden_models", []))
-        for model in subscription_models:
+        for model in _subscription_native_models(config, account):
             if model.get("slug") in hidden_models:
                 continue
             alias = _account_entry(account, model)

@@ -21,7 +21,7 @@ from easy_multi_provider.diagnostic_journal import NullJournal
 from easy_multi_provider.performance import ResponsesPerformanceTracker, reported_usage
 from easy_multi_provider.protocol_projection import _anthropic_usage, _chat_usage
 from easy_multi_provider.server import AppState, make_handler
-from easy_multi_provider.usage_ledger import UsageLedger, usage_identity
+from easy_multi_provider.usage_ledger import UsageLedger, usage_account_owner, usage_identity
 from easy_multi_provider.usage_pricing import PriceCatalog, estimate_tokens, model_price_key, normalize_prices
 from tests.support import ensure_test_master_key
 
@@ -117,6 +117,31 @@ class PriceCalculationTests(unittest.TestCase):
 
 
 class UsageStorageTests(unittest.TestCase):
+    def test_account_cost_groups_survive_local_id_changes_and_token_rotation(self):
+        for index, (local_id, account_id) in enumerate((("old", "account-A"), ("new", "account-A"), ("new", "account-B"))):
+            provider = {"id": local_id, "auth_mode": "account", "_resolved_account_auth": {
+                "Authorization": "Bearer token-%d" % index, "chatgpt-account-id": account_id}}
+            router._headers(provider, {}, False)
+            identity = usage_identity(provider, {"id": local_id + "/alias", "upstream_id": "gpt-example"})
+            self.assertNotIn(account_id, identity["usage_owner"])
+            self.assertNotIn("token-", identity["usage_owner"])
+            self.ledger.record(event(**identity, usage_response_id="resp-%d" % index), observed_at=100 + index)
+        data = self.ledger.query(0, 200)
+        self.assertEqual(len(data["groups"]), 2)
+        owner_a = usage_account_owner({"chatgpt-account-id": "account-A"})
+        group_a = next(row for row in data["groups"] if row["owner"] == owner_a)
+        self.assertEqual(group_a["requests"], 2)
+        self.assertEqual(group_a["cost_nanos"], 2 * 1_360_000)
+        self.assertEqual(data["totals"]["requests"], 3)
+        self.assertEqual(data["totals"]["cost_nanos"], 3 * 1_360_000)
+
+    def test_missing_account_identity_is_not_confused_with_a_confirmed_account(self):
+        owner = usage_account_owner({"Authorization": "Bearer fixture-token"})
+        self.assertTrue(owner.startswith("credential:"))
+        self.assertNotIn("fixture-token", owner)
+        self.assertNotEqual(owner, usage_account_owner({"chatgpt-account-id": "fixture-token"}))
+        self.assertEqual(usage_identity({"id": "local", "auth_mode": "account"}, {})["usage_owner"], "unconfirmed:local")
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -232,6 +257,7 @@ class UsageRoutingTests(unittest.TestCase):
             "providers": [{"id": "external", "protocol": "responses", "base_url": "https://example.invalid/v1"}],
             "models": [{"id": "external/alias", "provider": "external", "upstream_id": "gpt-example", "enabled": True}]}), path)
         self.state = AppState(path, runtime_controller=object())
+        self.state.codex_home = self.root / "codex"
         self.state.usage_prices._set({"gpt-example": RATES}, time.time())
 
     def test_nonstream_and_sse_record_one_complete_usage_each(self):
@@ -258,7 +284,7 @@ class UsageRoutingTests(unittest.TestCase):
         for mode in ("forward", "account"):
             plan = SimpleNamespace(provider={"id": "test-"+mode, "auth_mode": mode},
                 model={"id": "display/alias", "upstream_id": "gpt-example"},
-                payload={}, target=SimpleNamespace(headers={}), requested_slug="display/alias",
+                payload={}, target=SimpleNamespace(headers={"chatgpt-account-id": "selected-account"}), requested_slug="display/alias",
                 identity=SimpleNamespace(endpoint_fingerprint=""), context_observation={})
             self.state.record_native_websocket(plan, {"service_tier": "priority"}, time.monotonic(), 0, 0, 100,
                 {"status": 200, "success": True}, False, True, False,
@@ -268,6 +294,7 @@ class UsageRoutingTests(unittest.TestCase):
         self.assertEqual(data["totals"]["requests"], 2)
         self.assertEqual(data["totals"]["cost_nanos"], 2_720_000)
         self.assertEqual({row["category"] for row in data["groups"]}, {"native", "subscription"})
+        self.assertEqual({row["owner"] for row in data["groups"]}, {usage_account_owner({"chatgpt-account-id": "selected-account"})})
 
     def test_management_api_rejects_bad_periods_and_requires_session(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.state))

@@ -42,6 +42,9 @@ The current source version is `v0.11.1`.
   the machine's Codex login credentials, imported as an additional subscription
   without replacing the current login. Shared model-family display settings
   accompany the selected models.
+  Import updates accounts only when their identities match; conflicting accounts
+  are retained with new IDs/prefixes and their display settings follow them.
+  Export counts reflect the file contents; missing Native credentials are reported.
 - Preserve native Codex sessions, `resume`, WebSockets, compression, and MCP.
 - Continue compacted tasks when switching between the current login, imported
   subscriptions, and external models, using Codex-owned visible history only.
@@ -85,6 +88,16 @@ External subagent delegation, follow-up tasks and tool calls are verified with
 Gemini 3.7 Flash and 3.8 Flash on runtime `0.153.4`. See
 [collaboration compatibility](docs/external-collaboration.md) for protocol details.
 
+Subscription editing supports per-model context token counts. Leave a field
+blank for the model default. **Refresh model limits** fetches the subscription
+catalog with that account's credentials; values cannot exceed the advertised
+maximum. Codex's default 95% effective percentage is preserved (872,000 becomes
+828,400 usable). The catalog display and EMP request checks use the same window;
+API addresses and the destination Codex login are unchanged. Existing tasks may
+need a catalog refresh; confirm the effective window in a new task. Exported
+Native context settings follow the imported account instead of overwriting the
+destination's Native settings.
+
 ### Prebuilt packages
 
 Download reviewed builds from
@@ -102,8 +115,8 @@ builds and smoke-tests these native artifacts before a release is published:
 For the simplest desktop launch:
 
 - **Windows:** double-click `EMP.exe`.
-- **Linux:** install the `.deb`, then open **EMP** from the
-  application menu.
+- **Linux:** extract the `.tar.gz`, run `sh install-user.sh` in the extracted
+  directory, then open **EMP** from the application menu.
 - **macOS:** open the DMG, drag **EMP** to Applications, then
   double-click it.
 
@@ -120,6 +133,15 @@ Desktop launch stores configuration in the normal per-user directory:
 - Linux: `$XDG_CONFIG_HOME/easy-multi-provider/config.json`, or
   `~/.config/easy-multi-provider/config.json`
 
+The Linux user installer places the binary at
+`$XDG_DATA_HOME/easy-multi-provider/EMP` (default:
+`~/.local/share/easy-multi-provider/EMP`) and its launcher at `~/.local/bin/EMP`.
+Installation and Web UI updates require neither sudo nor an administrator
+password. Configuration and account data stay in the user configuration directory
+above and are not replaced by binary updates. Existing system `.deb` installations
+are not removed automatically; stop the old EMP and back up its configuration
+before moving it to the user configuration directory.
+
 For command-line use, the explicit service command remains available. With the
 downloaded Windows executable, use PowerShell:
 
@@ -131,8 +153,8 @@ downloaded Windows executable, use PowerShell:
 After extracting the Linux `.tar.gz` or installing the `.deb`:
 
 ```bash
-./easy-multi-provider --version
-./easy-multi-provider serve --config config.json
+./EMP --version
+./EMP serve --config config.json
 ```
 
 The `.deb` installs the same command into `PATH`, so omit `./` after installing

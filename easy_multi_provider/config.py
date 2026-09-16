@@ -16,6 +16,7 @@ from .accounts import (
     AccountError,
     canonicalize_account_paths,
     normalize_account,
+    normalize_context_windows,
     normalize_hidden_models,
     public_accounts,
 )
@@ -50,6 +51,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "providers": [],
     "models": [],
     "native_hidden_models": [],
+    "native_model_context_windows": {},
     "catalog_presentations": {},
     "catalog_family_presentations": {},
     "subscription_search": {
@@ -643,6 +645,7 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     result["native_hidden_models"] = normalize_hidden_models(
         raw.get("native_hidden_models"), "native_hidden_models"
     )
+    result["native_model_context_windows"] = normalize_context_windows(raw.get("native_model_context_windows"))
     result["catalog_presentations"] = _normalize_catalog_presentations(
         raw.get("catalog_presentations")
     )

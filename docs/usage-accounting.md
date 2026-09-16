@@ -29,7 +29,7 @@ because their individual requests and context tiers cannot be recovered.
 
 History/live overlap is matched one-to-one using the Codex turn ID, requested
 model, input, output and cached counts. The live observation wins, preserving
-its confirmed account and rate. Two identical real requests still count twice.
+its recorded account attribution and rate. Two identical real requests still count twice.
 A turn with unmatched history and live observations shows an overlap warning;
 no timestamp-only guesses are made. Old clients without turn metadata cannot
 be reliably reconciled with live observations; totals may contain overlap.
@@ -40,6 +40,16 @@ compared with the current route configuration; their category is an inference.
 Historical owners remain `history:<route prefix>` rather than the currently
 logged-in or imported account. Unmapped models remain Unknown source. Changed
 or reused prefixes cannot establish the original account identity.
+
+New live ChatGPT observations use an opaque fingerprint of the account ID in
+the selected upstream authentication headers. Local account IDs, prefixes,
+display names and token rotation do not change that identity. Native and Other
+Subscription remain separate categories even when they use the same account.
+If no account ID is available, the selected credential is fingerprinted and
+shown as identity unconfirmed; credential rotation can split those groups.
+Older live rows are retained without reassignment to the current login. External
+usage remains grouped by provider source; an API key does not establish the
+identity of an account behind a gateway or account pool.
 
 Token counts come from upstream usage, not character estimates. Input includes
 cached input and cache writes; output includes reasoning. These subsets are

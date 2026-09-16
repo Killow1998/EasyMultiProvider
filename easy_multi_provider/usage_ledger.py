@@ -30,10 +30,26 @@ def usage_context(body, headers):
         return {}  # unknown correlation must never break model forwarding
 
 
-def usage_identity(provider, model):
+def usage_account_owner(headers):
+    """Opaque identity from the credentials actually selected for this request."""
+    lower = {key.lower(): value for key, value in headers.items() if isinstance(key, str)}
+    account = lower.get("chatgpt-account-id")
+    if isinstance(account, str) and account.strip() and len(account) <= 512:
+        return "account:" + hashlib.sha256(b"emp-usage-account\0" + account.strip().encode()).hexdigest()
+    authorization = lower.get("authorization")
+    if isinstance(authorization, str) and authorization.strip():
+        return "credential:" + hashlib.sha256(b"emp-usage-credential\0" + authorization.strip().encode()).hexdigest()
+    return ""
+
+
+def usage_identity(provider, model, headers=None):
     mode = provider.get("auth_mode")
     category = "subscription" if mode == "account" else "native" if mode in ("forward", "native") else "external"
-    return {"usage_category": category, "usage_owner": str(provider.get("id") or ""),
+    owner = str(provider.get("id") or "")
+    if category in ("native", "subscription"):
+        owner = usage_account_owner(headers) if headers is not None else provider.get("_usage_owner", "")
+        owner = owner or "unconfirmed:" + str(provider.get("id") or "")
+    return {"usage_category": category, "usage_owner": owner,
             "upstream_model": resolved_upstream_model(provider, model, str(model.get("id") or ""))}
 
 

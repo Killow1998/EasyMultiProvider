@@ -43,6 +43,41 @@ def _scope(
 
 
 class ProviderReplayTests(unittest.TestCase):
+    def test_no_scope_iterator_closed_once_on_exhaustion_cancellation_and_failure(self):
+        class Chunks:
+            def __init__(self, fail=False):
+                self.position = 0
+                self.closes = 0
+                self.fail = fail
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if self.position:
+                    if self.fail:
+                        raise RuntimeError("fixture stream failure")
+                    raise StopIteration
+                self.position += 1
+                return b"fixture bytes"
+
+            def close(self):
+                self.closes += 1
+
+        for mode in ("exhaustion", "cancellation", "failure"):
+            with self.subTest(mode=mode):
+                chunks = Chunks(fail=mode == "failure")
+                stream = ProviderReplayCache().observe_stream(None, chunks)
+                self.assertEqual(next(stream), b"fixture bytes")
+                if mode == "cancellation":
+                    stream.close()
+                elif mode == "failure":
+                    with self.assertRaises(RuntimeError):
+                        next(stream)
+                else:
+                    self.assertEqual(list(stream), [])
+                self.assertEqual(chunks.closes, 1)
+
     def test_no_scope_stream_skips_parsing_and_closes_on_cancellation(self):
         closed = []
         data = b'data: {"type":"response.output_text.delta","delta":"fixture"}\n\n'

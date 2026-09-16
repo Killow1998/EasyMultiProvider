@@ -239,7 +239,8 @@ class ProviderReplayCache:
 
         try:
             if scope is None:
-                yield from chunks
+                for chunk in chunks:
+                    yield chunk
                 return
             for chunk in chunks:
                 if isinstance(chunk, (bytes, bytearray)):

@@ -16,6 +16,7 @@ from .accounts import (
     account_auth_path,
     load_auth,
     normalize_account,
+    same_account_auth,
     validate_auth_json,
 )
 from .config import api_key, load, normalize, save
@@ -30,6 +31,7 @@ EXPORT_GROUPS = frozenset({"native", "subscriptions", "external"})
 MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 MIN_PASSWORD_BYTES = 8
 MAX_PASSWORD_BYTES = 4096
+MAX_MIGRATION_REQUEST_BYTES = 4 * ((MAX_BUNDLE_BYTES + 2) // 3) + 64 * 1024
 _SALT_BYTES = 16
 _SCRYPT_N = 2**14
 _SCRYPT_R = 8
@@ -149,6 +151,7 @@ def select_export_config(config: Dict[str, Any], groups: Any = None) -> Dict[str
                                               if family in families}
     if "native" not in selected:
         result["native_hidden_models"] = []
+        result["native_model_context_windows"] = {}
     if not selected & {"native", "subscriptions"}:
         result["subscription_search"] = {"enabled": False, "account_id": ""}
     return result
@@ -156,10 +159,18 @@ def select_export_config(config: Dict[str, Any], groups: Any = None) -> Dict[str
 
 def export_bundle(config: Dict[str, Any], config_path: Path, password: Any, groups: Any = None,
                   native_auth_path: Optional[Path] = None) -> bytes:
+    return export_bundle_with_summary(config, config_path, password, groups, native_auth_path)[0]
+
+
+def export_bundle_with_summary(config: Dict[str, Any], config_path: Path, password: Any,
+                               groups: Any = None, native_auth_path: Optional[Path] = None
+                               ) -> Tuple[bytes, Dict[str, Any]]:
     """Return an encrypted bundle without writing any plaintext credential."""
     _password_bytes(password)
     config = select_export_config(config, groups)
     accounts = []
+    native_requested = groups is None or "native" in groups
+    native_included = False
     for raw in config.get("accounts", []):
         account = normalize_account(raw)
         if not account["auth_file"]:
@@ -181,6 +192,7 @@ def export_bundle(config: Dict[str, Any], config_path: Path, password: Any, grou
         except Exception as exc:
             raise MigrationError("Native login credentials are unavailable or invalid") from exc
         if auth is not None:
+            native_included = True
             # Use the existing portable account format. Importing never replaces
             # the destination machine's current Codex login.
             reserved = {item["id"] for item in config.get("providers", [])}
@@ -192,7 +204,8 @@ def export_bundle(config: Dict[str, Any], config_path: Path, password: Any, grou
                 account_id = "native-login-%d" % suffix
                 suffix += 1
             account = normalize_account({"id": account_id, "prefix": account_id,
-                "name": "Native login", "hidden_models": config.get("native_hidden_models", [])})
+                "name": "Native login", "hidden_models": config.get("native_hidden_models", []),
+                "model_context_windows": config.get("native_model_context_windows", {})})
             config["accounts"].append(account)
             metadata = dict(account)
             metadata.pop("auth_file", None)
@@ -227,7 +240,13 @@ def export_bundle(config: Dict[str, Any], config_path: Path, password: Any, grou
     result = MAGIC + _json_bytes(envelope) + b"\n"
     if len(result) > MAX_BUNDLE_BYTES:
         raise MigrationError("migration bundle is too large")
-    return result
+    return result, {
+        "accounts": len(accounts), "providers": len(config.get("providers", [])),
+        "models": len(config.get("models", [])),
+        "groups": sorted(EXPORT_GROUPS if groups is None else set(groups)),
+        "native_login_included": native_included,
+        "native_login_missing": native_requested and not native_included,
+    }
 
 
 def _validate_payload(payload: Any) -> Dict[str, Any]:
@@ -321,10 +340,6 @@ def import_bundle(
         models[model["id"]] = copy.deepcopy(model)
     target["models"] = list(models.values())
 
-    presentations = copy.deepcopy(target.get("catalog_presentations", {}))
-    presentations.update(copy.deepcopy(source.get("catalog_presentations", {})))
-    target["catalog_presentations"] = presentations
-
     family_presentations = copy.deepcopy(
         target.get("catalog_family_presentations", {})
     )
@@ -339,12 +354,66 @@ def import_bundle(
 
     accounts = {item["id"]: item for item in target.get("accounts", [])}
     imported_auth = {}
+    prefix_map = {}
+    renamed_accounts = 0
+    reserved = {item["id"] for item in target["providers"]}
+    for account in list(accounts.values()) + [record["metadata"] for record in payload["accounts"]]:
+        reserved.update((account["id"], account["prefix"]))
+
+    def unique_segment(value):
+        suffix = 2
+        while True:
+            ending = "-%d" % suffix
+            candidate = value[:64 - len(ending)] + ending
+            if candidate not in reserved:
+                reserved.add(candidate)
+                return candidate
+            suffix += 1
+
     for record in payload["accounts"]:
         metadata = normalize_account(record["metadata"])
-        imported_auth[metadata["id"]] = validate_auth_json(record["auth"])
+        auth = validate_auth_json(record["auth"])
+        source_prefix = metadata["prefix"]
+        existing = accounts.get(metadata["id"])
+        same_account = False
+        if existing is not None:
+            # A previous import may already have renamed this source ID.
+            # Reimporting that account should update it, not create another copy.
+            candidates = [existing] + [item for item in accounts.values() if item is not existing]
+            for candidate in candidates:
+                try:
+                    same_account = same_account_auth(load_auth(candidate), auth)
+                except ValueError:
+                    continue
+                if same_account:
+                    existing = candidate
+                    metadata["id"] = existing["id"]
+                    break
+            if same_account:
+                metadata["prefix"] = existing["prefix"]
+            else:
+                metadata["id"] = unique_segment(metadata["id"])
+                metadata["prefix"] = metadata["id"]
+                renamed_accounts += 1
+        if not same_account:
+            occupied_prefixes = {item["prefix"] for item in accounts.values()}
+            occupied_prefixes.update(item["id"] for item in target["providers"])
+            if metadata["prefix"] in occupied_prefixes:
+                metadata["prefix"] = unique_segment(metadata["prefix"])
+                if existing is None:
+                    renamed_accounts += 1
+        reserved.update((metadata["id"], metadata["prefix"]))
+        prefix_map[source_prefix] = metadata["prefix"]
+        imported_auth[metadata["id"]] = auth
         metadata["auth_file"] = ""
         accounts[metadata["id"]] = metadata
     target["accounts"] = list(accounts.values())
+    presentations = copy.deepcopy(target.get("catalog_presentations", {}))
+    for route, value in source.get("catalog_presentations", {}).items():
+        prefix, separator, slug = route.partition("/")
+        destination = prefix_map.get(prefix, prefix) + separator + slug if separator else route
+        presentations[destination] = copy.deepcopy(value)
+    target["catalog_presentations"] = presentations
     target = normalize(target)
     for account in target["accounts"]:
         if account["id"] in imported_auth:
@@ -359,8 +428,11 @@ def import_bundle(
         save(target, config_path, _transaction=transaction)
         result = load(config_path)
 
-    return result, {
+    summary = {
         "accounts": len(imported_auth),
         "providers": len(source.get("providers", [])),
         "models": len(source.get("models", [])),
     }
+    if renamed_accounts:
+        summary["renamed_accounts"] = renamed_accounts
+    return result, summary

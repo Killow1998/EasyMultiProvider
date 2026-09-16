@@ -10,7 +10,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Optional, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from urllib.request import Request
 
 from . import __version__
@@ -551,6 +551,28 @@ def discover_models(provider: Dict[str, Any]) -> list:
     return _owned_discover_models(_discovery_io(), provider)
 
 
+def fetch_subscription_catalog(base_url: str, headers: Dict[str, str], client_version: str) -> Dict[str, Any]:
+    url = base_url.rstrip("/") + "/models?client_version=" + quote(client_version, safe="")
+    request = Request(url, headers={**headers, "Accept": "application/json", "User-Agent": "codex_cli_rs/" + client_version})
+    try:
+        with urlopen(request, timeout=30) as response:
+            if response.status != 200:
+                raise RouterError("Subscription model catalog request failed", response.status)
+            raw = _read_limited(response, MAX_DISCOVERY_BODY_BYTES, "subscription model catalog", time.monotonic() + 30)
+            value = json.loads(raw)
+    except HTTPError as exc:
+        raise RouterError("Subscription model catalog request failed", exc.code) from None
+    except (URLError, OSError) as exc:
+        raise RouterError("Cannot connect to the subscription model catalog; check the network proxy and retry", 503) from exc
+    except (ValueError, UnicodeError):
+        raise RouterError("Subscription model catalog is not valid JSON", 502) from None
+    if not isinstance(value, dict) or not isinstance(value.get("models"), list):
+        raise RouterError("Subscription model catalog is missing models", 502)
+    if any(not isinstance(model, dict) or not isinstance(model.get("slug"), str) for model in value["models"]):
+        raise RouterError("Subscription model catalog has invalid model entries", 502)
+    return value
+
+
 def resolve_provider_protocol(
     provider: Dict[str, Any], preferred: str = "chat_completions"
 ) -> Dict[str, Any]:
@@ -663,6 +685,8 @@ def _headers(
             value = lower.get(source)
             if isinstance(value, str) and value:
                 headers[target] = value
+    if provider.get("auth_mode") in {"account", "forward", "native"}:
+        provider["_usage_owner"] = usage_identity(provider, {}, headers)["usage_owner"]
     return headers
 
 

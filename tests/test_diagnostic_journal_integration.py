@@ -1068,7 +1068,10 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
             root = Path(directory)
             journal = CapturingJournal()
             state = self.make_state(root, journal=journal)
-            state.export_migration = lambda password: b"EXPORT-BUNDLE-SECRET"
+            state.export_migration = lambda password, groups=None: (b"EXPORT-BUNDLE-SECRET", {
+                "accounts": 2, "providers": 3, "models": 4,
+                "native_login_included": True, "native_login_missing": False,
+            })
             state.snapshot = lambda: {
                 "accounts": [{}, {}],
                 "providers": [{}, {}, {}],

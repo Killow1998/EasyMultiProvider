@@ -11,10 +11,87 @@ from cryptography.fernet import Fernet
 from easy_multi_provider.accounts import import_account, load_auth
 from easy_multi_provider.config import api_key, load, normalize, save
 import easy_multi_provider.migration as migration_module
-from easy_multi_provider.migration import MigrationError, export_bundle, import_bundle, read_bundle
+from easy_multi_provider.migration import MigrationError, export_bundle, export_bundle_with_summary, import_bundle, read_bundle
 
 
 class MigrationTests(unittest.TestCase):
+    def test_native_imports_preserve_independent_accounts_and_update_reimports(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            "EASY_MULTI_PROVIDER_MASTER_KEY": Fernet.generate_key().decode("ascii"),
+        }):
+            root = Path(directory)
+            target_path = root / "target" / "config.json"
+            save(normalize({}), target_path)
+            bundles = []
+            for identity in ("account-A", "account-B"):
+                native_path = root / (identity + ".json")
+                native_path.write_text(json.dumps({"tokens": {"account_id": identity,
+                    "access_token": identity + "-access"}}), encoding="utf-8")
+                bundles.append(export_bundle(normalize({}), root / "source.json", "migration-pass", ["native"], native_path))
+            first, _ = import_bundle(load(target_path), bundles[0], "migration-pass", target_path)
+            original_file = Path(first["accounts"][0]["auth_file"])
+            original_bytes = original_file.read_bytes()
+            imported, summary = import_bundle(load(target_path), bundles[1], "migration-pass", target_path)
+            self.assertEqual({a["id"] for a in imported["accounts"]}, {"native-login", "native-login-2"})
+            self.assertEqual({load_auth(a)["tokens"]["account_id"] for a in imported["accounts"]}, {"account-A", "account-B"})
+            self.assertEqual(summary["renamed_accounts"], 1)
+            self.assertEqual(original_file.read_bytes(), original_bytes)
+            imported, _ = import_bundle(load(target_path), bundles[1], "migration-pass", target_path)
+            self.assertEqual(len(imported["accounts"]), 2)
+
+    def test_account_conflicts_remap_presentations_and_preserve_unknown_identity(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            "EASY_MULTI_PROVIDER_MASTER_KEY": Fernet.generate_key().decode("ascii"),
+        }):
+            root = Path(directory)
+            source_path = root / "source" / "config.json"
+            target_path = root / "target" / "config.json"
+            for identity in ("different", "unknown", "unreadable", "same", "prefix"):
+                with self.subTest(identity=identity):
+                    source = normalize({"catalog_presentations": {"route/model": {"catalog_alias": "Imported"}}})
+                    save(source, source_path)
+                    source = load(source_path)
+                    source["accounts"] = [import_account(source, {"id": "shared", "prefix": "route"},
+                        {"tokens": {"account_id": "account-B", "access_token": "new-access"}}, source_path)]
+                    save(source, source_path)
+                    bundle = export_bundle(load(source_path), source_path, "migration-pass", ["subscriptions"])
+                    target = normalize({"catalog_presentations": {"local/model": {"catalog_alias": "Retained"}}})
+                    save(target, target_path)
+                    target = load(target_path)
+                    auth = {"tokens": {"access_token": "old-access"}}
+                    if identity != "unknown":
+                        auth["tokens"]["account_id"] = "account-B" if identity == "same" else "account-A"
+                    target["accounts"] = [import_account(target, {"id": "other" if identity == "prefix" else "shared",
+                        "prefix": "route" if identity == "prefix" else "local"}, auth, target_path)]
+                    save(target, target_path)
+                    if identity == "unreadable":
+                        Path(target["accounts"][0]["auth_file"]).write_bytes(b"corrupt fixture")
+                    original_bytes = Path(target["accounts"][0]["auth_file"]).read_bytes()
+                    imported, _ = import_bundle(load(target_path), bundle, "migration-pass", target_path)
+                    self.assertEqual(len(imported["accounts"]), 1 if identity == "same" else 2)
+                    new_account = next(a for a in imported["accounts"] if load_auth(a)["tokens"]["access_token"] == "new-access") if identity != "unreadable" else imported["accounts"][-1]
+                    self.assertEqual(imported["catalog_presentations"][new_account["prefix"] + "/model"]["catalog_alias"], "Imported")
+                    if identity != "same":
+                        self.assertEqual(imported["catalog_presentations"]["local/model"]["catalog_alias"], "Retained")
+                        self.assertEqual(Path(target["accounts"][0]["auth_file"]).read_bytes(), original_bytes)
+
+    def test_export_summary_matches_credentials_and_reports_missing_native_login(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "auth.json"
+            config = normalize({})
+            bundle, summary = export_bundle_with_summary(config, root / "source.json", "migration-pass", ["native"], path)
+            self.assertTrue(summary["native_login_missing"])
+            self.assertFalse(summary["native_login_included"])
+            self.assertEqual(summary["accounts"], len(read_bundle(bundle, "migration-pass")["accounts"]))
+            path.write_text(json.dumps({"tokens": {"access_token": "fixture-native"}}))
+            bundle, summary = export_bundle_with_summary(config, root / "source.json", "migration-pass", ["native"], path)
+            self.assertTrue(summary["native_login_included"])
+            self.assertFalse(summary["native_login_missing"])
+            self.assertEqual(summary["accounts"], len(read_bundle(bundle, "migration-pass")["accounts"]))
+            self.assertEqual(summary["groups"], ["native"])
+            self.assertNotIn("fixture-native", json.dumps(summary))
+
     def test_native_login_exports_as_portable_account_without_replacing_current_login(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
             "EASY_MULTI_PROVIDER_MASTER_KEY": Fernet.generate_key().decode("ascii"),
@@ -352,7 +429,7 @@ class MigrationTests(unittest.TestCase):
                 source["accounts"] = [import_account(
                     source,
                     {"id": "same", "prefix": "same"},
-                    {"auth_mode": "chatgpt", "tokens": {"access_token": "NEW"}},
+                    {"auth_mode": "chatgpt", "tokens": {"account_id": "same-account", "access_token": "NEW"}},
                     source_path,
                 )]
                 save(source, source_path)
@@ -367,7 +444,7 @@ class MigrationTests(unittest.TestCase):
                 target["accounts"] = [import_account(
                     target,
                     {"id": "same", "prefix": "same"},
-                    {"auth_mode": "chatgpt", "tokens": {"access_token": "OLD"}},
+                    {"auth_mode": "chatgpt", "tokens": {"account_id": "same-account", "access_token": "OLD"}},
                     target_path,
                 )]
                 save(target, target_path)

@@ -2323,7 +2323,7 @@ class ServerAccountTests(unittest.TestCase):
                     "tools": [{"type": "function", "name": "tool-secret"}],
                     "max_output_tokens": 128,
                 }, {})
-                self.assertEqual(result, b'{"status":"completed","output":[]}')
+                self.assertEqual(json.loads(result), {"status": "completed", "output": []})
             records = state.diagnostics.snapshot()["records"]
             self.assertEqual(records[-1]["context_decision"], "allowed")
             self.assertGreater(records[-1]["estimated_tokens"], 0)
@@ -3058,6 +3058,56 @@ class ServerAccountTests(unittest.TestCase):
             serve_owned_mock.assert_not_called()
             self.assertFalse((second.parent / "state" / "service.lock").exists())
 
+    def test_migration_upload_accepts_base64_expansion_and_rejects_oversized_files(self):
+        from easy_multi_provider.migration import MAX_BUNDLE_BYTES, MAX_MIGRATION_REQUEST_BYTES, export_bundle
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(normalize({"native_catalog_path": str(root / "missing.json")}), config_path)
+            state = AppState(config_path)
+            state.codex_home = root / "codex"
+            source = normalize({"providers": [{"id": "large", "base_url": "https://example.test/v1",
+                "api_key": "x" * (15 * 1024 * 1024)}]})
+            bundle = export_bundle(source, root / "source.json", "migration-pass")
+            body = json.dumps({"password": "migration-pass", "bundle": base64.b64encode(bundle).decode("ascii")}).encode()
+            self.assertLess(len(bundle), MAX_BUNDLE_BYTES)
+            self.assertGreater(len(body), MAX_BUNDLE_BYTES)
+            self.assertLess(len(body), MAX_MIGRATION_REQUEST_BYTES)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            headers = {"Cookie": "emp_session=" + state.session_token, "Content-Type": "application/json"}
+            try:
+                with patch("easy_multi_provider.server.generated_catalog_path", return_value=root / "catalog.json"):
+                    connection = HTTPConnection(*server.server_address, timeout=30)
+                    connection.request("POST", "/api/migration/import", body, headers)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(json.loads(response.read())["providers"], 1)
+                    connection.close()
+                oversized = json.dumps({"password": "migration-pass",
+                    "bundle": base64.b64encode(b"x" * (MAX_BUNDLE_BYTES + 1)).decode("ascii")}).encode()
+                connection = HTTPConnection(*server.server_address, timeout=30)
+                connection.request("POST", "/api/migration/import", oversized, headers)
+                response = connection.getresponse()
+                self.assertEqual(response.status, 400)
+                self.assertIn("too large", json.loads(response.read())["error"]["message"])
+                connection.close()
+                for path, length in (("/api/migration/import", MAX_MIGRATION_REQUEST_BYTES + 1),
+                                     ("/api/migration/export", 5 * 1024 * 1024 + 1)):
+                    connection = HTTPConnection(*server.server_address, timeout=10)
+                    connection.putrequest("POST", path)
+                    for key, value in headers.items():
+                        connection.putheader(key, value)
+                    connection.putheader("Content-Length", str(length))
+                    connection.endheaders()
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 413)
+                    response.read()
+                    connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+
     def test_migration_endpoints_export_and_import_emp_bundle(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3119,6 +3169,9 @@ class ServerAccountTests(unittest.TestCase):
                     response = connection.getresponse()
                     self.assertEqual(response.status, 200)
                     selected = read_bundle(response.read(), "migration-pass-3")
+                    summary = json.loads(response.getheader("X-EMP-Export-Summary"))
+                    self.assertEqual(summary["accounts"], len(selected["accounts"]))
+                    self.assertTrue(summary["native_login_included"])
                     self.assertEqual(selected["config"]["providers"], [])
                     self.assertEqual(selected["provider_keys"], {})
                     self.assertEqual(selected["accounts"][0]["auth"], native_auth)

@@ -33,6 +33,8 @@ from .accounts import (
     NATIVE_ACCOUNT_ID,
     AccountError,
     load_native_auth,
+    auth_headers,
+    native_auth_headers,
     account_root,
     duplicate_account_status,
     import_account,
@@ -43,8 +45,12 @@ from .accounts import (
 from .catalog import (
     build_catalog,
     catalog_etag,
+    account_catalog_owner,
     generated_catalog_path,
+    native_path,
     preserve_native_catalog,
+    subscription_model_options,
+    validate_subscription_contexts,
     write_catalog,
 )
 from .capabilities import (
@@ -107,7 +113,7 @@ from .integration_views import (
     startup_target_conflict,
 )
 from .main import resolve_integration_paths
-from .migration import export_bundle, import_bundle, select_export_config
+from .migration import MAX_MIGRATION_REQUEST_BYTES, export_bundle_with_summary, import_bundle
 from .management_views import (
     management_capabilities,
     management_config,
@@ -128,7 +134,7 @@ from .quota_history import (
 )
 from .provider_replay import ProviderReplayCache
 from .performance import ResponsesPerformanceTracker, token_count
-from .usage_ledger import UsageLedger, usage_identity, usage_context
+from .usage_ledger import UsageLedger, usage_account_owner, usage_identity, usage_context
 from .usage_history import UsageHistoryScanner
 from .usage_pricing import PriceCatalog
 from .history_continuity import (
@@ -142,6 +148,7 @@ from .router import (
     HistoryReconstructionError,
     RouterError,
     discover_models,
+    fetch_subscription_catalog,
     forward_native_search,
     model_metadata,
 )
@@ -1308,6 +1315,7 @@ class AppState:
             credential_set = False
         with self.lock:
             hidden_models = list(self.config.get("native_hidden_models", []))
+            context_windows = dict(self.config.get("native_model_context_windows", {}))
             quota = (
                 json.loads(json.dumps(self._native_quota))
                 if self._native_quota is not None
@@ -1320,6 +1328,7 @@ class AppState:
             "native": True,
             "credential_set": credential_set,
             "hidden_models": hidden_models,
+            "model_context_windows": context_windows,
             "quota": quota,
         }
 
@@ -1727,6 +1736,7 @@ class AppState:
     def update(self, incoming: Dict[str, Any]) -> Dict[str, Any]:
         with self.lock:
             updated = merge_web_update(self.config, incoming, self.path)
+            validate_subscription_contexts(updated, self.config)
             updated, _ = migrate_duplicate_native_visibility(
                 updated,
                 duplicate_account_status(updated.get("accounts", [])),
@@ -1744,6 +1754,37 @@ class AppState:
         except (IntegrationError, OSError):
             pass
         return result
+
+    def subscription_models(self, account_id: str, refresh: bool = False) -> Dict[str, Any]:
+        config = self.snapshot()
+        account = None
+        if account_id != NATIVE_ACCOUNT_ID:
+            account = next((a for a in config.get("accounts", []) if a["id"] == account_id), None)
+            if account is None or not account.get("auth_file"):
+                raise ConfigError("Subscription account is unavailable")
+        if refresh:
+            from .accounts import auth_headers, native_auth_headers
+            from .codex_compatibility import RECOMMENDED_LABEL
+            headers = auth_headers(account) if account is not None else native_auth_headers(self.codex_home / "auth.json")
+            owner = account_catalog_owner(account) if account is not None else None
+            catalog = fetch_subscription_catalog(config["codex_base_url"], headers, RECOMMENDED_LABEL)
+            path = Path(account["auth_file"]).parent / "models_cache.json" if account is not None else native_path(config)
+            # Serialize against account edits/imports; an in-flight fetch may
+            # not attach old entitlements to a newly replaced login.
+            with self.lock:
+                if account is not None:
+                    current = next((a for a in self.config["accounts"] if a["id"] == account_id), None)
+                    if current is None or account_catalog_owner(current) != owner:
+                        raise ConfigError("Subscription changed during model refresh; retry")
+                    catalog["account_owner"] = owner
+                    catalog["base_url"] = config["codex_base_url"]
+                elif native_auth_headers(self.codex_home / "auth.json") != headers:
+                    raise ConfigError("Native login changed during model refresh; retry")
+                atomic_write_text(path, json.dumps(catalog, ensure_ascii=False))
+                if account is None:
+                    preserve_native_catalog(config)
+            self.refresh_catalog()
+        return {"models": subscription_model_options(config, account)}
 
     def refresh_catalog(self) -> Path:
         catalog_path = write_catalog(self.snapshot(), self.integration_catalog_path)
@@ -2039,7 +2080,7 @@ class AppState:
         event = {
             **request_source(body, plan.target.headers),
             **usage_context(body, plan.target.headers),
-            **usage_identity(plan.provider, plan.model),
+            **usage_identity(plan.provider, plan.model, plan.target.headers),
             "provider_id": plan.provider.get("id", ""),
             "model_id": plan.requested_slug,
             "endpoint_fingerprint": plan.identity.endpoint_fingerprint,
@@ -2069,10 +2110,10 @@ class AppState:
             event, body, started, "websocket", "responses"
         )
 
-    def export_migration(self, password: str, groups: Any = None) -> bytes:
+    def export_migration(self, password: str, groups: Any = None) -> Tuple[bytes, Dict[str, Any]]:
         with self.lock:
-            return export_bundle(self.config, self.path, password, groups,
-                                 native_auth_path=self.codex_home / "auth.json")
+            return export_bundle_with_summary(self.config, self.path, password, groups,
+                                            native_auth_path=self.codex_home / "auth.json")
 
     def import_migration(self, bundle: bytes, password: str) -> Dict[str, int]:
         with self.lock:
@@ -3564,10 +3605,26 @@ def make_handler(state: AppState):
                                                 (query.get("end") or [now])[0],
                                                 (query.get("category") or ["all"])[0])
                     with state.lock:
-                        names = {kind: {item["id"]: item.get("name") or item["id"] for item in state.config.get(key, [])}
-                                 for kind, key in (("subscription", "accounts"), ("external", "providers"))}
+                        accounts = [dict(item) for item in state.config.get("accounts", [])]
+                        names = {"external": {item["id"]: item.get("name") or item["id"] for item in state.config.get("providers", [])},
+                                 "subscription": {}, "native": {}}
+                    for account in accounts:
+                        try:
+                            owner = usage_account_owner(auth_headers(account))
+                        except AccountError:
+                            continue
+                        if owner:
+                            names["subscription"].setdefault(owner, account.get("name") or account["id"])
+                    try:
+                        native_owner = usage_account_owner(native_auth_headers(state.codex_home / "auth.json"))
+                        if native_owner:
+                            names["native"][native_owner] = "Native"
+                    except AccountError:
+                        pass
                     for row in payload["groups"]:
-                        row["owner_name"] = names.get(row["category"], {}).get(row["owner"], row["owner"])
+                        row["owner_name"] = names.get(row["category"], {}).get(row["owner"], "")
+                        if row["category"] in ("native", "subscription") and not row["owner"].startswith("history:"):
+                            row["account_identity_confirmed"] = row["owner"].startswith("account:")
                     payload["history"] = dict(state.usage_history.status)
                     self._send(200, _json_bytes(payload))
                 except (ValueError, TypeError, OverflowError):
@@ -3583,6 +3640,13 @@ def make_handler(state: AppState):
                 return
             if path == "/api/accounts":
                 self._send(200, _json_bytes(state.accounts_snapshot()))
+                return
+            if path.startswith("/api/accounts/") and path.endswith("/models"):
+                account_id = unquote(path[len("/api/accounts/") : -len("/models")])
+                try:
+                    self._send(200, _json_bytes(state.subscription_models(account_id)))
+                except (ConfigError, ValueError) as exc:
+                    self._error(400, str(exc))
                 return
             account_prefix = "/api/accounts/"
             history_suffix = "/quota-history"
@@ -3763,7 +3827,7 @@ def make_handler(state: AppState):
                 body = self._body(
                     MAX_PROXY_REQUEST_BYTES
                     if path in ("/v1/responses", "/v1/responses/compact")
-                    else 32 * 1024 * 1024
+                    else MAX_MIGRATION_REQUEST_BYTES
                     if path == "/api/migration/import"
                     else 5 * 1024 * 1024
                 )
@@ -3966,21 +4030,12 @@ def make_handler(state: AppState):
                     self._send(200, _json_bytes({"account": public_accounts([account])[0]}))
                     return
                 if path == "/api/migration/export":
-                    bundle = state.export_migration(body.get("password"), body.get("groups"))
-                    migration_snapshot = select_export_config(state.snapshot(), body.get("groups"))
+                    bundle, summary = state.export_migration(body.get("password"), body.get("groups"))
                     emit_operation(
                         "migration_operation",
                         "success",
                         operation="export",
-                        accounts=self._management_count(
-                            len(migration_snapshot.get("accounts", []))
-                        ),
-                        providers=self._management_count(
-                            len(migration_snapshot.get("providers", []))
-                        ),
-                        models=self._management_count(
-                            len(migration_snapshot.get("models", []))
-                        ),
+                        **self._migration_numeric_fields(summary),
                     )
                     self._send(
                         200,
@@ -3989,6 +4044,7 @@ def make_handler(state: AppState):
                         {
                             "Cache-Control": "no-store",
                             "Content-Disposition": 'attachment; filename="EMP.emp"',
+                            "X-EMP-Export-Summary": _json_bytes(summary).decode("ascii"),
                         },
                     )
                     return
@@ -4023,6 +4079,10 @@ def make_handler(state: AppState):
                         account_ref=self._account_ref(account_id),
                     )
                     self._send(200, _json_bytes({"account": account}))
+                    return
+                if path.startswith("/api/accounts/") and path.endswith("/models/refresh"):
+                    account_id = unquote(path[len("/api/accounts/") : -len("/models/refresh")])
+                    self._send(200, _json_bytes(state.subscription_models(account_id, refresh=True)))
                     return
                 if path == "/api/catalog/refresh":
                     catalog_path = state.refresh_catalog()

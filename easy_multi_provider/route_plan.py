@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from .capabilities import deployment_identity, endpoint_fingerprint, make_provenance
-from .catalog import load_native_catalog
+from .catalog import subscription_route_model
 from .dialects import classify_dialect
 from .router_errors import RouterError
 
@@ -150,19 +150,10 @@ def _native_route_model(
 
 
 def _native_catalog_route_model(
-    config: Dict[str, Any], requested_id: str, upstream_id: str
+    config: Dict[str, Any], requested_id: str, upstream_id: str, account: Optional[Dict[str, Any]] = None
 ) -> Optional[Dict[str, Any]]:
-    try:
-        native = load_native_catalog(config)
-    except Exception:
-        return None
-    for item in native.get("models", []):
-        if not isinstance(item, Mapping) or item.get("slug") != upstream_id:
-            continue
-        if item.get("supported_in_api", True) is False:
-            return None
-        return _native_route_model(item, requested_id, upstream_id)
-    return None
+    item = subscription_route_model(config, upstream_id, account)
+    return _native_route_model(item, requested_id, upstream_id) if item is not None else None
 
 
 def _implicit_native_route(
@@ -170,12 +161,8 @@ def _implicit_native_route(
 ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
     if "/" in model_id:
         return None
-    native = load_native_catalog(config)
-    for item in native.get("models", []):
-        if not isinstance(item, dict) or item.get("slug") != model_id:
-            continue
-        if item.get("supported_in_api", True) is False:
-            continue
+    item = subscription_route_model(config, model_id)
+    if item is not None:
         provider = {
             "id": "codex-native",
             "name": "Native Codex",
@@ -224,7 +211,7 @@ def resolve_route(config: Dict[str, Any], model_id: str) -> ResolvedRoute:
                 "auth_mode": "account",
                 "account": account,
             }
-            model = _native_catalog_route_model(config, model_id, upstream_id)
+            model = _native_catalog_route_model(config, model_id, upstream_id, account)
             return ResolvedRoute.from_parts(
                 model_id,
                 provider,

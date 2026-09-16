@@ -55,6 +55,12 @@ jobs:
           tests.test_transport_continuity tests.test_native_websocket
           tests.test_chat_projection_regressions
           tests.test_http_pool tests.test_http_pool_tls tests.test_provider_replay
+          tests.test_migration
+          tests.test_user_install
+          tests.test_subscription_context
+          tests.test_usage_ledger tests.test_usage_history
+          tests.test_server.ServerAccountTests.test_migration_endpoints_export_and_import_emp_bundle
+          tests.test_server.ServerAccountTests.test_migration_upload_accepts_base64_expansion_and_rejects_oversized_files
           tests.test_server.ContinuityAppStateTests
       - name: Install fixed official runtime
         run: npm install --prefix runtime-fixture --no-audit --no-fund --ignore-scripts @openai/codex@0.154.0

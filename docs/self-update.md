@@ -21,7 +21,16 @@ the DMG read-only and copies `EMP.app` without following symlinks. User-writable
 installations are supported. Source checkouts, standalone macOS binaries and
 mounted read-only disk images are not silently converted into installations.
 
-On Linux, EMP queries dpkg ownership instead of guessing from the directory.
+The recommended Linux installation uses `install-user.sh` from the tar archive.
+It installs under `$XDG_DATA_HOME/easy-multi-provider` (normally
+`~/.local/share/easy-multi-provider`), with a launcher at `~/.local/bin/EMP` and
+a user desktop entry. Configuration stays under `$XDG_CONFIG_HOME` (normally
+`~/.config/easy-multi-provider`). The launcher executes the real binary rather
+than a symlink; updates stage beside that user-owned binary and never request
+root authorization. Existing files and configurations are not overwritten by
+the installer. This avoids the privileged staging boundary described below.
+
+For existing system installations, EMP queries dpkg ownership instead of guessing from the directory.
 An installed `easy-multi-provider` package uses the release's `.deb`, preserving
 the package database and desktop resources. A protected portable installation
 uses the tar archive. Downloads and version checks run as the desktop user in a

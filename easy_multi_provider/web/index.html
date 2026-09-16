@@ -299,6 +299,13 @@ function zoomUsage(start,end) {
   $('usage_end').value = usageLocalInput(new Date(Math.min(end,usagePayload.end)*1000));
   $('usage_bucket').value = 'hour'; usagePreset=''; loadUsage();
 }
+function usageOwner(row) {
+  if (row.owner.startsWith('history:')) return tr('历史路由 · ','Historical route · ') + row.owner.slice(8);
+  if (row.category === 'external') return row.owner_name || row.owner;
+  if (row.owner.startsWith('account:')) return row.owner_name || tr('账号 · ','Account · ') + row.owner.slice(8,16);
+  if (row.owner.startsWith('credential:')) return (row.owner_name || row.owner.slice(11,19)) + tr(' · 身份未确认',' · identity unconfirmed');
+  return tr('旧记录或路由 · 账号身份未确认','Legacy record or route · account identity unconfirmed');
+}
 function renderUsage() {
   const box = $('usage_result'); if (!box || !usagePayload) return;
   const data = usagePayload, totals = data.totals, periods = usagePeriods();
@@ -313,7 +320,7 @@ function renderUsage() {
     const label = new Date(row.start*1000).toLocaleString() + ' · ' + usageNumber(tokens) + ' tokens · ' + cost(row);
     return `<rect x="${x}" y="${150-h}" width="${w}" height="${Math.max(1,h)}" rx="2" tabindex="0" role="button" aria-label="${esc(label)}" onclick="zoomUsage(${row.start},${row.end})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();zoomUsage(${row.start},${row.end});}"><title>${esc(label)}</title></rect>`;
   }).join('');
-  const rows = data.groups.sort((a,b)=>(b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)).map(row => `<tr><td>${esc(usageSource(row.category))}<small>${esc(row.owner.startsWith('history:') ? tr('历史路由 · ','Historical route · ') + row.owner.slice(8) : row.category === 'native' ? tr('Codex 登录','Codex login') : (row.owner_name || row.owner))}</small></td><td>${esc(row.model)}<small>${row.service_tier === 'default' ? tr('普通','Standard') : esc(row.service_tier)}</small></td><td>${row.input_reports ? usageNumber(row.input_tokens) : '—'}<small>${tr('缓存 ','Cached ')}${row.cache_reports ? usageNumber(row.cached_input_tokens) : '—'}${row.cache_write_tokens ? ' · '+tr('写入 ','Write ')+usageNumber(row.cache_write_tokens) : ''}</small></td><td>${row.output_reports ? usageNumber(row.output_tokens) : '—'}<small>${tr('推理 ','Reasoning ')}${row.reasoning_reports ? usageNumber(row.reasoning_tokens) : '—'}</small></td><td>${cost(row)}</td><td>${usageNumber(row.requests)}</td></tr>`).join('');
+  const rows = data.groups.sort((a,b)=>(b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)).map(row => `<tr><td>${esc(usageSource(row.category))}<small>${esc(usageOwner(row))}</small></td><td>${esc(row.model)}<small>${row.service_tier === 'default' ? tr('普通','Standard') : esc(row.service_tier)}</small></td><td>${row.input_reports ? usageNumber(row.input_tokens) : '—'}<small>${tr('缓存 ','Cached ')}${row.cache_reports ? usageNumber(row.cached_input_tokens) : '—'}${row.cache_write_tokens ? ' · '+tr('写入 ','Write ')+usageNumber(row.cache_write_tokens) : ''}</small></td><td>${row.output_reports ? usageNumber(row.output_tokens) : '—'}<small>${tr('推理 ','Reasoning ')}${row.reasoning_reports ? usageNumber(row.reasoning_tokens) : '—'}</small></td><td>${cost(row)}</td><td>${usageNumber(row.requests)}</td></tr>`).join('');
   const history = data.history || {}, historical = data.sources?.find(row => row.origin === 'history')?.requests || 0;
   box.innerHTML = `<p class="usage-notice">${history.running || history.queued ? tr('正在后台扫描历史…','Scanning history in the background…') : history.last_scan_at ? tr('历史已扫描 · ','History scanned · ') + usageNumber(history.files) + tr(' 个文件',' files') : tr('等待历史扫描','Waiting for history scan')}${history.errors ? ' · ' + tr('部分文件读取失败','Some files could not be read') : ''}</p>
     <div class="usage-totals"><div class="usage-total"><span>Tokens</span><strong>${totals.input_reports || totals.output_reports ? usageNumber(totals.input_tokens+totals.output_tokens) : '—'}</strong><span>${usageNumber(totals.reported_requests)} / ${usageNumber(totals.requests)} ${tr('次请求有完整用量','requests reported usage')}</span></div><div class="usage-total"><span>${tr('API 等价估算 · USD','API equivalent · USD')}</span><strong>${cost(totals)}</strong><span>${usageNumber(totals.priced_requests)} / ${usageNumber(totals.requests)} ${tr('次请求已计价','requests priced')}</span></div></div>
@@ -367,7 +374,10 @@ async function exportMigration() {
     if (password !== confirmPassword) throw new Error(tr('两次迁移密码不一致','The migration passwords do not match')); if (new TextEncoder().encode(password).length < 8) throw new Error(tr('迁移密码至少需要 8 个字节','The migration password must be at least 8 bytes'));
     const response = await fetch('/api/migration/export', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password, groups})});
     if (!response.ok) { let data = {}; try { data = await response.json(); } catch (_) {} throw new Error(data.error?.message || response.statusText); }
-    const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = migrationFilename(); document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); closeModal(); notice(tr('EMP 迁移包已下载','EMP data exported'));
+    const summary = JSON.parse(response.headers.get('X-EMP-Export-Summary') || '{}');
+    const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = migrationFilename(); document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); closeModal();
+    const missing = summary.native_login_missing;
+    notice(tr(`已导出：账户 ${summary.accounts ?? 0} 个，Provider ${summary.providers ?? 0} 个，模型 ${summary.models ?? 0} 个`,`Exported: ${summary.accounts ?? 0} accounts, ${summary.providers ?? 0} providers, ${summary.models ?? 0} models`) + (missing ? tr('；未找到 Native 登录凭据，仅导出其配置。','; Native login credentials were not found; only its settings were exported.') : ''), missing);
   });
 }
 function migrationFilename() { return 'EMP.emp'; }
@@ -375,13 +385,13 @@ function selectMigrationFile() { $('migration_file').click(); }
 async function migrationFileChosen(input) {
   const file = input.files[0]; if (!file) return; if (file.size > 32 * 1024 * 1024) { input.value = ''; return notice(tr('EMP 文件不能超过 32 MB','EMP files cannot exceed 32 MB'), true); }
   pendingMigrationFile = file;
-  openModal(tr('导入 EMP 数据','Import EMP data'), `<p class="muted">${tr('已选择','Selected')}：${esc(file.name)}<br>${tr('同 ID 数据会合并，其他本地数据保留。','Matching IDs are merged; other local data is retained.')}</p><label>${tr('迁移密码','Migration password')}<input id="modal_import_migration_password" type="password" autocomplete="current-password" autofocus></label>`, tr('导入并合并','Import and merge'), submitMigrationImport);
+  openModal(tr('导入 EMP 数据','Import EMP data'), `<p class="muted">${tr('已选择','Selected')}：${esc(file.name)}<br>${tr('同 ID 且身份一致的账号会更新；账号冲突会保留双方并重命名导入项。Provider 和模型按 ID 合并。','Accounts with matching IDs and identities are updated; conflicting accounts are retained under new IDs. Providers and models are merged by ID.')}</p><label>${tr('迁移密码','Migration password')}<input id="modal_import_migration_password" type="password" autocomplete="current-password" autofocus></label>`, tr('导入并合并','Import and merge'), submitMigrationImport);
 }
 async function submitMigrationImport() {
   const password = $('modal_import_migration_password').value; if (!password) throw new Error(tr('请填写迁移密码','Enter the migration password')); if (!pendingMigrationFile) throw new Error(tr('请重新选择 EMP 文件','Select the EMP file again'));
   const encoded = bytesToBase64(new Uint8Array(await pendingMigrationFile.arrayBuffer()));
   const result = await api('/api/migration/import', {method:'POST', body:JSON.stringify({password, bundle:encoded})});
-  pendingMigrationFile = null; $('migration_file').value = ''; closeModal(); state = await api('/api/config'); fill(); await loadIntegration(); notice(tr(`迁移完成：账户 ${result.accounts} 个，Provider ${result.providers} 个，模型 ${result.models} 个`,`Migration complete: ${result.accounts} accounts, ${result.providers} providers, ${result.models} models`));
+  pendingMigrationFile = null; $('migration_file').value = ''; closeModal(); state = await api('/api/config'); fill(); await loadIntegration(); notice(tr(`迁移完成：账户 ${result.accounts} 个，Provider ${result.providers} 个，模型 ${result.models} 个`,`Migration complete: ${result.accounts} accounts, ${result.providers} providers, ${result.models} models`) + (result.renamed_accounts ? tr(`；${result.renamed_accounts} 个冲突账号已重命名`,`; ${result.renamed_accounts} conflicting accounts renamed`) : ''));
 }
 let noticeTimer = null;
 function dismissNotice() { clearTimeout(noticeTimer); noticeTimer = null; $('notification').hidden = true; $('status').textContent = ''; }
@@ -1096,22 +1106,62 @@ async function submitAccountImport() {
   await api('/api/accounts/import', {method:'POST', body:JSON.stringify({id, name:id, prefix:id, auth_json:pendingAccountAuth})});
   pendingAccountAuth = null; $('a_auth_json').value = ''; closeModal(); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice(tr('账户已导入','Account imported'));
 }
+let subscriptionEditor = null;
+function renderSubscriptionModels(editor) {
+  const container = $('subscription_model_list'); if (!container || subscriptionEditor !== editor) return;
+  container.innerHTML = editor.models.map((model, index) => {
+    const route = editor.native ? model.id : editor.account.prefix + '/' + model.id;
+    const maximum = Number(model.max_context_window || 0);
+    const value = editor.windows[model.id] ?? '';
+    return `<div class="model-option" style="flex-wrap:wrap"><label style="display:flex;gap:10px;flex:1;min-width:180px"><input type="checkbox" name="subscription_model" value="${esc(model.id)}" ${editor.hidden.has(model.id) ? '' : 'checked'}><span><strong>${esc(canonicalDisplayName(model.display_name || model.id))}</strong><small>${esc(route)}</small></span></label><div style="width:220px"><label>${tr('上下文（tokens）','Context (tokens)')}<input type="number" name="subscription_context" data-model="${esc(model.id)}" min="1" step="1" ${maximum ? `max="${maximum}"` : 'disabled'} value="${esc(value)}" placeholder="${esc(tr('默认 ','Default ') + Number(model.default_context_window || 0))}" oninput="previewSubscriptionContext(this,${index})" style="width:100%;margin-top:4px"></label><small id="subscription_context_preview_${index}"></small></div></div>`;
+  }).join('') || `<p class="muted">${tr('没有可用的订阅模型，请刷新模型目录。','No subscription models available. Refresh the model catalog.')}</p>`;
+  container.querySelectorAll('input[name="subscription_context"]').forEach((input, index) => previewSubscriptionContext(input, index));
+}
+function previewSubscriptionContext(input, index) {
+  const model = subscriptionEditor?.models[index]; if (!model) return;
+  const tokens = input.value === '' ? Number(model.default_context_window || 0) : Number(input.value);
+  const usable = Math.round(tokens * Number(model.effective_context_window_percent ?? 95) / 100);
+  const maximum = Number(model.max_context_window || 0);
+  $(`subscription_context_preview_${index}`).textContent = maximum ? tr(`最大 ${compactContext(maximum)} · 可用 ${compactContext(usable)}`,`Max ${compactContext(maximum)} · Usable ${compactContext(usable)}`) : tr('上限未知，暂不可修改','Maximum unknown; editing unavailable');
+}
+function captureSubscriptionModels(editor) {
+  document.querySelectorAll('input[name="subscription_model"]').forEach(input => { if (input.checked) editor.hidden.delete(input.value); else editor.hidden.add(input.value); });
+  document.querySelectorAll('input[name="subscription_context"]').forEach(input => { if (input.value === '') delete editor.windows[input.dataset.model]; else editor.windows[input.dataset.model] = input.value; });
+}
+async function refreshSubscriptionModels() {
+  const editor = subscriptionEditor; if (!editor) return;
+  captureSubscriptionModels(editor);
+  const button = $('subscription_model_refresh'); button.disabled = true;
+  try {
+    const result = await api('/api/accounts/' + encodeURIComponent(editor.account.id) + '/models/refresh', {method:'POST', body:'{}'});
+    if (subscriptionEditor !== editor || $('modal_backdrop').classList.contains('hidden')) return;
+    editor.models = result.models; renderSubscriptionModels(editor);
+    $('modal_status').textContent = tr('模型上限已刷新','Model limits refreshed');
+  } catch (error) { if (subscriptionEditor === editor) $('modal_status').textContent = error.message; }
+  finally { if (subscriptionEditor === editor) button.disabled = false; }
+}
 function editAccount(id) {
   const account = state.native_account?.id === id ? state.native_account : (state.accounts || []).find(item => item.id === id); if (!account) return;
   if (account.duplicate && account.duplicate_of === '当前 Codex 登录') return notice(tr('模型显示请在原生账户中调整','Adjust model visibility from the Native account'), true);
-  const options = state.subscription_models || []; const hidden = new Set(account.hidden_models || []);
-  const native = account.native === true; const visibilityHint = native ? `<p class="muted">${tr('这里仅控制无前缀原生模型的显示与隐藏；名称在“模型列表显示”中按模型族统一设置。','This controls only unprefixed Native model visibility. Rename the whole family in Model list display.')}</p>` : '';
-  const modelSelection = options.length ? `<label>${tr('在 Codex /model 中显示','Visible in Codex /model')}</label><div class="toolbar"><button type="button" class="secondary" onclick="setSubscriptionModelChecks(true)">${tr('全部显示','Show all')}</button><button type="button" class="secondary" onclick="setSubscriptionModelChecks(false)">${tr('全部隐藏','Hide all')}</button></div><div class="model-selection">${options.map(model => { const route = native ? model.id : account.prefix + '/' + model.id; return `<label class="model-option"><input type="checkbox" name="subscription_model" value="${esc(model.id)}" ${hidden.has(model.id) ? '' : 'checked'}><span><strong>${esc(canonicalDisplayName(model.display_name || model.id))}</strong><small>${esc(route)}</small></span></label>`; }).join('')}</div>` : `<p class="muted">${tr('当前没有可用的原生 Coding Agent 模型。','No native Coding Agent models are available.')}</p>`;
+  const native = account.native === true;
+  const editor = {account, native, models:state.subscription_models || [], hidden:new Set(account.hidden_models || []), windows:{...(account.model_context_windows || {})}};
+  subscriptionEditor = editor;
+  const visibilityHint = `<p class="muted">${tr('留空使用默认上下文；上限来自订阅模型目录，预留比例保持原值。名称在“模型列表显示”中设置。','Leave blank for the default context. Limits come from the subscription model catalog; its reserve percentage is preserved. Rename models in Model list display.')}</p>`;
+  const modelSelection = `<label>${tr('在 Codex /model 中显示','Visible in Codex /model')}</label><div class="toolbar"><button type="button" class="secondary" onclick="setSubscriptionModelChecks(true)">${tr('全部显示','Show all')}</button><button type="button" class="secondary" onclick="setSubscriptionModelChecks(false)">${tr('全部隐藏','Hide all')}</button><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh" onclick="refreshSubscriptionModels()">${tr('刷新模型上限','Refresh model limits')}</button></div><div id="subscription_model_list" class="model-selection"></div>`;
   const identityEditor = native ? '' : `<p class="muted">${tr('账户 ID','Account ID')}: <code>${esc(id)}</code></p><label>${tr('显示名称 / 显示前缀','Display name / display prefix')}<input id="modal_account_alias" value="${esc(account.name || account.prefix || id)}"></label><p class="muted">${tr('只改变模型列表中的显示前缀，不改变路由。路由前缀：','Changes the display prefix in the model list, not the route. Route prefix: ')}<code>${esc(account.prefix)}</code></p>`;
   openModal(native ? tr('编辑原生模型','Edit Native models') : tr('编辑账户','Edit account'), `${identityEditor}${visibilityHint}${modelSelection}`, tr('保存修改','Save changes'), async () => {
     const alias = native ? '' : ($('modal_account_alias').value.trim() || id);
-    const selected = new Set([...document.querySelectorAll('input[name="subscription_model"]:checked')].map(input => input.value));
-    const hiddenModels = options.length ? options.filter(model => !selected.has(model.id)).map(model => model.id) : (account.hidden_models || []);
+    for (const input of document.querySelectorAll('input[name="subscription_context"]')) { if (!input.checkValidity()) { input.reportValidity(); throw new Error(tr('上下文必须为目录上限内的正整数','Context must be a positive integer within the catalog limit')); } }
+    captureSubscriptionModels(editor);
+    const contextWindows = Object.fromEntries(Object.entries(editor.windows).map(([model, value]) => [model, Number(value)]));
+    const hiddenModels = [...editor.hidden];
     const candidate = cloneState();
-    if (native) { candidate.native_hidden_models = hiddenModels; candidate.accounts = (candidate.accounts || []).map(item => item.duplicate && item.duplicate_of === '当前 Codex 登录' ? Object.assign({}, item, {hidden_models:[]}) : item); }
-    else { candidate.accounts = candidate.accounts.map(item => item.id === id ? Object.assign({}, item, {name:alias, hidden_models:hiddenModels}) : item); }
+    if (native) { candidate.native_hidden_models = hiddenModels; candidate.native_model_context_windows = contextWindows; candidate.accounts = (candidate.accounts || []).map(item => item.duplicate && item.duplicate_of === '当前 Codex 登录' ? Object.assign({}, item, {hidden_models:[]}) : item); }
+    else { candidate.accounts = candidate.accounts.map(item => item.id === id ? Object.assign({}, item, {name:alias, hidden_models:hiddenModels, model_context_windows:contextWindows}) : item); }
     await persistState(tr('账户信息已保存','Account saved'), candidate); closeModal();
   });
+  renderSubscriptionModels(editor);
+  api('/api/accounts/' + encodeURIComponent(id) + '/models').then(result => { if (subscriptionEditor === editor && !$('modal_backdrop').classList.contains('hidden')) { captureSubscriptionModels(editor); editor.models = result.models; renderSubscriptionModels(editor); } }).catch(error => { if (subscriptionEditor === editor) $('modal_status').textContent = error.message; });
 }
 function setSubscriptionModelChecks(checked) { document.querySelectorAll('input[name="subscription_model"]').forEach(input => { input.checked = checked; }); }
 function quotaErrorText(error, id) {
@@ -1215,7 +1265,7 @@ async function testModel(id) { try { notice(tr(`正在测试 ${id} …`,`Testing
 
 function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryLoading = false; quotaHistoryRequest++; }
 function openModal(title, body, submitLabel, submit) { stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; button.onclick = submit ? async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { button.disabled = false; button.textContent = label; } } : null; $('modal_backdrop').classList.remove('hidden'); }
-function closeModal() { stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
+function closeModal() { subscriptionEditor = null; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 
 let updatePollTimer = null;
 let updatePollGeneration = 0;

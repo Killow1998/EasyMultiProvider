@@ -104,6 +104,21 @@ def validate_auth_json(auth: Any) -> Dict[str, Any]:
     return _validate_auth(auth)
 
 
+def normalize_context_windows(raw: Any) -> Dict[str, int]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or len(raw) > _MAX_HIDDEN_MODELS:
+        raise AccountError("model_context_windows must be a bounded object")
+    result = {}
+    for model, tokens in raw.items():
+        if not isinstance(model, str) or not model.strip() or len(model.encode("utf-8")) > _MAX_MODEL_ID_BYTES:
+            raise AccountError("model_context_windows has an invalid model ID")
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens <= 0:
+            raise AccountError("model_context_windows values must be positive integer tokens")
+        result[model] = tokens
+    return result
+
+
 def normalize_account(raw: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise AccountError("each account must be an object")
@@ -123,6 +138,7 @@ def normalize_account(raw: Dict[str, Any]) -> Dict[str, Any]:
         "credential_status": credential_status,
         "enabled": bool(raw.get("enabled", True)),
         "hidden_models": normalize_hidden_models(raw.get("hidden_models")),
+        "model_context_windows": normalize_context_windows(raw.get("model_context_windows")),
         "quota": copy.deepcopy(raw.get("quota")) if isinstance(raw.get("quota"), dict) else None,
     }
 
@@ -162,6 +178,7 @@ def import_account(
             "auth_file": str(path),
             "enabled": metadata.get("enabled", True),
             "hidden_models": metadata.get("hidden_models", []),
+            "model_context_windows": metadata.get("model_context_windows", {}),
         }
     )
 
@@ -179,6 +196,7 @@ def public_accounts(accounts: Iterable[Dict[str, Any]]) -> list:
                 "prefix": account["prefix"],
                 "enabled": account["enabled"],
                 "hidden_models": account["hidden_models"],
+                "model_context_windows": account["model_context_windows"],
                 "credential_set": bool(account["auth_file"]),
                 "credential_status": account["credential_status"],
                 "quota": account["quota"],
@@ -214,6 +232,17 @@ def _auth_identities(auth: Dict[str, Any]) -> Set[Tuple[str, str]]:
     if isinstance(access_token, str) and access_token.strip():
         identities.add(("access_token", access_token.strip()))
     return identities
+
+
+def same_account_auth(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    """Require matching account IDs, or an identical access token if IDs are absent."""
+    left_ids = _auth_identities(left)
+    right_ids = _auth_identities(right)
+    left_accounts = {value for kind, value in left_ids if kind == "account_id"}
+    right_accounts = {value for kind, value in right_ids if kind == "account_id"}
+    if left_accounts and right_accounts:
+        return left_accounts == right_accounts
+    return bool(left_ids & right_ids)
 
 
 def _auth_file_identities(path: Path) -> Set[Tuple[str, str]]:

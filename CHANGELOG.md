@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.11.2 (2026-09-16)
+
+- Set per-model context windows for Native and imported subscriptions, bounded
+  by each model's subscription catalog maximum; preserve Codex's effective
+  percentage and use the same context for display and request checks. Refresh
+  subscription model limits with the selected account's credentials.
+- Hide GPT-5.5 from subscription model lists and editing options; keep external
+  providers and existing task routes unaffected.
+- Install Linux archives into the current user's data directory with a command
+  launcher and desktop entry; keep user configuration and avoid administrator
+  authorization for updates of these installations.
+- Preserve conflicting migration accounts under unique destination IDs and
+  prefixes; update confirmed reimports and move their route display settings.
+- Allow Base64/JSON expansion when uploading a migration while keeping the
+  decoded `.emp` file limit at 32 MiB and other endpoint limits unchanged.
+- Report actual export counts and warn when Native login credentials are missing.
+- Group new ChatGPT usage by the selected account's opaque identity instead of
+  local route IDs; retain Native/Subscription categories and leave old account
+  attribution unconfirmed. Keep external usage grouped by provider source.
+- Close unscoped replay iterators once on exhaustion, cancellation or failure.
+- Include migration and usage regressions in runtime compatibility checks.
 - Choose Native, other subscriptions and external providers when exporting
   encrypted `.emp` files. Include the selected routes, display settings and
   managed credentials only; retain the existing migration format and full-export

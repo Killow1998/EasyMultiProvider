@@ -34,6 +34,7 @@ EMP 是一个通过浏览器配置的 Codex 本地模型路由器。它在
 - 通过密码保护的 `.emp` 文件导入和导出数据。
   导出时可多选 Native、其他 Subscription 和 External Provider，默认全选。
   Native 包含模型显示配置和本机 Codex 登录凭据；导入后作为额外 Subscription 账号，不替换当前登录。选中模型的共享分组显示设置会一并导出。
+  导入时只有身份一致的账号才会更新；冲突账号保留双方，并为导入项分配新 ID/prefix，同步对应显示设置。导出结果按文件内容统计，缺少 Native 凭据时明确提示。
 - 保留 Codex 原生会话、`resume`、WebSocket、压缩和 MCP 功能。
 - 在当前登录、其他 Subscription 和外部模型之间切换时，使用 Codex 自己保存的
   可见历史继续已经压缩过的任务。
@@ -67,6 +68,14 @@ EMP 支持 Codex CLI `0.149.x` 至 `0.154.x`，推荐使用 `0.154.0`。Web UI �
 已在 runtime `0.153.4` 上验证 Gemini 3.7 Flash、3.8 Flash 的子任务委派、
 后续任务和工具调用。协议说明见 [子任务兼容性](docs/external-collaboration.md)。
 
+Subscription 的编辑窗口可以逐模型设置上下文 token 数。留空使用模型默认值；
+“刷新模型上限”会用该账号的登录凭据拉取订阅目录，输入不能超过目录中的
+最大上下文。0.95 的默认预留系数保持不变，例如设置 872,000 后可用约 828,400。
+设置同时影响 Codex 模型列表和 EMP 的请求上下文检查，不会修改 API 地址或
+目标 Codex 的当前登录。已有任务能否立即采用新窗口取决于客户端是否刷新了
+目录；新建任务后应确认有效上下文。Native 导出后，其上下文设置随导入的账号
+迁移，不覆盖目标机器 Native 的设置。
+
 ### 预构建安装包
 
 从 [GitHub Releases](https://github.com/Killow1998/EasyMultiProvider/releases)
@@ -84,7 +93,7 @@ EMP 支持 Codex CLI `0.149.x` 至 `0.154.x`，推荐使用 `0.154.0`。Web UI �
 最简单的桌面启动方式是：
 
 - **Windows：**双击 `EMP.exe`。
-- **Linux：**安装 `.deb` 后，从应用菜单打开 **EMP**。
+- **Linux：**解压 `.tar.gz`，在解压目录运行 `sh install-user.sh`，然后从应用菜单打开 **EMP**。
 - **macOS：**打开 DMG，把 **EMP** 拖入“应用程序”，然后双击。
 
 EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的终端窗口。看到
@@ -99,6 +108,12 @@ EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的
 - Linux：`$XDG_CONFIG_HOME/easy-multi-provider/config.json`，未设置时使用
   `~/.config/easy-multi-provider/config.json`
 
+Linux 用户安装把程序放在 `$XDG_DATA_HOME/easy-multi-provider/EMP`，默认是
+`~/.local/share/easy-multi-provider/EMP`；启动入口是 `~/.local/bin/EMP`。
+安装和网页更新都不需要 `sudo` 或管理员密码。配置与账号数据保存在上述用户
+配置目录，更新程序不会替换它们。已有系统 `.deb` 安装不会被自动卸载；停止
+旧 EMP 后可安装用户版本，旧配置应先备份再迁入用户配置目录。
+
 需要命令行控制时仍可显式启动服务。下载 Windows 可执行文件后，在 PowerShell 中运行：
 
 ```powershell
@@ -109,8 +124,8 @@ EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的
 解压 Linux `.tar.gz` 或安装 `.deb` 后运行：
 
 ```bash
-./easy-multi-provider --version
-./easy-multi-provider serve --config config.json
+./EMP --version
+./EMP serve --config config.json
 ```
 
 `.deb` 会把同一命令安装到 `PATH` 中，安装后不需要输入前面的 `./`。Windows

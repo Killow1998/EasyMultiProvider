@@ -259,6 +259,7 @@ class CatalogTests(unittest.TestCase):
                 "slug": "gpt-native",
                 "display_name": "Native Model",
                 "context_window": 258000,
+                "effective_context_window_percent": 100,
                 "base_instructions": "Be useful",
                 "model_messages": {},
             }]}), encoding="utf-8")
@@ -327,6 +328,7 @@ class CatalogTests(unittest.TestCase):
                                 "display_name": "Native",
                                 "description": "Native model",
                                 "context_window": 258000,
+                                "effective_context_window_percent": 100,
                             }
                         ]
                     }

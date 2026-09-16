@@ -360,6 +360,14 @@ def _copy_release_files(destination: Path, executable: Path, target: Target) -> 
         "THIRD_PARTY_NOTICES.md",
     ):
         shutil.copy2(str(PROJECT_ROOT / name), str(destination / name))
+    if target.system == "Linux":
+        installer = destination / "install-user.sh"
+        installer.write_bytes((PROJECT_ROOT / "packaging" / "install-user.sh").read_bytes().replace(b"\r\n", b"\n"))
+        installer.chmod(0o755)
+        shutil.copy2(
+            PROJECT_ROOT / "assets" / "branding" / "easy-multi-provider-icon.svg",
+            destination / "easy-multi-provider.svg",
+        )
 
 
 def _write_zip(
