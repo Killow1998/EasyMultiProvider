@@ -1,15 +1,52 @@
 import threading
+import base64
+import io
 import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import URLError
 from urllib.request import Request
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from easy_multi_provider import http_pool
 from easy_multi_provider.router import _bounded_stream_response, _DeadlineResponse, _validated_responses_stream
 from easy_multi_provider.stream_adapters import _reliable_responses_stream
+from easy_multi_provider.router_errors import RouterError
+
+
+class SSELineTests(unittest.TestCase):
+    def response(self, data):
+        source = io.BytesIO(data)
+        raw = Mock(status=200, headers={})
+        raw.read1.side_effect = source.read
+        return http_pool.Response(raw), raw, source
+
+    def test_unterminated_line_is_rejected_before_the_whole_body_is_read(self):
+        response, raw, source = self.response(b"x" * (4 * 1024 * 1024))
+        with self.assertRaisesRegex(RouterError, "SSE line is too large"):
+            next(response)
+        self.assertEqual(source.tell(), http_pool.MAX_SSE_LINE_BYTES + 1)
+        raw.close.assert_called_once()
+        raw.release_conn.assert_called_once()
+        self.assertEqual(len(response._buffer), 0)
+
+    def test_line_limit_includes_newline_and_accepts_eof_at_the_limit(self):
+        limit = http_pool.MAX_SSE_LINE_BYTES
+        for data in (b"x" * (limit - 1) + b"\n", b"x" * limit):
+            response, _, _ = self.response(data)
+            self.assertEqual(list(response), [data])
+        response, _, _ = self.response(b"x" * limit + b"\n")
+        with self.assertRaises(RouterError):
+            next(response)
+
+    def test_utf8_split_across_reads_and_multiple_lines_remain_intact(self):
+        data = ("data: " + "猫" * 3000 + "\n\ndata: end\n\n").encode()
+        response, _, _ = self.response(data)
+        self.assertEqual(b"".join(response), data)
+        response, _, _ = self.response(data)
+        for line in response:
+            line.decode("utf-8", errors="strict")
 
 
 class HTTPPoolTests(unittest.TestCase):
@@ -36,7 +73,8 @@ class HTTPPoolTests(unittest.TestCase):
 
             def do_GET(self):
                 owner.requests.append((self.client_address[1], self.path,
-                                       self.headers.get("Authorization")))
+                                       self.headers.get("Authorization"),
+                                       self.headers.get("Proxy-Authorization")))
                 if self.path == "/drop":
                     self.close_connection = True
                     return
@@ -78,6 +116,15 @@ class HTTPPoolTests(unittest.TestCase):
                 self.send_header("Content-Length", "2")
                 self.end_headers()
                 self.wfile.write(b"OK")
+
+            def do_CONNECT(self):
+                owner.requests.append((self.client_address[1], self.path,
+                                       self.headers.get("Authorization"),
+                                       self.headers.get("Proxy-Authorization")))
+                # Inspect authentication without a TLS origin or disabled trust.
+                self.send_response(502)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -158,3 +205,25 @@ class HTTPPoolTests(unittest.TestCase):
             with self.open() as response:
                 response.read()
         self.assertNotEqual(self.requests[0][0], self.requests[1][0])
+
+    def test_encoded_proxy_credentials_are_separate_from_origin_authorization(self):
+        proxy = self.url.replace("http://", "http://user%40test:pass%3Aword@")
+        expected = "Basic " + base64.b64encode(b"user@test:pass:word").decode()
+        with patch.object(http_pool, "proxy_for_url", return_value=proxy):
+            for _ in range(2):
+                with http_pool.open_request(Request("http://origin.test/resource",
+                        headers={"Authorization": "Bearer origin-only"}), timeout=2) as response:
+                    self.assertEqual(response.read(), b"OK")
+            with self.assertRaises(URLError):
+                http_pool.open_request(Request("https://origin.test/resource",
+                        headers={"Authorization": "Bearer origin-only"}), timeout=2)
+        self.assertEqual([r[3] for r in self.requests], [expected] * 3)
+        self.assertEqual([r[2] for r in self.requests], ["Bearer origin-only"] * 2 + [None])
+        self.assertEqual(self.requests[0][0], self.requests[1][0])
+        self.assertEqual(len(http_pool._managers), 1)
+        self.assertIsNone(http_pool._managers[proxy].proxy.auth)
+
+    def test_different_proxy_credentials_do_not_share_a_pool(self):
+        first = self.url.replace("http://", "http://one:pass@")
+        second = self.url.replace("http://", "http://two:pass@")
+        self.assertIsNot(http_pool._manager(first), http_pool._manager(second))

@@ -1,9 +1,11 @@
 import json
+import io
 import ssl
 import unittest
 from unittest.mock import Mock, patch
 
 import easy_multi_provider.native_websocket as native_websocket
+from easy_multi_provider.transport import WebSocketConnection, WebSocketProtocolError
 from easy_multi_provider.native_websocket import (
     MAX_NATIVE_WEBSOCKET_UNCOMPRESSED_REQUEST_BYTES,
     NativeWebSocketBridge,
@@ -53,6 +55,19 @@ class _GatewayFailure(Exception):
 
 
 class NativeWebSocketTests(unittest.TestCase):
+    def test_preencoded_downstream_json_matches_normal_frame_and_keeps_size_limit(self):
+        event = {"type": "response.output_text.delta", "delta": "猫🐱"}
+        encoded = json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        normal, reused = io.BytesIO(), io.BytesIO()
+        WebSocketConnection(None, normal).send_json(event)
+        connection = WebSocketConnection(None, reused)
+        connection.send_json_bytes(encoded)
+        self.assertEqual(normal.getvalue(), reused.getvalue())
+        with patch("easy_multi_provider.transport.MAX_WEBSOCKET_MESSAGE_BYTES", len(encoded) - 1):
+            with self.assertRaises(WebSocketProtocolError):
+                connection.send_json_bytes(encoded)
+        self.assertEqual(normal.getvalue(), reused.getvalue())
+
     def test_incremental_collaboration_restores_plaintext_without_tools(self):
         terminal = {"type": "response.completed", "response": {"status": "completed"}}
         item = {"type": "function_call", "namespace": "emp_collaboration",
@@ -174,9 +189,10 @@ class NativeWebSocketTests(unittest.TestCase):
             "wss://example.invalid/responses",
             {"Authorization": "Bearer test-only"},
             "route-a",
+            "http://127.0.0.1:7890",
         )
         connection = Connection()
-        with patch("websockets.sync.client.connect", return_value=connection) as opened, patch("easy_multi_provider.native_websocket.proxy_for_url", return_value="http://127.0.0.1:7890"):
+        with patch("websockets.sync.client.connect", return_value=connection) as opened:
             wrapped = _default_connector(target)
 
         self.assertTrue(wrapped.connected)
@@ -248,6 +264,9 @@ class NativeWebSocketTests(unittest.TestCase):
         self.assertEqual(events[-1]["response"]["id"], "resp_1")
         self.assertEqual(connection.sent[0]["input"], ["large-history"])
         self.assertTrue(connection.receive_timeouts)
+        self.assertTrue(bridge.can_continue(target))
+        self.assertIsNone(connection.acknowledgement.timeout)
+        bridge._last_healthy_at -= native_websocket.NATIVE_WEBSOCKET_HEALTH_FRESHNESS
         self.assertTrue(bridge.can_continue(target))
         self.assertEqual(
             connection.acknowledgement.timeout,
@@ -400,6 +419,9 @@ class NativeWebSocketTests(unittest.TestCase):
 
         list(bridge.events(target, {"type": "response.create", "input": []}))
         self.assertTrue(bridge.can_continue(target))
+        self.assertEqual(pings, [])
+        # Idle reuse still probes. Successful continuation refreshes health.
+        bridge._last_healthy_at -= native_websocket.NATIVE_WEBSOCKET_HEALTH_FRESHNESS
         list(bridge.events(target, {"type": "response.create", "input": []}))
 
         self.assertEqual(len(calls), 1)
@@ -437,10 +459,25 @@ class NativeWebSocketTests(unittest.TestCase):
 
         list(bridge.events(target, {"type": "response.create", "input": []}))
 
+        bridge._last_healthy_at -= native_websocket.NATIVE_WEBSOCKET_HEALTH_FRESHNESS
         self.assertFalse(bridge.can_continue(target))
         self.assertTrue(first.closed)
         list(bridge.events(target, {"type": "response.create", "input": []}))
         self.assertFalse(bridge.last_connection_reused)
+
+    def test_probe_health_expires_even_when_no_request_was_sent(self):
+        connection = _FakeConnection([])
+        connection.probe = Mock(return_value=True)
+        target = NativeWebSocketTarget("wss://example.test/responses", {}, "route")
+        bridge = NativeWebSocketBridge(lambda _: connection)
+        bridge.connect(target)
+        self.assertTrue(bridge.can_continue(target))
+        self.assertTrue(bridge.can_continue(target))
+        self.assertEqual(connection.probe.call_count, 1)
+        bridge._last_healthy_at -= native_websocket.NATIVE_WEBSOCKET_HEALTH_FRESHNESS
+        connection.probe.return_value = False
+        self.assertFalse(bridge.can_continue(target))
+        self.assertTrue(connection.closed)
 
     def test_route_change_closes_old_connection(self):
         first = _FakeConnection(

@@ -32,6 +32,20 @@ def search():
 
 
 class ExternalToolsTests(unittest.TestCase):
+    def test_shared_leaf_objects_keep_original_and_distinct_namespace_identities(self):
+        shared = function()
+        shared["parameters"]["properties"] = {"query": {"type": "string"}}
+        body = {"tools": [namespace("one", shared), namespace("two", shared)],
+                "input": [{"type": "additional_tools", "tools": [namespace("three", shared)]}]}
+        original = copy.deepcopy(body)
+        bridge = ExternalTools()
+        result = bridge.prepare(body)
+        self.assertEqual(len({tool["name"] for tool in result["tools"]}), 3)
+        self.assertEqual(body, original)
+        result["tools"][0]["parameters"]["properties"]["query"]["type"] = "number"
+        self.assertEqual(result["tools"][1]["parameters"]["properties"]["query"]["type"], "string")
+        self.assertEqual(shared["parameters"]["properties"]["query"]["type"], "string")
+
     def test_namespaced_names_choice_and_history_round_trip_in_all_protocols(self):
         body = {"input": [{"type": "function_call", "namespace": "one", "name": "search",
                            "call_id": "call", "arguments": '{"name":"do not rewrite"}'},

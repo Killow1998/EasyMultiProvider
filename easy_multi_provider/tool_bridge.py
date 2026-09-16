@@ -46,16 +46,16 @@ class ExternalTools:
         for raw in tools:
             if not isinstance(raw, Mapping):
                 raise RouterError("request projection failed: invalid tool definition", 422)
-            tool = copy.deepcopy(dict(raw))
-            kind = tool.get("type")
+            kind = raw.get("type")
             if kind == "namespace":
-                name = tool.get("name")
+                name = raw.get("name")
                 if namespace or not isinstance(name, str) or not name:
                     raise RouterError("request projection failed: invalid tool namespace", 422)
                 result.extend(self._definitions(
-                    tool.get("tools"), name, str(tool.get("description") or ""),
+                    raw.get("tools"), name, str(raw.get("description") or ""),
                 ))
                 continue
+            tool = copy.deepcopy(dict(raw))
             if kind == "tool_search":
                 if tool.get("execution") != "client":
                     raise RouterError("external tool search requires client execution", 422)

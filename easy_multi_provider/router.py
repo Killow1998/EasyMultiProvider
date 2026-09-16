@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import re
 import time
@@ -21,7 +22,7 @@ from .capabilities import (
     observed_at_now,
 )
 from .catalog import has_explicit_family_identity, presentation_for_route
-from .network_proxy import proxy_identity
+from .network_proxy import proxy_for_url
 from .http_pool import open_request
 from .config import api_key
 from .context_guard import (
@@ -1338,9 +1339,12 @@ def prepare_native_websocket_request(
         if key.lower() in {"authorization", "chatgpt-account-id"}:
             headers[key] = value
     payload["type"] = "response.create"
-    connection_key = identity.connection_key + ":" + proxy_identity(websocket_url)
+    # Resolve once: the connection identity and the eventual handshake must
+    # use the same proxy even if system settings change during preparation.
+    proxy = proxy_for_url(websocket_url)
+    connection_key = identity.connection_key + ":" + hashlib.sha256((proxy or "direct").encode()).hexdigest()
     return NativeWebSocketPlan(
-        target=NativeWebSocketTarget(websocket_url, headers, connection_key),
+        target=NativeWebSocketTarget(websocket_url, headers, connection_key, proxy),
         provider=provider,
         model=model,
         requested_slug=model_id,

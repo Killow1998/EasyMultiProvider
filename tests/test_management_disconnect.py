@@ -9,6 +9,11 @@ from easy_multi_provider.server import make_handler
 
 
 class ManagementDisconnectTests(unittest.TestCase):
+    def test_management_failures_keep_specific_quota_error_codes(self):
+        handler = object.__new__(make_handler(SimpleNamespace()))
+        for code in ("quota_output_encoding_error", "quota_output_protocol_error", "quota_timeout"):
+            self.assertEqual(handler._management_failure_class(QuotaError("safe error", code)), code)
+
     def test_disconnect_while_returning_quota_error_does_not_write_twice(self):
         for error in (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             with self.subTest(error=error.__name__):

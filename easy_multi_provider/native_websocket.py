@@ -13,7 +13,6 @@ import time
 import uuid
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Tuple
 
-from .network_proxy import proxy_for_url
 from .diagnostic_journal import exception_details
 from .transport_failures import PHASE_CONNECT, network_failure, status_error_class
 
@@ -25,6 +24,7 @@ MAX_NATIVE_WEBSOCKET_EVENT_BYTES = 64 * 1024 * 1024
 MAX_NATIVE_WEBSOCKET_UNCOMPRESSED_REQUEST_BYTES = 4 * 1024 * 1024
 NATIVE_WEBSOCKET_CONNECT_TIMEOUT = 15
 NATIVE_WEBSOCKET_REUSE_PROBE_TIMEOUT = 2
+NATIVE_WEBSOCKET_HEALTH_FRESHNESS = 20
 NATIVE_WEBSOCKET_IDLE_TIMEOUT = 300
 _RETRYABLE_UPGRADE_STATUSES = frozenset(
     {400, 404, 405, 415, 426, 501}
@@ -93,6 +93,7 @@ class NativeWebSocketTarget:
     url: str
     headers: Mapping[str, str]
     connection_key: str
+    proxy: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -167,7 +168,7 @@ def _compressed_connector(target: NativeWebSocketTarget):
             compression="deflate",
             additional_headers=dict(target.headers),
             user_agent_header=None,
-            proxy=proxy_for_url(target.url),
+            proxy=target.proxy,
             open_timeout=NATIVE_WEBSOCKET_CONNECT_TIMEOUT,
             ping_interval=20,
             ping_timeout=20,
@@ -326,7 +327,7 @@ class NativeWebSocketBridge:
         self._connection = None
         self._connection_key: Optional[str] = None
         self._last_connection_reused = False
-        self._probed_connection = None
+        self._last_healthy_at = None
 
     def _observe(self, phase: str, **fields: Any) -> None:
         if not callable(self._observer):
@@ -362,7 +363,8 @@ class NativeWebSocketBridge:
         connection = self._connection
         if connection is None:
             return False
-        if self._probed_connection is connection:
+        if (self._last_healthy_at is not None
+                and 0 <= time.monotonic() - self._last_healthy_at < NATIVE_WEBSOCKET_HEALTH_FRESHNESS):
             return True
         probe = getattr(connection, "probe", None)
         if callable(probe):
@@ -371,7 +373,7 @@ class NativeWebSocketBridge:
                     uuid.uuid4().hex[:16],
                     NATIVE_WEBSOCKET_REUSE_PROBE_TIMEOUT,
                 ):
-                    self._probed_connection = connection
+                    self._last_healthy_at = time.monotonic()
                     return True
             except Exception:
                 pass
@@ -383,7 +385,7 @@ class NativeWebSocketBridge:
         # Lightweight test doubles and alternate clients may not expose control
         # frames. Their ordinary ``connected`` state remains the best signal.
         if not callable(ping) or not callable(receive):
-            self._probed_connection = connection
+            self._last_healthy_at = time.monotonic()
             return True
         payload = uuid.uuid4().hex[:16]
         try:
@@ -397,7 +399,7 @@ class NativeWebSocketBridge:
                     if isinstance(data, bytes):
                         data = data.decode("ascii", errors="ignore")
                     if data == payload:
-                        self._probed_connection = connection
+                        self._last_healthy_at = time.monotonic()
                         return True
                     break
                 if opcode == 0x9:  # peer ping; websocket-client already replied
@@ -483,7 +485,7 @@ class NativeWebSocketBridge:
         self._connection = connection
         self._connection_key = target.connection_key
         self._last_connection_reused = False
-        self._probed_connection = None
+        self._last_healthy_at = None
         self._observe(
             "upstream_handshake_accepted",
             status=101,
@@ -521,7 +523,7 @@ class NativeWebSocketBridge:
                 request_bytes=len(payload.encode("utf-8")),
                 reused=self._last_connection_reused,
             )
-            self._probed_connection = None
+            self._last_healthy_at = None
             event_count = 0
             while True:
                 if callable(setter):
@@ -582,6 +584,8 @@ class NativeWebSocketBridge:
                 # Restore only our explicit namespace, regardless of that omission.
                 from .collaboration_transport import restore_collaboration
                 event = restore_collaboration(event)
+                if observation is not None and observation.get("success"):
+                    self._last_healthy_at = time.monotonic()
                 yield event
                 if observation is not None:
                     return
@@ -642,8 +646,8 @@ class NativeWebSocketBridge:
     def close(self) -> None:
         connection = self._connection
         self._connection = None
+        self._last_healthy_at = None
         self._connection_key = None
-        self._probed_connection = None
         if connection is None:
             return
         try:

@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import patch
 
 from easy_multi_provider.provider_replay import (
     ProviderReplayCache,
@@ -42,6 +43,24 @@ def _scope(
 
 
 class ProviderReplayTests(unittest.TestCase):
+    def test_no_scope_stream_skips_parsing_and_closes_on_cancellation(self):
+        closed = []
+        data = b'data: {"type":"response.output_text.delta","delta":"fixture"}\n\n'
+
+        def chunks():
+            try:
+                yield data
+                yield b'data: [DONE]\n\n'
+            finally:
+                closed.append(True)
+
+        cache = ProviderReplayCache()
+        with patch("easy_multi_provider.provider_replay.json.loads", side_effect=AssertionError("unused parse")):
+            stream = cache.observe_stream(None, chunks())
+            self.assertEqual(next(stream), data)
+            stream.close()
+        self.assertEqual(closed, [True])
+
     def test_scope_changes_when_resolved_upstream_model_changes(self):
         provider = {
             "id": "demo",

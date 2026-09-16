@@ -4006,6 +4006,65 @@ class HistoryContinuityWiringTests(unittest.TestCase):
 
 
 class ContinuityAppStateTests(unittest.TestCase):
+    def test_native_pre_output_queue_is_bounded_without_replay(self):
+        for count, padding in ((257, 0), (2, 600 * 1024)):
+            with self.subTest(count=count, padding=padding), tempfile.TemporaryDirectory() as directory:
+                events_read = []
+                closed = []
+
+                class FloodBridge:
+                    connection_key = None
+                    last_connection_reused = False
+
+                    def __init__(self, observer=None):
+                        pass
+
+                    def events(self, target, payload):
+                        for index in range(count):
+                            events_read.append(index)
+                            yield {"type": "response.created", "padding": "x" * padding}
+                        yield {"type": "response.completed", "response": {"status": "completed"}}
+
+                    def close(self):
+                        closed.append(True)
+
+                config_path = Path(directory) / "config.json"
+                self._write_config(config_path)
+                state = AppState(config_path)
+                server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    with patch("easy_multi_provider.server.NativeWebSocketBridge", FloodBridge), \
+                            patch("easy_multi_provider.codex_dispatch.proxy") as fallback, \
+                            socket.create_connection(server.server_address, timeout=5) as client, \
+                            client.makefile("rb") as stream:
+                        client.sendall((
+                            "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                            "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                            "Authorization: Bearer test-only\r\nchatgpt-account-id: account-fixture\r\n"
+                            "Cookie: emp_session=%s\r\n\r\n"
+                            % (server.server_address[1], state.session_token)
+                        ).encode("ascii"))
+                        self.assertIn(b" 101 ", stream.readline())
+                        while stream.readline() not in (b"\r\n", b"\n", b""):
+                            pass
+                        request = {"type": "response.create", "model": "native/model-a",
+                                   "input": "hello", "stream": True}
+                        client.sendall(_masked_text_frame(json.dumps(request)))
+                        _, raw = _read_text_frame(stream)
+                        event = json.loads(raw)
+                        self.assertEqual(event["type"], "response.failed")
+                        self.assertEqual(event["response"]["error"]["code"], "stream_error")
+                        self.assertEqual(len(events_read), count)
+                        self.assertTrue(closed)
+                        fallback.assert_not_called()
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(2)
+
     def _write_config(self, config_path: Path) -> None:
         save(
             normalize(

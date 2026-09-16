@@ -238,6 +238,9 @@ class ProviderReplayCache:
             self.observe_value(scope, value)
 
         try:
+            if scope is None:
+                yield from chunks
+                return
             for chunk in chunks:
                 if isinstance(chunk, (bytes, bytearray)):
                     pending.extend(chunk)

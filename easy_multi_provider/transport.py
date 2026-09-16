@@ -187,6 +187,10 @@ class WebSocketConnection:
 
     def send_json(self, value: Dict[str, Any]) -> None:
         payload = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self.send_json_bytes(payload)
+
+    def send_json_bytes(self, payload: bytes) -> None:
+        """Send an already encoded JSON event using the same frame limit."""
         if len(payload) > MAX_WEBSOCKET_MESSAGE_BYTES:
             raise WebSocketProtocolError("websocket response is too large", 1009)
         self._send_frame(1, payload)

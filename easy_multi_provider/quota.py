@@ -274,6 +274,8 @@ def _query_app_server(process: Any, requests: list, timeout: int) -> str:
                 message = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(message, dict):
+                raise QuotaError("Codex quota JSON-RPC output must be an object", "quota_output_protocol_error")
             if message.get("id") != request_id:
                 continue
             if "error" in message:
@@ -436,6 +438,8 @@ def parse_app_server_output(output: str) -> Dict[str, Any]:
             message = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(message, dict):
+            raise QuotaError("Codex quota JSON-RPC output must be an object", "quota_output_protocol_error")
         result = message.get("result")
         if isinstance(result, dict):
             if isinstance(result.get("account"), dict):

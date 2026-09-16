@@ -57,6 +57,26 @@ class LoopbackProxyTests(unittest.TestCase):
 
 
 class LiveSystemProxyTests(unittest.TestCase):
+    def test_native_proxy_identity_and_handshake_share_one_resolved_setting(self):
+        from unittest.mock import Mock
+        from easy_multi_provider.router import prepare_native_websocket_request
+        from easy_multi_provider.native_websocket import _compressed_connector
+        config = {"providers": [{"id": "native", "auth_mode": "forward", "protocol": "responses",
+                                  "base_url": "https://native.example/backend-api/codex"}],
+                  "models": [{"id": "native/model", "provider": "native", "upstream_id": "model"}]}
+        body = {"model": "native/model", "input": [{"type": "message", "role": "user", "content": "hello"}]}
+        incoming = {"Authorization": "Bearer fixture", "chatgpt-account-id": "fixture"}
+        with patch("easy_multi_provider.router.proxy_for_url", side_effect=["http://proxy.test:7890", None]) as reader:
+            first = prepare_native_websocket_request(config, body, incoming)
+            with patch("websockets.sync.client.connect", return_value=Mock()) as opened:
+                connection = _compressed_connector(first.target)
+                self.assertEqual(opened.call_args.kwargs["proxy"], "http://proxy.test:7890")
+                connection.close()
+            self.assertEqual(reader.call_count, 1)
+            second = prepare_native_websocket_request(config, body, incoming)
+        self.assertNotEqual(first.target.connection_key, second.target.connection_key)
+        self.assertIsNone(second.target.proxy)
+
     def tearDown(self):
         from easy_multi_provider.network_proxy import follow_system_proxy
         follow_system_proxy(None)

@@ -5,10 +5,15 @@ import threading
 import time
 from collections import OrderedDict
 from urllib.error import HTTPError, URLError
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import urllib3
 
 from .network_proxy import proxy_for_url
+from .router_errors import RouterError
+
+
+MAX_SSE_LINE_BYTES = 1024 * 1024
 
 
 _lock = threading.Lock()
@@ -41,7 +46,15 @@ def _manager(proxy):
                 from urllib3.contrib.socks import SOCKSProxyManager
                 manager = SOCKSProxyManager(proxy, **settings)
             elif proxy:
-                manager = urllib3.ProxyManager(proxy, **settings)
+                parsed = urlsplit(proxy)
+                proxy_url = proxy
+                proxy_headers = {}
+                if parsed.username is not None:
+                    credentials = unquote(parsed.username) + ":" + unquote(parsed.password or "")
+                    proxy_headers = urllib3.make_headers(proxy_basic_auth=credentials)
+                    # Userinfo belongs to the proxy only, never the origin URL.
+                    proxy_url = urlunsplit(parsed._replace(netloc=parsed.netloc.rsplit("@", 1)[1]))
+                manager = urllib3.ProxyManager(proxy_url, proxy_headers=proxy_headers, **settings)
             else:
                 manager = urllib3.PoolManager(**settings)
             _managers[proxy] = manager
@@ -78,12 +91,29 @@ class Response:
         return self
 
     def __next__(self):
-        while b"\n" not in self._buffer:
+        scanned = 0
+        while True:
+            end = self._buffer.find(b"\n", scanned)
+            if end >= 0:
+                if end + 1 > MAX_SSE_LINE_BYTES:
+                    self.close()
+                    self._buffer.clear()
+                    raise RouterError("upstream SSE line is too large", 502)
+                line = bytes(self._buffer[:end + 1])
+                del self._buffer[:end + 1]
+                return line
+            if len(self._buffer) > MAX_SSE_LINE_BYTES:
+                self.close()
+                self._buffer.clear()
+                raise RouterError("upstream SSE line is too large", 502)
+            scanned = len(self._buffer)
             try:
-                chunk = self._response.read1(8192)
+                chunk = self._response.read1(min(8192, MAX_SSE_LINE_BYTES + 1 - scanned))
             except urllib3.exceptions.TimeoutError as exc:
+                self.close()
                 raise TimeoutError("upstream read timed out") from exc
             except urllib3.exceptions.HTTPError as exc:
+                self.close()
                 raise URLError(exc) from exc
             if not chunk:
                 if not self._buffer:
@@ -92,10 +122,6 @@ class Response:
                 self._buffer.clear()
                 return line
             self._buffer.extend(chunk)
-        end = self._buffer.index(b"\n") + 1
-        line = bytes(self._buffer[:end])
-        del self._buffer[:end]
-        return line
 
     def close(self):
         # Unread/cancelled responses are discarded, never given to another request.

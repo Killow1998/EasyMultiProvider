@@ -167,7 +167,9 @@ from .transport_continuity import (
     TransportContinuityDecision,
     TransportContinuityState,
 )
-from .stream_adapters import _response_json_stream
+from .stream_adapters import (
+    MAX_PRE_OUTPUT_BUFFER_BYTES, MAX_PRE_OUTPUT_BUFFER_EVENTS, _response_json_stream,
+)
 from .search_integration import SearchFeatureManager
 from .vault import default_master_key_file, ensure_master_key
 
@@ -2649,7 +2651,7 @@ def make_handler(state: AppState):
             if isinstance(exception, IntegrationError):
                 return "integration_error"
             if isinstance(exception, QuotaError):
-                return "quota_error"
+                return exception.code
             if isinstance(exception, RouterError):
                 return "router_error"
             if isinstance(exception, ConfigError):
@@ -3139,6 +3141,7 @@ def make_handler(state: AppState):
                             output_emitted = False
                             tool_activity = False
                             pending_lifecycle_events = []
+                            pending_lifecycle_bytes = 0
                             performance = ResponsesPerformanceTracker(
                                 started=native_started
                             )
@@ -3183,11 +3186,21 @@ def make_handler(state: AppState):
                                             completed_native_id = response["id"]
                                     if event_output or event_tool or terminal is not None:
                                         for pending_event in pending_lifecycle_events:
-                                            websocket.send_json(pending_event)
+                                            websocket.send_json_bytes(pending_event)
                                         pending_lifecycle_events = []
-                                        websocket.send_json(event)
+                                        pending_lifecycle_bytes = 0
+                                        websocket.send_json_bytes(encoded_event)
                                     else:
-                                        pending_lifecycle_events.append(event)
+                                        if (len(pending_lifecycle_events) >= MAX_PRE_OUTPUT_BUFFER_EVENTS
+                                                or pending_lifecycle_bytes + len(encoded_event) > MAX_PRE_OUTPUT_BUFFER_BYTES):
+                                            native_upstream.close()
+                                            raise NativeWebSocketError(
+                                                "native upstream pre-output buffer is too large", 502, False,
+                                                request_sent=True, error_class="stream_error",
+                                                failure_reason="pre_output_buffer_limit",
+                                            )
+                                        pending_lifecycle_events.append(encoded_event)
+                                        pending_lifecycle_bytes += len(encoded_event)
                                 if terminal is None:
                                     raise NativeWebSocketError(
                                         "native upstream websocket ended without a terminal event"

@@ -37,6 +37,17 @@ tools do not inherit PyInstaller's private library path. Cancelling authorizatio
 keeps the old service running and reopens the request gate. The page distinguishes
 cancellation, unavailable authorization, installation and recovery failures.
 
+Known security boundary: the elevated system tool reopens a user-owned staging
+path after Polkit authorization. The checksum and private directory do not prevent
+another process with the same user's write access from replacing that file while
+authorization is pending. Post-install executable/version checks cannot verify
+all effects of a substituted deb package. This path is not hardened against that
+local attacker; adding another pre-install checksum would not close the window.
+A trusted privileged installer that snapshots and verifies the whole release
+inside its own boundary, or a system-package-manager-only update flow, is needed
+before claiming that protection. The existing desktop authorization test checks
+functionality, not resistance to this substitution attack.
+
 A Linux desktop with `pkexec` and a Polkit authentication agent is required for
 this path. SSH/headless sessions without an agent cannot display the desktop
 dialog: use the system package manager in an interactive terminal instead.

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Bound incomplete HTTP SSE lines before they reach the outer parser; preserve
+  complete UTF-8 lines and close oversized streams immediately.
+- Authenticate HTTP proxies using proxy-only headers, including CONNECT tunnels;
+  decode URL-encoded credentials and keep origin credentials and pools isolated.
+- Bound native WebSocket pre-output buffering by event count and byte size,
+  and send each event's existing JSON encoding without serializing it again.
+- Reuse recently healthy native WebSockets without a synchronous pong round trip;
+  idle connections still require a probe, and sent requests are never replayed.
+- Carry the native compressed WebSocket's selected proxy into its handshake so
+  connection identity and transport use the same settings during proxy switches.
+- Skip signature stream parsing without a replay scope and remove redundant
+  namespace-container copying while preserving tool definition isolation.
+- Reject non-object quota JSON-RPC with a specific protocol error and retain
+  quota failure codes in management diagnostics.
 - Read Codex quota subprocess JSON-RPC as UTF-8 on every OS. Report invalid
   output and pipe read failures explicitly instead of crashing reader threads;
   drain diagnostic stderr as bytes without changing account credentials.

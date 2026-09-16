@@ -359,6 +359,19 @@ class QuotaOutputTests(unittest.TestCase):
         {"id": 3, "method": "account/rateLimits/read"},
     ]
 
+    def test_non_object_json_rpc_fails_with_protocol_error_in_both_readers(self):
+        from unittest.mock import Mock
+        for output in ("[]\n", "null\n", "42\n", '"private-output"\n'):
+            with self.subTest(output=output):
+                process = Mock(stdin=io.StringIO(), stdout=io.StringIO(output), stderr=io.StringIO())
+                with self.assertRaises(quota_module.QuotaError) as raised:
+                    _query_app_server(process, self.requests, 2)
+                self.assertEqual(raised.exception.code, "quota_output_protocol_error")
+                self.assertNotIn("private", str(raised.exception))
+                with self.assertRaises(quota_module.QuotaError) as parsed:
+                    parse_app_server_output(output)
+                self.assertEqual(parsed.exception.code, "quota_output_protocol_error")
+
     def test_utf8_json_rpc_and_non_utf8_stderr_in_chinese_directory(self):
         # Bytes travel through real process pipes; no StringIO mock can reveal
         # the Windows locale-dependent decoder bug.
