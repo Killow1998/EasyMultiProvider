@@ -574,12 +574,193 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
             self.assertNotIn("SECRET", repr(journal.events))
         self.assertEqual(request_source({"metadata": {"thread_id": "prompt-secret"}}, {
             "session-id": "Bearer SECRET", "originator": "private-path", "x-emp-request-id": "invalid",
-        }), {"client_kind": "unknown"})
+        }), {
+            "client_kind": "unknown",
+            "client_kind_source": "unknown",
+            "identity_source": "unknown",
+            "call_purpose": "unknown",
+            "call_purpose_source": "not_provided",
+        })
         ring = ObservationRing()
         ring.record({**unsafe_route_event(), **event})
         row = ring.snapshot()["records"][0]
         self.assertEqual(row["session_id"], thread_id)
         self.assertEqual(row["request_id"], event["request_id"])
+
+    def test_model_trace_correlates_client_route_response_and_turn_without_content(self):
+        from easy_multi_provider.diagnostic_journal import request_source
+
+        thread_id = "01a0ad33-504f-7c83-9821-2bde34d29d06"
+        turn_id = "01a0ad33-5273-75b3-92a1-a484d6b6cd26"
+        parent_id = "01a00000-0000-7000-8000-000000000088"
+        source = request_source(
+            {
+                "client_metadata": {
+                    "x-codex-turn-metadata": json.dumps(
+                        {
+                            "thread_id": thread_id,
+                            "turn_id": turn_id,
+                            "forked_from_thread_id": parent_id,
+                            "content": "PRIVATE",
+                        }
+                    )
+                }
+            },
+            {
+                "originator": "codex_desktop",
+                "x-emp-request-id": "0123456789abcdef",
+                "Authorization": "Bearer SECRET",
+            },
+        )
+        ring = ObservationRing()
+        ring.record(
+            {
+                **unsafe_route_event(),
+                **source,
+                "client_model": "display/cat8",
+                "upstream_model": "gemini-3.8-flash",
+                "response_model": "gemini-3.8-flash-202609",
+                "response_model_source": "upstream_response",
+                "route_source": "explicit_model",
+                "protocol_fallback": True,
+                "fallback_reason": "protocol_rejection",
+                "model_trace_source": "emp_dispatch",
+            }
+        )
+        row = ring.snapshot()["records"][0]
+        self.assertEqual(row["request_id"], "0123456789abcdef")
+        self.assertEqual(row["thread_id"], thread_id)
+        self.assertEqual(row["turn_id"], turn_id)
+        self.assertEqual(row["parent_thread_id"], parent_id)
+        self.assertEqual(row["client_kind"], "codex_desktop")
+        self.assertEqual(row["identity_source"], "client_claim")
+        self.assertEqual(row["client_model"], "display/cat8")
+        self.assertEqual(row["upstream_model"], "gemini-3.8-flash")
+        self.assertEqual(row["response_model"], "gemini-3.8-flash-202609")
+        self.assertEqual(row["route_source"], "explicit_model")
+        self.assertEqual(row["fallback_reason"], "protocol_rejection")
+        self.assertEqual(row["call_purpose"], "unknown")
+        self.assertNotIn("PRIVATE", repr(row))
+        self.assertNotIn("SECRET", repr(row))
+
+    def test_controlled_request_records_model_mapping_and_upstream_declaration(self):
+        class Response(io.BytesIO):
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = self.make_state(Path(directory))
+            state.config = normalize(
+                {
+                    "providers": [
+                        {
+                            "id": "external",
+                            "base_url": "https://provider.example/v1/responses",
+                            "protocol": "responses",
+                            "auth_mode": "api_key",
+                            "api_key": "TESTONLY",
+                        }
+                    ],
+                    "models": [
+                        {
+                            "id": "display/cat8",
+                            "provider": "external",
+                            "upstream_id": "gemini-3.8-flash",
+                            "enabled": True,
+                        }
+                    ],
+                }
+            )
+            upstream = json.dumps(
+                {
+                    "id": "resp_test",
+                    "object": "response",
+                    "status": "completed",
+                    "model": "gemini-3.8-flash-202609",
+                    "output": [],
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            ).encode()
+            with patch(
+                "easy_multi_provider.router.urlopen",
+                return_value=Response(upstream),
+            ):
+                _, result = state.codex.route(
+                    {"model": "display/cat8", "input": []},
+                    {"x-emp-request-id": "0123456789abcdef"},
+                )
+            self.assertTrue(result)
+            row = state.diagnostics.snapshot()["records"][-1]
+            self.assertEqual(row["request_id"], "0123456789abcdef")
+            self.assertEqual(row["client_model"], "display/cat8")
+            self.assertEqual(row["upstream_model"], "gemini-3.8-flash")
+            self.assertEqual(row["response_model"], "gemini-3.8-flash-202609")
+            self.assertEqual(row["response_model_source"], "upstream_response")
+            self.assertEqual(row["route_source"], "explicit_model")
+            self.assertEqual(row["fallback_reason"], "none")
+
+    def test_controlled_request_records_protocol_fallback_reason(self):
+        from easy_multi_provider.router import RouterError
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = self.make_state(Path(directory))
+            state.config = normalize(
+                {
+                    "providers": [
+                        {
+                            "id": "external",
+                            "base_url": "https://provider.example/v1",
+                            "protocol": "auto",
+                            "auth_mode": "api_key",
+                            "api_key": "TESTONLY",
+                        }
+                    ],
+                    "models": [
+                        {
+                            "id": "display/cat8",
+                            "provider": "external",
+                            "upstream_id": "gemini-3.8-flash",
+                            "enabled": True,
+                        }
+                    ],
+                }
+            )
+
+            upstream = json.dumps(
+                {
+                    "id": "resp_test",
+                    "object": "response",
+                    "status": "completed",
+                    "model": "gemini-3.8-flash-202609",
+                    "output": [],
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            ).encode()
+
+            def accept_responses(provider, *_args, **_kwargs):
+                provider["_emp_upstream_response_model"] = "gemini-3.8-flash-202609"
+                return 200, "application/json", upstream
+
+            with patch(
+                "easy_multi_provider.router.chat_completion",
+                side_effect=RouterError("protocol rejected", 404),
+            ), patch(
+                "easy_multi_provider.router.forward_responses",
+                side_effect=accept_responses,
+            ):
+                _, result = state.codex.route(
+                    {"model": "display/cat8", "input": []},
+                    {"x-emp-request-id": "fedcba9876543210"},
+                )
+
+            self.assertTrue(result)
+            row = state.diagnostics.snapshot()["records"][-1]
+            self.assertEqual(row["request_id"], "fedcba9876543210")
+            self.assertEqual(row["client_model"], "display/cat8")
+            self.assertEqual(row["upstream_model"], "gemini-3.8-flash")
+            self.assertEqual(row["response_model"], "gemini-3.8-flash-202609")
+            self.assertEqual(row["protocol"], "responses")
+            self.assertEqual(row["fallback_reason"], "protocol_rejection")
 
     def test_quit_requires_auth_and_restores_before_stopping(self):
         from unittest.mock import Mock

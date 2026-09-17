@@ -225,10 +225,22 @@ def resolve_route(config: Dict[str, Any], model_id: str) -> ResolvedRoute:
         if item.get("enabled", True) and item.get("auth_mode") == "forward"
     ]
     if len(forward) == 1:
+        provider = forward[0]
+        provider_base_url = str(provider.get("base_url") or "").rstrip("/")
+        native_base_url = str(
+            config.get(
+                "codex_base_url", "https://chatgpt.com/backend-api/codex"
+            )
+        ).rstrip("/")
+        model = None
+        if provider_base_url and provider_base_url == native_base_url:
+            model = _native_catalog_route_model(
+                config, model_id, model_id
+            )
         return ResolvedRoute.from_parts(
             model_id,
-            forward[0],
-            {"id": model_id, "upstream_id": model_id},
+            provider,
+            model or {"id": model_id, "upstream_id": model_id},
             FORWARD_PROVIDER,
         )
     if not forward:

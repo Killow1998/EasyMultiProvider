@@ -258,14 +258,34 @@ class CodexRequestDispatcher:
         )
         performance = ResponsesPerformanceTracker(started=started)
         source = {**request_source(body, incoming), **usage_context(body, incoming)}
+        client_model = body.get("model") if isinstance(body.get("model"), str) else ""
         observed = False
         replay_scope = None
+        route = None
         history_prepare, history_compact = self._history_callbacks(body, incoming)
+
+        def model_trace(event: Mapping[str, Any]) -> Dict[str, Any]:
+            return {
+                "client_model": client_model,
+                "upstream_model": route.upstream_model if route is not None else "",
+                "route_source": route.source if route is not None else "unknown",
+                "fallback_reason": (
+                    "protocol_rejection"
+                    if event.get("protocol_fallback") is True
+                    else "none"
+                ),
+                "model_trace_source": "emp_dispatch",
+            }
 
         def on_observation(event: Dict[str, Any]) -> None:
             nonlocal observed
             observed = True
-            event = {**event, **performance.diagnostics(), **source}
+            event = {
+                **event,
+                **performance.diagnostics(),
+                **source,
+                **model_trace(event),
+            }
             self._record_route_event(
                 event, body, started, selected_transport, "responses"
             )
@@ -293,6 +313,7 @@ class CodexRequestDispatcher:
                 )
             raise
         metadata.update(source)
+        metadata.update(model_trace(metadata))
         if metadata.get("kind") == "stream":
             if not metadata.get("observation_attached"):
                 result = self._diagnostic_stream(

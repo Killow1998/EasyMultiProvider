@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from tests.support import ensure_test_master_key
-from easy_multi_provider.accounts import import_account
+from easy_multi_provider.accounts import import_account, load_auth
 from easy_multi_provider.catalog import build_catalog, subscription_model_options
 from easy_multi_provider.config import load, normalize, save
 from easy_multi_provider.migration import export_bundle, import_bundle
@@ -109,6 +109,133 @@ class SubscriptionContextTests(unittest.TestCase):
             # A removed/replaced login with a reused local ID must not inherit old entitlements.
             replacement = import_account(config, {"id": "a", "prefix": "a"}, {"tokens": {"access_token": "new", "account_id": "different"}}, path)
             self.assertEqual(subscription_model_options(config, replacement)[0]["max_context_window"], 1000000)
+
+    def test_account_refresh_rejects_credential_change_before_cache_write(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path, config, catalog = self.fixture(Path(temporary))
+            state = AppState(path)
+            cache = Path(config["accounts"][0]["auth_file"]).parent / "models_cache.json"
+            old_headers = {
+                "Authorization": "Bearer old",
+                "chatgpt-account-id": "account-a",
+            }
+            new_headers = {
+                "Authorization": "Bearer new",
+                "chatgpt-account-id": "account-b",
+            }
+            with patch(
+                "easy_multi_provider.accounts.auth_headers",
+                side_effect=[old_headers, new_headers],
+            ), patch(
+                "easy_multi_provider.server.fetch_subscription_catalog",
+                return_value=copy.deepcopy(catalog),
+            ) as fetch:
+                with self.assertRaisesRegex(ValueError, "changed during model refresh"):
+                    state.subscription_models("a", refresh=True)
+
+            self.assertEqual(fetch.call_args.args[1], old_headers)
+            self.assertFalse(cache.exists())
+
+    def test_direct_account_import_is_atomic_across_metadata_and_config_failures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path, _, _ = self.fixture(Path(temporary))
+            state = AppState(path)
+            current = next(item for item in state.config["accounts"] if item["id"] == "a")
+            auth_path = Path(current["auth_file"])
+            account_config_path = auth_path.parent / "config.toml"
+            original_main = path.read_bytes()
+            original_auth = auth_path.read_bytes()
+            original_account_config = account_config_path.read_bytes()
+            original_loaded_auth = load_auth(current)
+
+            with self.assertRaises(ValueError):
+                state.import_account(
+                    {
+                        "id": "a",
+                        "prefix": "a",
+                        "model_context_windows": {"gpt-current": -1},
+                    },
+                    {"tokens": {"access_token": "replacement", "account_id": "new"}},
+                )
+
+            self.assertEqual(path.read_bytes(), original_main)
+            self.assertEqual(auth_path.read_bytes(), original_auth)
+            self.assertEqual(account_config_path.read_bytes(), original_account_config)
+            self.assertEqual(load_auth(current), original_loaded_auth)
+            self.assertEqual(state.snapshot(), load(path))
+
+            with patch(
+                "easy_multi_provider.server.save",
+                side_effect=OSError("simulated config write failure"),
+            ):
+                with self.assertRaisesRegex(OSError, "simulated config write failure"):
+                    state.import_account(
+                        {"id": "a", "prefix": "a"},
+                        {"tokens": {"access_token": "replacement", "account_id": "new"}},
+                    )
+
+            self.assertEqual(path.read_bytes(), original_main)
+            self.assertEqual(auth_path.read_bytes(), original_auth)
+            self.assertEqual(account_config_path.read_bytes(), original_account_config)
+            self.assertEqual(load_auth(current), original_loaded_auth)
+            self.assertEqual(state.snapshot(), load(path))
+
+    def test_same_backend_legacy_forward_route_keeps_native_context_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _, config, _ = self.fixture(Path(temporary))
+            config["native_model_context_windows"] = {"gpt-current": 872000}
+            config["codex_base_url"] = "https://native.example/backend-api/codex"
+            config["providers"] = [
+                {
+                    "id": "legacy-native",
+                    "base_url": config["codex_base_url"],
+                    "protocol": "responses",
+                    "auth_mode": "forward",
+                }
+            ]
+
+            native_route = resolve_route(config, "gpt-current")
+            self.assertEqual(native_route.model["context_window"], 872000)
+            self.assertEqual(
+                native_route.model["effective_context_window_percent"], 95
+            )
+
+            config["providers"][0]["base_url"] = "https://gateway.example/v1"
+            gateway_route = resolve_route(config, "gpt-current")
+            self.assertNotIn("context_window", gateway_route.model)
+            self.assertEqual(gateway_route.provider["base_url"], "https://gateway.example/v1")
+
+    def test_catalog_snapshot_reuses_unchanged_sources_and_tracks_external_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path, config, catalog = self.fixture(Path(temporary))
+            state = AppState(path)
+            with patch(
+                "easy_multi_provider.server.build_catalog", wraps=build_catalog
+            ) as builder:
+                first = state.catalog_etag()
+                self.assertEqual(state.catalog_etag(), first)
+                self.assertEqual(builder.call_count, 1)
+
+                catalog["models"].append(
+                    {"slug": "gpt-added", "context_window": 128000}
+                )
+                Path(config["native_catalog_path"]).write_text(json.dumps(catalog))
+                second = state.catalog_etag()
+                self.assertNotEqual(second, first)
+                self.assertEqual(builder.call_count, 2)
+
+                state.config["native_hidden_models"] = ["gpt-added"]
+                third = state.catalog_etag()
+                self.assertNotEqual(third, second)
+                self.assertEqual(builder.call_count, 3)
+
+                cache = (
+                    Path(state.config["accounts"][0]["auth_file"]).parent
+                    / "models_cache.json"
+                )
+                cache.write_text(json.dumps({"models": []}), encoding="utf-8")
+                state.catalog_etag()
+                self.assertEqual(builder.call_count, 4)
 
     def test_refresh_endpoints_require_management_session_and_reject_over_limit_save(self):
         with tempfile.TemporaryDirectory() as temporary:

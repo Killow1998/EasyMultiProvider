@@ -3,17 +3,37 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any, Dict, Iterable, Iterator, Mapping, Optional
 
 _MAX_EVENT_BYTES = 1024 * 1024
 _MIN_TPS_WINDOW_MS = 500
 PERFORMANCE_SCHEMA = 2
+_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+~-]{0,255}$")
 
 
 def token_count(value: Any) -> Optional[int]:
     """Accept reported counts, not estimates, clamped values or missing fields."""
     return value if type(value) is int and 0 <= value <= 10_000_000 else None
+
+
+def declared_response_model(event: Mapping[str, Any]) -> Optional[str]:
+    """Return only a protocol-declared model identifier, never response content."""
+
+    if not isinstance(event, Mapping):
+        return None
+    candidates = [event.get("model")]
+    response = event.get("response")
+    if isinstance(response, Mapping):
+        candidates.append(response.get("model"))
+    message = event.get("message")
+    if isinstance(message, Mapping):
+        candidates.append(message.get("model"))
+    for value in candidates:
+        if isinstance(value, str) and _MODEL_ID.fullmatch(value):
+            return value
+    return None
 
 
 def input_cache_usage(event: Mapping[str, Any]) -> Dict[str, int]:
@@ -108,6 +128,7 @@ class ResponsesPerformanceTracker:
         self._data_bytes = 0
         self._valid_stream = True
         self._completed = False
+        self._response_model: Optional[str] = None
 
     def mark_upstream_started(self, value: Optional[float] = None) -> None:
         self._upstream_started = self._clock() if value is None else float(value)
@@ -115,6 +136,7 @@ class ResponsesPerformanceTracker:
     def observe_event(self, event: Mapping[str, Any]) -> None:
         if not isinstance(event, Mapping):
             return
+        self.observe_upstream_event(event)
         now = self._clock()
         if self._terminal_at is not None:
             return
@@ -137,6 +159,12 @@ class ResponsesPerformanceTracker:
             reasoning = _reasoning_tokens(event)
             if reasoning is not None:
                 self._reasoning_tokens = reasoning
+
+    def observe_upstream_event(self, event: Mapping[str, Any]) -> None:
+        """Capture the first model declared by the upstream protocol."""
+
+        if self._response_model is None:
+            self._response_model = declared_response_model(event)
 
     def observe_chunk(self, chunk: Any) -> None:
         if not self._valid_stream:
@@ -181,6 +209,7 @@ class ResponsesPerformanceTracker:
             self.observe_chunk(raw)
             return
         if isinstance(payload, Mapping):
+            self.observe_upstream_event(payload)
             self._input_usage = reported_usage(payload)
             count = _output_tokens(payload)
             if count is not None:
@@ -207,6 +236,9 @@ class ResponsesPerformanceTracker:
 
     def diagnostics(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {"performance_schema": PERFORMANCE_SCHEMA, **self._input_usage}
+        if self._response_model is not None:
+            result["response_model"] = self._response_model
+            result["response_model_source"] = "upstream_response"
         if self._first_token_at is not None:
             result["ttft_ms"] = max(
                 0, int(round((self._first_token_at - self._started) * 1000))

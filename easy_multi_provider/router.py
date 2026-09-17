@@ -51,7 +51,7 @@ from .dialects import (
     request_shape,
 )
 from .quota import QuotaError, refresh_account_quota
-from .performance import reported_usage
+from .performance import declared_response_model, reported_usage
 from .usage_ledger import usage_identity
 from .native_websocket import NativeWebSocketTarget
 from .model_discovery import (
@@ -156,6 +156,8 @@ class NativeWebSocketPlan:
     provider: Dict[str, Any]
     model: Dict[str, Any]
     requested_slug: str
+    upstream_model: str
+    route_source: str
     payload: Dict[str, Any]
     identity: NativeRouteIdentity
     context_observation: Dict[str, Any]
@@ -883,6 +885,22 @@ def _raise_if_context_response(
     raise ContextLengthError(observation)
 
 
+def _capture_response_model(provider: Dict[str, Any], payload: Any) -> None:
+    """Keep a request-local upstream model declaration for final diagnostics."""
+
+    value = declared_response_model(payload) if isinstance(payload, Mapping) else None
+    if value is not None and not provider.get("_emp_upstream_response_model"):
+        provider["_emp_upstream_response_model"] = value
+
+
+def _capture_response_model_bytes(provider: Dict[str, Any], raw: bytes) -> None:
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
+        return
+    _capture_response_model(provider, payload)
+
+
 def forward_responses(
     provider: Dict[str, Any],
     body: Dict[str, Any],
@@ -910,6 +928,7 @@ def forward_responses(
         content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses 响应")
         _raise_if_context_response(provider, response.status, content_type, raw)
+        _capture_response_model_bytes(provider, raw)
         return (
             response.status,
             content_type,
@@ -947,8 +966,12 @@ def forward_responses_stream(
         )
     )
     validated = _validated_responses_stream(upstream, terminal_callback, provider)
-    if on_stream_event is not None:
-        validated = _observing_stream(validated, on_stream_event)
+    def observe_upstream(event: Mapping[str, Any]) -> None:
+        _capture_response_model(provider, event)
+        if on_stream_event is not None:
+            on_stream_event(event)
+
+    validated = _observing_stream(validated, observe_upstream)
     if adapter.dialect == PORTABLE_RESPONSES:
         return _project_responses_stream(
             provider,
@@ -1372,6 +1395,8 @@ def prepare_native_websocket_request(
         provider=provider,
         model=model,
         requested_slug=model_id,
+        upstream_model=route.upstream_model,
+        route_source=route.source,
         payload=payload,
         identity=identity,
         context_observation=context_observation,
@@ -1405,6 +1430,7 @@ def chat_completion(
         content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Chat Completions 响应")
     _raise_if_context_response(provider, response.status, content_type, raw)
+    _capture_response_model_bytes(provider, raw)
     return (
         200,
         "application/json",
@@ -1439,6 +1465,7 @@ def anthropic_completion(
         content_type = response.headers.get("Content-Type", "application/json")
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Anthropic 响应")
     _raise_if_context_response(provider, response.status, content_type, raw)
+    _capture_response_model_bytes(provider, raw)
     return (
         200,
         "application/json",
@@ -1624,6 +1651,7 @@ def stream_chat_completion(
         Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]
     ] = None,
     upstream_model: Optional[str] = None,
+    on_upstream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Iterable[bytes]:
     return _owned_stream_chat_completion(
         _stream_adapter_io(),
@@ -1635,6 +1663,7 @@ def stream_chat_completion(
         or resolved_upstream_model(provider, model, body["model"]),
         terminal_callback,
         context_check,
+        on_upstream_event,
     )
 
 
@@ -1648,6 +1677,7 @@ def stream_anthropic_completion(
         Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]
     ] = None,
     upstream_model: Optional[str] = None,
+    on_upstream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Iterable[bytes]:
     return _owned_stream_anthropic_completion(
         _stream_adapter_io(),
@@ -1659,6 +1689,7 @@ def stream_anthropic_completion(
         or resolved_upstream_model(provider, model, body["model"]),
         terminal_callback,
         context_check,
+        on_upstream_event,
     )
 
 
@@ -1719,6 +1750,7 @@ def _tag_route(
     tagged["resolved_protocol"] = provider.get("protocol")
     tagged["protocol_decision"] = decision
     tagged["protocol_fallback"] = bool(fallback)
+    tagged["fallback_reason"] = "protocol_rejection" if fallback else "none"
     tagged["dialect"] = classify_dialect(provider)
     tagged.update(usage_identity(provider, model or {}))
     if isinstance(request, Mapping):
@@ -1770,6 +1802,13 @@ def _route_event(
     if isinstance(context_observation, Mapping):
         event["context_observation"] = dict(context_observation)
     event.update(_safe_transport_metadata(provider.get("_transport_metadata")))
+    response_model = provider.get("_emp_upstream_response_model")
+    event["response_model"] = (
+        response_model if isinstance(response_model, str) else "unknown"
+    )
+    event["response_model_source"] = (
+        "upstream_response" if isinstance(response_model, str) else "missing"
+    )
     for key in (
         "close_code",
         "output_emitted",
@@ -2238,6 +2277,7 @@ def _proxy_resolved(
                 None,
                 None,
                 route.upstream_model,
+                lambda event: _capture_response_model(provider, event),
             ),
             terminal_callback,
             replay_safe=adapter.replay_safe,
@@ -2264,6 +2304,7 @@ def _proxy_resolved(
                 None,
                 None,
                 route.upstream_model,
+                lambda event: _capture_response_model(provider, event),
             ),
             terminal_callback,
             replay_safe=adapter.replay_safe,

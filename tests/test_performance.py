@@ -1,6 +1,6 @@
 import unittest
 
-from easy_multi_provider.performance import ResponsesPerformanceTracker
+from easy_multi_provider.performance import ResponsesPerformanceTracker, declared_response_model
 
 
 class FakeClock:
@@ -15,6 +15,28 @@ class FakeClock:
 
 
 class ResponsesPerformanceTrackerTests(unittest.TestCase):
+    def test_response_model_uses_only_protocol_fields(self):
+        tracker = ResponsesPerformanceTracker()
+        tracker.observe_upstream_event(
+            {
+                "type": "response.created",
+                "response": {"model": "actual-upstream-v2", "output": "PRIVATE"},
+            }
+        )
+        tracker.observe_upstream_event({"model": "later-model"})
+        self.assertEqual(tracker.diagnostics()["response_model"], "actual-upstream-v2")
+        self.assertEqual(
+            tracker.diagnostics()["response_model_source"], "upstream_response"
+        )
+        self.assertNotIn("PRIVATE", repr(tracker.diagnostics()))
+        self.assertEqual(
+            declared_response_model(
+                {"type": "message_start", "message": {"model": "claude-real"}}
+            ),
+            "claude-real",
+        )
+        self.assertIsNone(declared_response_model({"content": {"model": "hidden"}}))
+
     def test_canonical_events_measure_ttft_and_tps_without_content(self):
         clock = FakeClock()
         tracker = ResponsesPerformanceTracker(started=clock(), clock=clock)

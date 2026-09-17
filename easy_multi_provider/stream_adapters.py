@@ -825,6 +825,7 @@ def stream_chat_completion(
     upstream_model: str,
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+    on_upstream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Iterable[bytes]:
     body = io.body_with_supported_effort(provider, body, model)
     payload = responses_to_chat(body, upstream_model)
@@ -877,6 +878,8 @@ def stream_chat_completion(
                 raise ExternalProtocolError(
                     "Chat Completions upstream returned malformed SSE data"
                 )
+            if on_upstream_event is not None:
+                on_upstream_event(chunk)
             if chunk.get("error"):
                 if is_explicit_context_error(
                     400,
@@ -1224,6 +1227,7 @@ def stream_anthropic_completion(
     upstream_model: str,
     terminal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
+    on_upstream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
 ) -> Iterable[bytes]:
     payload = responses_to_anthropic(body, upstream_model)
     payload["stream"] = True
@@ -1269,6 +1273,8 @@ def stream_anthropic_completion(
                 raise ExternalProtocolError(
                     "Anthropic upstream returned an invalid stream event"
                 )
+            if on_upstream_event is not None:
+                on_upstream_event(event)
             event_type = str(event.get("type") or "")
             if event_type == "error":
                 raise ExternalProtocolError("Anthropic upstream returned an error event")

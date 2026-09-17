@@ -11,7 +11,13 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Set, Tuple
 
-from .vault import VaultError, read_encrypted_json, write_encrypted_json
+from .vault import (
+    FileTransaction,
+    VaultError,
+    file_transaction,
+    read_encrypted_json,
+    write_encrypted_json,
+)
 
 _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _MAX_AUTH_BYTES = 1024 * 1024
@@ -157,30 +163,56 @@ def _private_text(path: Path, value: str) -> None:
             os.unlink(temporary)
 
 
-def import_account(
-    config: Dict[str, Any], metadata: Dict[str, Any], auth_json: Dict[str, Any],
+def prepare_account_import(
+    config: Dict[str, Any], metadata: Dict[str, Any],
     config_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    """Validate imported account metadata without changing managed files."""
+
     account_id = _segment(metadata.get("id"), "account.id")
-    prefix = _segment(metadata.get("prefix"), "account.prefix")
-    auth = _validate_auth(auth_json)
     path = account_auth_path(config, account_id, config_path)
-    try:
-        write_encrypted_json(path, auth)
-    except VaultError as exc:
-        raise AccountError(str(exc)) from exc
-    _private_text(path.parent / "config.toml", 'cli_auth_credentials_store = "file"\n')
     return normalize_account(
         {
             "id": account_id,
             "name": metadata.get("name", account_id),
-            "prefix": prefix,
+            "prefix": metadata.get("prefix"),
             "auth_file": str(path),
             "enabled": metadata.get("enabled", True),
             "hidden_models": metadata.get("hidden_models", []),
             "model_context_windows": metadata.get("model_context_windows", {}),
         }
     )
+
+
+def import_account(
+    config: Dict[str, Any], metadata: Dict[str, Any], auth_json: Dict[str, Any],
+    config_path: Optional[Path] = None,
+    _transaction: Optional[FileTransaction] = None,
+) -> Dict[str, Any]:
+    if _transaction is None:
+        try:
+            with file_transaction() as transaction:
+                return import_account(
+                    config,
+                    metadata,
+                    auth_json,
+                    config_path,
+                    _transaction=transaction,
+                )
+        except VaultError as exc:
+            raise AccountError(str(exc)) from exc
+
+    account = prepare_account_import(config, metadata, config_path)
+    auth = _validate_auth(auth_json)
+    path = Path(account["auth_file"])
+    try:
+        _transaction.remember(path)
+        _transaction.remember(path.parent / "config.toml")
+        write_encrypted_json(path, auth)
+    except VaultError as exc:
+        raise AccountError(str(exc)) from exc
+    _private_text(path.parent / "config.toml", 'cli_auth_credentials_store = "file"\n')
+    return account
 
 
 def public_accounts(accounts: Iterable[Dict[str, Any]]) -> list:

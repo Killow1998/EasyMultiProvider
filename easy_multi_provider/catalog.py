@@ -8,7 +8,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from .accounts import auth_headers, duplicate_account_status
 from .capabilities import codex_input_modalities, normalize_reasoning_levels
@@ -40,10 +40,13 @@ def _apply_subscription_context(model: Dict[str, Any], windows: Dict[str, int]) 
         model.pop("auto_compact_token_limit", None)
 
 
-def account_catalog_owner(account: Dict[str, Any]) -> str:
-    headers = auth_headers(account)
+def account_catalog_owner_from_headers(headers: Mapping[str, str]) -> str:
     identity = headers.get("ChatGPT-Account-ID") or headers.get("chatgpt-account-id") or headers.get("Authorization", "")
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def account_catalog_owner(account: Dict[str, Any]) -> str:
+    return account_catalog_owner_from_headers(auth_headers(account))
 
 
 def _account_catalog(config: Dict[str, Any], account: Dict[str, Any]) -> Dict[str, Any]:

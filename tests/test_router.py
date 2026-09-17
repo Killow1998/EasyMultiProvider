@@ -928,6 +928,8 @@ class RouterTests(unittest.TestCase):
                 {},
             )
         self.assertEqual(metadata["resolved_protocol"], "chat_completions")
+        self.assertTrue(metadata["protocol_fallback"])
+        self.assertEqual(metadata["fallback_reason"], "protocol_rejection")
         self.assertEqual(result, b"{}")
         self.assertEqual(completion.call_args.args[0]["protocol"], "chat_completions")
 

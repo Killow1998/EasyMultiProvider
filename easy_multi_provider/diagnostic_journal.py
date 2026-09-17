@@ -598,13 +598,37 @@ def request_source(body, headers):
     incoming = {str(key).lower(): value for key, value in headers.items()}
     metadata = body.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
+    client_metadata = body.get("client_metadata")
+    client_metadata = client_metadata if isinstance(client_metadata, dict) else {}
+    raw_turn_metadata = (
+        client_metadata.get("x-codex-turn-metadata")
+        or incoming.get("x-codex-turn-metadata")
+    )
+    try:
+        turn_metadata = (
+            json.loads(raw_turn_metadata)
+            if isinstance(raw_turn_metadata, str)
+            else {}
+        )
+    except (TypeError, ValueError):
+        turn_metadata = {}
+    turn_metadata = turn_metadata if isinstance(turn_metadata, dict) else {}
     result = {}
     request_id = incoming.get("x-emp-request-id", "")
     if isinstance(request_id, str) and re.fullmatch(r"[0-9a-f]{16,32}", request_id):
         result["request_id"] = request_id
     for name, value in (
-        ("thread_id", incoming.get("thread-id") or metadata.get("thread_id") or metadata.get("threadId")),
+        (
+            "thread_id",
+            incoming.get("thread-id")
+            or turn_metadata.get("thread_id")
+            or turn_metadata.get("threadId")
+            or metadata.get("thread_id")
+            or metadata.get("threadId"),
+        ),
         ("session_id", incoming.get("session-id")),
+        ("turn_id", turn_metadata.get("turn_id") or turn_metadata.get("turnId")),
+        ("parent_thread_id", turn_metadata.get("forked_from_thread_id")),
     ):
         if isinstance(value, str):
             try:
@@ -616,4 +640,17 @@ def request_source(body, headers):
     result["client_kind"] = originator if originator in {
         "codex_cli_rs", "codex_vscode", "codex_desktop", "codex_app",
     } else "unknown"
+    result["client_kind_source"] = (
+        "originator_header" if result["client_kind"] != "unknown" else "unknown"
+    )
+    result["identity_source"] = (
+        "client_claim"
+        if any(
+            result.get(name)
+            for name in ("thread_id", "session_id", "turn_id", "parent_thread_id")
+        )
+        else "unknown"
+    )
+    result["call_purpose"] = "unknown"
+    result["call_purpose_source"] = "not_provided"
     return result

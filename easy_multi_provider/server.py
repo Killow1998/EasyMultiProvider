@@ -35,17 +35,19 @@ from .accounts import (
     load_native_auth,
     auth_headers,
     native_auth_headers,
+    prepare_account_import,
     account_root,
     duplicate_account_status,
     import_account,
     migrate_duplicate_native_visibility,
     public_accounts,
+    validate_auth_json,
     valid_caller_authorization,
 )
 from .catalog import (
     build_catalog,
     catalog_etag,
-    account_catalog_owner,
+    account_catalog_owner_from_headers,
     generated_catalog_path,
     native_path,
     preserve_native_catalog,
@@ -167,6 +169,7 @@ from .transport_failures import failure_from_exception, public_failure_message, 
 from .router_errors import UpstreamHTTPError
 from .tls_runtime import tls_trust_source
 from .request_limits import RequestLimits
+from .vault import file_transaction
 from .transport_continuity import (
     PREVIOUS_RESPONSE_NOT_FOUND_CODE,
     PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
@@ -193,6 +196,7 @@ PROXY_ENV_KEYS = (
 )
 _DIAGNOSTIC_CAPACITY = 512
 _DIAGNOSTIC_ID = re.compile(r"^[A-Za-z0-9._/:-]{1,256}$")
+_DIAGNOSTIC_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+~-]{0,255}$")
 _DIAGNOSTIC_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 _DIAGNOSTIC_OBSERVED_AT = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$"
@@ -378,6 +382,19 @@ _DIAGNOSTIC_RECOVERY_MODES = frozenset(
         "previous_response_not_found",
     }
 )
+_DIAGNOSTIC_ROUTE_SOURCES = frozenset(
+    {
+        "explicit_model",
+        "subscription_account",
+        "forward_provider",
+        "implicit_native",
+        "unknown",
+    }
+)
+_DIAGNOSTIC_FALLBACK_REASONS = frozenset(
+    {"none", "protocol_rejection", "native_websocket_rejection", "unknown"}
+)
+_DIAGNOSTIC_RESPONSE_MODEL_SOURCES = frozenset({"upstream_response", "missing"})
 _HTTP_REQUEST_BYTES_MAX = 64 * 1024 * 1024
 _HTTP_HANDLER_STAGE = "http_handler"
 _MANAGEMENT_COUNT_MAX = 1_000_000
@@ -804,12 +821,32 @@ class ObservationRing:
         compression_ratio = _safe_transport_ratio(
             event.get("compression_ratio"), decoded_request_bytes
         )
+        route_source = event.get("route_source", "unknown")
+        if route_source not in _DIAGNOSTIC_ROUTE_SOURCES:
+            route_source = "unknown"
+        fallback_reason = event.get("fallback_reason", "none")
+        if fallback_reason not in _DIAGNOSTIC_FALLBACK_REASONS:
+            fallback_reason = "unknown"
+        response_model_source = event.get("response_model_source", "missing")
+        if response_model_source not in _DIAGNOSTIC_RESPONSE_MODEL_SOURCES:
+            response_model_source = "missing"
+        turn_metadata = json.dumps(
+            {
+                "thread_id": event.get("thread_id"),
+                "turn_id": event.get("turn_id"),
+                "forked_from_thread_id": event.get("parent_thread_id"),
+            },
+            separators=(",", ":"),
+        )
         record = {
             "observation_id": (
                 _safe_diagnostic_text(event.get("observation_id"), _DIAGNOSTIC_ID)
                 or uuid.uuid4().hex
             ),
-            **request_source({"metadata": {"thread_id": event.get("thread_id")}}, {
+            **request_source({
+                "metadata": {"thread_id": event.get("thread_id")},
+                "client_metadata": {"x-codex-turn-metadata": turn_metadata},
+            }, {
                 "X-EMP-Request-ID": event.get("request_id"),
                 "session-id": event.get("session_id"),
                 "originator": event.get("client_kind"),
@@ -819,6 +856,23 @@ class ObservationRing:
             or "unknown",
             "provider_id": _safe_diagnostic_text(event.get("provider_id"), _DIAGNOSTIC_ID),
             "model_id": _safe_diagnostic_text(event.get("model_id"), _DIAGNOSTIC_ID),
+            "client_model": _safe_diagnostic_text(
+                event.get("client_model"), _DIAGNOSTIC_MODEL
+            ) or "unknown",
+            "upstream_model": _safe_diagnostic_text(
+                event.get("upstream_model"), _DIAGNOSTIC_MODEL
+            ) or "unknown",
+            "response_model": _safe_diagnostic_text(
+                event.get("response_model"), _DIAGNOSTIC_MODEL
+            ) or "unknown",
+            "response_model_source": response_model_source,
+            "route_source": route_source,
+            "fallback_reason": fallback_reason,
+            "model_trace_source": (
+                "emp_dispatch"
+                if event.get("model_trace_source") == "emp_dispatch"
+                else "unknown"
+            ),
             "speed_mode": speed_mode,
             "endpoint_fingerprint": _safe_diagnostic_text(
                 event.get("endpoint_fingerprint"), _DIAGNOSTIC_FINGERPRINT
@@ -1224,6 +1278,9 @@ class AppState:
         self.discovery_lock = threading.Lock()
         self._native_websocket_lock = threading.Lock()
         self._native_websocket_cooldowns: Dict[str, float] = {}
+        self._catalog_cache_revision = None
+        self._catalog_cache: Optional[Dict[str, Any]] = None
+        self._catalog_cache_etag = ""
         self.config = load(self.path)
         if isinstance(self.runtime_controller, CodexRuntimeController):
             self.runtime_controller.set_runtime_preferences(
@@ -1454,8 +1511,69 @@ class AppState:
     def integration_status(self) -> IntegrationStatus:
         return self.ensure_integration_manager().status()
 
+    @staticmethod
+    def _catalog_file_revision(path: Path) -> Tuple[Any, ...]:
+        absolute = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+        try:
+            info = absolute.stat()
+        except OSError:
+            return (str(absolute), None)
+        return (
+            str(absolute),
+            info.st_mtime_ns,
+            info.st_size,
+            getattr(info, "st_ino", 0),
+        )
+
+    def _catalog_revision(self, config: Dict[str, Any]) -> Tuple[Any, ...]:
+        config_hash = hashlib.sha256(
+            json.dumps(
+                config,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).digest()
+        native_catalog = native_path(config)
+        sources = [
+            native_catalog,
+            native_catalog.parent / "easy-multi-provider" / "native-catalog.json",
+        ]
+        for account in config.get("accounts", []):
+            auth_file = account.get("auth_file")
+            if isinstance(auth_file, str) and auth_file:
+                auth_path = Path(auth_file)
+                sources.extend((auth_path, auth_path.parent / "models_cache.json"))
+        return (
+            config_hash,
+            tuple(self._catalog_file_revision(path) for path in sources),
+        )
+
+    def model_catalog(self) -> Dict[str, Any]:
+        """Reuse a catalog while all configuration and file sources are unchanged."""
+
+        config = self.snapshot()
+        revision = self._catalog_revision(config)
+        with self.lock:
+            if (
+                self._catalog_cache is not None
+                and self._catalog_cache_revision == revision
+            ):
+                return self._catalog_cache
+
+        catalog = build_catalog(config)
+        etag = catalog_etag(catalog)
+        if self._catalog_revision(config) == revision:
+            with self.lock:
+                current = json.loads(json.dumps(self.config))
+                if self._catalog_revision(current) == revision:
+                    self._catalog_cache_revision = revision
+                    self._catalog_cache = catalog
+                    self._catalog_cache_etag = etag
+        return catalog
+
     def _runtime_model_ids(self) -> Tuple[str, ...]:
-        catalog = build_catalog(self.snapshot())
+        catalog = self.model_catalog()
         return tuple(
             item["slug"]
             for item in catalog.get("models", [])
@@ -1466,7 +1584,11 @@ class AppState:
         )
 
     def catalog_etag(self) -> str:
-        return catalog_etag(build_catalog(self.snapshot()))
+        catalog = self.model_catalog()
+        with self.lock:
+            if catalog is self._catalog_cache:
+                return self._catalog_cache_etag
+        return catalog_etag(catalog)
 
     def _mark_runtime_pending(self, intent: str, detail: str) -> None:
         """Record a saved file change separately from the loaded runtime."""
@@ -1572,7 +1694,7 @@ class AppState:
                     expected_models = self._runtime_expected_models
                 expected_models = expected_models or self._runtime_model_ids()
                 result = self.runtime_controller.observe(
-                    expected_models, "emp", expected_catalog=build_catalog(self.snapshot())
+                    expected_models, "emp", expected_catalog=self.model_catalog()
                 )
                 with self.lock:
                     self._runtime_expected_models = tuple(expected_models)
@@ -1599,7 +1721,7 @@ class AppState:
             expected_models,
             target,
             confirm_reload=confirm_reload,
-            expected_catalog=build_catalog(self.snapshot()) if target == "emp" else None,
+            expected_catalog=self.model_catalog() if target == "emp" else None,
         )
         with self.lock:
             self._runtime_sync = {
@@ -1632,7 +1754,7 @@ class AppState:
             isinstance(item.get("slug"), str)
             and item["slug"]
             and item.get("visibility", "list") == "list"
-            for item in build_catalog(config).get("models", [])
+            for item in self.model_catalog().get("models", [])
         ):
             raise EmptyEmpCatalog("The catalog has no visible native or additional models")
         # Retain the disk catalog for clients without ChatGPT model discovery.
@@ -1765,20 +1887,35 @@ class AppState:
         if refresh:
             from .accounts import auth_headers, native_auth_headers
             from .codex_compatibility import RECOMMENDED_LABEL
+            base_url = config["codex_base_url"]
             headers = auth_headers(account) if account is not None else native_auth_headers(self.codex_home / "auth.json")
-            owner = account_catalog_owner(account) if account is not None else None
-            catalog = fetch_subscription_catalog(config["codex_base_url"], headers, RECOMMENDED_LABEL)
+            owner = account_catalog_owner_from_headers(headers) if account is not None else None
+            catalog = fetch_subscription_catalog(base_url, headers, RECOMMENDED_LABEL)
             path = Path(account["auth_file"]).parent / "models_cache.json" if account is not None else native_path(config)
             # Serialize against account edits/imports; an in-flight fetch may
             # not attach old entitlements to a newly replaced login.
             with self.lock:
+                if self.config.get("codex_base_url") != base_url:
+                    raise ConfigError("Subscription backend changed during model refresh; retry")
                 if account is not None:
                     current = next((a for a in self.config["accounts"] if a["id"] == account_id), None)
-                    if current is None or account_catalog_owner(current) != owner:
+                    current_path = (
+                        Path(current["auth_file"]).parent / "models_cache.json"
+                        if current is not None and current.get("auth_file")
+                        else None
+                    )
+                    if (
+                        current is None
+                        or current_path != path
+                        or account_catalog_owner_from_headers(auth_headers(current)) != owner
+                    ):
                         raise ConfigError("Subscription changed during model refresh; retry")
                     catalog["account_owner"] = owner
-                    catalog["base_url"] = config["codex_base_url"]
-                elif native_auth_headers(self.codex_home / "auth.json") != headers:
+                    catalog["base_url"] = base_url
+                elif (
+                    native_path(self.config) != path
+                    or native_auth_headers(self.codex_home / "auth.json") != headers
+                ):
                     raise ConfigError("Native login changed during model refresh; retry")
                 atomic_write_text(path, json.dumps(catalog, ensure_ascii=False))
                 if account is None:
@@ -1787,7 +1924,10 @@ class AppState:
         return {"models": subscription_model_options(config, account)}
 
     def refresh_catalog(self) -> Path:
-        catalog_path = write_catalog(self.snapshot(), self.integration_catalog_path)
+        catalog_path = atomic_write_text(
+            self.integration_catalog_path,
+            json.dumps(self.model_catalog(), indent=2, ensure_ascii=False) + "\n",
+        )
         try:
             if self.integration_status().state == "active":
                 self._mark_runtime_pending("emp", "EMP model catalog changed")
@@ -1952,6 +2092,13 @@ class AppState:
                 **(source or {}),
                 "provider_id": provider_id,
                 "model_id": model_id,
+                "client_model": model_id,
+                "upstream_model": "",
+                "response_model": "unknown",
+                "response_model_source": "missing",
+                "route_source": "unknown",
+                "fallback_reason": "none",
+                "model_trace_source": "emp_dispatch",
                 "endpoint_fingerprint": endpoint,
                 "deployment_identity": deployment,
                 "resolved_protocol": protocol,
@@ -2083,6 +2230,24 @@ class AppState:
             **usage_identity(plan.provider, plan.model, plan.target.headers),
             "provider_id": plan.provider.get("id", ""),
             "model_id": plan.requested_slug,
+            "client_model": (
+                body.get("model") if isinstance(body.get("model"), str) else ""
+            ),
+            "upstream_model": (
+                getattr(plan, "upstream_model", None)
+                or (
+                    plan.payload.get("model")
+                    if isinstance(plan.payload, Mapping)
+                    else None
+                )
+                or plan.model.get("upstream_id")
+                or plan.requested_slug
+            ),
+            "route_source": getattr(plan, "route_source", "unknown"),
+            "fallback_reason": (
+                "native_websocket_rejection" if protocol_fallback else "none"
+            ),
+            "model_trace_source": "emp_dispatch",
             "endpoint_fingerprint": plan.identity.endpoint_fingerprint,
             "deployment_identity": deployment_identity(plan.provider, plan.model),
             "resolved_protocol": "responses",
@@ -2232,23 +2397,36 @@ class AppState:
     def import_account(self, metadata: Dict[str, Any], auth_json: Dict[str, Any]) -> Dict[str, Any]:
         with account_refresh_lock(metadata.get("id")):
             with self.lock:
-                account_id = metadata.get("id")
-                prefix = metadata.get("prefix")
+                account = prepare_account_import(
+                    self.config, metadata, self.path
+                )
+                validate_auth_json(auth_json)
+                account_id = account["id"]
+                prefix = account["prefix"]
                 current_accounts = self.config.get("accounts", [])
-                for account in current_accounts:
-                    if account.get("id") != account_id and account.get("prefix") == prefix:
+                for current in current_accounts:
+                    if current.get("id") != account_id and current.get("prefix") == prefix:
                         raise ConfigError("account prefix is already in use: %s" % prefix)
-                account = import_account(self.config, metadata, auth_json, self.path)
                 accounts = [item for item in current_accounts if item.get("id") != account["id"]]
                 accounts.append(account)
                 updated = dict(self.config)
                 updated["accounts"] = accounts
-                self.config = load_from_value(updated)
-                self.config, _ = migrate_duplicate_native_visibility(
-                    self.config,
-                    duplicate_account_status(self.config.get("accounts", [])),
+                candidate = load_from_value(updated)
+                candidate, _ = migrate_duplicate_native_visibility(
+                    candidate,
+                    duplicate_account_status(candidate.get("accounts", [])),
                 )
-                save(self.config, self.path)
+                with file_transaction() as transaction:
+                    account = import_account(
+                        self.config,
+                        metadata,
+                        auth_json,
+                        self.path,
+                        _transaction=transaction,
+                    )
+                    save(candidate, self.path, _transaction=transaction)
+                    committed = load(self.path)
+                self.config = committed
                 clear_account_quota_cache(account_id)
                 self.notify_quota_update(account_id)
                 return account
@@ -3683,7 +3861,7 @@ def make_handler(state: AppState):
                 query = parse_qs(urlparse(self.path).query)
                 if "client_version" in query:
                     preserve_native_catalog(config)
-                catalog = build_catalog(config)
+                catalog = state.model_catalog()
                 if "client_version" in query:
                     # Codex's models manager uses its own rich ModelsResponse
                     # schema at this endpoint. Other OpenAI-compatible clients
@@ -3706,7 +3884,7 @@ def make_handler(state: AppState):
                 return
             if path.startswith("/v1/models/"):
                 model_id = unquote(path[len("/v1/models/"):])
-                catalog = build_catalog(state.snapshot())
+                catalog = state.model_catalog()
                 if any(model.get("slug") == model_id for model in catalog["models"]):
                     self._send(200, _json_bytes({"id": model_id, "object": "model", "created": 0}))
                 else:
@@ -4086,7 +4264,7 @@ def make_handler(state: AppState):
                     return
                 if path == "/api/catalog/refresh":
                     catalog_path = state.refresh_catalog()
-                    visible_model_count = len(build_catalog(state.snapshot())["models"])
+                    visible_model_count = len(state.model_catalog()["models"])
                     emit_operation(
                         "catalog_refresh",
                         "success",
