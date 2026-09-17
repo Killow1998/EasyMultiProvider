@@ -566,7 +566,8 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
                     })
             self.assertEqual(status, 200)
             event = next(fields for _, name, fields in journal.events if name == "model_request_received")
-            self.assertEqual(event["session_id"], thread_id)
+            self.assertEqual(event["session_ref"], journal.pseudonym(thread_id))
+            self.assertNotIn("session_id", event)
             self.assertTrue(event["model_hidden"])
             self.assertEqual(event["collaboration"], {"native": 1, "emp": 1, "emp_in_history": 1})
             self.assertFalse(event["incremental"])
@@ -584,7 +585,8 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
         ring = ObservationRing()
         ring.record({**unsafe_route_event(), **event})
         row = ring.snapshot()["records"][0]
-        self.assertEqual(row["session_id"], thread_id)
+        self.assertEqual(row["session_ref"], journal.pseudonym(thread_id))
+        self.assertNotIn("session_id", row)
         self.assertEqual(row["request_id"], event["request_id"])
 
     def test_model_trace_correlates_client_route_response_and_turn_without_content(self):
@@ -629,9 +631,12 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
         )
         row = ring.snapshot()["records"][0]
         self.assertEqual(row["request_id"], "0123456789abcdef")
-        self.assertEqual(row["thread_id"], thread_id)
-        self.assertEqual(row["turn_id"], turn_id)
-        self.assertEqual(row["parent_thread_id"], parent_id)
+        self.assertIn("thread_ref", row)
+        self.assertIn("turn_ref", row)
+        self.assertIn("parent_thread_ref", row)
+        self.assertNotIn(thread_id, repr(row))
+        self.assertNotIn(turn_id, repr(row))
+        self.assertNotIn(parent_id, repr(row))
         self.assertEqual(row["client_kind"], "codex_desktop")
         self.assertEqual(row["identity_source"], "client_claim")
         self.assertEqual(row["client_model"], "display/cat8")

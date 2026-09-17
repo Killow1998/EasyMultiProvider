@@ -31,15 +31,43 @@ class TransportError(ValueError):
 
 
 class RequestBodyTooLarge(TransportError):
-    def __init__(self, limit: int, *, decoded: bool = False, reason: str = "size_limit"):
+    def __init__(
+        self, limit: int, *, decoded: bool = False, reason: str = "size_limit",
+        available_bytes: int = 0, required_memory_bytes: int = 0,
+        memory_total_bytes: int = 0, memory_used_bytes: int = 0,
+        memory_used_percent=None,
+    ):
         self.limit = limit
         self.decoded = decoded
         self.reason = reason
-        super().__init__(
-            "%srequest body is too large (EMP limit: %d bytes)"
-            % ("decoded " if decoded else "", limit)
-            + ("; insufficient available memory for automatic expansion" if reason == "memory_limit" else "")
-        )
+        self.available_bytes = available_bytes
+        self.required_memory_bytes = required_memory_bytes
+        self.memory_total_bytes = memory_total_bytes
+        self.memory_used_bytes = memory_used_bytes
+        self.memory_used_percent = memory_used_percent
+        if reason == "memory_limit":
+            usage = (
+                "%.1f%% used, " % memory_used_percent
+                if isinstance(memory_used_percent, (int, float)) else ""
+            )
+            message = (
+                "EMP out of memory safeguard blocked this request "
+                "(system memory: %s%.1f of %.1f MiB used; %.1f MiB available; "
+                "%.1f MiB required including "
+                "safety headroom). Free memory and retry."
+                % (
+                    usage,
+                    memory_used_bytes / (1024 * 1024),
+                    memory_total_bytes / (1024 * 1024),
+                    available_bytes / (1024 * 1024),
+                    required_memory_bytes / (1024 * 1024),
+                )
+            )
+        else:
+            message = "%srequest body is too large (EMP limit: %d bytes)" % (
+                "decoded " if decoded else "", limit
+            )
+        super().__init__(message)
 
 
 class WebSocketProtocolError(TransportError):
@@ -49,11 +77,18 @@ class WebSocketProtocolError(TransportError):
 
 
 class WebSocketRequestTooLarge(WebSocketProtocolError):
-    def __init__(self, limit: int, reason: str = "size_limit"):
+    def __init__(self, limit: int, reason: str = "size_limit", **memory):
         self.limit = limit
         self.reason = reason
+        details = RequestBodyTooLarge(limit, reason=reason, **memory)
+        self.available_bytes = details.available_bytes
+        self.required_memory_bytes = details.required_memory_bytes
+        self.memory_total_bytes = details.memory_total_bytes
+        self.memory_used_bytes = details.memory_used_bytes
+        self.memory_used_percent = details.memory_used_percent
         super().__init__(
-            str(RequestBodyTooLarge(limit, reason=reason)), 1009
+            str(details),
+            1013 if reason == "memory_limit" else 1009,
         )
 
 
@@ -244,7 +279,15 @@ class WebSocketConnection:
                     try:
                         budget.ensure(len(message) + length)
                     except RequestBodyTooLarge as exc:
-                        raise WebSocketRequestTooLarge(exc.limit, exc.reason) from exc
+                        raise WebSocketRequestTooLarge(
+                            exc.limit,
+                            exc.reason,
+                            available_bytes=exc.available_bytes,
+                            required_memory_bytes=exc.required_memory_bytes,
+                            memory_total_bytes=exc.memory_total_bytes,
+                            memory_used_bytes=exc.memory_used_bytes,
+                            memory_used_percent=exc.memory_used_percent,
+                        ) from exc
                 elif len(message) + length > MAX_PROXY_REQUEST_BYTES:
                     raise WebSocketRequestTooLarge(MAX_PROXY_REQUEST_BYTES)
             mask = _read_exact(self.reader, 4)

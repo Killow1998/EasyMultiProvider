@@ -1269,37 +1269,32 @@ function closeModal() { subscriptionEditor = null; stopDiagnostics(); stopUpdate
 
 let updatePollTimer = null;
 let updatePollGeneration = 0;
+let latestUpdateInfo = null;
 function stopUpdatePoll() { updatePollGeneration++; if (updatePollTimer) clearTimeout(updatePollTimer); updatePollTimer = null; }
 function updateErrorLabel(code) {
   const messages = {
     directory_not_writable:tr('安装目录没有写权限，请将 EMP 移到可写目录后重试。','The installation directory is not writable. Move EMP to a writable folder and retry.'),
-    authorization_cancelled:tr('已取消系统授权，EMP 继续运行。','System authorization cancelled. EMP is still running.'),
-    authorization_unavailable:tr('未能取得管理员授权。请在 Linux 桌面会话中重试，并确认已安装 Polkit 和认证代理；也可使用系统包管理器更新。','Administrator authorization was not available. Retry from a Linux desktop with Polkit and an authentication agent, or update using the system package manager.'),
-    update_requires_desktop_user:tr('请以普通用户启动 EMP，再通过系统授权更新。','Start EMP as your regular user, then authorize the update through the system dialog.'),
-    rollback_package_unavailable:tr('无法准备当前版本的恢复包，尚未修改安装。请检查网络，或使用系统包管理器更新。','Could not prepare the recovery package. The installation is unchanged. Check the network or use the system package manager.'),
     package_query_failed:tr('无法确认系统安装包状态。请先在系统包管理器中检查 EMP。','Could not confirm the installed package state. Check EMP in the system package manager first.'),
-    installation_changed:tr('安装内容已改变，请重新检查更新。','The installation has changed. Check for updates again.'),
-    system_install_failed:tr('系统安装失败，EMP 仍在运行，已恢复原有安装。请检查包管理器是否正被占用。','System installation failed. EMP is still running and the previous installation was restored. Check whether the package manager is busy.'),
-    system_recovery_required:tr('系统安装未完成，恢复也未成功；恢复文件已保留。请使用系统包管理器重新安装 EMP，完成前不要退出当前实例。','System installation and recovery did not complete. Recovery files were retained. Reinstall EMP using the system package manager before closing this instance.'),
     requests_busy:tr('当前请求尚未结束，已取消安装，请稍后重试。','Requests are still running. Installation was cancelled; try again later.'),
     checksum_missing:tr('新版本缺少文件校验信息，暂时无法自动更新。','The release has no file checksum; automatic update is unavailable.'),
     checksum_mismatch:tr('下载文件校验失败，请重试。','Download verification failed. Please retry.'),
     package_missing:tr('新版本尚未提供此平台的安装包。','The release does not yet include a package for this platform.'),
     unsupported_installation:tr('当前安装方式不支持自动更新。','This installation does not support automatic updates.'),
+    system_install_manual:tr('系统级 Linux 安装不能在运行中覆盖。请按迁移说明改为用户级安装。','A system Linux installation cannot be replaced while running. Follow the migration steps to install for your user.'),
     unsupported_platform:tr('此平台暂不支持自动更新。','Automatic updates are not available for this platform.'),
     install_rolled_back:tr('新版本未能启动，已恢复旧版本。','The new version could not start. The previous version has been restored.'),
   };
   return messages[code] || tr('更新失败，当前版本未受影响，请重试。','Update failed; the current version is unchanged. Please retry.');
 }
 function renderUpdate(info) {
+  latestUpdateInfo = info;
   const labels = {
     idle:tr('检查可用版本。','Check for an available version.'), checking:tr('正在检查…','Checking…'),
     no_release:tr('暂无正式版更新。','No stable release is available.'), current:tr('当前已是最新版本。','You are up to date.'),
     available:tr(`发现新版本 v${info.latest_version}。`,`Version ${info.latest_version} is available.`),
+    migration_required:tr('检测到旧的 Linux 系统级安装。请先退出 EMP 并恢复原生 Codex，再迁移到用户目录；现有配置会继续保留。','A legacy system-wide Linux installation was detected. Exit EMP and restore native Codex, then migrate to a user installation. Your existing configuration is preserved.'),
     downloading:tr(`正在后台下载 ${info.progress}%…`,`Downloading in the background: ${info.progress}%…`),
     verifying:tr('正在校验安装包…','Verifying the package…'), waiting:tr('下载完成，正在等待当前请求结束…','Download complete. Waiting for current requests to finish…'),
-    authorizing:tr('请在系统弹窗中授权；授权后将安装更新。密码不会交给 EMP。','Authorize in the system dialog to install the update. EMP never receives your password.'),
-    restoring:tr('正在恢复旧版本；如系统请求授权，请在系统弹窗中确认。','Restoring the previous version. Confirm in the system dialog if authorization is requested.'),
     installing:tr('正在安装并重启 EMP，完成后会打开新页面。','Installing and restarting EMP. A new page will open when ready.'),
     error:updateErrorLabel(info.error),
   };
@@ -1308,14 +1303,26 @@ function renderUpdate(info) {
   $('update_progress').hidden = !['downloading','verifying'].includes(info.state);
   $('update_progress').value = Number(info.progress) || 0;
   const install = $('update_install'); install.hidden = info.state !== 'available' || !info.supported;
+  const release = $('update_release'); release.hidden = info.manual_update !== 'linux_system_migration';
+  const commands = $('update_commands'); commands.hidden = info.manual_update !== 'linux_system_migration';
+  const manual = $('update_manual'); manual.hidden = info.manual_update !== 'linux_system_migration';
   if (info.state === 'available' && !info.supported) $('update_status').textContent += tr(' 请使用 EMP 安装包启动后更新。',' Launch the packaged EMP app to update.');
+}
+function openLatestRelease() {
+  const url = latestUpdateInfo?.release_url;
+  if (url === 'https://github.com/Killow1998/EasyMultiProvider/releases/latest') window.open(url, '_blank', 'noopener');
+}
+async function copyLinuxMigrationCommands() {
+  const commands = `sudo apt remove easy-multi-provider\ntar -xzf EMP-linux-x86_64.tar.gz\ncd EMP\n./install-user.sh\n~/.local/bin/EMP`;
+  try { await navigator.clipboard.writeText(commands); notice(tr('迁移命令已复制。','Migration commands copied.')); }
+  catch (_) { $('update_status').textContent = commands; }
 }
 async function pollUpdate(generation) {
   try {
     const info = await api('/api/updates');
     if (generation !== updatePollGeneration) return;
     renderUpdate(info);
-    if (['checking','downloading','verifying','waiting','authorizing','restoring','installing'].includes(info.state)) updatePollTimer = setTimeout(() => pollUpdate(generation), 1000);
+    if (['checking','downloading','verifying','waiting','installing'].includes(info.state)) updatePollTimer = setTimeout(() => pollUpdate(generation), 1000);
   } catch (_) {
     if (generation === updatePollGeneration) $('update_status').textContent = tr('连接已断开。若正在更新，请等待 EMP 重新打开页面。','Connection closed. If updating, wait for EMP to reopen the page.');
   }
@@ -1336,7 +1343,7 @@ async function quitEmp() {
 }
 
 async function openUpdate() {
-  openModal(tr('更新 EMP','Update EMP'), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite">${tr('正在检查…','Checking…')}</div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div class="modal-actions"><button id="update_install" type="button" data-icon="update" hidden onclick="requestUpdate('install')">${tr('后台更新','Update in background')}</button></div>`, '', null);
+  openModal(tr('更新 EMP','Update EMP'), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite">${tr('正在检查…','Checking…')}</div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div id="update_manual" class="muted" hidden><p>${tr('推荐：在 Release 页面下载 Linux tar.gz，退出当前 EMP 后执行迁移命令。配置仍位于 ~/.config/easy-multi-provider/config.json，无需搬移。','Recommended: download the Linux tar.gz from Releases, exit this EMP, then run the migration commands. Configuration remains at ~/.config/easy-multi-provider/config.json and does not need to move.')}</p><p>${tr('若坚持系统级安装，可下载 .deb 后执行 sudo apt install ./EMP-linux-x86_64.deb；此方式以后仍需用包管理器更新。','To remain system-managed, download the .deb and run sudo apt install ./EMP-linux-x86_64.deb; future updates must also use the package manager.')}</p></div><div class="modal-actions"><button id="update_release" type="button" class="secondary" hidden onclick="openLatestRelease()">${tr('打开最新 Release','Open latest Release')}</button><button id="update_commands" type="button" class="secondary" hidden onclick="copyLinuxMigrationCommands()">${tr('复制迁移命令','Copy migration commands')}</button><button id="update_install" type="button" data-icon="update" hidden onclick="requestUpdate('install')">${tr('后台更新','Update in background')}</button></div>`, '', null);
   await requestUpdate('check');
 }
 function handleModalKeydown(event) { if (event.key === 'Escape' && !$('modal_backdrop').classList.contains('hidden')) closeModal(); }

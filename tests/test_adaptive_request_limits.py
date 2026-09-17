@@ -19,7 +19,10 @@ from tests.test_request_limits import serving, post, frame
 
 class AdaptiveRequestLimitTests(unittest.TestCase):
     def limits(self, available=16384, maximum=256):
-        return RequestLimits(baseline=64, maximum=maximum, available_memory=lambda: available)
+        return RequestLimits(
+            baseline=64, maximum=maximum, available_memory=lambda: available,
+            growth_quantum=64, memory_headroom=0,
+        )
 
     def test_growth_is_per_request_and_reservations_are_released(self):
         limits = self.limits()
@@ -29,16 +32,16 @@ class AdaptiveRequestLimitTests(unittest.TestCase):
         first.ensure(65)
         self.assertEqual(first.limit, 128)
         first.ensure(129)
-        self.assertEqual(first.limit, 256)
-        self.assertEqual(limits.reserved, 256 * 8)
-        self.assertEqual([n["limit_bytes"] for n in limits.snapshot()["notices"]], [128, 256])
+        self.assertEqual(first.limit, 192)
+        self.assertEqual(limits.reserved, 192 * 8)
+        self.assertEqual([n["limit_bytes"] for n in limits.snapshot()["notices"]], [128, 192])
         self.assertEqual(limits.request("http").limit, 64)
         first.release()
         first.release()
         self.assertEqual(limits.reserved, 0)
 
     def test_concurrent_allowances_cannot_spend_the_same_memory(self):
-        limits = self.limits(available=4096)
+        limits = self.limits(available=2048)
         first, second, third = [limits.request("http") for _ in range(3)]
         first.ensure(65)
         second.ensure(65)
@@ -59,15 +62,15 @@ class AdaptiveRequestLimitTests(unittest.TestCase):
         with self.assertRaises(RequestBodyTooLarge) as caught:
             budget.ensure(257)
         self.assertEqual(caught.exception.reason, "hard_limit")
-        limits.available_memory = lambda: (_ for _ in ()).throw(OSError("unavailable"))
+        limits.memory_status = lambda: (_ for _ in ()).throw(OSError("unavailable"))
         with self.assertRaises(RequestBodyTooLarge) as caught:
             budget.ensure(65)
         self.assertEqual(caught.exception.reason, "memory_limit")
         self.assertEqual(limits.reserved, 0)
 
     def test_parallel_admission_reserves_atomically(self):
-        limits = self.limits(available=4096)
-        limits.available_memory = lambda: (time.sleep(.005), 4096)[1]
+        limits = self.limits(available=2048)
+        limits.memory_status = lambda: {"available": (time.sleep(.005), 2048)[1]}
         start = threading.Barrier(8)
         budgets = [limits.request("http") for _ in range(8)]
 
@@ -97,7 +100,7 @@ class AdaptiveRequestLimitTests(unittest.TestCase):
                 limits = self.limits()
                 budget = limits.request("http")
                 self.assertEqual(decode_content(encode(raw), encoding, 64, budget=budget), raw)
-                self.assertEqual(budget.limit, 256)
+                self.assertEqual(budget.limit, 192)
                 budget.release()
                 self.assertEqual(limits.reserved, 0)
 
@@ -107,7 +110,7 @@ class AdaptiveRequestLimitTests(unittest.TestCase):
         wire = frame(b"a" * 60, final=False) + frame(b"ping", opcode=9) + frame(b"b" * 70, opcode=0)
         connection = WebSocketConnection(io.BytesIO(wire), io.BytesIO())
         self.assertEqual(connection.receive_text(budget=budget), "a" * 60 + "b" * 70)
-        self.assertEqual(budget.limit, 256)
+        self.assertEqual(budget.limit, 192)
         budget.release()
 
     def test_active_frame_timeout_does_not_apply_to_idle_ping(self):
@@ -187,8 +190,54 @@ class AdaptiveRequestLimitTests(unittest.TestCase):
         self.assertEqual(len(limits.snapshot()["notices"]), 20)
         self.assertIn("expanded", output.getvalue())
         self.assertEqual(set(limits.snapshot()["notices"][0]), {
-            "id", "timestamp", "kind", "transport", "previous_bytes", "limit_bytes", "reason"
+            "id", "timestamp", "kind", "transport", "previous_bytes",
+            "requested_bytes", "target_bytes", "limit_bytes",
+            "reservation_bytes", "required_memory_bytes", "available_bytes",
+            "memory_total_bytes", "memory_used_bytes", "memory_used_percent", "reason",
         })
+
+    def test_realistic_compaction_uses_quantized_growth_instead_of_doubling(self):
+        mib = 1024 * 1024
+        limits = RequestLimits(
+            available_memory=lambda: 1_992_433_664,
+            memory_headroom=512 * mib,
+        )
+        budget = limits.request("http")
+        budget.ensure(86 * mib)
+        self.assertEqual(budget.limit, 96 * mib)
+        self.assertEqual(budget.reserved, 96 * mib * 8)
+        notice = limits.snapshot()["notices"][-1]
+        self.assertEqual(notice["target_bytes"], 96 * mib)
+        self.assertEqual(notice["kind"], "expanded")
+        budget.release()
+
+    def test_memory_pressure_is_reported_as_retryable_http_capacity_failure(self):
+        def route(*args, **kwargs):
+            self.fail("must not route")
+
+        with serving(route) as (address, state):
+            state.request_limits = RequestLimits(
+                baseline=64, maximum=256,
+                memory_status=lambda: {
+                    "available": 100, "total": 1000, "used": 900,
+                    "used_percent": 90.0,
+                },
+                growth_quantum=64, memory_headroom=0,
+            )
+            status, payload, connection_header = post(
+                address, "/v1/responses", gzip.compress(b'{"input":"' + b'x' * 100 + b'"}'), "gzip"
+            )
+            self.assertEqual(status, 503)
+            self.assertEqual(payload["error"]["code"], "request_capacity_unavailable")
+            self.assertIn("out of memory", payload["error"]["message"])
+            self.assertEqual(payload["error"]["memory"], {
+                "used_percent": 90.0,
+                "used_bytes": 900,
+                "total_bytes": 1000,
+                "available_bytes": 100,
+                "required_bytes": 1024,
+            })
+            self.assertEqual(connection_header, "close")
 
 
 if __name__ == "__main__":

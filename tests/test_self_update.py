@@ -184,7 +184,7 @@ class UpdateEndpointTests(unittest.TestCase):
                 self.assertEqual(state.updater.gate.active, 0)
                 state.updater.gate.reopen()
                 with patch.object(state, "shutdown_restore") as restore:
-                    for phase in ("authorizing", "restoring"):
+                    for phase in ("downloading", "installing"):
                         state.updater._set(state=phase)
                         status, _ = request(server, "POST", "/api/quit", b"{}", headers)
                         self.assertEqual(status, 409)

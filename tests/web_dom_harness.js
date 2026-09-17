@@ -43,6 +43,7 @@ class Element {
     this._innerHTML = String(value);
     this.innerHTMLWrites++;
     if (this.id === "modal_body") { parseDiscoveredOptions(this._innerHTML); parseSubscriptionOptions(this._innerHTML); quotaRangeButtons = parseQuotaButtons(this._innerHTML); }
+    if (this.id === "subscription_model_list") parseSubscriptionOptions(this._innerHTML);
     if (this.id === "catalog_display_models") parseCatalogDisplay(this._innerHTML);
     if (this.id === "codex_runtimes") parseRuntimeInputs(this._innerHTML);
     if (this.id === "quota_history_controls") quotaControls = parseQuotaButtons(this._innerHTML);

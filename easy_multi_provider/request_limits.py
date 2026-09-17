@@ -13,6 +13,8 @@ from .transport import MAX_PROXY_REQUEST_BYTES, RequestBodyTooLarge
 MAX_EXPANDED_REQUEST_BYTES = 1024 * 1024 * 1024
 # JSON parsing, UTF-8 strings, routing copies and compression can coexist.
 MEMORY_RESERVATION_FACTOR = 8
+REQUEST_GROWTH_QUANTUM = 16 * 1024 * 1024
+MIN_MEMORY_HEADROOM_BYTES = 512 * 1024 * 1024
 
 
 class RequestBudget:
@@ -36,18 +38,40 @@ class RequestBudget:
 
 class RequestLimits:
     def __init__(self, journal=None, *, baseline=MAX_PROXY_REQUEST_BYTES,
-                 maximum=MAX_EXPANDED_REQUEST_BYTES, available_memory=None):
+                 maximum=MAX_EXPANDED_REQUEST_BYTES, available_memory=None,
+                 growth_quantum=REQUEST_GROWTH_QUANTUM,
+                 memory_headroom=MIN_MEMORY_HEADROOM_BYTES,
+                 memory_status=None):
         if baseline <= 0 or maximum < baseline:
             raise ValueError("invalid request growth limits")
+        if growth_quantum <= 0 or memory_headroom < 0:
+            raise ValueError("invalid request memory limits")
         self.baseline = baseline
         self.maximum = maximum
-        self.available_memory = available_memory or (lambda: psutil.virtual_memory().available)
+        self.growth_quantum = growth_quantum
+        self.memory_headroom = memory_headroom
+        if memory_status is not None:
+            self.memory_status = memory_status
+        elif available_memory is not None:
+            self.memory_status = lambda: {"available": available_memory()}
+        else:
+            self.memory_status = self._system_memory_status
         self.journal = journal
         self.lock = threading.Lock()
         self.reserved = 0
         self.notices = deque(maxlen=20)
         self.sequence = 0
         self.run_id = uuid.uuid4().hex
+
+    @staticmethod
+    def _system_memory_status():
+        memory = psutil.virtual_memory()
+        return {
+            "available": memory.available,
+            "total": memory.total,
+            "used": memory.used,
+            "used_percent": memory.percent,
+        }
 
     def request(self, transport):
         return RequestBudget(self, transport)
@@ -59,19 +83,36 @@ class RequestLimits:
             if size <= budget.limit:
                 return
             previous = budget.limit
-            target = previous
-            while target < size and target < self.maximum:
-                target = min(target * 2, self.maximum)
+            target = min(
+                self.maximum,
+                max(self.baseline, ((size + self.growth_quantum - 1) // self.growth_quantum)
+                    * self.growth_quantum),
+            )
             reason = "hard_limit" if size > self.maximum else ""
+            available = 0
+            needed = 0
+            total = 0
+            used = 0
+            used_percent = None
+            required = 0
             if not reason:
                 try:
-                    available = max(0, int(self.available_memory()))
+                    memory = self.memory_status()
+                    available = max(0, int(memory.get("available", 0)))
+                    total = max(0, int(memory.get("total", 0)))
+                    used = max(0, int(memory.get("used", max(0, total - available))))
+                    percent = memory.get("used_percent")
+                    if isinstance(percent, (int, float)) and not isinstance(percent, bool):
+                        used_percent = max(0.0, min(100.0, round(float(percent), 1)))
                 except (OSError, ValueError, TypeError, psutil.Error):
                     available = 0
                 needed = target * MEMORY_RESERVATION_FACTOR
-                # Leave half of current free memory alone, and subtract other
-                # expanded requests' reservations under the same lock.
-                if needed > available // 2 - (self.reserved - budget.reserved):
+                # A fixed headroom avoids the discontinuity caused by reserving
+                # half of all currently free memory. Other expanded requests
+                # remain part of the same atomic admission decision.
+                other_reserved = self.reserved - budget.reserved
+                required = needed + other_reserved + self.memory_headroom
+                if required > available:
                     reason = "memory_limit"
                 else:
                     self.reserved += needed - budget.reserved
@@ -83,7 +124,15 @@ class RequestLimits:
                 "kind": "blocked" if reason else "expanded",
                 "transport": budget.transport,
                 "previous_bytes": previous,
+                "requested_bytes": size,
+                "target_bytes": self.maximum if reason == "hard_limit" else target,
                 "limit_bytes": self.maximum if reason == "hard_limit" else budget.limit,
+                "reservation_bytes": needed,
+                "required_memory_bytes": required,
+                "available_bytes": available,
+                "memory_total_bytes": total,
+                "memory_used_bytes": used,
+                "memory_used_percent": used_percent,
                 "reason": reason,
             }
             self.notices.append(notice)
@@ -101,7 +150,15 @@ class RequestLimits:
         except (OSError, UnicodeError, ValueError):
             pass
         if reason:
-            raise RequestBodyTooLarge(notice["limit_bytes"], reason=reason)
+            raise RequestBodyTooLarge(
+                notice["target_bytes"],
+                reason=reason,
+                available_bytes=available,
+                required_memory_bytes=required,
+                memory_total_bytes=total,
+                memory_used_bytes=used,
+                memory_used_percent=used_percent,
+            )
 
     def snapshot(self):
         with self.lock:

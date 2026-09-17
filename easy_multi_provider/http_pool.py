@@ -20,6 +20,36 @@ _lock = threading.Lock()
 _managers = OrderedDict()
 
 
+def _read1(response, size):
+    """Read one available HTTP chunk across urllib3 versions."""
+    reader = getattr(response, "read1", None)
+    if callable(reader):
+        return reader(size)
+
+    # urllib3 2.0 doesn't expose read1(), while its wrapped
+    # http.client.HTTPResponse does.  Use that implementation so an SSE line
+    # is delivered as soon as bytes arrive instead of waiting for ``size``.
+    raw = getattr(response, "_fp", None)
+    reader = getattr(raw, "read1", None)
+    error_catcher = getattr(response, "_error_catcher", None)
+    if not callable(reader) or not callable(error_catcher):
+        return response.read(size)
+    with error_catcher():
+        data = reader(size)
+        if size and not data:
+            raw.close()
+            remaining = getattr(response, "length_remaining", None)
+            if getattr(response, "enforce_content_length", False) and remaining not in (None, 0):
+                raise urllib3.exceptions.IncompleteRead(
+                    getattr(response, "_fp_bytes_read", 0), remaining,
+                )
+    if data:
+        response._fp_bytes_read = getattr(response, "_fp_bytes_read", 0) + len(data)
+        if getattr(response, "length_remaining", None) is not None:
+            response.length_remaining -= len(data)
+    return data
+
+
 def close_pools():
     with _lock:
         managers = list(_managers.values())
@@ -108,7 +138,7 @@ class Response:
                 raise RouterError("upstream SSE line is too large", 502)
             scanned = len(self._buffer)
             try:
-                chunk = self._response.read1(min(8192, MAX_SSE_LINE_BYTES + 1 - scanned))
+                chunk = _read1(self._response, min(8192, MAX_SSE_LINE_BYTES + 1 - scanned))
             except urllib3.exceptions.TimeoutError as exc:
                 self.close()
                 raise TimeoutError("upstream read timed out") from exc
@@ -140,7 +170,7 @@ class Response:
                 if budget <= 0:
                     break
                 self.settimeout(budget)
-                chunk = self._response.read1(min(8192, remaining))
+                chunk = _read1(self._response, min(8192, remaining))
                 if not chunk:
                     break
                 remaining -= len(chunk)

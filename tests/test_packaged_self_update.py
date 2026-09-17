@@ -47,7 +47,7 @@ def stop_test_processes(root):
 
 @unittest.skipUnless(os.environ.get("EMP_PACKAGE_UPDATE_SMOKE") == "1", "requires a native build")
 class PackagedUpdateSmokeTests(unittest.TestCase):
-    def run_scenario(self, fails_startup, system_install=False):
+    def run_scenario(self, fails_startup):
         artifacts = Path(__file__).resolve().parents[1] / "artifacts"
         name = asset_name()
         package = artifacts / name
@@ -59,9 +59,7 @@ class PackagedUpdateSmokeTests(unittest.TestCase):
             # Use the physical path for the isolated vault; production correctly
             # rejects key paths containing symlink components.
             root = Path(temporary).resolve()
-            staging = root / "staging" if system_install else root
-            staging.mkdir(exist_ok=True)
-            job = staging / ".emp-update-smoke"
+            job = root / ".emp-update-smoke"
             job.mkdir(mode=0o700)
             relative = "Contents/Resources/EMP" if sys.platform == "darwin" else ""
             target = root / ("EMP.app" if relative else "EMP.exe" if os.name == "nt" else "EMP")
@@ -102,13 +100,6 @@ class PackagedUpdateSmokeTests(unittest.TestCase):
             plan = {"target": str(target), "candidate": str(candidate), "relative_binary": relative,
                     "parents": [], "args": ["serve", "--config", str(config), "--port", str(port)],
                     "version": __version__, "nonce": "packaged-smoke"}
-            if system_install:
-                # System tools have already installed the package. The user
-                # worker must restart it without renaming /usr/bin or elevating
-                # the service, and acknowledge a private non-sibling staging job.
-                shutil.copy2(installed, job / "previous")
-                plan["linux_install"] = {"kind": "binary", "uid": os.getuid(), "gid": os.getgid(),
-                                         "previous_digest": original, "candidate_digest": original}
             plan_path = job / "plan.json"
             plan_path.write_text(json.dumps(plan), encoding="utf-8")
             environment = _child_environment()
@@ -138,11 +129,6 @@ class PackagedUpdateSmokeTests(unittest.TestCase):
                 else:
                     self.fail("replacement/rollback service did not become healthy")
                 self.assertEqual(hashlib.sha256(installed.read_bytes()).hexdigest(), original)
-                if system_install:
-                    services = [process for process in psutil.process_iter(["exe", "uids"])
-                                if process.info["exe"] == str(installed)]
-                    self.assertTrue(services)
-                    self.assertTrue(all(process.info["uids"].effective == os.getuid() for process in services))
                 if relative:
                     self.assertEqual({
                         str(path.relative_to(target)): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -168,7 +154,3 @@ class PackagedUpdateSmokeTests(unittest.TestCase):
 
     def test_packaged_failed_startup_restores_previous_binary_and_service(self):
         self.run_scenario(True)
-
-    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux system installation")
-    def test_system_install_restarts_as_user_and_cleans_private_staging(self):
-        self.run_scenario(False, system_install=True)

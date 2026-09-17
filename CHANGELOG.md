@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.11.3 (2026-09-17)
+
+- Grow large request capacity in 16 MiB steps instead of doubling it. Keep
+  concurrent reservations atomic and preserve 512 MiB of system headroom, so
+  ordinary remote-compaction requests no longer fail at the 64 MiB boundary
+  merely because the next power-of-two reservation is too large.
+- Report temporary memory pressure as retryable `503
+  request_capacity_unavailable`, with current memory usage, available memory
+  and the required capacity. Keep actual request-size violations as `413`.
+- Detect legacy Linux system installations without modifying them. Guide users
+  to remove the old package and install the user-level archive; keep existing
+  configuration in the user profile and remove the privileged `pkexec` update
+  path.
+- Validate account metadata before replacing credentials and keep credential,
+  account and main-configuration writes in one rollback transaction. Derive
+  duplicate-Native identity from the replacement credential during reimport.
+- Store task, turn, session and parent identifiers as run-local pseudonymous
+  references in diagnostics while retaining request correlation and omitting
+  prompts, tool arguments and credentials.
+- Stream SSE promptly on urllib3 versions that do not expose
+  `HTTPResponse.read1()`, preserving connection reuse, cancellation behavior
+  and bounded cleanup on Windows.
+- Run the complete unit suite in runtime compatibility CI, in addition to the
+  platform-specific protocol checks.
+
 ## 0.11.2 (2026-09-16)
 
 - Set per-model context windows for Native and imported subscriptions, bounded

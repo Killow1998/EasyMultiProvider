@@ -723,14 +723,49 @@ def _diagnostic_http_path(raw_target: Any) -> str:
     return path
 
 
+_REQUEST_ID_REFERENCES = (
+    ("thread_id", "thread_ref"),
+    ("session_id", "session_ref"),
+    ("turn_id", "turn_ref"),
+    ("parent_thread_id", "parent_thread_ref"),
+)
+
+
+def _pseudonymous_request_source(journal, body, headers) -> Dict[str, Any]:
+    """Return content-free client claims without persisting raw task UUIDs."""
+
+    source = request_source(body, headers)
+    for raw_name, ref_name in _REQUEST_ID_REFERENCES:
+        value = source.pop(raw_name, None)
+        if not value:
+            continue
+        try:
+            reference = journal.pseudonym(value)
+        except Exception:
+            continue
+        reference = _safe_diagnostic_text(reference, _DIAGNOSTIC_ID)
+        if reference:
+            source[ref_name] = reference
+    return source
+
+
 class ObservationRing:
     """Small process-local diagnostics ring containing only safe route facts."""
 
-    def __init__(self, capacity: int = _DIAGNOSTIC_CAPACITY, sink=None):
+    def __init__(self, capacity: int = _DIAGNOSTIC_CAPACITY, sink=None, pseudonym=None):
         self.capacity = max(1, min(_DIAGNOSTIC_CAPACITY, int(capacity)))
         self._records = deque(maxlen=self.capacity)
         self._lock = threading.RLock()
         self._sink = sink
+        salt = secrets.token_hex(8)
+        self._pseudonym = pseudonym or (
+            lambda value: hashlib.sha256(
+                ("emp-observation:" + salt + ":" + value).encode("utf-8")
+            ).hexdigest()[:16]
+        )
+
+    def pseudonym(self, value: str) -> str:
+        return self._pseudonym(value)
 
     def record(self, event: Mapping[str, Any]) -> None:
         if not isinstance(event, Mapping):
@@ -838,19 +873,26 @@ class ObservationRing:
             },
             separators=(",", ":"),
         )
+        source = _pseudonymous_request_source(self, {
+            "metadata": {"thread_id": event.get("thread_id")},
+            "client_metadata": {"x-codex-turn-metadata": turn_metadata},
+        }, {
+            "X-EMP-Request-ID": event.get("request_id"),
+            "session-id": event.get("session_id"),
+            "originator": event.get("client_kind"),
+        })
+        # Persisted records read from a prior journal already contain refs.
+        # Preserve those refs without hashing them a second time.
+        for _raw_name, ref_name in _REQUEST_ID_REFERENCES:
+            existing = _safe_diagnostic_text(event.get(ref_name), _DIAGNOSTIC_ID)
+            if existing:
+                source[ref_name] = existing
         record = {
             "observation_id": (
                 _safe_diagnostic_text(event.get("observation_id"), _DIAGNOSTIC_ID)
                 or uuid.uuid4().hex
             ),
-            **request_source({
-                "metadata": {"thread_id": event.get("thread_id")},
-                "client_metadata": {"x-codex-turn-metadata": turn_metadata},
-            }, {
-                "X-EMP-Request-ID": event.get("request_id"),
-                "session-id": event.get("session_id"),
-                "originator": event.get("client_kind"),
-            }),
+            **source,
             "observed_at": observed_at,
             "route": _safe_diagnostic_text(event.get("route", ""), _DIAGNOSTIC_ID)
             or "unknown",
@@ -1199,7 +1241,10 @@ class AppState:
         self.diagnostics = (
             diagnostics
             if diagnostics is not None
-            else ObservationRing(sink=self._persist_route_observation)
+            else ObservationRing(
+                sink=self._persist_route_observation,
+                pseudonym=self.journal.pseudonym,
+            )
         )
         self.context_guard = ContextGuard()
         self.provider_replay = ProviderReplayCache()
@@ -2411,11 +2456,8 @@ class AppState:
                 accounts.append(account)
                 updated = dict(self.config)
                 updated["accounts"] = accounts
+                # Validate all account metadata before touching credentials.
                 candidate = load_from_value(updated)
-                candidate, _ = migrate_duplicate_native_visibility(
-                    candidate,
-                    duplicate_account_status(candidate.get("accounts", [])),
-                )
                 with file_transaction() as transaction:
                     account = import_account(
                         self.config,
@@ -2423,6 +2465,13 @@ class AppState:
                         auth_json,
                         self.path,
                         _transaction=transaction,
+                    )
+                    # Duplicate identity is credential-derived. Recompute it
+                    # only after the replacement credential is visible inside
+                    # the rollback-protected transaction.
+                    candidate, _ = migrate_duplicate_native_visibility(
+                        candidate,
+                        duplicate_account_status(candidate.get("accounts", [])),
                     )
                     save(candidate, self.path, _transaction=transaction)
                     committed = load(self.path)
@@ -2754,7 +2803,11 @@ def make_handler(state: AppState):
         def _record_model_request(self, body, transport):
             try:
                 from .collaboration_transport import collaboration_summary
-                fields = request_source(body, {**dict(self.headers.items()), "X-EMP-Request-ID": self._request_id})
+                fields = _pseudonymous_request_source(
+                    state.journal,
+                    body,
+                    {**dict(self.headers.items()), "X-EMP-Request-ID": self._request_id},
+                )
                 fields["model_id"] = _safe_diagnostic_text(body.get("model"), _DIAGNOSTIC_ID)
                 fields["transport"] = transport
                 fields["model_hidden"] = body.get("model") in state.snapshot().get("native_hidden_models", [])
@@ -3656,9 +3709,17 @@ def make_handler(state: AppState):
             except EOFError:
                 return
             except WebSocketRequestTooLarge as exc:
-                self._record_request_rejection("websocket", "websocket_message_too_large", exc.limit)
+                capacity = exc.reason == "memory_limit"
+                self._record_request_rejection(
+                    "websocket",
+                    "request_capacity_unavailable" if capacity else "websocket_message_too_large",
+                    exc.limit,
+                )
                 try:
-                    self._websocket_error(websocket, str(exc), 413, "request_too_large")
+                    self._websocket_error(
+                        websocket, str(exc), 503 if capacity else 413,
+                        "request_capacity_unavailable" if capacity else "request_too_large",
+                    )
                 except OSError:
                     pass
                 websocket.close(exc.code, str(exc))
@@ -4012,7 +4073,7 @@ def make_handler(state: AppState):
                 if path in ("/v1/responses", "/v1/responses/compact"):
                     self._record_model_request(body, "sse" if body.get("stream") else "http")
                 if path == "/api/quit":
-                    if state.updater.snapshot()["state"] in {"downloading", "verifying", "waiting", "authorizing", "restoring", "installing"}:
+                    if state.updater.snapshot()["state"] in {"downloading", "verifying", "waiting", "installing"}:
                         self._error(409, "Wait for the update to finish before exiting EMP")
                         return
                     result = state.shutdown_restore()
@@ -4409,17 +4470,32 @@ def make_handler(state: AppState):
                     self._send(409, _json_bytes(_history_error_body(exc)))
             except RequestBodyTooLarge as exc:
                 emit_operation_failure(exc)
+                capacity = exc.reason == "memory_limit"
                 self._record_request_rejection(
-                    "http", "decoded_body_too_large" if exc.decoded else "wire_body_too_large", exc.limit
+                    "http",
+                    "request_capacity_unavailable" if capacity else
+                    "decoded_body_too_large" if exc.decoded else "wire_body_too_large",
+                    exc.limit,
                 )
                 self.close_connection = True
                 self._send(
-                    413,
+                    503 if capacity else 413,
                     _json_bytes({"error": {
-                        "code": "request_too_large", "message": str(exc),
+                        "code": "request_capacity_unavailable" if capacity else "request_too_large",
+                        "message": str(exc),
                         "limit_bytes": exc.limit,
+                        **({"memory": {
+                            "used_percent": exc.memory_used_percent,
+                            "used_bytes": exc.memory_used_bytes,
+                            "total_bytes": exc.memory_total_bytes,
+                            "available_bytes": exc.available_bytes,
+                            "required_bytes": exc.required_memory_bytes,
+                        }} if capacity else {}),
                     }}),
-                    headers={"Connection": "close"},
+                    headers={
+                        "Connection": "close",
+                        **({"Retry-After": "2"} if capacity else {}),
+                    },
                 )
             except (ConfigError, RouterError, QuotaError, ValueError) as exc:
                 emit_operation_failure(exc)

@@ -180,6 +180,31 @@ class SubscriptionContextTests(unittest.TestCase):
             self.assertEqual(load_auth(current), original_loaded_auth)
             self.assertEqual(state.snapshot(), load(path))
 
+    def test_reimport_duplicate_decision_uses_replacement_credential(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path, _, _ = self.fixture(root)
+            state = AppState(path)
+            state.config["accounts"][0]["hidden_models"] = ["gpt-current"]
+            save(state.config, path)
+            native_auth = root / "native-auth.json"
+            native_auth.write_text(json.dumps({
+                "tokens": {"access_token": "a-token", "account_id": "a"}
+            }))
+
+            with patch(
+                "easy_multi_provider.accounts.codex_auth_path",
+                return_value=native_auth,
+            ):
+                state.import_account(
+                    {"id": "a", "prefix": "a", "hidden_models": ["gpt-current"]},
+                    {"tokens": {"access_token": "replacement", "account_id": "different"}},
+                )
+
+            account = next(item for item in state.config["accounts"] if item["id"] == "a")
+            self.assertEqual(account["hidden_models"], ["gpt-current"])
+            self.assertNotIn("gpt-current", state.config.get("native_hidden_models", []))
+
     def test_same_backend_legacy_forward_route_keeps_native_context_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
             _, config, _ = self.fixture(Path(temporary))
