@@ -791,3 +791,31 @@ and do not start a full Rust/Go/C++ rewrite on this evidence. No commits, publis
 personal configuration changes or Codex source changes were performed.
 
 **Ten rounds and final source review completed; this is the final accepted snapshot.**
+
+### 2026-09-18 EMP 0.11.4 release preparation
+
+Xian subsequently authorized updating GitHub and publishing the fixes. The
+earlier audit entries describe their historical no-commit/no-publish boundary;
+this release stage has explicit authorization to commit, push and publish.
+
+Before preparing 0.11.4, Point fetched and retained upstream main commit
+`e6fa73ba01aee1496324b8854ecb4afce58ede88`: peer-initiated 1009 WebSocket
+recovery before any response event, context-managed compressed connections, and
+restoration of GPT-5.5 when advertised by the subscription catalog. The only
+source merge conflict was an import block; both `ExitStack` and dataclass
+`field` were retained. One existing proxy test used a non-context-managed Mock;
+its fixture was updated to match the new connection interface without removing
+the proxy/identity assertions.
+
+The merged release candidate passed **1242 tests in 62.240s, 28 skipped, no
+failures/errors**, and the installed official Codex CLI 0.155.0 runner passed
+**19/19 contracts in 19.629s**. These replace the pre-integration audit counts
+for release acceptance. Source, pyproject, editable lock metadata and both
+READMEs now agree on **0.11.4**; the unchanged dependency resolutions were
+preserved. Release notes include both the audit fixes and the upstream fixes.
+`compileall`, CLI `--version` and `git diff --check` passed.
+
+Runtime compatibility CI now includes the new native model/owner/stream
+regressions in its Linux, Windows and macOS protocol jobs, in addition to the
+19 installed-CLI contracts. Publication remains pending those remote checks and
+the four native package builds, smoke tests, manifest and checksum verification.

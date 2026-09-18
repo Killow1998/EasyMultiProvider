@@ -65,6 +65,7 @@ jobs:
           tests.test_tool_bridge tests.test_review_boundaries tests.test_catalog tests.test_v06_dialects
           tests.test_codex_history tests.test_history_continuity
           tests.test_transport_continuity tests.test_native_websocket
+          tests.test_native_model_boundary tests.test_native_route_owner tests.test_native_stream_fidelity
           tests.test_chat_projection_regressions
           tests.test_http_pool tests.test_http_pool_tls tests.test_provider_replay
           tests.test_migration

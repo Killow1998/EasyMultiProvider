@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+## 0.11.4 (2026-09-18)
+
+- Adapt model routing and runtime compatibility checks to Codex CLI 0.155.0;
+  recommend 0.155.0 while retaining the existing 0.149.x minimum.
+- Preserve selected native HTTP/SSE, compact and WebSocket response metadata,
+  including turn state, model identity and errors. Keep catalog revision
+  notifications separate from turn state and avoid stale handshake metadata
+  on reused connections.
+- Keep known native model aliases consistent with the requested catalog slug,
+  preventing false account-risk warnings while preserving real model changes.
+- Preserve native failure codes and pre-output HTTP status so permanent policy
+  and invalid-prompt errors are reported without unnecessary generation retries.
+- Isolate native connections and model catalogs by the selected user/workspace
+  owner, and normalize credential header names before WebSocket handshakes.
+- Parse streamed UTF-8 across network chunks and validate complete SSE events,
+  retaining context errors and final events without a trailing blank line.
+  Match Codex's malformed-event tolerance only on native Responses paths;
+  external protocol validation remains strict.
+- Translate configured JSON Schema output to Chat Completions and Anthropic,
+  preserve supported Anthropic reasoning effort, and retain store/include/cache
+  intent for the official OpenAI Responses endpoint.
+- Preserve Codex's persistent-to-disabled reasoning wire alias when an external
+  Responses model explicitly advertises persistent reasoning support.
+- Key compaction summaries by the actual mapped history prefix and output
+  budget, preventing stale cache reuse and missing history. Preserve unfinished
+  client tool-search pairs and visible server-search results during translation.
+- Accept valid native server-side tool-search output at stream completion,
+  avoiding a false failure after successful tool execution; retain response-body
+  consistency checks and strict portable output validation.
+- Enable prompt downstream writes with TCP_NODELAY. Local low-concurrency
+  WebSocket measurements show reduced first-token delay; no universal model
+  throughput improvement is claimed.
+
 - Recover a native WebSocket request rejected by the peer with close code 1009
   before any response event through HTTP/zstd inside EMP. Keep subsequent full
   requests on HTTP for that local connection and route, without unsafe replay
