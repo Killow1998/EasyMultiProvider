@@ -819,3 +819,37 @@ Runtime compatibility CI now includes the new native model/owner/stream
 regressions in its Linux, Windows and macOS protocol jobs, in addition to the
 19 installed-CLI contracts. Publication remains pending those remote checks and
 the four native package builds, smoke tests, manifest and checksum verification.
+
+### 2026-09-18 EMP 0.11.4 published
+
+**[EMP v0.11.4](https://github.com/Killow1998/EasyMultiProvider/releases/tag/v0.11.4)
+was published as the latest stable release at 2026-09-18 14:42:30 UTC.**
+The annotated tag resolves to the exact verified source commit
+`ee360128e3a807444cfe28518e276bb9a65e7141`.
+
+Remote acceptance evidence:
+
+- [Runtime compatibility](https://github.com/Killow1998/EasyMultiProvider/actions/runs/35357223202):
+  all four jobs passed. Linux Python 3.11 full regression was **1242 tests,
+  28 skipped, OK, 58.056s**. Each Linux/Windows/macOS protocol job passed
+  **244 regressions** and **19 official Codex CLI 0.155.0 contracts**. The CLI
+  runs took 21.937s, 58.687s and 59.792s respectively; these are test durations,
+  not model-speed measurements.
+- [Candidate packaging](https://github.com/Killow1998/EasyMultiProvider/actions/runs/35357223226):
+  Windows x64, Linux x64, macOS Intel and Apple Silicon all passed native build,
+  version/TLS/service smoke, background update and rollback verification.
+- [Tagged publication](https://github.com/Killow1998/EasyMultiProvider/actions/runs/35357623534):
+  the same four platforms rebuilt successfully from the verified tag, and the
+  publish job passed source/tag validation plus the complete **22-file manifest
+  and SHA-256 checks**, selecting **five public downloads**.
+
+GitHub's live release API confirmed a published, non-draft, non-prerelease
+latest release, with exactly these five nonempty uploaded assets and SHA-256
+digests: `EMP.exe`, `EMP-linux-x86_64.tar.gz`, `EMP-linux-x86_64.deb`,
+`EMP-macos-x86_64.dmg`, and `EMP-macos-arm64.dmg`. No existing published release
+or tag was replaced. Codex source and personal runtime/account configuration
+were not changed.
+
+This release delivers the 0.155 adaptation and stability fixes with cross-platform
+fixture and packaging evidence. Real-provider capability parity and production
+model throughput remain unverified; the language decision remains to keep Python.
