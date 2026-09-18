@@ -45,6 +45,7 @@ class UpstreamHTTPError(RouterError):
         failure_reason: str,
         error_class: Optional[str] = None,
         retry_after_seconds: Optional[int] = None,
+        response_headers: Optional[Dict[str, str]] = None,
     ):
         self.failure_reason = (
             failure_reason
@@ -53,6 +54,7 @@ class UpstreamHTTPError(RouterError):
         )
         self.error_class = error_class
         self.retry_after_seconds = retry_after_seconds
+        self.response_headers = dict(response_headers or {})
         super().__init__(message, status)
 
 
@@ -104,9 +106,11 @@ class ContextLengthError(RouterError):
         observation: Optional[Dict[str, Any]] = None,
         status: int = 413,
         preflight: bool = False,
+        response_headers: Optional[Dict[str, str]] = None,
     ):
         self.context_observation = dict(observation or {})
         self.preflight = bool(preflight)
+        self.response_headers = dict(response_headers or {})
         super().__init__(format_context_error(self.context_observation), status)
 
 

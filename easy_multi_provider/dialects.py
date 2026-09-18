@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 from typing import Any, Dict, Mapping
+from urllib.parse import urlsplit
 
 
 CODEX_NATIVE = "codex_native"
@@ -46,6 +47,31 @@ _CUSTOM_TOOL_PARAMETERS = {
     "required": ["input"],
     "additionalProperties": False,
 }
+
+
+def _is_official_openai_responses_provider(provider: Mapping[str, Any]) -> bool:
+    """Keep official-only Responses controls away from compatible gateways."""
+
+    base_url = provider.get("base_url")
+    if not isinstance(base_url, str) or not base_url.strip():
+        return False
+    try:
+        parsed = urlsplit(base_url.strip())
+        port = parsed.port
+    except ValueError:
+        return False
+    path = parsed.path.rstrip("/") or "/"
+    return (
+        parsed.scheme.lower() == "https"
+        and parsed.hostname is not None
+        and parsed.hostname.lower() == "api.openai.com"
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.query
+        and not parsed.fragment
+        and (port is None or port == 443)
+        and path in {"/v1", "/v1/responses"}
+    )
 
 
 class ProjectionError(ValueError):
@@ -548,6 +574,10 @@ def project_request(
         for key, value in body.items()
         if key in _PORTABLE_TOP_LEVEL
     }
+    if _is_official_openai_responses_provider(provider):
+        for key in ("store", "include", "prompt_cache_key"):
+            if key in body:
+                projected[key] = copy.deepcopy(body[key])
     projected_input, hoisted_instructions = _portable_input(
         body.get("input"), preserve_reasoning_state=preserve_reasoning_state
     )

@@ -14,7 +14,7 @@ from easy_multi_provider.router_errors import (
     HistoryReconstructionError,
 )
 from easy_multi_provider.destination_context import DestinationContextCompactor
-from easy_multi_provider.history_compaction import split_atomic_units
+from easy_multi_provider.history_compaction import HistoryCompactor, split_atomic_units
 from easy_multi_provider.context_guard import estimate_json_tokens
 
 
@@ -233,6 +233,92 @@ class ActiveTurnCompactionTests(unittest.TestCase):
             self.compact(items, fail)
         self.assertEqual(error.exception.reason, "summary_call_failed")
         self.assertEqual(items, original)
+
+
+class CheckpointCacheStabilityTests(unittest.TestCase):
+    def test_cache_scopes_summary_to_request_output_reserve(self):
+        provider = {"id": "external", "protocol": "responses"}
+        model = {"id": "external/model", "upstream_id": "model"}
+        history = [_message("completed history " + ("x" * 500)) for _ in range(12)]
+        active = [_message("continue the current task")]
+        calls = []
+
+        def summarize(request):
+            calls.append(request)
+            return "checkpoint-%d" % len(calls)
+
+        compactor = HistoryCompactor(summarize)
+
+        def compact(max_output_tokens):
+            body = {
+                "model": model["id"],
+                "max_output_tokens": max_output_tokens,
+                "input": history + active,
+            }
+            return compactor.compact(
+                provider=provider,
+                model=model,
+                protocol="responses",
+                requested_slug=model["id"],
+                body=body,
+                safe_budget=1_600,
+                candidate_items=history,
+                active_request=active,
+                source_boundary={"kind": "fixture", "anchor": "same"},
+            )
+
+        first = compact(8)
+        second = compact(64)
+
+        self.assertEqual(first.status, "compacted")
+        self.assertEqual(second.status, "compacted")
+        self.assertFalse(first.metrics.cache_hit)
+        self.assertFalse(second.metrics.cache_hit)
+        self.assertGreaterEqual(len(calls), 2)
+
+    def test_cache_does_not_reuse_summary_when_tail_packing_changes_mapped_prefix(self):
+        provider = {"id": "external", "protocol": "responses"}
+        model = {"id": "external/model", "upstream_id": "model", "max_output_tokens": 32}
+        history = [_message("completed history " + ("x" * 500)) for _ in range(16)]
+        active = [_message("continue the current task")]
+        calls = []
+
+        def summarize(request):
+            calls.append(request)
+            return "checkpoint-%d" % len(calls)
+
+        compactor = HistoryCompactor(summarize)
+
+        def compact(instructions):
+            body = {
+                "model": model["id"],
+                "instructions": instructions,
+                "max_output_tokens": 32,
+                "input": history + active,
+            }
+            return compactor.compact(
+                provider=provider,
+                model=model,
+                protocol="responses",
+                requested_slug=model["id"],
+                body=body,
+                safe_budget=1_500,
+                candidate_items=history,
+                active_request=active,
+                source_boundary={"kind": "fixture", "anchor": "same"},
+            )
+
+        first = compact("")
+        second = compact("y" * 900)
+
+        self.assertEqual(first.status, "compacted")
+        self.assertEqual(second.status, "compacted")
+        self.assertFalse(first.metrics.cache_hit)
+        self.assertFalse(second.metrics.cache_hit)
+        self.assertEqual((first.metrics.mapped_units, first.metrics.retained_units), (12, 4))
+        self.assertGreater(second.metrics.mapped_units, first.metrics.mapped_units)
+        self.assertLess(second.metrics.retained_units, first.metrics.retained_units)
+        self.assertGreater(len(calls), first.metrics.map_calls + first.metrics.reduce_calls)
 
 
 if __name__ == "__main__":

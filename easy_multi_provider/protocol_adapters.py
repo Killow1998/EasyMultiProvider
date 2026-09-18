@@ -45,8 +45,21 @@ def body_with_supported_effort(
         return projected
     levels = model.get("reasoning_levels")
     effort = reasoning.get("effort")
+    # Codex 0.155 keeps ``persistent`` as the local setting but sends the
+    # Responses wire alias ``disabled``.  An external Responses model that
+    # explicitly advertises persistent therefore supports this wire value;
+    # comparing the strings literally would silently drop the selected mode.
+    persistent_wire_alias = (
+        provider.get("protocol") == "responses"
+        and effort == "disabled"
+        and isinstance(levels, list)
+        and "persistent" in levels
+    )
     unsupported = model.get("supports_reasoning") is False or (
-        isinstance(levels, list) and bool(levels) and effort not in levels
+        isinstance(levels, list)
+        and bool(levels)
+        and effort not in levels
+        and not persistent_wire_alias
     )
     if not unsupported:
         return projected
@@ -247,7 +260,9 @@ class AnthropicMessagesAdapter(ProtocolAdapter):
         model: Mapping[str, Any],
         upstream_model: str,
     ) -> Dict[str, Any]:
-        return responses_to_anthropic(body, upstream_model)
+        return responses_to_anthropic(
+            body_with_supported_effort(provider, body, model), upstream_model
+        )
 
     def normalize_response(
         self,

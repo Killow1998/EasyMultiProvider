@@ -66,6 +66,44 @@ class ResponsesDialectTests(unittest.TestCase):
         self.assertIs(explicit_null["stream"], False)
         self.assertIs(streaming["stream"], True)
 
+    def test_official_openai_responses_controls_are_not_sent_to_gateways(self):
+        body = {
+            "model": "gpt-5.6",
+            "input": "hello",
+            "store": False,
+            "include": ["reasoning.encrypted_content"],
+            "prompt_cache_key": "thread-fixture",
+        }
+        for base_url in (
+            "https://api.openai.com/v1",
+            "https://api.openai.com/v1/",
+            "https://api.openai.com/v1/responses",
+            "https://api.openai.com:443/v1",
+            "https://api.openai.com:443/v1/responses/",
+        ):
+            with self.subTest(base_url=base_url):
+                official = project_request(
+                    {
+                        "protocol": "responses",
+                        "auth_mode": "api_key",
+                        "base_url": base_url,
+                    },
+                    body,
+                )
+                for key in ("store", "include", "prompt_cache_key"):
+                    self.assertEqual(official[key], body[key])
+
+        gateway = project_request(
+            {
+                "protocol": "responses",
+                "auth_mode": "api_key",
+                "base_url": "https://gateway.example/v1",
+            },
+            body,
+        )
+        for key in ("store", "include", "prompt_cache_key"):
+            self.assertNotIn(key, gateway)
+
     def test_portable_projection_rejects_a_non_boolean_stream_flag(self):
         with self.assertRaises(ProjectionError) as raised:
             project_request(

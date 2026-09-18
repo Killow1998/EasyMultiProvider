@@ -19,13 +19,14 @@ from easy_multi_provider.native_websocket import (
 
 
 class _Handshake:
-    def __init__(self, status=101):
+    def __init__(self, status=101, headers=None):
         self.status = status
+        self.headers = headers or {}
 
 
 class _FakeConnection:
-    def __init__(self, responses, status=101):
-        self.handshake_response = _Handshake(status)
+    def __init__(self, responses, status=101, headers=None):
+        self.handshake_response = _Handshake(status, headers)
         self.responses = list(responses)
         self.sent = []
         self.connected = True
@@ -56,6 +57,30 @@ class _GatewayFailure(Exception):
 
 
 class NativeWebSocketTests(unittest.TestCase):
+    def test_bridge_keeps_only_safe_upstream_handshake_headers(self):
+        connection = _FakeConnection(
+            [{"type": "response.completed", "response": {"status": "completed"}}],
+            headers={
+                "X-Codex-Turn-State": "turn-state",
+                "OpenAI-Model": "server-model",
+                "X-OpenAI-Model": "server-model-alias",
+                "Set-Cookie": "session=secret",
+            },
+        )
+        bridge = NativeWebSocketBridge(lambda _target: connection)
+        target = NativeWebSocketTarget("wss://example.test/responses", {}, "route")
+
+        list(bridge.events(target, {"type": "response.create", "input": []}))
+
+        self.assertEqual(
+            bridge.handshake_headers,
+            {
+                "x-codex-turn-state": "turn-state",
+                "openai-model": "server-model",
+                "x-openai-model": "server-model-alias",
+            },
+        )
+
     def test_preencoded_downstream_json_matches_normal_frame_and_keeps_size_limit(self):
         event = {"type": "response.output_text.delta", "delta": "猫🐱"}
         encoded = json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -529,6 +554,28 @@ class NativeWebSocketTests(unittest.TestCase):
                 )
             )
         self.assertTrue(connection.closed)
+
+    def test_skips_malformed_events_before_native_terminal(self):
+        completed = {
+            "type": "response.completed",
+            "response": {"id": "resp_valid", "status": "completed"},
+        }
+        connection = _FakeConnection([])
+        connection.recv = Mock(
+            side_effect=["{not json}", "[]", "null", json.dumps(completed)]
+        )
+        bridge = NativeWebSocketBridge(lambda _target: connection)
+
+        events = list(
+            bridge.events(
+                NativeWebSocketTarget(
+                    "wss://example.invalid/responses", {}, "route-a"
+                ),
+                {"type": "response.create", "input": []},
+            )
+        )
+
+        self.assertEqual(events, [completed])
 
     def test_reused_connection_failure_keeps_request_reuse_diagnostic(self):
         connection = _FakeConnection(

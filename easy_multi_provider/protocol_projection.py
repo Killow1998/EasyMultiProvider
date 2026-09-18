@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import json
 import re
 import uuid
@@ -39,6 +40,7 @@ _RESPONSES_OUTPUT_TYPES = frozenset(
 _ANTHROPIC_IMAGE_MEDIA_TYPES = frozenset(
     {"image/jpeg", "image/png", "image/gif", "image/webp"}
 )
+_ANTHROPIC_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
 def _response_string(item: Mapping[str, Any], field: str) -> str:
@@ -497,6 +499,40 @@ def _chat_tool_choice(value: Any) -> Any:
     raise RouterError("request projection failed: unsupported tool choice", 422)
 
 
+def _responses_json_schema_format(body: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Validate the canonical Responses JSON-schema format once per projection."""
+
+    text = body.get("text")
+    if text is None:
+        return None
+    if not isinstance(text, Mapping):
+        raise RouterError("request projection failed: invalid text controls", 422)
+    format_value = text.get("format")
+    if format_value is None:
+        return None
+    if not isinstance(format_value, Mapping) or format_value.get("type") != "json_schema":
+        raise RouterError(
+            "request projection failed: unsupported structured output format", 422
+        )
+    name = format_value.get("name")
+    schema = format_value.get("schema")
+    strict = format_value.get("strict")
+    if (
+        not isinstance(name, str)
+        or not name
+        or not isinstance(schema, Mapping)
+        or (strict is not None and not isinstance(strict, bool))
+    ):
+        raise RouterError(
+            "request projection failed: invalid structured output format", 422
+        )
+    return {
+        "name": name,
+        "schema": copy.deepcopy(dict(schema)),
+        "strict": strict,
+    }
+
+
 def responses_to_chat(body: Dict[str, Any], upstream_model: str) -> Dict[str, Any]:
     payload = {"model": upstream_model, "messages": _messages(body), "stream": bool(body.get("stream"))}
     tools = _tools(body)
@@ -522,6 +558,18 @@ def responses_to_chat(body: Dict[str, Any], upstream_model: str) -> Dict[str, An
     reasoning = body.get("reasoning")
     if isinstance(reasoning, dict) and isinstance(reasoning.get("effort"), str):
         payload["reasoning_effort"] = reasoning["effort"]
+    schema_format = _responses_json_schema_format(body)
+    if schema_format is not None:
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_format["name"],
+                "schema": schema_format["schema"],
+            },
+        }
+        if schema_format["strict"] is not None:
+            response_format["json_schema"]["strict"] = schema_format["strict"]
+        payload["response_format"] = response_format
     return payload
 
 
@@ -770,6 +818,26 @@ def responses_to_anthropic(body: Dict[str, Any], upstream_model: str) -> Dict[st
         )
     elif parallel is False:
         payload["tool_choice"] = _anthropic_tool_choice("auto", parallel)
+    output_config = {}
+    schema_format = _responses_json_schema_format(body)
+    if schema_format is not None:
+        # Anthropic's format accepts the schema itself; the Responses name and
+        # strict wrapper have no equivalent in Messages output_config.format.
+        output_config["format"] = {
+            "type": "json_schema",
+            "schema": schema_format["schema"],
+        }
+    reasoning = body.get("reasoning")
+    if isinstance(reasoning, Mapping) and isinstance(reasoning.get("effort"), str):
+        effort = reasoning["effort"]
+        if effort not in _ANTHROPIC_EFFORT_LEVELS:
+            raise RouterError(
+                "request projection failed: unsupported Anthropic reasoning effort",
+                422,
+            )
+        output_config["effort"] = effort
+    if output_config:
+        payload["output_config"] = output_config
     return payload
 
 

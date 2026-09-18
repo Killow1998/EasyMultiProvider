@@ -8,7 +8,7 @@ EMP only keeps the matching upstream socket alive for that downstream socket.
 from __future__ import annotations
 
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import time
 import uuid
@@ -31,6 +31,35 @@ WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009
 _RETRYABLE_UPGRADE_STATUSES = frozenset(
     {400, 404, 405, 415, 426, 501}
 )
+_NATIVE_HANDSHAKE_HEADER_NAMES = frozenset({
+    "cf-ray",
+    "openai-model",
+    "x-codex-safety-buffering-enabled",
+    "x-codex-safety-buffering-faster-model",
+    "x-codex-turn-state",
+    "x-error-json",
+    "x-models-etag",
+    "x-oai-request-id",
+    "x-openai-authorization-error",
+    "x-openai-model",
+    "x-reasoning-included",
+    "x-request-id",
+})
+
+
+def _select_handshake_headers(headers: Any) -> Dict[str, str]:
+    selected: Dict[str, str] = {}
+    try:
+        items = headers.items()
+        for raw_name, raw_value in items:
+            if not isinstance(raw_name, str) or not isinstance(raw_value, str):
+                continue
+            name = raw_name.lower()
+            if name in _NATIVE_HANDSHAKE_HEADER_NAMES:
+                selected[name] = raw_value
+    except (AttributeError, TypeError):
+        return selected
+    return selected
 
 
 def _http_fallback_before_request(status: int) -> bool:
@@ -139,6 +168,7 @@ class NativeWebSocketTarget:
 @dataclass(frozen=True)
 class _HandshakeResponse:
     status: int
+    headers: Mapping[str, str] = field(default_factory=dict)
 
 
 class _CompressedWebSocketConnection:
@@ -150,7 +180,8 @@ class _CompressedWebSocketConnection:
         response = getattr(connection, "response", None)
         status = getattr(response, "status_code", 101)
         self.handshake_response = _HandshakeResponse(
-            status if isinstance(status, int) and not isinstance(status, bool) else 101
+            status if isinstance(status, int) and not isinstance(status, bool) else 101,
+            _select_handshake_headers(getattr(response, "headers", {})),
         )
         self._timeout = float(NATIVE_WEBSOCKET_CONNECT_TIMEOUT)
         self._last_sent = None
@@ -374,6 +405,7 @@ class NativeWebSocketBridge:
         self._connection_key: Optional[str] = None
         self._last_connection_reused = False
         self._last_healthy_at = None
+        self._handshake_headers: Dict[str, str] = {}
 
     def _observe(self, phase: str, **fields: Any) -> None:
         if not callable(self._observer):
@@ -391,6 +423,12 @@ class NativeWebSocketBridge:
     @property
     def last_connection_reused(self) -> bool:
         return self._last_connection_reused
+
+    @property
+    def handshake_headers(self) -> Mapping[str, str]:
+        """Selected upstream 101 headers for the current native socket."""
+
+        return dict(self._handshake_headers)
 
     def _usable(self, target: NativeWebSocketTarget) -> bool:
         if self._connection is None or self._connection_key != target.connection_key:
@@ -530,6 +568,10 @@ class NativeWebSocketBridge:
             )
         self._connection = connection
         self._connection_key = target.connection_key
+        response = getattr(connection, "handshake_response", None)
+        self._handshake_headers = _select_handshake_headers(
+            getattr(response, "headers", {})
+        )
         self._last_connection_reused = False
         self._last_healthy_at = None
         self._observe(
@@ -606,13 +648,23 @@ class NativeWebSocketBridge:
                 try:
                     event = json.loads(raw)
                 except ValueError as exc:
-                    raise NativeWebSocketError(
-                        "native upstream websocket event is not valid JSON", 502, False
-                    ) from exc
-                if not isinstance(event, dict):
-                    raise NativeWebSocketError(
-                        "native upstream websocket event must be an object", 502, False
+                    # Codex 0.155's native WS consumer logs and skips an
+                    # unparseable text event, then continues to the terminal
+                    # event. Do not apply this tolerance to other protocols;
+                    # this bridge is the native Responses boundary.
+                    self._observe(
+                        "upstream_event_skipped",
+                        reason="invalid_json",
+                        event_bytes=len(raw_bytes),
                     )
+                    continue
+                if not isinstance(event, dict):
+                    self._observe(
+                        "upstream_event_skipped",
+                        reason="non_object",
+                        event_bytes=len(raw_bytes),
+                    )
+                    continue
                 observation = terminal_observation(event)
                 event = _safe_terminal_event(event, observation)
                 output, tool = native_websocket_event_activity(event)
@@ -715,6 +767,7 @@ class NativeWebSocketBridge:
         self._connection = None
         self._last_healthy_at = None
         self._connection_key = None
+        self._handshake_headers = {}
         if connection is None:
             return
         try:

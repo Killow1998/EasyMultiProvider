@@ -1,4 +1,5 @@
 import json
+import base64
 import os
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from unittest.mock import patch
 from tests.support import ensure_test_master_key
 from easy_multi_provider.accounts import public_accounts
 from easy_multi_provider.catalog import (
+    account_catalog_owner_from_headers,
     build_catalog,
     generated_catalog_path,
     subscription_model_options,
@@ -21,6 +23,43 @@ ensure_test_master_key()
 
 
 class CatalogTests(unittest.TestCase):
+    def test_catalog_owner_scopes_cache_to_user_and_workspace(self):
+        def headers(user, token, *, opaque=False):
+            if opaque:
+                access_token = "opaque-" + token
+            else:
+                claims = {
+                    "https://api.openai.com/auth": {"chatgpt_user_id": user}
+                }
+                payload = base64.urlsafe_b64encode(
+                    json.dumps(claims).encode("utf-8")
+                ).decode("ascii").rstrip("=")
+                access_token = "fixture." + payload + "." + token
+            return {
+                "chatgpt-account-id": "workspace-a",
+                "Authorization": "Bearer " + access_token,
+            }
+
+        self.assertEqual(
+            account_catalog_owner_from_headers(headers("user-a", "token-1")),
+            account_catalog_owner_from_headers(headers("user-a", "token-2")),
+        )
+        self.assertNotEqual(
+            account_catalog_owner_from_headers(headers("user-a", "token-1")),
+            account_catalog_owner_from_headers(headers("user-b", "token-2")),
+        )
+        self.assertNotEqual(
+            account_catalog_owner_from_headers(headers("user-a", "token-1", opaque=True)),
+            account_catalog_owner_from_headers(headers("user-a", "token-2", opaque=True)),
+        )
+        missing_workspace = lambda token: {
+            "Authorization": "Bearer opaque-" + token,
+        }
+        self.assertNotEqual(
+            account_catalog_owner_from_headers(missing_workspace("token-1")),
+            account_catalog_owner_from_headers(missing_workspace("token-2")),
+        )
+
     def test_family_presentation_renames_native_and_prefixed_sources_once(self):
         with tempfile.TemporaryDirectory() as directory:
             native_path = Path(directory) / "native.json"
@@ -537,6 +576,9 @@ class CatalogTests(unittest.TestCase):
         model = build_catalog(config)["models"][0]
 
         self.assertTrue(model["supports_parallel_tool_calls"])
+        # The bridge implements Codex's client-side deferred search round trip;
+        # this flag is not a claim that the vendor provides server-side search.
+        self.assertTrue(model["supports_search_tool"])
 
     def test_generated_catalog_path_is_stable_below_codex_home(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -80,7 +80,7 @@ Linux App discovery recognizes the runtime at
 `$CODEX_HOME/plugins/.plugin-appserver/codex`, alongside managed, editor and PATH
 runtimes. Other Linux App packaging layouts require separate verification.
 
-EMP supports Codex CLI `0.149.x` through `0.154.x`; `0.154.0` is recommended.
+EMP supports Codex CLI `0.149.x` through `0.155.x`; `0.155.0` is recommended.
 The Web UI shows the installed version and marks newer versions as not yet
 verified or older versions as unsupported.
 
@@ -221,7 +221,7 @@ one model visible. Display names do not change model IDs.
 With a ChatGPT login, model names, visibility, and additions refresh while Codex
 is running. EMP sends its catalog revision on Responses HTTP streams and
 WebSocket metadata, allowing Codex to fetch changes on subsequent requests.
-Codex also refreshes periodically (about every 4.5 minutes in 0.154.0); an idle
+Codex also refreshes periodically (about every 4.5 minutes in 0.155.0); an idle
 App menu is not guaranteed to update immediately. Reopen the model picker after
 the refresh. Restart Codex once after upgrading from an older EMP
 static catalog or changing Codex's Base URL. Clients without ChatGPT model

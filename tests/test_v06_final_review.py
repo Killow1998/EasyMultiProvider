@@ -272,6 +272,40 @@ class FinalReviewRegressionTests(unittest.TestCase):
             )
         self.assertLessEqual(TrackingBuffer.maximum, len(first))
 
+    def test_external_sse_parsers_accept_utf8_split_across_transport_chunks(self):
+        data = json.dumps({"text": "café"}, ensure_ascii=False)
+        wire = ("data: " + data + "\n\n").encode("utf-8")
+        split = wire.index("é".encode("utf-8")) + 1
+        chunks = [wire[:split], wire[split:]]
+
+        self.assertEqual(
+            list(stream_adapters._sse_data(_FakeResponse(chunks))),
+            [(data, True)],
+        )
+
+        terminal = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp-utf8",
+                "status": "completed",
+                "output": [],
+                "output_text": "café",
+            },
+        }
+        response_wire = (
+            b"event: response.completed\n"
+            + ("data: " + json.dumps(terminal, ensure_ascii=False) + "\n\n").encode("utf-8")
+        )
+        response_split = response_wire.index("é".encode("utf-8")) + 1
+        response = _FakeResponse(
+            [response_wire[:response_split], response_wire[response_split:]]
+        )
+        response.status = 200
+        response.headers = {"Content-Type": "text/event-stream"}
+        converted = b"".join(router._validated_responses_stream(response)).decode("utf-8")
+        self.assertIn('"output_text": "café"', converted)
+        self.assertNotIn("response.failed", converted)
+
     def test_model_timestamp_is_not_limited_by_context_window(self):
         self.assertEqual(created_timestamp(1_700_000_000), 1_700_000_000)
         self.assertEqual(created_timestamp(1_700_000_000_000), 1_700_000_000)

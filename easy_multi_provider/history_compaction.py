@@ -268,8 +268,9 @@ def destination_fingerprint(
     model: Mapping[str, Any],
     protocol: str,
     safe_input_budget: int,
+    output_limit: Optional[int] = None,
 ) -> str:
-    """Return a capability fingerprint without copying credentials into a key."""
+    """Return a destination/request fingerprint without copying credentials."""
 
     provider_fields = (
         "id",
@@ -301,6 +302,10 @@ def destination_fingerprint(
             },
             "protocol": protocol,
             "safe_input_budget": safe_input_budget,
+            # The summary prompt is the same, but its usable input and tail
+            # packing change with this request-local reserve. Keep a result
+            # produced under one reserve from serving another request.
+            "output_limit": output_limit,
         }
     )
 
@@ -897,21 +902,6 @@ class HistoryCompactor:
         metric_state.source_units = len(candidate_units)
         metric_state.active_items = len(active)
         output_limit = self._summary_output_limit(model, body, safe_budget)
-        source_fp = source_fingerprint(
-            source_boundary,
-            {"candidate": visible_candidates, "active_request": list(active), "prefix": list(prefix_items)},
-        )
-        cache_key = CheckpointCacheKey(
-            source_boundary_fingerprint=_fingerprint(source_boundary),
-            visible_prefix_fingerprint=_fingerprint(
-                {"candidate": visible_candidates, "active_request": list(active), "prefix": list(prefix_items)}
-            ),
-            destination_fingerprint=destination_fingerprint(
-                provider, model, protocol, safe_budget
-            ),
-            safe_input_budget=safe_budget,
-        )
-
         active_only = self._final_body(
             body,
             prefix_items,
@@ -943,6 +933,22 @@ class HistoryCompactor:
         map_units = candidate_units[: len(candidate_units) - len(tail_units)]
         metric_state.mapped_units = len(map_units)
         metric_state.retained_units = len(tail_units)
+        # Tail packing depends on the full request shape.  Cache only the
+        # summary for the prefix actually sent to the summarizer; hashing all
+        # candidates before packing can reuse a shorter-prefix summary after a
+        # request change silently evicts the newly mapped unit from history.
+        source_fp = source_fingerprint(
+            source_boundary,
+            {"mapped": list(map_units), "active_request": list(active), "prefix": list(prefix_items)},
+        )
+        cache_key = CheckpointCacheKey(
+            source_boundary_fingerprint=_fingerprint(source_boundary),
+            visible_prefix_fingerprint=_fingerprint({"mapped": list(map_units)}),
+            destination_fingerprint=destination_fingerprint(
+                provider, model, protocol, safe_budget, output_limit
+            ),
+            safe_input_budget=safe_budget,
+        )
         summary = self.cache.get(cache_key) if map_units else None
         if summary is not None:
             metric_state.cache_hit = True

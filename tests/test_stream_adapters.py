@@ -35,6 +35,57 @@ def _event(event_type, **value):
 
 
 class StreamAdapterTransportMatrixTests(unittest.TestCase):
+    def test_native_failure_event_preserves_upstream_error_schema(self):
+        event = {
+            "type": "response.failed",
+            "response": {
+                "id": "resp_native_failure",
+                "status": "failed",
+                "error": {
+                    "code": "bio_policy",
+                    "message": "policy rejection",
+                    "status": 400,
+                },
+            },
+        }
+        wire = ("data: " + json.dumps(event) + "\n\n").encode()
+
+        events = list(
+            sse_json_events(
+                _reliable_responses_stream(
+                    lambda: [wire], native_passthrough=True
+                )
+            )
+        )
+
+        self.assertEqual(events, [event])
+
+    def test_native_pre_output_http_error_propagates_without_replay(self):
+        failure = UpstreamHTTPError(
+            "private upstream detail",
+            401,
+            "auth_rejected",
+            "auth",
+            response_headers={"x-request-id": "request-fixture"},
+        )
+        calls = []
+
+        def factory():
+            calls.append(True)
+            raise failure
+
+        with self.assertRaises(UpstreamHTTPError) as raised:
+            list(
+                sse_json_events(
+                    _reliable_responses_stream(
+                        factory, native_passthrough=True
+                    )
+                )
+            )
+
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(calls, [True])
+
     def test_sse_parser_limits_aggregate_multiline_event_size(self):
         piece = "a" * (MAX_SSE_EVENT_BYTES // 2 + 100)
         chunks = [

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from .capabilities import endpoint_fingerprint
 
@@ -64,6 +66,45 @@ def _account_id(headers: Mapping[str, Any]) -> str:
     raise NativeIdentityError("native route account identity is unavailable")
 
 
+def _header_value(headers: Mapping[str, Any], name: str) -> str:
+    if not isinstance(headers, Mapping):
+        return ""
+    wanted = name.casefold()
+    for key, value in headers.items():
+        if isinstance(key, str) and key.casefold() == wanted:
+            return value.strip() if isinstance(value, str) else ""
+    return ""
+
+
+def _verified_owner_hint(authorization: str) -> str:
+    """Read only the local JWT owner hint; never treat it as proof of auth."""
+
+    if not isinstance(authorization, str):
+        return ""
+    token = authorization.strip()
+    if token[:7].casefold() != "bearer ":
+        return ""
+    token = token[7:].strip()
+    parts = token.split(".")
+    if len(parts) != 3 or not all(parts):
+        return ""
+    try:
+        padding = "=" * (-len(parts[1]) % 4)
+        payload = base64.urlsafe_b64decode((parts[1] + padding).encode("ascii"))
+        claims = json.loads(payload.decode("utf-8"))
+        if not isinstance(claims, Mapping):
+            return ""
+        auth = claims.get("https://api.openai.com/auth")
+        if not isinstance(auth, Mapping):
+            return ""
+        owner = auth.get("chatgpt_user_id") or auth.get("user_id")
+    except (UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(owner, str) or not owner.strip() or len(owner.strip()) > _MAX_FIELD_CHARS:
+        return ""
+    return owner.strip()
+
+
 def _digest(domain: bytes, *parts: str) -> str:
     digest = hashlib.sha256()
     digest.update(domain)
@@ -78,8 +119,9 @@ def derive_native_route_identity(
     endpoint: Any,
     deployment: Any,
     upstream_model: Any,
+    credential_headers: Optional[Mapping[str, Any]] = None,
 ) -> NativeRouteIdentity:
-    """Derive socket identity without retaining account or endpoint content."""
+    """Derive socket identity without retaining account or credential content."""
 
     account = _account_id(headers)
     deployment_value = _bounded_text(
@@ -87,8 +129,15 @@ def derive_native_route_identity(
     )
     upstream = _bounded_text(upstream_model, "upstream model")
     endpoint_value = endpoint_fingerprint(endpoint)
+    credential = _header_value(credential_headers or {}, "authorization")
+    owner_hint = _verified_owner_hint(credential)
+    auth_parts = (account, endpoint_value, owner_hint) if owner_hint else (
+        account,
+        endpoint_value,
+        credential or "missing-authorization",
+    )
     return NativeRouteIdentity(
-        auth_identity=_digest(_AUTH_DOMAIN, account, endpoint_value),
+        auth_identity=_digest(_AUTH_DOMAIN, *auth_parts),
         endpoint_fingerprint=endpoint_value,
         deployment_fingerprint=_digest(
             _DEPLOYMENT_DOMAIN, endpoint_value, deployment_value, upstream
@@ -96,8 +145,31 @@ def derive_native_route_identity(
     )
 
 
+def derive_native_catalog_owner(headers: Mapping[str, Any]) -> str:
+    """Derive a stable catalog owner without retaining credentials.
+
+    A complete ChatGPT owner is the user/workspace pair.  When the local
+    token does not expose a bounded owner hint, fall back to the credential
+    digest so an opaque refresh cannot reuse another cached catalog.
+    """
+
+    account = _header_value(headers, "chatgpt-account-id")
+    if not account or len(account) > _MAX_FIELD_CHARS:
+        account = "missing-account"
+    credential = _header_value(headers, "authorization")
+    owner_hint = _verified_owner_hint(credential)
+    # Without both user and workspace, the owner hint is not sufficient to
+    # establish the official same-owner relation; keep the credential digest.
+    parts = (account, owner_hint) if owner_hint and account != "missing-account" else (
+        account,
+        credential or "missing-authorization",
+    )
+    return _digest(_AUTH_DOMAIN, *parts)
+
+
 __all__ = [
     "NativeIdentityError",
     "NativeRouteIdentity",
+    "derive_native_catalog_owner",
     "derive_native_route_identity",
 ]

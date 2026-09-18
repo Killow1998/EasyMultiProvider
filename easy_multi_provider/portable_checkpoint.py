@@ -91,8 +91,30 @@ def _tool_family(item: Mapping[str, Any]) -> str:
     return "custom" if "custom_tool" in raw_type else "function"
 
 
+def _is_server_tool_search_output(item: Mapping[str, Any]) -> bool:
+    raw_type = str(item.get("raw_type") or item.get("type") or "").lower()
+    content = item.get("content")
+    return (
+        raw_type == "tool_search_output"
+        and isinstance(content, Mapping)
+        and content.get("execution") == "server"
+    )
+
+
 def _aborted_output(call: Mapping[str, Any]) -> Dict[str, Any]:
     family = _tool_family(call)
+    raw_type = str(call.get("raw_type") or call.get("type") or "").lower()
+    if raw_type == "tool_search_call":
+        # Codex 0.155 normalizes an unfinished client tool search with a
+        # ToolSearchOutput, not a function_call_output. Keep the pair's wire
+        # family intact when a checkpoint is rebuilt before the result exists.
+        return {
+            "kind": "tool_result",
+            "content": {"status": "completed", "execution": "client", "tools": []},
+            "call_id": _call_id(call),
+            "turn_id": call.get("turn_id"),
+            "raw_type": "tool_search_output",
+        }
     return {
         "kind": "tool_result",
         "content": {"output": "aborted"},
@@ -127,7 +149,9 @@ def _normalize_tool_pairs(items: Iterable[Mapping[str, Any]]) -> List[Dict[str, 
         role = _tool_role(item)
         if role == "result":
             key = (_tool_family(item), _call_id(item))
-            if key not in calls:
+            # Codex keeps server-side discovery output even when the client
+            # has no matching ToolSearchCall in its local prompt history.
+            if key not in calls and not _is_server_tool_search_output(item):
                 continue
         normalized.append(item)
         if role == "call":

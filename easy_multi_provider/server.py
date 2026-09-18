@@ -22,7 +22,7 @@ import uuid
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 import urllib.request
 from .network_proxy import follow_system_proxy
@@ -153,6 +153,8 @@ from .router import (
     fetch_subscription_catalog,
     forward_native_search,
     model_metadata,
+    _rewrite_native_model_event,
+    _rewrite_native_model_headers,
 )
 from .transport import (
     MAX_PROXY_REQUEST_BYTES,
@@ -352,6 +354,88 @@ def _router_error_body(exc: RouterError) -> Dict[str, Any]:
 def _retry_headers(payload: Mapping[str, Any]) -> Dict[str, str]:
     delay = payload.get("error", {}).get("retry_after_seconds")
     return {"Retry-After": str(delay)} if delay is not None else {}
+
+
+_RESPONSE_HEADER_EXCLUSIONS = frozenset({
+    "authorization",
+    "cache-control",
+    "connection",
+    "cookie",
+    "content-length",
+    "content-type",
+    "set-cookie",
+    "transfer-encoding",
+    "x-models-etag",
+})
+
+
+def _native_response_headers(metadata: Mapping[str, Any]) -> Dict[str, str]:
+    """Return the router's selected native headers for the client boundary."""
+
+    value = metadata.get("response_headers") if isinstance(metadata, Mapping) else None
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        key: item
+        for key, item in value.items()
+        if isinstance(key, str)
+        and isinstance(item, str)
+        and key.lower() not in _RESPONSE_HEADER_EXCLUSIONS
+    }
+
+
+def _native_websocket_metadata_events(
+    response_headers: Mapping[str, Any],
+    *,
+    requested_model: Any = None,
+    expected_upstream_model: Any = None,
+    reused: bool = False,
+) -> List[Dict[str, Any]]:
+    """Use Codex's distinct event kinds for state and catalog metadata.
+
+    A fresh native connection may expose all selected 101 metadata.  On a
+    reused connection Codex re-emits the current server model, but does not
+    replay stale turn state, rate-limit headers, or an old catalog snapshot.
+    """
+
+    selected = {
+        key: value
+        for key, value in response_headers.items()
+        if isinstance(key, str) and isinstance(value, str)
+    } if isinstance(response_headers, Mapping) else {}
+    if reused:
+        selected = {
+            key: value
+            for key, value in selected.items()
+            if key.casefold() in {"openai-model", "x-openai-model"}
+        }
+    selected = _rewrite_native_model_headers(
+        selected,
+        requested_model=requested_model,
+        expected_upstream_model=expected_upstream_model,
+    )
+    state_headers = {
+        key: value
+        for key, value in selected.items()
+        if key.lower() != "x-models-etag"
+    }
+    events = []
+    if state_headers:
+        events.append({"type": "response.metadata", "headers": state_headers})
+    etag = next(
+        (value for key, value in selected.items() if key.lower() == "x-models-etag"),
+        None,
+    )
+    if etag is not None:
+        events.append(
+            {"type": "codex.response.metadata", "headers": {"x-models-etag": etag}}
+        )
+    return events
+
+
+def _native_router_error_headers(exc: BaseException) -> Dict[str, str]:
+    value = getattr(exc, "response_headers", None)
+    return _native_response_headers({"response_headers": value})
 
 
 _DIAGNOSTIC_DECISIONS = frozenset(
@@ -2718,6 +2802,7 @@ def _json_bytes(value: Any) -> bytes:
 def make_handler(state: AppState):
     class Handler(BaseHTTPRequestHandler):
         server_version = "EMP/%s" % __version__
+        disable_nagle_algorithm = True
 
         def setup(self) -> None:
             super().setup()
@@ -3209,7 +3294,15 @@ def make_handler(state: AppState):
             if kind == "stream":
                 iterator = iter(result)
                 try:
-                    for event in sse_json_events(iterator):
+                    events = iter(sse_json_events(iterator))
+                    first = next(events, None)
+                    for event in _native_websocket_metadata_events(
+                        _native_response_headers(metadata)
+                    ):
+                        yield event
+                    if first is not None:
+                        yield first
+                    for event in events:
                         yield event
                 finally:
                     close = getattr(iterator, "close", None)
@@ -3219,7 +3312,15 @@ def make_handler(state: AppState):
             if kind == "raw_stream":
                 try:
                     chunks = iter(lambda: result.read(8192), b"")
-                    for event in sse_json_events(chunks):
+                    events = iter(sse_json_events(chunks))
+                    first = next(events, None)
+                    for event in _native_websocket_metadata_events(
+                        _native_response_headers(metadata)
+                    ):
+                        yield event
+                    if first is not None:
+                        yield first
+                    for event in events:
                         yield event
                 finally:
                     result.close()
@@ -3230,6 +3331,10 @@ def make_handler(state: AppState):
                 raise TransportError("upstream response is not valid JSON") from exc
             if not isinstance(response, dict):
                 raise TransportError("upstream response must be a JSON object")
+            for event in _native_websocket_metadata_events(
+                _native_response_headers(metadata)
+            ):
+                yield event
             yield from sse_json_events(
                 _response_json_stream(
                     response,
@@ -3420,6 +3525,7 @@ def make_handler(state: AppState):
                             tool_activity = False
                             pending_lifecycle_events = []
                             pending_lifecycle_bytes = 0
+                            handshake_metadata_sent = False
                             performance = ResponsesPerformanceTracker(
                                 started=native_started
                             )
@@ -3429,6 +3535,22 @@ def make_handler(state: AppState):
                                 for event in native_upstream.events(
                                     plan.target, plan.payload
                                 ):
+                                    if not handshake_metadata_sent:
+                                        for metadata_event in _native_websocket_metadata_events(
+                                            getattr(native_upstream, "handshake_headers", {}),
+                                            requested_model=plan.requested_slug,
+                                            expected_upstream_model=plan.upstream_model,
+                                            reused=native_upstream.last_connection_reused,
+                                        ):
+                                            websocket.send_json(
+                                                self._catalog_event(metadata_event, etag)
+                                            )
+                                        handshake_metadata_sent = True
+                                    event = _rewrite_native_model_event(
+                                        event,
+                                        requested_model=plan.requested_slug,
+                                        expected_upstream_model=plan.upstream_model,
+                                    )
                                     event = self._catalog_event(event, etag)
                                     performance.observe_event(event)
                                     if first_event_ms is None:
@@ -4381,10 +4503,13 @@ def make_handler(state: AppState):
                         {**dict(self.headers.items()), "X-EMP-Request-ID": self._request_id},
                         transport="http",
                     )
+                    response_headers = _native_response_headers(metadata)
+                    response_headers["X-Models-Etag"] = state.catalog_etag()
                     self._send(
                         metadata.get("status", 200),
                         result,
                         metadata.get("content_type", "application/json"),
+                        headers=response_headers,
                     )
                     return
                 if path == "/v1/responses":
@@ -4407,13 +4532,19 @@ def make_handler(state: AppState):
                                 status,
                                 _json_bytes(payload),
                                 "application/json",
-                                {"Connection": "close", **_retry_headers(payload)},
+                                {
+                                    "Connection": "close",
+                                    **_native_response_headers(metadata),
+                                    **_retry_headers(payload),
+                                },
                             )
                             self.close_connection = True
                             return
                         close_after_stream = b'"type": "response.failed"' in first_chunk
                         self.send_response(200)
                         self.send_header("Content-Type", metadata["content_type"])
+                        for key, value in _native_response_headers(metadata).items():
+                            self.send_header(key, value)
                         self.send_header("X-Models-Etag", state.catalog_etag())
                         self.send_header("Cache-Control", "no-cache")
                         self.send_header("Connection", "close" if close_after_stream else "keep-alive")
@@ -4438,6 +4569,8 @@ def make_handler(state: AppState):
                     elif metadata["kind"] == "raw_stream":
                         self.send_response(metadata.get("status", 200))
                         self.send_header("Content-Type", metadata["content_type"])
+                        for key, value in _native_response_headers(metadata).items():
+                            self.send_header(key, value)
                         self.send_header("X-Models-Etag", state.catalog_etag())
                         self.send_header("Cache-Control", "no-cache")
                         self.send_header("Connection", "keep-alive")
@@ -4452,11 +4585,13 @@ def make_handler(state: AppState):
                         finally:
                             result.close()
                     else:
+                        response_headers = _native_response_headers(metadata)
+                        response_headers["X-Models-Etag"] = state.catalog_etag()
                         self._send(
                             metadata.get("status", 200),
                             result,
                             metadata.get("content_type", "application/json"),
-                            headers={"X-Models-Etag": state.catalog_etag()},
+                            headers=response_headers,
                         )
                     return
                 self._error(404, "not found")
@@ -4523,7 +4658,14 @@ def make_handler(state: AppState):
                     self._send(503, _json_bytes({"error": {"code": exc.code, "message": str(exc)}}))
                 elif isinstance(exc, RouterError):
                     payload = _router_error_body(exc)
-                    self._send(status, _json_bytes(payload), headers=_retry_headers(payload))
+                    self._send(
+                        status,
+                        _json_bytes(payload),
+                        headers={
+                            **_native_router_error_headers(exc),
+                            **_retry_headers(payload),
+                        },
+                    )
                 else:
                     self._error(status, str(exc))
             except Exception as exc:  # Keep server alive and avoid leaking request details.

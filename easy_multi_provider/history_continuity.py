@@ -163,6 +163,19 @@ def _wire_item(item: Mapping[str, Any]) -> Any:
         return _message("user", _SUMMARY_PREFIX + "\n\n" + text) if text else None
     if kind in {"tool_call", "tool_result"}:
         value = dict(content) if isinstance(content, Mapping) else {"output": content}
+        if (
+            kind == "tool_result"
+            and item.get("raw_type") == "tool_search_output"
+            and value.get("execution") == "server"
+        ):
+            # Server-side discovery has no client-executable call to replay.
+            # Preserve its visible result as data-only history when crossing
+            # to a portable destination.
+            return {
+                "type": "function_call_output",
+                "name": "tool_search",
+                "output": json.dumps(value, ensure_ascii=False, sort_keys=True),
+            }
         value["type"] = item.get("raw_type") or (
             "function_call" if kind == "tool_call" else "function_call_output"
         )

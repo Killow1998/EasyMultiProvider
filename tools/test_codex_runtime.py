@@ -27,7 +27,7 @@ def main():
                    EMP_TEST_CODEX_BIN=binary, EASY_MP_RUN_CODEX_CLI="1")
         return subprocess.call([
             sys.executable, "-m", "unittest", "-v", "tests.test_codex_live_catalog",
-            "tests.test_codex_retry_cli", "tests.test_codex_cli_demo",
+            "tests.test_codex_retry_cli", "tests.test_codex_cli_demo", "tests.test_codex_metadata_cli",
         ], cwd=root, env=env)
 
 

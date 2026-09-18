@@ -75,7 +75,7 @@ jobs:
           tests.test_server.ServerAccountTests.test_migration_upload_accepts_base64_expansion_and_rejects_oversized_files
           tests.test_server.ContinuityAppStateTests
       - name: Install fixed official runtime
-        run: npm install --prefix runtime-fixture --no-audit --no-fund --ignore-scripts @openai/codex@0.154.0
+        run: npm install --prefix runtime-fixture --no-audit --no-fund --ignore-scripts @openai/codex@0.155.0
       - name: Official runtime contracts with local fixtures
         shell: python
         run: |

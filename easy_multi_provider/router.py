@@ -196,6 +196,282 @@ _CONCRETE_PROTOCOLS = frozenset(
     {"responses", "chat_completions", "anthropic_messages"}
 )
 _REASONING_LEVEL_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+# These are response-side values that the native Codex client consumes. Keep
+# the boundary explicit: forwarding arbitrary upstream headers could expose
+# credentials, cookies, or provider-internal state to the local caller.
+_NATIVE_RESPONSE_HEADER_NAMES = frozenset({
+    "cf-ray",
+    "openai-model",
+    "x-openai-model",
+    "x-error-json",
+    "x-oai-request-id",
+    "x-openai-authorization-error",
+    "x-request-id",
+    "x-models-etag",
+    "x-reasoning-included",
+    "x-codex-active-limit",
+    "x-codex-credits-balance",
+    "x-codex-credits-has-credits",
+    "x-codex-credits-unlimited",
+    "x-codex-promo-message",
+    "x-codex-rate-limit-reached-type",
+    "x-codex-safety-buffering-enabled",
+    "x-codex-safety-buffering-faster-model",
+    "x-codex-turn-state",
+})
+_NATIVE_RATE_HEADER = re.compile(
+    r"^x-[a-z0-9-]+-(?:primary|secondary)-"
+    r"(?:used-percent|window-minutes|reset-at)$"
+)
+_NATIVE_RATE_LIMIT_NAME_HEADER = re.compile(r"^x-[a-z0-9-]+-limit-name$")
+
+
+_NATIVE_MODEL_HEADER_NAMES = frozenset({"openai-model", "x-openai-model"})
+
+
+def _set_native_model_identity(
+    provider: Dict[str, Any],
+    requested_model: Any,
+    expected_upstream_model: Any,
+) -> None:
+    """Keep the known request/upstream model mapping request-local.
+
+    Codex compares the server model with the requested catalog slug.  Native
+    account routes may deliberately send a provider basename upstream, so the
+    mapping is needed only at the local response boundary and never belongs in
+    the forwarded request payload.
+    """
+
+    if classify_dialect(provider) != CODEX_NATIVE:
+        provider.pop("_emp_requested_model", None)
+        provider.pop("_emp_expected_upstream_model", None)
+        return
+    if (
+        isinstance(requested_model, str)
+        and requested_model
+        and isinstance(expected_upstream_model, str)
+        and expected_upstream_model
+    ):
+        provider["_emp_requested_model"] = requested_model
+        provider["_emp_expected_upstream_model"] = expected_upstream_model
+    else:
+        provider.pop("_emp_requested_model", None)
+        provider.pop("_emp_expected_upstream_model", None)
+
+
+def _native_model_identity(
+    provider: Optional[Mapping[str, Any]] = None,
+    requested_model: Any = None,
+    expected_upstream_model: Any = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    if isinstance(provider, Mapping):
+        if requested_model is None:
+            requested_model = provider.get("_emp_requested_model")
+        if expected_upstream_model is None:
+            expected_upstream_model = provider.get("_emp_expected_upstream_model")
+    return (
+        requested_model if isinstance(requested_model, str) and requested_model else None,
+        expected_upstream_model
+        if isinstance(expected_upstream_model, str) and expected_upstream_model
+        else None,
+    )
+
+
+def _native_model_header_value(
+    value: Any,
+    provider: Optional[Mapping[str, Any]] = None,
+    requested_model: Any = None,
+    expected_upstream_model: Any = None,
+) -> Any:
+    requested, expected = _native_model_identity(
+        provider, requested_model, expected_upstream_model
+    )
+    if (
+        isinstance(value, str)
+        and requested is not None
+        and expected is not None
+        and value.casefold() == expected.casefold()
+    ):
+        return requested
+    return value
+
+
+def _rewrite_native_model_headers(
+    headers: Mapping[str, Any],
+    provider: Optional[Mapping[str, Any]] = None,
+    *,
+    requested_model: Any = None,
+    expected_upstream_model: Any = None,
+) -> Dict[str, Any]:
+    """Map only a known native basename back to the caller's model slug."""
+
+    if not isinstance(headers, Mapping):
+        return {}
+    result: Dict[str, Any] = {}
+    for key, value in headers.items():
+        if (
+            isinstance(key, str)
+            and key.lower() in _NATIVE_MODEL_HEADER_NAMES
+        ):
+            value = _native_model_header_value(
+                value, provider, requested_model, expected_upstream_model
+            )
+        result[key] = value
+    return result
+
+
+def _rewrite_native_model_event(
+    event: Any,
+    provider: Optional[Mapping[str, Any]] = None,
+    *,
+    requested_model: Any = None,
+    expected_upstream_model: Any = None,
+) -> Any:
+    """Rewrite native model headers in an event without changing response.model."""
+
+    if not isinstance(event, Mapping):
+        return event
+    rewritten = dict(event)
+    changed = False
+
+    def rewrite_container(container: Any) -> Any:
+        nonlocal changed
+        if not isinstance(container, Mapping):
+            return container
+        headers = container.get("headers")
+        if not isinstance(headers, Mapping):
+            return container
+        projected = _rewrite_native_model_headers(
+            headers,
+            provider,
+            requested_model=requested_model,
+            expected_upstream_model=expected_upstream_model,
+        )
+        if projected != dict(headers):
+            changed = True
+            copy = dict(container)
+            copy["headers"] = projected
+            return copy
+        return container
+
+    projected = rewrite_container(rewritten)
+    if projected is not rewritten:
+        rewritten = projected
+    response = rewritten.get("response")
+    projected_response = rewrite_container(response)
+    if projected_response is not response:
+        rewritten["response"] = projected_response
+    return rewritten if changed else event
+
+
+def _rewrite_native_model_sse_frame(
+    frame: bytes,
+    provider: Optional[Mapping[str, Any]] = None,
+) -> bytes:
+    """Project a changed native model-header event while preserving SSE framing."""
+
+    if not isinstance(frame, bytes) or b"data:" not in frame:
+        return frame
+    lines = frame.splitlines()
+    data_lines = [line[5:].lstrip() for line in lines if line.startswith(b"data:")]
+    if not data_lines:
+        return frame
+    data = b"\n".join(data_lines)
+    if data == b"[DONE]":
+        return frame
+    try:
+        event = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
+        return frame
+    projected = _rewrite_native_model_event(event, provider)
+    if projected is event:
+        return frame
+    line_ending = b"\r\n" if b"\r\n" in frame else b"\n"
+    prefix = [line for line in lines if line and not line.startswith(b"data:")]
+    prefix.append(
+        b"data: "
+        + json.dumps(projected, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
+    return line_ending.join(prefix + [b""]) + line_ending
+
+
+def _rewrite_native_model_stream(
+    chunks: Iterable[bytes], provider: Optional[Mapping[str, Any]] = None
+) -> Iterator[bytes]:
+    """Rewrite only native SSE events carrying the known model mapping."""
+
+    buffer = bytearray()
+    try:
+        for chunk in chunks:
+            if not isinstance(chunk, (bytes, bytearray)):
+                chunk = str(chunk).encode("utf-8")
+            buffer.extend(chunk)
+            while True:
+                lf = buffer.find(b"\n\n")
+                crlf = buffer.find(b"\r\n\r\n")
+                positions = [item for item in (lf, crlf) if item >= 0]
+                if not positions:
+                    break
+                start = min(positions)
+                delimiter = 4 if crlf == start else 2
+                frame = bytes(buffer[: start + delimiter])
+                del buffer[: start + delimiter]
+                yield _rewrite_native_model_sse_frame(frame, provider)
+        if buffer:
+            yield _rewrite_native_model_sse_frame(bytes(buffer), provider)
+    finally:
+        close = getattr(chunks, "close", None)
+        if callable(close):
+            close()
+
+
+def _native_response_headers(
+    response: Any, provider: Optional[Mapping[str, Any]] = None
+) -> Dict[str, str]:
+    """Select non-credential response headers required by native Codex."""
+
+    headers = getattr(response, "headers", {}) or {}
+    selected: Dict[str, str] = {}
+    try:
+        items = headers.items()
+    except AttributeError:
+        return selected
+    for raw_name, raw_value in items:
+        if not isinstance(raw_name, str) or not isinstance(raw_value, str):
+            continue
+        name = raw_name.lower()
+        if (
+            name not in _NATIVE_RESPONSE_HEADER_NAMES
+            and not _NATIVE_RATE_HEADER.fullmatch(name)
+            and not _NATIVE_RATE_LIMIT_NAME_HEADER.fullmatch(name)
+        ):
+            continue
+        selected[name] = raw_value
+    return {
+        key: value
+        for key, value in _rewrite_native_model_headers(selected, provider).items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def _capture_native_response_headers(
+    provider: Dict[str, Any], response: Any,
+    response_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    """Expose selected native response headers to the local transport only."""
+
+    if classify_dialect(provider) != CODEX_NATIVE:
+        return {}
+    selected = _native_response_headers(response, provider)
+    provider["_emp_response_headers"] = selected
+    if response_metadata is not None:
+        response_metadata["response_headers"] = dict(selected)
+    return selected
+
+
 def _set_response_timeout(response: Any, timeout: float) -> None:
     # urllib wraps a TLS socket differently across Python/proxy paths. A
     # typical chunked response is addinfourl.fp -> HTTPResponse.fp ->
@@ -816,7 +1092,10 @@ def _request(
                     provider.get("_context_observation", {}),
                     provider.get("_context_observation", {}).get("input_estimate"),
                 )
-                raise ContextLengthError(observation) from exc
+                raise ContextLengthError(
+                    observation,
+                    response_headers=_native_response_headers(exc, provider),
+                ) from exc
             if (
                 allow_retries
                 and attempt == 0
@@ -850,6 +1129,7 @@ def _request(
                 failure.failure_reason or "upstream_rejected",
                 failure.error_class,
                 failure.retry_after_seconds,
+                response_headers=_native_response_headers(exc, provider),
             )
         except URLError as exc:
             if transport_retry_allowed and attempt == 0:
@@ -910,12 +1190,17 @@ def forward_responses(
     allow_retries: bool = True,
     upstream_model: Optional[str] = None,
 ) -> Tuple[int, str, bytes]:
+    provider.pop("_emp_response_headers", None)
     adapter = protocol_adapter(classify_dialect(provider))
+    resolved_model = upstream_model or resolved_upstream_model(
+        provider, model, body["model"]
+    )
+    _set_native_model_identity(provider, body.get("model"), resolved_model)
     payload = adapter.project_request(
         provider,
         body,
         model,
-        upstream_model or resolved_upstream_model(provider, model, body["model"]),
+        resolved_model,
     )
     with _request(
         provider,
@@ -926,6 +1211,7 @@ def forward_responses(
         allow_retries=allow_retries,
     ) as response:
         content_type = response.headers.get("Content-Type", "application/json")
+        _capture_native_response_headers(provider, response)
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses 响应")
         _raise_if_context_response(provider, response.status, content_type, raw)
         _capture_response_model_bytes(provider, raw)
@@ -947,16 +1233,24 @@ def forward_responses_stream(
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
     on_stream_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
     upstream_model: Optional[str] = None,
+    response_metadata: Optional[Dict[str, Any]] = None,
 ):
+    provider.pop("_emp_response_headers", None)
+    if response_metadata is not None:
+        response_metadata.pop("response_headers", None)
     adapter = protocol_adapter(classify_dialect(provider))
+    resolved_model = upstream_model or resolved_upstream_model(
+        provider, model, body["model"]
+    )
+    _set_native_model_identity(provider, body.get("model"), resolved_model)
     payload = adapter.project_request(
         provider,
         body,
         model,
-        upstream_model or resolved_upstream_model(provider, model, body["model"]),
+        resolved_model,
     )
-    upstream = _bounded_stream_response(
-        _request(
+    try:
+        response = _request(
             provider,
             payload,
             incoming,
@@ -964,7 +1258,14 @@ def forward_responses_stream(
             context_check=context_check,
             allow_retries=False,
         )
-    )
+    except (ContextLengthError, UpstreamHTTPError) as exc:
+        if response_metadata is not None:
+            response_metadata["response_headers"] = dict(
+                getattr(exc, "response_headers", {})
+            )
+        raise
+    _capture_native_response_headers(provider, response, response_metadata)
+    upstream = _bounded_stream_response(response)
     validated = _validated_responses_stream(upstream, terminal_callback, provider)
     def observe_upstream(event: Mapping[str, Any]) -> None:
         _capture_response_model(provider, event)
@@ -972,6 +1273,8 @@ def forward_responses_stream(
             on_stream_event(event)
 
     validated = _observing_stream(validated, observe_upstream)
+    if adapter.native:
+        validated = _rewrite_native_model_stream(validated, provider)
     if adapter.dialect == PORTABLE_RESPONSES:
         return _project_responses_stream(
             provider,
@@ -1108,12 +1411,17 @@ def forward_responses_compact(
     context_check: Optional[Callable[[Dict[str, Any], bool, str], Mapping[str, Any]]] = None,
     upstream_model: Optional[str] = None,
 ) -> Tuple[int, str, bytes]:
+    provider.pop("_emp_response_headers", None)
     adapter = protocol_adapter(classify_dialect(provider))
+    resolved_model = upstream_model or resolved_upstream_model(
+        provider, model, body["model"]
+    )
+    _set_native_model_identity(provider, body.get("model"), resolved_model)
     payload = adapter.project_request(
         provider,
         body,
         model,
-        upstream_model or resolved_upstream_model(provider, model, body["model"]),
+        resolved_model,
     )
     with _request(
         provider,
@@ -1124,6 +1432,7 @@ def forward_responses_compact(
         context_check=context_check,
     ) as response:
         content_type = response.headers.get("Content-Type", "application/json")
+        _capture_native_response_headers(provider, response)
         raw = _read_limited(response, MAX_UPSTREAM_BODY_BYTES, "Responses compact response")
         _raise_if_context_response(provider, response.status, content_type, raw)
         return response.status, content_type, raw
@@ -1367,7 +1676,7 @@ def prepare_native_websocket_request(
     )
     try:
         full_headers, identity_headers = _native_route_headers(provider, incoming)
-        identity = _native_route_identity(route, identity_headers)
+        identity = _native_route_identity(route, identity_headers, full_headers)
     except (AccountError, NativeIdentityError, KeyError, TypeError):
         # HTTP forwarding remains the compatibility path when a stable native
         # connection identity cannot be proven.
@@ -1752,6 +2061,13 @@ def _tag_route(
     tagged["protocol_fallback"] = bool(fallback)
     tagged["fallback_reason"] = "protocol_rejection" if fallback else "none"
     tagged["dialect"] = classify_dialect(provider)
+    response_headers = provider.get("_emp_response_headers")
+    if isinstance(response_headers, Mapping):
+        tagged["response_headers"] = {
+            key: value
+            for key, value in response_headers.items()
+            if isinstance(key, str) and isinstance(value, str)
+        }
     tagged.update(usage_identity(provider, model or {}))
     if isinstance(request, Mapping):
         tagged.update(request_shape(request))
@@ -2140,18 +2456,40 @@ def _native_route_headers(
         }
     else:
         raise NativeIdentityError("native route authentication is unavailable")
-    return full, _identity_headers(full)
+    # Header names are case-insensitive, but the websocket client emits the
+    # mapping as written.  Select the last ordinary value once and use the
+    # canonical names for both the owner key and the wire handshake; otherwise
+    # a lower-case caller header can coexist with the canonical header emitted
+    # by _headers and produce two Authorization fields on the raw socket.
+    normalized: Dict[str, str] = {}
+    selected_authorization = None
+    selected_account = None
+    for key, value in full.items():
+        lowered = key.casefold()
+        if lowered == "authorization":
+            selected_authorization = value
+        elif lowered == "chatgpt-account-id":
+            selected_account = value
+        else:
+            normalized[key] = value
+    if selected_authorization is not None:
+        normalized["Authorization"] = selected_authorization
+    if selected_account is not None:
+        normalized["chatgpt-account-id"] = selected_account
+    return normalized, _identity_headers(normalized)
 
 
 def _native_route_identity(
     route: ResolvedRoute,
     identity_headers: Mapping[str, str],
+    credential_headers: Mapping[str, str],
 ):
     return derive_native_route_identity(
         identity_headers,
         route.provider.get("base_url"),
         route.deployment_identity,
         route.upstream_model,
+        credential_headers,
     )
 
 
@@ -2316,18 +2654,7 @@ def _proxy_resolved(
             _preflight_history_projection(
                 provider, body, model, route.upstream_model, route.dialect
             )
-            upstream = _reliable_responses_stream(
-                lambda: forward_responses_stream(
-                    provider, body, model, incoming, None, None,
-                    on_stream_event=on_stream_event if adapter.native else None,
-                    upstream_model=route.upstream_model,
-                ),
-                terminal_callback,
-                replay_safe=adapter.replay_safe,
-                event_transform=tools.restore_event if tools else None,
-                on_event=on_stream_event if tools else None,
-            )
-            return _tag_route(
+            metadata = _tag_route(
                 {
                     "kind": "stream",
                     "status": 200,
@@ -2338,7 +2665,21 @@ def _proxy_resolved(
                 decision,
                 fallback,
                 request=body,
-            ), upstream
+            )
+            upstream = _reliable_responses_stream(
+                lambda: forward_responses_stream(
+                    provider, body, model, incoming, None, None,
+                    on_stream_event=on_stream_event if adapter.native else None,
+                    upstream_model=route.upstream_model,
+                    response_metadata=metadata,
+                ),
+                terminal_callback,
+                replay_safe=adapter.replay_safe,
+                event_transform=tools.restore_event if tools else None,
+                on_event=on_stream_event if tools else None,
+                native_passthrough=adapter.native,
+            )
+            return metadata, upstream
         status, content_type, raw = forward_responses(
             provider,
             body,

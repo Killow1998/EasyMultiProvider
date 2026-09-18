@@ -14,6 +14,7 @@ from .accounts import auth_headers, duplicate_account_status
 from .capabilities import codex_input_modalities, normalize_reasoning_levels
 from .config import MAX_CONTEXT_WINDOW
 from .integration import atomic_write_text
+from .native_identity import derive_native_catalog_owner
 
 def subscription_context_max(model: Dict[str, Any]) -> int:
     # A missing maximum permits the advertised default, not a guessed API limit.
@@ -38,8 +39,7 @@ def _apply_subscription_context(model: Dict[str, Any], windows: Dict[str, int]) 
 
 
 def account_catalog_owner_from_headers(headers: Mapping[str, str]) -> str:
-    identity = headers.get("ChatGPT-Account-ID") or headers.get("chatgpt-account-id") or headers.get("Authorization", "")
-    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return derive_native_catalog_owner(headers)
 
 
 def account_catalog_owner(account: Dict[str, Any]) -> str:
@@ -376,6 +376,10 @@ def _external_entry(
             ),
             "support_verbosity": False,
             "default_verbosity": None,
+            # EMP's request-local bridge preserves Codex-owned client
+            # tool_search/load/execute semantics for external destinations.
+            # This does not claim that the vendor supplies server-side web
+            # search; that is a separate provider capability.
             "supports_search_tool": True,
             "supports_image_detail_original": model.get(
                 "supports_image_detail_original", False

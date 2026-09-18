@@ -294,9 +294,16 @@ def _stream_terminal(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     return terminal
 
 
-def _validate_terminal_payload(event: Mapping[str, Any]) -> None:
+def _validate_terminal_payload(
+    event: Mapping[str, Any], *, native_passthrough: bool = False
+) -> None:
     """Validate complete terminal output, including structured tool JSON."""
 
+    # The portable Responses schema intentionally rejects provider-owned
+    # output variants.  Native Codex Responses must remain transparent here:
+    # 0.155 can emit server-side tool-search items that are valid native
+    # output but are not client-side portable tool definitions.  Retain body
+    # invariants while delegating native output-item interpretation to Codex.
     if str(event.get("type") or "") not in {
         "response.completed",
         "response.incomplete",
@@ -305,7 +312,7 @@ def _validate_terminal_payload(event: Mapping[str, Any]) -> None:
     response = event.get("response")
     if not isinstance(response, Mapping) or "output" not in response:
         return
-    validate_responses_body(response)
+    validate_responses_body(response, validate_output_items=not native_passthrough)
 
 
 def _reliable_responses_stream(
@@ -314,8 +321,14 @@ def _reliable_responses_stream(
     replay_safe: bool = False,
     event_transform: Optional[Callable[[Mapping[str, Any]], Optional[Mapping[str, Any]]]] = None,
     on_event: Optional[Callable[[Mapping[str, Any]], None]] = None,
+    native_passthrough: bool = False,
 ) -> Iterator[bytes]:
-    """Enforce terminal truth and one explicitly safe pre-output retry."""
+    """Enforce terminal truth and one explicitly safe pre-output retry.
+
+    Native Responses owns its terminal error schema and HTTP status boundary.
+    Its caller opts into preserving those values; portable destinations keep
+    the existing sanitized translation and retry behavior.
+    """
 
     lifecycle = StreamLifecycle(replayable=replay_safe)
     recovery_attempted = False
@@ -364,7 +377,9 @@ def _reliable_responses_stream(
                     terminal = _stream_terminal(event)
                     if terminal is not None:
                         terminal = lifecycle.observe_terminal(event, terminal)
-                        _validate_terminal_payload(event)
+                        _validate_terminal_payload(
+                            event, native_passthrough=native_passthrough
+                        )
                         if on_event is not None:
                             try:
                                 on_event(event)
@@ -379,6 +394,10 @@ def _reliable_responses_stream(
                             for buffered in pending:
                                 yield buffered
                             yield _sse_frame("response.incomplete", dict(event))
+                        elif native_passthrough and str(event.get("type") or "") == "response.failed":
+                            for buffered in pending:
+                                yield buffered
+                            yield _sse_frame("response.failed", dict(event))
                         else:
                             yield _response_failure_frame(
                                 "upstream stream failed",
@@ -427,6 +446,17 @@ def _reliable_responses_stream(
             except GeneratorExit:
                 raise
             except Exception as exc:
+                if native_passthrough and isinstance(
+                    exc, (ContextLengthError, UpstreamHTTPError)
+                ) and not lifecycle.output_emitted:
+                    failure = failure_from_exception(
+                        exc,
+                        lifecycle.phase,
+                        lifecycle.output_emitted,
+                    )
+                    lifecycle.phase = failure.phase
+                    report(failure.terminal(), False)
+                    raise
                 failure = failure_from_exception(
                     exc,
                     lifecycle.phase,
@@ -482,35 +512,53 @@ def _sse_data(response: Any) -> Iterator[Tuple[str, bool]]:
     pending_bytes = 0
     stream_bytes = 0
     raw_body = bytearray()
+    line_buffer = b""
     saw_sse_data = False
+
+    def consume_line(raw_line: bytes) -> Optional[str]:
+        nonlocal pending_bytes, saw_sse_data
+        try:
+            line = raw_line.decode("utf-8", "strict").rstrip("\r")
+        except UnicodeDecodeError as exc:
+            raise ExternalProtocolError(
+                "upstream SSE stream is not valid UTF-8"
+            ) from exc
+        if line.startswith("data:"):
+            if not saw_sse_data:
+                raw_body.clear()
+            saw_sse_data = True
+            value = line[5:].lstrip()
+            pending_bytes += len(value.encode("utf-8"))
+            if pending_bytes > MAX_SSE_FRAME_BYTES:
+                raise RouterError("upstream SSE frame is too large", 502)
+            pending.append(value)
+        elif not line and pending:
+            value = "\n".join(pending)
+            pending.clear()
+            pending_bytes = 0
+            return value
+        return None
+
     try:
         for raw in response:
-            stream_bytes += len(raw)
+            raw_bytes = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
+            stream_bytes += len(raw_bytes)
             if stream_bytes > MAX_UPSTREAM_BODY_BYTES:
                 raise RouterError("upstream SSE stream is too large", 502)
-            if len(raw) > MAX_SSE_FRAME_BYTES:
+            if len(raw_bytes) > MAX_SSE_FRAME_BYTES:
                 raise RouterError("upstream SSE frame is too large", 502)
             if not saw_sse_data:
-                raw_body.extend(raw)
-            try:
-                line = raw.decode("utf-8", "strict").rstrip("\r\n")
-            except UnicodeDecodeError as exc:
-                raise ExternalProtocolError(
-                    "upstream SSE stream is not valid UTF-8"
-                ) from exc
-            if line.startswith("data:"):
-                if not saw_sse_data:
-                    raw_body.clear()
-                saw_sse_data = True
-                value = line[5:].lstrip()
-                pending_bytes += len(value.encode("utf-8"))
-                if pending_bytes > MAX_SSE_FRAME_BYTES:
-                    raise RouterError("upstream SSE frame is too large", 502)
-                pending.append(value)
-            elif not line and pending:
-                yield "\n".join(pending), True
-                pending = []
-                pending_bytes = 0
+                raw_body.extend(raw_bytes)
+            line_buffer += raw_bytes
+            while b"\n" in line_buffer:
+                line, line_buffer = line_buffer.split(b"\n", 1)
+                value = consume_line(line)
+                if value is not None:
+                    yield value, True
+        if line_buffer:
+            value = consume_line(line_buffer)
+            if value is not None:
+                yield value, True
         if pending:
             yield "\n".join(pending), True
         if not saw_sse_data and raw_body:
@@ -655,6 +703,11 @@ def _validated_responses_stream(
     reported = False
     saw_terminal = False
     lifecycle = StreamLifecycle()
+    native_passthrough = bool(
+        isinstance(provider, Mapping)
+        and provider.get("protocol") == "responses"
+        and provider.get("auth_mode") in {"account", "forward"}
+    )
 
     def report(
         status: Any,
@@ -701,10 +754,7 @@ def _validated_responses_stream(
                         content_type,
                         raw,
                     )
-                strict_output = not (
-                    provider is not None
-                    and provider.get("auth_mode") == "forward"
-                )
+                strict_output = not native_passthrough
                 lifecycle.mark_iterator_created()
                 lifecycle.observe_event(
                     {"type": "response." + str(value.get("status")), "response": value}
@@ -721,65 +771,123 @@ def _validated_responses_stream(
                 )
                 return
 
-        line_buffer = ""
+        line_buffer = b""
         pending_data = []
+        pending_wire = bytearray()
         saw_data = False
         terminal_observation: Optional[Dict[str, Any]] = None
+        context_observation: Optional[Dict[str, Any]] = None
 
-        def consume_line(line: str) -> None:
-            nonlocal saw_data, saw_terminal, pending_data, terminal_observation
-            line = line.rstrip("\r")
+        def consume_line(raw_line: bytes, wire_line: bytes) -> Optional[bytes]:
+            nonlocal saw_data, saw_terminal, pending_data
+            nonlocal terminal_observation, context_observation
+            pending_wire.extend(wire_line)
+            if len(pending_wire) > MAX_SSE_FRAME_BYTES:
+                raise TransportError(
+                    "upstream Responses SSE event is too large",
+                    failure_reason="sse_event_too_large",
+                )
+            try:
+                line = raw_line.decode("utf-8", "strict").rstrip("\r")
+            except UnicodeDecodeError as exc:
+                raise ExternalProtocolError(
+                    "upstream Responses stream is not valid UTF-8"
+                ) from exc
             if line.startswith("data:"):
                 saw_data = True
                 pending_data.append(line[5:].lstrip())
-                return
+                return None
             if line or not pending_data:
-                return
+                if not line:
+                    wire = bytes(pending_wire)
+                    pending_wire.clear()
+                    return wire
+                return None
             data = "\n".join(pending_data)
             pending_data = []
             if data == "[DONE]":
-                return
+                pending_wire.clear()
+                return None
             try:
                 value = json.loads(data)
-            except ValueError:
-                return
+            except (TypeError, ValueError) as exc:
+                pending_wire.clear()
+                if (
+                    isinstance(provider, Mapping)
+                    and provider.get("protocol") == "responses"
+                    and provider.get("auth_mode") in {"account", "forward"}
+                ):
+                    # Codex 0.155's native Responses consumer skips an
+                    # unparseable event and continues reading the stream.
+                    # Keep portable/external translation strict: they do not
+                    # share the native consumer's tolerance contract.
+                    return None
+                raise TransportError(
+                    "upstream Responses SSE event is not valid JSON",
+                    failure_reason="sse_invalid_json",
+                ) from exc
             if not isinstance(value, dict):
-                return
+                pending_wire.clear()
+                if (
+                    isinstance(provider, Mapping)
+                    and provider.get("protocol") == "responses"
+                    and provider.get("auth_mode") in {"account", "forward"}
+                ):
+                    # See the malformed JSON branch above. A valid JSON
+                    # scalar/array is likewise not a native Responses event.
+                    return None
+                raise TransportError(
+                    "upstream Responses SSE event must be a JSON object",
+                    failure_reason="sse_non_object",
+                )
             if provider is not None and is_explicit_context_error(
                 400, "application/json", data.encode("utf-8", "replace")
             ):
-                observation = mark_explicit_failure(
+                context_observation = mark_explicit_failure(
                     provider.get("_context_observation", {}),
                     provider.get("_context_observation", {}).get("input_estimate"),
                 )
-                raise ContextLengthError(observation)
+                if isinstance(provider, dict):
+                    provider["_context_observation"] = dict(context_observation)
             lifecycle.observe_event(value)
             terminal = _stream_terminal(value)
             if terminal is not None:
                 saw_terminal = True
                 terminal_observation = lifecycle.observe_terminal(value, terminal)
-                _validate_terminal_payload(value)
+                _validate_terminal_payload(
+                    value, native_passthrough=native_passthrough
+                )
+                report(
+                    terminal_observation.get("status", 502),
+                    terminal_observation.get("error_class", "stream_error"),
+                    context_observation=context_observation,
+                    terminal=terminal_observation,
+                )
+            wire = bytes(pending_wire)
+            pending_wire.clear()
+            return wire
 
         for raw in chunks:
             raw_bytes = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
-            try:
-                text = raw_bytes.decode("utf-8", "strict")
-            except UnicodeDecodeError as exc:
-                raise ExternalProtocolError(
-                    "upstream Responses stream is not valid UTF-8"
-                ) from exc
-            line_buffer += text
-            while "\n" in line_buffer:
-                line, line_buffer = line_buffer.split("\n", 1)
-                consume_line(line)
-            lines = raw_bytes.splitlines(keepends=True)
-            filtered = b"".join(line for line in lines if line.strip() != b"data: [DONE]")
-            if filtered:
-                yield filtered
+            line_buffer += raw_bytes
+            while b"\n" in line_buffer:
+                line, line_buffer = line_buffer.split(b"\n", 1)
+                emitted = consume_line(line, line + b"\n")
+                if emitted:
+                    yield emitted
+            if len(line_buffer) + len(pending_wire) > MAX_SSE_FRAME_BYTES:
+                raise TransportError(
+                    "upstream Responses SSE event is too large",
+                    failure_reason="sse_event_too_large",
+                )
         if line_buffer:
-            consume_line(line_buffer)
+            emitted = consume_line(line_buffer, line_buffer)
+            if emitted:
+                yield emitted
         if pending_data:
-            consume_line("")
+            emitted = consume_line(b"", b"")
+            if emitted:
+                yield emitted
         if not saw_terminal:
             message = "upstream Responses stream ended before response.completed" if saw_data else "upstream Responses stream contained no SSE data"
             yield _response_failure_frame(message, 502, STREAM_INCOMPLETE)
@@ -793,6 +901,7 @@ def _validated_responses_stream(
             report(
                 terminal.get("status", 502),
                 terminal.get("error_class", "stream_error"),
+                context_observation=context_observation,
                 terminal=terminal,
             )
     except RouterError as exc:

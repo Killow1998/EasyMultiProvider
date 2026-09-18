@@ -3303,6 +3303,214 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(payload["model"], "model")
         self.assertEqual(payload["input"], "hello")
 
+    def test_native_response_headers_keep_codex_state_without_forwarding_secrets(self):
+        provider = {
+            "id": "native",
+            "protocol": "responses",
+            "auth_mode": "forward",
+            "base_url": "https://example.com/v1",
+        }
+        model = {"id": "native/model", "upstream_id": "model"}
+
+        class FakeResponse:
+            status = 200
+            headers = {
+                "Content-Type": "application/json",
+                "openai-model": "server-model",
+                "x-openai-model": "server-model-alias",
+                "x-request-id": "request-123",
+                "x-models-etag": "upstream-etag",
+                "x-reasoning-included": "true",
+                "x-codex-turn-state": "sticky-state",
+                "x-codex-safety-buffering-enabled": "true",
+                "x-codex-safety-buffering-faster-model": "gpt-fast",
+                "x-codex-primary-used-percent": "12.5",
+                "x-codex-secondary-primary-window-minutes": "1440",
+                "x-codex-other-limit-name": "other",
+                "Set-Cookie": "session=secret",
+                "Authorization": "Bearer secret",
+                "x-provider-internal": "do-not-forward",
+            }
+
+            def __init__(self):
+                self.sent = False
+
+            def read(self, size=-1):
+                if self.sent:
+                    return b""
+                self.sent = True
+                return b'{"status":"completed","output":[]}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            status, content_type, raw = router.forward_responses(
+                provider,
+                {"model": "native/model", "input": "hello"},
+                model,
+                {},
+            )
+
+        self.assertEqual((status, content_type), (200, "application/json"))
+        self.assertIn(b'"status":"completed"', raw)
+        self.assertEqual(
+            provider["_emp_response_headers"],
+            {
+                "openai-model": "server-model",
+                "x-openai-model": "server-model-alias",
+                "x-request-id": "request-123",
+                "x-models-etag": "upstream-etag",
+                "x-reasoning-included": "true",
+                "x-codex-turn-state": "sticky-state",
+                "x-codex-safety-buffering-enabled": "true",
+                "x-codex-safety-buffering-faster-model": "gpt-fast",
+                "x-codex-primary-used-percent": "12.5",
+                "x-codex-secondary-primary-window-minutes": "1440",
+                "x-codex-other-limit-name": "other",
+            },
+        )
+
+    def test_native_stream_adds_response_headers_to_mutable_route_metadata(self):
+        provider = {
+            "id": "native",
+            "protocol": "responses",
+            "auth_mode": "forward",
+            "base_url": "https://example.com/v1",
+        }
+        model = {"id": "native/model", "upstream_id": "model"}
+
+        class FakeResponse:
+            status = 200
+            headers = {
+                "Content-Type": "text/event-stream",
+                "x-codex-turn-state": "sticky-state",
+            }
+
+            def __iter__(self):
+                yield (
+                    b'event: response.completed\n'
+                    b'data: {"type":"response.completed","response":'
+                    b'{"status":"completed","output":[]}}\n\n'
+                )
+
+            def close(self):
+                pass
+
+        metadata = {"kind": "stream"}
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            result = router.forward_responses_stream(
+                provider,
+                {"model": "native/model", "input": [], "stream": True},
+                model,
+                {},
+                response_metadata=metadata,
+            )
+            next(iter(result))
+
+        self.assertEqual(
+            metadata["response_headers"],
+            {"x-codex-turn-state": "sticky-state"},
+        )
+
+    def test_native_stream_preserves_upstream_failure_event(self):
+        config = {
+            "providers": [{
+                "id": "native",
+                "enabled": True,
+                "base_url": "https://native.example/v1",
+                "protocol": "responses",
+                "auth_mode": "forward",
+            }],
+            "models": [{
+                "id": "native/model",
+                "provider": "native",
+                "upstream_id": "model",
+                "enabled": True,
+            }],
+        }
+        failure = {
+            "type": "response.failed",
+            "response": {
+                "id": "resp_native_failure",
+                "status": "failed",
+                "error": {
+                    "code": "bio_policy",
+                    "message": "policy rejection",
+                    "status": 400,
+                },
+            },
+        }
+
+        class FakeResponse:
+            status = 200
+            headers = {"Content-Type": "text/event-stream"}
+
+            def __iter__(self):
+                yield (
+                    "event: response.failed\ndata: "
+                    + json.dumps(failure, separators=(",", ":"))
+                    + "\n\n"
+                ).encode()
+
+            def close(self):
+                pass
+
+        with patch.object(router, "_request", return_value=FakeResponse()):
+            metadata, stream = router.proxy(
+                config,
+                {"model": "native/model", "input": "hello", "stream": True},
+                {
+                    "Authorization": "Bearer fixture-only",
+                    "chatgpt-account-id": "account-fixture",
+                },
+            )
+            events = list(sse_json_events(stream))
+
+        self.assertEqual(metadata["dialect"], "codex_native")
+        self.assertEqual(events, [failure])
+
+    def test_native_http_error_preserves_codex_headers_without_credentials(self):
+        provider = {
+            "id": "native",
+            "protocol": "responses",
+            "auth_mode": "forward",
+            "base_url": "https://example.com/v1",
+        }
+        error = HTTPError(
+            "https://example.com/v1/responses",
+            429,
+            "Too Many Requests",
+            {
+                "Content-Type": "application/json",
+                "x-codex-active-limit": "plus",
+                "x-codex-primary-used-percent": "91",
+                "x-request-id": "request-fixture",
+                "Set-Cookie": "session=secret",
+            },
+            BytesIO(b'{"error":{"message":"busy"}}'),
+        )
+        with patch.object(router, "urlopen", side_effect=error):
+            with self.assertRaises(UpstreamHTTPError) as raised:
+                router._request(
+                    provider,
+                    {"model": "native/model", "input": "hello"},
+                    {"Authorization": "Bearer fixture-only"},
+                    allow_retries=False,
+                )
+
+        self.assertEqual(
+            raised.exception.response_headers,
+            {
+                "x-codex-active-limit": "plus",
+                "x-codex-primary-used-percent": "91",
+                "x-request-id": "request-fixture",
+            },
+        )
+
     def test_subscription_responses_preserve_native_codex_client_metadata(self):
         metadata = {"thread_id": "native-thread"}
         payload = protocol_adapter(CODEX_NATIVE).project_request(
@@ -4149,6 +4357,82 @@ class RouterTests(unittest.TestCase):
         self.assertIn("event: response.failed", output)
         self.assertNotIn("event: response.completed", output)
 
+    def test_native_context_failure_is_validated_before_sse_forwarding(self):
+        class ContextResponse:
+            status = 200
+            headers = {"Content-Type": "text/event-stream"}
+
+            def __iter__(self):
+                event = {
+                    "type": "response.failed",
+                    "response": {
+                        "status": "failed",
+                        "error": {
+                            "code": "context_length_exceeded",
+                            "message": "fixture context exceeded",
+                        },
+                    },
+                }
+                yield ("data: " + json.dumps(event) + "\n").encode()
+                yield b"\n"
+
+            def close(self):
+                pass
+
+        response = ContextResponse()
+        observed = []
+        stream = router._validated_responses_stream(
+            response,
+            terminal_callback=observed.append,
+            provider={"auth_mode": "forward", "_context_observation": {}},
+        )
+        emitted = list(stream)
+        events = list(sse_json_events(emitted))
+        self.assertEqual([event["type"] for event in events], ["response.failed"])
+        self.assertEqual(
+            events[0]["response"]["error"]["code"], "context_length_exceeded"
+        )
+        self.assertEqual(observed[0]["error_class"], "context_length_exceeded")
+
+    def test_native_websocket_plan_normalizes_credential_header_names(self):
+        config = {
+            "providers": [{
+                "id": "native",
+                "enabled": True,
+                "base_url": "https://native.example/v1",
+                "protocol": "responses",
+                "auth_mode": "forward",
+            }],
+            "models": [{
+                "id": "native/model",
+                "provider": "native",
+                "upstream_id": "model",
+                "enabled": True,
+            }],
+        }
+        plan = router.prepare_native_websocket_request(
+            config,
+            {"model": "native/model", "input": [], "stream": True},
+            {
+                "authorization": "Bearer lower-case-token",
+                "ChatGPT-Account-ID": "account-fixture",
+            },
+        )
+
+        self.assertIsNotNone(plan)
+        auth_names = [
+            key for key in plan.target.headers if key.casefold() == "authorization"
+        ]
+        account_names = [
+            key
+            for key in plan.target.headers
+            if key.casefold() == "chatgpt-account-id"
+        ]
+        self.assertEqual(auth_names, ["Authorization"])
+        self.assertEqual(account_names, ["chatgpt-account-id"])
+        self.assertEqual(plan.target.headers["Authorization"], "Bearer lower-case-token")
+        self.assertEqual(plan.target.headers["chatgpt-account-id"], "account-fixture")
+
     def test_translated_stream_timeout_is_a_terminal_response_failure(self):
         model = {"id": "demo/model"}
         body = {"model": "demo/model", "input": "Hello", "stream": True}
@@ -4385,6 +4669,50 @@ class RouterTests(unittest.TestCase):
                 {},
             )
         )
+
+    def test_native_connection_key_changes_when_credential_rotates(self):
+        config = {
+            "providers": [
+                {
+                    "id": "native",
+                    "enabled": True,
+                    "base_url": "https://native.example/v1",
+                    "protocol": "responses",
+                    "auth_mode": "forward",
+                }
+            ],
+            "models": [
+                {
+                    "id": "native/model-a",
+                    "provider": "native",
+                    "upstream_id": "model-a",
+                    "enabled": True,
+                }
+            ],
+        }
+        body = {"model": "native/model-a", "input": [], "stream": True}
+        first = router.prepare_native_websocket_request(
+            config,
+            body,
+            {
+                "Authorization": "Bearer token-one",
+                "ChatGPT-Account-ID": "account-fixture",
+            },
+        )
+        second = router.prepare_native_websocket_request(
+            config,
+            body,
+            {
+                "Authorization": "Bearer token-two",
+                "ChatGPT-Account-ID": "account-fixture",
+            },
+        )
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first.target.connection_key, second.target.connection_key)
+        self.assertNotIn("token-one", first.target.connection_key)
+        self.assertNotIn("token-two", second.target.connection_key)
 
 if __name__ == "__main__":
     unittest.main()
