@@ -82,6 +82,8 @@ Routing and reliability:
 - `request_failure` retains the normalized error class/reason and bounded exception
   chain even when a route observation was already emitted or a lazy stream fails.
   Causes include numeric HTTP/OS/TLS verification codes, fixed SSL reason codes, and
+  sent/received WebSocket close codes plus `peer_initiated_close` when the library
+  establishes their order. Do not record arbitrary close reasons. Include
   at most six basename/line/function frames per cause, without exception messages,
   locals, source lines, full paths, or credentials.
 - persist the already-normalized `ObservationRing` record for each route;

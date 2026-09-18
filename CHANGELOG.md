@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Recover a native WebSocket request rejected by the peer with close code 1009
+  before any response event through HTTP/zstd inside EMP. Keep subsequent full
+  requests on HTTP for that local connection and route, without unsafe replay
+  after acceptance/output or repeated failed model responses to Codex. Record
+  close-frame ordering without storing frame contents or close reasons.
+- Restore GPT-5.5 in subscription lists and context editing when the upstream
+  catalog exposes it; preserve user-selected hidden models instead of applying
+  a premature hard-coded retirement filter.
+
 ## 0.11.3 (2026-09-17)
 
 - Grow large request capacity in 16 MiB steps instead of doubling it. Keep

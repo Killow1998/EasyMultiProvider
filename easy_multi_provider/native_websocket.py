@@ -7,6 +7,7 @@ EMP only keeps the matching upstream socket alive for that downstream socket.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import dataclass
 import json
 import time
@@ -26,6 +27,7 @@ NATIVE_WEBSOCKET_CONNECT_TIMEOUT = 15
 NATIVE_WEBSOCKET_REUSE_PROBE_TIMEOUT = 2
 NATIVE_WEBSOCKET_HEALTH_FRESHNESS = 20
 NATIVE_WEBSOCKET_IDLE_TIMEOUT = 300
+WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009
 _RETRYABLE_UPGRADE_STATUSES = frozenset(
     {400, 404, 405, 415, 426, 501}
 )
@@ -61,6 +63,36 @@ def native_websocket_request_fits(request: Mapping[str, Any]) -> bool:
     return len(encoded) <= MAX_NATIVE_WEBSOCKET_UNCOMPRESSED_REQUEST_BYTES
 
 
+def _peer_websocket_close_code(exception: BaseException) -> Optional[int]:
+    """Return only a peer-initiated close code, never a close reason."""
+
+    current: Optional[BaseException] = exception
+    seen = set()
+    while (
+        isinstance(current, BaseException)
+        and id(current) not in seen
+        and len(seen) < 8
+    ):
+        seen.add(id(current))
+        close = getattr(current, "rcvd", None)
+        code = getattr(close, "code", None)
+        sent = getattr(current, "sent", None)
+        peer_first = sent is None or getattr(current, "rcvd_then_sent", None) is True
+        if peer_first and isinstance(code, int) and not isinstance(code, bool):
+            return int(code)
+        reason = (
+            None
+            if hasattr(current, "rcvd") or hasattr(current, "sent")
+            else getattr(current, "reason", None)
+        )
+        current = (
+            reason
+            if isinstance(reason, BaseException)
+            else current.__cause__ or current.__context__
+        )
+    return None
+
+
 class NativeWebSocketError(RuntimeError):
     """A bounded transport failure that never includes URLs or credentials."""
 
@@ -73,6 +105,8 @@ class NativeWebSocketError(RuntimeError):
         request_sent: bool = False,
         error_class: Optional[str] = None,
         failure_reason: Optional[str] = None,
+        close_code: Optional[int] = None,
+        http_fallback_safe: bool = False,
     ):
         super().__init__(message)
         self.status = status if isinstance(status, int) else 502
@@ -84,6 +118,12 @@ class NativeWebSocketError(RuntimeError):
         self.request_sent = bool(request_sent)
         self.error_class = error_class
         self.failure_reason = failure_reason
+        self.close_code = (
+            int(close_code)
+            if isinstance(close_code, int) and not isinstance(close_code, bool)
+            else None
+        )
+        self.http_fallback_safe = bool(http_fallback_safe)
 
 
 @dataclass(frozen=True)
@@ -104,8 +144,9 @@ class _HandshakeResponse:
 class _CompressedWebSocketConnection:
     """Adapt ``websockets`` to the small interface used by the bridge."""
 
-    def __init__(self, connection: Any):
+    def __init__(self, connection: Any, context: Optional[ExitStack] = None):
         self._connection = connection
+        self._context = context
         response = getattr(connection, "response", None)
         status = getattr(response, "status_code", 101)
         self.handshake_response = _HandshakeResponse(
@@ -156,14 +197,18 @@ class _CompressedWebSocketConnection:
         return bool(acknowledgement.wait(max(0.1, float(timeout))))
 
     def close(self) -> None:
-        self._connection.close()
+        if self._context is not None:
+            self._context.close()
+        else:
+            self._connection.close()
 
 
 def _compressed_connector(target: NativeWebSocketTarget):
     from websockets.sync.client import connect
 
+    context = ExitStack()
     try:
-        connection = connect(
+        connection = context.enter_context(connect(
             target.url,
             compression="deflate",
             additional_headers=dict(target.headers),
@@ -175,8 +220,9 @@ def _compressed_connector(target: NativeWebSocketTarget):
             close_timeout=5,
             max_size=MAX_NATIVE_WEBSOCKET_EVENT_BYTES,
             max_queue=16,
-        )
+        ))
     except Exception as exc:
+        context.close()
         response = getattr(exc, "response", None)
         status = getattr(response, "status_code", None)
         if isinstance(status, int) and not isinstance(status, bool):
@@ -186,7 +232,7 @@ def _compressed_connector(target: NativeWebSocketTarget):
                 _http_fallback_before_request(status),
             ) from exc
         raise
-    return _CompressedWebSocketConnection(connection)
+    return _CompressedWebSocketConnection(connection, context)
 
 
 def _legacy_connector(target: NativeWebSocketTarget):
@@ -506,6 +552,7 @@ class NativeWebSocketBridge:
         try:
             request_sent = False
             substantive_activity = False
+            event_count = 0
             setter = getattr(connection, "settimeout", None)
             payload = json.dumps(
                 dict(request), ensure_ascii=False, separators=(",", ":")
@@ -524,7 +571,6 @@ class NativeWebSocketBridge:
                 reused=self._last_connection_reused,
             )
             self._last_healthy_at = None
-            event_count = 0
             while True:
                 if callable(setter):
                     # Match Codex: apply one idle timeout to each incoming
@@ -603,11 +649,32 @@ class NativeWebSocketBridge:
                     error_class=exc.error_class,
                     failure_reason=exc.failure_reason
                     or "transport_closed_after_send",
+                    close_code=exc.close_code,
+                    http_fallback_safe=exc.http_fallback_safe,
                 ) from exc
             raise
         except Exception as exc:
             self._observe_failure(exc, request_sent)
             self.close()
+            close_code = _peer_websocket_close_code(exc)
+            if (
+                request_sent
+                and close_code == WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE
+                and event_count == 0
+            ):
+                # A 1009 close before any response event proves that the peer
+                # rejected this frame. Replaying the full logical request over
+                # the existing HTTP/zstd path cannot duplicate inference.
+                raise NativeWebSocketError(
+                    "native upstream websocket rejected the request as too large",
+                    413,
+                    True,
+                    request_sent=True,
+                    error_class="request_too_large",
+                    failure_reason="upstream_websocket_message_too_large",
+                    close_code=close_code,
+                    http_fallback_safe=True,
+                ) from exc
             if isinstance(exc, TimeoutError) or "timeout" in exc.__class__.__name__.lower():
                 error_class = (
                     "idle_after_output"

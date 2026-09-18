@@ -4571,6 +4571,7 @@ class ContinuityAppStateTests(unittest.TestCase):
                     while stream.readline() not in (b"\r\n", b"\n", b""):
                         pass
                     request = {"type": "response.create", "model": "native/model-a", "stream": True,
+                               "prompt_cache_key": "cache-fixture",
                                "input": [{"type": "additional_tools", "id": "at_client",
                                           "tools": [{"type": "namespace", "name": "collaboration", "tools": [{
                                               "type": "function", "name": "spawn_agent", "parameters": {
@@ -4593,11 +4594,161 @@ class ContinuityAppStateTests(unittest.TestCase):
                 self.assertEqual(len(websocket_requests), 1)
                 self.assertEqual(len(http_requests), 2)
                 for payload in http_requests:
+                    self.assertEqual(payload["prompt_cache_key"], "cache-fixture")
+                    self.assertEqual(websocket_requests[0]["prompt_cache_key"], "cache-fixture")
                     self.assertEqual(payload["input"], websocket_requests[0]["input"])
                     self.assertNotEqual(payload["input"][0]["id"], "at_client")
                     self.assertEqual(payload["input"][0]["tools"][0]["name"], "emp_collaboration")
                     message = payload["input"][0]["tools"][0]["tools"][0]["parameters"]["properties"]["message"]
                     self.assertNotIn("encrypted", message)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_native_websocket_1009_falls_back_to_http_without_client_retry(self):
+        websocket_requests = []
+        http_requests = []
+
+        class MessageTooLargeBridge:
+            connection_key = None
+            last_connection_reused = False
+
+            def __init__(self, observer=None):
+                pass
+
+            def events(self, _target, payload):
+                websocket_requests.append(payload)
+                raise NativeWebSocketError(
+                    "native upstream websocket rejected the request as too large",
+                    413,
+                    True,
+                    request_sent=True,
+                    error_class="request_too_large",
+                    failure_reason="upstream_websocket_message_too_large",
+                    close_code=1009,
+                    http_fallback_safe=True,
+                )
+
+            def close(self):
+                pass
+
+            def can_continue(self, _target):
+                return False
+
+        completed = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_http",
+                "object": "response",
+                "status": "completed",
+                "output": [],
+            },
+        }
+
+        def fake_proxy(_config, body, _incoming, *args, **kwargs):
+            http_requests.append(dict(body))
+            chunk = (
+                "event: response.completed\ndata: "
+                + json.dumps(completed, separators=(",", ":"))
+                + "\n\n"
+            ).encode("utf-8")
+            return (
+                {
+                    "kind": "stream",
+                    "status": 200,
+                    "content_type": "text/event-stream",
+                    "provider_id": "native",
+                    "model_id": "native/model-a",
+                    "resolved_protocol": "responses",
+                    "dialect": "codex_native",
+                    "protocol_decision": "explicit",
+                    "protocol_fallback": False,
+                },
+                iter((chunk,)),
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            self._write_config(config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with patch(
+                    "easy_multi_provider.server.NativeWebSocketBridge",
+                    MessageTooLargeBridge,
+                ), patch(
+                    "easy_multi_provider.codex_dispatch.proxy",
+                    side_effect=fake_proxy,
+                ), socket.create_connection(
+                    server.server_address, timeout=5
+                ) as client, client.makefile("rb") as stream:
+                    client.sendall((
+                        "GET /v1/responses HTTP/1.1\r\n"
+                        "Host: 127.0.0.1:%d\r\n"
+                        "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                        "Sec-WebSocket-Version: 13\r\n"
+                        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                        "Authorization: Bearer test-only\r\n"
+                        "chatgpt-account-id: account-fixture\r\n"
+                        "Cookie: emp_session=%s\r\n\r\n"
+                        % (server.server_address[1], state.session_token)
+                    ).encode("ascii"))
+                    self.assertIn(b" 101 ", stream.readline())
+                    while stream.readline() not in (b"\r\n", b"\n", b""):
+                        pass
+                    request = {
+                        "type": "response.create",
+                        "model": "native/model-a",
+                        "stream": True,
+                        "input": [
+                            {"type": "message", "role": "user", "content": "large"}
+                        ],
+                    }
+                    def read_result():
+                        events = []
+                        while not any(
+                            item.get("type")
+                            in {"response.completed", "response.failed", "error"}
+                            for item in events
+                        ):
+                            _, raw = _read_text_frame(stream)
+                            events.append(json.loads(raw))
+                        return events
+
+                    client.sendall(_masked_text_frame(json.dumps(request)))
+                    events = read_result()
+                    self.assertEqual(events[-1]["type"], "response.completed", events)
+                    # The HTTP response cannot establish an upstream WS chain.
+                    # Ask Codex for the full request, then stay on HTTP rather
+                    # than send the same oversized frame a second time.
+                    incremental = {
+                        **request,
+                        "previous_response_id": "resp_http",
+                        "input": [{"type": "message", "role": "user", "content": "next"}],
+                    }
+                    client.sendall(_masked_text_frame(json.dumps(incremental)))
+                    recovery = read_result()
+                    self.assertEqual(
+                        recovery[-1]["error"]["code"], "previous_response_not_found"
+                    )
+                    client.sendall(_masked_text_frame(json.dumps(request)))
+                    events += read_result()
+
+                self.assertEqual(events[-1]["type"], "response.completed", events)
+                self.assertFalse(any(item.get("type") == "response.failed" for item in events))
+                self.assertEqual(len(websocket_requests), 1)
+                self.assertEqual(len(http_requests), 2)
+                failures = [
+                    item
+                    for item in state.diagnostics.snapshot()["records"]
+                    if item.get("failure_reason")
+                    == "upstream_websocket_message_too_large"
+                ]
+                self.assertEqual(len(failures), 1)
+                self.assertEqual(failures[0]["recovery_mode"], "native_http_fallback")
+                self.assertEqual(failures[0]["close_code"], 1009)
             finally:
                 server.shutdown()
                 server.server_close()

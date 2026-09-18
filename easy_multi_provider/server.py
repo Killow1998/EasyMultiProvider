@@ -3301,6 +3301,10 @@ def make_handler(state: AppState):
             transport_continuity = TransportContinuityAdapter()
             last_native_response_id = None
             last_native_scope = (None, None)
+            # A peer 1009 close is payload-dependent. Keep this downstream
+            # Codex task on HTTP after the first proven rejection without
+            # disabling native WebSocket for unrelated tasks or accounts.
+            native_http_only_routes = set()
             acquire_websocket_slot = getattr(
                 self.server, "acquire_websocket_slot", None
             )
@@ -3402,6 +3406,7 @@ def make_handler(state: AppState):
                         )
                         if (
                             plan is not None
+                            and plan.target.connection_key not in native_http_only_routes
                             and native_websocket_request_fits(plan.payload)
                             and state.native_websocket_allowed(
                                 plan.target.connection_key
@@ -3479,11 +3484,19 @@ def make_handler(state: AppState):
                                         "native upstream websocket ended without a terminal event"
                                     )
                             except NativeWebSocketError as exc:
-                                if exc.retryable:
+                                safe_http_fallback = (
+                                    exc.http_fallback_safe
+                                    and not output_emitted
+                                    and not tool_activity
+                                    and first_event_ms is None
+                                )
+                                if safe_http_fallback:
+                                    native_http_only_routes.add(plan.target.connection_key)
+                                elif exc.retryable:
                                     state.mark_native_websocket_unavailable(
                                         plan.target.connection_key
                                     )
-                                if (
+                                if not safe_http_fallback and (
                                     output_emitted
                                     or tool_activity
                                     or first_event_ms is not None
@@ -3532,7 +3545,7 @@ def make_handler(state: AppState):
                                         }
                                     )
                                     continue
-                                if not exc.retryable:
+                                if not exc.retryable and not safe_http_fallback:
                                     error_class = exc.error_class or status_error_class(exc.status)
                                     terminal = {
                                         "status": exc.status,
@@ -3574,6 +3587,8 @@ def make_handler(state: AppState):
                                 }
                                 if exc.failure_reason:
                                     failure_terminal["failure_reason"] = exc.failure_reason
+                                if exc.close_code is not None:
+                                    failure_terminal["close_code"] = exc.close_code
                                 if previous_hint is not None:
                                     # Codex recognizes this code and retries the
                                     # same turn as a full request.  Native routes
@@ -3598,8 +3613,8 @@ def make_handler(state: AppState):
                                     self._previous_response_not_found(websocket)
                                     continue
                                 # A full request can safely use the established
-                                # HTTP compatibility path when the upstream WS
-                                # handshake failed before any event was emitted.
+                                # HTTP compatibility path after an incompatible
+                                # handshake or a proven peer 1009 rejection.
                                 state.record_native_websocket(
                                     plan,
                                     request,

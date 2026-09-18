@@ -326,7 +326,7 @@ class SubscriptionContextTests(unittest.TestCase):
                     self.assertEqual(limits["models"][0]["max_context_window"], 872000)
                     self.assertEqual(observed[0][1:], ("Bearer a-token", "a"))
                     self.assertTrue(observed[0][0].startswith("/models?client_version="))
-                    self.assertNotIn("gpt-5.5", {m["id"] for m in limits["models"]})
+                    self.assertIn("gpt-5.5", {m["id"] for m in limits["models"]})
 
                     candidate = state.snapshot()
                     candidate["accounts"][0]["model_context_windows"] = {"gpt-current": 872000}
@@ -342,7 +342,8 @@ class SubscriptionContextTests(unittest.TestCase):
                     self.assertEqual(resolve_route(state.snapshot(), "a/gpt-current").model["context_window"], 872000)
                     self.assertEqual(models["gpt-current"]["context_window"], 272000)
                     self.assertEqual(models["b/gpt-current"]["context_window"], 272000)
-                    self.assertFalse(any(slug == "gpt-5.5" or slug.endswith("/gpt-5.5") for slug in models))
+                    self.assertIn("gpt-5.5", models)
+                    self.assertIn("a/gpt-5.5", models)
                     self.assertEqual(AppState(path).snapshot()["accounts"][0]["model_context_windows"], {"gpt-current": 872000})
 
                     before = path.read_bytes()
@@ -369,7 +370,7 @@ class SubscriptionContextTests(unittest.TestCase):
                 upstream.server_close()
                 worker.join(timeout=3)
 
-    def test_retired_subscription_model_hidden_but_external_and_old_routes_preserved(self):
+    def test_subscription_model_visibility_follows_catalog_and_user_settings(self):
         with tempfile.TemporaryDirectory() as temporary:
             path, config, catalog = self.fixture(Path(temporary))
             catalog["models"].append({"slug": "gpt-5.5", "context_window": 272000})
@@ -378,10 +379,17 @@ class SubscriptionContextTests(unittest.TestCase):
             config["models"] = [{"id": "external/gpt-5.5", "upstream_id": "gpt-5.5", "provider": "external", "context_window": 1000000}]
             config = normalize(config)
             visible = {m["slug"] for m in build_catalog(config)["models"]}
-            self.assertNotIn("gpt-5.5", visible); self.assertNotIn("a/gpt-5.5", visible)
+            self.assertIn("gpt-5.5", visible); self.assertIn("a/gpt-5.5", visible)
             self.assertIn("external/gpt-5.5", visible)
-            self.assertNotIn("gpt-5.5", {m["id"] for m in subscription_model_options(config)})
+            self.assertIn("gpt-5.5", {m["id"] for m in subscription_model_options(config)})
             self.assertEqual(resolve_route(config, "a/gpt-5.5").upstream_model, "gpt-5.5")
+            config["native_hidden_models"] = ["gpt-5.5"]
+            config["accounts"][0]["hidden_models"] = ["gpt-5.5"]
+            visible = {m["slug"] for m in build_catalog(config)["models"]}
+            self.assertNotIn("gpt-5.5", visible)
+            self.assertNotIn("a/gpt-5.5", visible)
+            self.assertIn("b/gpt-5.5", visible)
+            self.assertIn("external/gpt-5.5", visible)
 
     def test_native_export_import_keeps_context_with_imported_account_not_destination_login(self):
         with tempfile.TemporaryDirectory() as temporary:

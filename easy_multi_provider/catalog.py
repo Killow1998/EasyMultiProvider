@@ -15,9 +15,6 @@ from .capabilities import codex_input_modalities, normalize_reasoning_levels
 from .config import MAX_CONTEXT_WINDOW
 from .integration import atomic_write_text
 
-RETIRED_SUBSCRIPTION_MODELS = frozenset({"gpt-5.5"})
-
-
 def subscription_context_max(model: Dict[str, Any]) -> int:
     # A missing maximum permits the advertised default, not a guessed API limit.
     value = model.get("max_context_window")
@@ -444,7 +441,6 @@ def _subscription_native_models(config: Dict[str, Any], account: Optional[Dict[s
         for item in native["models"]
         if isinstance(item, dict)
         and str(item.get("slug", "")).strip()
-        and item.get("slug") not in RETIRED_SUBSCRIPTION_MODELS
         and item.get("visibility", "list") == "list"
         and item.get("supported_in_api", True) is not False
     ]
@@ -509,7 +505,6 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
         copy.deepcopy(item)
         for item in native["models"]
         if isinstance(item, dict)
-        and item.get("slug") not in RETIRED_SUBSCRIPTION_MODELS
         and item.get("supported_in_api", True) is not False
         and not (
             item.get("slug") in native_hidden_models

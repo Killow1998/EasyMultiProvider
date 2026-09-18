@@ -100,15 +100,20 @@ def exception_details(exception: BaseException):
     while isinstance(current, BaseException) and id(current) not in seen and len(result) < 8:
         seen.add(id(current))
         item = {"type": type(current).__name__}
+        websocket_close = hasattr(current, "rcvd") or hasattr(current, "sent")
         frames = traceback.extract_tb(current.__traceback__)[-6:]
         if frames:
             item["frames"] = [{"file": os.path.basename(frame.filename),
                                "line": frame.lineno, "function": frame.name} for frame in frames]
         for name in ("errno", "winerror", "verify_code", "status", "code"):
+            if name == "code" and websocket_close:
+                continue
             value = getattr(current, name, None)
             if isinstance(value, int):
                 item[name] = value
         for name in ("library", "reason"):
+            if name == "reason" and websocket_close:
+                continue
             value = getattr(current, name, None)
             if isinstance(value, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,95}", value):
                 item[name] = value
@@ -119,8 +124,11 @@ def exception_details(exception: BaseException):
                 item[name + "_close_code"] = code
             if getattr(close, "reason", None) == "keepalive ping timeout":
                 item["heartbeat_timeout"] = True
+        close_order = getattr(current, "rcvd_then_sent", None)
+        if isinstance(close_order, bool):
+            item["peer_initiated_close"] = close_order
         result.append(item)
-        reason = getattr(current, "reason", None)
+        reason = None if websocket_close else getattr(current, "reason", None)
         current = reason if isinstance(reason, BaseException) else current.__cause__ or current.__context__
     return result
 

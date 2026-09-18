@@ -1,6 +1,7 @@
 import json
 import io
 import ssl
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -182,8 +183,15 @@ class NativeWebSocketTests(unittest.TestCase):
             response = Response()
             state = State()
 
+            def __enter__(self):
+                self.entered = True
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
             def close(self):
-                pass
+                self.closed = True
 
         target = NativeWebSocketTarget(
             "wss://example.invalid/responses",
@@ -196,6 +204,9 @@ class NativeWebSocketTests(unittest.TestCase):
             wrapped = _default_connector(target)
 
         self.assertTrue(wrapped.connected)
+        self.assertTrue(connection.entered)
+        wrapped.close()
+        self.assertTrue(connection.closed)
         options = opened.call_args.kwargs
         self.assertEqual(options["compression"], "deflate")
         self.assertEqual(options["proxy"], "http://127.0.0.1:7890")
@@ -625,6 +636,113 @@ class NativeWebSocketTests(unittest.TestCase):
         self.assertFalse(raised.exception.retryable)
         self.assertTrue(raised.exception.request_sent)
         self.assertEqual(raised.exception.error_class, "first_output_timeout")
+
+    def test_peer_1009_before_output_is_safe_for_http_fallback(self):
+        class CloseFrame:
+            code = 1009
+
+        class MessageTooBig(Exception):
+            sent = CloseFrame()
+            rcvd = CloseFrame()
+            rcvd_then_sent = True
+
+        connection = _FakeConnection([])
+        connection.send = Mock(side_effect=MessageTooBig())
+        bridge = NativeWebSocketBridge(lambda _target: connection)
+
+        with self.assertRaises(NativeWebSocketError) as raised:
+            list(
+                bridge.events(
+                    NativeWebSocketTarget(
+                        "wss://example.invalid/responses", {}, "route-a"
+                    ),
+                    {"type": "response.create", "input": ["large"]},
+                )
+            )
+
+        self.assertEqual(raised.exception.status, 413)
+        self.assertEqual(raised.exception.close_code, 1009)
+        self.assertTrue(raised.exception.request_sent)
+        self.assertTrue(raised.exception.http_fallback_safe)
+        self.assertEqual(
+            raised.exception.failure_reason,
+            "upstream_websocket_message_too_large",
+        )
+        self.assertTrue(connection.closed)
+
+    def test_local_1009_or_peer_1009_after_acceptance_never_replays(self):
+        class CloseFrame:
+            code = 1009
+
+        class MessageTooBig(Exception):
+            sent = CloseFrame()
+            rcvd = CloseFrame()
+
+        for peer_first, accepted in ((False, False), (True, True)):
+            with self.subTest(peer_first=peer_first, accepted=accepted):
+                failure = MessageTooBig()
+                failure.rcvd_then_sent = peer_first
+                connection = _FakeConnection([])
+                messages = iter(
+                    [json.dumps({"type": "response.created"}), failure]
+                    if accepted
+                    else [failure]
+                )
+
+                def receive():
+                    value = next(messages)
+                    if isinstance(value, BaseException):
+                        raise value
+                    return value
+
+                connection.recv = receive
+                bridge = NativeWebSocketBridge(lambda _target: connection)
+                with self.assertRaises(NativeWebSocketError) as raised:
+                    list(bridge.events(
+                        NativeWebSocketTarget(
+                            "wss://example.invalid/responses", {}, "route-a"
+                        ),
+                        {"type": "response.create", "input": []},
+                    ))
+                self.assertFalse(raised.exception.http_fallback_safe)
+                self.assertFalse(raised.exception.retryable)
+
+    @unittest.skipUnless(
+        native_websocket.compressed_native_websocket_available(),
+        "compressed WebSocket client is optional on Python 3.8",
+    )
+    def test_real_compressed_socket_preserves_peer_1009_and_close_order(self):
+        from websockets.sync.server import serve
+
+        phases = []
+
+        def reject(connection):
+            connection.recv()
+            connection.close(1009, "fixture message too big")
+
+        with serve(reject, "127.0.0.1", 0) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            bridge = NativeWebSocketBridge(
+                observer=lambda phase, **fields: phases.append((phase, fields))
+            )
+            target = NativeWebSocketTarget(
+                "ws://127.0.0.1:%d/responses" % server.socket.getsockname()[1],
+                {},
+                "route-fixture",
+            )
+            try:
+                with self.assertRaises(NativeWebSocketError) as raised:
+                    list(bridge.events(target, {"type": "response.create", "input": []}))
+                self.assertEqual(raised.exception.close_code, 1009)
+                self.assertTrue(raised.exception.http_fallback_safe)
+                failure = next(fields for phase, fields in phases if phase == "upstream_transport_failed")
+                self.assertTrue(failure["exception_chain"][0]["peer_initiated_close"])
+                self.assertNotIn("fixture message too big", json.dumps(phases))
+            finally:
+                bridge.close()
+                server.shutdown()
+                thread.join(2)
 
     def test_output_switches_to_long_stream_idle_timeout(self):
         connection = _FakeConnection(
