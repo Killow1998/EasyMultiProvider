@@ -1,268 +1,311 @@
-# EMP
+<p align="center">
+  <img src="assets/branding/easy-multi-provider-icon.svg" alt="EMP logo" width="112">
+</p>
 
-English | [中文](README.zh-CN.md)
+<h1 align="center">EMP — EasyMultiProvider</h1>
 
-EMP is a local, browser-configured model router for Codex.
-It keeps the native Codex experience while adding multiple ChatGPT
-subscriptions, API providers, and external models to the same model list.
+<p align="center">
+  <strong>Bring multiple ChatGPT subscriptions and external models into Codex — without replacing the native Codex experience.</strong>
+</p>
 
-The current source version is `v0.11.4`.
+<p align="center">
+  <a href="https://github.com/Killow1998/EasyMultiProvider/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/Killow1998/EasyMultiProvider"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/Killow1998/EasyMultiProvider"></a>
+  <img alt="Codex CLI 0.149.x–0.155.x" src="https://img.shields.io/badge/Codex%20CLI-0.149.x--0.155.x-blue">
+  <img alt="Windows Linux macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey">
+</p>
 
-## Features
+<p align="center">
+  <a href="https://github.com/Killow1998/EasyMultiProvider/releases/latest"><strong>Download</strong></a>
+  · <a href="#quick-start">Quick Start</a>
+  · <a href="#what-emp-does">Features</a>
+  · <a href="#docs">Docs</a>
+  · <a href="README.zh-CN.md">中文</a>
+</p>
 
-- Track historical and live token usage and API-equivalent costs by time, account and provider,
-  with daily price updates. See [usage accounting](docs/usage-accounting.md).
+EMP is a local, browser-configured control plane for Codex. It lets the same Codex client use the current ChatGPT login, additional ChatGPT subscription accounts, and external API models from one model catalog.
 
-- Use native Codex models, additional ChatGPT subscriptions, and external API
-  models from the same Codex model picker.
-- Route models with readable prefixes such as `team/gpt-5.6-luna` or
-  `provider/model`.
-- Import multiple Codex subscription accounts and refresh available quota data.
-- Add official or custom providers through the Web UI.
-- Discover provider models, select which ones to import, edit context windows,
-  test them, and hide unused entries.
-- Preserve text, image, reasoning, and structured tool capabilities when the
-  provider reports or supports them.
-- Let Codex delegate a native child task to an external catalog model by its
-  existing model slug; Codex continues to own the child task and permissions.
-- Keep credentials encrypted on the local machine.
-- Keep a private, bounded diagnostic journal for later troubleshooting.
-- View upstream-reported prompt cache hit rates for native and external models
-  in Performance and health, grouped into token-weighted 10-minute periods.
-  Idle periods are omitted and missing cache usage is shown as unavailable.
-- Inspect rolling median TTFT/TPS from the latest 20 valid calls per recently
-  used model and compare it with the preceding window. History survives EMP
-  restarts, and OpenAI speed modes appear only after a Fast request is actually
-  observed. EMP also shows observed
-  success, 429, 502, 503, and 504 rates without storing prompt or response
-  content.
-- Export and import password-protected `.emp` migration files.
-  Select Native, other subscriptions and/or external providers when exporting;
-  all categories are selected by default. Native includes display settings and
-  the machine's Codex login credentials, imported as an additional subscription
-  without replacing the current login. Shared model-family display settings
-  accompany the selected models.
-  Import updates accounts only when their identities match; conflicting accounts
-  are retained with new IDs/prefixes and their display settings follow them.
-  Export counts reflect the file contents; missing Native credentials are reported.
-- Preserve native Codex sessions, `resume`, WebSockets, compression, and MCP.
-- Continue compacted tasks when switching between the current login, imported
-  subscriptions, and external models, using Codex-owned visible history only.
-- Let external models use Codex standalone web search. EMP prefers the current
-  `.codex` login and automatically falls back to an available imported account,
-  without exposing Provider credentials.
+**The goal is not to replace Codex.** EMP keeps Codex in charge of the client, task, permissions, tools, and native workflow while adding account routing, external providers, model management, usage visibility, and cross-provider continuity.
 
-## Install
+> **One Codex. Multiple accounts. Multiple providers. One model picker.**
 
-EMP does not bundle or replace Codex. On the first integration-status load, it
-performs a bounded scan of known locations for the Codex App runtime, the
-active `.codex` managed runtime, OpenAI's VS Code/Cursor extension runtime, and
-a standalone `codex` on `PATH`. The Web UI lists their versions, deduplicates
-the same executable, and lets the user select the compatible Codex clients in
-which they intend to use EMP. Multiple selected clients and workspaces can run
-concurrently. EMP independently chooses a compatible helper executable for
-version checks and account quota queries; that internal choice does not route
-model traffic or limit selected clients. Unsupported or unreadable
-runtimes remain visible but cannot be selected; otherwise eligible pre-release
-or newer versions remain explicitly unverified.
+<!-- Demo placeholder: add a short assets/emp-demo.gif here when available. -->
 
-These clients normally share the same user-level `.codex` directory. Runtime
-selection does not create another Codex profile and does not restrict which
-client receives the shared configuration.
+## Why EMP?
 
-EMP treats a persistent Codex App Server as externally owned. Enabling,
-restoring, refreshing, or checking integration files never stops, starts, or
-restarts Codex. EMP reads `model/list` from the existing local control socket
-on Windows, macOS and Linux. The check compares visible models, display names
-and descriptions with the saved catalog. A stale catalog stays pending; a
-successful check does not mean that Base URLs or other startup settings changed.
-Linux App discovery recognizes the runtime at
-`$CODEX_HOME/plugins/.plugin-appserver/codex`, alongside managed, editor and PATH
-runtimes. Other Linux App packaging layouts require separate verification.
+Most model routers stop at forwarding an OpenAI-compatible request. EMP is built around the parts of Codex that make a coding-agent session more than a single HTTP call.
 
-EMP supports Codex CLI `0.149.x` through `0.155.x`; `0.155.0` is recommended.
-The Web UI shows the installed version and marks newer versions as not yet
-verified or older versions as unsupported.
-
-External subagent delegation, follow-up tasks and tool calls are verified with
-Gemini 3.7 Flash and 3.8 Flash on runtime `0.153.4`. See
-[collaboration compatibility](docs/external-collaboration.md) for protocol details.
-
-Subscription editing supports per-model context token counts. Leave a field
-blank for the model default. **Refresh model limits** fetches the subscription
-catalog with that account's credentials; values cannot exceed the advertised
-maximum. Codex's default 95% effective percentage is preserved (872,000 becomes
-828,400 usable). The catalog display and EMP request checks use the same window;
-API addresses and the destination Codex login are unchanged. Existing tasks may
-need a catalog refresh; confirm the effective window in a new task. Exported
-Native context settings follow the imported account instead of overwriting the
-destination's Native settings.
-
-### Prebuilt packages
-
-Download reviewed builds from
-[GitHub Releases](https://github.com/Killow1998/EasyMultiProvider/releases). The
-[Package workflow](https://github.com/Killow1998/EasyMultiProvider/actions/workflows/package.yml)
-builds and smoke-tests these native artifacts before a release is published:
-
-| Platform | Artifact |
+| What you need | EMP |
 | --- | --- |
-| Windows x64 | branded standalone `.exe` |
-| Ubuntu 22.04+ x64 | `.tar.gz` and desktop-enabled `.deb` |
-| macOS Intel | `.app` inside a `.dmg` |
-| macOS Apple Silicon | `.app` inside a `.dmg` |
+| Multiple ChatGPT subscription accounts | Import accounts, refresh quota, and expose selected models with readable prefixes |
+| External API models inside Codex | Add official or custom providers and import their models into the Codex catalog |
+| Native Codex model selection | Use native, subscription, and external models from the same Codex model picker |
+| Existing Codex sessions | Preserve native sessions, `resume`, WebSockets, compression, and MCP on supported paths |
+| Switching providers mid-task | Continue compacted tasks using Codex-owned visible history instead of forwarding private opaque state |
+| Usage visibility | Track live and historical tokens, API-equivalent cost, quota, cache hit rate, TTFT/TPS, and observed error rates |
+| Local credentials | Encrypt subscription credentials and Provider API keys on the local machine |
+| Migration between machines | Export and import password-protected `.emp` bundles |
 
-For the simplest desktop launch:
+### Mental model
 
-- **Windows:** double-click `EMP.exe`.
-- **Linux:** extract the `.tar.gz`, run `sh install-user.sh` in the extracted
-  directory, then open **EMP** from the application menu.
-- **macOS:** open the DMG, drag **EMP** to Applications, then
-  double-click it.
+~~~text
+                  Codex App / CLI / editor integration
+                               │
+                               ▼
+                        ┌─────────────┐
+                        │     EMP     │
+                        │ local only  │
+                        └──────┬──────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+       Current Codex     Extra ChatGPT     API Providers
+          login           subscriptions     / custom APIs
+              │                │                │
+              └────────────────┼────────────────┘
+                               ▼
+                    One Codex model catalog
+~~~
 
-EMP opens the authenticated Web UI and keeps a visible terminal window for
-status and logs. `EMP listening on ...` means startup succeeded.
-Keep that terminal open while using EMP. Press `Ctrl+C` for a clean stop, or
-close the terminal to terminate the process; after a clean stop it prints
-`EMP stopped.`
-
-Desktop launch stores configuration in the normal per-user directory:
-
-- Windows: `%LOCALAPPDATA%\EasyMultiProvider\config.json`
-- macOS: `~/Library/Application Support/EasyMultiProvider/config.json`
-- Linux: `$XDG_CONFIG_HOME/easy-multi-provider/config.json`, or
-  `~/.config/easy-multi-provider/config.json`
-
-The Linux user installer places the binary at
-`$XDG_DATA_HOME/easy-multi-provider/EMP` (default:
-`~/.local/share/easy-multi-provider/EMP`) and its launcher at `~/.local/bin/EMP`.
-Installation and Web UI updates require neither sudo nor an administrator
-password. Configuration and account data stay in the user configuration directory
-above and are not replaced by binary updates. Existing system `.deb` installations
-are not removed automatically; stop the old EMP and back up its configuration
-before moving it to the user configuration directory.
-
-For command-line use, the explicit service command remains available. With the
-downloaded Windows executable, use PowerShell:
-
-```powershell
-.\EMP.exe --version
-.\EMP.exe serve --config config.json
-```
-
-After extracting the Linux `.tar.gz` or installing the `.deb`:
-
-```bash
-./EMP --version
-./EMP serve --config config.json
-```
-
-The `.deb` installs the same command into `PATH`, so omit `./` after installing
-it. The Windows executable and Linux archive command also enter the
-browser-opening desktop mode when run without arguments.
-
-The current macOS workflow artifacts are unsigned development builds. Public
-distribution still requires Apple Developer ID signing and notarization.
-
-### Install from source
-
-Install Git and [`uv`](https://docs.astral.sh/uv/getting-started/installation/),
-then clone EMP:
-
-```bash
-git clone https://github.com/Killow1998/EasyMultiProvider.git
-cd EasyMultiProvider
-uv sync
-```
-
-`uv` manages Python, the virtual environment, and locked dependencies. No
-separate Python version manager is required.
+EMP does not bundle Codex and does not take ownership of the persistent Codex App Server.
 
 ## Quick Start
 
-Start a packaged EMP executable explicitly on Linux or macOS with:
+### 1. Download EMP
 
-```bash
-easy-multi-provider serve --config config.json
-```
+Download the latest reviewed build from [GitHub Releases](https://github.com/Killow1998/EasyMultiProvider/releases/latest).
 
-When running from a source checkout, use:
+| Platform | Package | Launch |
+| --- | --- | --- |
+| Windows x64 | `EMP.exe` | Double-click `EMP.exe` |
+| Ubuntu 22.04+ x64 | `.tar.gz` or `.deb` | Run `sh install-user.sh`, then open **EMP** |
+| macOS Apple Silicon | `.dmg` | Drag **EMP** to Applications |
+| macOS Intel | `.dmg` | Drag **EMP** to Applications |
 
-```bash
-uv run python -m easy_multi_provider serve --config config.json
-```
+The [package workflow](https://github.com/Killow1998/EasyMultiProvider/actions/workflows/package.yml) builds and smoke-tests the native artifacts before a release is published.
 
-On first start, EMP automatically creates a private local encryption key. No
-environment variable or manual key-generation command is required.
+> macOS release artifacts are currently unsigned development builds. Public distribution still requires Developer ID signing and notarization.
 
-### `.emp` version compatibility
+### 2. Start EMP
 
-EMP v0.9.0 through v0.9.9 use the same encrypted migration format. A current
-EMP can import files exported by any of those versions, and the complete
-v0.9.0-v0.9.7 cross-version matrix preserves accounts and credentials,
-Providers and API keys, models, and model display aliases. Use the same or a
-newer EMP version for a lossless migration of settings: an older application
-cannot preserve settings introduced after it was released, such as model-family
-presentation and native-model visibility added in v0.9.3.
+EMP opens an authenticated local Web UI. A successful start prints:
 
-The terminal prints a one-use browser URL. Open it and:
+~~~text
+EMP listening on ...
+~~~
 
-1. Import a Codex subscription account or add an API Provider.
-2. Pull the Provider model list and import the models you want.
-3. Adjust model visibility or context windows when needed.
-4. Click **Apply EMP to Codex**.
-5. Start Codex normally and select a model from `/model` or the App model menu.
+Keep the EMP process running while using it.
 
-With only the current native account, skip account and Provider import. Hide
-models under **Current Codex login → Edit**, rename model families under
-**Model display**, save, and click **Apply EMP to Codex**. Keep at least
-one model visible. Display names do not change model IDs.
+### 3. Add what you want to use
 
-With a ChatGPT login, model names, visibility, and additions refresh while Codex
-is running. EMP sends its catalog revision on Responses HTTP streams and
-WebSocket metadata, allowing Codex to fetch changes on subsequent requests.
-Codex also refreshes periodically (about every 4.5 minutes in 0.155.0); an idle
-App menu is not guaranteed to update immediately. Reopen the model picker after
-the refresh. Restart Codex once after upgrading from an older EMP
-static catalog or changing Codex's Base URL. Clients without ChatGPT model
-discovery continue to use the static catalog. Restore Native Codex before
-rolling back to EMP 0.9.91 or earlier.
+In the Web UI, either:
 
-EMP listens on `http://127.0.0.1:4200` by default. Use `--port` only when that
-port is already occupied.
+- import another Codex / ChatGPT subscription account,
+- add an API Provider,
+- or keep only the current native Codex login and use EMP for model visibility and display settings.
 
-Each start also prints `Diagnostic log: ...`. EMP stores structured runtime
-metadata in that file so later bugs can be diagnosed without reconstructing
-the session from memory. Managed logs are kept under `state/logs/`; the oldest
-parts are removed automatically when they exceed 10 MiB in total. Prompts,
-responses, tool payloads, HTTP bodies, headers, cookies, and credentials are
-not recorded.
+For an API Provider, pull the upstream model list, choose the models you want, and optionally edit their context windows.
+
+### 4. Apply EMP to Codex
+
+Click **Apply EMP to Codex**.
+
+EMP scans known Codex runtimes, shows their versions, and lets you select compatible clients. Multiple selected clients and workspaces can run concurrently.
+
+### 5. Select a model normally
+
+Open Codex and choose a model from `/model` or the App model menu.
+
+Readable route prefixes make the source explicit, for example:
+
+~~~text
+team/gpt-5.6-luna
+provider/model
+~~~
+
+With a ChatGPT login, catalog changes can refresh while Codex is running. Codex 0.155.0 also refreshes periodically; reopen the model picker if a newly added model is not visible immediately.
+
+## What EMP does
+
+### Accounts and model routing
+
+- Use native Codex models, imported ChatGPT subscription models, and external API models from one catalog.
+- Import multiple subscription accounts and refresh available quota data.
+- Choose which Coding Agent models each subscription exposes.
+- Add official or custom Providers through the Web UI.
+- Discover Provider models, import only the ones you want, test them, edit context limits, hide them, or remove them.
+- Preserve text, image, reasoning, and structured tool capabilities when the destination reports or supports them.
+- Let Codex delegate a native child task to an external catalog model by its existing model slug while Codex continues to own the child task and permissions.
+- Let external models use Codex standalone web search. EMP prefers the current `.codex` login and can fall back to an available imported account without exposing Provider credentials.
+
+### Codex continuity
+
+EMP is designed to keep provider changes from turning into a different coding client.
+
+It preserves native Codex sessions, `resume`, WebSockets, compression, and MCP where supported. For compacted tasks that switch between the current login, imported subscriptions, and external models, EMP reconstructs only Codex-owned visible history instead of forwarding provider-private opaque state.
+
+External subagent delegation, follow-up tasks, and tool calls have been verified with Gemini 3.7 Flash and 3.8 Flash on Codex runtime `0.153.4`. See [external collaboration compatibility](docs/external-collaboration.md).
+
+### Usage, quota, and cost
+
+EMP records local operational metrics so you can see where your coding-agent usage is going.
+
+- Historical and live token usage by time, account, and Provider.
+- API-equivalent cost estimates with daily price updates.
+- Subscription quota snapshots and local trends.
+- Upstream-reported prompt cache hit rates in token-weighted 10-minute periods.
+- Rolling median TTFT and TPS from the latest 20 valid calls per recently used model, compared with the preceding window.
+- Observed success, 429, 502, 503, and 504 rates.
+
+Performance history survives EMP restarts. Missing upstream cache data is shown as unavailable rather than estimated.
+
+See [usage accounting](docs/usage-accounting.md) and [usage verification](docs/usage-verification.md).
+
+### Model display and context windows
+
+Subscription editing supports per-model context token counts. Leave a field blank to use the model default.
+
+**Refresh model limits** retrieves the subscription catalog with that account's credentials. Configured values cannot exceed the upstream-advertised maximum. Codex's default 95% effective percentage is preserved, so an advertised 872,000-token window becomes 828,400 usable tokens.
+
+The catalog display and EMP request checks use the same effective window.
+
+## Codex compatibility
+
+The current source version is **v0.11.4**.
+
+EMP supports Codex CLI **0.149.x through 0.155.x**; **0.155.0 is recommended**.
+
+On the first integration-status load, EMP performs a bounded scan of known locations for:
+
+- the Codex App runtime,
+- the active `.codex` managed runtime,
+- OpenAI's VS Code / Cursor extension runtime,
+- a standalone `codex` on `PATH`,
+- and, on Linux, `$CODEX_HOME/plugins/.plugin-appserver/codex`.
+
+Detected runtimes are deduplicated. Unsupported or unreadable runtimes remain visible but cannot be selected; eligible pre-release or newer versions are shown as unverified.
+
+EMP treats a persistent Codex App Server as externally owned. Enabling, restoring, refreshing, or checking integration files does **not** stop, start, or restart Codex.
+
+EMP reads `model/list` from the existing local control socket on Windows, macOS, and Linux and compares the visible model catalog with its saved state.
 
 ## Web UI
 
-- **Accounts** imports `auth.json` and backup files such as `auth.json.bk1`.
-  Only an account ID is required. The display name / display prefix can be edited
-  later and supports emoji; the actual route prefix stays unchanged.
-  **Refresh** performs a live quota query and saves the new snapshot.
-  While EMP is running it samples quota every five minutes and shows local
-  trends for one hour, one day, one week, or up to 15 days. This history stores
-  quota metrics only, never credentials. Each subscription can control which
-  Coding Agent models appear in Codex.
-- **Providers** offers presets for supported official services and a custom
-  Provider form for Base URL and API key endpoints.
-- **Models** discovers upstream models and lets you import, test, edit, hide,
-  or remove them. Models stay grouped by Provider.
-- **Codex integration** applies the current EMP catalog to the default Codex
-  configuration and can restore native Codex routing from the same page. File
-  state and the model IDs observed from the shared backend are shown separately;
-  EMP never controls that backend's process lifecycle.
+The local Web UI is organized around four main areas:
 
-EMP automatically detects proxy settings from its launch environment or the
-operating system.
+- **Accounts** — import subscription credentials, edit display names and prefixes, refresh quota, view quota history, and control model visibility.
+- **Providers** — configure supported services or a custom Provider.
+- **Models** — discover, import, test, edit, hide, or remove Provider models.
+- **Codex integration** — apply the EMP catalog to Codex or restore native Codex routing.
 
-## Local Security
+EMP automatically detects proxy settings from its launch environment or operating system.
 
-EMP binds its management UI to the local machine by default. Subscription
-credentials and Provider API keys are encrypted locally and are not returned
-to the browser after saving. Local configuration, encrypted state, and
-generated catalogs are excluded from Git.
+## Local security and diagnostics
+
+EMP binds the management UI to the local machine by default.
+
+- Subscription credentials and Provider API keys are encrypted locally.
+- Saved credentials are not returned to the browser after being stored.
+- Local configuration, encrypted state, and generated catalogs are excluded from Git.
+- EMP creates a private local encryption key automatically on first start.
+- No manual key-generation environment variable is required.
+
+Each start also prints a `Diagnostic log: ...` path. The diagnostic journal stores bounded structured runtime metadata for troubleshooting.
+
+It does **not** record prompts, responses, tool payloads, HTTP bodies, headers, cookies, or credentials.
+
+Managed logs are kept under `state/logs/`; the oldest data is removed automatically when the journal exceeds 10 MiB in total.
+
+See [diagnostic journal specification](docs/diagnostic-journal-spec.md).
+
+## Migration
+
+EMP can export and import password-protected `.emp` migration files.
+
+An export can include:
+
+- Native Codex settings and credentials,
+- additional subscription accounts,
+- external Providers and API keys,
+- imported models,
+- model-family display settings.
+
+Native credentials imported on another machine become an additional subscription instead of replacing the destination machine's current login.
+
+EMP v0.9.0 through v0.9.9 use the same encrypted migration format, and a current EMP can import files exported by those versions. Use the same or a newer EMP version when moving settings forward so newer fields are not lost.
+
+## Command-line mode
+
+Packaged builds can also run explicitly as a service.
+
+Windows:
+
+~~~powershell
+.\EMP.exe --version
+.\EMP.exe serve --config config.json
+~~~
+
+Linux archive or `.deb`:
+
+~~~bash
+./EMP --version
+./EMP serve --config config.json
+~~~
+
+The `.deb` installs the same command into `PATH`, so omit `./` after installation.
+
+EMP listens on `http://127.0.0.1:4200` by default. Use `--port` only when that port is already occupied.
+
+## Install from source
+
+Install Git and [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then:
+
+~~~bash
+git clone https://github.com/Killow1998/EasyMultiProvider.git
+cd EasyMultiProvider
+uv sync
+uv run python -m easy_multi_provider serve --config config.json
+~~~
+
+`uv` manages Python, the virtual environment, and locked dependencies. No separate Python version manager is required.
+
+## Configuration locations
+
+Desktop launch stores configuration in the normal per-user location:
+
+| Platform | Config |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\EasyMultiProvider\config.json` |
+| macOS | `~/Library/Application Support/EasyMultiProvider/config.json` |
+| Linux | `$XDG_CONFIG_HOME/easy-multi-provider/config.json` or `~/.config/easy-multi-provider/config.json` |
+
+The Linux user installer places the binary at `$XDG_DATA_HOME/easy-multi-provider/EMP` (default `~/.local/share/easy-multi-provider/EMP`) and the launcher at `~/.local/bin/EMP`.
+
+Installation and Web UI updates do not require sudo or an administrator password. Configuration and account data stay in the user configuration directory and are not replaced by binary updates.
+
+## Docs
+
+Useful technical references:
+
+- [Usage accounting](docs/usage-accounting.md)
+- [Usage verification](docs/usage-verification.md)
+- [External collaboration compatibility](docs/external-collaboration.md)
+- [HTTP forwarding](docs/http-forwarding.md)
+- [Request limits](docs/request-limits.md)
+- [Self-update behavior](docs/self-update.md)
+- [Packaging](docs/packaging.md)
+- [Diagnostic journal specification](docs/diagnostic-journal-spec.md)
+- [Sidechat history handling](docs/sidechat-history.md)
+- [Changelog](CHANGELOG.md)
+
+## Notes
+
+- Existing tasks may need a catalog refresh after context-window or model-display changes; verify the effective window in a new task when it matters.
+- Restart Codex once after upgrading from an older EMP static catalog or after changing Codex's Base URL.
+- Restore Native Codex before rolling back to EMP 0.9.91 or earlier.
+- Existing system `.deb` installations are not removed automatically when moving to the user installer; stop the old EMP and back up its configuration first.
+
+## License
+
+EMP is released under the [MIT License](LICENSE).
