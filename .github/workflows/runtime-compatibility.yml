@@ -158,6 +158,13 @@ jobs:
           uv run --frozen cargo test --locked -p emp-state --test web_session_compat
           rust_and_live_python_reuse_each_others_web_sessions
 
+      - name: Python and Rust Chat projection interoperability
+        if: matrix.os == 'ubuntu-22.04'
+        env:
+          EMP_PYTHON_INTEROP: python
+        run: >-
+          uv run --frozen cargo test --locked -p emp-protocol --test python_oracle
+
       - name: Python and Rust account normalization
         if: matrix.os == 'ubuntu-22.04'
         env:

@@ -214,6 +214,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "emp-protocol"
+version = "0.11.6"
+dependencies = [
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "emp-state"
 version = "0.11.6"
 dependencies = [

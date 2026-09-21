@@ -1,9 +1,29 @@
 {
-  "status": "inventory_only",
-  "source": "tests/test_chat_projection_regressions.py",
-  "required_properties": [
-    "reasoning is emitted as reasoning items",
-    "visible answer text is not duplicated into reasoning",
-    "terminal event follows all deltas"
-  ]
+  "status": "differentially_implemented",
+  "source": [
+    "tests/test_chat_projection_regressions.py",
+    "easy_multi_provider/protocol_projection.py:_response_from_chat",
+    "easy_multi_provider/stream_adapters.py:stream_chat_completion"
+  ],
+  "rust_evidence": [
+    "crates/emp-protocol/tests/chat_projection.rs",
+    "crates/emp-protocol/tests/python_oracle.rs"
+  ],
+  "normalization": [
+    "generated resp_, msg_, and rs_ identifiers are normalized by type while every item_id reference is checked",
+    "sequence numbers, output indices, content indices, event bodies and terminal response remain exact"
+  ],
+  "covered_cases": [
+    "reasoning aliases use reasoning_content then reasoning then reasoning_text precedence",
+    "leading reasoning closes before the visible assistant message starts",
+    "reasoning reported after answer text becomes a distinct later reasoning item",
+    "visible answer text and refusal parts retain separate content indices",
+    "the assistant message closes before function or custom tool calls",
+    "split tool names and arguments are assembled once and validated as JSON objects",
+    "usage-only tail chunks preserve token and cache details",
+    "literal reasoning/tool markup remains visible text",
+    "missing DONE, missing finish reason, duplicate tool IDs and invalid payload shapes fail closed",
+    "exactly one completed or incomplete terminal event follows all deltas"
+  ],
+  "side_effects": ["none; complete response and stream projection are pure"]
 }

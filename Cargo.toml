@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/emp-core", "crates/emp-app", "crates/emp-state"]
+members = [
+    "crates/emp-app",
+    "crates/emp-core",
+    "crates/emp-protocol",
+    "crates/emp-state",
+]
 
 [workspace.package]
 version = "0.11.6"
