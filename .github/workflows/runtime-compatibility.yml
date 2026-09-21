@@ -32,16 +32,33 @@ permissions:
   contents: read
 
 jobs:
-  rust-foundation:
-    runs-on: ubuntu-22.04
+  rust-workspace:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@1.93.1
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-python@v7.0.0
+        if: matrix.os == 'ubuntu-22.04'
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10.0.1
+        if: matrix.os == 'ubuntu-22.04'
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace --all-targets
+      - name: Python and Rust state interoperability
+        if: matrix.os == 'ubuntu-22.04'
+        env:
+          EMP_PYTHON_INTEROP: python
+        run: >-
+          uv run --frozen cargo test --locked -p emp-state --test python_interop
+          rust_ciphertext_can_be_checked_by_the_python_oracle_when_configured
 
   full-unit-suite:
     runs-on: ubuntu-22.04

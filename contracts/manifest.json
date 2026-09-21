@@ -56,6 +56,16 @@
       "normalization": ["fresh Fernet timestamps and initialization vectors may differ"],
       "side_effects": ["none; this fixture validates the encrypted envelope only"],
       "fixture": "state/python-crypto-interop.json"
+    },
+    {
+      "id": "state.vault.filesystem",
+      "level": "state",
+      "source": "easy_multi_provider/vault.py and tests/test_vault.py",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": ["temporary filenames and generated Fernet keys may differ"],
+      "side_effects": ["private key, encrypted credential, and remembered transaction files only"],
+      "fixture": "state/vault-filesystem.json"
     }
   ]
 }

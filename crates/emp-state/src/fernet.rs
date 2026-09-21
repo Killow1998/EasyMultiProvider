@@ -14,6 +14,12 @@ pub struct FernetKey {
 }
 
 impl FernetKey {
+    /// Generate a key with the operating system CSPRNG used by `fernet`.
+    pub fn generate() -> Self {
+        let encoded = Zeroizing::new(FernetToken::generate_key());
+        Self::from_encoded(&encoded).expect("fernet generated a valid key")
+    }
+
     /// Validate that `encoded` decodes to the 32 bytes required by Fernet.
     pub fn from_encoded(encoded: &str) -> Result<Self, FernetKeyError> {
         let decoded = Zeroizing::new(

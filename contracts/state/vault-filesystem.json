@@ -1,0 +1,33 @@
+{
+  "status": "implemented",
+  "implementation": "crates/emp-state/src/filesystem.rs",
+  "test": "crates/emp-state/tests/filesystem.rs",
+  "master_key": {
+    "environment_precedence": true,
+    "generated_with_os_csprng": true,
+    "exclusive_creation": true,
+    "unix_directory_mode": "0700",
+    "unix_file_mode": "0600",
+    "rejects_symlinks": true,
+    "never_replaces_invalid_existing_key": true
+  },
+  "encrypted_files": {
+    "atomic_replace": true,
+    "formats": ["bytes", "utf8_text", "json"],
+    "plaintext_absent_at_rest": true,
+    "unix_file_mode": "0600"
+  },
+  "transactions": {
+    "process_serialized": true,
+    "first_snapshot_wins": true,
+    "reverse_order_rollback": true,
+    "maximum_snapshot_bytes": 67108864,
+    "restores_original_mode_on_unix": true,
+    "removes_new_files_on_rollback": true
+  },
+  "remaining_platform_work": [
+    "Windows user-restricted ACLs",
+    "Windows reparse-point rejection",
+    "cross-process Python-compatible file locks"
+  ]
+}

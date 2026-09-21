@@ -11,8 +11,11 @@ Progress evidence on 2026-09-21:
   and Windows.
 - `emp-state` now proves both-direction interoperability for the existing
   Fernet vault and scrypt/Fernet `.emp` envelope with synthetic Python fixtures
-  and a live local Python oracle. Filesystem transactions, key ownership, and
-  import merge behavior remain in stage 2.
+  and a live local Python oracle. It also implements private master-key files,
+  atomic encrypted file writes, bounded reverse-order rollback, symlink and
+  Unix ownership/permission checks. The Rust workspace now runs on Linux,
+  macOS, and Windows in CI. Import merge behavior and Windows ACL/reparse-point
+  hardening remain in stage 2.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

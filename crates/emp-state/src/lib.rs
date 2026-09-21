@@ -12,10 +12,15 @@
 //! buffers are zeroized.
 
 pub mod fernet;
+pub mod filesystem;
 pub mod migration;
 pub mod vault;
 
 pub use fernet::{Fernet, FernetError, FernetKey, FernetKeyError};
+pub use filesystem::{
+    FileTransaction, FilesystemError, MASTER_KEY_ENV, MASTER_KEY_FILE_ENV,
+    MAX_TRANSACTION_FILE_BYTES, VaultStore, with_file_transaction,
+};
 pub use migration::{
     MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES, MIGRATION_MAGIC, MIGRATION_SCHEMA, MIGRATION_VERSION,
     MIN_PASSWORD_BYTES, MigrationError, MigrationParams, MigrationResult, SALT_BYTES, SCRYPT_N,
