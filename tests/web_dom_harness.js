@@ -188,6 +188,7 @@ assert.match(html, /\.display-row>button\{grid-column:3;grid-row:1;/, "advanced 
 assert.match(html, /href="https:\/\/github.com\/Killow1998\/EasyMultiProvider" target="_blank" rel="noopener noreferrer"/);
 assert.doesNotMatch(html, /id="subscription_search_account"/);
 assert.doesNotMatch(html, /data-catalog-summary/);
+assert.doesNotMatch(html, /不会自动补|not added automatically/, "users must not manage provider API path suffixes");
 assert.match(html, /Icon paths derived from Lucide \(ISC\)/);
 assert.strictEqual(
   Array.from(html.matchAll(/button\[data-icon="[^"]+"\](?:,\.quota-reset)?\{--button-icon:url\("data:image\/svg\+xml,%3Csvg%20/g)).length,

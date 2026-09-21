@@ -824,6 +824,7 @@ class TestBundledRegistry(unittest.TestCase):
         p = next(
             p for p in self.registry["providers"] if p["key"] == "deepseek"
         )
+        self.assertIn("https://api.deepseek.com/v1", p["api_base_urls"])
         self.assertIn("https://api.deepseek.com/anthropic", p["api_base_urls"])
 
     def test_deepseek_no_x_api_key(self):

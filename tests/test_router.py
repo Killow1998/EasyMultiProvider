@@ -62,6 +62,26 @@ class RouterTests(unittest.TestCase):
         provider_copy["protocol"] = "responses"
         self.assertEqual(route.provider["protocol"], "chat_completions")
 
+    def test_pasted_provider_urls_resolve_to_one_responses_endpoint(self):
+        for entered in (
+            "https://api.example.com",
+            "https://api.example.com/v1",
+            "https://api.example.com/v1/response",
+            "https://api.example.com/v1/responses",
+        ):
+            with self.subTest(entered=entered):
+                provider = normalize({
+                    "providers": [{
+                        "id": "demo",
+                        "base_url": entered,
+                        "protocol": "responses",
+                    }]
+                })["providers"][0]
+                self.assertEqual(
+                    router._endpoint(provider),
+                    "https://api.example.com/v1/responses",
+                )
+
     def test_reasoning_summary_route_policy_preserves_effort_and_native_payload(self):
         external = {
             "id": "external",

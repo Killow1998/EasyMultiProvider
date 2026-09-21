@@ -199,6 +199,7 @@
       ],
       "api_base_urls": [
         "https://api.deepseek.com",
+        "https://api.deepseek.com/v1",
         "https://api.deepseek.com/anthropic"
       ],
       "auth_modes": [

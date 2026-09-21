@@ -233,9 +233,23 @@ def _validate_url(value: Any, field: str) -> str:
 
 def _validate_provider_base_url(value: Any) -> str:
     base_url = _validate_url(value, "provider.base_url")
-    # The API version belongs to the provider's path, so never add /v1 to
-    # an arbitrary root. Only collapse an unmistakably duplicated suffix.
-    return re.sub(r"(?:/v1){2,}$", "/v1", base_url)
+    parsed = urlparse(base_url)
+    path = parsed.path.rstrip("/")
+    # Accept the URLs providers commonly show in their documentation. EMP
+    # owns the final resource suffix, so a pasted request or model-list URL is
+    # reduced to the API root before requests are constructed.
+    path = re.sub(
+        r"/(?:responses?(?:/compact)?|chat/completions|messages|models)$",
+        "",
+        path,
+        flags=re.IGNORECASE,
+    )
+    path = re.sub(r"(?:/v1){2,}$", "/v1", path, flags=re.IGNORECASE)
+    # A bare origin is overwhelmingly an OpenAI-compatible endpoint. Keep
+    # explicit provider paths such as /api/paas/v4 and /v1beta/openai intact.
+    if not path:
+        path = "/v1"
+    return parsed._replace(path=path).geturl().rstrip("/")
 
 
 def _normalize_codex_runtime_sources(value: Any) -> List[str]:
