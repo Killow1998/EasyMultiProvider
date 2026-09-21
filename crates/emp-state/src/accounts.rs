@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 const MAX_HIDDEN_MODELS: usize = 1000;
 const MAX_MODEL_ID_BYTES: usize = 256;
+const MAX_AUTH_BYTES: usize = 1024 * 1024;
 const CREDENTIAL_STATUSES: [&str; 3] = ["unknown", "valid", "invalid"];
 
 /// A stable Python-visible account failure without credential material.
@@ -36,6 +37,99 @@ impl fmt::Display for AccountError {
 impl std::error::Error for AccountError {}
 
 pub type AccountResult<T> = Result<T, AccountError>;
+
+fn python_json_spacing(value: &Value) -> usize {
+    match value {
+        Value::Array(values) => {
+            values.len().saturating_sub(1) + values.iter().map(python_json_spacing).sum::<usize>()
+        }
+        Value::Object(values) => {
+            values.len()
+                + values.len().saturating_sub(1)
+                + values.values().map(python_json_spacing).sum::<usize>()
+        }
+        _ => 0,
+    }
+}
+
+/// Validate imported Codex credential JSON without persisting it.
+pub fn validate_auth_json(auth: &Value) -> AccountResult<Value> {
+    let Value::Object(object) = auth else {
+        return Err(AccountError::new("auth_json must be a JSON object"));
+    };
+    let encoded =
+        serde_json::to_vec(auth).map_err(|_| AccountError::new("auth_json is invalid"))?;
+    if encoded.len().saturating_add(python_json_spacing(auth)) > MAX_AUTH_BYTES {
+        return Err(AccountError::new("auth_json is too large"));
+    }
+    let tokens = object.get("tokens").and_then(Value::as_object);
+    let access_token = tokens.map_or_else(
+        || object.get("access_token"),
+        |tokens| tokens.get("access_token"),
+    );
+    if access_token
+        .and_then(Value::as_str)
+        .is_none_or(|value| python_trim(value).is_empty())
+    {
+        return Err(AccountError::new(
+            "auth_json does not contain a ChatGPT access token",
+        ));
+    }
+    Ok(auth.clone())
+}
+
+fn auth_identities(auth: &Value) -> BTreeSet<(String, String)> {
+    let Some(auth) = auth.as_object() else {
+        return BTreeSet::new();
+    };
+    let tokens = auth
+        .get("tokens")
+        .and_then(Value::as_object)
+        .unwrap_or(auth);
+    let mut identities = BTreeSet::new();
+    for source in [tokens, auth] {
+        for key in ["account_id", "chatgpt_account_id"] {
+            if let Some(value) = source
+                .get(key)
+                .and_then(Value::as_str)
+                .map(python_trim)
+                .filter(|value| !value.is_empty())
+            {
+                identities.insert(("account_id".to_owned(), value.to_owned()));
+            }
+        }
+    }
+    if let Some(value) = tokens
+        .get("access_token")
+        .and_then(Value::as_str)
+        .map(python_trim)
+        .filter(|value| !value.is_empty())
+    {
+        identities.insert(("access_token".to_owned(), value.to_owned()));
+    }
+    identities
+}
+
+/// Compare two validated credential documents using Python's stable identity
+/// rule: matching account IDs win, with access-token equality as the fallback.
+pub fn same_account_auth(left: &Value, right: &Value) -> bool {
+    let left = auth_identities(left);
+    let right = auth_identities(right);
+    let left_accounts = left
+        .iter()
+        .filter(|(kind, _)| kind == "account_id")
+        .map(|(_, value)| value)
+        .collect::<BTreeSet<_>>();
+    let right_accounts = right
+        .iter()
+        .filter(|(kind, _)| kind == "account_id")
+        .map(|(_, value)| value)
+        .collect::<BTreeSet<_>>();
+    if !left_accounts.is_empty() && !right_accounts.is_empty() {
+        return left_accounts == right_accounts;
+    }
+    left.iter().any(|identity| right.contains(identity))
+}
 
 /// Apply Python `str.strip()` semantics, including the four C0 file separators.
 fn python_trim(value: &str) -> &str {
@@ -282,5 +376,30 @@ mod tests {
                 "model_context_windows values must be positive integer tokens"
             );
         }
+    }
+
+    #[test]
+    fn auth_validation_and_identity_match_python_precedence() {
+        assert_eq!(
+            validate_auth_json(&serde_json::json!({
+                "tokens": {},
+                "access_token": "top-level-is-shadowed"
+            }))
+            .expect_err("tokens object shadows top-level token")
+            .to_string(),
+            "auth_json does not contain a ChatGPT access token"
+        );
+        assert!(same_account_auth(
+            &serde_json::json!({"tokens": {"account_id": "same", "access_token": "left"}}),
+            &serde_json::json!({"tokens": {"account_id": "same", "access_token": "right"}})
+        ));
+        assert!(!same_account_auth(
+            &serde_json::json!({"tokens": {"account_id": "left", "access_token": "shared"}}),
+            &serde_json::json!({"tokens": {"account_id": "right", "access_token": "shared"}})
+        ));
+        assert!(same_account_auth(
+            &serde_json::json!({"access_token": "shared"}),
+            &serde_json::json!({"access_token": "shared"})
+        ));
     }
 }

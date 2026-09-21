@@ -22,7 +22,7 @@ pub mod vault;
 
 pub use accounts::{
     AccountError, AccountResult, account_auth_path, normalize_account, normalize_context_windows,
-    normalize_hidden_models,
+    normalize_hidden_models, same_account_auth, validate_auth_json,
 };
 pub use config::{
     CONFIG_PATH_ENV, ConfigError, ConfigResult, canonical_catalog_json, canonicalize_account_paths,
@@ -41,8 +41,9 @@ pub use filesystem::{
 pub use lock::{IntegrationFileLock, LockError};
 pub use migration::{
     MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES, MIGRATION_MAGIC, MIGRATION_SCHEMA, MIGRATION_VERSION,
-    MIN_PASSWORD_BYTES, MigrationError, MigrationParams, MigrationResult, SALT_BYTES, SCRYPT_N,
-    SCRYPT_P, SCRYPT_R, decode_migration, encode_migration, parse_envelope,
+    MIN_PASSWORD_BYTES, MigrationError, MigrationImportSummary, MigrationParams, MigrationResult,
+    SALT_BYTES, SCRYPT_N, SCRYPT_P, SCRYPT_R, decode_migration, encode_migration,
+    import_migration_bundle, parse_envelope,
 };
 pub use model_values::{
     IMAGE_MODALITY, MAX_MODALITIES, MAX_MODALITY_ID_BYTES, TEXT_MODALITY, codex_input_modalities,

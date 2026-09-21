@@ -44,8 +44,13 @@ Progress evidence on 2026-09-21:
   keys, preserves masked managed keys, cleans obsolete managed secrets, writes
   private files atomically and participates in a caller-owned rollback without
   committing it early. Its serialized configuration and decrypted secret match
-  the live Python oracle. Import merge behavior and Windows ACL/reparse-point
-  hardening remain.
+  the live Python oracle. Rust can now decrypt and validate Python `.emp`
+  bundles, merge providers, models and presentations without deleting local
+  entries, identify or rename subscription accounts, re-encrypt imported
+  credentials with the destination vault, and roll every file back on a failed
+  commit. The complete provider/account path also matches the live Python
+  oracle. Export selection/composition and Windows ACL/reparse-point hardening
+  remain.
   Account metadata normalization also matches Python's sorting, UTF-8 byte
   limits, truthiness, quota preservation and exact validation order.
 - Runtime compatibility run `35636981488` passed the complete Python suite,
@@ -70,6 +75,8 @@ Progress evidence on 2026-09-21:
 - Runtime compatibility run `35657782552` passed all seven jobs after private
   path canonicalization and configuration loading, including the corrected
   Windows path form.
+- Runtime compatibility run `35659424531` passed all seven jobs with
+  transactional configuration saving and its live Python save oracle.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
