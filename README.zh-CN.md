@@ -4,12 +4,19 @@
 
 <h1 align="center">EMP — EasyMultiProvider</h1>
 
-<p align="center"><strong>在熟悉的 Codex 模型列表里，使用另一个 ChatGPT 账号或外部 API 模型。</strong></p>
+<p align="center"><strong>一个 Codex 模型选择器，切换多个 ChatGPT 账号和外部 API 模型。</strong></p>
 
 <p align="center"><a href="README.md">English</a> · <a href="#快速开始">快速开始</a> · <a href="https://github.com/Killow1998/EasyMultiProvider/releases/latest">下载</a></p>
 
-EMP 在本机运行。你可以在网页里导入另一个 ChatGPT 订阅账号，或添加 DeepSeek
-等官方 API Provider，选择模型后应用到 Codex，再从 `/model` 或 Codex App 菜单中切换。
+EMP 在本机运行，主要解决两件事：
+
+1. **多账号共用一个模型选择器。**导入其他 ChatGPT 订阅账号后，直接在同一个
+   `/model` 列表或 Codex App 菜单里选择对应模型，不必退出当前账号再登录。
+2. **外部模型进入模型选择器。**添加 DeepSeek 等 API Provider 并导入模型。
+   EMP 适配受支持的协议，让会话、工具调用和模型切换在上游模型支持时尽量接近
+   Codex 原生模型的使用体验。
+
+在 EMP 的本地网页配置账号和 Provider，再将模型列表应用到 Codex。
 
 例如，同一个模型列表可以同时出现：
 

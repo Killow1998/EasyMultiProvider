@@ -5,7 +5,7 @@
 <h1 align="center">EMP — EasyMultiProvider</h1>
 
 <p align="center">
-  <strong>Use another ChatGPT account or an API model in the Codex model picker you already use.</strong>
+  <strong>One Codex model picker for multiple ChatGPT accounts and external API models.</strong>
 </p>
 
 <p align="center">
@@ -23,7 +23,12 @@
   · <a href="README.zh-CN.md">中文</a>
 </p>
 
-EMP runs locally beside Codex. In its Web UI, import another ChatGPT subscription or add an official API provider such as DeepSeek, choose its models, and apply the catalog to Codex. Then select a model through `/model` or the Codex App menu.
+EMP runs locally beside Codex and does two things:
+
+1. **Switch accounts in one model picker.** Import additional ChatGPT subscriptions, then choose their models in the same `/model` list or Codex App menu as your current login. You do not have to sign out to use another account.
+2. **Use external models like Codex models.** Add an API provider such as DeepSeek and import its models into that picker. EMP adapts supported protocols so sessions, tool calls, and model switching feel close to native Codex use when the upstream model supports them.
+
+Configure accounts and providers in EMP's local Web UI, then apply the catalog to Codex.
 
 For example, one model picker can show:
 
@@ -34,44 +39,6 @@ For example, one model picker can show:
 | `deepseek/deepseek-v4-pro` | A model you imported from the DeepSeek API |
 
 The prefixed names are examples; you choose the account, provider, and models. Selecting `team/gpt-5.6-luna` uses the imported account, while `deepseek/deepseek-v4-pro` uses the DeepSeek API key. Codex still owns the coding session, permissions, and tools.
-
-## Why EMP?
-
-You can add models without editing Codex configuration for each provider. EMP keeps the catalog, encrypted credentials, and account quota in one local Web UI.
-
-| What you need | EMP |
-| --- | --- |
-| Multiple ChatGPT subscription accounts | Import accounts, refresh quota, and expose selected models with readable prefixes |
-| External API models inside Codex | Add official or custom providers and import their models into the Codex catalog |
-| Existing Codex work | Keep native sessions, `resume`, WebSockets, compression, and MCP on supported paths |
-| Switching models mid-task | Continue compacted tasks using Codex-owned visible history |
-| Usage visibility | Track live and historical tokens, API-equivalent cost, quota, cache hit rate, TTFT/TPS, and observed error rates |
-| Local credentials | Encrypt subscription credentials and Provider API keys on the local machine |
-| Migration between machines | Export and import password-protected `.emp` bundles |
-
-### Mental model
-
-~~~text
-                  Codex App / CLI / editor integration
-                               │
-                               ▼
-                        ┌─────────────┐
-                        │     EMP     │
-                        │ local only  │
-                        └──────┬──────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-              ▼                ▼                ▼
-       Current Codex     Extra ChatGPT     API Providers
-          login           subscriptions     / custom APIs
-              │                │                │
-              └────────────────┼────────────────┘
-                               ▼
-                    One Codex model catalog
-~~~
-
-EMP does not bundle Codex and does not take ownership of the persistent Codex App Server.
 
 ## Quick Start
 
