@@ -5,7 +5,7 @@
 <h1 align="center">EMP — EasyMultiProvider</h1>
 
 <p align="center">
-  <strong>Bring multiple ChatGPT subscriptions and external models into Codex — without replacing the native Codex experience.</strong>
+  <strong>Use another ChatGPT account or an API model in the Codex model picker you already use.</strong>
 </p>
 
 <p align="center">
@@ -23,25 +23,28 @@
   · <a href="README.zh-CN.md">中文</a>
 </p>
 
-EMP is a local, browser-configured control plane for Codex. It lets the same Codex client use the current ChatGPT login, additional ChatGPT subscription accounts, and external API models from one model catalog.
+EMP runs locally beside Codex. In its Web UI, import another ChatGPT subscription or add an API provider such as LiteLLM, choose its models, and apply the catalog to Codex. Then select a model through `/model` or the Codex App menu.
 
-**The goal is not to replace Codex.** EMP keeps Codex in charge of the client, task, permissions, tools, and native workflow while adding account routing, external providers, model management, usage visibility, and cross-provider continuity.
+For example, one model picker can show:
 
-> **One Codex. Multiple accounts. Multiple providers. One model picker.**
+| Model shown in Codex | Where the request goes |
+| --- | --- |
+| `gpt-5.6-luna` | Your current Codex login |
+| `team/gpt-5.6-luna` | An imported ChatGPT subscription |
+| `litellm/glm` | A model you imported from a LiteLLM provider |
 
-<!-- Demo placeholder: add a short assets/emp-demo.gif here when available. -->
+The prefixed names are examples; you choose the account, provider, and models. Selecting `team/gpt-5.6-luna` uses the imported account, while `litellm/glm` uses that provider's API key. Codex still owns the coding session, permissions, and tools.
 
 ## Why EMP?
 
-Most model routers stop at forwarding an OpenAI-compatible request. EMP is built around the parts of Codex that make a coding-agent session more than a single HTTP call.
+You can add models without editing Codex configuration for each provider. EMP keeps the catalog, encrypted credentials, and account quota in one local Web UI.
 
 | What you need | EMP |
 | --- | --- |
 | Multiple ChatGPT subscription accounts | Import accounts, refresh quota, and expose selected models with readable prefixes |
 | External API models inside Codex | Add official or custom providers and import their models into the Codex catalog |
-| Native Codex model selection | Use native, subscription, and external models from the same Codex model picker |
-| Existing Codex sessions | Preserve native sessions, `resume`, WebSockets, compression, and MCP on supported paths |
-| Switching providers mid-task | Continue compacted tasks using Codex-owned visible history instead of forwarding private opaque state |
+| Existing Codex work | Keep native sessions, `resume`, WebSockets, compression, and MCP on supported paths |
+| Switching models mid-task | Continue compacted tasks using Codex-owned visible history |
 | Usage visibility | Track live and historical tokens, API-equivalent cost, quota, cache hit rate, TTFT/TPS, and observed error rates |
 | Local credentials | Encrypt subscription credentials and Provider API keys on the local machine |
 | Migration between machines | Export and import password-protected `.emp` bundles |
@@ -76,12 +79,23 @@ EMP does not bundle Codex and does not take ownership of the persistent Codex Ap
 
 Download the latest reviewed build from [GitHub Releases](https://github.com/Killow1998/EasyMultiProvider/releases/latest).
 
-| Platform | Package | Launch |
+| Platform | Package | Install and launch |
 | --- | --- | --- |
 | Windows x64 | `EMP.exe` | Double-click `EMP.exe` |
-| Ubuntu 22.04+ x64 | `.tar.gz` or `.deb` | Run `sh install-user.sh`, then open **EMP** |
+| Ubuntu 22.04+ x64 | `EMP-linux-x86_64.tar.gz` | Use the user-install commands below, then open **EMP** from the application menu |
+| Ubuntu 22.04+ x64 | `EMP-linux-x86_64.deb` | Run `sudo apt install ./EMP-linux-x86_64.deb`, then open **EMP** |
 | macOS Apple Silicon | `.dmg` | Drag **EMP** to Applications |
 | macOS Intel | `.dmg` | Drag **EMP** to Applications |
+
+For the Linux `.tar.gz`, run these commands in the download directory:
+
+~~~bash
+tar -xzf EMP-linux-x86_64.tar.gz
+cd EMP
+./install-user.sh
+~~~
+
+The `.deb` is a separate system-managed installation; it does not contain `install-user.sh`.
 
 The [package workflow](https://github.com/Killow1998/EasyMultiProvider/actions/workflows/package.yml) builds and smoke-tests the native artifacts before a release is published.
 
@@ -246,14 +260,14 @@ Windows:
 .\EMP.exe serve --config config.json
 ~~~
 
-Linux archive or `.deb`:
+Linux archive, from its extracted directory:
 
 ~~~bash
 ./EMP --version
 ./EMP serve --config config.json
 ~~~
 
-The `.deb` installs the same command into `PATH`, so omit `./` after installation.
+With the `.deb`, use `EMP` instead of `./EMP` after installation.
 
 EMP listens on `http://127.0.0.1:4200` by default. Use `--port` only when that port is already occupied.
 
@@ -282,7 +296,7 @@ Desktop launch stores configuration in the normal per-user location:
 
 The Linux user installer places the binary at `$XDG_DATA_HOME/easy-multi-provider/EMP` (default `~/.local/share/easy-multi-provider/EMP`) and the launcher at `~/.local/bin/EMP`.
 
-Installation and Web UI updates do not require sudo or an administrator password. Configuration and account data stay in the user configuration directory and are not replaced by binary updates.
+The Linux user installer and Web UI updates do not require sudo or an administrator password. Installing the system `.deb` does. Configuration and account data stay in the user configuration directory and are not replaced by binary updates.
 
 ## Docs
 
