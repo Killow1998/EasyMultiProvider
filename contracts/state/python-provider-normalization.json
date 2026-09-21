@@ -1,0 +1,366 @@
+{
+  "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config._normalize_provider",
+  "status": "implemented",
+  "implementation": "crates/emp-state/src/config.rs",
+  "test": "crates/emp-state/tests/provider_config_compat.rs",
+  "valid": [
+    {
+      "input": {
+        "id": "deepseek",
+        "base_url": "https://api.deepseek.com"
+      },
+      "expected": {
+        "id": "deepseek",
+        "name": "deepseek",
+        "base_url": "https://api.deepseek.com/v1",
+        "protocol": "chat_completions",
+        "auth_mode": "api_key",
+        "api_key": "",
+        "api_key_file": "",
+        "anthropic_version": "2023-06-01",
+        "enabled": true,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "capabilities": {}
+      }
+    },
+    {
+      "input": {
+        "id": " deepseek.prod-1 ",
+        "name": " DeepSeek ",
+        "base_url": "https://api.deepseek.com/v1/responses",
+        "protocol": "chat_completions",
+        "auth_mode": "api_key",
+        "api_key": "synthetic-provider-key",
+        "api_key_file": " /tmp/synthetic-provider.key ",
+        "anthropic_version": " 2023-06-01 ",
+        "enabled": 0,
+        "deployment_identity": " prod/deployment-1 ",
+        "resolved_protocol": " responses ",
+        "protocol_observation": {
+          "source": "observed",
+          "confidence": "0.875",
+          "observed_at": "2026-08-21T00:00:00Z",
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "deployment_identity": " production ",
+          "upstream_model": " deepseek-chat ",
+          "unknown": "discard"
+        },
+        "capabilities": {
+          "streaming": true,
+          "structured_tools": false,
+          "supports_reasoning": true,
+          "websocket": false,
+          "unknown": true
+        },
+        "unknown": "discard"
+      },
+      "expected": {
+        "id": "deepseek.prod-1",
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.com/v1",
+        "protocol": "chat_completions",
+        "auth_mode": "api_key",
+        "api_key": "synthetic-provider-key",
+        "api_key_file": "/tmp/synthetic-provider.key",
+        "anthropic_version": "2023-06-01",
+        "enabled": false,
+        "deployment_identity": "prod/deployment-1",
+        "resolved_protocol": "responses",
+        "protocol_observation": {
+          "source": "observed",
+          "confidence": 0.875,
+          "observed_at": "2026-08-21T00:00:00Z",
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "deployment_identity": "production",
+          "upstream_model": "deepseek-chat"
+        },
+        "capabilities": {
+          "structured_tools": false,
+          "websocket": false,
+          "supports_reasoning": true,
+          "streaming": true
+        }
+      }
+    },
+    {
+      "input": {
+        "id": "native-forward",
+        "base_url": "http://[::1]:43123/v1",
+        "protocol": "responses",
+        "auth_mode": "forward",
+        "enabled": "false",
+        "protocol_observation": {
+          "source": "official",
+          "confidence": null,
+          "observed_at": "2026-08-21 00:00:00+00:00"
+        }
+      },
+      "expected": {
+        "id": "native-forward",
+        "name": "native-forward",
+        "base_url": "http://[::1]:43123/v1",
+        "protocol": "responses",
+        "auth_mode": "forward",
+        "api_key": "",
+        "api_key_file": "",
+        "anthropic_version": "2023-06-01",
+        "enabled": true,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "official",
+          "confidence": 0.95,
+          "observed_at": "2026-08-21 00:00:00+00:00",
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "capabilities": {}
+      }
+    },
+    {
+      "input": {
+        "id": "null-disabled",
+        "base_url": "https://example.test/v1",
+        "enabled": null
+      },
+      "expected": {
+        "id": "null-disabled",
+        "name": "null-disabled",
+        "base_url": "https://example.test/v1",
+        "protocol": "chat_completions",
+        "auth_mode": "api_key",
+        "api_key": "",
+        "api_key_file": "",
+        "anthropic_version": "2023-06-01",
+        "enabled": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "capabilities": {}
+      }
+    },
+    {
+      "input": {
+        "id": "empty-list-disabled",
+        "base_url": "https://example.test/v1",
+        "enabled": []
+      },
+      "expected": {
+        "id": "empty-list-disabled",
+        "name": "empty-list-disabled",
+        "base_url": "https://example.test/v1",
+        "protocol": "chat_completions",
+        "auth_mode": "api_key",
+        "api_key": "",
+        "api_key_file": "",
+        "anthropic_version": "2023-06-01",
+        "enabled": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "capabilities": {}
+      }
+    },
+    {
+      "input": {
+        "id": "object-enabled",
+        "base_url": "https://example.test/v1",
+        "enabled": {
+          "value": false
+        }
+      },
+      "expected": {
+        "id": "object-enabled",
+        "name": "object-enabled",
+        "base_url": "https://example.test/v1",
+        "protocol": "chat_completions",
+        "auth_mode": "api_key",
+        "api_key": "",
+        "api_key_file": "",
+        "anthropic_version": "2023-06-01",
+        "enabled": true,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "capabilities": {}
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "input": "provider",
+      "error": "each provider must be an object"
+    },
+    {
+      "input": {
+        "name": "missing",
+        "base_url": "https://example.test/v1"
+      },
+      "error": "provider.id is required"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "name": 42,
+        "base_url": "https://example.test/v1"
+      },
+      "error": "value must be a string"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "api_key": []
+      },
+      "error": "value must be a string"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "protocol": "rpc"
+      },
+      "error": "provider.protocol must be auto, responses, chat_completions, or anthropic_messages"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "auth_mode": "delegate"
+      },
+      "error": "provider.auth_mode must be api_key, anthropic_api_key, or forward"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "protocol": "auto",
+        "auth_mode": "forward"
+      },
+      "error": "forward providers must use the Responses protocol"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "deployment_identity": true
+      },
+      "error": "provider.deployment_identity must be a string"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "resolved_protocol": "auto"
+      },
+      "error": "resolved_protocol must be a concrete protocol"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "protocol_observation": []
+      },
+      "error": "protocol_observation must be an object"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "protocol_observation": {
+          "source": "secret"
+        }
+      },
+      "error": "invalid protocol_observation"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "protocol_observation": {
+          "confidence": 1.1
+        }
+      },
+      "error": "invalid protocol_observation"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "protocol_observation": {
+          "observed_at": "not-a-time"
+        }
+      },
+      "error": "invalid protocol_observation"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "protocol_observation": {
+          "endpoint_fingerprint": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "error": "protocol_observation.endpoint_fingerprint is invalid"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "protocol_observation": {
+          "deployment_identity": {}
+        }
+      },
+      "error": "protocol_observation.deployment_identity must be a string"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "capabilities": []
+      },
+      "error": "provider.capabilities must be an object"
+    },
+    {
+      "input": {
+        "id": "demo",
+        "base_url": "https://example.test/v1",
+        "capabilities": {
+          "streaming": "yes"
+        }
+      },
+      "error": "provider.capabilities.streaming must be boolean"
+    }
+  ]
+}

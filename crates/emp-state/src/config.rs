@@ -267,6 +267,376 @@ pub fn normalize_provider_base_url(raw: Option<&Value>) -> ConfigResult<String> 
     Ok(normalized.trim_end_matches('/').to_owned())
 }
 
+const PROVIDER_PROTOCOLS: [&str; 4] = [
+    "auto",
+    "responses",
+    "chat_completions",
+    "anthropic_messages",
+];
+const PROVIDER_AUTH_MODES: [&str; 3] = ["api_key", "anthropic_api_key", "forward"];
+const CAPABILITY_SOURCES: [(&str, f64); 7] = [
+    ("official", 0.95),
+    ("advertised", 0.75),
+    ("observed", 1.0),
+    ("manual", 1.0),
+    ("inherited", 0.6),
+    ("inferred", 0.35),
+    ("unknown", 0.0),
+];
+const PROVIDER_BOOLEAN_CAPABILITIES: [&str; 8] = [
+    "streaming",
+    "structured_tools",
+    "parallel_tools",
+    "structured_output",
+    "web_search",
+    "supports_reasoning",
+    "supports_reasoning_summaries",
+    "websocket",
+];
+
+fn json_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+        Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+    }
+}
+
+fn safe_capability_identity(raw: Option<&Value>, field: &str) -> ConfigResult<String> {
+    let value = string_value(raw, field, false)?;
+    let valid = value.len() <= 256
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '/' | ':' | '-')
+        });
+    if !value.is_empty() && !valid {
+        return Err(ConfigError::new(format!(
+            "{field} contains unsupported characters"
+        )));
+    }
+    Ok(value)
+}
+
+fn normalize_resolved_protocol(raw: Option<&Value>) -> ConfigResult<String> {
+    let value = string_value(raw, "resolved_protocol", false)?;
+    if !value.is_empty() && !PROVIDER_PROTOCOLS[1..].contains(&value.as_str()) {
+        return Err(ConfigError::new(
+            "resolved_protocol must be a concrete protocol",
+        ));
+    }
+    Ok(value)
+}
+
+fn leap_year(year: u32) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
+fn valid_iso_date(value: &str) -> bool {
+    if value.len() != 10
+        || value.as_bytes().get(4) != Some(&b'-')
+        || value.as_bytes().get(7) != Some(&b'-')
+    {
+        return false;
+    }
+    let Ok(year) = value[..4].parse::<u32>() else {
+        return false;
+    };
+    if year == 0 {
+        return false;
+    }
+    let Ok(month) = value[5..7].parse::<u32>() else {
+        return false;
+    };
+    let Ok(day) = value[8..].parse::<u32>() else {
+        return false;
+    };
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year(year) => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&day)
+}
+
+fn two_digit_number(value: &str, maximum: u32) -> bool {
+    value.len() == 2
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && value.parse::<u32>().is_ok_and(|number| number <= maximum)
+}
+
+fn strip_fraction(value: &str) -> Option<&str> {
+    let separator = value.find(['.', ',']);
+    match separator {
+        None => Some(value),
+        Some(index) => {
+            let fraction = &value[index + 1..];
+            (!fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit()))
+                .then_some(&value[..index])
+        }
+    }
+}
+
+fn valid_iso_offset(value: &str) -> bool {
+    let Some(value) = value.strip_prefix(['+', '-']) else {
+        return false;
+    };
+    let mut parts = value.split(':');
+    let Some(hour) = parts.next() else {
+        return false;
+    };
+    let Some(minute) = parts.next() else {
+        return false;
+    };
+    if !two_digit_number(hour, 23) || !two_digit_number(minute, 59) {
+        return false;
+    }
+    match parts.next() {
+        None => true,
+        Some(second) => {
+            let Some(second) = strip_fraction(second) else {
+                return false;
+            };
+            two_digit_number(second, 59) && parts.next().is_none()
+        }
+    }
+}
+
+fn valid_iso_time(value: &str) -> bool {
+    let (time, offset) = if let Some(time) = value.strip_suffix('Z') {
+        (time, None)
+    } else if let Some(index) = value
+        .char_indices()
+        .skip(1)
+        .find_map(|(index, character)| matches!(character, '+' | '-').then_some(index))
+    {
+        (&value[..index], Some(&value[index..]))
+    } else {
+        (value, None)
+    };
+    if offset.is_some_and(|value| !valid_iso_offset(value)) {
+        return false;
+    }
+    let mut parts = time.split(':');
+    let Some(hour) = parts.next() else {
+        return false;
+    };
+    if !two_digit_number(hour, 23) {
+        return false;
+    }
+    let Some(minute) = parts.next() else {
+        return true;
+    };
+    if !two_digit_number(minute, 59) {
+        return false;
+    }
+    let Some(second) = parts.next() else {
+        return true;
+    };
+    let Some(second) = strip_fraction(second) else {
+        return false;
+    };
+    two_digit_number(second, 59) && parts.next().is_none()
+}
+
+fn valid_python_iso_timestamp(value: &str) -> bool {
+    let Some(date) = value.get(..10) else {
+        return false;
+    };
+    if !valid_iso_date(date) {
+        return false;
+    }
+    let Some(rest) = value.get(10..) else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    let mut characters = rest.chars();
+    let Some(_) = characters.next() else {
+        return false;
+    };
+    valid_iso_time(characters.as_str())
+}
+
+fn protocol_confidence(raw: Option<&Value>, default: f64) -> ConfigResult<f64> {
+    let value = match raw {
+        None | Some(Value::Null) => default,
+        Some(Value::Bool(value)) => f64::from(*value),
+        Some(Value::Number(value)) => value
+            .as_f64()
+            .ok_or_else(|| ConfigError::new("invalid protocol_observation"))?,
+        Some(Value::String(value)) => value
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| ConfigError::new("invalid protocol_observation"))?,
+        Some(_) => return Err(ConfigError::new("invalid protocol_observation")),
+    };
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(ConfigError::new("invalid protocol_observation"));
+    }
+    Ok(value)
+}
+
+fn normalize_protocol_observation(raw: Option<&Value>) -> ConfigResult<Value> {
+    let empty = Map::new();
+    let raw = match raw {
+        None | Some(Value::Null) => &empty,
+        Some(Value::Object(raw)) => raw,
+        Some(_) => {
+            return Err(ConfigError::new("protocol_observation must be an object"));
+        }
+    };
+    let source = match raw.get("source") {
+        None => "unknown",
+        Some(Value::String(value)) => value,
+        Some(_) => return Err(ConfigError::new("invalid protocol_observation")),
+    };
+    let Some((_, default_confidence)) = CAPABILITY_SOURCES
+        .iter()
+        .find(|(candidate, _)| *candidate == source)
+    else {
+        return Err(ConfigError::new("invalid protocol_observation"));
+    };
+    let confidence = protocol_confidence(raw.get("confidence"), *default_confidence)?;
+    let observed_at = match raw.get("observed_at") {
+        None | Some(Value::Null) => Value::Null,
+        Some(Value::String(value)) if valid_python_iso_timestamp(value) => {
+            Value::String(value.clone())
+        }
+        Some(_) => return Err(ConfigError::new("invalid protocol_observation")),
+    };
+    let fingerprint = string_value(
+        raw.get("endpoint_fingerprint"),
+        "protocol_observation.endpoint_fingerprint",
+        false,
+    )?;
+    let valid_fingerprint = fingerprint.len() == 71
+        && fingerprint.starts_with("sha256:")
+        && fingerprint[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'));
+    if !fingerprint.is_empty() && !valid_fingerprint {
+        return Err(ConfigError::new(
+            "protocol_observation.endpoint_fingerprint is invalid",
+        ));
+    }
+    Ok(serde_json::json!({
+        "source": source,
+        "confidence": confidence,
+        "observed_at": observed_at,
+        "endpoint_fingerprint": fingerprint,
+        "deployment_identity": safe_capability_identity(
+            raw.get("deployment_identity"),
+            "protocol_observation.deployment_identity",
+        )?,
+        "upstream_model": safe_capability_identity(
+            raw.get("upstream_model"),
+            "protocol_observation.upstream_model",
+        )?,
+    }))
+}
+
+fn normalize_provider_capabilities(raw: Option<&Value>) -> ConfigResult<Value> {
+    let raw = match raw {
+        None | Some(Value::Null) => return Ok(Value::Object(Map::new())),
+        Some(Value::Object(raw)) => raw,
+        Some(_) => {
+            return Err(ConfigError::new("provider.capabilities must be an object"));
+        }
+    };
+    let mut normalized = Map::new();
+    for name in PROVIDER_BOOLEAN_CAPABILITIES {
+        let Some(value) = raw.get(name) else {
+            continue;
+        };
+        let Value::Bool(value) = value else {
+            return Err(ConfigError::new(format!(
+                "provider.capabilities.{name} must be boolean"
+            )));
+        };
+        normalized.insert(name.to_owned(), Value::Bool(*value));
+    }
+    Ok(Value::Object(normalized))
+}
+
+/// Normalize one complete external-provider record into the persisted shape.
+pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
+    let Value::Object(raw) = raw else {
+        return Err(ConfigError::new("each provider must be an object"));
+    };
+    let id = normalize_provider_id(raw.get("id"))?;
+    let name = string_value(raw.get("name"), "value", false)?;
+    let name = if name.is_empty() {
+        string_value(raw.get("id"), "provider.id", false)?
+    } else {
+        name
+    };
+    let base_url = normalize_provider_base_url(raw.get("base_url"))?;
+    let protocol = string_value(raw.get("protocol"), "value", false)?;
+    let protocol = if protocol.is_empty() {
+        "chat_completions".to_owned()
+    } else {
+        protocol
+    };
+    let auth_mode = string_value(raw.get("auth_mode"), "value", false)?;
+    let auth_mode = if auth_mode.is_empty() {
+        "api_key".to_owned()
+    } else {
+        auth_mode
+    };
+    let api_key = string_value(raw.get("api_key"), "value", false)?;
+    let api_key_file = string_value(raw.get("api_key_file"), "value", false)?;
+    let anthropic_version = string_value(raw.get("anthropic_version"), "value", false)?;
+    let anthropic_version = if anthropic_version.is_empty() {
+        "2023-06-01".to_owned()
+    } else {
+        anthropic_version
+    };
+    let enabled = raw.get("enabled").is_none_or(json_truthy);
+    let deployment_identity = safe_capability_identity(
+        raw.get("deployment_identity"),
+        "provider.deployment_identity",
+    )?;
+    let resolved_protocol = normalize_resolved_protocol(raw.get("resolved_protocol"))?;
+    let protocol_observation = normalize_protocol_observation(raw.get("protocol_observation"))?;
+    let capabilities = normalize_provider_capabilities(raw.get("capabilities"))?;
+
+    if !PROVIDER_PROTOCOLS.contains(&protocol.as_str()) {
+        return Err(ConfigError::new(
+            "provider.protocol must be auto, responses, chat_completions, or anthropic_messages",
+        ));
+    }
+    if !PROVIDER_AUTH_MODES.contains(&auth_mode.as_str()) {
+        return Err(ConfigError::new(
+            "provider.auth_mode must be api_key, anthropic_api_key, or forward",
+        ));
+    }
+    if auth_mode == "forward" && protocol != "responses" {
+        return Err(ConfigError::new(
+            "forward providers must use the Responses protocol",
+        ));
+    }
+    Ok(serde_json::json!({
+        "id": id,
+        "name": name,
+        "base_url": base_url,
+        "protocol": protocol,
+        "auth_mode": auth_mode,
+        "api_key": api_key,
+        "api_key_file": api_key_file,
+        "anthropic_version": anthropic_version,
+        "enabled": enabled,
+        "deployment_identity": deployment_identity,
+        "resolved_protocol": resolved_protocol,
+        "protocol_observation": protocol_observation,
+        "capabilities": capabilities,
+    }))
+}
+
 /// Normalize route-keyed catalog presentation controls exactly like Python.
 ///
 /// Python intentionally rebuilds each value from the three public fields, so

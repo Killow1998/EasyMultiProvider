@@ -86,6 +86,16 @@
       "normalization": ["lock-holder process identifiers and wait duration may differ"],
       "side_effects": ["private lock directory and one-byte lock file only"],
       "fixture": "state/python-file-lock.json"
+    },
+    {
+      "id": "state.provider-normalization.python-rust",
+      "level": "state",
+      "source": "easy_multi_provider/config.py:_normalize_provider",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": ["unknown provider and capability fields are intentionally discarded"],
+      "side_effects": ["none; provider normalization is pure"],
+      "fixture": "state/python-provider-normalization.json"
     }
   ]
 }

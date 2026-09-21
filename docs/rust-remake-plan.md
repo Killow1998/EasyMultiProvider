@@ -21,7 +21,10 @@ Progress evidence on 2026-09-21:
   explicit provider paths, loopback HTTP, IPv6, and Unicode paths. Full entity
   normalization/import merge behavior remains in stage 2. Rust also contends
   on the same POSIX `flock` and Windows one-byte range as Python before changing
-  integration state; Windows ACL/reparse-point hardening remains incomplete.
+  integration state. Full provider records now preserve Python defaults,
+  protocol/auth constraints, protocol observations and explicit boolean
+  capabilities under a live differential oracle. Model/account normalization,
+  import merge behavior and Windows ACL/reparse-point hardening remain.
 - Runtime compatibility run `35636981488` passed the complete Python suite,
   Rust workspace, live state/configuration oracles, and pinned Codex protocol
   lanes on Linux, macOS, and Windows after the accepted-socket BSD fix.
