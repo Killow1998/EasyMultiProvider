@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -54,16 +54,12 @@ fn spawn_emp() -> (u16, std::process::Child) {
         .stderr(Stdio::inherit())
         .spawn()
         .expect("start EMP");
-    let mut stdout = child.stdout.take().expect("EMP stdout");
+    let stdout = child.stdout.take().expect("EMP stdout");
+    let mut stdout = BufReader::new(stdout);
     let mut ready_line = String::new();
-    loop {
-        let mut byte = [0_u8; 1];
-        stdout.read_exact(&mut byte).expect("read readiness output");
-        ready_line.push(byte[0] as char);
-        if byte[0] == b'\n' {
-            break;
-        }
-    }
+    stdout
+        .read_line(&mut ready_line)
+        .expect("read readiness output");
     assert!(
         ready_line.starts_with("EMP listening on http://127.0.0.1:"),
         "unexpected readiness line: {ready_line:?}"
@@ -73,6 +69,17 @@ fn spawn_emp() -> (u16, std::process::Child) {
         .next()
         .and_then(|raw| raw.trim_end().parse::<u16>().ok())
         .expect("readiness line contains a port");
+    // Consume the complete startup output before closing the pipe. Dropping it
+    // after only the readiness line can race the second write and terminate
+    // the child with BrokenPipe before the first request is handled.
+    let mut shutdown_line = String::new();
+    stdout
+        .read_line(&mut shutdown_line)
+        .expect("read shutdown guidance");
+    assert_eq!(
+        shutdown_line,
+        "Shutdown: terminate the process (SIGINT/SIGTERM where supported)\n"
+    );
     (port, child)
 }
 
