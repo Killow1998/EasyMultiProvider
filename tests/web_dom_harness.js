@@ -786,8 +786,7 @@ async function creditLayoutBehavior() {
   run("openResetCredits('credit-lines')");
   const modal = getElement('modal_body').innerHTML;
   assert.match(modal, /新的额度与下一次刷新时间由 OpenAI 返回/);
-  assert.match(modal, /周额度低于 10%/);
-  assert.match(modal, /没有公布/);
+  assert.doesNotMatch(modal, /10%|固定门槛|传闻|weekly quota below/, "unconfirmed reset rules must not appear in the UI");
   assert.strictEqual((modal.match(/ UTC/g) || []).length, 2, "each reset expiry must use an absolute UTC date and time");
   assert.strictEqual((modal.match(/data-reset-countdown=/g) || []).length, 2, "each reset expiry must also show remaining time");
   assert.match(modal, /Rate-limit reset/);
