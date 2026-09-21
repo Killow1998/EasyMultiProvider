@@ -1,0 +1,15 @@
+{
+  "source": "easy_multi_provider.integration._FileLock",
+  "status": "implemented",
+  "implementation": "crates/emp-state/src/lock.rs",
+  "test": "crates/emp-state/tests/file_lock.rs",
+  "contract": {
+    "posix": "exclusive nonblocking flock on the shared lock file",
+    "windows": "exclusive nonblocking one-byte lock from offset zero",
+    "file_bytes": 1,
+    "file_mode_posix": "0600",
+    "directory_mode_posix": "0700",
+    "symlink_components": "rejected",
+    "timeout_clock": "monotonic"
+  }
+}

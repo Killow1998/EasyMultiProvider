@@ -76,6 +76,16 @@
       "normalization": ["catalog object keys use Python sort_keys ordering"],
       "side_effects": ["none; helper normalization and hashing are pure"],
       "fixture": "state/python-config-etag-normalization.json"
+    },
+    {
+      "id": "state.integration-lock.python-rust",
+      "level": "state",
+      "source": "easy_multi_provider/integration.py and tests/test_integration.py",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": ["lock-holder process identifiers and wait duration may differ"],
+      "side_effects": ["private lock directory and one-byte lock file only"],
+      "fixture": "state/python-file-lock.json"
     }
   ]
 }
