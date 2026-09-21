@@ -184,6 +184,9 @@ assert.match(html, /\.model-card \.entity-card-meta\{grid-column:1\/-1;grid-row:
 assert.match(html, /\.quota-credit span\{display:block;/, "credit details must use separate visual lines");
 assert.match(html, /\.account-card \.entity-card-quota\{grid-column:2;grid-row:1\/3\}/, "desktop quota must stay beside account actions");
 assert.match(html, /\.account-card \.entity-card-actions\{grid-column:1;grid-row:2;[^}]*border:0\}/, "desktop account actions must use the open space below account identity");
+assert.match(html, /\.provider-card\{grid-template-columns:minmax\(220px,1fr\) auto;/, "provider cards must match the compact model-card layout");
+assert.match(html, /\.provider-card \.entity-card-actions\{grid-column:2;grid-row:1;flex-wrap:nowrap;/, "provider actions must stay visible on the title row");
+assert.match(html, /\.provider-card \.entity-card-meta\{grid-column:1\/-1;grid-row:2;/, "provider details must use one readable row across the card");
 assert.match(html, /\.display-row\{grid-template-columns:minmax\(0,1fr\) auto auto;/, "display cards must reserve one top row for the model and controls");
 assert.match(html, /\.display-row \.inline-check\{grid-column:2;grid-row:1;/, "context checkbox must stay at the upper right");
 assert.match(html, /\.display-row>button\{grid-column:3;grid-row:1;/, "advanced options must stay at the upper right");
@@ -962,6 +965,7 @@ function providerCardBehavior() {
   assert.match(html, /toggleProviderModels\('provider-a', false\)/);
   assert.match(html, /removeProvider\('provider-a'\)/);
   assert.doesNotMatch(html, /<table>/);
+  assert.match(html, /<\/div>\s*<div class="entity-card-meta"><code class="endpoint">/, "provider details must sit outside the narrow title column");
 }
 
 function officialPresetBehavior() {

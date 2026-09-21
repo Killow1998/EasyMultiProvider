@@ -140,9 +140,13 @@ button[data-icon]{display:inline-flex}
 .account-card .entity-card-status{margin-top:4px}
 .account-card .quota-stack{max-width:none;min-width:0}
 .account-duplicate .entity-card-main{opacity:.62}
-.provider-card .entity-card-meta{margin-top:6px}
-.provider-card .endpoint{display:block;min-width:0;overflow-wrap:anywhere;color:var(--code)}
-.provider-card .entity-card-status{margin-top:7px}
+.provider-card{grid-template-columns:minmax(220px,1fr) auto;align-items:center;gap:6px 12px;padding:10px 12px;border-radius:8px}
+.provider-card .entity-card-main{grid-column:1;grid-row:1;min-width:0}
+.provider-card .entity-card-title strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.provider-card .entity-card-meta{grid-column:1/-1;grid-row:2;min-width:0;margin-top:0;line-height:1.35;overflow-wrap:anywhere}
+.provider-card .endpoint{display:inline;color:var(--code)}
+.provider-card .entity-card-actions{grid-column:2;grid-row:1;flex-wrap:nowrap;gap:5px;padding:0;border:0}
+.provider-card .entity-card-actions button,.provider-card .entity-card-actions button:disabled{height:32px;min-height:32px;min-width:0;padding:0 8px;font-size:12px;white-space:nowrap}
 .model-card{grid-template-columns:minmax(220px,1fr) auto auto;align-items:center;gap:6px 12px;padding:10px 12px;border-radius:8px}
 .model-card .entity-card-main{grid-column:1;grid-row:1;min-width:0}
 .model-card .entity-card-title strong,.model-card .entity-card-subtitle{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -175,7 +179,7 @@ button[data-icon]{display:inline-flex}
 .modal-actions{flex-wrap:wrap}
 .choice{display:block;min-height:0;white-space:normal}
 @media(max-width:1180px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}}
-@media(max-width:760px){main{padding:18px 12px 32px}section{padding:15px}.page-header{flex-direction:column;align-items:stretch}.account-card{grid-template-columns:1fr;grid-template-rows:auto;padding:12px}.account-card .entity-card-main,.account-card .entity-card-quota,.account-card .entity-card-actions{grid-column:1;grid-row:auto}.account-card .entity-card-actions{padding-top:8px;border-top:1px solid var(--border)}.entity-card{padding:13px}.model-card{grid-template-columns:minmax(0,1fr) auto;padding:10px}.model-card .entity-card-main{grid-column:1;grid-row:1}.model-card .visibility{grid-column:2;grid-row:1}.model-card .entity-card-meta{grid-column:1/-1;grid-row:2}.model-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1/-1;grid-row:3;width:100%;padding-top:8px;border-top:1px solid var(--border)}.model-card .entity-card-actions button{width:100%}.action-group{grid-template-columns:1fr;gap:4px}.action-group-label{padding-top:0}.display-row{grid-template-columns:minmax(0,1fr) auto auto}}
+@media(max-width:760px){main{padding:18px 12px 32px}section{padding:15px}.page-header{flex-direction:column;align-items:stretch}.account-card{grid-template-columns:1fr;grid-template-rows:auto;padding:12px}.account-card .entity-card-main,.account-card .entity-card-quota,.account-card .entity-card-actions{grid-column:1;grid-row:auto}.account-card .entity-card-actions{padding-top:8px;border-top:1px solid var(--border)}.entity-card{padding:13px}.provider-card{grid-template-columns:minmax(0,1fr);padding:10px}.provider-card .entity-card-main{grid-column:1;grid-row:1}.provider-card .entity-card-meta{grid-column:1;grid-row:2}.provider-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1;grid-row:3;width:100%;padding-top:8px;border-top:1px solid var(--border)}.provider-card .entity-card-actions button{width:100%}.model-card{grid-template-columns:minmax(0,1fr) auto;padding:10px}.model-card .entity-card-main{grid-column:1;grid-row:1}.model-card .visibility{grid-column:2;grid-row:1}.model-card .entity-card-meta{grid-column:1/-1;grid-row:2}.model-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1/-1;grid-row:3;width:100%;padding-top:8px;border-top:1px solid var(--border)}.model-card .entity-card-actions button{width:100%}.action-group{grid-template-columns:1fr;gap:4px}.action-group-label{padding-top:0}.display-row{grid-template-columns:minmax(0,1fr) auto auto}}
 </style>
 </head>
 <body>
@@ -1329,9 +1333,10 @@ function renderProviders() {
   if (!providers.length) { $('providers').innerHTML = `<p class="muted">${tr('还没有 Provider。','No Providers yet.')}</p>`; return; }
   $('providers').innerHTML = `<div class="entity-list">${providers.map(p => {
     const models = (state.models || []).filter(model => model.provider === p.id); const allHidden = models.length > 0 && models.every(model => !model.enabled);
+    const providerPill = String(p.name || p.id) === String(p.id) ? '' : `<span class="pill">${esc(p.id)}</span>`;
     return `<article class="entity-card provider-card">
-      <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(p.name || p.id)}</strong><span class="pill">${esc(p.id)}</span></div>
-      <div class="entity-card-meta"><code class="endpoint">${esc(p.base_url)}</code>${esc(protocolLabel(p.protocol))} · ${esc(authLabel(p.auth_mode))}${p.api_key_set ? tr(' · Key 已设置',' · Key set') : ''} · ${tr(`${models.length} 个模型`,`${models.length} models`)}</div></div>
+      <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(p.name || p.id)}</strong>${providerPill}</div></div>
+      <div class="entity-card-meta"><code class="endpoint">${esc(p.base_url)}</code> · ${esc(protocolLabel(p.protocol))} · ${esc(authLabel(p.auth_mode))}${p.api_key_set ? tr(' · Key 已设置',' · Key set') : ''} · ${tr(`${models.length} 个模型`,`${models.length} models`)}</div>
       <div class="entity-card-actions"><button class="secondary" data-icon="download" onclick="discoverProvider('${esc(p.id)}')">${tr('拉取模型','Fetch models')}</button><button class="secondary" data-icon="edit" onclick="editProvider('${esc(p.id)}')">${tr('编辑','Edit')}</button><button class="secondary" ${models.length ? '' : 'disabled'} onclick="toggleProviderModels('${esc(p.id)}', ${allHidden})">${allHidden ? tr('显示全部模型','Show all models') : tr('隐藏全部模型','Hide all models')}</button><button class="danger" data-icon="trash" onclick="removeProvider('${esc(p.id)}')">${tr('删除','Delete')}</button></div>
     </article>`;
   }).join('')}</div>`;
