@@ -129,21 +129,28 @@ button[data-icon]{display:inline-flex}
 .entity-card-actions button{min-width:74px}
 .entity-card-actions button:disabled{min-width:74px}
 .entity-card-quota{min-width:0}
+.quota-credit{display:grid;gap:2px;margin-top:7px;font-size:11px;line-height:1.35}
+.quota-credit span{display:block;overflow-wrap:anywhere}
 .account-card{grid-template-columns:minmax(0,1fr) minmax(180px,225px)}
 .account-card .quota-stack{max-width:none;min-width:0}
 .account-duplicate .entity-card-main{opacity:.62}
-.provider-card .entity-card-meta,.model-card .entity-card-meta{margin-top:6px}
+.provider-card .entity-card-meta{margin-top:6px}
 .provider-card .endpoint{display:block;min-width:0;overflow-wrap:anywhere;color:var(--code)}
 .provider-card .entity-card-status{margin-top:7px}
-.model-card{grid-template-columns:minmax(0,1fr) auto}
+.model-card{grid-template-columns:minmax(220px,1fr) auto auto;align-items:center;gap:8px 12px;padding:10px 12px;border-radius:8px}
 .model-card .entity-card-main{min-width:0}
-.model-card .entity-card-title strong{overflow-wrap:anywhere}
-.model-card .visibility{display:inline-flex;align-items:center;gap:6px;margin:0;color:var(--text);white-space:nowrap}
+.model-card .entity-card-title strong,.model-card .entity-card-subtitle,.model-card .entity-card-meta{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model-card .entity-card-subtitle{margin-top:2px}
+.model-card .entity-card-subtitle code{word-break:normal}
+.model-card .entity-card-meta{margin-top:3px;line-height:1.3}
+.model-card .visibility{display:inline-flex;align-items:center;gap:5px;margin:0;color:var(--text);font-size:12px;white-space:nowrap}
 .model-card .visibility input{width:auto;margin:0}
+.model-card .entity-card-actions{grid-column:auto;flex-wrap:nowrap;gap:5px;padding:0;border:0}
+.model-card .entity-card-actions button,.model-card .entity-card-actions button:disabled{height:32px;min-height:32px;min-width:0;padding:0 8px;font-size:12px;white-space:nowrap}
 .provider-model-group{border:0;padding:0;margin:18px 0 0}
 .provider-model-group:first-child{margin-top:0}
 .provider-model-group h3{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:13px;color:var(--text)}
-.provider-model-group .entity-list{margin-bottom:10px}
+.provider-model-group .entity-list{gap:6px;margin-bottom:10px}
 .display-list{border:0;display:grid;gap:9px}
 .display-row{grid-template-columns:minmax(0,1fr) auto;gap:10px 12px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel-soft)}
 .display-row:last-child{border-bottom:1px solid var(--border)}
@@ -161,7 +168,7 @@ button[data-icon]{display:inline-flex}
 .modal-actions{flex-wrap:wrap}
 .choice{display:block;min-height:0;white-space:normal}
 @media(max-width:1180px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}}
-@media(max-width:760px){main{padding:18px 12px 32px}section{padding:15px}.page-header{flex-direction:column;align-items:stretch}.account-card{grid-template-columns:1fr}.entity-card{padding:13px}.action-group{grid-template-columns:1fr;gap:4px}.action-group-label{padding-top:0}.display-row{grid-template-columns:minmax(0,1fr) auto}}
+@media(max-width:760px){main{padding:18px 12px 32px}section{padding:15px}.page-header{flex-direction:column;align-items:stretch}.account-card{grid-template-columns:1fr}.entity-card{padding:13px}.model-card{grid-template-columns:minmax(0,1fr) auto;padding:10px}.model-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1/-1;width:100%;padding-top:8px;border-top:1px solid var(--border)}.model-card .entity-card-actions button{width:100%}.action-group{grid-template-columns:1fr;gap:4px}.action-group-label{padding-top:0}.display-row{grid-template-columns:minmax(0,1fr) auto}}
 </style>
 </head>
 <body>
@@ -951,7 +958,7 @@ function renderAccounts() {
       <div class="entity-card-main"><div class="entity-card-title"><strong>${title}</strong><span class="pill">${a.native ? 'Native' : esc(a.prefix || a.id)}</span></div>
       <div class="entity-card-subtitle">${subtitle}${a.quota && a.quota.account_label ? `<span>${esc(a.quota.account_label)}</span>` : ''}</div>
       <div class="entity-card-status">${status}${duplicateText ? `<br><span class="muted">${duplicateText}</span>` : ''}</div></div>
-      <div class="entity-card-quota">${quotaMetersHtml(a, busy, animateQuota)}<div class="muted quota-credit">${esc(creditText(a))}</div>${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</div>
+      <div class="entity-card-quota">${quotaMetersHtml(a, busy, animateQuota)}<div class="muted quota-credit">${creditHtml(a)}</div>${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</div>
       <div class="entity-card-actions">${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" onclick="openQuotaHistory('${esc(a.id)}')">${tr('趋势','Trend')}</button>${remove}</div>
     </article>`;
   }).join('');
@@ -1047,7 +1054,8 @@ async function refreshQuotaState() {
   finally { quotaStateBusy = false; drainQuotaUpdates(); }
 }
 function integerCredit(value) { const number = Number(value); return Number.isFinite(number) ? String(Math.round(number)) : String(value); }
-function creditText(account) { const quota = account.quota; if (!quota) return tr('credit 未查询','credit not checked'); const credit = quota.credits; if (!credit) return tr('credit 未提供','credit unavailable'); const parts = []; if (credit.unlimited === true) parts.push('credit unlimited'); else if (credit.balance !== undefined) parts.push(`credit ${integerCredit(credit.balance)}`); if (credit.individual_limit && typeof credit.individual_limit.remaining_percent === 'number') parts.push(`monthly ${credit.individual_limit.remaining_percent}% left`); if (credit.reset_credits && Number.isInteger(credit.reset_credits.available_count)) parts.push(`reset ${credit.reset_credits.available_count}`); const expires = credit.reset_credits && Array.isArray(credit.reset_credits.credits) ? credit.reset_credits.credits.map(item => localTimeText(item && item.expires_at)).filter(Boolean) : []; expires.forEach(value => parts.push(`expire ${value}`)); if (credit.spend_control_reached === true) parts.push('spend limit reached'); return parts.length ? parts.join(' · ') : tr('credit 未提供','credit unavailable'); }
+function creditLines(account) { const quota = account.quota; if (!quota) return [tr('credit 未查询','credit not checked')]; const credit = quota.credits; if (!credit) return [tr('credit 未提供','credit unavailable')]; const lines = []; if (credit.unlimited === true) lines.push('credit unlimited'); else if (credit.balance !== undefined) lines.push(`credit ${integerCredit(credit.balance)}`); if (credit.individual_limit && typeof credit.individual_limit.remaining_percent === 'number') lines.push(`monthly ${credit.individual_limit.remaining_percent}% left`); if (credit.reset_credits && Number.isInteger(credit.reset_credits.available_count)) lines.push(`reset ${credit.reset_credits.available_count}`); const expires = credit.reset_credits && Array.isArray(credit.reset_credits.credits) ? credit.reset_credits.credits.map(item => localTimeText(item && item.expires_at)).filter(Boolean) : []; expires.forEach(value => lines.push(`expire ${value}`)); if (credit.spend_control_reached === true) lines.push('spend limit reached'); return lines.length ? lines : [tr('credit 未提供','credit unavailable')]; }
+function creditHtml(account) { return creditLines(account).map(line => `<span>${esc(line)}</span>`).join(''); }
 
 const quotaChartColors = ['#3b82f6','#f59e0b','#10b981','#a855f7','#ef4444','#06b6d4'];
 function quotaRangeLabel(value) { return ({'1h':tr('1 小时','1 hour'),'1d':tr('1 天','1 day'),'1w':tr('1 周','1 week'),'all':tr('全部 15 天','All 15 days')})[value] || value; }
@@ -1366,7 +1374,7 @@ function renderModels() {
       return `<article class="entity-card model-card${m.enabled ? '' : ' model-hidden'}">
         <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, m.context_window))}</strong></div>
         <div class="entity-card-subtitle"><code>${esc(m.id)}</code></div>
-        <div class="entity-card-meta">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? '<br>' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</div></div>
+        <div class="entity-card-meta">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</div></div>
         <label class="visibility"><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</label>
         <div class="entity-card-actions"><button class="secondary" data-icon="edit" onclick="openManualModelModal('${esc(m.id)}')">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" onclick="testModel('${esc(m.id)}')">${tr('测试','Test')}</button><button class="secondary" data-icon="test" onclick="testModelVision('${esc(m.id)}')">${tr('测试图像','Test image')}</button><button class="danger" data-icon="trash" onclick="removeModel('${esc(m.id)}')">${tr('删除','Delete')}</button></div>
       </article>`;

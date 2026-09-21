@@ -178,6 +178,9 @@ for (const visibleControl of [
 ]) assert.match(html, visibleControl, `page control must stay visible: ${visibleControl}`);
 assert.match(html, /button,\.repo-link\{[^}]*height:36px[^}]*margin:0[^}]*white-space:nowrap/);
 assert.match(html, /@media\(max-width:760px\)\{[\s\S]*?\.page-header\{flex-direction:column;align-items:stretch\}/);
+assert.match(html, /\.model-card\{grid-template-columns:minmax\(220px,1fr\) auto auto;/, "desktop model cards must keep details and actions on one compact row");
+assert.match(html, /\.model-card \.entity-card-actions\{grid-column:auto;flex-wrap:nowrap;/, "desktop model actions must remain aligned and visible");
+assert.match(html, /\.quota-credit span\{display:block;/, "credit details must use separate visual lines");
 assert.match(html, /href="https:\/\/github.com\/Killow1998\/EasyMultiProvider" target="_blank" rel="noopener noreferrer"/);
 assert.doesNotMatch(html, /id="subscription_search_account"/);
 assert.doesNotMatch(html, /data-catalog-summary/);
@@ -741,6 +744,20 @@ function quotaMeterBehavior() {
   assert.match(html, /@media\(prefers-reduced-motion:reduce\)/);
 }
 
+function creditLayoutBehavior() {
+  context.__creditLayoutState = {
+    native_account: null,
+    accounts: [{id:'credit-lines',name:'credit-lines',prefix:'credit-lines',credential_set:true,quota:{credits:{balance:1200,individual_limit:{remaining_percent:73},reset_credits:{available_count:2,credits:[{expires_at:1893553445},{expires_at:1896321906}]}}}}],
+  };
+  run("state = __creditLayoutState; renderAccounts()");
+  const rendered = getElement("accounts").innerHTML;
+  const block = rendered.match(/<div class="muted quota-credit">([\s\S]*?)<\/div>/);
+  assert(block, "credit details must render in a dedicated block");
+  assert.strictEqual((block[1].match(/<span>/g) || []).length, 5, "credit, monthly, reset, and each expiry must have their own line");
+  assert.match(block[1], /<span>credit 1200<\/span><span>monthly 73% left<\/span><span>reset 2<\/span><span>expire /);
+  assert.doesNotMatch(block[1], / · /, "credit details must not be joined into one line");
+}
+
 function invalidCredentialAccountBehavior() {
   run("state = {native_account:null,accounts:[{id:'expired',name:'expired',prefix:'expired',credential_set:true,credential_status:'invalid',quota:null}],providers:[],models:[]}; renderAccounts()");
   assert.match(getElement("accounts").innerHTML, /登录已失效/);
@@ -916,6 +933,7 @@ function modelGroupBehavior() {
   assert.strictEqual((html.match(/testModelVision\('/g) || []).length, 4);
   assert.strictEqual((html.match(/removeModel\('/g) || []).length, 4);
   assert.doesNotMatch(html, /<table>/, "model actions should not be squeezed into table cells");
+  assert.doesNotMatch(html, /<br>/, "model metadata should stay on one compact line");
 }
 
 function providerCardBehavior() {
@@ -1287,6 +1305,7 @@ function updateBehavior() {
   await cacheUsageBehavior();
   providerDiscoveryErrorBehavior();
   quotaMeterBehavior();
+  creditLayoutBehavior();
   invalidCredentialAccountBehavior();
   await quotaStateSyncBehavior();
   await quotaNotificationBehavior();
