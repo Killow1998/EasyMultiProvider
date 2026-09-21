@@ -1,0 +1,1648 @@
+{
+  "values": {
+    "id": "provider-a/synthetic-provenance",
+    "provider": "provider-a",
+    "upstream_id": "",
+    "family_id": "",
+    "display_name": "",
+    "description": "",
+    "supports_reasoning": true,
+    "supports_reasoning_summaries": false,
+    "reasoning_levels": [
+      "low"
+    ],
+    "reasoning_control": "low",
+    "context_window": 128000,
+    "max_input_tokens": 100000,
+    "output_limit": 4096,
+    "created_at": 0,
+    "enabled": true,
+    "visibility": "list",
+    "input_modalities": [
+      "text"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "supported_protocols": [
+      "responses"
+    ],
+    "supports_image_detail_original": true,
+    "deployment_identity": "",
+    "resolved_protocol": "",
+    "protocol_observation": {
+      "source": "unknown",
+      "confidence": 0.0,
+      "observed_at": null,
+      "endpoint_fingerprint": "",
+      "deployment_identity": "",
+      "upstream_model": ""
+    },
+    "context_calibrations": [],
+    "capabilities": {
+      "supports_reasoning_summaries": true,
+      "structured_tools": false,
+      "parallel_tools": true,
+      "structured_output": true,
+      "web_search": false,
+      "streaming": true,
+      "websocket": false,
+      "supports_reasoning": false
+    }
+  },
+  "explicit_fields": [
+    "capabilities",
+    "context_window",
+    "id",
+    "input_modalities",
+    "max_input_tokens",
+    "output_limit",
+    "parallel_tools",
+    "provider",
+    "reasoning_control",
+    "reasoning_levels",
+    "streaming",
+    "structured_output",
+    "structured_tools",
+    "supported_protocols",
+    "supports_image_detail_original",
+    "supports_reasoning",
+    "supports_reasoning_summaries",
+    "web_search",
+    "websocket"
+  ],
+  "valid": [
+    {
+      "name": "raw-null",
+      "input": null,
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "raw-empty",
+      "input": {},
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "explicit-null-input-modality-normalizes-as-manual",
+      "input": {
+        "input_modalities": {
+          "source": "observed",
+          "observed_at": "2026-09-21T12:00:00+00:00"
+        }
+      },
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "observed",
+          "confidence": 1.0,
+          "observed_at": "2026-09-21T12:00:00+00:00"
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "missing-input-modality-presence-is-unknown",
+      "input": {},
+      "explicit_fields": [
+        "capabilities",
+        "context_window",
+        "id",
+        "max_input_tokens",
+        "output_limit",
+        "parallel_tools",
+        "provider",
+        "reasoning_control",
+        "reasoning_levels",
+        "streaming",
+        "structured_output",
+        "structured_tools",
+        "supported_protocols",
+        "supports_image_detail_original",
+        "supports_reasoning",
+        "supports_reasoning_summaries",
+        "web_search",
+        "websocket"
+      ],
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "top-level-null-shadows-nested-false",
+      "input": {},
+      "values": {
+        "id": "provider-a/null-shadow",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {
+          "supports_reasoning": false
+        }
+      },
+      "explicit_fields": [
+        "capabilities",
+        "id",
+        "provider",
+        "supports_reasoning"
+      ],
+      "expected": {
+        "supports_image_detail_original": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "unknown-capability-retains-supplied-provenance",
+      "input": {
+        "supports_reasoning": {
+          "source": "inherited",
+          "unknown": "discarded"
+        }
+      },
+      "values": {
+        "id": "provider-a/null-shadow",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {
+          "supports_reasoning": false
+        }
+      },
+      "explicit_fields": [
+        "capabilities",
+        "id",
+        "provider",
+        "supports_reasoning"
+      ],
+      "expected": {
+        "supports_image_detail_original": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "inherited",
+          "confidence": 0.6,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "advertised-default-confidence",
+      "input": {
+        "structured_tools": {
+          "source": "advertised"
+        }
+      },
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "advertised",
+          "confidence": 0.75,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "official-default-confidence",
+      "input": {
+        "reasoning_levels": {
+          "source": "official"
+        }
+      },
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "official",
+          "confidence": 0.95,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "observed-default-confidence",
+      "input": {
+        "parallel_tools": {
+          "source": "observed"
+        }
+      },
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "observed",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "manual-default-confidence",
+      "input": {
+        "context_window": {
+          "source": "manual"
+        }
+      },
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "inherited-default-confidence",
+      "input": {
+        "output_limit": {
+          "source": "inherited"
+        }
+      },
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inherited",
+          "confidence": 0.6,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "inferred-default-confidence",
+      "input": {
+        "websocket": {
+          "source": "inferred"
+        }
+      },
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "unknown-default-confidence",
+      "input": {
+        "output_modalities": {
+          "source": "unknown"
+        }
+      },
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "boolean-and-numeric-string-confidence",
+      "input": {
+        "supported_protocols": {
+          "source": "official",
+          "confidence": true
+        },
+        "websocket": {
+          "source": "advertised",
+          "confidence": "0.5",
+          "observed_at": "2026-09-21T12:00:00Z"
+        }
+      },
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "advertised",
+          "confidence": 0.5,
+          "observed_at": "2026-09-21T12:00:00Z"
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "official",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "explicit-null-confidence-uses-source-default",
+      "input": {
+        "streaming": {
+          "source": "advertised",
+          "confidence": null
+        }
+      },
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "advertised",
+          "confidence": 0.75,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "image-detail-explicit-provenance",
+      "input": {
+        "supports_image_detail_original": {}
+      },
+      "expected": {
+        "supports_reasoning_summaries": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "structured_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "output_limit": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "supports_image_detail_original": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "streaming": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "websocket": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "supports_reasoning": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "output_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        },
+        "supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "parallel_tools": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "web_search": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "context_window": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        },
+        "reasoning_levels": {
+          "source": "inferred",
+          "confidence": 0.35,
+          "observed_at": null
+        },
+        "reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": null
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "raw-not-object",
+      "input": "manual",
+      "error": "model.capability_sources must be an object"
+    },
+    {
+      "name": "field-not-object",
+      "input": {
+        "streaming": "manual"
+      },
+      "error": "model.capability_sources.streaming must be an object"
+    },
+    {
+      "name": "field-null",
+      "input": {
+        "streaming": null
+      },
+      "error": "model.capability_sources.streaming must be an object"
+    },
+    {
+      "name": "source-not-string",
+      "input": {
+        "streaming": {
+          "source": 1
+        }
+      },
+      "error": "invalid provenance for model.streaming"
+    },
+    {
+      "name": "unsupported-source",
+      "input": {
+        "streaming": {
+          "source": "external"
+        }
+      },
+      "error": "invalid provenance for model.streaming"
+    },
+    {
+      "name": "confidence-object",
+      "input": {
+        "streaming": {
+          "confidence": {}
+        }
+      },
+      "error": "invalid provenance for model.streaming"
+    },
+    {
+      "name": "confidence-out-of-range",
+      "input": {
+        "streaming": {
+          "confidence": 2
+        }
+      },
+      "error": "invalid provenance for model.streaming"
+    },
+    {
+      "name": "confidence-not-numeric",
+      "input": {
+        "streaming": {
+          "confidence": "strong"
+        }
+      },
+      "error": "invalid provenance for model.streaming"
+    },
+    {
+      "name": "observed-at-object",
+      "input": {
+        "streaming": {
+          "observed_at": {}
+        }
+      },
+      "error": "invalid provenance for model.streaming"
+    },
+    {
+      "name": "observed-at-invalid",
+      "input": {
+        "streaming": {
+          "observed_at": "not-a-timestamp"
+        }
+      },
+      "error": "invalid provenance for model.streaming"
+    }
+  ]
+}

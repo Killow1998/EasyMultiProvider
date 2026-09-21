@@ -111,6 +111,19 @@
       "fixture": "state/python-account-normalization.json"
     },
     {
+      "id": "state.model-capability-sources.python-rust",
+      "level": "state",
+      "source": "easy_multi_provider/config.py:_normalize_capability_sources",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": [
+        "unknown provenance-field names are intentionally discarded",
+        "explicit raw model-key presence is caller supplied"
+      ],
+      "side_effects": ["none; capability-source normalization is pure"],
+      "fixture": "state/python-model-capability-sources.json"
+    },
+    {
       "id": "state.capability-model-values.python-rust",
       "level": "state",
       "source": "easy_multi_provider/capabilities.py pure model value helpers",

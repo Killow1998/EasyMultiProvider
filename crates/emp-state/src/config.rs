@@ -4,6 +4,9 @@
 //! later migration slice. Exposing only completed helpers prevents callers from
 //! mistaking a partial configuration rebuild for the production contract.
 
+use crate::model_values::{
+    input_modalities_known, output_modalities_known, supported_protocols_known,
+};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -294,6 +297,48 @@ const PROVIDER_BOOLEAN_CAPABILITIES: [&str; 8] = [
     "websocket",
 ];
 
+const MODEL_CAPABILITY_SOURCE_FIELDS: [&str; 17] = [
+    "streaming",
+    "structured_tools",
+    "parallel_tools",
+    "structured_output",
+    "web_search",
+    "supports_reasoning",
+    "supports_reasoning_summaries",
+    "reasoning_levels",
+    "reasoning_control",
+    "context_window",
+    "max_input_tokens",
+    "output_limit",
+    "websocket",
+    "input_modalities",
+    "output_modalities",
+    "supported_protocols",
+    "supports_image_detail_original",
+];
+const MODEL_EXPLICIT_CAPABILITY_FIELDS: [&str; 10] = [
+    "supports_reasoning",
+    "supports_reasoning_summaries",
+    "input_modalities",
+    "output_modalities",
+    "supported_protocols",
+    "reasoning_control",
+    "max_input_tokens",
+    "structured_output",
+    "web_search",
+    "supports_image_detail_original",
+];
+const MODEL_BOOLEAN_CAPABILITIES: [&str; 8] = [
+    "streaming",
+    "structured_tools",
+    "parallel_tools",
+    "structured_output",
+    "web_search",
+    "supports_reasoning",
+    "supports_reasoning_summaries",
+    "websocket",
+];
+
 fn json_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
@@ -538,6 +583,183 @@ fn normalize_protocol_observation(raw: Option<&Value>) -> ConfigResult<Value> {
             "protocol_observation.upstream_model",
         )?,
     }))
+}
+
+fn python_capability_trim(value: &str) -> &str {
+    value.trim_matches(|character: char| {
+        matches!(
+            character,
+            '\t'
+                | '\n'
+                | '\u{b}'
+                | '\u{c}'
+                | '\u{d}'
+                | ' '
+                | '\u{85}'
+                | '\u{a0}'
+                | '\u{1680}'
+                | '\u{2000}'..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{1c}'..='\u{1f}'
+        )
+    })
+}
+
+fn effective_model_capability_value<'a>(values: &'a Value, field: &str) -> Option<&'a Value> {
+    if let Some(value) = values.get(field) {
+        return Some(value);
+    }
+    values
+        .get("capabilities")
+        .filter(|value| value.is_object())
+        .and_then(|capabilities| capabilities.get(field))
+}
+
+fn model_capability_known(field: &str, value: Option<&Value>) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    if MODEL_BOOLEAN_CAPABILITIES.contains(&field) {
+        return value.is_boolean();
+    }
+    match field {
+        "reasoning_levels" => value.as_array().is_some_and(|levels| !levels.is_empty()),
+        "reasoning_control" => value
+            .as_str()
+            .is_some_and(|control| !python_capability_trim(control).is_empty()),
+        "input_modalities" => input_modalities_known(Some(value)),
+        "output_modalities" => output_modalities_known(Some(value)),
+        "supported_protocols" => supported_protocols_known(Some(value)),
+        "supports_image_detail_original" => value.is_boolean(),
+        _ => {
+            value.as_i64().is_some_and(|number| number > 0)
+                || value.as_u64().is_some_and(|number| number > 0)
+        }
+    }
+}
+
+fn default_model_capability_source(
+    field: &str,
+    values: &Value,
+    explicit_fields: Option<&[&str]>,
+) -> &'static str {
+    if MODEL_EXPLICIT_CAPABILITY_FIELDS.contains(&field) {
+        return if explicit_fields.is_some_and(|fields| fields.contains(&field)) {
+            "manual"
+        } else {
+            "unknown"
+        };
+    }
+    if model_capability_known(field, effective_model_capability_value(values, field)) {
+        "inferred"
+    } else {
+        "unknown"
+    }
+}
+
+fn model_provenance_confidence(raw: Option<&Value>, default: f64) -> ConfigResult<f64> {
+    let value = match raw {
+        None | Some(Value::Null) => default,
+        Some(Value::Bool(value)) => f64::from(*value),
+        Some(Value::Number(value)) => value
+            .as_f64()
+            .ok_or_else(|| ConfigError::new("invalid provenance value"))?,
+        Some(Value::String(value)) => value
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| ConfigError::new("invalid provenance value"))?,
+        Some(_) => return Err(ConfigError::new("invalid provenance value")),
+    };
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(ConfigError::new("invalid provenance value"));
+    }
+    Ok(value)
+}
+
+fn normalize_model_provenance(
+    raw: &Map<String, Value>,
+    default_source: &str,
+) -> ConfigResult<Value> {
+    let source = match raw.get("source") {
+        None => default_source,
+        Some(Value::String(source)) => source,
+        Some(_) => return Err(ConfigError::new("unsupported capability source")),
+    };
+    let Some((_, default_confidence)) = CAPABILITY_SOURCES
+        .iter()
+        .find(|(candidate, _)| candidate == &source)
+    else {
+        return Err(ConfigError::new("unsupported capability source"));
+    };
+    let confidence = model_provenance_confidence(raw.get("confidence"), *default_confidence)?;
+    let observed_at = match raw.get("observed_at") {
+        None | Some(Value::Null) => Value::Null,
+        Some(Value::String(value)) if valid_python_iso_timestamp(value) => {
+            Value::String(value.clone())
+        }
+        Some(_) => return Err(ConfigError::new("invalid capability observed_at")),
+    };
+    Ok(serde_json::json!({
+        "source": source,
+        "confidence": confidence,
+        "observed_at": observed_at,
+    }))
+}
+
+/// Normalize capability provenance for an already-normalized model record.
+///
+/// `values` must have the shape produced by Python `_normalize_model`; in
+/// particular, top-level capability values take precedence over the nested
+/// `capabilities` object even when the top-level value is null. Explicitness is
+/// raw model-key presence and is supplied by the caller.
+pub fn normalize_model_capability_sources(
+    raw: Option<&Value>,
+    values: &Value,
+    explicit_fields: Option<&[&str]>,
+) -> ConfigResult<Value> {
+    if !values.is_object() {
+        return Err(ConfigError::new(
+            "model.capability_sources requires normalized model values",
+        ));
+    }
+    let empty = Map::new();
+    let raw = match raw {
+        None | Some(Value::Null) => &empty,
+        Some(Value::Object(raw)) => raw,
+        Some(_) => {
+            return Err(ConfigError::new(
+                "model.capability_sources must be an object",
+            ));
+        }
+    };
+    let mut result = Map::new();
+    for field in MODEL_CAPABILITY_SOURCE_FIELDS {
+        let Some(value) = raw.get(field) else {
+            if model_capability_known(field, effective_model_capability_value(values, field)) {
+                let source = default_model_capability_source(field, values, explicit_fields);
+                let provenance = normalize_model_provenance(&Map::new(), source).map_err(|_| {
+                    ConfigError::new(format!("invalid provenance for model.{field}"))
+                })?;
+                result.insert(field.to_owned(), provenance);
+            }
+            continue;
+        };
+        let provenance = if let Some(object) = value.as_object() {
+            let source = default_model_capability_source(field, values, explicit_fields);
+            normalize_model_provenance(object, source)
+                .map_err(|_| ConfigError::new(format!("invalid provenance for model.{field}")))?
+        } else {
+            return Err(ConfigError::new(format!(
+                "model.capability_sources.{field} must be an object"
+            )));
+        };
+        result.insert(field.to_owned(), provenance);
+    }
+    Ok(Value::Object(result))
 }
 
 fn normalize_provider_capabilities(raw: Option<&Value>) -> ConfigResult<Value> {

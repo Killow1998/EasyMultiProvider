@@ -25,8 +25,11 @@ Progress evidence on 2026-09-21:
   protocol/auth constraints, protocol observations and explicit boolean
   capabilities under a live differential oracle. Primitive model values now
   preserve Python's modality bounds, Unicode normalization, Codex projection,
-  concrete protocol filtering and reasoning-effort ordering. Full model
-  records, import merge behavior and Windows ACL/reparse-point hardening remain.
+  concrete protocol filtering and reasoning-effort ordering. Model capability
+  provenance now also preserves top-level-over-nested precedence, raw-key
+  explicitness, default source/confidence selection and supplied observations
+  under frozen and live Python oracles. Full model records, context
+  calibrations, import merge behavior and Windows ACL/reparse-point hardening remain.
   Account metadata normalization also matches Python's sorting, UTF-8 byte
   limits, truthiness, quota preservation and exact validation order.
 - Runtime compatibility run `35636981488` passed the complete Python suite,
@@ -36,6 +39,8 @@ Progress evidence on 2026-09-21:
   jobs with the cross-language integration lock and complete provider oracle.
 - Runtime compatibility run `35643375207` passed all seven jobs after account
   metadata normalization was added to the live Python/Rust oracle.
+- Runtime compatibility run `35644867552` passed all seven jobs after the
+  startup-output integration test was made independent of pipe-reader timing.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

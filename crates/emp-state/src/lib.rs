@@ -26,8 +26,9 @@ pub use accounts::{
 };
 pub use config::{
     ConfigError, ConfigResult, canonical_catalog_json, catalog_etag,
-    normalize_catalog_presentations, normalize_codex_runtime_sources, normalize_provider,
-    normalize_provider_base_url, normalize_provider_id, normalize_subscription_search,
+    normalize_catalog_presentations, normalize_codex_runtime_sources,
+    normalize_model_capability_sources, normalize_provider, normalize_provider_base_url,
+    normalize_provider_id, normalize_subscription_search,
 };
 pub use fernet::{Fernet, FernetError, FernetKey, FernetKeyError};
 pub use filesystem::{
