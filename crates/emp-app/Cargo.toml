@@ -10,6 +10,12 @@ name = "EMP"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22"
+emp-state = { path = "../emp-state" }
+getrandom = "0.2.17"
 
 [lib]
 path = "src/lib.rs"
+
+[dev-dependencies]
+tempfile = "3.27"

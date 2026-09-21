@@ -198,6 +198,12 @@ dependencies = [
 [[package]]
 name = "emp-app"
 version = "0.11.6"
+dependencies = [
+ "base64",
+ "emp-state",
+ "getrandom 0.2.17",
+ "tempfile",
+]
 
 [[package]]
 name = "emp-core"
