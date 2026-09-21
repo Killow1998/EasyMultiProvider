@@ -179,7 +179,8 @@ for (const visibleControl of [
 assert.match(html, /button,\.repo-link\{[^}]*height:36px[^}]*margin:0[^}]*white-space:nowrap/);
 assert.match(html, /@media\(max-width:760px\)\{[\s\S]*?\.page-header\{flex-direction:column;align-items:stretch\}/);
 assert.match(html, /\.model-card\{grid-template-columns:minmax\(220px,1fr\) auto auto;/, "desktop model cards must keep details and actions on one compact row");
-assert.match(html, /\.model-card \.entity-card-actions\{grid-column:auto;flex-wrap:nowrap;/, "desktop model actions must remain aligned and visible");
+assert.match(html, /\.model-card \.entity-card-actions\{grid-column:3;grid-row:1;flex-wrap:nowrap;/, "desktop model actions must remain aligned and visible");
+assert.match(html, /\.model-card \.entity-card-meta\{grid-column:1\/-1;grid-row:2;[^}]*white-space:normal;/, "model metadata must remain fully readable across the card");
 assert.match(html, /\.quota-credit span\{display:block;/, "credit details must use separate visual lines");
 assert.match(html, /href="https:\/\/github.com\/Killow1998\/EasyMultiProvider" target="_blank" rel="noopener noreferrer"/);
 assert.doesNotMatch(html, /id="subscription_search_account"/);
@@ -933,7 +934,8 @@ function modelGroupBehavior() {
   assert.strictEqual((html.match(/testModelVision\('/g) || []).length, 4);
   assert.strictEqual((html.match(/removeModel\('/g) || []).length, 4);
   assert.doesNotMatch(html, /<table>/, "model actions should not be squeezed into table cells");
-  assert.doesNotMatch(html, /<br>/, "model metadata should stay on one compact line");
+  assert.doesNotMatch(html, /<br>/, "model metadata should wrap naturally instead of forcing extra lines");
+  assert.match(html, /<\/div>\s*<div class="entity-card-meta">/, "model metadata must use a full-width row outside the narrow title column");
 }
 
 function providerCardBehavior() {
