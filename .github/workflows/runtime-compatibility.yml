@@ -150,6 +150,13 @@ jobs:
         run: >-
           uv run --frozen cargo test --locked -p emp-state --test migration_export_compat
           migration_export_matches_live_python_oracle_when_configured
+      - name: Python and Rust Web session persistence
+        if: matrix.os == 'ubuntu-22.04'
+        env:
+          EMP_PYTHON_INTEROP: python
+        run: >-
+          uv run --frozen cargo test --locked -p emp-state --test web_session_compat
+          rust_and_live_python_reuse_each_others_web_sessions
 
       - name: Python and Rust account normalization
         if: matrix.os == 'ubuntu-22.04'

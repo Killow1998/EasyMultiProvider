@@ -57,8 +57,8 @@ fn generated_key_is_private_valid_and_reused() {
 fn invalid_existing_key_is_never_replaced() {
     let directory = tempdir().expect("tempdir");
     let key_path = canonical_temp_path(&directory).join("master.key");
+    drop(VaultStore::from_sources(None, &key_path).expect("create private key file"));
     fs::write(&key_path, b"invalid-key\n").expect("write invalid key");
-    set_mode(&key_path, 0o600);
 
     assert_eq!(
         VaultStore::from_sources(None, &key_path)

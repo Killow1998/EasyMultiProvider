@@ -17,6 +17,8 @@ use zeroize::Zeroizing;
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt as StdOpenOptionsExt, PermissionsExt};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt as StdOpenOptionsExt;
 
 pub const MASTER_KEY_ENV: &str = "EASY_MULTI_PROVIDER_MASTER_KEY";
 pub const MASTER_KEY_FILE_ENV: &str = "EASY_MULTI_PROVIDER_MASTER_KEY_FILE";
@@ -184,7 +186,25 @@ impl VaultStore {
     }
 
     pub fn read_encrypted_bytes(&self, path: &Path) -> Result<Zeroizing<Vec<u8>>, FilesystemError> {
-        let raw = fs::read(path).map_err(|_| FilesystemError::CredentialFileUnavailable)?;
+        ensure_managed_write_path(path).map_err(|_| FilesystemError::CredentialFileUnavailable)?;
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NOFOLLOW);
+        #[cfg(windows)]
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+        let mut file = options
+            .open(path)
+            .map_err(|_| FilesystemError::CredentialFileUnavailable)?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| FilesystemError::CredentialFileUnavailable)?;
+        if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
+            return Err(FilesystemError::CredentialFileUnavailable);
+        }
+        let mut raw = Vec::new();
+        file.read_to_end(&mut raw)
+            .map_err(|_| FilesystemError::CredentialFileUnavailable)?;
         decode_vault(&self.key, &raw).map_err(Into::into)
     }
 
@@ -226,6 +246,41 @@ fn expand_user(path: &Path) -> PathBuf {
         .map_or_else(|| path.to_path_buf(), |home| PathBuf::from(home).join(rest))
 }
 
+#[cfg(windows)]
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || crate::private_windows::metadata_is_reparse(metadata)
+}
+
+#[cfg(not(windows))]
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+/// Reject existing links/reparse points in every target component before an
+/// atomic replacement. Missing components are allowed and checked again after
+/// their parent directories have been created.
+fn ensure_managed_write_path(path: &Path) -> Result<(), FilesystemError> {
+    let candidate = absolute(path).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
+    for parent in candidate.ancestors().skip(1) {
+        match fs::symlink_metadata(parent) {
+            Ok(metadata) if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() => {
+                return Err(FilesystemError::ManagedFileNotRegular);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(FilesystemError::ManagedFileUnavailable),
+        }
+    }
+    match fs::symlink_metadata(&candidate) {
+        Ok(metadata) if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() => {
+            Err(FilesystemError::ManagedFileNotRegular)
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(FilesystemError::ManagedFileUnavailable),
+    }
+}
+
 /// Build an absolute key path without following an existing symlink component.
 fn safe_key_path(path: &Path) -> Result<PathBuf, FilesystemError> {
     let candidate =
@@ -233,7 +288,7 @@ fn safe_key_path(path: &Path) -> Result<PathBuf, FilesystemError> {
     for parent in candidate.ancestors().skip(1) {
         match fs::symlink_metadata(parent) {
             Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
                     return Err(FilesystemError::KeyDirectoryNotRegular);
                 }
             }
@@ -242,7 +297,7 @@ fn safe_key_path(path: &Path) -> Result<PathBuf, FilesystemError> {
         }
     }
     match fs::symlink_metadata(&candidate) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
+        Ok(metadata) if metadata_is_link_or_reparse(&metadata) => {
             Err(FilesystemError::KeyFileNotRegular)
         }
         Ok(_) => Ok(candidate),
@@ -254,17 +309,27 @@ fn safe_key_path(path: &Path) -> Result<PathBuf, FilesystemError> {
 fn read_key_file(path: &Path) -> Result<FernetKey, FilesystemError> {
     let path = safe_key_path(path)?;
     let metadata = fs::symlink_metadata(&path).map_err(|_| FilesystemError::KeyFileUnavailable)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
         return Err(FilesystemError::KeyFileNotRegular);
     }
-    validate_private_key_metadata(&metadata)?;
-    let raw =
-        Zeroizing::new(fs::read_to_string(&path).map_err(|_| FilesystemError::KeyFileUnavailable)?);
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    let mut file = options
+        .open(&path)
+        .map_err(|_| FilesystemError::KeyFileUnavailable)?;
+    validate_private_key_file(&file, &metadata)?;
+    let mut raw = Zeroizing::new(String::new());
+    file.read_to_string(&mut raw)
+        .map_err(|_| FilesystemError::KeyFileUnavailable)?;
     FernetKey::from_encoded(raw.trim()).map_err(|_| FilesystemError::KeyFileInvalid)
 }
 
 #[cfg(unix)]
-fn validate_private_key_metadata(metadata: &fs::Metadata) -> Result<(), FilesystemError> {
+fn validate_private_key_file(_: &fs::File, metadata: &fs::Metadata) -> Result<(), FilesystemError> {
     // SAFETY: getuid has no preconditions and does not dereference pointers.
     let current_uid = unsafe { libc::getuid() };
     if metadata.uid() != 0 && metadata.uid() != current_uid {
@@ -276,8 +341,13 @@ fn validate_private_key_metadata(metadata: &fs::Metadata) -> Result<(), Filesyst
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn validate_private_key_metadata(_: &fs::Metadata) -> Result<(), FilesystemError> {
+#[cfg(windows)]
+fn validate_private_key_file(file: &fs::File, _: &fs::Metadata) -> Result<(), FilesystemError> {
+    crate::private_windows::validate_private_key_file(file)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn validate_private_key_file(_: &fs::File, _: &fs::Metadata) -> Result<(), FilesystemError> {
     Ok(())
 }
 
@@ -299,11 +369,18 @@ fn create_key_file(path: &Path) -> Result<(), FilesystemError> {
     {
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     let mut file = match options.open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
         Err(_) => return Err(FilesystemError::KeyFileCannotCreate),
     };
+    if set_private_file_mode(&file, 0o600).is_err() {
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(FilesystemError::KeyFileCannotCreate);
+    }
     let key = FernetKey::generate();
     let result = file
         .write_all(key.encoded().as_bytes())
@@ -323,7 +400,12 @@ fn set_private_directory(path: &Path) -> Result<(), FilesystemError> {
         .map_err(|_| FilesystemError::KeyDirectoryUnavailable)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_private_directory(path: &Path) -> Result<(), FilesystemError> {
+    crate::private_windows::set_private_directory(path)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn set_private_directory(_: &Path) -> Result<(), FilesystemError> {
     Ok(())
 }
@@ -340,10 +422,12 @@ fn atomic_write(
     mode: u32,
     private_parent: bool,
 ) -> Result<(), FilesystemError> {
+    ensure_managed_write_path(path)?;
     let parent = path
         .parent()
         .ok_or(FilesystemError::ManagedFileUnavailable)?;
     fs::create_dir_all(parent).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
+    ensure_managed_write_path(path)?;
     if private_parent {
         set_private_directory(parent).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
     }
@@ -368,7 +452,12 @@ fn set_private_file_mode(file: &fs::File, mode: u32) -> Result<(), FilesystemErr
     .map_err(|_| FilesystemError::ManagedFileUnavailable)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_private_file_mode(file: &fs::File, _: u32) -> Result<(), FilesystemError> {
+    crate::private_windows::set_private_file(file)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn set_private_file_mode(_: &fs::File, _: u32) -> Result<(), FilesystemError> {
     Ok(())
 }
@@ -401,7 +490,7 @@ impl FileTransaction {
         }
         let snapshot = match fs::symlink_metadata(&path) {
             Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
                     return Err(FilesystemError::ManagedFileNotRegular);
                 }
                 if metadata.len() > MAX_TRANSACTION_FILE_BYTES as u64 {

@@ -17,6 +17,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 #[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+#[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, ERROR_LOCK_VIOLATION, HANDLE};
@@ -78,7 +80,7 @@ fn inspect_lock_path(path: &Path) -> Result<PathBuf, LockError> {
     components.reverse();
     for component in components {
         match fs::symlink_metadata(component) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Ok(metadata) if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() => {
                 return Err(LockError::PathUnsafe);
             }
             Ok(_) => {}
@@ -87,13 +89,23 @@ fn inspect_lock_path(path: &Path) -> Result<PathBuf, LockError> {
         }
     }
     match fs::symlink_metadata(&candidate) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+        Ok(metadata) if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() => {
             Err(LockError::PathUnsafe)
         }
         Ok(_) => Ok(candidate),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(candidate),
         Err(_) => Err(LockError::PathUnsafe),
     }
+}
+
+#[cfg(windows)]
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || crate::private_windows::metadata_is_reparse(metadata)
+}
+
+#[cfg(not(windows))]
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
 }
 
 fn open_lock_file(path: &Path) -> Result<File, LockError> {
@@ -133,7 +145,22 @@ fn open_lock_file(path: &Path) -> Result<File, LockError> {
         unsafe { File::from_raw_fd(descriptor) }
     };
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let file = {
+        crate::private_windows::set_private_directory(parent).map_err(|_| LockError::OpenFailed)?;
+        let mut options = fs::OpenOptions::new();
+        options
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+        let file = options.open(&path).map_err(|_| LockError::OpenFailed)?;
+        crate::private_windows::set_private_file(&file).map_err(|_| LockError::OpenFailed)?;
+        file
+    };
+
+    #[cfg(not(any(unix, windows)))]
     let file = fs::OpenOptions::new()
         .read(true)
         .write(true)

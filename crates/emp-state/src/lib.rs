@@ -18,7 +18,10 @@ pub mod filesystem;
 pub mod lock;
 pub mod migration;
 pub mod model_values;
+#[cfg(windows)]
+mod private_windows;
 pub mod vault;
+pub mod web_session;
 
 pub use accounts::{
     AccountError, AccountResult, account_auth_path, normalize_account, normalize_context_windows,
@@ -54,3 +57,7 @@ pub use model_values::{
     output_modalities_known, output_modalities_metadata_source, supported_protocols_known,
 };
 pub use vault::{VAULT_MAGIC, VaultError, VaultResult, decode_vault, encode_vault};
+pub use web_session::{
+    WEB_SESSION_LIFETIME_SECONDS, WEB_SESSION_TOKEN_BYTES, WEB_SESSION_TOKEN_LENGTH, WebSession,
+    WebSessionError, load_or_create_web_session, web_session_path,
+};

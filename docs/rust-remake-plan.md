@@ -82,6 +82,8 @@ Progress evidence on 2026-09-21:
   transactional configuration saving and its live Python save oracle.
 - Runtime compatibility run `35661360516` passed all seven jobs with complete
   migration import, account identity handling and rollback coverage.
+- Runtime compatibility run `35662851694` passed all seven jobs with portable,
+  encrypted migration export and category-dependency coverage.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
