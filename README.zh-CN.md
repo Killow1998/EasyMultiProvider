@@ -1,10 +1,27 @@
-# EMP
+<p align="center">
+  <img src="assets/branding/easy-multi-provider-icon.svg" alt="EMP 标志" width="112">
+</p>
 
-[English](README.md) | 中文
+<h1 align="center">EMP — EasyMultiProvider</h1>
 
-EMP 是一个通过浏览器配置的 Codex 本地模型路由器。它在
-保留 Codex 原生使用体验的同时，把多个 ChatGPT Subscription、API Provider
-和外部模型加入同一个模型列表。
+<p align="center"><strong>在熟悉的 Codex 模型列表里，使用另一个 ChatGPT 账号或外部 API 模型。</strong></p>
+
+<p align="center"><a href="README.md">English</a> · <a href="#快速开始">快速开始</a> · <a href="https://github.com/Killow1998/EasyMultiProvider/releases/latest">下载</a></p>
+
+EMP 在本机运行。你可以在网页里导入另一个 ChatGPT 订阅账号，或添加 LiteLLM
+等 API Provider，选择模型后应用到 Codex，再从 `/model` 或 Codex App 菜单中切换。
+
+例如，同一个模型列表可以同时出现：
+
+| Codex 中显示的模型 | 请求发送到哪里 |
+| --- | --- |
+| `gpt-5.6-luna` | 当前 Codex 登录账号 |
+| `team/gpt-5.6-luna` | 导入的 ChatGPT 订阅账号 |
+| `litellm/glm` | 从 LiteLLM Provider 导入的模型 |
+
+带前缀的名称只是示例；账号、Provider 和模型由你选择。选中 `team/gpt-5.6-luna`
+时使用导入的账号，选中 `litellm/glm` 时使用对应 Provider 的 API Key。编码任务、
+权限和工具仍由 Codex 管理。EMP 在本机统一管理模型列表、加密凭据和账号额度。
 
 当前源码版本为 `v0.11.4`。
 
@@ -93,7 +110,15 @@ Subscription 的编辑窗口可以逐模型设置上下文 token 数。留空使
 最简单的桌面启动方式是：
 
 - **Windows：**双击 `EMP.exe`。
-- **Linux：**解压 `.tar.gz`，在解压目录运行 `sh install-user.sh`，然后从应用菜单打开 **EMP**。
+- **Linux `.tar.gz`：**在下载目录运行以下命令，再从应用菜单打开 **EMP**：
+
+  ```bash
+  tar -xzf EMP-linux-x86_64.tar.gz
+  cd EMP
+  ./install-user.sh
+  ```
+
+- **Linux `.deb`：**运行 `sudo apt install ./EMP-linux-x86_64.deb`，再从应用菜单打开 **EMP**。`.deb` 不包含 `install-user.sh`。
 - **macOS：**打开 DMG，把 **EMP** 拖入“应用程序”，然后双击。
 
 EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的终端窗口。看到
@@ -110,8 +135,9 @@ EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的
 
 Linux 用户安装把程序放在 `$XDG_DATA_HOME/easy-multi-provider/EMP`，默认是
 `~/.local/share/easy-multi-provider/EMP`；启动入口是 `~/.local/bin/EMP`。
-安装和网页更新都不需要 `sudo` 或管理员密码。配置与账号数据保存在上述用户
-配置目录，更新程序不会替换它们。已有系统 `.deb` 安装不会被自动卸载；停止
+Linux 用户安装与网页更新不需要 `sudo` 或管理员密码；安装系统级 `.deb` 需要。
+配置与账号数据保存在上述用户配置目录，更新程序不会替换它们。
+已有系统 `.deb` 安装不会被自动卸载；停止
 旧 EMP 后可安装用户版本，旧配置应先备份再迁入用户配置目录。
 
 需要命令行控制时仍可显式启动服务。下载 Windows 可执行文件后，在 PowerShell 中运行：
