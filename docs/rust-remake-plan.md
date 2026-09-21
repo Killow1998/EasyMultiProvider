@@ -52,8 +52,13 @@ Progress evidence on 2026-09-21:
   oracle. Export now filters all seven non-empty native/subscription/external
   category combinations, carries only their route and family dependencies,
   emits portable paths, includes available native login state, and encrypts
-  every selected credential in a Python-readable bundle. Windows
-  ACL/reparse-point hardening remains.
+  every selected credential in a Python-readable bundle. Private-state writes
+  now reject Windows reparse points, assign a protected current-user-only DACL
+  and owner, and validate that exact shape before loading a key. The persistent
+  30-day browser session is byte/schema compatible with Python, and the Rust
+  local server now enforces the same one-use bootstrap, Host/Origin boundary,
+  cookie attributes, restart reuse and expiry rotation while serving the
+  unchanged Web UI.
   Account metadata normalization also matches Python's sorting, UTF-8 byte
   limits, truthiness, quota preservation and exact validation order.
 - Runtime compatibility run `35636981488` passed the complete Python suite,
@@ -84,6 +89,12 @@ Progress evidence on 2026-09-21:
   migration import, account identity handling and rollback coverage.
 - Runtime compatibility run `35662851694` passed all seven jobs with portable,
   encrypted migration export and category-dependency coverage.
+- Runtime compatibility run `35667325806` passed all seven jobs with Windows
+  current-user ACL/owner enforcement, reparse-point rejection and portable
+  private-state tests on Linux, macOS and Windows.
+- Runtime compatibility run `35667534902` passed all seven jobs with the Rust
+  management bootstrap and persistent Web-session boundary, including live
+  Python interoperability and the unchanged browser asset bytes.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
