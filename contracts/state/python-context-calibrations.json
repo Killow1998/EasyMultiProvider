@@ -1,0 +1,804 @@
+{
+  "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config._normalize_context_calibrations",
+  "status": "implemented",
+  "implementation": "crates/emp-state/src/config.rs",
+  "test": "crates/emp-state/tests/context_calibration_compat.rs",
+  "valid": [
+    {
+      "name": "complete-observed-record",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": " deepseek-chat ",
+          "protocol": "chat_completions",
+          "deployment_identity": " default ",
+          "largest_success_estimate": "1_000",
+          "smallest_failure_estimate": "1200",
+          "largest_success_source": " observed ",
+          "smallest_failure_source": "observed",
+          "largest_success_confidence": "0.875",
+          "smallest_failure_confidence": 0.25,
+          "largest_success_observed_at": "2026-08-21T00:00:00Z",
+          "smallest_failure_observed_at": "2026-08-21 00:00:00+00:00",
+          "unknown": "discard"
+        }
+      ],
+      "expected": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "chat_completions",
+          "deployment_identity": "default",
+          "largest_success_estimate": 1000,
+          "smallest_failure_estimate": 1200,
+          "largest_success_source": "observed",
+          "smallest_failure_source": "observed",
+          "largest_success_confidence": 0.875,
+          "smallest_failure_confidence": 0.25,
+          "largest_success_observed_at": "2026-08-21T00:00:00Z",
+          "smallest_failure_observed_at": "2026-08-21 00:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "name": "empty-estimates-and-defaults",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "prod/deployment-1",
+          "largest_success_estimate": null,
+          "smallest_failure_estimate": ""
+        }
+      ],
+      "expected": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "prod/deployment-1",
+          "largest_success_estimate": null,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 0.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        }
+      ]
+    },
+    {
+      "name": "numeric-boundary-and-date-only",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 100000000,
+          "smallest_failure_estimate": 1,
+          "largest_success_confidence": true,
+          "smallest_failure_confidence": false,
+          "largest_success_observed_at": "2026-08-21",
+          "smallest_failure_observed_at": null
+        }
+      ],
+      "expected": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 100000000,
+          "smallest_failure_estimate": 1,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": "2026-08-21",
+          "smallest_failure_observed_at": null
+        }
+      ]
+    },
+    {
+      "name": "permissive-integer-text",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "anthropic_messages",
+          "deployment_identity": "default",
+          "largest_success_estimate": "  001_2  ",
+          "smallest_failure_estimate": "١٢",
+          "largest_success_confidence": 1,
+          "smallest_failure_confidence": 0
+        }
+      ],
+      "expected": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "anthropic_messages",
+          "deployment_identity": "default",
+          "largest_success_estimate": 12,
+          "smallest_failure_estimate": 12,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        }
+      ]
+    },
+    {
+      "name": "only-first-eight-are-retained",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 1,
+          "smallest_failure_estimate": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 2,
+          "smallest_failure_estimate": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 3,
+          "smallest_failure_estimate": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 4,
+          "smallest_failure_estimate": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 5,
+          "smallest_failure_estimate": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 6,
+          "smallest_failure_estimate": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 7,
+          "smallest_failure_estimate": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 8,
+          "smallest_failure_estimate": null
+        },
+        "discarded before validation"
+      ],
+      "expected": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 1,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 2,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 3,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 4,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 5,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 6,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 7,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 8,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        }
+      ]
+    },
+    {
+      "name": "raw-null",
+      "input": null,
+      "expected": []
+    },
+    {
+      "name": "raw-empty-list",
+      "input": [],
+      "expected": []
+    },
+    {
+      "name": "missing-estimates-default-zero",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default"
+        }
+      ],
+      "expected": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": null,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 0.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        }
+      ]
+    },
+    {
+      "name": "boolean-and-fractional-estimates",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": true,
+          "smallest_failure_estimate": 1.9
+        }
+      ],
+      "expected": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 1,
+          "smallest_failure_estimate": 1,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 1.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        }
+      ]
+    },
+    {
+      "name": "upper-bound-float-truncates-before-range-check",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 100000000.9
+        }
+      ],
+      "expected": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 100000000,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        }
+      ]
+    },
+    {
+      "name": "unicode-numbers-and-python-whitespace",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "　deepseek-chat　",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": "　+１_٢　",
+          "largest_success_source": "　observed　",
+          "largest_success_confidence": "０.５"
+        }
+      ],
+      "expected": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 12,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "observed",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 0.5,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        }
+      ]
+    },
+    {
+      "name": "contradictory-estimates-are-preserved",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 2000,
+          "smallest_failure_estimate": 1000
+        }
+      ],
+      "expected": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 2000,
+          "smallest_failure_estimate": 1000,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 1.0,
+          "smallest_failure_confidence": 1.0,
+          "largest_success_observed_at": null,
+          "smallest_failure_observed_at": null
+        }
+      ]
+    },
+    {
+      "name": "python-iso-basic-week-and-unicode-separator",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_observed_at": "20260921T120000+0230",
+          "smallest_failure_observed_at": "2026-W39-1🐱12:00:00,5"
+        }
+      ],
+      "expected": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": null,
+          "smallest_failure_estimate": null,
+          "largest_success_source": "unknown",
+          "smallest_failure_source": "unknown",
+          "largest_success_confidence": 0.0,
+          "smallest_failure_confidence": 0.0,
+          "largest_success_observed_at": "20260921T120000+0230",
+          "smallest_failure_observed_at": "2026-W39-1🐱12:00:00,5"
+        }
+      ]
+    }
+  ],
+  "invalid": [
+    {
+      "name": "raw-not-list",
+      "input": {},
+      "error": "model.context_calibrations must be a list",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "entry-not-object",
+      "input": [
+        "calibration"
+      ],
+      "error": "model.context_calibrations entries must be objects",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "missing-fingerprint",
+      "input": [
+        {
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default"
+        }
+      ],
+      "error": "model.context_calibrations endpoint fingerprint is invalid",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "uppercase-fingerprint",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default"
+        }
+      ],
+      "error": "model.context_calibrations endpoint fingerprint is invalid",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "auto-protocol-before-estimate",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "auto",
+          "deployment_identity": "default",
+          "largest_success_estimate": {}
+        }
+      ],
+      "error": "model.context_calibrations protocol is invalid",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "missing-identity",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "protocol": "responses",
+          "deployment_identity": "default"
+        }
+      ],
+      "error": "model.context_calibrations identity is required",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "oversized-identity",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "protocol": "responses",
+          "deployment_identity": "default"
+        }
+      ],
+      "error": "model.context_calibrations.upstream_model contains unsupported characters",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "zero-estimate",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": 0
+        }
+      ],
+      "error": "model.context_calibrations.largest_success_estimate is out of range",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "over-context-maximum",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "smallest_failure_estimate": "100_000_001"
+        }
+      ],
+      "error": "model.context_calibrations.smallest_failure_estimate is out of range",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "invalid-source-before-confidence",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_source": "manual",
+          "largest_success_confidence": {}
+        }
+      ],
+      "error": "model.context_calibrations.largest_success_source is invalid",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "confidence-below-zero",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_confidence": -0.1
+        }
+      ],
+      "error": "model.context_calibrations.largest_success_confidence is out of range",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "confidence-above-one",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "smallest_failure_confidence": 1.1
+        }
+      ],
+      "error": "model.context_calibrations.smallest_failure_confidence is out of range",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "confidence-not-json-numeric",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_confidence": {
+            "confidence": 1.0
+          }
+        }
+      ],
+      "error": "model.context_calibrations.largest_success_confidence must be numeric",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "invalid-timestamp-offset",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "smallest_failure_observed_at": "2026-08-21T00:00:00+25:00"
+        }
+      ],
+      "error": "model.context_calibrations.smallest_failure_observed_at is invalid",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "timestamp-not-string",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_observed_at": 123
+        }
+      ],
+      "error": "model.context_calibrations.largest_success_observed_at is invalid",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "validation-stops-before-later-item",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default"
+        },
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "not-a-protocol",
+          "deployment_identity": "default"
+        },
+        [
+          "not an object"
+        ]
+      ],
+      "error": "model.context_calibrations protocol is invalid",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "false-estimate-is-out-of-range",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": false
+        }
+      ],
+      "error_type": "ConfigError",
+      "error": "model.context_calibrations.largest_success_estimate is out of range"
+    },
+    {
+      "name": "negative-fraction-truncates-to-zero",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": -0.9
+        }
+      ],
+      "error_type": "ConfigError",
+      "error": "model.context_calibrations.largest_success_estimate is out of range"
+    },
+    {
+      "name": "estimate-object-is-not-numeric",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "smallest_failure_estimate": {}
+        }
+      ],
+      "error_type": "ConfigError",
+      "error": "model.context_calibrations.smallest_failure_estimate must be numeric"
+    },
+    {
+      "name": "estimate-invalid-underscore-is-not-numeric",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_estimate": "1__0"
+        }
+      ],
+      "error_type": "ConfigError",
+      "error": "model.context_calibrations.largest_success_estimate must be numeric"
+    },
+    {
+      "name": "explicit-null-source-is-invalid",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_source": null
+        }
+      ],
+      "error_type": "ConfigError",
+      "error": "model.context_calibrations.largest_success_source is invalid"
+    },
+    {
+      "name": "explicit-null-confidence-is-not-numeric",
+      "input": [
+        {
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "upstream_model": "deepseek-chat",
+          "protocol": "responses",
+          "deployment_identity": "default",
+          "largest_success_confidence": null
+        }
+      ],
+      "error_type": "ConfigError",
+      "error": "model.context_calibrations.largest_success_confidence must be numeric"
+    }
+  ]
+}

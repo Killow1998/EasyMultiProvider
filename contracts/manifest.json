@@ -124,6 +124,20 @@
       "fixture": "state/python-model-capability-sources.json"
     },
     {
+      "id": "state.context-calibrations.python-rust",
+      "level": "state",
+      "source": "easy_multi_provider/config.py:_normalize_context_calibrations",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": [
+        "only the first eight calibration records are evaluated",
+        "input order and duplicates are preserved",
+        "unknown fields are discarded"
+      ],
+      "side_effects": ["none; context calibration normalization is pure"],
+      "fixture": "state/python-context-calibrations.json"
+    },
+    {
       "id": "state.capability-model-values.python-rust",
       "level": "state",
       "source": "easy_multi_provider/capabilities.py pure model value helpers",

@@ -28,8 +28,10 @@ Progress evidence on 2026-09-21:
   concrete protocol filtering and reasoning-effort ordering. Model capability
   provenance now also preserves top-level-over-nested precedence, raw-key
   explicitness, default source/confidence selection and supplied observations
-  under frozen and live Python oracles. Full model records, context
-  calibrations, import merge behavior and Windows ACL/reparse-point hardening remain.
+  under frozen and live Python oracles. Context calibrations preserve the
+  eight-record bound, validation order, Python numeric coercion, provenance
+  defaults and accepted ISO timestamp forms. Full model records, import merge
+  behavior and Windows ACL/reparse-point hardening remain.
   Account metadata normalization also matches Python's sorting, UTF-8 byte
   limits, truthiness, quota preservation and exact validation order.
 - Runtime compatibility run `35636981488` passed the complete Python suite,
