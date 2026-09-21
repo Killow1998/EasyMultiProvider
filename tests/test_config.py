@@ -631,6 +631,24 @@ class TestNewCapabilityFieldsConfigRoundTrip(ConfigTests):
         self.assertEqual(sources["max_input_tokens"]["source"], "manual")
         self.assertEqual(sources["reasoning_control"]["source"], "manual")
 
+    def test_web_vision_override_can_return_to_unknown(self):
+        current = normalize({"providers": [self.provider], "models": [{
+            "id": "deepseek/model", "provider": "deepseek", "upstream_id": "model",
+            "input_modalities": ["text", "image"],
+            "capability_sources": {"input_modalities": {"source": "advertised"}},
+        }]})
+        incoming = public_config(current)
+        model = incoming["models"][0]
+        model["input_modalities"] = ["text"]
+        model["capability_sources"]["input_modalities"] = {"source": "unknown"}
+        updated = merge_web_update(current, incoming)
+        self.assertEqual(updated["models"][0]["input_modalities"], ["text"])
+        self.assertEqual(updated["models"][0]["capability_sources"]["input_modalities"]["source"], "unknown")
+
+        incoming["models"][0]["input_modalities"] = ["text", "image"]
+        asserted = merge_web_update(updated, incoming)
+        self.assertEqual(asserted["models"][0]["capability_sources"]["input_modalities"]["source"], "manual")
+
     def test_web_update_preserves_unchanged_new_fields(self):
         current = normalize({"providers": [self.provider], "models": [self.rich_model]})
         incoming = public_config(current)

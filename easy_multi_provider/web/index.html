@@ -226,8 +226,17 @@ function confirmedField(model, field) {
 function modalityLabel(value) {
   const labels = language === 'en' ? {text:'text',image:'image',audio:'audio',video:'video'} : {text:'文本',image:'图像',audio:'音频',video:'视频'}; return labels[value] || value;
 }
+function visionStatus(model) {
+  const modalities = confirmedField(model, 'input_modalities');
+  if (!Array.isArray(modalities)) return 'unknown';
+  return modalities.includes('image') ? 'supported' : 'unsupported';
+}
+function visionLabel(status) {
+  return {unknown:tr('图像未知','vision unknown'),supported:tr('支持图像','vision supported'),unsupported:tr('不支持图像','vision not supported')}[status];
+}
 function capabilitySummary(model) {
   const parts = [];
+  parts.push(esc(visionLabel(visionStatus(model))));
   const inputs = Array.isArray(confirmedField(model, 'input_modalities')) ? confirmedField(model, 'input_modalities') : [];
   if (inputs.length) parts.push(tr('输入 ', 'Input ') + inputs.map(modalityLabel).map(esc).join('/'));
   const outputs = Array.isArray(confirmedField(model, 'output_modalities')) ? confirmedField(model, 'output_modalities') : [];
@@ -1233,7 +1242,7 @@ function renderModels() {
   const providerNames = Object.fromEntries((state.providers || []).map(p => [p.id, p.name || p.id])); const groups = {};
   models.forEach(model => { (groups[model.provider] ||= []).push(model); });
   const configuredOrder = (state.providers || []).map(provider => provider.id); const groupOrder = [...configuredOrder.filter(provider => groups[provider]), ...Object.keys(groups).filter(provider => !configuredOrder.includes(provider))];
-  $('models').innerHTML = groupOrder.map(provider => { const items = groups[provider]; const expanded = expandedModelGroups.has(provider); const shown = expanded ? items : items.slice(0, 6); const rows = shown.map(m => { const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : []; const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? tr('支持推理，档位未知','reasoning supported; levels unknown') : tr('无推理档位控制','no reasoning level control')); const capabilities = capabilitySummary(m); return `<tr class="${m.enabled ? '' : 'model-hidden'}"><td><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, m.context_window))}</strong><br><code>${esc(m.id)}</code><br><span class="muted">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? '<br>' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</span></td><td><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</td><td><button class="secondary" data-icon="edit" onclick="openManualModelModal('${esc(m.id)}')">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" onclick="testModel('${esc(m.id)}')">${tr('测试','Test')}</button><button class="danger" data-icon="trash" onclick="removeModel('${esc(m.id)}')">${tr('删除','Delete')}</button></td></tr>`; }).join(''); const toggle = items.length > 6 ? `<button type="button" class="secondary" onclick="toggleModelGroup('${esc(provider)}')">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : ''; return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><table><tr><th>${tr('模型','Model')}</th><th>${tr('显示','Visibility')}</th><th>${tr('操作','Actions')}</th></tr>${rows}</table>${toggle}</div>`; }).join('');
+  $('models').innerHTML = groupOrder.map(provider => { const items = groups[provider]; const expanded = expandedModelGroups.has(provider); const shown = expanded ? items : items.slice(0, 6); const rows = shown.map(m => { const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : []; const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? tr('支持推理，档位未知','reasoning supported; levels unknown') : tr('无推理档位控制','no reasoning level control')); const capabilities = capabilitySummary(m); return `<tr class="${m.enabled ? '' : 'model-hidden'}"><td><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, m.context_window))}</strong><br><code>${esc(m.id)}</code><br><span class="muted">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? '<br>' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</span></td><td><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</td><td><button class="secondary" data-icon="edit" onclick="openManualModelModal('${esc(m.id)}')">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" onclick="testModel('${esc(m.id)}')">${tr('测试','Test')}</button><button class="secondary" data-icon="test" onclick="testModelVision('${esc(m.id)}')">${tr('测试图像','Test image')}</button><button class="danger" data-icon="trash" onclick="removeModel('${esc(m.id)}')">${tr('删除','Delete')}</button></td></tr>`; }).join(''); const toggle = items.length > 6 ? `<button type="button" class="secondary" onclick="toggleModelGroup('${esc(provider)}')">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : ''; return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><table><tr><th>${tr('模型','Model')}</th><th>${tr('显示','Visibility')}</th><th>${tr('操作','Actions')}</th></tr>${rows}</table>${toggle}</div>`; }).join('');
 }
 function toggleModelGroup(provider) { if (expandedModelGroups.has(provider)) expandedModelGroups.delete(provider); else expandedModelGroups.add(provider); renderModels(); }
 function providerDiscoveryError(error) { const status = Number(error?.status || error?.payload?.error?.status || 0); if ([400,401,403].includes(status)) return tr('API Key 无效或没有读取模型列表的权限。','The API key is invalid or cannot read the model list.'); if (status === 429) return tr('请求过于频繁，请稍后重试。','Too many requests. Try again later.'); if (status >= 500) return tr('模型服务暂时不可用，请稍后重试。','The model service is temporarily unavailable. Try again later.'); return error?.message || tr('无法读取模型列表。','Could not read the model list.'); }
@@ -1251,9 +1260,11 @@ function updateDiscoveredCount() { const options = [...document.querySelectorAll
 function openManualModelModal(modelId = '') {
   const existing = (state.models || []).find(m => m.id === modelId) || {}; editingModelId = modelId; modalReasoningLevels = Array.isArray(existing.reasoning_levels) ? existing.reasoning_levels : null; modalReasoningSupport = typeof existing.supports_reasoning === 'boolean' ? existing.supports_reasoning : null; modalReasoningSummarySupport = typeof existing.supports_reasoning_summaries === 'boolean' ? existing.supports_reasoning_summaries : null;
   const options = (state.providers || []).map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join('');
-  const inputModalities = Array.isArray(existing.input_modalities) ? existing.input_modalities : ['text'];
-  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label>${tr('上游模型名','Upstream model name')}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${tr('例如 glm','for example glm')}" oninput="updateManualModelRoute()"></div><div><label>${tr('上下文窗口（可选）','Context window (optional)')}</label><input id="modal_model_context" type="number" min="0" value="${Number(existing.context_window || 0)}"></div><div><label>${tr('自动获取','Fetch metadata')}</label><button class="secondary" onclick="inspectModalModel()">${tr('获取上游最大值','Fetch upstream maximum')}</button></div><div class="wide"><label>${tr('输入模态（逗号分隔）','Input modalities (comma-separated)')}</label><input id="modal_model_input_modalities" value="${esc(inputModalities.join(', '))}" placeholder="text, image"><small class="muted">${tr('Codex 目前使用 text / image；其他模态会保留在 EMP 中。','Codex currently uses text / image; other modalities remain in EMP.')}</small></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
+  const inputModalities = (Array.isArray(existing.input_modalities) ? existing.input_modalities : ['text']).filter(value => value !== 'image');
+  const vision = visionStatus(existing);
+  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label>${tr('上游模型名','Upstream model name')}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${tr('例如 glm','for example glm')}" oninput="updateManualModelRoute()"></div><div><label>${tr('上下文窗口（可选）','Context window (optional)')}</label><input id="modal_model_context" type="number" min="0" value="${Number(existing.context_window || 0)}"></div><div><label>${tr('自动获取','Fetch metadata')}</label><button class="secondary" onclick="inspectModalModel()">${tr('获取上游最大值','Fetch upstream maximum')}</button></div><div class="wide"><label>${tr('图像输入能力','Vision input capability')}</label><select id="modal_model_vision"><option value="unknown">${tr('未知','Unknown')}</option><option value="supported">${tr('支持','Supported')}</option><option value="unsupported">${tr('不支持','Not supported')}</option></select><small class="muted">${tr('未知不会将图像能力宣称给 Codex；测试图像仅在点击按钮时发送。','Unknown does not claim image support to Codex; the image test runs only when clicked.')}</small></div><div class="wide"><label>${tr('其他输入模态（逗号分隔）','Other input modalities (comma-separated)')}</label><input id="modal_model_input_modalities" value="${esc(inputModalities.join(', '))}" placeholder="text, image"><small class="muted">${tr('Codex 目前使用 text / image；其他模态会保留在 EMP 中。','Codex currently uses text / image; other modalities remain in EMP.')}</small></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
   if (existing.provider) $('modal_model_provider').value = existing.provider;
+  $('modal_model_vision').value = vision;
   updateManualModelRoute();
 }
 function manualModelRoute() { const provider = $('modal_model_provider')?.value || ''; const entered = $('modal_model_upstream')?.value.trim() || ''; const prefix = provider + '/'; return provider && entered ? prefix + (entered.startsWith(prefix) ? entered.slice(prefix.length) : entered) : ''; }
@@ -1269,10 +1280,15 @@ async function saveManualModel() {
   const previous = state.models.find(m => m.id === editingModelId);
   const collision = state.models.find(m => m.id === id && m.id !== editingModelId);
   if (collision) throw new Error(tr('模型路由已存在，不能覆盖另一个模型','That model route already exists and cannot overwrite another model'));
-  const modalities = [...new Set($('modal_model_input_modalities').value.split(',').map(value => value.trim().toLowerCase()))];
-  if (!modalities.length || modalities.length > 16 || modalities.some(value => !/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(value))) {
-    throw new Error(tr('请输入有效的输入模态，用逗号分隔（例如 text, image）','Enter valid comma-separated input modalities (for example text, image)'));
+  const vision = $('modal_model_vision').value;
+  if (!['unknown', 'supported', 'unsupported'].includes(vision)) throw new Error(tr('请选择图像输入能力','Choose a vision input capability'));
+  const modalities = [...new Set($('modal_model_input_modalities').value.split(',').map(value => value.trim().toLowerCase()).filter(Boolean))];
+  if (modalities.length > 16 || modalities.some(value => !/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(value) || value === 'image')) {
+    throw new Error(tr('请输入有效的其他输入模态；图像请使用上方选项','Enter valid other input modalities; use the vision selector for images'));
   }
+  if (vision === 'supported') modalities.push('image');
+  if (!modalities.length) modalities.push('text');
+  if (modalities.length > 16) throw new Error(tr('输入模态不能超过 16 项','Input modalities cannot exceed 16 entries'));
   const levels = Array.isArray(modalReasoningLevels) ? modalReasoningLevels : (Array.isArray(previous?.reasoning_levels) ? previous.reasoning_levels : []);
   const support = typeof modalReasoningSupport === 'boolean' ? modalReasoningSupport : (typeof previous?.supports_reasoning === 'boolean' ? previous.supports_reasoning : (levels.length ? true : null));
   const summarySupport = typeof modalReasoningSummarySupport === 'boolean' ? modalReasoningSummarySupport : (previous?.supports_reasoning_summaries ?? null);
@@ -1283,6 +1299,7 @@ async function saveManualModel() {
     supports_reasoning_summaries:summarySupport, reasoning_levels:levels,
     context_window:Number($('modal_model_context').value) || 0,
     input_modalities:modalities, created_at:previous?.created_at || 0,
+    capability_sources:{...(previous?.capability_sources || {}), input_modalities:{source:vision === 'unknown' ? 'unknown' : 'manual'}},
     enabled:previous ? previous.enabled : true,
   };
   const candidate = cloneState();
@@ -1301,6 +1318,17 @@ async function saveManualModel() {
 async function toggleModel(id, enabled) { const candidate = cloneState(); const model = candidate.models.find(item => item.id === id); if (!model) return; model.enabled = enabled; try { await persistState(enabled ? tr('模型已显示','Model is visible') : tr('模型已隐藏；已从 Codex /model 目录移除','Model hidden and removed from the Codex /model catalog'), candidate); } catch (error) { notice(error.message, true); } }
 async function removeModel(id) { const candidate = cloneState(); candidate.models = candidate.models.filter(m => m.id !== id); try { await persistState(tr('模型已删除','Model deleted'), candidate); } catch (error) { notice(error.message, true); } }
 async function testModel(id) { try { notice(tr(`正在测试 ${id} …`,`Testing ${id}…`)); const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr('测试成功：','Test succeeded: ') + (result.output_text || tr('已收到模型响应','model response received'))); } catch (error) { notice(tr('测试失败：','Test failed: ') + error.message, true); } }
+async function testModelVision(id) {
+  try {
+    notice(tr(`正在向 ${id} 发送 EMP 图标…`,`Sending the EMP icon to ${id}…`));
+    const image = await api('/api/models/vision-test-image');
+    if (!String(image.data_url || '').startsWith('data:image/png;base64,')) throw new Error(tr('测试图像不可用','Test image is unavailable'));
+    const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:[{role:'user', content:[{type:'input_text',text:'Describe this image in one short sentence.'},{type:'input_image',image_url:image.data_url}]}], max_output_tokens:512})});
+    const answer = String(result.output_text || (result.output || []).flatMap(item => item.content || []).map(part => part.text || '').join('')).trim();
+    if (!answer) throw new Error(tr('模型没有返回图像描述','The model returned no image description'));
+    notice(tr('图像测试收到回复（仅为本次兼容性观察，非官方能力保证）：','Image test received a reply (observed compatibility, not an official guarantee): ') + answer.slice(0, 240));
+  } catch (error) { notice(tr('图像测试未通过：','Image test did not succeed: ') + error.message, true); }
+}
 
 function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryLoading = false; quotaHistoryRequest++; }
 function openModal(title, body, submitLabel, submit) { stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; button.onclick = submit ? async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { button.disabled = false; button.textContent = label; } } : null; $('modal_backdrop').classList.remove('hidden'); }

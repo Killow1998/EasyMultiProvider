@@ -2127,6 +2127,8 @@ def _route_event(
     )
     for key in (
         "close_code",
+        "phase",
+        "retry_count",
         "output_emitted",
         "tool_activity",
         "terminal_event_observed",

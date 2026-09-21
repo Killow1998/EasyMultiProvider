@@ -262,6 +262,8 @@ class BoundaryDiagnosticsTests(unittest.TestCase):
                 "route": "responses",
                 "resolved_protocol": "responses",
                 "transport": "websocket",
+                "phase": "streaming",
+                "retry_count": 2,
                 "close_code": 1006,
                 "error_class": "upstream_close_after_output",
                 "output_emitted": True,
@@ -277,6 +279,8 @@ class BoundaryDiagnosticsTests(unittest.TestCase):
         record = ring.snapshot()["records"][0]
 
         self.assertEqual(record["close_code"], 1006)
+        self.assertEqual(record["stream_phase"], "streaming")
+        self.assertEqual(record["retry_count"], 2)
         self.assertTrue(record["output_emitted"])
         self.assertFalse(record["tool_activity"])
         self.assertFalse(record["terminal_event_observed"])

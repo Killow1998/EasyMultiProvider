@@ -187,6 +187,7 @@ from .vault import default_master_key_file, ensure_master_key
 
 
 WEB_FILE = Path(__file__).with_name("web").joinpath("index.html")
+VISION_TEST_ICON = WEB_FILE.with_name("vision-test-icon.png")
 _PROCESS_SERVICE_LOCK = threading.Lock()
 PROXY_ENV_KEYS = (
     "HTTP_PROXY",
@@ -216,6 +217,9 @@ _DIAGNOSTIC_DIALECTS = frozenset(
     }
 )
 _DIAGNOSTIC_TRANSPORTS = frozenset({"http", "sse", "websocket", "unknown"})
+_DIAGNOSTIC_STREAM_PHASES = frozenset({
+    "connect", "first_event", "streaming", "terminal_validation", "unknown",
+})
 _WEBSOCKET_PHASES = frozenset({
     "upstream_transport_failed",
     "local_upgrade_accepted",
@@ -919,6 +923,9 @@ class ObservationRing:
         recovery_mode = event.get("recovery_mode", "none")
         if recovery_mode not in _DIAGNOSTIC_RECOVERY_MODES:
             recovery_mode = "none"
+        stream_phase = event.get("phase", "unknown")
+        if stream_phase not in _DIAGNOSTIC_STREAM_PHASES:
+            stream_phase = "unknown"
         speed_mode = event.get("speed_mode", "unknown")
         if speed_mode not in ("standard", "fast", "unknown"):
             speed_mode = "unknown"
@@ -1010,6 +1017,8 @@ class ObservationRing:
             "protocol": protocol,
             "dialect": dialect,
             "transport": transport,
+            "stream_phase": stream_phase,
+            "retry_count": _safe_diagnostic_int(event.get("retry_count"), 10) or 0,
             "request_item_count": _safe_diagnostic_int(
                 event.get("request_item_count"), 256
             ),
@@ -3963,6 +3972,14 @@ def make_handler(state: AppState):
                 return
             if path == "/api/config":
                 self._send(200, _json_bytes(state.management_snapshot()))
+                return
+            if path == "/api/models/vision-test-image":
+                icon = base64.b64encode(VISION_TEST_ICON.read_bytes()).decode("ascii")
+                self._send(
+                    200,
+                    _json_bytes({"data_url": "data:image/png;base64," + icon}),
+                    headers={"Cache-Control": "no-store"},
+                )
                 return
             if path == "/api/capabilities":
                 try:

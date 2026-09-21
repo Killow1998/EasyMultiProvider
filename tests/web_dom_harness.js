@@ -1039,9 +1039,12 @@ async function atomicStateBehavior() {
 
   run("state = {catalog_presentations:{},accounts:[],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',input_modalities:['text'],output_modalities:['text','audio'],output_limit:4000,capability_sources:{input_modalities:{source:'advertised'},output_modalities:{source:'advertised'}}}]}; openManualModelModal('provider-a/model')");
   assert.match(getElement("modal_body").innerHTML, /id="modal_model_input_modalities" value="text"/);
+  assert.match(getElement("modal_body").innerHTML, /id="modal_model_vision"/);
+  assert.strictEqual(getElement("modal_model_vision").value, "unsupported");
   getElement("modal_model_provider").value = "provider-a";
   getElement("modal_model_upstream").value = "model";
-  getElement("modal_model_input_modalities").value = "text, image";
+  getElement("modal_model_input_modalities").value = "text";
+  getElement("modal_model_vision").value = "supported";
   context.__persistStateStub = async (_message, candidate) => { context.__savedCandidate = candidate; context.state = candidate; };
   run("__realPersistState = persistState; persistState = __persistStateStub");
   await run("saveManualModel()");
@@ -1049,6 +1052,7 @@ async function atomicStateBehavior() {
   run("state = __savedCandidate");
   const savedModel = run("__savedCandidate.models[0]");
   assert.deepStrictEqual(Array.from(savedModel.input_modalities), ["text", "image"]);
+  assert.strictEqual(savedModel.capability_sources.input_modalities.source, "manual");
   assert.deepStrictEqual(Array.from(savedModel.output_modalities), ["text", "audio"], "editing input must preserve output modalities");
   assert.strictEqual(savedModel.output_limit, 4000, "editing input must preserve discovered limits");
   assert.strictEqual(savedModel.capability_sources.output_modalities.source, "advertised");
@@ -1056,8 +1060,36 @@ async function atomicStateBehavior() {
   getElement("modal_model_provider").value = "provider-a";
   getElement("modal_model_upstream").value = "model";
   getElement("modal_model_input_modalities").value = "text, invalid!";
-  await assert.rejects(run("saveManualModel()"), /请输入有效的输入模态/);
+  await assert.rejects(run("saveManualModel()"), /请输入有效的其他输入模态/);
   assert.deepStrictEqual(Array.from(run("state.models[0].input_modalities")), ["text", "image"]);
+
+  getElement("modal_model_input_modalities").value = "text";
+  getElement("modal_model_vision").value = "unknown";
+  run("persistState = __persistStateStub");
+  await run("saveManualModel()");
+  run("persistState = __realPersistState");
+  run("state = __savedCandidate");
+  assert.deepStrictEqual(Array.from(run("state.models[0].input_modalities")), ["text"]);
+  assert.strictEqual(run("state.models[0].capability_sources.input_modalities.source"), "unknown");
+
+  const visionCalls = [];
+  context.__apiStub = async (path, options) => {
+    visionCalls.push([path, options]);
+    if (path === "/api/models/vision-test-image") return {data_url:"data:image/png;base64,fixture"};
+    if (path === "/v1/responses") return {output_text:"A gold face icon."};
+    throw new Error("unexpected API " + path);
+  };
+  run("api = __apiStub");
+  assert.strictEqual(visionCalls.length, 0, "vision must not be probed automatically");
+  await run("testModelVision('provider-a/model')");
+  assert.deepStrictEqual(visionCalls.map(call => call[0]), ["/api/models/vision-test-image", "/v1/responses"]);
+  const probe = JSON.parse(visionCalls[1][1].body);
+  assert.strictEqual(probe.model, "provider-a/model");
+  assert.strictEqual(probe.input[0].content[1].type, "input_image");
+  assert.strictEqual(probe.input[0].content[1].image_url, "data:image/png;base64,fixture");
+  assert.strictEqual(probe.max_output_tokens, 512);
+  assert.match(getElement("status").textContent, /仅为本次兼容性观察/);
+  assert.strictEqual(run("state.models[0].capability_sources.input_modalities.source"), "unknown", "probe must not silently change a manual override");
 
   run("state = {native_catalog_path:'',catalog_presentations:{'provider-a/a':{catalog_alias:'A'},'provider-a/b':{catalog_alias:'B'}},accounts:[],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/a',provider:'provider-a',upstream_id:'a',enabled:true},{id:'provider-a/b',provider:'provider-a',upstream_id:'b',enabled:true}]}; openManualModelModal('provider-a/a')");
   getElement("modal_model_provider").value = "provider-a";

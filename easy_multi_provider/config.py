@@ -869,7 +869,23 @@ def merge_web_update(
                 continue
             previous = old.get(field) if old else None
             if old is None or model.get(field) != previous:
-                sources[field] = make_provenance("manual", observed_at=observed_at_now())
+                requested_source = (
+                    incoming_sources.get(field, {}).get("source")
+                    if isinstance(incoming_sources, dict)
+                    and isinstance(incoming_sources.get(field), dict)
+                    else None
+                )
+                # Let a user clear an unverified vision claim back to unknown.
+                # An image-bearing list cannot be unknown: it is an explicit
+                # assertion and remains a manual override.
+                if (
+                    field == "input_modalities"
+                    and requested_source == "unknown"
+                    and "image" not in normalize_input_modalities(model.get(field))
+                ):
+                    sources[field] = make_provenance("unknown")
+                else:
+                    sources[field] = make_provenance("manual", observed_at=observed_at_now())
         current_caps = model.get("capabilities")
         if isinstance(current_caps, dict):
             for cap_field in _BOOLEAN_CAPABILITIES:

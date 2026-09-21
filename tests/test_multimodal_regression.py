@@ -210,6 +210,33 @@ class MultimodalRegressionTests(unittest.TestCase):
         self.assertEqual(sent["input"][0]["content"][0]["type"], "input_image")
         self.assertEqual(sent["input"][0]["content"][0]["image_url"], data_url)
 
+    def test_unknown_vision_model_can_be_probed_through_chat_completions(self):
+        data_url = "data:image/png;base64,ZmFrZS1pbWFnZQ=="
+        provider = {**self._provider(), "protocol": "chat_completions"}
+        model = {
+            "id": "openrouter/unknown-vision",
+            "upstream_id": "unknown-vision",
+            "input_modalities": ["text"],
+            "capability_sources": {"input_modalities": {"source": "unknown"}},
+        }
+        body = {
+            "model": model["id"],
+            "input": [{"role": "user", "content": [
+                {"type": "input_text", "text": "Describe the image"},
+                {"type": "input_image", "image_url": data_url},
+            ]}],
+        }
+        response = {"choices": [{"message": {"content": "A gold icon."}, "finish_reason": "stop"}]}
+        with patch.object(router, "_request", return_value=_JsonResponse(response)) as request:
+            status, _, raw = router.chat_completion(provider, body, model, {})
+
+        sent = request.call_args.args[1]
+        self.assertEqual(status, 200)
+        self.assertIn(b"A gold icon.", raw)
+        self.assertEqual(sent["messages"][0]["content"][1], {
+            "type": "image_url", "image_url": {"url": data_url},
+        })
+
     def test_save_load_and_catalog_refresh_keep_multimodal_models(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

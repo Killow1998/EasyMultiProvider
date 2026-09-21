@@ -2862,6 +2862,12 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(event["upstream_request_bytes"], 5)
         self.assertEqual(event["upstream_content_encoding"], "zstd")
         self.assertEqual(event["compression_ratio"], 0.5)
+        failed = router._route_event(
+            {"status": 502}, provider, {"id": "fixture/model", "upstream_id": "fixture"},
+            {"status": 502, "success": False, "phase": "first_event", "retry_count": 1},
+        )
+        self.assertEqual(failed["phase"], "first_event")
+        self.assertEqual(failed["retry_count"], 1)
         for key in ("body", "authorization", "url", "model", "account", "token", "opaque"):
             self.assertNotIn(key, event)
 

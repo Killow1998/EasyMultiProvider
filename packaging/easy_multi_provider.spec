@@ -19,6 +19,7 @@ analysis = Analysis(
     binaries=collect_windows_tls_binaries(),
     datas=[
         (str(PACKAGE_ROOT / "web" / "index.html"), "easy_multi_provider/web"),
+        (str(PACKAGE_ROOT / "web" / "vision-test-icon.png"), "easy_multi_provider/web"),
         (
             str(PACKAGE_ROOT / "data" / "official_models.json"),
             "easy_multi_provider/data",

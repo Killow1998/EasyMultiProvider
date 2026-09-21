@@ -1907,6 +1907,8 @@ class ServerAccountTests(unittest.TestCase):
             "protocol",
             "dialect",
             "transport",
+            "stream_phase",
+            "retry_count",
             "request_item_count",
             "request_item_types",
             "content_part_types",
@@ -2048,6 +2050,8 @@ class ServerAccountTests(unittest.TestCase):
                     "protocol",
                     "dialect",
                     "transport",
+                    "stream_phase",
+                    "retry_count",
                     "request_item_count",
                     "request_item_types",
                     "content_part_types",
@@ -3734,6 +3738,37 @@ class ServerAccountTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(connection.getresponse().status, 401)
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_vision_test_icon_requires_session_and_is_bundled_png(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = HTTPConnection(*server.server_address)
+                connection.request("GET", "/api/models/vision-test-image")
+                response = connection.getresponse()
+                self.assertEqual(response.status, 401)
+                response.read()
+                connection.close()
+
+                connection = HTTPConnection(*server.server_address)
+                connection.request(
+                    "GET", "/api/models/vision-test-image",
+                    headers={"Cookie": "emp_session=" + state.session_token},
+                )
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                payload = json.loads(response.read())
+                self.assertTrue(payload["data_url"].startswith("data:image/png;base64,"))
+                self.assertTrue(base64.b64decode(payload["data_url"].split(",", 1)[1]).startswith(b"\x89PNG\r\n\x1a\n"))
                 connection.close()
             finally:
                 server.shutdown()
