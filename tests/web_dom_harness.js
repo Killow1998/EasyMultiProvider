@@ -182,6 +182,9 @@ assert.match(html, /\.model-card\{grid-template-columns:minmax\(220px,1fr\) auto
 assert.match(html, /\.model-card \.entity-card-actions\{grid-column:3;grid-row:1;flex-wrap:nowrap;/, "desktop model actions must remain aligned and visible");
 assert.match(html, /\.model-card \.entity-card-meta\{grid-column:1\/-1;grid-row:2;[^}]*white-space:normal;/, "model metadata must remain fully readable across the card");
 assert.match(html, /\.quota-credit span\{display:block;/, "credit details must use separate visual lines");
+assert.match(html, /\.display-row\{grid-template-columns:minmax\(0,1fr\) auto auto;/, "display cards must reserve one top row for the model and controls");
+assert.match(html, /\.display-row \.inline-check\{grid-column:2;grid-row:1;/, "context checkbox must stay at the upper right");
+assert.match(html, /\.display-row>button\{grid-column:3;grid-row:1;/, "advanced options must stay at the upper right");
 assert.match(html, /href="https:\/\/github.com\/Killow1998\/EasyMultiProvider" target="_blank" rel="noopener noreferrer"/);
 assert.doesNotMatch(html, /id="subscription_search_account"/);
 assert.doesNotMatch(html, /data-catalog-summary/);
