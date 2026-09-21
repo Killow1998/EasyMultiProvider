@@ -38,8 +38,10 @@ Progress evidence on 2026-09-21:
   discovery state, calibrations and capability provenance under frozen and live
   Python oracles. Managed account and provider credential paths now use the same
   config-relative, home-relative, strict-false resolution and final-symlink
-  checks as Python. Import merge behavior and Windows ACL/reparse-point hardening
-  remain.
+  checks as Python. Configuration loading now preserves missing-file defaults,
+  normalization, path canonicalization and Python-visible failure classes.
+  Configuration saving, import merge behavior and Windows ACL/reparse-point
+  hardening remain.
   Account metadata normalization also matches Python's sorting, UTF-8 byte
   limits, truthiness, quota preservation and exact validation order.
 - Runtime compatibility run `35636981488` passed the complete Python suite,

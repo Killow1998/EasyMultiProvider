@@ -196,6 +196,21 @@
       "fixture": "state/python-private-path-canonicalization.json"
     },
     {
+      "id": "state.config-load.python-rust",
+      "level": "state",
+      "source": "easy_multi_provider/config.py:config_path + load",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": [
+        "missing files return the normalized default configuration",
+        "valid UTF-8 JSON is normalized before private paths are canonicalized",
+        "JSON syntax errors retain ConfigError while parser diagnostic text remains implementation-specific",
+        "UTF-8 and common I/O failures retain their Python-visible error class"
+      ],
+      "side_effects": ["none; configuration loading is read-only"],
+      "fixture": "state/python-config-load.json"
+    },
+    {
       "id": "state.capability-model-values.python-rust",
       "level": "state",
       "source": "easy_multi_provider/capabilities.py pure model value helpers",

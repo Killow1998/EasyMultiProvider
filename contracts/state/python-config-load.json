@@ -1,0 +1,77 @@
+{
+  "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config.config_path + load",
+  "status": "implemented",
+  "implementation": "crates/emp-state/src/config.rs",
+  "test": "crates/emp-state/tests/config_load_compat.rs",
+  "limitations": [
+    "JSON parser diagnostic wording and positions differ; both implementations expose ConfigError and reject the same bounded fixture classes.",
+    "I/O messages are stable and secret-free in Rust while Python retains platform-native path-carrying messages.",
+    "Directory I/O cases are asserted only on platforms where directory reads fail consistently."
+  ],
+  "valid_json_prefixes": [
+    "default missing file",
+    "same normalization output"
+  ],
+  "invalid_json_cases": [
+    {
+      "name": "missing-file",
+      "content": null
+    },
+    {
+      "name": "empty",
+      "content": "",
+      "error_suffix": "EOF while parsing a value at line 1 column 0"
+    },
+    {
+      "name": " \t\n",
+      "content": " \t\n",
+      "error_suffix": "EOF while parsing a value at line 2 column 0"
+    },
+    {
+      "name": "{",
+      "content": "{",
+      "error_suffix": "EOF while parsing an object at line 1 column 1"
+    },
+    {
+      "name": "[]extra",
+      "content": "[]extra",
+      "error_suffix": "trailing characters at line 1 column 3"
+    },
+    {
+      "name": "{\"a\":1,}",
+      "content": "{\"a\":1,}",
+      "error_suffix": "trailing comma at line 1 column 8"
+    },
+    {
+      "name": "\"x",
+      "content": "\"x",
+      "error_suffix": "EOF while parsing a string at line 1 column 2"
+    },
+    {
+      "name": "{\"a\":01}",
+      "content": "{\"a\":01}",
+      "error_suffix": "invalid number at line 1 column 7"
+    },
+    {
+      "name": "truex",
+      "content": "truex",
+      "error_suffix": "trailing characters at line 1 column 5"
+    },
+    {
+      "name": "invalid-utf8",
+      "bytes": [
+        123,
+        34,
+        97,
+        34,
+        58,
+        255,
+        125
+      ]
+    },
+    {
+      "name": "directory",
+      "content": null
+    }
+  ]
+}

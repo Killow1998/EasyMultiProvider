@@ -122,6 +122,13 @@ jobs:
         run: >-
           uv run --frozen cargo test --locked -p emp-state --test private_path_compat
           private_paths_match_live_python_oracle_when_configured
+      - name: Python and Rust configuration loading
+        if: matrix.os == 'ubuntu-22.04'
+        env:
+          EMP_PYTHON_INTEROP: python
+        run: >-
+          uv run --frozen cargo test --locked -p emp-state --test config_load_compat
+          config_load_matches_live_python_oracle_when_configured
 
       - name: Python and Rust account normalization
         if: matrix.os == 'ubuntu-22.04'

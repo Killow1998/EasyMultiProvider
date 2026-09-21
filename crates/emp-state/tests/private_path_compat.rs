@@ -61,6 +61,9 @@ fn home_path() -> PathBuf {
         .or_else(|| std::env::var_os("USERPROFILE"))
         .expect("test home directory");
     let home = PathBuf::from(home);
+    #[cfg(windows)]
+    return home;
+    #[cfg(not(windows))]
     fs::canonicalize(&home).unwrap_or(home)
 }
 

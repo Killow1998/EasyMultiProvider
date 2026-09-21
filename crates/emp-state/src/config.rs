@@ -18,6 +18,7 @@ use std::fmt;
 use std::path::{Path, PathBuf, absolute};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub const CONFIG_PATH_ENV: &str = "EASY_MULTI_PROVIDER_CONFIG";
 const MAX_CATALOG_ALIAS_BYTES: usize = 512;
 const REASONING_SUMMARIES: [&str; 3] = ["auto", "show", "hide"];
 const RUNTIME_SOURCES: [&str; 8] = [
@@ -2391,6 +2392,64 @@ fn merge_web_update_at_time(
         }
     }
     normalize_configuration(Some(&merged))
+}
+
+/// Return the configured configuration path without environment side effects.
+///
+/// This mirrors Python's `config_path`: an absent environment variable selects
+/// `config.json`; an explicitly empty value keeps current-directory semantics.
+pub fn config_path() -> PathBuf {
+    config_path_from_env(std::env::var_os(CONFIG_PATH_ENV).as_deref())
+}
+
+/// Resolve the configuration path used by [`load_configuration`].
+fn config_path_from_env(value: Option<&std::ffi::OsStr>) -> PathBuf {
+    match value {
+        Some(value) => PathBuf::from(value),
+        None => PathBuf::from("config.json"),
+    }
+}
+
+/// Load, normalize and canonicalize the private paths in a configuration file.
+///
+/// This is Python's `config.load`. Missing files return the default
+/// configuration. A successful UTF-8 JSON decode is passed through full
+/// configuration normalization, then through managed-path canonicalization.
+///
+/// Python preserves the native `OSError` for non-JSON I/O failures while Rust
+/// has no exception hierarchy, so this boundary records the corresponding
+/// Python-visible error class while keeping a stable message. JSON syntax
+/// errors remain `ConfigError`; parser-specific diagnostic wording may differ.
+pub fn load_configuration(path: Option<&Path>) -> ConfigResult<Value> {
+    let path = match path {
+        Some(path) => path.to_path_buf(),
+        None => config_path(),
+    };
+    if !path.exists() {
+        return normalize_configuration(None);
+    }
+
+    let raw = std::fs::read(&path).map_err(|error| {
+        let python_type = match error.kind() {
+            std::io::ErrorKind::NotFound => "FileNotFoundError",
+            std::io::ErrorKind::PermissionDenied => "PermissionError",
+            std::io::ErrorKind::IsADirectory => "IsADirectoryError",
+            _ => "OSError",
+        };
+        ConfigError::python(python_type, "configuration file could not be read")
+    })?;
+    let raw = String::from_utf8(raw).map_err(|_| {
+        ConfigError::python(
+            "UnicodeDecodeError",
+            "configuration file is not valid UTF-8",
+        )
+    })?;
+    let value = serde_json::from_str::<Value>(&raw).map_err(|error| {
+        ConfigError::new(format!("invalid JSON in {}: {}", path.display(), error))
+    })?;
+    let mut config = normalize_configuration(Some(&value))?;
+    canonicalize_private_paths(&mut config, &path)?;
+    Ok(config)
 }
 
 /// Apply a Web update while preserving secrets and managed discovery metadata.
