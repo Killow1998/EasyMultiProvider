@@ -3,6 +3,8 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+
 fn repository_index_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../easy_multi_provider/web/index.html")
 }
@@ -14,11 +16,35 @@ fn get_body(port: u16, path: &str) -> Vec<u8> {
         "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
     )
     .expect("write HTTP request");
-    let mut response = Vec::new();
     stream
-        .read_to_end(&mut response)
-        .expect("read HTTP response");
-    response
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .expect("response timeout");
+    let mut response = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let count = stream.read(&mut buffer).expect("read HTTP response");
+        assert!(count > 0, "response ended before Content-Length bytes");
+        response.extend_from_slice(&buffer[..count]);
+        assert!(
+            response.len() <= MAX_RESPONSE_BYTES,
+            "response exceeded the bounded test contract"
+        );
+        let Some(separator) = response.windows(4).position(|window| window == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers = std::str::from_utf8(&response[..separator]).expect("ASCII headers");
+        let content_length = headers
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+            .expect("Content-Length header");
+        let expected = separator + 4 + content_length;
+        assert!(response.len() <= expected, "unexpected pipelined bytes");
+        if response.len() == expected {
+            return response;
+        }
+    }
 }
 
 fn spawn_emp() -> (u16, std::process::Child) {

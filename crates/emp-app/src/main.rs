@@ -328,6 +328,39 @@ fn main() -> std::process::ExitCode {
 mod tests {
     use super::*;
 
+    fn complete_response(stream: &mut TcpStream) -> Vec<u8> {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("response timeout");
+        let mut response = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = stream.read(&mut buffer).expect("read response");
+            assert!(count > 0, "response ended before Content-Length bytes");
+            response.extend_from_slice(&buffer[..count]);
+            assert!(
+                response.len() <= WEB_INDEX_BYTES.len() + 4096,
+                "response exceeded the bounded test contract"
+            );
+            let Some(separator) = response.windows(4).position(|window| window == b"\r\n\r\n")
+            else {
+                continue;
+            };
+            let headers = std::str::from_utf8(&response[..separator]).expect("ASCII headers");
+            let content_length = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                .expect("Content-Length header");
+            let expected = separator + 4 + content_length;
+            assert!(response.len() <= expected, "unexpected pipelined bytes");
+            if response.len() == expected {
+                return response;
+            }
+        }
+    }
+
     #[test]
     fn cli_rejects_non_loopback_host_before_starting() {
         let error = parse_cli([
@@ -349,8 +382,8 @@ mod tests {
         stream
             .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
             .expect("write request");
-        let mut response = String::new();
-        stream.read_to_string(&mut response).expect("read response");
+        let response = complete_response(&mut stream);
+        let response = String::from_utf8(response).expect("UTF-8 health response");
         assert_eq!(
             response.rsplit("\r\n\r\n").next().unwrap(),
             "{\"status\":\"ok\"}"
@@ -367,8 +400,7 @@ mod tests {
         stream
             .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
             .expect("write request");
-        let mut response = Vec::new();
-        stream.read_to_end(&mut response).expect("read response");
+        let response = complete_response(&mut stream);
         let separator = response
             .windows(4)
             .position(|window| window == b"\r\n\r\n")
