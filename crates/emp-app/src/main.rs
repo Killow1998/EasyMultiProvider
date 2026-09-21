@@ -88,7 +88,10 @@ where
                     return Err("--port was provided more than once".to_string());
                 }
                 let raw = arguments.next().ok_or("--port requires a value")?;
-                port = Some(raw.parse::<u16>().map_err(|_| format!("invalid port: {raw}"))?);
+                port = Some(
+                    raw.parse::<u16>()
+                        .map_err(|_| format!("invalid port: {raw}"))?,
+                );
             }
             unknown => return Err(format!("unknown serve option: {unknown}")),
         }
@@ -123,11 +126,7 @@ fn response(status_line: &str, content_type: &str, body: &[u8]) -> Vec<u8> {
 }
 
 fn health_response() -> Vec<u8> {
-    response(
-        "HTTP/1.1 200 OK",
-        "application/json",
-        HEALTH_JSON_BYTES,
-    )
+    response("HTTP/1.1 200 OK", "application/json", HEALTH_JSON_BYTES)
 }
 
 fn ui_response() -> Vec<u8> {
@@ -224,10 +223,7 @@ impl ServerHandle {
         listener.set_nonblocking(true)?;
         let local_addr = listener.local_addr()?;
         let shutdown = Arc::new(AtomicBool::new(false));
-        let state = Arc::new(ServerState {
-            listener,
-            shutdown,
-        });
+        let state = Arc::new(ServerState { listener, shutdown });
         let workers = Arc::new(Mutex::new(Vec::new()));
         let handle = Self {
             local_addr,
@@ -242,20 +238,22 @@ impl ServerHandle {
         let state = Arc::clone(&self.state);
         let worker = thread::Builder::new()
             .name("emp-http".to_string())
-            .spawn(move || loop {
-                if state.shutdown.load(Ordering::Acquire) {
-                    break;
-                }
-                match state.listener.accept() {
-                    Ok((stream, _)) => {
-                        let _ = thread::Builder::new()
-                            .name("emp-request".to_string())
-                            .spawn(move || handle_connection(stream));
+            .spawn(move || {
+                loop {
+                    if state.shutdown.load(Ordering::Acquire) {
+                        break;
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(10));
+                    match state.listener.accept() {
+                        Ok((stream, _)) => {
+                            let _ = thread::Builder::new()
+                                .name("emp-request".to_string())
+                                .spawn(move || handle_connection(stream));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(_) => break,
                     }
-                    Err(_) => break,
                 }
             })
             .map_err(AppError::Io)?;
@@ -277,9 +275,8 @@ impl ServerHandle {
             Ok(workers) => workers,
             Err(_) => return Err(AppError::ServerStopped),
         };
-        let workers: Vec<JoinHandle<()>> = workers
-            .into_inner()
-            .map_err(|_| AppError::ServerStopped)?;
+        let workers: Vec<JoinHandle<()>> =
+            workers.into_inner().map_err(|_| AppError::ServerStopped)?;
         for worker in workers {
             let _: () = worker.join().map_err(|_| AppError::ServerStopped)?;
         }
@@ -350,7 +347,10 @@ mod tests {
             .expect("write request");
         let mut response = String::new();
         stream.read_to_string(&mut response).expect("read response");
-        assert_eq!(response.rsplit("\r\n\r\n").next().unwrap(), "{\"status\":\"ok\"}");
+        assert_eq!(
+            response.rsplit("\r\n\r\n").next().unwrap(),
+            "{\"status\":\"ok\"}"
+        );
         drop(stream);
         server.shutdown().expect("graceful shutdown");
     }

@@ -105,7 +105,10 @@ impl OpaqueJson {
     /// Validate against a non-default limit.  Persistence and transport always
     /// use [`Self::MAX_BYTES`], so the retained object has no per-instance
     /// policy that can bypass validation after deserialization.
-    pub fn with_limit(value: Map<String, Value>, max_bytes: usize) -> Result<Self, OpaqueJsonError> {
+    pub fn with_limit(
+        value: Map<String, Value>,
+        max_bytes: usize,
+    ) -> Result<Self, OpaqueJsonError> {
         let result = Self { value };
         result.validate(max_bytes)?;
         Ok(result)
@@ -182,7 +185,9 @@ impl fmt::Display for ValidationError {
             }
             Self::InvalidRequestId => f.write_str("request id must be 16 lowercase hex characters"),
             Self::InvalidDeadline => f.write_str("request deadline precedes received time"),
-            Self::InvalidUrl => f.write_str("prepared request URL must use http, https, ws, or wss"),
+            Self::InvalidUrl => {
+                f.write_str("prepared request URL must use http, https, ws, or wss")
+            }
             Self::InvalidStatus => f.write_str("public failure status must be 100 through 599"),
             Self::OpaqueJson(error) => write!(f, "{error}"),
         }
@@ -200,9 +205,9 @@ impl From<OpaqueJsonError> for ValidationError {
 fn valid_deployment_identity(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 256
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b':' | b'-'))
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b':' | b'-')
+        })
 }
 
 /// Immutable route snapshot produced after configuration resolution.
@@ -326,7 +331,11 @@ impl RequestContext {
     /// Construct a context with default limits.  Python uses a 16-character
     /// lowercase request id; preserving that shape avoids introducing a second
     /// diagnostic identifier format.
-    pub fn new(request_id: impl Into<String>, received_at: Duration, stream: bool) -> Result<Self, ValidationError> {
+    pub fn new(
+        request_id: impl Into<String>,
+        received_at: Duration,
+        stream: bool,
+    ) -> Result<Self, ValidationError> {
         let request_id = request_id.into();
         let valid = request_id.len() == 16
             && request_id
@@ -394,9 +403,7 @@ impl PreparedRequest {
         if !valid_scheme {
             return Err(ValidationError::InvalidUrl);
         }
-        let body = body
-            .map(OpaqueJson::new)
-            .transpose()?;
+        let body = body.map(OpaqueJson::new).transpose()?;
         let metadata = OpaqueJson::new(metadata)?;
         Ok(Self {
             route,
@@ -447,7 +454,7 @@ impl PublicFailure {
         let failure_reason = failure_reason
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-            .map(|value| safe_token(value))
+            .map(safe_token)
             .filter(|value| !value.is_empty());
         let public_message = public_message
             .filter(|value| !value.trim().is_empty())
@@ -455,11 +462,9 @@ impl PublicFailure {
         let phase = phase
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-            .map(|value| safe_token(value))
+            .map(safe_token)
             .filter(|value| !value.is_empty());
-        let context_observation = context_observation
-            .map(OpaqueJson::new)
-            .transpose()?;
+        let context_observation = context_observation.map(OpaqueJson::new).transpose()?;
         Ok(Self {
             error_class,
             status,
@@ -491,6 +496,7 @@ pub struct StreamObservation {
 impl StreamObservation {
     /// Construct an observation.  A terminal event must have a classified
     /// terminal value so stream truth cannot be silently discarded.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         phase: impl Into<String>,
         duration_ms: u64,
@@ -654,11 +660,8 @@ mod tests {
     #[test]
     fn opaque_json_enforces_its_limit() {
         let value = json!({"large": "0123456789"});
-        let error = OpaqueJson::with_limit(
-            value.as_object().expect("object").clone(),
-            8,
-        )
-        .expect_err("too large");
+        let error = OpaqueJson::with_limit(value.as_object().expect("object").clone(), 8)
+            .expect_err("too large");
         assert_eq!(error.reason, OpaqueJsonErrorReason::TooLarge);
     }
 
@@ -687,10 +690,7 @@ mod tests {
         assert!(serde_json::from_str::<OpaqueJson>("42").is_err());
         let valid: OpaqueJson =
             serde_json::from_str(r#"{"future":{"unknown":true}}"#).expect("valid JSON");
-        assert_eq!(
-            valid.value().get("future"),
-            Some(&json!({"unknown": true}))
-        );
+        assert_eq!(valid.value().get("future"), Some(&json!({"unknown": true})));
     }
 
     #[test]
@@ -758,9 +758,18 @@ mod tests {
             Map::new(),
         )
         .expect("valid request");
-        assert_eq!(request.body.as_ref().expect("body").value().get("future_protocol_field"), Some(&json!({"opaque": true})));
+        assert_eq!(
+            request
+                .body
+                .as_ref()
+                .expect("body")
+                .value()
+                .get("future_protocol_field"),
+            Some(&json!({"opaque": true}))
+        );
         let restored: PreparedRequest =
-            serde_json::from_str(&serde_json::to_string(&request).expect("serialize")).expect("deserialize");
+            serde_json::from_str(&serde_json::to_string(&request).expect("serialize"))
+                .expect("deserialize");
         assert_eq!(restored, request);
     }
 
@@ -829,7 +838,16 @@ mod tests {
         .expect("observation");
         assert_eq!(observation.terminal, Some(terminal));
         let missing = StreamObservation::new(
-            "terminal_validation", 125, None, 0, false, false, true, true, None, Map::new(),
+            "terminal_validation",
+            125,
+            None,
+            0,
+            false,
+            false,
+            true,
+            true,
+            None,
+            Map::new(),
         )
         .expect_err("terminal missing");
         assert_eq!(missing, ValidationError::EmptyField("terminal"));
@@ -839,11 +857,14 @@ mod tests {
     fn injected_sources_are_deterministic() {
         let clock = FixedClock(Duration::from_secs(42));
         assert_eq!(clock.now(), Duration::from_secs(42));
-        assert_eq!(clock.deadline_after(Duration::from_secs(1)), Duration::from_secs(43));
+        assert_eq!(
+            clock.deadline_after(Duration::from_secs(1)),
+            Duration::from_secs(43)
+        );
 
         let random = FixedRandomSource(0xa5);
         assert_eq!(random.request_id(), "a5a5a5a5a5a5a5a5");
-        let admission = PermissiveMemoryInspector::default()
+        let admission = PermissiveMemoryInspector
             .admit(1024)
             .expect("permissive admission");
         assert_eq!(admission.required_bytes, 1024);

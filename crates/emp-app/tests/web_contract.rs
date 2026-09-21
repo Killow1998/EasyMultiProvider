@@ -15,7 +15,9 @@ fn get_body(port: u16, path: &str) -> Vec<u8> {
     )
     .expect("write HTTP request");
     let mut response = Vec::new();
-    stream.read_to_end(&mut response).expect("read HTTP response");
+    stream
+        .read_to_end(&mut response)
+        .expect("read HTTP response");
     response
 }
 
