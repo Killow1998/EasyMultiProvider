@@ -2,11 +2,6 @@
 
 ## Unreleased
 
-## 0.11.6 (2026-09-21)
-
-- Publish the verified 0.11.5 fixes under a separate patch version. No
-  functional changes were made beyond the version metadata and release notes.
-
 ## 0.11.5 (2026-09-21)
 
 - Preserve reasoning as separate Codex stream items for Chat Completions models
