@@ -351,6 +351,78 @@ class QuotaTests(unittest.TestCase):
             self.assertIsNone(rate_limit_request["params"])
             self.assertTrue(process.stdin.closed)
 
+    def test_reset_uses_one_idempotent_app_server_request(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            account_dir = Path(directory) / "primary"
+            account_dir.mkdir()
+            auth_file = account_dir / "auth.json.enc"
+            write_encrypted_json(auth_file, {"tokens": {"access_token": "secret"}})
+            codex_file = Path(directory) / "codex"
+            codex_file.write_text("#!/bin/sh\n", encoding="utf-8")
+            codex_file.chmod(0o700)
+
+            class FakeStream:
+                def __init__(self, lines=()):
+                    self.lines = iter(lines)
+
+                def readline(self):
+                    return next(self.lines, "")
+
+            class FakeStdin:
+                def __init__(self):
+                    self.body = ""
+
+                def write(self, value):
+                    self.body += value
+
+                def flush(self):
+                    return None
+
+                def close(self):
+                    return None
+
+            class FakeProcess:
+                def __init__(self):
+                    self.returncode = 0
+                    self.stdin = FakeStdin()
+                    self.stdout = FakeStream(
+                        [
+                            json.dumps({"id": 1, "result": {}}) + "\n",
+                            json.dumps({"id": 2, "result": {"account": {"planType": "plus"}}}) + "\n",
+                            json.dumps({"id": 3, "result": {"outcome": "reset"}}) + "\n",
+                        ]
+                    )
+                    self.stderr = FakeStream()
+
+                def wait(self, timeout=None):
+                    return self.returncode
+
+                def kill(self):
+                    self.returncode = -9
+
+            process = FakeProcess()
+            key = "12345678-1234-4123-8123-123456789abc"
+            with patch(
+                "easy_multi_provider.quota.subprocess.Popen", return_value=process
+            ):
+                outcome = quota_module.consume_account_quota_reset(
+                    {"id": "primary", "auth_file": str(auth_file)},
+                    key,
+                    codex_binary=str(codex_file),
+                )
+
+        requests = [json.loads(line) for line in process.stdin.body.splitlines()]
+        self.assertEqual(outcome, "reset")
+        self.assertEqual(requests[-1]["method"], "account/rateLimitResetCredit/consume")
+        self.assertEqual(requests[-1]["params"]["idempotencyKey"], key)
+        self.assertNotIn("account/rateLimits/read", process.stdin.body)
+        self.assertNotIn("secret", process.stdin.body)
+
+    def test_reset_rejects_non_uuid_idempotency_key_before_loading_auth(self):
+        with self.assertRaises(quota_module.QuotaError) as raised:
+            quota_module.consume_account_quota_reset({}, "retry-me")
+        self.assertEqual(raised.exception.code, "quota_reset_invalid_request")
+
 
 class QuotaOutputTests(unittest.TestCase):
     requests = [

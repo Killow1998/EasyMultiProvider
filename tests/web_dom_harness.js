@@ -771,7 +771,7 @@ function quotaMeterBehavior() {
   assert.match(html, /@media\(prefers-reduced-motion:reduce\)/);
 }
 
-function creditLayoutBehavior() {
+async function creditLayoutBehavior() {
   context.__creditLayoutState = {
     native_account: null,
     accounts: [{id:'credit-lines',name:'credit-lines',prefix:'credit-lines',credential_set:true,quota:{credits:{balance:1200,individual_limit:{remaining_percent:73},reset_credits:{available_count:2,credits:[{status:'available',title:'Rate-limit reset',description:'Reset an eligible Codex rate-limit window.',expires_at:1893553445},{status:'available',expires_at:1896321906}]}}}},{id:'no-resets',name:'no-resets',prefix:'no-resets',credential_set:true,quota:{credits:{balance:20,reset_credits:{available_count:0,credits:[]}}}}],
@@ -791,7 +791,23 @@ function creditLayoutBehavior() {
   assert.strictEqual((modal.match(/ UTC/g) || []).length, 2, "each reset expiry must use an absolute UTC date and time");
   assert.strictEqual((modal.match(/data-reset-countdown=/g) || []).length, 2, "each reset expiry must also show remaining time");
   assert.match(modal, /Rate-limit reset/);
-  run('closeModal()');
+  assert.strictEqual(getElement('modal_submit').textContent, '使用一次重置');
+  const calls = [];
+  context.__resetApi = async (path, options) => {
+    calls.push({path, body:JSON.parse(options.body)});
+    return calls.length === 1 ? {outcome:'nothingToReset'} : {outcome:'reset',refresh_error:null};
+  };
+  run('__savedResetApi=api; __savedResetRefresh=refreshQuotaState; api=__resetApi; refreshQuotaState=async()=>false');
+  try {
+    await getElement('modal_submit').click();
+    assert.match(getElement('modal_status').textContent, /没有符合资格/);
+    await getElement('modal_submit').click();
+    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(calls[0].path, '/api/accounts/credit-lines/quota-reset');
+    assert.strictEqual(calls[0].body.idempotency_key, calls[1].body.idempotency_key, 'a retry must reuse the same reset attempt key');
+    assert.match(calls[0].body.idempotency_key, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.match(getElement('status').textContent, /重置已完成/);
+  } finally { run('api=__savedResetApi; refreshQuotaState=__savedResetRefresh; closeModal()'); }
 }
 
 function invalidCredentialAccountBehavior() {
@@ -1344,7 +1360,7 @@ function updateBehavior() {
   await cacheUsageBehavior();
   providerDiscoveryErrorBehavior();
   quotaMeterBehavior();
-  creditLayoutBehavior();
+  await creditLayoutBehavior();
   invalidCredentialAccountBehavior();
   await quotaStateSyncBehavior();
   await quotaNotificationBehavior();

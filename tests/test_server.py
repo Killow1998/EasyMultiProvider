@@ -3501,6 +3501,84 @@ class ServerAccountTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_quota_reset_consumes_once_then_refreshes_imported_account(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(
+                normalize({"account_store_path": str(root / "state" / "accounts")}),
+                config_path,
+            )
+            state = AppState(config_path)
+            state.import_account(
+                {"id": "primary", "name": "Primary", "prefix": "primary"},
+                {"auth_mode": "chatgpt", "tokens": {"access_token": "secret"}},
+            )
+            key = "12345678-1234-4123-8123-123456789abc"
+            refreshed = {
+                "id": "primary",
+                "name": "Primary",
+                "prefix": "primary",
+                "credential_set": True,
+                "quota": {"rate_limits": {"primary": {"usedPercent": 0}}},
+            }
+            with patch(
+                "easy_multi_provider.server.consume_account_quota_reset",
+                return_value="reset",
+            ) as consume, patch.object(
+                state, "refresh_account", return_value=refreshed
+            ) as refresh, patch(
+                "easy_multi_provider.server.consume_native_login_quota_reset"
+            ) as native_consume:
+                result = state.consume_quota_reset("primary", key)
+
+        self.assertEqual(result["outcome"], "reset")
+        self.assertEqual(result["account"]["id"], "primary")
+        self.assertIsNone(result["refresh_error"])
+        consume.assert_called_once()
+        self.assertEqual(consume.call_args.args[1], key)
+        refresh.assert_called_once_with("primary")
+        native_consume.assert_not_called()
+
+    def test_quota_reset_endpoint_keeps_client_idempotency_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = AppState(Path(directory) / "config.json")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            key = "12345678-1234-4123-8123-123456789abc"
+            try:
+                with patch.object(
+                    state,
+                    "consume_quota_reset",
+                    return_value={
+                        "outcome": "nothingToReset",
+                        "account": None,
+                        "refresh_error": None,
+                    },
+                ) as consume:
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request(
+                        "POST",
+                        "/api/accounts/%40native/quota-reset",
+                        json.dumps({"idempotency_key": key}),
+                        {
+                            "Content-Type": "application/json",
+                            "Cookie": "emp_session=" + state.session_token,
+                        },
+                    )
+                    response = connection.getresponse()
+                    payload = json.loads(response.read())
+                    connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["outcome"], "nothingToReset")
+        consume.assert_called_once_with("@native", key)
+
     def test_quota_refresh_uses_native_login_for_duplicate_current_login(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

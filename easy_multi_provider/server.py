@@ -127,7 +127,15 @@ from .native_websocket import (
     native_websocket_request_fits,
     terminal_observation as native_websocket_terminal,
 )
-from .quota import QuotaError, account_refresh_lock, clear_account_quota_cache, read_native_login_quota, refresh_account_quota
+from .quota import (
+    QuotaError,
+    account_refresh_lock,
+    clear_account_quota_cache,
+    consume_account_quota_reset,
+    consume_native_login_quota_reset,
+    read_native_login_quota,
+    refresh_account_quota,
+)
 from .quota_history import (
     QuotaHistoryError,
     QuotaHistoryStore,
@@ -2653,6 +2661,63 @@ class AppState:
             self.notify_quota_update(NATIVE_ACCOUNT_ID)
         return self.native_account_snapshot()
 
+    def consume_quota_reset(
+        self, account_id: str, idempotency_key: str
+    ) -> Dict[str, Any]:
+        with self.lock:
+            target = next(
+                (
+                    dict(item)
+                    for item in self.config.get("accounts", [])
+                    if item.get("id") == account_id
+                ),
+                None,
+            )
+        if account_id != NATIVE_ACCOUNT_ID and target is None:
+            raise QuotaError("unknown account: %s" % account_id)
+        duplicate_native = bool(
+            target
+            and duplicate_account_status([target]).get(account_id)
+            == "当前 Codex 登录"
+        )
+        owner = NATIVE_ACCOUNT_ID if account_id == NATIVE_ACCOUNT_ID or duplicate_native else account_id
+        executable = getattr(self.runtime_controller, "executable", None)
+        codex_binary = executable() if callable(executable) else "codex"
+        with account_refresh_lock(owner):
+            if owner == NATIVE_ACCOUNT_ID:
+                outcome = consume_native_login_quota_reset(
+                    idempotency_key,
+                    codex_binary=codex_binary,
+                    auth_path=self.codex_home / "auth.json",
+                )
+            else:
+                outcome = consume_account_quota_reset(
+                    target or {},
+                    idempotency_key,
+                    codex_binary=codex_binary,
+                )
+            clear_account_quota_cache(owner)
+            clear_account_quota_cache(account_id)
+            refresh_error = None
+            account = None
+            try:
+                if account_id == NATIVE_ACCOUNT_ID:
+                    account = self.refresh_native_account()
+                elif duplicate_native:
+                    self.refresh_native_account()
+                    account = public_accounts([self.refresh_account(account_id)])[0]
+                else:
+                    account = public_accounts([self.refresh_account(account_id)])[0]
+            except QuotaError as exc:
+                # The reset outcome is authoritative even when the required
+                # post-reset quota read fails. Do not invite a new redemption.
+                refresh_error = {"code": exc.code, "message": str(exc)}
+        return {
+            "outcome": outcome,
+            "account": account,
+            "refresh_error": refresh_error,
+        }
+
     def _quota_owner_key(self, account_id: str) -> str:
         if account_id == NATIVE_ACCOUNT_ID:
             return NATIVE_ACCOUNT_ID
@@ -4470,6 +4535,23 @@ def make_handler(state: AppState):
                     )
                     self._send(200, _json_bytes({"status": "ok", **summary}))
                     return
+                if path.startswith("/api/accounts/") and path.endswith("/quota-reset"):
+                    account_id = unquote(
+                        path[len("/api/accounts/") : -len("/quota-reset")].rstrip("/")
+                    )
+                    result = state.consume_quota_reset(
+                        account_id, body.get("idempotency_key")
+                    )
+                    emit_operation(
+                        "account_operation",
+                        "success"
+                        if result["outcome"] in ("reset", "alreadyRedeemed")
+                        else "not_eligible",
+                        operation="quota_reset",
+                        account_ref=self._account_ref(account_id),
+                    )
+                    self._send(200, _json_bytes(result))
+                    return
                 if path.startswith("/api/accounts/") and path.endswith("/quota"):
                     account_id = unquote(path[len("/api/accounts/") : -len("/quota")].rstrip("/"))
                     account = (
@@ -4684,7 +4766,10 @@ def make_handler(state: AppState):
                                         exception_chain=exception_details(exc))
                 status = exc.status if isinstance(exc, RouterError) else 400
                 if isinstance(exc, QuotaError):
-                    self._send(503, _json_bytes({"error": {"code": exc.code, "message": str(exc)}}))
+                    self._send(
+                        400 if exc.code == "quota_reset_invalid_request" else 503,
+                        _json_bytes({"error": {"code": exc.code, "message": str(exc)}}),
+                    )
                 elif isinstance(exc, RouterError):
                     payload = _router_error_body(exc)
                     self._send(

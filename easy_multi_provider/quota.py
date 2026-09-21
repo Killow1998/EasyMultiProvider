@@ -15,6 +15,7 @@ import stat
 import tempfile
 import threading
 import time
+import uuid
 import weakref
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -40,7 +41,10 @@ def _quota_rpc_error(method: str, error: Any) -> QuotaError:
     auth_required = message in {
         "codex account authentication required to read rate limits",
         "chatgpt authentication required to read rate limits",
-    }
+    } or (
+        method == "account/rateLimitResetCredit/consume"
+        and "authentication required" in message.lower()
+    )
     status = re.search(r" failed: (\d{3})\b[^;]*; content-type=", message.split("; body=", 1)[0])
     status_code = int(status[1]) if status else None
     if auth_required or status_code == 401:
@@ -55,6 +59,8 @@ def _quota_rpc_error(method: str, error: Any) -> QuotaError:
         return QuotaError("Codex quota service query failed; check network connectivity and try again", "quota_fetch_failed")
     if method == "account/read":
         return QuotaError("Codex account read failed", "quota_account_read_failed")
+    if method == "account/rateLimitResetCredit/consume":
+        return QuotaError("Codex could not use the reset opportunity", "quota_reset_failed")
     return QuotaError("Codex app-server initialization failed", "quota_initialize_failed")
 
 
@@ -256,7 +262,7 @@ def _query_app_server(process: Any, requests: list, timeout: int) -> str:
         except (OSError, ValueError) as exc:
             raise QuotaError("Codex account quota check failed") from exc
 
-    def wait_for(request_id: int, method: str) -> None:
+    def wait_for(request_id: Any, method: str) -> None:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -288,16 +294,13 @@ def _query_app_server(process: Any, requests: list, timeout: int) -> str:
             return
 
     try:
-        # Keep stdin open and sequence account/rate-limit calls. An isolated
-        # app-server may still be completing account refresh when it receives
-        # the rate-limit request; the shared Codex home only hid this race.
-        send(requests[0])
-        wait_for(1, "initialize")
-        send(requests[1])
-        send(requests[2])
-        wait_for(2, "account/read")
-        send(requests[3])
-        wait_for(3, "account/rateLimits/read")
+        # Keep stdin open and wait for each request before sending the next.
+        # An isolated app-server may still be completing account refresh when
+        # it receives a following account operation.
+        for request in requests:
+            send(request)
+            if "id" in request:
+                wait_for(request["id"], str(request.get("method") or ""))
     finally:
         try:
             process.stdin.close()
@@ -315,6 +318,28 @@ def _query_app_server(process: Any, requests: list, timeout: int) -> str:
     if process.returncode not in (0, None):
         raise QuotaError("Codex account quota check failed")
     return "".join(lines)
+
+
+def _reset_outcome(output: str, request_id: int = 3) -> str:
+    allowed = {"reset", "nothingToReset", "noCredit", "alreadyRedeemed"}
+    for line in output.splitlines():
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(message, dict):
+            raise QuotaError(
+                "Codex reset JSON-RPC output must be an object",
+                "quota_output_protocol_error",
+            )
+        if message.get("id") != request_id:
+            continue
+        result = message.get("result")
+        outcome = result.get("outcome") if isinstance(result, dict) else None
+        if outcome in allowed:
+            return outcome
+        break
+    raise QuotaError("Codex did not return a reset outcome", "quota_reset_failed")
 
 
 def _mask_email(value: Any) -> str:
@@ -472,8 +497,9 @@ def _run_quota_query(
     timeout: int,
     allow_refresh: bool,
     persist_path: Optional[Path],
+    reset_idempotency_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Run the isolated app-server quota query against a validated auth object.
+    """Run an isolated quota read or reset against a validated auth object.
 
     Policy flags keep the imported-account and native-login callers explicit:
     - allow_refresh: whether account/read may request token rotation.
@@ -497,7 +523,15 @@ def _run_quota_query(
         },
         {"method": "initialized"},
         {"id": 2, "method": "account/read", "params": {"refreshToken": allow_refresh}},
-        {"id": 3, "method": "account/rateLimits/read", "params": None},
+        (
+            {
+                "id": 3,
+                "method": "account/rateLimitResetCredit/consume",
+                "params": {"idempotencyKey": reset_idempotency_key},
+            }
+            if reset_idempotency_key is not None
+            else {"id": 3, "method": "account/rateLimits/read", "params": None}
+        ),
     ]
     with tempfile.TemporaryDirectory(prefix="easy-mp-codex-account-") as temporary:
         codex_home = Path(temporary)
@@ -589,6 +623,8 @@ def _run_quota_query(
                         write_encrypted_json(Path(persist_path), validate_auth_json(refreshed_auth))
                 except (OSError, ValueError, VaultError) as exc:
                     raise QuotaError("Codex refreshed credentials could not be saved", "quota_credentials_save_failed") from exc
+        if reset_idempotency_key is not None:
+            return {"outcome": _reset_outcome(stdout)}
         return parse_app_server_output(stdout)
 
 
@@ -646,3 +682,79 @@ def read_native_login_quota(
             auth, codex_binary, timeout, allow_refresh=False, persist_path=None,
         ),
     )
+
+
+def _validated_reset_idempotency_key(value: Any) -> str:
+    if not isinstance(value, str) or len(value) > 64:
+        raise QuotaError("reset idempotency key is invalid", "quota_reset_invalid_request")
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError) as exc:
+        raise QuotaError("reset idempotency key is invalid", "quota_reset_invalid_request") from exc
+    if str(parsed) != value.lower():
+        raise QuotaError("reset idempotency key is invalid", "quota_reset_invalid_request")
+    return str(parsed)
+
+
+def consume_account_quota_reset(
+    account: Dict[str, Any],
+    idempotency_key: str,
+    codex_binary: str = "codex",
+    timeout: int = 45,
+) -> str:
+    """Consume one earned reset for an imported account without exposing credentials."""
+    key = _validated_reset_idempotency_key(idempotency_key)
+    auth_file = account.get("auth_file", "")
+    if not auth_file:
+        raise QuotaError("account credentials are not configured")
+    try:
+        auth = load_auth(account)
+    except (AccountError, VaultError) as exc:
+        raise QuotaError(str(exc)) from exc
+    persist_path = Path(auth_file)
+    with account_refresh_lock(account.get("id")):
+        try:
+            result = _run_quota_query(
+                auth,
+                codex_binary,
+                timeout,
+                allow_refresh=False,
+                persist_path=persist_path,
+                reset_idempotency_key=key,
+            )
+        except QuotaError as exc:
+            if exc.code != "quota_auth_required":
+                raise
+            result = _run_quota_query(
+                load_auth(account),
+                codex_binary,
+                timeout,
+                allow_refresh=True,
+                persist_path=persist_path,
+                reset_idempotency_key=key,
+            )
+    return str(result["outcome"])
+
+
+def consume_native_login_quota_reset(
+    idempotency_key: str,
+    codex_binary: str = "codex",
+    timeout: int = 45,
+    auth_path: Optional[Path] = None,
+) -> str:
+    """Consume one earned reset for the live native login without mutating auth.json."""
+    key = _validated_reset_idempotency_key(idempotency_key)
+    try:
+        auth = load_native_auth(auth_path)
+    except AccountError as exc:
+        raise QuotaError(str(exc)) from exc
+    with account_refresh_lock(NATIVE_ACCOUNT_ID):
+        result = _run_quota_query(
+            auth,
+            codex_binary,
+            timeout,
+            allow_refresh=False,
+            persist_path=None,
+            reset_idempotency_key=key,
+        )
+    return str(result["outcome"])
