@@ -231,6 +231,13 @@ def _validate_url(value: Any, field: str) -> str:
     return value
 
 
+def _validate_provider_base_url(value: Any) -> str:
+    base_url = _validate_url(value, "provider.base_url")
+    # The API version belongs to the provider's path, so never add /v1 to
+    # an arbitrary root. Only collapse an unmistakably duplicated suffix.
+    return re.sub(r"(?:/v1){2,}$", "/v1", base_url)
+
+
 def _normalize_codex_runtime_sources(value: Any) -> List[str]:
     if value is None:
         return ["auto"]
@@ -463,7 +470,7 @@ def _normalize_provider(raw: Dict[str, Any]) -> Dict[str, Any]:
     provider = {
         "id": _validate_provider_id(raw.get("id")),
         "name": _string(raw.get("name")) or _string(raw.get("id"), "provider.id"),
-        "base_url": _validate_url(raw.get("base_url"), "provider.base_url"),
+        "base_url": _validate_provider_base_url(raw.get("base_url")),
         "protocol": _string(raw.get("protocol")) or "chat_completions",
         "auth_mode": _string(raw.get("auth_mode")) or "api_key",
         "api_key": _string(raw.get("api_key")),

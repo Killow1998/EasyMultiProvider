@@ -427,6 +427,17 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(base_url=base_url), self.assertRaises(ConfigError):
                 normalize({"providers": [{"id": "demo", "base_url": base_url}]})
 
+    def test_provider_base_url_cleans_duplicate_v1_without_adding_version(self):
+        for entered, expected in (
+            ("https://api.example.com/v1/v1/v1/", "https://api.example.com/v1"),
+            ("https://api.example.com", "https://api.example.com"),
+            ("https://api.example.com/api/paas/v4", "https://api.example.com/api/paas/v4"),
+            ("https://api.example.com/v1beta/openai", "https://api.example.com/v1beta/openai"),
+        ):
+            with self.subTest(entered=entered):
+                value = normalize({"providers": [{"id": "demo", "base_url": entered}]})
+                self.assertEqual(value["providers"][0]["base_url"], expected)
+
     def test_model_context_window_has_a_safe_upper_bound(self):
         with self.assertRaises(ConfigError):
             normalize({
