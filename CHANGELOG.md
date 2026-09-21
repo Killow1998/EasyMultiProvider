@@ -17,6 +17,8 @@
 - Consume an available quota-reset credit through the official Codex app-server
   method with explicit confirmation, an idempotency key, and an immediate quota
   refresh.
+- Verify against Codex 0.155.0 that a native WebSocket TLS handshake failure
+  falls back once to HTTP without exposing a reconnect loop to the user.
 
 ## 0.11.5 (2026-09-21)
 

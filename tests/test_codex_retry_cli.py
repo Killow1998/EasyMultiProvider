@@ -16,7 +16,6 @@ from easy_multi_provider.config import normalize, save
 from easy_multi_provider.server import AppState, make_handler
 from tests.support import ensure_test_master_key
 from tests.test_codex_cli_demo import FIXED_REPLY, _fixed_response_stream
-from tests.test_native_websocket import _FakeConnection
 
 
 @unittest.skipUnless(
@@ -24,19 +23,28 @@ from tests.test_native_websocket import _FakeConnection
     "set EMP_CODEX_TEST_BINARY and EMP_CODEX_TEST_CATALOG for isolated official CLI test",
 )
 class CodexRetryCliTests(unittest.TestCase):
-    def test_tls_failure_recovers_on_websocket_without_http_replay(self):
+    def test_tls_failure_recovers_over_http_without_client_reconnect(self):
         ensure_test_master_key()
 
-        class FixedConnection(_FakeConnection):
-            def send(self, value):
-                super().send(value)
-                self.responses = [
-                    json.loads(line[6:])
-                    for line in _fixed_response_stream("gpt-6-astra").decode().splitlines()
-                    if line.startswith("data: {")
-                ]
+        http_requests = []
 
-        upstream = FixedConnection([])
+        def http_fallback(_config, body, _incoming, *args, **kwargs):
+            http_requests.append(dict(body))
+            return (
+                {
+                    "kind": "stream",
+                    "status": 200,
+                    "content_type": "text/event-stream",
+                    "provider_id": "native",
+                    "model_id": "native/gpt-6-astra",
+                    "resolved_protocol": "responses",
+                    "dialect": "codex_native",
+                    "protocol_decision": "explicit",
+                    "protocol_fallback": False,
+                },
+                iter((_fixed_response_stream("gpt-6-astra"),)),
+            )
+
         with tempfile.TemporaryDirectory(prefix="emp-native-retry-") as directory:
             root = Path(directory)
             isolated_home = root / "codex"
@@ -71,17 +79,19 @@ class CodexRetryCliTests(unittest.TestCase):
                        "--output-last-message", str(root / "reply.txt"), "Say hello."]
             try:
                 with patch("easy_multi_provider.native_websocket._default_connector",
-                           side_effect=[ssl.SSLEOFError(8, "unexpected EOF"), upstream]) as connector, \
+                           side_effect=ssl.SSLEOFError(8, "unexpected EOF")) as connector, \
                         patch("easy_multi_provider.codex_dispatch.proxy",
-                              side_effect=AssertionError("unexpected HTTP replay")) as http:
+                              side_effect=http_fallback) as http:
                     result = subprocess.run(command, env=env, cwd=root, input="", capture_output=True,
                                             text=True, encoding="utf-8", errors="replace", timeout=60)
                     self.assertEqual(result.returncode, 0, result.stderr[-4000:])
                     self.assertEqual((root / "reply.txt").read_text(encoding="utf-8").strip(), FIXED_REPLY)
-                    self.assertEqual(connector.call_count, 2)
-                    self.assertEqual(sum(item.get("generate") is not False for item in upstream.sent), 1)
-                    self.assertEqual(state._native_websocket_cooldowns, {})
-                    http.assert_not_called()
+                    self.assertNotIn("Reconnecting", result.stderr)
+                    self.assertNotIn("high demand", result.stderr.lower())
+                    self.assertEqual(connector.call_count, 1)
+                    self.assertEqual(http.call_count, 1)
+                    self.assertEqual(len(http_requests), 1)
+                    self.assertTrue(state._native_websocket_cooldowns)
             finally:
                 server.shutdown()
                 server.server_close()
