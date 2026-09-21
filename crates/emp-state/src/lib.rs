@@ -11,6 +11,7 @@
 //! Crypto primitives come from the RustCrypto ecosystem crates; sensitive
 //! buffers are zeroized.
 
+pub mod accounts;
 pub mod config;
 pub mod fernet;
 pub mod filesystem;
@@ -18,6 +19,10 @@ pub mod lock;
 pub mod migration;
 pub mod vault;
 
+pub use accounts::{
+    AccountError, AccountResult, normalize_account, normalize_context_windows,
+    normalize_hidden_models,
+};
 pub use config::{
     ConfigError, ConfigResult, canonical_catalog_json, catalog_etag,
     normalize_catalog_presentations, normalize_codex_runtime_sources, normalize_provider,

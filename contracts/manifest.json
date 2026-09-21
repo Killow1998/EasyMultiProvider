@@ -96,6 +96,19 @@
       "normalization": ["unknown provider and capability fields are intentionally discarded"],
       "side_effects": ["none; provider normalization is pure"],
       "fixture": "state/python-provider-normalization.json"
+    },
+    {
+      "id": "state.account-normalization.python-rust",
+      "level": "state",
+      "source": "easy_multi_provider/accounts.py:normalize_account",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": [
+        "unknown account fields are intentionally discarded",
+        "model identifiers are sorted and deduplicated"
+      ],
+      "side_effects": ["none; account metadata normalization is pure"],
+      "fixture": "state/python-account-normalization.json"
     }
   ]
 }

@@ -1,0 +1,372 @@
+{
+  "source": "EasyMultiProvider 0.11.6 easy_multi_provider/accounts.py",
+  "status": "implemented",
+  "implementation": "crates/emp-state/src/accounts.rs",
+  "test": "crates/emp-state/tests/account_compat.rs",
+  "hidden_models": {
+    "valid": [
+      {
+        "input": null,
+        "expected": []
+      },
+      {
+        "input": [],
+        "expected": []
+      },
+      {
+        "input": [
+          " zeta ",
+          "alpha",
+          "zeta",
+          "\u00e9",
+          "z",
+          "\t alpha \n"
+        ],
+        "expected": [
+          "alpha",
+          "z",
+          "zeta",
+          "\u00e9"
+        ]
+      },
+      {
+        "input": [
+          "\u0000",
+          "\u0001",
+          "\u0002",
+          "\u0003"
+        ],
+        "expected": [
+          "\u0000",
+          "\u0001",
+          "\u0002",
+          "\u0003"
+        ]
+      }
+    ],
+    "invalid": [
+      {
+        "input": "gpt",
+        "error": "account.hidden_models must be a bounded list"
+      },
+      {
+        "input": [
+          42
+        ],
+        "error": "account.hidden_models must contain model IDs"
+      },
+      {
+        "input": [
+          "  "
+        ],
+        "error": "account.hidden_models must contain model IDs"
+      },
+      {
+        "input": [
+          "\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0\ud83e\udda0"
+        ],
+        "error": "account.hidden_models contains an oversized model ID"
+      }
+    ]
+  },
+  "context_windows": {
+    "valid": [
+      {
+        "input": null,
+        "expected": {}
+      },
+      {
+        "input": {},
+        "expected": {}
+      },
+      {
+        "input": {
+          " o3 ": 128,
+          "gpt-5": 1
+        },
+        "expected": {
+          " o3 ": 128,
+          "gpt-5": 1
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "input": [],
+        "error": "model_context_windows must be a bounded object"
+      },
+      {
+        "input": {
+          "": 1
+        },
+        "error": "model_context_windows has an invalid model ID"
+      },
+      {
+        "input": {
+          "gpt": true
+        },
+        "error": "model_context_windows values must be positive integer tokens"
+      },
+      {
+        "input": {
+          "gpt": 0
+        },
+        "error": "model_context_windows values must be positive integer tokens"
+      },
+      {
+        "input": {
+          "gpt": -1
+        },
+        "error": "model_context_windows values must be positive integer tokens"
+      },
+      {
+        "input": {
+          "gpt": 1.5
+        },
+        "error": "model_context_windows values must be positive integer tokens"
+      }
+    ]
+  },
+  "accounts": {
+    "valid": [
+      {
+        "input": {
+          "id": " primary ",
+          "name": " Primary Account ",
+          "prefix": " p1 ",
+          "auth_file": " /tmp/synthetic-primary.auth ",
+          "credential_status": "valid",
+          "enabled": {
+            "yes": true
+          },
+          "hidden_models": [
+            " zeta ",
+            "alpha",
+            "zeta",
+            "\u00e9",
+            "z"
+          ],
+          "model_context_windows": {
+            "o3": 128,
+            "gpt-5": 1
+          },
+          "quota": {
+            "remaining": 5,
+            "nested": {
+              "reset": "2026-09-21T00:00:00Z"
+            },
+            "unknown": [
+              true
+            ]
+          },
+          "unknown": "discard"
+        },
+        "expected": {
+          "id": "primary",
+          "name": "Primary Account",
+          "prefix": "p1",
+          "auth_file": "/tmp/synthetic-primary.auth",
+          "credential_status": "valid",
+          "enabled": true,
+          "hidden_models": [
+            "alpha",
+            "z",
+            "zeta",
+            "\u00e9"
+          ],
+          "model_context_windows": {
+            "o3": 128,
+            "gpt-5": 1
+          },
+          "quota": {
+            "remaining": 5,
+            "nested": {
+              "reset": "2026-09-21T00:00:00Z"
+            },
+            "unknown": [
+              true
+            ]
+          }
+        }
+      },
+      {
+        "input": {
+          "id": "minimal",
+          "prefix": "minimal",
+          "enabled": 0
+        },
+        "expected": {
+          "id": "minimal",
+          "name": "minimal",
+          "prefix": "minimal",
+          "auth_file": "",
+          "credential_status": "unknown",
+          "enabled": false,
+          "hidden_models": [],
+          "model_context_windows": {},
+          "quota": null
+        }
+      },
+      {
+        "input": {
+          "id": "empty-list-enabled",
+          "prefix": "empty-list-enabled",
+          "name": null,
+          "enabled": []
+        },
+        "expected": {
+          "id": "empty-list-enabled",
+          "name": "empty-list-enabled",
+          "prefix": "empty-list-enabled",
+          "auth_file": "",
+          "credential_status": "unknown",
+          "enabled": false,
+          "hidden_models": [],
+          "model_context_windows": {},
+          "quota": null
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "input": "account",
+        "error": "each account must be an object"
+      },
+      {
+        "input": {},
+        "error": "account.id must be a safe single path segment"
+      },
+      {
+        "input": {
+          "id": 42
+        },
+        "error": "account.id must be a safe single path segment"
+      },
+      {
+        "input": {
+          "id": "../escape",
+          "prefix": "p"
+        },
+        "error": "account.id must be a safe single path segment"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": 42
+        },
+        "error": "account.prefix must be a safe single path segment"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": "p",
+          "name": 42
+        },
+        "error": "account.name must be a string"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": "p",
+          "auth_file": []
+        },
+        "error": "account.auth_file must be a string"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": "p",
+          "credential_status": "expired"
+        },
+        "error": "account.credential_status is invalid"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": "p",
+          "credential_status": " valid "
+        },
+        "error": "account.credential_status is invalid"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": "p",
+          "hidden_models": "gpt"
+        },
+        "error": "account.hidden_models must be a bounded list"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": "p",
+          "hidden_models": [
+            42
+          ]
+        },
+        "error": "account.hidden_models must contain model IDs"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": "p",
+          "model_context_windows": []
+        },
+        "error": "model_context_windows must be a bounded object"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": "p",
+          "model_context_windows": {
+            "gpt": false
+          }
+        },
+        "error": "model_context_windows values must be positive integer tokens"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": "p",
+          "model_context_windows": {
+            "gpt": -1
+          }
+        },
+        "error": "model_context_windows values must be positive integer tokens"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": "p",
+          "auth_file": null
+        },
+        "error": "account.auth_file must be a string"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": 42,
+          "name": 42
+        },
+        "error": "account.prefix must be a safe single path segment"
+      },
+      {
+        "input": {
+          "id": "primary",
+          "prefix": "p",
+          "name": 42,
+          "hidden_models": "also-invalid"
+        },
+        "error": "account.name must be a string"
+      }
+    ]
+  },
+  "bounds": {
+    "hidden_models_limit": 1000,
+    "model_id_limit_bytes": 256,
+    "segment_limit_bytes": 64,
+    "too_many_hidden_models_error": "account.hidden_models must be a bounded list",
+    "too_many_context_windows_error": "model_context_windows must be a bounded object",
+    "too_long_segment_error": "account.id must be a safe single path segment"
+  }
+}
