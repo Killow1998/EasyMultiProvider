@@ -20,6 +20,7 @@ from .protocol_projection import (
     _anthropic_tool_arguments,
     _anthropic_usage,
     _chat_incomplete_reason,
+    _chat_reasoning_text,
     _upstream_tool_arguments,
     _chat_usage,
     responses_terminal_observation,
@@ -942,7 +943,10 @@ def stream_chat_completion(
     payload["stream_options"] = {"include_usage": True}
     response_id = "resp_" + uuid.uuid4().hex
     message_id = "msg_" + uuid.uuid4().hex
+    reasoning_id = "rs_" + uuid.uuid4().hex
     text = []
+    reasoning = []
+    late_reasoning = []
     text_bytes = 0
     content_parts = {}
     usage = None
@@ -954,6 +958,8 @@ def stream_chat_completion(
     saw_done = False
     ordinary_complete = False
     message_started = False
+    reasoning_index = None
+    message_index = None
     response = {
         "id": response_id,
         "object": "response",
@@ -1065,6 +1071,31 @@ def stream_chat_completion(
             refusal = delta.get("refusal")
             if refusal is not None and not isinstance(refusal, str):
                 raise ExternalProtocolError("Chat Completions upstream returned invalid refusal")
+            reasoning_piece = _chat_reasoning_text(delta)
+            if reasoning_piece:
+                piece_bytes = len(reasoning_piece.encode("utf-8"))
+                if text_bytes + piece_bytes > MAX_STREAM_TEXT_BYTES:
+                    raise RouterError("upstream streamed text is too large", 502)
+                text_bytes += piece_bytes
+                saw_output = True
+                if message_started:
+                    late_reasoning.append(reasoning_piece)
+                else:
+                    reasoning.append(reasoning_piece)
+                    if reasoning_index is None:
+                        reasoning_index = 0
+                        yield frame("response.output_item.added", {
+                            "type": "response.output_item.added",
+                            "output_index": reasoning_index,
+                            "item": {"id": reasoning_id, "type": "reasoning", "status": "in_progress", "summary": [], "content": []},
+                        })
+                    yield frame("response.reasoning_text.delta", {
+                        "type": "response.reasoning_text.delta",
+                        "item_id": reasoning_id,
+                        "output_index": reasoning_index,
+                        "content_index": 0,
+                        "delta": reasoning_piece,
+                    })
             for kind, fragment in (("output_text", piece), ("refusal", refusal)):
                 if not fragment:
                     continue
@@ -1076,9 +1107,19 @@ def stream_chat_completion(
                     text.append(fragment)
                 saw_output = True
                 if not message_started:
+                    if reasoning_index is not None:
+                        yield frame("response.output_item.done", {
+                            "type": "response.output_item.done",
+                            "output_index": reasoning_index,
+                            "item": {
+                                "id": reasoning_id, "type": "reasoning", "status": "completed", "summary": [],
+                                "content": [{"type": "reasoning_text", "text": "".join(reasoning)}],
+                            },
+                        })
                     message_started = True
+                    message_index = int(reasoning_index is not None)
                     yield frame("response.output_item.added", {
-                        "type": "response.output_item.added", "output_index": 0,
+                        "type": "response.output_item.added", "output_index": message_index,
                         "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []},
                     })
                 if kind not in content_parts:
@@ -1088,13 +1129,13 @@ def stream_chat_completion(
                     content_parts[kind] = part
                     yield frame("response.content_part.added", {
                         "type": "response.content_part.added", "item_id": message_id,
-                        "output_index": 0, "content_index": list(content_parts).index(kind),
+                        "output_index": message_index, "content_index": list(content_parts).index(kind),
                         "part": dict(part),
                     })
                 content_parts[kind]["text" if kind == "output_text" else "refusal"] += fragment
                 event = "response." + kind + ".delta"
                 yield frame(event, {
-                    "type": event, "item_id": message_id, "output_index": 0,
+                    "type": event, "item_id": message_id, "output_index": message_index,
                     "content_index": list(content_parts).index(kind), "delta": fragment,
                 })
             raw_calls = delta.get("tool_calls", [])
@@ -1188,8 +1229,54 @@ def stream_chat_completion(
             "role": "assistant",
             "content": list(content_parts.values()),
         }
+        if reasoning_index is not None and not message_started:
+            yield frame("response.output_item.done", {
+                "type": "response.output_item.done", "output_index": reasoning_index,
+                "item": {
+                    "id": reasoning_id, "type": "reasoning", "status": "completed", "summary": [],
+                    "content": [{"type": "reasoning_text", "text": "".join(reasoning)}],
+                },
+            })
+        if message_started:
+            for content_index, (kind, part) in enumerate(content_parts.items()):
+                field = "text" if kind == "output_text" else "refusal"
+                event = "response." + kind + ".done"
+                yield frame(event, {
+                    "type": event, "item_id": message_id, "output_index": message_index,
+                    "content_index": content_index, field: part[field],
+                })
+                yield frame("response.content_part.done", {
+                    "type": "response.content_part.done", "item_id": message_id,
+                    "output_index": message_index, "content_index": content_index, "part": part,
+                })
+            yield frame("response.output_item.done", {
+                "type": "response.output_item.done", "output_index": message_index,
+                "item": output,
+            })
+        late_reasoning_output = None
+        if late_reasoning:
+            late_reasoning_index = int(message_started) + int(reasoning_index is not None)
+            late_reasoning_id = "rs_" + uuid.uuid4().hex
+            late_reasoning_text = "".join(late_reasoning)
+            late_reasoning_output = {
+                "id": late_reasoning_id, "type": "reasoning", "status": "completed", "summary": [],
+                "content": [{"type": "reasoning_text", "text": late_reasoning_text}],
+            }
+            yield frame("response.output_item.added", {
+                "type": "response.output_item.added", "output_index": late_reasoning_index,
+                "item": {"id": late_reasoning_id, "type": "reasoning", "status": "in_progress", "summary": [], "content": []},
+            })
+            yield frame("response.reasoning_text.delta", {
+                "type": "response.reasoning_text.delta", "item_id": late_reasoning_id,
+                "output_index": late_reasoning_index, "content_index": 0,
+                "delta": late_reasoning_text,
+            })
+            yield frame("response.output_item.done", {
+                "type": "response.output_item.done", "output_index": late_reasoning_index,
+                "item": late_reasoning_output,
+            })
         function_outputs = []
-        tool_output_base = 1 if message_started else 0
+        tool_output_base = int(message_started) + int(reasoning_index is not None) + int(bool(late_reasoning))
         for tool_position, raw_index in enumerate(sorted(tool_calls)):
             state = tool_calls[raw_index]
             output_index = tool_output_base + tool_position
@@ -1276,32 +1363,26 @@ def stream_chat_completion(
                 },
             )
         response["status"] = "incomplete" if incomplete_reason else "completed"
-        response["output"] = ([output] if message_started else []) + function_outputs
+        leading_outputs = []
+        if reasoning_index is not None:
+            reasoning_output = {
+                "id": reasoning_id,
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [],
+                "content": [{"type": "reasoning_text", "text": "".join(reasoning)}],
+            }
+            leading_outputs.append((reasoning_index, reasoning_output))
+        if message_started:
+            leading_outputs.append((message_index, output))
+        if late_reasoning_output is not None:
+            leading_outputs.append((late_reasoning_index, late_reasoning_output))
+        response["output"] = [item for _, item in sorted(leading_outputs)] + function_outputs
         response["output_text"] = final_text
         if incomplete_reason:
             response["incomplete_details"] = {"reason": incomplete_reason}
         if usage is not None:
             response["usage"] = usage
-        if message_started:
-            for content_index, (kind, part) in enumerate(content_parts.items()):
-                field = "text" if kind == "output_text" else "refusal"
-                event = "response." + kind + ".done"
-                yield frame(event, {
-                    "type": event, "item_id": message_id, "output_index": 0,
-                    "content_index": content_index, field: part[field],
-                })
-                yield frame("response.content_part.done", {
-                    "type": "response.content_part.done", "item_id": message_id,
-                    "output_index": 0, "content_index": content_index, "part": part,
-                })
-            yield frame(
-                "response.output_item.done",
-                {
-                    "type": "response.output_item.done",
-                    "output_index": 0,
-                    "item": output,
-                },
-            )
         terminal_event = "response.incomplete" if incomplete_reason else "response.completed"
         yield frame(terminal_event, {"type": terminal_event, "response": response})
         _notify_terminal(

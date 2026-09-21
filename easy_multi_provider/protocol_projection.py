@@ -43,6 +43,15 @@ _ANTHROPIC_IMAGE_MEDIA_TYPES = frozenset(
 _ANTHROPIC_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
+def _chat_reasoning_text(message: Mapping[str, Any]) -> str:
+    """Prefer one OpenAI-compatible reasoning field when aliases coexist."""
+    for field in ("reasoning_content", "reasoning", "reasoning_text"):
+        value = message.get(field)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _response_string(item: Mapping[str, Any], field: str) -> str:
     value = item.get(field)
     if not isinstance(value, str) or not value:
@@ -896,6 +905,15 @@ def _response_from_chat(
         )
     custom_names = custom_names or set()
     output = []
+    reasoning_text = _chat_reasoning_text(message)
+    if reasoning_text:
+        output.append({
+            "id": "rs_" + uuid.uuid4().hex,
+            "type": "reasoning",
+            "status": "completed",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": reasoning_text}],
+        })
     raw_text = message.get("content")
     if raw_text is None:
         text = ""

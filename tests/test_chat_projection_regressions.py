@@ -78,6 +78,80 @@ class ChatProjectionRegressions(unittest.TestCase):
         self.assertEqual("".join(e["delta"] for e in events if e["type"] == "response.refusal.delta"), "I cannot assist.")
         self.assertEqual(next(e for e in events if e["type"] == "response.refusal.done")["refusal"], "I cannot assist.")
 
+    def test_chat_reasoning_stays_separate_from_answer(self):
+        result = _response_from_chat({"choices": [{"message": {
+            "reasoning_content": "Check the sum.",
+            "content": "Four.",
+        }, "finish_reason": "stop"}]}, "test/model")
+        self.assertEqual([item["type"] for item in result["output"]], ["reasoning", "message"])
+        self.assertEqual(result["output"][0]["content"], [
+            {"type": "reasoning_text", "text": "Check the sum."}
+        ])
+        self.assertEqual(result["output"][0]["summary"], [])
+        self.assertEqual(result["output_text"], "Four.")
+        events = list(sse_json_events(_response_json_stream(result)))
+        self.assertEqual(
+            [event["item"]["type"] for event in events if event["type"] == "response.output_item.done"],
+            ["reasoning", "message"],
+        )
+
+    def test_chat_stream_reasoning_and_answer_have_distinct_items(self):
+        events = self.stream([
+            {"choices": [{"delta": {"content": None, "reasoning_content": "Check "}}]},
+            {"choices": [{"delta": {"reasoning_content": "the sum.", "content": "Four."}}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        ])
+        self.assertEqual(
+            "".join(event["delta"] for event in events if event["type"] == "response.reasoning_text.delta"),
+            "Check the sum.",
+        )
+        self.assertEqual(
+            "".join(event["delta"] for event in events if event["type"] == "response.output_text.delta"),
+            "Four.",
+        )
+        completed = events[-1]["response"]
+        self.assertEqual([item["type"] for item in completed["output"]], ["reasoning", "message"])
+        self.assertEqual(completed["output"][0]["content"][0]["text"], "Check the sum.")
+        self.assertEqual(completed["output_text"], "Four.")
+        item_events = [event for event in events if event["type"] in {
+            "response.output_item.added", "response.output_item.done"
+        }]
+        self.assertEqual([event["type"] for event in item_events], [
+            "response.output_item.added", "response.output_item.done",
+            "response.output_item.added", "response.output_item.done",
+        ])
+
+    def test_chat_stream_reasoning_after_answer_keeps_output_indices(self):
+        events = self.stream([
+            {"choices": [{"delta": {"content": "First."}}]},
+            {"choices": [{"delta": {"reasoning_content": "Late reasoning."}, "finish_reason": "stop"}]},
+        ])
+        completed = events[-1]["response"]
+        self.assertEqual([item["type"] for item in completed["output"]], ["message", "reasoning"])
+        added = [event for event in events if event["type"] == "response.output_item.added"]
+        self.assertEqual([event["output_index"] for event in added], [0, 1])
+        reasoning_delta = next(event for event in events if event["type"] == "response.reasoning_text.delta")
+        self.assertEqual(reasoning_delta["output_index"], 1)
+        self.assertEqual(reasoning_delta["content_index"], 0)
+
+    def test_chat_stream_message_closes_before_tool_call(self):
+        events = self.stream([
+            {"choices": [{"delta": {"content": "Calculating."}}]},
+            {"choices": [{"delta": {"tool_calls": [{
+                "index": 0, "id": "call_fixture", "type": "function",
+                "function": {"name": "calculator", "arguments": '{"x":4}'},
+            }]}, "finish_reason": "tool_calls"}]},
+        ])
+        item_events = [event for event in events if event["type"] in {
+            "response.output_item.added", "response.output_item.done"
+        }]
+        self.assertEqual([(event["type"], event["item"]["type"]) for event in item_events], [
+            ("response.output_item.added", "message"),
+            ("response.output_item.done", "message"),
+            ("response.output_item.added", "function_call"),
+            ("response.output_item.done", "function_call"),
+        ])
+
     def test_literal_markup_split_across_chunks_is_text(self):
         pieces = ["Example: <thi", "nk>text</think> and <tool_", "call> is documentation."]
         events = self.stream([{"choices": [{"delta": {"content": p}}]} for p in pieces]
