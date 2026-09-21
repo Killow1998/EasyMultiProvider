@@ -1,6 +1,7 @@
 use emp_state::{
     canonical_catalog_json, catalog_etag, normalize_catalog_presentations,
-    normalize_codex_runtime_sources, normalize_subscription_search,
+    normalize_codex_runtime_sources, normalize_provider_base_url, normalize_provider_id,
+    normalize_subscription_search,
 };
 use serde_json::{Value, json};
 use std::io::Write;
@@ -44,6 +45,29 @@ fn search_and_runtime_selection_match_python_fixture() {
         normalize_codex_runtime_sources(Some(&Value::Null)).expect("null sources"),
         json!(["auto"])
     );
+}
+
+#[test]
+fn provider_identifiers_and_urls_match_python_fixture() {
+    let fixture = fixture();
+    for case in fixture["provider_ids"]["valid"]
+        .as_array()
+        .expect("provider ID cases")
+    {
+        assert_eq!(
+            normalize_provider_id(Some(&case["input"])).expect("valid provider ID"),
+            case["expected"].as_str().expect("provider ID expected")
+        );
+    }
+    for case in fixture["provider_base_urls"]["valid"]
+        .as_array()
+        .expect("provider URL cases")
+    {
+        assert_eq!(
+            normalize_provider_base_url(Some(&case["input"])).expect("valid provider URL"),
+            case["expected"].as_str().expect("provider URL expected")
+        );
+    }
 }
 
 #[test]
@@ -99,6 +123,30 @@ fn configuration_failures_match_python_messages() {
         assert_eq!(error.to_string(), expected);
     }
 
+    let fixture = fixture();
+    for case in fixture["provider_ids"]["invalid"]
+        .as_array()
+        .expect("invalid provider ID cases")
+    {
+        assert_eq!(
+            normalize_provider_id(Some(&case["input"]))
+                .expect_err("invalid provider ID")
+                .to_string(),
+            case["error"].as_str().expect("provider ID error")
+        );
+    }
+    for case in fixture["provider_base_urls"]["invalid"]
+        .as_array()
+        .expect("invalid provider URL cases")
+    {
+        assert_eq!(
+            normalize_provider_base_url(Some(&case["input"]))
+                .expect_err("invalid provider URL")
+                .to_string(),
+            case["error"].as_str().expect("provider URL error")
+        );
+    }
+
     let long_alias = "界".repeat(171);
     assert!(long_alias.len() > 512);
     assert_eq!(
@@ -138,14 +186,26 @@ from easy_multi_provider.config import (
     _normalize_catalog_presentations,
     _normalize_subscription_search,
     _normalize_codex_runtime_sources,
+    _validate_provider_base_url,
+    _validate_provider_id,
 )
 value = json.load(sys.stdin)
 catalog = value["canonical_etag"]["input"]
 canonical = json.dumps(catalog, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+def error_of(function, case):
+    try:
+        function(case["input"])
+    except Exception as exc:
+        return str(exc)
+    raise AssertionError("fixture expected an error")
 json.dump({
     "presentations": _normalize_catalog_presentations(value["presentations"]["input"]),
     "subscription_search": _normalize_subscription_search(value["subscription_search"]["input"], set()),
     "runtime_sources": _normalize_codex_runtime_sources(value["runtime_sources"]["input"]),
+    "provider_ids": [_validate_provider_id(case["input"]) for case in value["provider_ids"]["valid"]],
+    "provider_id_errors": [error_of(_validate_provider_id, case) for case in value["provider_ids"]["invalid"]],
+    "provider_base_urls": [_validate_provider_base_url(case["input"]) for case in value["provider_base_urls"]["valid"]],
+    "provider_base_url_errors": [error_of(_validate_provider_base_url, case) for case in value["provider_base_urls"]["invalid"]],
     "canonical_json": canonical,
     "etag": '"emp-' + hashlib.sha256(canonical.encode("utf-8")).hexdigest() + '"',
 }, sys.stdout, ensure_ascii=False, separators=(",", ":"))
@@ -189,6 +249,34 @@ json.dump({
             &fixture["runtime_sources"]["input"]
         ))
         .expect("Rust runtime sources"),
+        "provider_ids": fixture["provider_ids"]["valid"]
+            .as_array()
+            .expect("provider ID cases")
+            .iter()
+            .map(|case| normalize_provider_id(Some(&case["input"])).expect("Rust provider ID"))
+            .collect::<Vec<_>>(),
+        "provider_id_errors": fixture["provider_ids"]["invalid"]
+            .as_array()
+            .expect("invalid provider ID cases")
+            .iter()
+            .map(|case| normalize_provider_id(Some(&case["input"]))
+                .expect_err("Rust invalid provider ID")
+                .to_string())
+            .collect::<Vec<_>>(),
+        "provider_base_urls": fixture["provider_base_urls"]["valid"]
+            .as_array()
+            .expect("provider URL cases")
+            .iter()
+            .map(|case| normalize_provider_base_url(Some(&case["input"])).expect("Rust provider URL"))
+            .collect::<Vec<_>>(),
+        "provider_base_url_errors": fixture["provider_base_urls"]["invalid"]
+            .as_array()
+            .expect("invalid provider URL cases")
+            .iter()
+            .map(|case| normalize_provider_base_url(Some(&case["input"]))
+                .expect_err("Rust invalid provider URL")
+                .to_string())
+            .collect::<Vec<_>>(),
         "canonical_json": String::from_utf8(
             canonical_catalog_json(input).expect("Rust canonical JSON")
         )

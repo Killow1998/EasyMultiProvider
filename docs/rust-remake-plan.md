@@ -16,8 +16,14 @@ Progress evidence on 2026-09-21:
   Unix ownership/permission checks. The Rust workspace now runs on Linux,
   macOS, and Windows in CI. Route presentation, subscription search, runtime
   source selection, and catalog ETag helpers are also checked against a live
-  Python oracle. Full entity normalization/import merge behavior and Windows
-  ACL/reparse-point hardening remain in stage 2.
+  Python oracle. Provider identifiers and pasted external API URLs now share
+  the Python contract as well, including automatic origin/request-URL cleanup,
+  explicit provider paths, loopback HTTP, IPv6, and Unicode paths. Full entity
+  normalization/import merge behavior and Windows ACL/reparse-point hardening
+  remain in stage 2.
+- Runtime compatibility run `35636981488` passed the complete Python suite,
+  Rust workspace, live state/configuration oracles, and pinned Codex protocol
+  lanes on Linux, macOS, and Windows after the accepted-socket BSD fix.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

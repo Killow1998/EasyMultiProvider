@@ -52,6 +52,53 @@
       "path_cli"
     ]
   },
+  "provider_ids": {
+    "valid": [
+      {"input": " deepseek.prod-1 ", "expected": "deepseek.prod-1"},
+      {"input": "A_2", "expected": "A_2"}
+    ],
+    "invalid": [
+      {"input": null, "error": "provider.id is required"},
+      {"input": true, "error": "provider.id must be a string"},
+      {"input": "..", "error": "provider.id must be a safe single path segment"},
+      {"input": "nested/provider", "error": "provider.id must be a safe single path segment"}
+    ]
+  },
+  "provider_base_urls": {
+    "valid": [
+      {"input": "https://api.deepseek.com", "expected": "https://api.deepseek.com/v1"},
+      {"input": "https://api.example.com/", "expected": "https://api.example.com/v1"},
+      {"input": "https://api.example.com/v1/v1/v1/", "expected": "https://api.example.com/v1"},
+      {"input": "https://api.example.com/v1/response", "expected": "https://api.example.com/v1"},
+      {"input": "https://api.example.com/v1/responses", "expected": "https://api.example.com/v1"},
+      {"input": "https://api.example.com/v1/responses/compact", "expected": "https://api.example.com/v1"},
+      {"input": "https://api.example.com/v1/chat/completions", "expected": "https://api.example.com/v1"},
+      {"input": "https://api.example.com/v1/messages", "expected": "https://api.example.com/v1"},
+      {"input": "https://api.example.com/v1/models", "expected": "https://api.example.com/v1"},
+      {"input": "https://api.example.com/api/paas/v4", "expected": "https://api.example.com/api/paas/v4"},
+      {"input": "https://api.example.com/v1beta/openai/chat/completions", "expected": "https://api.example.com/v1beta/openai"},
+      {"input": "HTTPS://EXAMPLE.COM/V1/RESPONSES/", "expected": "https://EXAMPLE.COM/V1"},
+      {"input": "https://api.example.com/v1/V1", "expected": "https://api.example.com/v1"},
+      {"input": "https://例子.example/模型", "expected": "https://例子.example/模型"},
+      {"input": "https://api.example.com/notresponses", "expected": "https://api.example.com/notresponses"},
+      {"input": "https://example.com/v1?", "expected": "https://example.com/v1"},
+      {"input": "https://example.com/v1#", "expected": "https://example.com/v1"},
+      {"input": "https://example.com/v1;tenant", "expected": "https://example.com/v1;tenant"},
+      {"input": "http://127.0.0.1:9999/v1", "expected": "http://127.0.0.1:9999/v1"},
+      {"input": "http://[::1]:9999/v1/responses", "expected": "http://[::1]:9999/v1"}
+    ],
+    "invalid": [
+      {"input": null, "error": "provider.base_url is required"},
+      {"input": 42, "error": "provider.base_url must be a string"},
+      {"input": "api.example.com", "error": "provider.base_url must be an http(s) URL"},
+      {"input": "ftp://api.example.com/v1", "error": "provider.base_url must be an http(s) URL"},
+      {"input": "https:///v1", "error": "provider.base_url must be an http(s) URL"},
+      {"input": "https://user:secret@example.com/v1", "error": "provider.base_url must not contain URL credentials"},
+      {"input": "https://example.com/v1?tenant=a", "error": "provider.base_url must not contain a query or fragment"},
+      {"input": "https://example.com/v1#deployment", "error": "provider.base_url must not contain a query or fragment"},
+      {"input": "http://example.com/v1", "error": "provider.base_url must use HTTPS unless it targets loopback"}
+    ]
+  },
   "canonical_etag": {
     "input": {
       "z": "中文",
