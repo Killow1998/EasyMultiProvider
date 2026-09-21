@@ -542,6 +542,11 @@ class NativeWebSocketBridge:
                 _http_fallback_before_request(status),
                 error_class=error_class,
                 failure_reason=failure_reason,
+                # The model request is sent only after the WebSocket
+                # handshake succeeds.  A transport failure here can safely
+                # use the HTTP compatibility path without replaying output or
+                # tool activity.
+                http_fallback_safe=True,
             )
             self._observe(
                 "upstream_handshake_failed",

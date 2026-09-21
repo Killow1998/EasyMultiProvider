@@ -371,6 +371,18 @@ class CodexHomeHistoryReader:
         except HistoryUnavailableError as original:
             if original.reason != "thread_missing" or not anchor.forked_from_thread_id:
                 raise
+        except HistoryMismatchError as original:
+            # A newly spawned full-history child can be visible through the
+            # shared App Server before its own rollout is materialized. Some
+            # runtimes answer that child lookup with the parent thread. Only
+            # the explicit fork path may recover, and the exact inherited
+            # checkpoint is still verified against the named parent below.
+            if (
+                original.reason != "thread_mismatch"
+                or original.source != "app_server"
+                or not anchor.forked_from_thread_id
+            ):
+                raise
         # Codex's fork metadata names the parent. Restrict lookup to that UUID in
         # the configured home and require the exact inherited encrypted checkpoint.
         # No global scan, active app-server attachment, or parent-tail guessing.

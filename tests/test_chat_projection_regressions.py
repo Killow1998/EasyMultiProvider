@@ -95,6 +95,50 @@ class ChatProjectionRegressions(unittest.TestCase):
             ["reasoning", "message"],
         )
 
+    def test_plaintext_agent_message_becomes_portable_user_turn(self):
+        item = {
+            "type": "agent_message",
+            "author": "/root",
+            "recipient": "/root/worker",
+            "content": [
+                {"type": "input_text", "text": "Message Type: NEW_TASK"},
+                {"type": "input_text", "text": "Implement the requested UI."},
+            ],
+        }
+
+        chat = responses_to_chat({"input": [item]}, "chat-model")
+        self.assertEqual(chat["messages"], [{
+            "role": "user",
+            "content": "Message Type: NEW_TASK\nImplement the requested UI.",
+        }])
+        anthropic = responses_to_anthropic({"input": [item]}, "claude-model")
+        self.assertEqual(anthropic["messages"], [{
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "Message Type: NEW_TASK\nImplement the requested UI.",
+            }],
+        }])
+
+    def test_agent_message_rejects_opaque_or_malformed_content(self):
+        valid = {
+            "type": "agent_message",
+            "author": "/root",
+            "recipient": "/root/worker",
+        }
+        for content in (
+            [],
+            [{"type": "encrypted_content", "encrypted_content": "opaque"}],
+            [{"type": "input_text", "text": ""}],
+        ):
+            with self.subTest(content=content):
+                with self.assertRaises(RouterError):
+                    responses_to_chat({"input": [{**valid, "content": content}]}, "chat-model")
+                with self.assertRaises(RouterError):
+                    responses_to_anthropic(
+                        {"input": [{**valid, "content": content}]}, "claude-model"
+                    )
+
     def test_chat_stream_reasoning_and_answer_have_distinct_items(self):
         events = self.stream([
             {"choices": [{"delta": {"content": None, "reasoning_content": "Check "}}]},

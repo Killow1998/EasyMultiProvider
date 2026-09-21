@@ -3622,7 +3622,19 @@ def make_handler(state: AppState):
                                     and first_event_ms is None
                                 )
                                 if safe_http_fallback:
-                                    native_http_only_routes.add(plan.target.connection_key)
+                                    if exc.retryable:
+                                        # Upgrade incompatibility and peer 1009
+                                        # are stable for this downstream
+                                        # connection; keep it on HTTP.
+                                        native_http_only_routes.add(plan.target.connection_key)
+                                    else:
+                                        # A pre-request TLS or network failure
+                                        # is transient.  Serve this turn over
+                                        # HTTP and let the shared cooldown
+                                        # bound future WS handshake attempts.
+                                        state.mark_native_websocket_unavailable(
+                                            plan.target.connection_key
+                                        )
                                 elif exc.retryable:
                                     state.mark_native_websocket_unavailable(
                                         plan.target.connection_key

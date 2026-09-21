@@ -4788,7 +4788,7 @@ class ContinuityAppStateTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
-    def test_transient_tls_failure_does_not_disable_the_native_route(self):
+    def test_transient_tls_failure_uses_http_and_cools_down_websocket(self):
         import ssl
         from tests.test_native_websocket import _FakeConnection
 
@@ -4796,6 +4796,30 @@ class ContinuityAppStateTests(unittest.TestCase):
             "id": "resp_recovered", "status": "completed", "output": [],
         }}
         upstream = _FakeConnection([completed])
+        http_requests = []
+
+        def fake_proxy(_config, body, _incoming, *args, **kwargs):
+            http_requests.append(dict(body))
+            chunk = (
+                "event: response.completed\ndata: "
+                + json.dumps(completed, separators=(",", ":"))
+                + "\n\n"
+            ).encode("utf-8")
+            return (
+                {
+                    "kind": "stream",
+                    "status": 200,
+                    "content_type": "text/event-stream",
+                    "provider_id": "native",
+                    "model_id": "native/model-a",
+                    "resolved_protocol": "responses",
+                    "dialect": "codex_native",
+                    "protocol_decision": "explicit",
+                    "protocol_fallback": False,
+                },
+                iter((chunk,)),
+            )
+
         response_recorded = threading.Event()
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
@@ -4814,7 +4838,7 @@ class ContinuityAppStateTests(unittest.TestCase):
             try:
                 with patch("easy_multi_provider.native_websocket._default_connector",
                            side_effect=[ssl.SSLEOFError(8, "unexpected EOF"), upstream]) as connector, \
-                        patch("easy_multi_provider.codex_dispatch.proxy") as http, \
+                        patch("easy_multi_provider.codex_dispatch.proxy", side_effect=fake_proxy) as http, \
                         patch.object(state.diagnostics, "record", side_effect=record_response), \
                         socket.create_connection(server.server_address, timeout=5) as client, \
                         client.makefile("rb") as stream:
@@ -4836,24 +4860,22 @@ class ContinuityAppStateTests(unittest.TestCase):
                                "input": [{"type": "message", "role": "user", "content": "hello"}]}
                     client.sendall(_masked_text_frame(json.dumps(request)))
                     _, raw = _read_text_frame(stream)
-                    failure = json.loads(raw)
-                    self.assertEqual(failure["type"], "error")
-                    self.assertEqual(failure["status"], 502)
-                    self.assertEqual(failure["error"]["code"], "tls_failure")
-                    self.assertEqual(state._native_websocket_cooldowns, {})
-                    # Codex retries the turn. EMP still tries WS, without an
-                    # extra model request on HTTP or replay after output.
+                    self.assertEqual(json.loads(raw)["type"], "response.completed")
+                    self.assertTrue(state._native_websocket_cooldowns)
+                    # The route stays on HTTP during the bounded cooldown
+                    # instead of making Codex retry the same failed handshake.
                     client.sendall(_masked_text_frame(json.dumps(request)))
                     _, raw = _read_text_frame(stream)
                     self.assertEqual(json.loads(raw)["type"], "response.completed")
-                    self.assertEqual(connector.call_count, 2)
-                    self.assertEqual(len(upstream.sent), 1)
-                    http.assert_not_called()
+                    self.assertEqual(connector.call_count, 1)
+                    self.assertEqual(len(upstream.sent), 0)
+                    self.assertEqual(http.call_count, 2)
+                    self.assertEqual(len(http_requests), 2)
                     self.assertTrue(response_recorded.wait(2))
                 health = state.diagnostics_snapshot()["health"]
-                self.assertEqual(health["sample_count"], 2)
-                self.assertEqual(health["status_502_count"], 1)
-                self.assertEqual(health["fallback_attempt_count"], 0)
+                self.assertGreaterEqual(health["sample_count"], 2)
+                self.assertEqual(health["status_502_count"], 0)
+                self.assertEqual(health["fallback_attempt_count"], 1)
             finally:
                 server.shutdown()
                 server.server_close()

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from easy_multi_provider.codex_history import HistoryAnchor
+from easy_multi_provider.codex_history import AppServerReader, HistoryAnchor
 from easy_multi_provider.history_continuity import CodexHomeHistoryReader, HistoryContinuityEngine
 from easy_multi_provider.router_errors import HistoryReconstructionError
 
@@ -68,6 +68,25 @@ class SidechatHistoryTests(unittest.TestCase):
         self.assertEqual(result["input"][-2:], original["input"][-2:])
         self.assertEqual(self.body, original)
         self.assertEqual(result["_emp_active_input_start"], len(result["input"]) - 2)
+
+    def test_app_server_parent_mismatch_uses_only_the_exact_fork_checkpoint(self):
+        parent_response = {
+            "thread": {
+                "id": PARENT,
+                "turns": [],
+            }
+        }
+        self.reader = CodexHomeHistoryReader(
+            self.home,
+            app_server_reader=AppServerReader(lambda method, params: parent_response),
+        )
+
+        result = self.prepare()
+
+        rendered = json.dumps(result["input"])
+        self.assertIn("parent reference", rendered)
+        self.assertNotIn("DO NOT LEAK", rendered)
+        self.assertNotIn("inherited-checkpoint", rendered)
 
     def test_checkpoint_committed_in_active_parent_turn_is_readable(self):
         self.records = self.records[:6]

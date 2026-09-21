@@ -3019,6 +3019,101 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(opened.call_count, 1)
         self.assertEqual(raised.exception.error_class, "connect_timeout")
 
+    def test_external_pre_header_rate_limit_retries_once_after_short_cooldown(self):
+        provider = {
+            "id": "chat",
+            "protocol": "chat_completions",
+            "auth_mode": "api_key",
+            "api_key": "key",
+            "base_url": "https://example.com/v1",
+        }
+
+        class FakeResponse:
+            status = 200
+
+        limited = HTTPError(
+            "https://example.com/v1/chat/completions",
+            429,
+            "busy",
+            {"Content-Type": "application/json"},
+            BytesIO(b'{"error":{"message":"busy"}}'),
+        )
+        with patch.object(
+            router, "urlopen", side_effect=[limited, FakeResponse()]
+        ) as opened, patch.object(router.time, "sleep") as sleep:
+            response = router._request(
+                provider,
+                {"model": "external-model", "messages": []},
+                {},
+                stream=True,
+            )
+
+        self.assertIsInstance(response, FakeResponse)
+        self.assertEqual(opened.call_count, 2)
+        sleep.assert_called_once_with(1)
+
+    def test_external_long_rate_limit_cooldown_is_propagated_without_replay(self):
+        provider = {
+            "id": "chat",
+            "protocol": "chat_completions",
+            "auth_mode": "api_key",
+            "api_key": "key",
+            "base_url": "https://example.com/v1",
+        }
+        limited = HTTPError(
+            "https://example.com/v1/chat/completions",
+            429,
+            "busy",
+            {"Content-Type": "application/json", "Retry-After": "12"},
+            BytesIO(b'{"error":{"message":"busy"}}'),
+        )
+        with patch.object(router, "urlopen", side_effect=limited) as opened, patch.object(
+            router.time, "sleep"
+        ) as sleep, self.assertRaises(UpstreamHTTPError) as raised:
+            router._request(
+                provider,
+                {"model": "external-model", "messages": []},
+                {},
+                stream=True,
+            )
+
+        self.assertEqual(opened.call_count, 1)
+        sleep.assert_not_called()
+        self.assertEqual(raised.exception.retry_after_seconds, 12)
+
+    def test_external_pre_header_gateway_timeout_retries_once(self):
+        provider = {
+            "id": "chat",
+            "protocol": "chat_completions",
+            "auth_mode": "api_key",
+            "api_key": "key",
+            "base_url": "https://example.com/v1",
+        }
+
+        class FakeResponse:
+            status = 200
+
+        failure = HTTPError(
+            "https://example.com/v1/chat/completions",
+            504,
+            "gateway timeout",
+            {"Content-Type": "application/json"},
+            BytesIO(b'{"error":{"message":"upstream timed out"}}'),
+        )
+        with patch.object(
+            router, "urlopen", side_effect=[failure, FakeResponse()]
+        ) as opened, patch.object(router.time, "sleep") as sleep:
+            response = router._request(
+                provider,
+                {"model": "external-model", "messages": []},
+                {},
+                stream=True,
+            )
+
+        self.assertIsInstance(response, FakeResponse)
+        self.assertEqual(opened.call_count, 2)
+        sleep.assert_called_once_with(1)
+
     def test_native_second_pre_header_timeout_returns_safe_gateway_timeout(self):
         provider = {
             "id": "native",

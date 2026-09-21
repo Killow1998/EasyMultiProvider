@@ -1039,6 +1039,9 @@ def _request(
         and not stream
         and classify_dialect(provider) == CODEX_NATIVE
     )
+    external_pre_output_retry_allowed = (
+        allow_retries and classify_dialect(provider) != CODEX_NATIVE
+    )
     for attempt in range(2):
         remaining = (
             UPSTREAM_STREAM_IDLE_TIMEOUT
@@ -1122,6 +1125,34 @@ def _request(
                 provider["_transport_metadata"] = transport_metadata
                 headers = None
                 continue
+            if external_pre_output_retry_allowed and attempt == 0:
+                failure = upstream_http_failure(exc, raw, payload.get("model"))
+                retryable_external_failure = (
+                    exc.code == 504
+                    or (
+                        exc.code == 429
+                        and failure.failure_reason == "rate_limited"
+                        and not str(payload.get("model") or "")
+                        .strip()
+                        .lower()
+                        .endswith(":free")
+                    )
+                )
+                delay = (
+                    failure.retry_after_seconds
+                    if failure.retry_after_seconds is not None
+                    else 1
+                )
+                # These pre-header failures emitted no model output and Codex
+                # would otherwise replay the same turn itself.  Keep that one
+                # bounded retry inside EMP so a gateway timeout or an
+                # unclassified short rate limit does not surface as a visible
+                # reconnect. Explicit quota/capacity failures are propagated;
+                # longer provider cooldowns remain owned by the client through
+                # the propagated Retry-After header.
+                if retryable_external_failure and 0 <= delay <= 5:
+                    time.sleep(delay)
+                    continue
             failure = upstream_http_failure(exc, raw, payload.get("model"))
             raise UpstreamHTTPError(
                 failure.public_message or "upstream request failed",

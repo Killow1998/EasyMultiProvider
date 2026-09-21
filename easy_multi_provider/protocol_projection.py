@@ -342,6 +342,26 @@ def _chat_content(content: Any) -> Any:
     return "".join(item["text"] for item in result if item["type"] == "text")
 
 
+def _agent_message_text(item: Mapping[str, Any]) -> str:
+    """Project one plaintext Codex inter-agent turn onto portable protocols."""
+    _required_string(item.get("author"), "agent message author")
+    _required_string(item.get("recipient"), "agent message recipient")
+    content = item.get("content")
+    if not isinstance(content, list) or not content:
+        raise RouterError("request projection failed: invalid agent message content", 422)
+    parts = []
+    for part in content:
+        if not isinstance(part, Mapping):
+            raise RouterError("request projection failed: invalid agent message content", 422)
+        if part.get("type") != "input_text":
+            raise RouterError("request projection failed: unsupported agent message content", 422)
+        text = part.get("text")
+        if not isinstance(text, str) or not text:
+            raise RouterError("request projection failed: invalid agent message content", 422)
+        parts.append(text)
+    return "\n".join(parts)
+
+
 def _message_item(text: str) -> Dict[str, Any]:
     return {
         "type": "message",
@@ -424,6 +444,11 @@ def _messages(body: Dict[str, Any]) -> list:
             if role not in {"user", "assistant", "system", "developer"}:
                 raise RouterError("request projection failed: unsupported message role", 422)
             messages.append({"role": role, "content": _chat_content(item.get("content", ""))})
+        elif item_type == "agent_message":
+            flush_calls()
+            # Codex treats agent_message as a turn boundary. Chat Completions
+            # has no equivalent item, so deliver its plaintext as user input.
+            messages.append({"role": "user", "content": _agent_message_text(item)})
         elif item_type in {"function_call", "custom_tool_call"}:
             arguments = (
                 custom_tool_arguments(item.get("input", ""))
@@ -707,6 +732,14 @@ def _anthropic_messages(body: Dict[str, Any]) -> list:
             if not content:
                 raise RouterError("request projection failed: empty Anthropic content", 422)
             messages.append({"role": role, "content": content})
+        elif item_type == "agent_message":
+            flush_pending()
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": _agent_message_text(item)}],
+                }
+            )
         elif item_type in {"function_call", "custom_tool_call"}:
             if pending_results:
                 messages.append({"role": "user", "content": list(pending_results)})

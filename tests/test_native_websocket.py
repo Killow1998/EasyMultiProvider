@@ -338,7 +338,7 @@ class NativeWebSocketTests(unittest.TestCase):
         self.assertEqual(raised.exception.status, 502)
         self.assertFalse(raised.exception.retryable)
 
-    def test_tls_handshake_failure_can_be_retried_by_the_client(self):
+    def test_tls_handshake_failure_is_safe_for_http_fallback(self):
         connection = _FakeConnection([{
             "type": "response.completed", "response": {"id": "resp_retried", "status": "completed"},
         }])
@@ -351,6 +351,7 @@ class NativeWebSocketTests(unittest.TestCase):
         self.assertEqual(raised.exception.error_class, "tls_failure")
         self.assertFalse(raised.exception.retryable)
         self.assertFalse(raised.exception.request_sent)
+        self.assertTrue(raised.exception.http_fallback_safe)
         self.assertEqual(connection.sent, [])
         self.assertEqual(list(bridge.events(target, request))[-1]["response"]["id"], "resp_retried")
         self.assertEqual(len(connection.sent), 1)
