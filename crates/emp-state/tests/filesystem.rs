@@ -135,9 +135,10 @@ fn process_environment_selects_key_and_path_once() {
 #[test]
 fn encrypted_bytes_text_and_json_never_write_plaintext() {
     let directory = tempdir().expect("tempdir");
-    let store = VaultStore::from_sources(Some(SYNTHETIC_KEY), &directory.path().join("unused.key"))
-        .expect("store");
-    let json_path = directory.path().join("nested/auth.json.enc");
+    let root = canonical_temp_path(&directory);
+    let store =
+        VaultStore::from_sources(Some(SYNTHETIC_KEY), &root.join("unused.key")).expect("store");
+    let json_path = root.join("nested/auth.json.enc");
     let value = json!({
         "tokens": {"access_token": "do-not-store-plain"},
         "label": "測試"
@@ -164,7 +165,7 @@ fn encrypted_bytes_text_and_json_never_write_plaintext() {
         replacement
     );
 
-    let text_path = directory.path().join("nested/text.enc");
+    let text_path = root.join("nested/text.enc");
     store
         .write_encrypted_text(&text_path, "secret text 測試")
         .expect("write text");
@@ -176,7 +177,7 @@ fn encrypted_bytes_text_and_json_never_write_plaintext() {
         "secret text 測試"
     );
 
-    let bytes_path = directory.path().join("nested/bytes.enc");
+    let bytes_path = root.join("nested/bytes.enc");
     store
         .write_encrypted_bytes(&bytes_path, b"\x00\xffbinary")
         .expect("write bytes");
@@ -189,15 +190,14 @@ fn encrypted_bytes_text_and_json_never_write_plaintext() {
     );
 
     let wrong_store =
-        VaultStore::from_sources(Some(OTHER_KEY), &directory.path().join("unused-2.key"))
-            .expect("wrong store");
+        VaultStore::from_sources(Some(OTHER_KEY), &root.join("unused-2.key")).expect("wrong store");
     assert_eq!(
         wrong_store
             .read_encrypted_bytes(&bytes_path)
             .expect_err("wrong key"),
         FilesystemError::CredentialDecryptFailed
     );
-    let plain_path = directory.path().join("plain");
+    let plain_path = root.join("plain");
     fs::write(&plain_path, b"plaintext").expect("write plaintext");
     assert_eq!(
         store
@@ -206,7 +206,7 @@ fn encrypted_bytes_text_and_json_never_write_plaintext() {
         FilesystemError::UnsupportedCredentialFormat
     );
 
-    let invalid_json_path = directory.path().join("nested/invalid-json.enc");
+    let invalid_json_path = root.join("nested/invalid-json.enc");
     store
         .write_encrypted_bytes(&invalid_json_path, b"{not-json")
         .expect("write invalid JSON payload");
@@ -216,7 +216,7 @@ fn encrypted_bytes_text_and_json_never_write_plaintext() {
             .expect_err("invalid JSON"),
         FilesystemError::InvalidJson
     );
-    let invalid_text_path = directory.path().join("nested/invalid-text.enc");
+    let invalid_text_path = root.join("nested/invalid-text.enc");
     store
         .write_encrypted_bytes(&invalid_text_path, b"\xff")
         .expect("write invalid text payload");
@@ -301,8 +301,9 @@ fn key_paths_reject_symlink_components_and_public_permissions() {
 #[test]
 fn transaction_rolls_back_existing_and_new_files_and_preserves_first_snapshot() {
     let directory = tempdir().expect("tempdir");
-    let existing = directory.path().join("existing.json");
-    let created = directory.path().join("created.json");
+    let root = canonical_temp_path(&directory);
+    let existing = root.join("existing.json");
+    let created = root.join("created.json");
     fs::write(&existing, b"original").expect("original file");
     set_mode(&existing, 0o640);
 
@@ -334,7 +335,7 @@ fn transaction_rolls_back_existing_and_new_files_and_preserves_first_snapshot() 
 #[test]
 fn transaction_commit_persists_and_drop_rolls_back() {
     let directory = tempdir().expect("tempdir");
-    let path = directory.path().join("value");
+    let path = canonical_temp_path(&directory).join("value");
     fs::write(&path, b"before").expect("before");
 
     {

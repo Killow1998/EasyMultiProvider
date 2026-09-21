@@ -134,8 +134,10 @@ pub(super) fn set_private_directory(path: &Path) -> Result<(), FilesystemError> 
         SetNamedSecurityInfoW(
             wide.as_mut_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            null_mut(),
+            OWNER_SECURITY_INFORMATION
+                | DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION,
+            user.sid(),
             null_mut(),
             acl.0.cast(),
             null(),
@@ -161,8 +163,10 @@ pub(super) fn set_private_file(file: &File) -> Result<(), FilesystemError> {
         SetNamedSecurityInfoW(
             wide.as_mut_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            null_mut(),
+            OWNER_SECURITY_INFORMATION
+                | DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION,
+            user.sid(),
             null_mut(),
             acl.0.cast(),
             null(),
