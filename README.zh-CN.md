@@ -8,8 +8,8 @@
 
 <p align="center"><a href="README.md">English</a> · <a href="#快速开始">快速开始</a> · <a href="https://github.com/Killow1998/EasyMultiProvider/releases/latest">下载</a></p>
 
-EMP 在本机运行。你可以在网页里导入另一个 ChatGPT 订阅账号，或添加 LiteLLM
-等 API Provider，选择模型后应用到 Codex，再从 `/model` 或 Codex App 菜单中切换。
+EMP 在本机运行。你可以在网页里导入另一个 ChatGPT 订阅账号，或添加 DeepSeek
+等官方 API Provider，选择模型后应用到 Codex，再从 `/model` 或 Codex App 菜单中切换。
 
 例如，同一个模型列表可以同时出现：
 
@@ -17,10 +17,10 @@ EMP 在本机运行。你可以在网页里导入另一个 ChatGPT 订阅账号�
 | --- | --- |
 | `gpt-5.6-luna` | 当前 Codex 登录账号 |
 | `team/gpt-5.6-luna` | 导入的 ChatGPT 订阅账号 |
-| `litellm/glm` | 从 LiteLLM Provider 导入的模型 |
+| `deepseek/deepseek-v4-pro` | 从 DeepSeek 官方 API 导入的模型 |
 
 带前缀的名称只是示例；账号、Provider 和模型由你选择。选中 `team/gpt-5.6-luna`
-时使用导入的账号，选中 `litellm/glm` 时使用对应 Provider 的 API Key。编码任务、
+时使用导入的账号，选中 `deepseek/deepseek-v4-pro` 时使用 DeepSeek API Key。编码任务、
 权限和工具仍由 Codex 管理。EMP 在本机统一管理模型列表、加密凭据和账号额度。
 
 当前源码版本为 `v0.11.4`。
