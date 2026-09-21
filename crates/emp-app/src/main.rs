@@ -5,7 +5,7 @@
 //! cannot be mistaken for a complete router port.
 
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -189,6 +189,7 @@ fn handle_connection(mut stream: TcpStream) {
         None => {
             let _ = stream.write_all(&bad_request_response());
             let _ = stream.flush();
+            let _ = stream.shutdown(Shutdown::Write);
             return;
         }
     };
@@ -199,6 +200,9 @@ fn handle_connection(mut stream: TcpStream) {
     };
     let _ = stream.write_all(&response);
     let _ = stream.flush();
+    // Finish the response with a TCP FIN before dropping the socket. macOS can
+    // otherwise surface a reset to a client that is reading through EOF.
+    let _ = stream.shutdown(Shutdown::Write);
 }
 
 /// A running listener with explicit, testable shutdown ownership.
