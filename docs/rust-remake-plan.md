@@ -18,8 +18,7 @@ Progress evidence on 2026-09-21:
   source selection, and catalog ETag helpers are also checked against a live
   Python oracle. Provider identifiers and pasted external API URLs now share
   the Python contract as well, including automatic origin/request-URL cleanup,
-  explicit provider paths, loopback HTTP, IPv6, and Unicode paths. Full entity
-  import merge behavior remains in stage 2. Rust also contends
+  explicit provider paths, loopback HTTP, IPv6, and Unicode paths. Rust also contends
   on the same POSIX `flock` and Windows one-byte range as Python before changing
   integration state. Full provider records now preserve Python defaults,
   protocol/auth constraints, protocol observations and explicit boolean
@@ -34,8 +33,11 @@ Progress evidence on 2026-09-21:
   those primitives in Python's validation order, including raw-key presence,
   the legacy output-limit alias and Python conversion failures. Pure top-level
   configuration composition now also preserves entity order, uniqueness,
-  prefix conflicts, provider references and tail-control normalization. Import
-  merge behavior, canonical private paths and Windows ACL/reparse-point hardening remain.
+  prefix conflicts, provider references and tail-control normalization. The
+  pathless Web-update merge preserves credentials, runtime/path selections,
+  discovery state, calibrations and capability provenance under frozen and live
+  Python oracles. Path-aware canonicalization, import merge behavior and Windows
+  ACL/reparse-point hardening remain.
   Account metadata normalization also matches Python's sorting, UTF-8 byte
   limits, truthiness, quota preservation and exact validation order.
 - Runtime compatibility run `35636981488` passed the complete Python suite,
@@ -53,6 +55,8 @@ Progress evidence on 2026-09-21:
   calibration normalization and expanded Python ISO timestamp compatibility.
 - Runtime compatibility run `35651621964` passed all seven jobs with complete
   model-record normalization enabled against the live Python oracle.
+- Runtime compatibility run `35653303723` passed all seven jobs with complete
+  top-level configuration normalization enabled against the live Python oracle.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

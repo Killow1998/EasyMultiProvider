@@ -1,0 +1,670 @@
+{
+  "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config.merge_web_update(path=None)",
+  "status": "implemented",
+  "implementation": "crates/emp-state/src/config.rs",
+  "test": "crates/emp-state/tests/web_update_merge_compat.rs",
+  "fixed_observed_at": "2026-09-21T20:00:00+00:00",
+  "limitations": [
+    "filesystem path canonicalization is a separate state transition"
+  ],
+  "valid": [
+    {
+      "name": "preserves-runtime-paths-secrets-and-account-credential",
+      "current": {
+        "native_catalog_path": "/managed/models.json",
+        "account_store_path": "/managed/accounts",
+        "secret_store_path": "/managed/secrets",
+        "codex_runtime_sources": [
+          "cursor"
+        ],
+        "accounts": [
+          {
+            "id": "egg",
+            "prefix": "egg",
+            "auth_file": "/managed/accounts/egg/auth.json.enc"
+          }
+        ],
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "secret-value"
+          }
+        ]
+      },
+      "incoming": {
+        "native_catalog_path": "/attacker/models.json",
+        "account_store_path": "/attacker/accounts",
+        "secret_store_path": "/attacker/secrets",
+        "codex_runtime_sources": [
+          "auto"
+        ],
+        "accounts": [
+          {
+            "id": "egg",
+            "prefix": "egg"
+          }
+        ],
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "••••••••"
+          }
+        ],
+        "models": []
+      },
+      "select": [
+        "/codex_runtime_sources",
+        "/native_catalog_path",
+        "/account_store_path",
+        "/secret_store_path",
+        "/accounts/0/auth_file",
+        "/providers/0/api_key"
+      ],
+      "expected": {
+        "/codex_runtime_sources": [
+          "cursor"
+        ],
+        "/native_catalog_path": "/managed/models.json",
+        "/account_store_path": "/managed/accounts",
+        "/secret_store_path": "/managed/secrets",
+        "/accounts/0/auth_file": "/managed/accounts/egg/auth.json.enc",
+        "/providers/0/api_key": "secret-value"
+      }
+    },
+    {
+      "name": "preserves-omitted-provider-secret-and-managed-file",
+      "current": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "",
+            "api_key_file": "/managed/secrets/deepseek.key.enc"
+          }
+        ]
+      },
+      "incoming": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions"
+          }
+        ],
+        "models": []
+      },
+      "select": [
+        "/providers/0/api_key",
+        "/providers/0/api_key_file"
+      ],
+      "expected": {
+        "/providers/0/api_key": "",
+        "/providers/0/api_key_file": "/managed/secrets/deepseek.key.enc"
+      }
+    },
+    {
+      "name": "provider-identity-change-clears-observation",
+      "current": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "auto",
+            "api_key": "secret-value",
+            "deployment_identity": "production",
+            "resolved_protocol": "responses",
+            "protocol_observation": {
+              "source": "observed",
+              "confidence": 1.0,
+              "observed_at": "2026-08-22T00:00:00+00:00",
+              "endpoint_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+              "deployment_identity": "production",
+              "upstream_model": "deepseek-chat"
+            }
+          }
+        ]
+      },
+      "incoming": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1/responses",
+            "protocol": "auto",
+            "api_key": "••••••••",
+            "deployment_identity": "staging"
+          }
+        ],
+        "models": []
+      },
+      "select": [
+        "/providers/0/base_url",
+        "/providers/0/deployment_identity",
+        "/providers/0/resolved_protocol",
+        "/providers/0/protocol_observation/source",
+        "/providers/0/api_key"
+      ],
+      "expected": {
+        "/providers/0/base_url": "https://api.deepseek.com/v1",
+        "/providers/0/deployment_identity": "staging",
+        "/providers/0/resolved_protocol": "",
+        "/providers/0/protocol_observation/source": "unknown",
+        "/providers/0/api_key": "secret-value"
+      }
+    },
+    {
+      "name": "partial-model-edit-preserves-discovery-state",
+      "current": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "secret-value"
+          }
+        ],
+        "models": [
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-chat",
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "context_window": 128000,
+            "display_name": "Before",
+            "output_limit": 4096,
+            "max_input_tokens": 120000,
+            "input_modalities": [
+              "text",
+              "image"
+            ],
+            "output_modalities": [
+              "text",
+              "audio"
+            ],
+            "supported_protocols": [
+              "responses",
+              "chat_completions"
+            ],
+            "reasoning_control": "reasoning.effort enum: low, high",
+            "deployment_identity": "production",
+            "resolved_protocol": "responses",
+            "protocol_observation": {
+              "source": "observed",
+              "confidence": 1.0,
+              "observed_at": "2026-08-22T00:00:00+00:00",
+              "endpoint_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+              "deployment_identity": "production",
+              "upstream_model": "deepseek-chat"
+            },
+            "context_calibrations": [
+              {
+                "endpoint_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                "upstream_model": "deepseek-chat",
+                "protocol": "responses",
+                "deployment_identity": "production",
+                "largest_success_estimate": 100000,
+                "smallest_failure_estimate": null,
+                "largest_success_source": "observed",
+                "smallest_failure_source": "unknown",
+                "largest_success_confidence": 1.0,
+                "smallest_failure_confidence": 0.0,
+                "largest_success_observed_at": "2026-08-22T00:00:00+00:00",
+                "smallest_failure_observed_at": null
+              }
+            ],
+            "capabilities": {
+              "structured_output": true,
+              "web_search": false
+            },
+            "capability_sources": {
+              "output_limit": {
+                "source": "advertised",
+                "confidence": 0.75,
+                "observed_at": "2026-08-22T00:00:00+00:00"
+              },
+              "structured_output": {
+                "source": "official",
+                "confidence": 0.95,
+                "observed_at": "2026-08-22T00:00:00+00:00"
+              }
+            }
+          }
+        ]
+      },
+      "incoming": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "••••••••"
+          }
+        ],
+        "models": [
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-chat",
+            "display_name": "After",
+            "context_window": 128000,
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "enabled": true
+          }
+        ]
+      },
+      "select": [
+        "/models/0/display_name",
+        "/models/0/output_limit",
+        "/models/0/max_input_tokens",
+        "/models/0/input_modalities",
+        "/models/0/output_modalities",
+        "/models/0/supported_protocols",
+        "/models/0/reasoning_control",
+        "/models/0/deployment_identity",
+        "/models/0/resolved_protocol",
+        "/models/0/protocol_observation/source",
+        "/models/0/context_calibrations/0/largest_success_estimate",
+        "/models/0/capabilities/structured_output",
+        "/models/0/capability_sources/output_limit/source",
+        "/models/0/capability_sources/structured_output/source"
+      ],
+      "expected": {
+        "/models/0/display_name": "After",
+        "/models/0/output_limit": 4096,
+        "/models/0/max_input_tokens": 120000,
+        "/models/0/input_modalities": [
+          "text",
+          "image"
+        ],
+        "/models/0/output_modalities": [
+          "text",
+          "audio"
+        ],
+        "/models/0/supported_protocols": [
+          "responses",
+          "chat_completions"
+        ],
+        "/models/0/reasoning_control": "reasoning.effort enum: low, high",
+        "/models/0/deployment_identity": "production",
+        "/models/0/resolved_protocol": "responses",
+        "/models/0/protocol_observation/source": "observed",
+        "/models/0/context_calibrations/0/largest_success_estimate": 100000,
+        "/models/0/capabilities/structured_output": true,
+        "/models/0/capability_sources/output_limit/source": "advertised",
+        "/models/0/capability_sources/structured_output/source": "official"
+      }
+    },
+    {
+      "name": "changed-model-fields-get-manual-provenance",
+      "current": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "secret-value"
+          }
+        ],
+        "models": [
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-chat",
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "context_window": 128000,
+            "max_input_tokens": 100000,
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ],
+            "supported_protocols": [
+              "chat_completions"
+            ],
+            "reasoning_control": "old",
+            "capabilities": {
+              "structured_output": true,
+              "web_search": false
+            },
+            "capability_sources": {
+              "structured_output": {
+                "source": "official",
+                "confidence": 0.95,
+                "observed_at": "2026-08-22T00:00:00+00:00"
+              },
+              "web_search": {
+                "source": "advertised",
+                "confidence": 0.75,
+                "observed_at": "2026-08-22T00:00:00+00:00"
+              }
+            }
+          }
+        ]
+      },
+      "incoming": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "••••••••"
+          }
+        ],
+        "models": [
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-chat",
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "context_window": 128000,
+            "max_input_tokens": 90000,
+            "input_modalities": [
+              "text",
+              "image"
+            ],
+            "output_modalities": [
+              "text",
+              "audio"
+            ],
+            "supported_protocols": [
+              "responses"
+            ],
+            "reasoning_control": "new",
+            "capabilities": {
+              "structured_output": false
+            }
+          }
+        ]
+      },
+      "select": [
+        "/models/0/capability_sources/max_input_tokens",
+        "/models/0/capability_sources/input_modalities",
+        "/models/0/capability_sources/output_modalities",
+        "/models/0/capability_sources/supported_protocols",
+        "/models/0/capability_sources/reasoning_control",
+        "/models/0/capability_sources/structured_output",
+        "/models/0/capability_sources/web_search/source",
+        "/models/0/capabilities/structured_output",
+        "/models/0/capabilities/web_search"
+      ],
+      "expected": {
+        "/models/0/capability_sources/max_input_tokens": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": "2026-09-21T20:00:00+00:00"
+        },
+        "/models/0/capability_sources/input_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": "2026-09-21T20:00:00+00:00"
+        },
+        "/models/0/capability_sources/output_modalities": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": "2026-09-21T20:00:00+00:00"
+        },
+        "/models/0/capability_sources/supported_protocols": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": "2026-09-21T20:00:00+00:00"
+        },
+        "/models/0/capability_sources/reasoning_control": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": "2026-09-21T20:00:00+00:00"
+        },
+        "/models/0/capability_sources/structured_output": {
+          "source": "manual",
+          "confidence": 1.0,
+          "observed_at": "2026-09-21T20:00:00+00:00"
+        },
+        "/models/0/capability_sources/web_search/source": "advertised",
+        "/models/0/capabilities/structured_output": false,
+        "/models/0/capabilities/web_search": false
+      }
+    },
+    {
+      "name": "vision-claim-can-return-to-unknown",
+      "current": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "secret-value"
+          }
+        ],
+        "models": [
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-chat",
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "context_window": 128000,
+            "input_modalities": [
+              "text",
+              "image"
+            ],
+            "capability_sources": {
+              "input_modalities": {
+                "source": "advertised",
+                "confidence": 0.75,
+                "observed_at": "2026-08-22T00:00:00+00:00"
+              }
+            }
+          }
+        ]
+      },
+      "incoming": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "••••••••"
+          }
+        ],
+        "models": [
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-chat",
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "context_window": 128000,
+            "input_modalities": [
+              "text"
+            ],
+            "capability_sources": {
+              "input_modalities": {
+                "source": "unknown"
+              }
+            }
+          }
+        ]
+      },
+      "select": [
+        "/models/0/input_modalities",
+        "/models/0/capability_sources/input_modalities"
+      ],
+      "expected": {
+        "/models/0/input_modalities": [
+          "text"
+        ],
+        "/models/0/capability_sources/input_modalities": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null
+        }
+      }
+    },
+    {
+      "name": "model-identity-change-clears-observation",
+      "current": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "secret-value"
+          }
+        ],
+        "models": [
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-chat",
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "context_window": 128000,
+            "deployment_identity": "production",
+            "resolved_protocol": "responses",
+            "protocol_observation": {
+              "source": "observed",
+              "confidence": 1.0,
+              "observed_at": "2026-08-22T00:00:00+00:00",
+              "endpoint_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+              "deployment_identity": "production",
+              "upstream_model": "deepseek-chat"
+            }
+          }
+        ]
+      },
+      "incoming": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "••••••••"
+          }
+        ],
+        "models": [
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-reasoner",
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "context_window": 128000,
+            "deployment_identity": "production"
+          }
+        ]
+      },
+      "select": [
+        "/models/0/upstream_id",
+        "/models/0/resolved_protocol",
+        "/models/0/protocol_observation/source"
+      ],
+      "expected": {
+        "/models/0/upstream_id": "deepseek-reasoner",
+        "/models/0/resolved_protocol": "",
+        "/models/0/protocol_observation/source": "unknown"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "request-body-array",
+      "current": {},
+      "incoming": [],
+      "error_type": "ConfigError",
+      "error": "request body must be an object"
+    },
+    {
+      "name": "provider-managed-file-injection",
+      "current": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "",
+            "api_key_file": "/managed/secrets/deepseek.key.enc"
+          }
+        ]
+      },
+      "incoming": {
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": "••••••••",
+            "api_key_file": "/tmp/stolen.key"
+          }
+        ],
+        "models": []
+      },
+      "error_type": "ConfigError",
+      "error": "provider.api_key_file is managed by EMP"
+    },
+    {
+      "name": "account-managed-file-injection",
+      "current": {
+        "accounts": [
+          {
+            "id": "egg",
+            "prefix": "egg",
+            "auth_file": "/managed/accounts/egg/auth.json.enc"
+          }
+        ]
+      },
+      "incoming": {
+        "accounts": [
+          {
+            "id": "egg",
+            "prefix": "egg",
+            "auth_file": "/tmp/stolen.enc"
+          }
+        ],
+        "providers": [],
+        "models": []
+      },
+      "error_type": "ConfigError",
+      "error": "account.auth_file is managed by EMP"
+    }
+  ]
+}

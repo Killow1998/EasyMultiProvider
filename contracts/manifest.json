@@ -166,6 +166,21 @@
       "fixture": "state/python-config-normalization.json"
     },
     {
+      "id": "state.web-update-merge.python-rust",
+      "level": "state",
+      "source": "easy_multi_provider/config.py:merge_web_update(path=None)",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": [
+        "runtime and managed store selections are preserved from current state",
+        "omitted or masked credentials retain their managed values",
+        "model discovery metadata and provenance survive partial Web edits",
+        "changed capability assertions receive deterministic manual provenance"
+      ],
+      "side_effects": ["none; this fixture covers the pathless pure merge transition"],
+      "fixture": "state/python-web-update-merge.json"
+    },
+    {
       "id": "state.capability-model-values.python-rust",
       "level": "state",
       "source": "easy_multi_provider/capabilities.py pure model value helpers",
