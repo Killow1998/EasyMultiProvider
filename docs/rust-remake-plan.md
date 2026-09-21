@@ -23,15 +23,19 @@ Progress evidence on 2026-09-21:
   on the same POSIX `flock` and Windows one-byte range as Python before changing
   integration state. Full provider records now preserve Python defaults,
   protocol/auth constraints, protocol observations and explicit boolean
-  capabilities under a live differential oracle. Model normalization, import
-  merge behavior and Windows ACL/reparse-point hardening remain. Account
-  metadata normalization now also matches Python's sorting, UTF-8 byte limits,
-  truthiness, quota preservation and exact validation order.
+  capabilities under a live differential oracle. Primitive model values now
+  preserve Python's modality bounds, Unicode normalization, Codex projection,
+  concrete protocol filtering and reasoning-effort ordering. Full model
+  records, import merge behavior and Windows ACL/reparse-point hardening remain.
+  Account metadata normalization also matches Python's sorting, UTF-8 byte
+  limits, truthiness, quota preservation and exact validation order.
 - Runtime compatibility run `35636981488` passed the complete Python suite,
   Rust workspace, live state/configuration oracles, and pinned Codex protocol
   lanes on Linux, macOS, and Windows after the accepted-socket BSD fix.
 - Runtime compatibility run `35641778568` passed all seven Linux/macOS/Windows
   jobs with the cross-language integration lock and complete provider oracle.
+- Runtime compatibility run `35643375207` passed all seven jobs after account
+  metadata normalization was added to the live Python/Rust oracle.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

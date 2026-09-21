@@ -109,6 +109,20 @@
       ],
       "side_effects": ["none; account metadata normalization is pure"],
       "fixture": "state/python-account-normalization.json"
+    },
+    {
+      "id": "state.capability-model-values.python-rust",
+      "level": "state",
+      "source": "easy_multi_provider/capabilities.py pure model value helpers",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": [
+        "modalities are Unicode-lowercased, deduplicated, and preserve input order",
+        "supported protocols exclude auto and ignore unknown or non-string entries",
+        "reasoning values follow the official effort order with stable unknown ordering"
+      ],
+      "side_effects": ["none; capability model value normalization is pure"],
+      "fixture": "state/python-capability-model-values.json"
     }
   ]
 }

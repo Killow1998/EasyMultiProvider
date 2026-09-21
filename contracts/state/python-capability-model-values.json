@@ -1,0 +1,333 @@
+{
+  "source": "EasyMultiProvider 0.11.6 easy_multi_provider/capabilities.py",
+  "status": "implemented",
+  "implementation": "crates/emp-state/src/model_values.rs",
+  "test": "crates/emp-state/tests/model_values_compat.rs",
+  "modalities": {
+    "cases": [
+      {
+        "input": null,
+        "expected": [
+          "text"
+        ],
+        "known": false,
+        "metadata_source": "unknown",
+        "codex": [
+          "text"
+        ]
+      },
+      {
+        "input": [],
+        "expected": [
+          "text"
+        ],
+        "known": false,
+        "metadata_source": "unknown",
+        "codex": [
+          "text"
+        ]
+      },
+      {
+        "input": [
+          "  "
+        ],
+        "expected": [
+          "text"
+        ],
+        "known": false,
+        "metadata_source": "unknown",
+        "codex": [
+          "text"
+        ]
+      },
+      {
+        "input": [
+          "\u001c TEXT \u001f"
+        ],
+        "expected": [
+          "text"
+        ],
+        "known": true,
+        "metadata_source": "advertised",
+        "codex": [
+          "text"
+        ]
+      },
+      {
+        "input": [
+          " TEXT ",
+          "text",
+          "Image",
+          "audio",
+          "audio",
+          "weB_search"
+        ],
+        "expected": [
+          "text",
+          "image",
+          "audio",
+          "web_search"
+        ],
+        "known": true,
+        "metadata_source": "advertised",
+        "codex": [
+          "text",
+          "image"
+        ]
+      },
+      {
+        "input": [
+          "text",
+          1
+        ],
+        "expected": [
+          "text"
+        ],
+        "known": false,
+        "metadata_source": "unknown",
+        "codex": [
+          "text"
+        ]
+      },
+      {
+        "input": [
+          "ÿ"
+        ],
+        "expected": [
+          "text"
+        ],
+        "known": false,
+        "metadata_source": "unknown",
+        "codex": [
+          "text"
+        ]
+      },
+      {
+        "input": [
+          "İ"
+        ],
+        "expected": [
+          "text"
+        ],
+        "known": false,
+        "metadata_source": "unknown",
+        "codex": [
+          "text"
+        ]
+      },
+      {
+        "input": [
+          "K"
+        ],
+        "expected": [
+          "k"
+        ],
+        "known": true,
+        "metadata_source": "advertised",
+        "codex": [
+          "text"
+        ]
+      },
+      {
+        "input": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "expected": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "known": true,
+        "metadata_source": "advertised",
+        "codex": [
+          "text"
+        ]
+      },
+      {
+        "input": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "expected": [
+          "text"
+        ],
+        "known": false,
+        "metadata_source": "unknown",
+        "codex": [
+          "text"
+        ]
+      },
+      {
+        "input": [
+          "m0",
+          "m1",
+          "m2",
+          "m3",
+          "m4",
+          "m5",
+          "m6",
+          "m7",
+          "m8",
+          "m9",
+          "m10",
+          "m11",
+          "m12",
+          "m13",
+          "m14",
+          "m15"
+        ],
+        "expected": [
+          "m0",
+          "m1",
+          "m2",
+          "m3",
+          "m4",
+          "m5",
+          "m6",
+          "m7",
+          "m8",
+          "m9",
+          "m10",
+          "m11",
+          "m12",
+          "m13",
+          "m14",
+          "m15"
+        ],
+        "known": true,
+        "metadata_source": "advertised",
+        "codex": [
+          "text"
+        ]
+      },
+      {
+        "input": [
+          "m0",
+          "m1",
+          "m2",
+          "m3",
+          "m4",
+          "m5",
+          "m6",
+          "m7",
+          "m8",
+          "m9",
+          "m10",
+          "m11",
+          "m12",
+          "m13",
+          "m14",
+          "m15",
+          "m16"
+        ],
+        "expected": [
+          "text"
+        ],
+        "known": false,
+        "metadata_source": "unknown",
+        "codex": [
+          "text"
+        ]
+      }
+    ]
+  },
+  "protocols": [
+    {
+      "input": null,
+      "expected": [],
+      "known": false
+    },
+    {
+      "input": [],
+      "expected": [],
+      "known": false
+    },
+    {
+      "input": [
+        "AUTO"
+      ],
+      "expected": [],
+      "known": false
+    },
+    {
+      "input": [
+        " auto ",
+        "Responses",
+        1
+      ],
+      "expected": [
+        "responses"
+      ],
+      "known": true
+    },
+    {
+      "input": [
+        "chat_completions",
+        "ANTHROPIC_MESSAGES",
+        "chat_completions",
+        null
+      ],
+      "expected": [
+        "chat_completions",
+        "anthropic_messages"
+      ],
+      "known": true
+    }
+  ],
+  "reasoning_levels": [
+    {
+      "input": null,
+      "expected": []
+    },
+    {
+      "input": [],
+      "expected": []
+    },
+    {
+      "input": [
+        " Max ",
+        "high",
+        "foo",
+        "HIGH",
+        "none",
+        1,
+        "   ",
+        "xhigh",
+        "FOO",
+        "foo"
+      ],
+      "expected": [
+        "none",
+        "high",
+        "xhigh",
+        "max",
+        "foo",
+        "FOO"
+      ]
+    },
+    {
+      "input": [
+        "ULTRA",
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ULTRA"
+      ],
+      "expected": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    }
+  ],
+  "bounds": {
+    "max_modalities": 16,
+    "max_modality_id_bytes": 64
+  }
+}
