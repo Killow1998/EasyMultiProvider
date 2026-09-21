@@ -136,6 +136,13 @@ jobs:
         run: >-
           uv run --frozen cargo test --locked -p emp-state --test config_save
           config_save_matches_live_python_oracle_when_configured
+      - name: Python and Rust browser-safe configuration
+        if: matrix.os == 'ubuntu-22.04'
+        env:
+          EMP_PYTHON_INTEROP: python
+        run: >-
+          uv run --frozen cargo test --locked -p emp-state --test public_config_compat
+          public_configuration_matches_live_python_oracle_when_configured
       - name: Python and Rust migration importing
         if: matrix.os == 'ubuntu-22.04'
         env:

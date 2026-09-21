@@ -15,7 +15,7 @@ use crate::model_values::{
 };
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fmt;
 use std::fs;
@@ -80,6 +80,81 @@ impl From<FilesystemError> for ConfigError {
 }
 
 pub type ConfigResult<T> = Result<T, ConfigError>;
+
+/// Project normalized configuration into the credential-free browser shape.
+///
+/// Duplicate-account labels and secret-file status are supplied by the
+/// composition layer so this transformation never reads or decrypts account
+/// credentials and remains deterministic under differential tests.
+pub fn public_configuration_with_file_status(
+    config: &Value,
+    duplicate_accounts: &BTreeMap<String, String>,
+    secret_file_is_regular: impl Fn(&Path) -> bool,
+) -> ConfigResult<Value> {
+    let Value::Object(_) = config else {
+        return Err(ConfigError::new("configuration must be a JSON object"));
+    };
+    let mut result = config.clone();
+    let result_object = result
+        .as_object_mut()
+        .expect("configuration object checked above");
+
+    let accounts = result_object
+        .get("accounts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut public_accounts = Vec::with_capacity(accounts.len());
+    for raw in accounts {
+        let account = normalize_account(&raw)
+            .map_err(|error| ConfigError::python("AccountError", error.to_string()))?;
+        let account = account
+            .as_object()
+            .expect("normalized account is always an object");
+        let id = account
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("normalized account ID");
+        let duplicate_of = duplicate_accounts.get(id).cloned().unwrap_or_default();
+        public_accounts.push(serde_json::json!({
+            "id": account["id"].clone(),
+            "name": account["name"].clone(),
+            "prefix": account["prefix"].clone(),
+            "enabled": account["enabled"].clone(),
+            "hidden_models": account["hidden_models"].clone(),
+            "model_context_windows": account["model_context_windows"].clone(),
+            "credential_set": account["auth_file"].as_str().is_some_and(|path| !path.is_empty()),
+            "credential_status": account["credential_status"].clone(),
+            "quota": account["quota"].clone(),
+            "duplicate": !duplicate_of.is_empty(),
+            "duplicate_of": duplicate_of,
+        }));
+    }
+    result_object.insert("accounts".to_owned(), Value::Array(public_accounts));
+
+    let providers = result_object
+        .get_mut("providers")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| ConfigError::new("configuration.providers must be a list"))?;
+    for provider in providers {
+        let provider = provider
+            .as_object_mut()
+            .ok_or_else(|| ConfigError::new("each provider must be an object"))?;
+        let key = provider.remove("api_key").unwrap_or(Value::Null);
+        let secret_file = provider.remove("api_key_file").unwrap_or(Value::Null);
+        let key_set = json_truthy(&key);
+        let secret_set = secret_file
+            .as_str()
+            .filter(|path| !path.is_empty())
+            .is_some_and(|path| secret_file_is_regular(Path::new(path)));
+        provider.insert("api_key_set".to_owned(), Value::Bool(key_set || secret_set));
+        provider.insert(
+            "api_key".to_owned(),
+            Value::String(if key_set { MASKED_API_KEY } else { "" }.to_owned()),
+        );
+    }
+    Ok(result)
+}
 
 fn presentation_error(message: &'static str) -> ConfigError {
     ConfigError::new(message)
