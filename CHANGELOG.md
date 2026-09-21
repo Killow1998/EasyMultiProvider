@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.11.6 (2026-09-21)
+
+- Normalize pasted external-provider URLs from a bare origin, `/v1`, or a
+  concrete Responses/Chat Completions endpoint into the route EMP needs.
+- Keep the main management and model actions visible while making provider,
+  model, and subscription cards more compact and consistently aligned.
+- Show subscription identity and plan as one segmented badge, place 5-hour and
+  7-day quotas side by side, and mark an unreported limit with repeated slashes
+  that remain visible outside the quota bar.
+- Record subscription plans in quota history, show credits as compact badges,
+  and expose reported reset times as both a local UTC timestamp and a remaining
+  duration.
+- Consume an available quota-reset credit through the official Codex app-server
+  method with explicit confirmation, an idempotency key, and an immediate quota
+  refresh.
+
 ## 0.11.5 (2026-09-21)
 
 - Preserve reasoning as separate Codex stream items for Chat Completions models

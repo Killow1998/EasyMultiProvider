@@ -136,7 +136,11 @@ button[data-icon]{display:inline-flex}
 .credit-badge strong,.credit-monthly strong{font-size:12px;color:var(--text);font-variant-numeric:tabular-nums}
 .quota-credit .reset-credit-button{height:28px;min-height:28px;min-width:0;padding:0 8px;font-size:11px}
 .credit-warning{align-items:center;min-height:28px;padding:4px 8px;border:1px solid var(--danger);border-radius:8px;background:var(--danger-soft);color:var(--danger-text)}
-.subscription-plan{--plan-color:#94a3b8;display:inline-flex;align-items:center;min-height:22px;padding:2px 8px;border:1px solid var(--plan-color);border-radius:999px;background:color-mix(in srgb,var(--plan-color) 18%,var(--panel));color:var(--text);font-size:11px;font-weight:650;white-space:nowrap}
+.account-identity{display:inline-flex;align-items:stretch;min-width:0;max-width:100%;font-size:11px;font-weight:650;white-space:nowrap}
+.account-identity-id,.subscription-plan{display:inline-flex;align-items:center;min-height:22px;padding:2px 8px;border:1px solid var(--border-strong)}
+.account-identity-id{max-width:180px;overflow:hidden;border-radius:999px;text-overflow:ellipsis;background:var(--accent-soft);color:var(--text)}
+.account-identity.has-plan .account-identity-id{border-radius:999px 0 0 999px}
+.subscription-plan{--plan-color:#94a3b8;margin-left:-1px;border-color:var(--plan-color);border-radius:0 999px 999px 0;background:color-mix(in srgb,var(--plan-color) 18%,var(--panel));color:var(--text)}
 .plan-free{--plan-color:#94a3b8}.plan-go{--plan-color:#2bb5a6}.plan-plus{--plan-color:#4c8bea}.plan-prolite{--plan-color:#d9c98f}.plan-pro{--plan-color:#f2b705}.plan-business{--plan-color:#9b7ad8}.plan-unknown{--plan-color:#94a3b8}
 .account-card{grid-template-columns:minmax(180px,1fr) auto;grid-template-rows:auto auto;align-items:center;gap:7px 12px;padding:10px 12px}
 .account-card .entity-card-main{grid-column:1;grid-row:1;min-width:0}
@@ -147,7 +151,9 @@ button[data-icon]{display:inline-flex}
 .account-card .entity-card-status{margin-top:4px}
 .account-card .quota-stack{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;max-width:none;min-width:0}
 .quota-meter.is-unreported .quota-value{color:var(--muted)}
-.quota-meter.is-unreported .quota-battery{background:linear-gradient(to bottom right,transparent 48.8%,var(--muted) 49%,var(--muted) 51%,transparent 51.2%)}
+.quota-meter.is-unreported .quota-battery{background:var(--input)}
+.quota-meter.is-unreported .quota-battery::before{content:"";position:absolute;z-index:1;inset:-5px 3px;pointer-events:none;background:repeating-linear-gradient(45deg,transparent 0 25px,var(--success) 25px 27px,transparent 27px 50px)}
+.quota-meter.is-unreported .quota-battery::after{z-index:2}
 .quota-meter.is-unreported .quota-battery-fill{display:none}
 .reset-credit-list{display:grid;gap:8px}
 .reset-credit-card{display:grid;gap:7px;padding:11px 12px;border:1px solid var(--border);border-radius:9px;background:var(--panel-soft)}
@@ -990,7 +996,12 @@ function subscriptionPlanLabel(value) {
   return ({free:'Free',go:'Go',plus:'Plus',prolite:'Pro Lite',pro:'Pro',business:'Business'})[key] || String(value || '').replace(/[_-]+/g,' ').replace(/\b\w/g, letter => letter.toUpperCase());
 }
 function subscriptionPlanColor(value) { return ({free:'#94a3b8',go:'#2bb5a6',plus:'#4c8bea',prolite:'#d9c98f',pro:'#f2b705',business:'#9b7ad8'})[subscriptionPlanKey(value)] || '#94a3b8'; }
-function subscriptionPlanHtml(value) { const key = subscriptionPlanKey(value); return key ? `<span class="subscription-plan plan-${key}">${esc(subscriptionPlanLabel(value))}</span>` : ''; }
+function accountIdentityHtml(account, hover = '') {
+  const key = subscriptionPlanKey(account.quota && account.quota.plan_type);
+  const label = account.native ? 'Native' : String(account.id || '');
+  const plan = key ? `<span class="subscription-plan plan-${key}">${esc(subscriptionPlanLabel(account.quota.plan_type))}</span>` : '';
+  return `<span class="account-identity${key ? ' has-plan' : ''}"><span class="account-identity-id"${hover}>${esc(label)}</span>${plan}</span>`;
+}
 
 function renderAccounts() {
   const accounts = [...(state.native_account ? [state.native_account] : []), ...(state.accounts || [])];
@@ -1008,14 +1019,11 @@ function renderAccounts() {
     const hoverText = [accountLabel, nativeDetail].filter(Boolean).join(' · ');
     const hover = hoverText ? ` title="${esc(hoverText)}"` : '';
     const titleHasId = !a.native && titleText === String(a.id);
-    const title = `<strong${a.native || titleHasId ? hover : ''}>${esc(titleText)}</strong>`;
-    const subtitle = a.native || titleHasId ? '' : `<div class="entity-card-subtitle"><code${hover}>${esc(a.id)}</code></div>`;
-    const prefix = String(a.prefix || a.id || '');
-    const pill = a.native ? `<span class="pill" title="${esc(nativeDetail)}">Native</span>` : (prefix && prefix !== String(a.id) ? `<span class="pill">${esc(prefix)}</span>` : '');
-    const plan = subscriptionPlanHtml(a.quota && a.quota.plan_type);
+    const title = titleHasId ? '' : `<strong${a.native ? hover : ''}>${esc(titleText)}</strong>`;
+    const identity = accountIdentityHtml(a, hover);
     const statusHtml = status || duplicateText ? `<div class="entity-card-status">${status}${status && duplicateText ? '<br>' : ''}${duplicateText ? `<span class="muted">${duplicateText}</span>` : ''}</div>` : '';
     return `<article class="entity-card account-card${duplicateCurrent ? ' account-duplicate' : ''}">
-      <div class="entity-card-main"><div class="entity-card-title">${title}${pill}${plan}</div>${subtitle}${statusHtml}</div>
+      <div class="entity-card-main"><div class="entity-card-title">${title}${identity}</div>${statusHtml}</div>
       <div class="entity-card-quota">${quotaMetersHtml(a, busy, animateQuota)}${creditHtml(a)}${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</div>
       <div class="entity-card-actions">${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" onclick="openQuotaHistory('${esc(a.id)}')">${tr('趋势','Trend')}</button>${remove}</div>
     </article>`;

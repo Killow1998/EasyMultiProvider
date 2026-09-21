@@ -184,6 +184,8 @@ assert.match(html, /\.model-card \.entity-card-meta\{grid-column:1\/-1;grid-row:
 assert.match(html, /\.credit-badge,.credit-monthly\{[^}]*border:1px solid var\(--border\)/, "credit values must use compact visual badges");
 assert.match(html, /\.account-card \.entity-card-quota\{[^}]*grid-column:1\/-1;grid-row:2/, "desktop quota must use a compact full-width row");
 assert.match(html, /\.account-card \.entity-card-actions\{grid-column:2;grid-row:1;[^}]*border:0/, "desktop account actions must stay at the upper right");
+assert.match(html, /\.account-identity\.has-plan \.account-identity-id\{border-radius:999px 0 0 999px\}/, "account ID and plan must form one segmented badge");
+assert.match(html, /\.subscription-plan\{[^}]*margin-left:-1px;[^}]*border-radius:0 999px 999px 0/, "the plan segment must join the account ID without a gap");
 assert.match(html, /\.plan-prolite\{--plan-color:#d9c98f\}\.plan-pro\{--plan-color:#f2b705\}/, "Pro Lite and Pro must have distinct gold plan colors");
 assert.match(html, /\.provider-card\{grid-template-columns:minmax\(220px,1fr\) auto;/, "provider cards must match the compact model-card layout");
 assert.match(html, /\.provider-card \.entity-card-actions\{grid-column:2;grid-row:1;flex-wrap:nowrap;/, "provider actions must stay visible on the title row");
@@ -413,7 +415,7 @@ function duplicateAccountBehavior() {
   const nativeCard = cards.find(card => card.includes("refreshAccount('@native')"));
   assert.doesNotMatch(nativeCard, /removeAccount\('@native'\)/);
   assert.match(nativeCard, /title="n\*\*\*@example\.com · 使用 \.codex 当前登录"/);
-  assert.match(nativeCard, /class="subscription-plan plan-pro">Pro</);
+  assert.match(nativeCard, /class="account-identity has-plan"><span class="account-identity-id"[^>]*>Native<\/span><span class="subscription-plan plan-pro">Pro<\/span><\/span>/);
   assert.doesNotMatch(nativeCard, /<div class="entity-card-status">使用 \.codex 当前登录/);
   const duplicateCard = cards.find(card => card.includes("refreshAccount('same-login-account')"));
   assert(duplicateCard, "duplicate account card must render");
@@ -422,7 +424,8 @@ function duplicateAccountBehavior() {
   assert.doesNotMatch(duplicateCard, /<details class="action-menu">/);
   assert.match(duplicateCard, /openQuotaHistory\('same-login-account'\)/);
   const usableCard = cards.find(card => card.includes("refreshAccount('usable-account')"));
-  assert.match(usableCard, /<code title="u\*\*\*@example\.com">usable-account<\/code>/);
+  assert.match(usableCard, /class="account-identity has-plan"><span class="account-identity-id" title="u\*\*\*@example\.com">usable-account<\/span><span class="subscription-plan plan-prolite">Pro Lite<\/span><\/span>/);
+  assert.doesNotMatch(usableCard, /entity-card-subtitle/, "a differing account ID must not add a second title row");
   assert.doesNotMatch(usableCard, /<span class="pill">usable-account<\/span>/, "an account ID must not be repeated as a badge");
   assert.doesNotMatch(usableCard, />u\*\*\*@example\.com</, "account labels must stay in the ID tooltip");
   assert.doesNotMatch(usableCard, /凭据已保存/, "successful credential state is redundant");
@@ -763,7 +766,7 @@ function quotaMeterBehavior() {
   assert.match(rendered, /is-low/);
   assert.match(rendered, /class="quota-meter is-unreported" title="7d 未回传限制"/);
   assert.match(rendered, /role="img" aria-label="7d 未回传限制"/);
-  assert.match(html, /\.quota-meter\.is-unreported \.quota-battery\{background:linear-gradient\(to bottom right/);
+  assert.match(html, /\.quota-meter\.is-unreported \.quota-battery::before\{[^}]*inset:-5px 3px;[^}]*repeating-linear-gradient\(45deg/, "an unlimited window must use repeated slashes that extend beyond the battery");
 
   run("refreshingAccounts.add('meter'); renderAccounts()");
   assert.match(getElement("accounts").innerHTML, /is-refreshing/);
@@ -960,7 +963,7 @@ async function accountEmojiBehavior() {
   assert.strictEqual(run("__savedEmojiCandidate.accounts[0].prefix"), "ship");
   assert.strictEqual(run("__savedEmojiCandidate.catalog_presentations['ship/model-a'].catalog_alias"), "Keep me");
   run("state = __savedEmojiCandidate; renderAccounts()");
-  assert.match(getElement("accounts").innerHTML, /<strong>🚢<\/strong>[\s\S]*<code>ship<\/code>/);
+  assert.match(getElement("accounts").innerHTML, /<strong>🚢<\/strong><span class="account-identity"><span class="account-identity-id">ship<\/span><\/span>/);
   assert.doesNotMatch(getElement("accounts").innerHTML, /<span class="pill">ship<\/span>/);
 }
 
