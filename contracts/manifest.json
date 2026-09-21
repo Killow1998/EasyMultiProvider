@@ -66,6 +66,16 @@
       "normalization": ["temporary filenames and generated Fernet keys may differ"],
       "side_effects": ["private key, encrypted credential, and remembered transaction files only"],
       "fixture": "state/vault-filesystem.json"
+    },
+    {
+      "id": "state.config.helpers-etag",
+      "level": "state",
+      "source": "easy_multi_provider/config.py and easy_multi_provider/catalog.py",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": ["catalog object keys use Python sort_keys ordering"],
+      "side_effects": ["none; helper normalization and hashing are pure"],
+      "fixture": "state/python-config-etag-normalization.json"
     }
   ]
 }

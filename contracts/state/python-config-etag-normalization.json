@@ -1,0 +1,87 @@
+{
+  "source": "Python 3.11 standard library and EasyMultiProvider 0.11.6",
+  "status": "implemented",
+  "implementation": "crates/emp-state/src/config.rs",
+  "test": "crates/emp-state/tests/config_compat.rs",
+  "presentations": {
+    "input": {
+      " route/x:y.-_ ": {
+        "catalog_alias": " 名稱 ",
+        "show_context": false,
+        "reasoning_summary": " HIDE ",
+        "unknown": "discard"
+      },
+      "plain": {
+        "unknown": true
+      }
+    },
+    "expected": {
+      "route/x:y.-_": {
+        "catalog_alias": " 名稱 ",
+        "show_context": false,
+        "reasoning_summary": "hide"
+      },
+      "plain": {
+        "catalog_alias": "",
+        "show_context": true,
+        "reasoning_summary": "auto"
+      }
+    }
+  },
+  "subscription_search": {
+    "input": {
+      "enabled": true,
+      "account_id": "legacy",
+      "unknown": 12
+    },
+    "expected": {
+      "enabled": true,
+      "account_id": ""
+    }
+  },
+  "runtime_sources": {
+    "input": [
+      " cursor ",
+      "cursor",
+      "codex_app",
+      "path_cli"
+    ],
+    "expected": [
+      "cursor",
+      "codex_app",
+      "path_cli"
+    ]
+  },
+  "canonical_etag": {
+    "input": {
+      "z": "中文",
+      "a": [
+        true,
+        null,
+        1.0,
+        0.75,
+        1e-10,
+        1e-9,
+        1e-8,
+        1e-7,
+        1e-6,
+        1e-5,
+        0.0001,
+        1000000000000000.0,
+        1e16,
+        1e20,
+        0.00001234567890123,
+        2.2250738585072014e-308,
+        1.7976931348623157e308,
+        5e-324,
+        -0.0
+      ],
+      "c": {
+        "é": "emoji 😀",
+        "control": "line\nfeed"
+      }
+    },
+    "canonical_json": "{\"a\":[true,null,1.0,0.75,1e-10,1e-09,1e-08,1e-07,1e-06,1e-05,0.0001,1000000000000000.0,1e+16,1e+20,1.234567890123e-05,2.2250738585072014e-308,1.7976931348623157e+308,5e-324,-0.0],\"c\":{\"control\":\"line\\nfeed\",\"é\":\"emoji 😀\"},\"z\":\"中文\"}",
+    "etag": "\"emp-cf56d7e9d64e83d4d86a767daa481889388911aa3e6dd3d353b7e6210745aa02\""
+  }
+}

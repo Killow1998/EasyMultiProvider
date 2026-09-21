@@ -11,11 +11,17 @@
 //! Crypto primitives come from the RustCrypto ecosystem crates; sensitive
 //! buffers are zeroized.
 
+pub mod config;
 pub mod fernet;
 pub mod filesystem;
 pub mod migration;
 pub mod vault;
 
+pub use config::{
+    ConfigError, ConfigResult, canonical_catalog_json, catalog_etag,
+    normalize_catalog_presentations, normalize_codex_runtime_sources,
+    normalize_subscription_search,
+};
 pub use fernet::{Fernet, FernetError, FernetKey, FernetKeyError};
 pub use filesystem::{
     FileTransaction, FilesystemError, MASTER_KEY_ENV, MASTER_KEY_FILE_ENV,
