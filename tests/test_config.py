@@ -607,12 +607,14 @@ class TestNewCapabilityFieldsConfigRoundTrip(ConfigTests):
     def test_web_update_gives_manual_provenance_to_changed_new_fields(self):
         current = normalize({"providers": [self.provider], "models": [self.rich_model]})
         incoming = public_config(current)
+        incoming["models"][0]["input_modalities"] = ["text"]
         incoming["models"][0]["output_modalities"] = ["text"]
         incoming["models"][0]["supported_protocols"] = ["chat_completions"]
         incoming["models"][0]["max_input_tokens"] = 50000
         incoming["models"][0]["reasoning_control"] = "new control"
         updated = merge_web_update(current, incoming)
         sources = updated["models"][0]["capability_sources"]
+        self.assertEqual(sources["input_modalities"]["source"], "manual")
         self.assertEqual(sources["output_modalities"]["source"], "manual")
         self.assertEqual(sources["supported_protocols"]["source"], "manual")
         self.assertEqual(sources["max_input_tokens"]["source"], "manual")

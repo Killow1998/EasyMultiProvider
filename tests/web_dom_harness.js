@@ -1037,6 +1037,28 @@ async function atomicStateBehavior() {
   await run("inspectModalModel()");
   assert.strictEqual(run("modalReasoningSummarySupport"), true, "metadata inspection must retain summary capability");
 
+  run("state = {catalog_presentations:{},accounts:[],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',input_modalities:['text'],output_modalities:['text','audio'],output_limit:4000,capability_sources:{input_modalities:{source:'advertised'},output_modalities:{source:'advertised'}}}]}; openManualModelModal('provider-a/model')");
+  assert.match(getElement("modal_body").innerHTML, /id="modal_model_input_modalities" value="text"/);
+  getElement("modal_model_provider").value = "provider-a";
+  getElement("modal_model_upstream").value = "model";
+  getElement("modal_model_input_modalities").value = "text, image";
+  context.__persistStateStub = async (_message, candidate) => { context.__savedCandidate = candidate; context.state = candidate; };
+  run("__realPersistState = persistState; persistState = __persistStateStub");
+  await run("saveManualModel()");
+  run("persistState = __realPersistState");
+  run("state = __savedCandidate");
+  const savedModel = run("__savedCandidate.models[0]");
+  assert.deepStrictEqual(Array.from(savedModel.input_modalities), ["text", "image"]);
+  assert.deepStrictEqual(Array.from(savedModel.output_modalities), ["text", "audio"], "editing input must preserve output modalities");
+  assert.strictEqual(savedModel.output_limit, 4000, "editing input must preserve discovered limits");
+  assert.strictEqual(savedModel.capability_sources.output_modalities.source, "advertised");
+  run("openManualModelModal('provider-a/model')");
+  getElement("modal_model_provider").value = "provider-a";
+  getElement("modal_model_upstream").value = "model";
+  getElement("modal_model_input_modalities").value = "text, invalid!";
+  await assert.rejects(run("saveManualModel()"), /请输入有效的输入模态/);
+  assert.deepStrictEqual(Array.from(run("state.models[0].input_modalities")), ["text", "image"]);
+
   run("state = {native_catalog_path:'',catalog_presentations:{'provider-a/a':{catalog_alias:'A'},'provider-a/b':{catalog_alias:'B'}},accounts:[],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/a',provider:'provider-a',upstream_id:'a',enabled:true},{id:'provider-a/b',provider:'provider-a',upstream_id:'b',enabled:true}]}; openManualModelModal('provider-a/a')");
   getElement("modal_model_provider").value = "provider-a";
   getElement("modal_model_upstream").value = "b";

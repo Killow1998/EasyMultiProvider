@@ -1251,14 +1251,53 @@ function updateDiscoveredCount() { const options = [...document.querySelectorAll
 function openManualModelModal(modelId = '') {
   const existing = (state.models || []).find(m => m.id === modelId) || {}; editingModelId = modelId; modalReasoningLevels = Array.isArray(existing.reasoning_levels) ? existing.reasoning_levels : null; modalReasoningSupport = typeof existing.supports_reasoning === 'boolean' ? existing.supports_reasoning : null; modalReasoningSummarySupport = typeof existing.supports_reasoning_summaries === 'boolean' ? existing.supports_reasoning_summaries : null;
   const options = (state.providers || []).map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join('');
-  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label>${tr('上游模型名','Upstream model name')}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${tr('例如 glm','for example glm')}" oninput="updateManualModelRoute()"></div><div><label>${tr('上下文窗口（可选）','Context window (optional)')}</label><input id="modal_model_context" type="number" min="0" value="${Number(existing.context_window || 0)}"></div><div><label>${tr('自动获取','Fetch metadata')}</label><button class="secondary" onclick="inspectModalModel()">${tr('获取上游最大值','Fetch upstream maximum')}</button></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
+  const inputModalities = Array.isArray(existing.input_modalities) ? existing.input_modalities : ['text'];
+  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label>${tr('上游模型名','Upstream model name')}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${tr('例如 glm','for example glm')}" oninput="updateManualModelRoute()"></div><div><label>${tr('上下文窗口（可选）','Context window (optional)')}</label><input id="modal_model_context" type="number" min="0" value="${Number(existing.context_window || 0)}"></div><div><label>${tr('自动获取','Fetch metadata')}</label><button class="secondary" onclick="inspectModalModel()">${tr('获取上游最大值','Fetch upstream maximum')}</button></div><div class="wide"><label>${tr('输入模态（逗号分隔）','Input modalities (comma-separated)')}</label><input id="modal_model_input_modalities" value="${esc(inputModalities.join(', '))}" placeholder="text, image"><small class="muted">${tr('Codex 目前使用 text / image；其他模态会保留在 EMP 中。','Codex currently uses text / image; other modalities remain in EMP.')}</small></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
   if (existing.provider) $('modal_model_provider').value = existing.provider;
   updateManualModelRoute();
 }
 function manualModelRoute() { const provider = $('modal_model_provider')?.value || ''; const entered = $('modal_model_upstream')?.value.trim() || ''; const prefix = provider + '/'; return provider && entered ? prefix + (entered.startsWith(prefix) ? entered.slice(prefix.length) : entered) : ''; }
 function updateManualModelRoute() { const route = manualModelRoute(); if ($('modal_model_route')) $('modal_model_route').textContent = route || tr('保存后生成','Generated after save'); }
 async function inspectModalModel() { const provider = $('modal_model_provider').value; const upstream = $('modal_model_upstream').value.trim(); if (!provider || !upstream) return notice(tr('请填写 Provider 和上游模型名','Enter a Provider and upstream model name'), true); try { const result = await api('/api/models/metadata', {method:'POST', body:JSON.stringify({provider, model:upstream})}); $('modal_model_context').value = result.context_window; modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : []; modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null; modalReasoningSummarySupport = typeof result.supports_reasoning_summaries === 'boolean' ? result.supports_reasoning_summaries : null; updateManualModelRoute(); notice(tr(`已获取上限：输入 ${Number(result.input_token_limit).toLocaleString()} · 输出 ${Number(result.output_token_limit).toLocaleString()}`,`Limits fetched: input ${Number(result.input_token_limit).toLocaleString()} · output ${Number(result.output_token_limit).toLocaleString()}`)); } catch (error) { notice(tr('获取失败：','Fetch failed: ') + error.message, true); } }
-async function saveManualModel() { const provider = $('modal_model_provider').value; const entered = $('modal_model_upstream').value.trim(); if (!provider || !entered) throw new Error(tr('Provider 和上游模型名不能为空','Provider and upstream model name are required')); const prefix = provider + '/'; const upstream = entered.startsWith(prefix) ? entered.slice(prefix.length) : entered; const id = prefix + upstream; const previous = state.models.find(m => m.id === editingModelId); const collision = state.models.find(m => m.id === id && m.id !== editingModelId); if (collision) throw new Error(tr('模型路由已存在，不能覆盖另一个模型','That model route already exists and cannot overwrite another model')); const levels = Array.isArray(modalReasoningLevels) ? modalReasoningLevels : (Array.isArray(previous?.reasoning_levels) ? previous.reasoning_levels : []); const support = typeof modalReasoningSupport === 'boolean' ? modalReasoningSupport : (typeof previous?.supports_reasoning === 'boolean' ? previous.supports_reasoning : (levels.length ? true : null)); const summarySupport = typeof modalReasoningSummarySupport === 'boolean' ? modalReasoningSummarySupport : (previous?.supports_reasoning_summaries ?? null); const model = {id, provider, display_name:previous?.display_name || upstream, description:previous?.description || '', upstream_id:upstream, family_id:previous?.family_id || '', supports_reasoning:support, supports_reasoning_summaries:summarySupport, reasoning_levels:levels, context_window:Number($('modal_model_context').value) || 0, created_at:previous?.created_at || 0, enabled:previous ? previous.enabled : true}; const candidate = cloneState(); if (editingModelId && editingModelId !== id) { candidate.models = candidate.models.filter(m => m.id !== editingModelId); movePresentation(editingModelId, id, candidate); } const index = candidate.models.findIndex(m => m.id === id); if (index >= 0) candidate.models[index] = model; else candidate.models.push(model); await persistState(previous ? tr('模型已修改','Model updated') : tr('模型已添加','Model added'), candidate); editingModelId = ''; modalReasoningLevels = null; modalReasoningSupport = null; modalReasoningSummarySupport = null; }
+async function saveManualModel() {
+  const provider = $('modal_model_provider').value;
+  const entered = $('modal_model_upstream').value.trim();
+  if (!provider || !entered) throw new Error(tr('Provider 和上游模型名不能为空','Provider and upstream model name are required'));
+  const prefix = provider + '/';
+  const upstream = entered.startsWith(prefix) ? entered.slice(prefix.length) : entered;
+  const id = prefix + upstream;
+  const previous = state.models.find(m => m.id === editingModelId);
+  const collision = state.models.find(m => m.id === id && m.id !== editingModelId);
+  if (collision) throw new Error(tr('模型路由已存在，不能覆盖另一个模型','That model route already exists and cannot overwrite another model'));
+  const modalities = [...new Set($('modal_model_input_modalities').value.split(',').map(value => value.trim().toLowerCase()))];
+  if (!modalities.length || modalities.length > 16 || modalities.some(value => !/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(value))) {
+    throw new Error(tr('请输入有效的输入模态，用逗号分隔（例如 text, image）','Enter valid comma-separated input modalities (for example text, image)'));
+  }
+  const levels = Array.isArray(modalReasoningLevels) ? modalReasoningLevels : (Array.isArray(previous?.reasoning_levels) ? previous.reasoning_levels : []);
+  const support = typeof modalReasoningSupport === 'boolean' ? modalReasoningSupport : (typeof previous?.supports_reasoning === 'boolean' ? previous.supports_reasoning : (levels.length ? true : null));
+  const summarySupport = typeof modalReasoningSummarySupport === 'boolean' ? modalReasoningSummarySupport : (previous?.supports_reasoning_summaries ?? null);
+  const model = {
+    ...(previous || {}), id, provider, upstream_id:upstream,
+    display_name:previous?.display_name || upstream, description:previous?.description || '',
+    family_id:previous?.family_id || '', supports_reasoning:support,
+    supports_reasoning_summaries:summarySupport, reasoning_levels:levels,
+    context_window:Number($('modal_model_context').value) || 0,
+    input_modalities:modalities, created_at:previous?.created_at || 0,
+    enabled:previous ? previous.enabled : true,
+  };
+  const candidate = cloneState();
+  if (editingModelId && editingModelId !== id) {
+    candidate.models = candidate.models.filter(m => m.id !== editingModelId);
+    movePresentation(editingModelId, id, candidate);
+  }
+  const index = candidate.models.findIndex(m => m.id === id);
+  if (index >= 0) candidate.models[index] = model; else candidate.models.push(model);
+  await persistState(previous ? tr('模型已修改','Model updated') : tr('模型已添加','Model added'), candidate);
+  editingModelId = '';
+  modalReasoningLevels = null;
+  modalReasoningSupport = null;
+  modalReasoningSummarySupport = null;
+}
 async function toggleModel(id, enabled) { const candidate = cloneState(); const model = candidate.models.find(item => item.id === id); if (!model) return; model.enabled = enabled; try { await persistState(enabled ? tr('模型已显示','Model is visible') : tr('模型已隐藏；已从 Codex /model 目录移除','Model hidden and removed from the Codex /model catalog'), candidate); } catch (error) { notice(error.message, true); } }
 async function removeModel(id) { const candidate = cloneState(); candidate.models = candidate.models.filter(m => m.id !== id); try { await persistState(tr('模型已删除','Model deleted'), candidate); } catch (error) { notice(error.message, true); } }
 async function testModel(id) { try { notice(tr(`正在测试 ${id} …`,`Testing ${id}…`)); const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr('测试成功：','Test succeeded: ') + (result.output_text || tr('已收到模型响应','model response received'))); } catch (error) { notice(tr('测试失败：','Test failed: ') + error.message, true); } }
