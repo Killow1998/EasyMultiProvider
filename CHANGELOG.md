@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.11.5 (2026-09-21)
+
+- Preserve reasoning as separate Codex stream items for Chat Completions models
+  instead of folding it into the visible answer.
+- Let users edit external model input modalities and mark image support as
+  supported, unsupported, or unknown. Add an opt-in bundled-icon test; a
+  successful reply is an observation and does not silently change metadata.
+- Normalize duplicate `/v1` segments in external provider URLs and avoid
+  forced credential rotation when reading imported subscription quota.
+- Record bounded stream failure phase and retry count for diagnosis without
+  storing request or response content. Existing missing-terminal handling
+  still fails closed; intermittent issue #7 needs a current live reproduction.
+- Rewrite the READMEs around the two main uses: one Codex model picker for
+  multiple subscriptions, and external API models with a native-like workflow.
+
+Known limitation: the repeated 503 reports in issue #11 are not yet tied to a
+single cause. Local records show native WebSocket handshake failures; they do
+not establish an external-provider fault.
+
 ## 0.11.4 (2026-09-18)
 
 - Adapt model routing and runtime compatibility checks to Codex CLI 0.155.0;
