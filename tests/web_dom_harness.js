@@ -182,6 +182,8 @@ assert.match(html, /\.model-card\{grid-template-columns:minmax\(220px,1fr\) auto
 assert.match(html, /\.model-card \.entity-card-actions\{grid-column:3;grid-row:1;flex-wrap:nowrap;/, "desktop model actions must remain aligned and visible");
 assert.match(html, /\.model-card \.entity-card-meta\{grid-column:1\/-1;grid-row:2;[^}]*white-space:normal;/, "model metadata must remain fully readable across the card");
 assert.match(html, /\.quota-credit span\{display:block;/, "credit details must use separate visual lines");
+assert.match(html, /\.account-card \.entity-card-quota\{grid-column:2;grid-row:1\/3\}/, "desktop quota must stay beside account actions");
+assert.match(html, /\.account-card \.entity-card-actions\{grid-column:1;grid-row:2;[^}]*border:0\}/, "desktop account actions must use the open space below account identity");
 assert.match(html, /\.display-row\{grid-template-columns:minmax\(0,1fr\) auto auto;/, "display cards must reserve one top row for the model and controls");
 assert.match(html, /\.display-row \.inline-check\{grid-column:2;grid-row:1;/, "context checkbox must stay at the upper right");
 assert.match(html, /\.display-row>button\{grid-column:3;grid-row:1;/, "advanced options must stay at the upper right");
@@ -395,7 +397,7 @@ function pickerBehavior() {
 }
 
 function duplicateAccountBehavior() {
-  run("state = {native_account:{id:'@native',name:'当前 Codex 登录',prefix:'',native:true,credential_set:true,hidden_models:[]},accounts:[{id:'same-login-account',prefix:'same-login-account',duplicate:true,duplicate_of:'当前 Codex 登录',credential_set:true},{id:'usable-account',prefix:'usable-account',duplicate:false,credential_set:true}]}; renderAccounts()");
+  run("state = {native_account:{id:'@native',name:'当前 Codex 登录',prefix:'',native:true,credential_set:true,hidden_models:[],quota:{account_label:'n***@example.com'}},accounts:[{id:'same-login-account',prefix:'same-login-account',duplicate:true,duplicate_of:'当前 Codex 登录',credential_set:true},{id:'usable-account',name:'🥚',prefix:'usable-account',duplicate:false,credential_set:true,quota:{account_label:'u***@example.com'}}]}; renderAccounts()");
   const html = getElement("accounts").innerHTML;
   assert.match(html, /当前 Codex 登录/);
   assert.match(html, /Native/);
@@ -406,12 +408,19 @@ function duplicateAccountBehavior() {
   assert.strictEqual(cards.length, 3, "each account should render as one aligned card");
   const nativeCard = cards.find(card => card.includes("refreshAccount('@native')"));
   assert.doesNotMatch(nativeCard, /removeAccount\('@native'\)/);
+  assert.match(nativeCard, /title="n\*\*\*@example\.com · 使用 \.codex 当前登录"/);
+  assert.doesNotMatch(nativeCard, /<div class="entity-card-status">使用 \.codex 当前登录/);
   const duplicateCard = cards.find(card => card.includes("refreshAccount('same-login-account')"));
   assert(duplicateCard, "duplicate account card must render");
   assert.match(duplicateCard, /account-duplicate/);
   assert.doesNotMatch(duplicateCard, /editAccount\('same-login-account'\)/);
   assert.doesNotMatch(duplicateCard, /<details class="action-menu">/);
   assert.match(duplicateCard, /openQuotaHistory\('same-login-account'\)/);
+  const usableCard = cards.find(card => card.includes("refreshAccount('usable-account')"));
+  assert.match(usableCard, /<code title="u\*\*\*@example\.com">usable-account<\/code>/);
+  assert.doesNotMatch(usableCard, /<span class="pill">usable-account<\/span>/, "an account ID must not be repeated as a badge");
+  assert.doesNotMatch(usableCard, />u\*\*\*@example\.com</, "account labels must stay in the ID tooltip");
+  assert.doesNotMatch(usableCard, /凭据已保存/, "successful credential state is redundant");
 }
 
 function quotaHistoryHtml() {
@@ -914,7 +923,8 @@ async function accountEmojiBehavior() {
   assert.strictEqual(run("__savedEmojiCandidate.accounts[0].prefix"), "ship");
   assert.strictEqual(run("__savedEmojiCandidate.catalog_presentations['ship/model-a'].catalog_alias"), "Keep me");
   run("state = __savedEmojiCandidate; renderAccounts()");
-  assert.match(getElement("accounts").innerHTML, /<strong>🚢<\/strong><span class="pill">ship<\/span>/);
+  assert.match(getElement("accounts").innerHTML, /<strong>🚢<\/strong>[\s\S]*<code>ship<\/code>/);
+  assert.doesNotMatch(getElement("accounts").innerHTML, /<span class="pill">ship<\/span>/);
 }
 
 async function quotaErrorBehavior() {

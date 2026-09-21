@@ -131,7 +131,13 @@ button[data-icon]{display:inline-flex}
 .entity-card-quota{min-width:0}
 .quota-credit{display:grid;gap:2px;margin-top:7px;font-size:11px;line-height:1.35}
 .quota-credit span{display:block;overflow-wrap:anywhere}
-.account-card{grid-template-columns:minmax(0,1fr) minmax(180px,225px)}
+.account-card{grid-template-columns:minmax(0,1fr) minmax(180px,225px);grid-template-rows:auto auto;align-items:start;gap:8px 16px;padding:12px 14px}
+.account-card .entity-card-main{grid-column:1;grid-row:1;min-width:0}
+.account-card .entity-card-quota{grid-column:2;grid-row:1/3}
+.account-card .entity-card-actions{grid-column:1;grid-row:2;gap:6px;padding:0;border:0}
+.account-card .entity-card-actions button,.account-card .entity-card-actions button:disabled{height:32px;min-height:32px}
+.account-card .entity-card-subtitle{margin-top:3px}
+.account-card .entity-card-status{margin-top:4px}
 .account-card .quota-stack{max-width:none;min-width:0}
 .account-duplicate .entity-card-main{opacity:.62}
 .provider-card .entity-card-meta{margin-top:6px}
@@ -169,7 +175,7 @@ button[data-icon]{display:inline-flex}
 .modal-actions{flex-wrap:wrap}
 .choice{display:block;min-height:0;white-space:normal}
 @media(max-width:1180px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}}
-@media(max-width:760px){main{padding:18px 12px 32px}section{padding:15px}.page-header{flex-direction:column;align-items:stretch}.account-card{grid-template-columns:1fr}.entity-card{padding:13px}.model-card{grid-template-columns:minmax(0,1fr) auto;padding:10px}.model-card .entity-card-main{grid-column:1;grid-row:1}.model-card .visibility{grid-column:2;grid-row:1}.model-card .entity-card-meta{grid-column:1/-1;grid-row:2}.model-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1/-1;grid-row:3;width:100%;padding-top:8px;border-top:1px solid var(--border)}.model-card .entity-card-actions button{width:100%}.action-group{grid-template-columns:1fr;gap:4px}.action-group-label{padding-top:0}.display-row{grid-template-columns:minmax(0,1fr) auto auto}}
+@media(max-width:760px){main{padding:18px 12px 32px}section{padding:15px}.page-header{flex-direction:column;align-items:stretch}.account-card{grid-template-columns:1fr;grid-template-rows:auto;padding:12px}.account-card .entity-card-main,.account-card .entity-card-quota,.account-card .entity-card-actions{grid-column:1;grid-row:auto}.account-card .entity-card-actions{padding-top:8px;border-top:1px solid var(--border)}.entity-card{padding:13px}.model-card{grid-template-columns:minmax(0,1fr) auto;padding:10px}.model-card .entity-card-main{grid-column:1;grid-row:1}.model-card .visibility{grid-column:2;grid-row:1}.model-card .entity-card-meta{grid-column:1/-1;grid-row:2}.model-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1/-1;grid-row:3;width:100%;padding-top:8px;border-top:1px solid var(--border)}.model-card .entity-card-actions button{width:100%}.action-group{grid-template-columns:1fr;gap:4px}.action-group-label{padding-top:0}.display-row{grid-template-columns:minmax(0,1fr) auto auto}}
 </style>
 </head>
 <body>
@@ -950,15 +956,22 @@ function renderAccounts() {
     const busy = refreshingAccounts.has(a.id); const error = refreshErrors[a.id]; const animateQuota = quotaAnimationAccounts.has(a.id);
     const duplicateCurrent = a.duplicate && a.duplicate_of === '当前 Codex 登录';
     const duplicateText = a.duplicate ? (duplicateCurrent ? tr('与当前 Codex 登录重复；模型显示由原生账户管理','Duplicates the current Codex login; model visibility is managed by Native') : `${tr('与','Duplicates ')}${esc(a.duplicate_of)}${tr('重复；不生成重复前缀模型','; duplicate prefixed routes are omitted')}`) : '';
-    const status = a.native ? (a.credential_set ? tr('使用 .codex 当前登录','Using current .codex login') : tr('未检测到 .codex 登录','No .codex login detected')) : (a.credential_status === 'invalid' ? tr('登录已失效','Sign-in expired') : (a.credential_set ? tr('凭据已保存','Credentials saved') : tr('未导入凭据','No credentials')));
+    const status = a.native ? (a.credential_set ? '' : tr('未检测到 .codex 登录','No .codex login detected')) : (a.credential_status === 'invalid' ? tr('登录已失效','Sign-in expired') : (a.credential_set ? '' : tr('未导入凭据','No credentials')));
     const remove = a.native ? '' : `<button class="danger" data-icon="trash" onclick="removeAccount('${esc(a.id)}')">${tr('删除','Delete')}</button>`;
     const edit = duplicateCurrent ? `<button class="secondary" data-icon="edit" disabled title="${esc(tr('模型显示由原生账户管理','Model visibility is managed by Native'))}">${tr('编辑','Edit')}</button>` : `<button class="secondary" data-icon="edit" onclick="editAccount('${esc(a.id)}')">${tr('编辑','Edit')}</button>`;
-    const title = a.native ? tr('当前 Codex 登录','Current Codex login') : esc(a.name || a.id);
-    const subtitle = a.native ? '' : `<code>${esc(a.id)}</code>`;
+    const titleText = a.native ? tr('当前 Codex 登录','Current Codex login') : String(a.name || a.id);
+    const accountLabel = String(a.quota && a.quota.account_label || '');
+    const nativeDetail = a.native ? tr('使用 .codex 当前登录','Using current .codex login') : '';
+    const hoverText = [accountLabel, nativeDetail].filter(Boolean).join(' · ');
+    const hover = hoverText ? ` title="${esc(hoverText)}"` : '';
+    const titleHasId = !a.native && titleText === String(a.id);
+    const title = `<strong${a.native || titleHasId ? hover : ''}>${esc(titleText)}</strong>`;
+    const subtitle = a.native || titleHasId ? '' : `<div class="entity-card-subtitle"><code${hover}>${esc(a.id)}</code></div>`;
+    const prefix = String(a.prefix || a.id || '');
+    const pill = a.native ? `<span class="pill" title="${esc(nativeDetail)}">Native</span>` : (prefix && prefix !== String(a.id) ? `<span class="pill">${esc(prefix)}</span>` : '');
+    const statusHtml = status || duplicateText ? `<div class="entity-card-status">${status}${status && duplicateText ? '<br>' : ''}${duplicateText ? `<span class="muted">${duplicateText}</span>` : ''}</div>` : '';
     return `<article class="entity-card account-card${duplicateCurrent ? ' account-duplicate' : ''}">
-      <div class="entity-card-main"><div class="entity-card-title"><strong>${title}</strong><span class="pill">${a.native ? 'Native' : esc(a.prefix || a.id)}</span></div>
-      <div class="entity-card-subtitle">${subtitle}${a.quota && a.quota.account_label ? `<span>${esc(a.quota.account_label)}</span>` : ''}</div>
-      <div class="entity-card-status">${status}${duplicateText ? `<br><span class="muted">${duplicateText}</span>` : ''}</div></div>
+      <div class="entity-card-main"><div class="entity-card-title">${title}${pill}</div>${subtitle}${statusHtml}</div>
       <div class="entity-card-quota">${quotaMetersHtml(a, busy, animateQuota)}<div class="muted quota-credit">${creditHtml(a)}</div>${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</div>
       <div class="entity-card-actions">${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" onclick="openQuotaHistory('${esc(a.id)}')">${tr('趋势','Trend')}</button>${remove}</div>
     </article>`;
