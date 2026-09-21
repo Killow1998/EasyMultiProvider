@@ -5,6 +5,9 @@
 //! remain separate state transitions so callers cannot mistake parsing for I/O.
 
 use crate::accounts::{normalize_account, normalize_context_windows, normalize_hidden_models};
+use crate::filesystem::{
+    FileTransaction, FilesystemError, VaultStore, atomic_write_config, with_file_transaction,
+};
 use crate::model_values::{
     input_modalities_known, normalize_input_modalities, normalize_output_modalities,
     normalize_reasoning_levels, normalize_supported_protocols, output_modalities_known,
@@ -15,12 +18,14 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::env;
 use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf, absolute};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CONFIG_PATH_ENV: &str = "EASY_MULTI_PROVIDER_CONFIG";
 const MAX_CATALOG_ALIAS_BYTES: usize = 512;
 const REASONING_SUMMARIES: [&str; 3] = ["auto", "show", "hide"];
+const MASKED_API_KEY: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}";
 const RUNTIME_SOURCES: [&str; 8] = [
     "auto",
     "configured",
@@ -67,6 +72,12 @@ impl fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+impl From<FilesystemError> for ConfigError {
+    fn from(error: FilesystemError) -> Self {
+        Self::new(error.to_string())
+    }
+}
 
 pub type ConfigResult<T> = Result<T, ConfigError>;
 
@@ -2031,6 +2042,22 @@ pub fn canonicalize_account_paths(config: &mut Value, config_path: &Path) -> Con
     canonical_account_paths(config, config_path)
 }
 
+fn canonical_secret_root(config: &Value, config_path: &Path) -> PathBuf {
+    let mut root = expand_user(Path::new(
+        config
+            .get("secret_store_path")
+            .and_then(Value::as_str)
+            .unwrap_or("state/secrets"),
+    ));
+    if !root.is_absolute() {
+        root = config_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(root);
+    }
+    path_python_resolve(&root)
+}
+
 fn canonical_secret_paths(config: &mut Value, config_path: &Path) -> Result<(), ConfigError> {
     let base = config_path
         .parent()
@@ -2408,6 +2435,120 @@ fn config_path_from_env(value: Option<&std::ffi::OsStr>) -> PathBuf {
         Some(value) => PathBuf::from(value),
         None => PathBuf::from("config.json"),
     }
+}
+
+/// Save a normalized configuration and its derived secret files atomically.
+pub fn save_configuration(
+    config: &Value,
+    path: Option<&Path>,
+    vault: &VaultStore,
+) -> ConfigResult<PathBuf> {
+    with_file_transaction(|transaction| {
+        save_configuration_in_transaction(config, path, vault, transaction)
+    })
+}
+
+/// Add a configuration save to a caller-owned transaction.
+///
+/// This is used by larger state changes such as migration imports. The caller
+/// owns commit and rollback; this function never ends the transaction early.
+pub fn save_configuration_in_transaction(
+    config: &Value,
+    path: Option<&Path>,
+    vault: &VaultStore,
+    transaction: &mut FileTransaction,
+) -> ConfigResult<PathBuf> {
+    let path = match path {
+        Some(path) => path.to_path_buf(),
+        None => config_path(),
+    };
+
+    let mut previous_secret_files = Vec::new();
+    if path.exists()
+        && let Ok(previous) = load_configuration(Some(&path))
+    {
+        let mut values = previous
+            .get("providers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|provider| {
+                provider
+                    .get("api_key_file")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>();
+        values.sort();
+        values.dedup();
+        previous_secret_files = values;
+    }
+
+    let mut config = normalize_configuration(Some(config))?;
+    canonicalize_private_paths(&mut config, &path)?;
+    let secret_root = canonical_secret_root(&config, &path);
+    if let Some(Value::Array(providers)) = config.get_mut("providers") {
+        for provider in providers {
+            let Some(object) = provider.as_object_mut() else {
+                return Err(ConfigError::new("each provider must be an object"));
+            };
+            let api_key = object
+                .get("api_key")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            if api_key.is_empty() || api_key == MASKED_API_KEY {
+                continue;
+            }
+            let Some(id) = object.get("id").and_then(Value::as_str) else {
+                return Err(ConfigError::new("provider.id must be a string"));
+            };
+            let secret_path = secret_root.join(format!("{}.key.enc", percent_encode(id)));
+            transaction.remember(&secret_path)?;
+            vault.write_encrypted_text(&secret_path, &api_key)?;
+            object.insert("api_key".to_owned(), Value::String(String::new()));
+            object.insert(
+                "api_key_file".to_owned(),
+                Value::String(secret_path.to_string_lossy().into_owned()),
+            );
+        }
+    }
+
+    transaction.remember(&path)?;
+    let serialized = serde_json::to_vec_pretty(&config)
+        .map_err(|_| ConfigError::new("configuration could not be serialized"))?;
+    let mut serialized = serialized;
+    serialized.push(b'\n');
+    atomic_write_config(&path, &serialized)?;
+
+    let current_secret_files = config
+        .get("providers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|provider| {
+            provider
+                .get("api_key_file")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+        .collect::<BTreeSet<_>>();
+    for obsolete in previous_secret_files
+        .into_iter()
+        .filter(|value| !current_secret_files.contains(value))
+    {
+        let obsolete_path = PathBuf::from(&obsolete);
+        transaction.remember(&obsolete_path)?;
+        match fs::remove_file(&obsolete_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            // Python deliberately treats obsolete-secret cleanup as best effort.
+            Err(_) => {}
+        }
+    }
+    Ok(path)
 }
 
 /// Load, normalize and canonicalize the private paths in a configuration file.

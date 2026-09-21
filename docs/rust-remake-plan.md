@@ -40,7 +40,11 @@ Progress evidence on 2026-09-21:
   config-relative, home-relative, strict-false resolution and final-symlink
   checks as Python. Configuration loading now preserves missing-file defaults,
   normalization, path canonicalization and Python-visible failure classes.
-  Configuration saving, import merge behavior and Windows ACL/reparse-point
+  Configuration saving now normalizes before persistence, encrypts new provider
+  keys, preserves masked managed keys, cleans obsolete managed secrets, writes
+  private files atomically and participates in a caller-owned rollback without
+  committing it early. Its serialized configuration and decrypted secret match
+  the live Python oracle. Import merge behavior and Windows ACL/reparse-point
   hardening remain.
   Account metadata normalization also matches Python's sorting, UTF-8 byte
   limits, truthiness, quota preservation and exact validation order.
@@ -63,6 +67,9 @@ Progress evidence on 2026-09-21:
   top-level configuration normalization enabled against the live Python oracle.
 - Runtime compatibility run `35655058469` passed all seven jobs with pathless
   Web-update merging enabled against the live Python oracle.
+- Runtime compatibility run `35657782552` passed all seven jobs after private
+  path canonicalization and configuration loading, including the corrected
+  Windows path form.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

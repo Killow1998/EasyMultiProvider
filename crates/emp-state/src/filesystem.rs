@@ -21,6 +21,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt as StdOpenOptionsExt, Permis
 pub const MASTER_KEY_ENV: &str = "EASY_MULTI_PROVIDER_MASTER_KEY";
 pub const MASTER_KEY_FILE_ENV: &str = "EASY_MULTI_PROVIDER_MASTER_KEY_FILE";
 pub const MAX_TRANSACTION_FILE_BYTES: usize = 64 * 1024 * 1024;
+const CONFIG_FILE_MODE: u32 = 0o600;
 
 static FILE_TRANSACTION_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
@@ -325,6 +326,12 @@ fn set_private_directory(path: &Path) -> Result<(), FilesystemError> {
 #[cfg(not(unix))]
 fn set_private_directory(_: &Path) -> Result<(), FilesystemError> {
     Ok(())
+}
+
+/// Atomically replace a private configuration file without changing the
+/// permissions of a caller-owned parent directory.
+pub(crate) fn atomic_write_config(path: &Path, data: &[u8]) -> Result<(), FilesystemError> {
+    atomic_write(path, data, CONFIG_FILE_MODE, false)
 }
 
 fn atomic_write(

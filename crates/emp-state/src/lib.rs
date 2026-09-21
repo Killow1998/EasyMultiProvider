@@ -30,7 +30,8 @@ pub use config::{
     merge_web_update_with_time, normalize_catalog_presentations, normalize_codex_runtime_sources,
     normalize_configuration, normalize_context_calibrations, normalize_model,
     normalize_model_capability_sources, normalize_provider, normalize_provider_base_url,
-    normalize_provider_id, normalize_subscription_search,
+    normalize_provider_id, normalize_subscription_search, save_configuration,
+    save_configuration_in_transaction,
 };
 pub use fernet::{Fernet, FernetError, FernetKey, FernetKeyError};
 pub use filesystem::{
