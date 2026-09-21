@@ -17,7 +17,7 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 #[test]
 fn generated_key_is_private_valid_and_reused() {
     let directory = tempdir().expect("tempdir");
-    let key_path = directory.path().join("private/master.key");
+    let key_path = canonical_temp_path(&directory).join("private/master.key");
     let first = VaultStore::from_sources(None, &key_path).expect("create key");
     let original = fs::read(&key_path).expect("read generated key");
     assert_eq!(
@@ -56,7 +56,7 @@ fn generated_key_is_private_valid_and_reused() {
 #[test]
 fn invalid_existing_key_is_never_replaced() {
     let directory = tempdir().expect("tempdir");
-    let key_path = directory.path().join("master.key");
+    let key_path = canonical_temp_path(&directory).join("master.key");
     fs::write(&key_path, b"invalid-key\n").expect("write invalid key");
     set_mode(&key_path, 0o600);
 
@@ -91,8 +91,9 @@ fn environment_key_takes_precedence_without_creating_a_file() {
 fn process_environment_selects_key_and_path_once() {
     let _lock = ENV_LOCK.lock().expect("environment lock");
     let directory = tempdir().expect("tempdir");
-    let default_path = directory.path().join("default/master.key");
-    let configured_path = directory.path().join("configured/master.key");
+    let root = canonical_temp_path(&directory);
+    let default_path = root.join("default/master.key");
+    let configured_path = root.join("configured/master.key");
     let original_key = std::env::var_os(MASTER_KEY_ENV);
     let original_path = std::env::var_os(MASTER_KEY_FILE_ENV);
 
@@ -250,7 +251,7 @@ fn encrypted_bytes_text_and_json_never_write_plaintext() {
 #[test]
 fn key_path_rejects_a_non_directory_parent() {
     let directory = tempdir().expect("tempdir");
-    let parent = directory.path().join("not-a-directory");
+    let parent = canonical_temp_path(&directory).join("not-a-directory");
     fs::write(&parent, b"file").expect("parent blocker");
     assert_eq!(
         VaultStore::from_sources(None, &parent.join("master.key"))
@@ -264,9 +265,10 @@ fn key_path_rejects_a_non_directory_parent() {
 #[test]
 fn key_paths_reject_symlink_components_and_public_permissions() {
     let directory = tempdir().expect("tempdir");
-    let real = directory.path().join("real");
+    let root = canonical_temp_path(&directory);
+    let real = root.join("real");
     fs::create_dir(&real).expect("real directory");
-    let linked = directory.path().join("linked");
+    let linked = root.join("linked");
     symlink(&real, &linked).expect("directory symlink");
     assert_eq!(
         VaultStore::from_sources(None, &linked.join("master.key"))
@@ -275,10 +277,10 @@ fn key_paths_reject_symlink_components_and_public_permissions() {
         FilesystemError::KeyDirectoryNotRegular
     );
 
-    let target = directory.path().join("target.key");
+    let target = root.join("target.key");
     fs::write(&target, format!("{SYNTHETIC_KEY}\n")).expect("target key");
     set_mode(&target, 0o600);
-    let key_link = directory.path().join("key-link");
+    let key_link = root.join("key-link");
     symlink(&target, &key_link).expect("key symlink");
     assert_eq!(
         VaultStore::from_sources(None, &key_link)
@@ -381,3 +383,7 @@ fn set_mode(path: &std::path::Path, mode: u32) {
 
 #[cfg(not(unix))]
 fn set_mode(_: &std::path::Path, _: u32) {}
+
+fn canonical_temp_path(directory: &tempfile::TempDir) -> std::path::PathBuf {
+    fs::canonicalize(directory.path()).expect("canonical temporary directory")
+}
