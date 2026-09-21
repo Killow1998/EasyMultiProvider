@@ -23,7 +23,7 @@
   · <a href="README.zh-CN.md">中文</a>
 </p>
 
-EMP runs locally beside Codex. In its Web UI, import another ChatGPT subscription or add an API provider such as LiteLLM, choose its models, and apply the catalog to Codex. Then select a model through `/model` or the Codex App menu.
+EMP runs locally beside Codex. In its Web UI, import another ChatGPT subscription or add an official API provider such as DeepSeek, choose its models, and apply the catalog to Codex. Then select a model through `/model` or the Codex App menu.
 
 For example, one model picker can show:
 
@@ -31,9 +31,9 @@ For example, one model picker can show:
 | --- | --- |
 | `gpt-5.6-luna` | Your current Codex login |
 | `team/gpt-5.6-luna` | An imported ChatGPT subscription |
-| `litellm/glm` | A model you imported from a LiteLLM provider |
+| `deepseek/deepseek-v4-pro` | A model you imported from the DeepSeek API |
 
-The prefixed names are examples; you choose the account, provider, and models. Selecting `team/gpt-5.6-luna` uses the imported account, while `litellm/glm` uses that provider's API key. Codex still owns the coding session, permissions, and tools.
+The prefixed names are examples; you choose the account, provider, and models. Selecting `team/gpt-5.6-luna` uses the imported account, while `deepseek/deepseek-v4-pro` uses the DeepSeek API key. Codex still owns the coding session, permissions, and tools.
 
 ## Why EMP?
 
