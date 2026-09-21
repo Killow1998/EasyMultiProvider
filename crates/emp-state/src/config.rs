@@ -1942,7 +1942,17 @@ pub(crate) fn account_root(config: &Value) -> PathBuf {
     ))
 }
 
-pub(crate) fn expand_user(path: &Path) -> PathBuf {
+/// Expand `~` exactly for paths escaped from the configuration crate.
+pub(crate) fn expand_home(path: &Path) -> PathBuf {
+    expand_user(path)
+}
+
+/// Return the Python-native catalog fallback, expanded in the caller's home.
+pub(crate) fn expand_home_default_native_catalog_path() -> PathBuf {
+    expand_user(Path::new(&default_native_catalog_path()))
+}
+
+fn expand_user(path: &Path) -> PathBuf {
     let Some(value) = path.to_str() else {
         return path.to_path_buf();
     };

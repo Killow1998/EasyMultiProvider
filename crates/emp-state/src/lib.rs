@@ -40,10 +40,12 @@ pub use filesystem::{
 };
 pub use lock::{IntegrationFileLock, LockError};
 pub use migration::{
-    MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES, MIGRATION_MAGIC, MIGRATION_SCHEMA, MIGRATION_VERSION,
-    MIN_PASSWORD_BYTES, MigrationError, MigrationImportSummary, MigrationParams, MigrationResult,
-    SALT_BYTES, SCRYPT_N, SCRYPT_P, SCRYPT_R, decode_migration, encode_migration,
-    import_migration_bundle, parse_envelope,
+    ExportGroup, ExportGroups, MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES, MIGRATION_MAGIC,
+    MIGRATION_SCHEMA, MIGRATION_VERSION, MIN_PASSWORD_BYTES, MigrationError,
+    MigrationExportSummary, MigrationImportSummary, MigrationParams, MigrationResult, SALT_BYTES,
+    SCRYPT_N, SCRYPT_P, SCRYPT_R, decode_migration, encode_migration, export_migration_bundle,
+    export_migration_bundle_with_summary, import_migration_bundle, parse_envelope,
+    select_export_config,
 };
 pub use model_values::{
     IMAGE_MODALITY, MAX_MODALITIES, MAX_MODALITY_ID_BYTES, TEXT_MODALITY, codex_input_modalities,

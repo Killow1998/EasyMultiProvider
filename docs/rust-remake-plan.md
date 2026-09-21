@@ -49,8 +49,11 @@ Progress evidence on 2026-09-21:
   entries, identify or rename subscription accounts, re-encrypt imported
   credentials with the destination vault, and roll every file back on a failed
   commit. The complete provider/account path also matches the live Python
-  oracle. Export selection/composition and Windows ACL/reparse-point hardening
-  remain.
+  oracle. Export now filters all seven non-empty native/subscription/external
+  category combinations, carries only their route and family dependencies,
+  emits portable paths, includes available native login state, and encrypts
+  every selected credential in a Python-readable bundle. Windows
+  ACL/reparse-point hardening remains.
   Account metadata normalization also matches Python's sorting, UTF-8 byte
   limits, truthiness, quota preservation and exact validation order.
 - Runtime compatibility run `35636981488` passed the complete Python suite,
@@ -77,6 +80,8 @@ Progress evidence on 2026-09-21:
   Windows path form.
 - Runtime compatibility run `35659424531` passed all seven jobs with
   transactional configuration saving and its live Python save oracle.
+- Runtime compatibility run `35661360516` passed all seven jobs with complete
+  migration import, account identity handling and rollback coverage.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

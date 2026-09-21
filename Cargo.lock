@@ -214,6 +214,7 @@ dependencies = [
  "atomic-write-file",
  "base64",
  "fernet",
+ "getrandom 0.2.17",
  "libc",
  "scrypt",
  "serde",
