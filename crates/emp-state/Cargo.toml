@@ -1,0 +1,14 @@
+[package]
+name = "emp-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "State cryptography and migration envelope compatibility for EMP."
+
+[dependencies]
+base64 = "0.22"
+fernet = { version = "0.2.2", default-features = false, features = ["rustcrypto"] }
+scrypt = "0.12.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
+zeroize = "1.9"

@@ -1,6 +1,8 @@
 {
-  "status": "inventory_only",
+  "status": "implemented",
   "prefix": "easy-multi-provider-v1\n",
   "directions": ["python_to_rust", "rust_to_python"],
-  "negative_cases": ["wrong_key", "tampered_ciphertext", "truncated_ciphertext"]
+  "fixture": "python-crypto-interop.json",
+  "test": "crates/emp-state/tests/python_interop.rs",
+  "negative_cases": ["wrong_key", "tampered_ciphertext", "plaintext_input"]
 }

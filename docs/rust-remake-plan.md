@@ -4,6 +4,16 @@ Status: active on `remake4rust`
 
 Baseline: EMP 0.11.6 at `47a8a0a5e06f82e3fd488fe00c4704fcf0b06f78`
 
+Progress evidence on 2026-09-21:
+
+- Foundation CI run `35625874619` passed the Rust format/lint/test lane, the
+  complete Python suite, and the pinned Codex protocol lanes on Linux, macOS,
+  and Windows.
+- `emp-state` now proves both-direction interoperability for the existing
+  Fernet vault and scrypt/Fernet `.emp` envelope with synthetic Python fixtures
+  and a live local Python oracle. Filesystem transactions, key ownership, and
+  import merge behavior remain in stage 2.
+
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
 environment, an isolated temporary `CODEX_HOME`, and local-only socket access.

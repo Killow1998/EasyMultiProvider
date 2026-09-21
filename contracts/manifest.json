@@ -46,6 +46,16 @@
       "normalization": ["fresh Fernet ciphertext may differ"],
       "side_effects": ["private key and ciphertext files only"],
       "fixture": "state/vault-roundtrip.json"
+    },
+    {
+      "id": "state.migration.python-rust",
+      "level": "state",
+      "source": "tests/test_migration.py and easy_multi_provider/migration.py",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": ["fresh Fernet timestamps and initialization vectors may differ"],
+      "side_effects": ["none; this fixture validates the encrypted envelope only"],
+      "fixture": "state/python-crypto-interop.json"
     }
   ]
 }
