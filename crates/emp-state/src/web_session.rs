@@ -166,7 +166,11 @@ mod tests {
     #[test]
     fn creates_and_reuses_a_python_compatible_session() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("state/web-session.json");
+        let path = directory
+            .path()
+            .canonicalize()
+            .expect("canonical temporary directory")
+            .join("state/web-session.json");
         let created = load_or_create_web_session(&path, NOW).expect("create session");
         assert_eq!(created.token().len(), WEB_SESSION_TOKEN_LENGTH);
         assert!(
@@ -190,7 +194,11 @@ mod tests {
     #[test]
     fn rotates_invalid_expired_and_too_distant_state() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("web-session.json");
+        let path = directory
+            .path()
+            .canonicalize()
+            .expect("canonical temporary directory")
+            .join("web-session.json");
         for payload in [
             b"not json".as_slice(),
             br#"{"token":"short","expires_at":1790000100}"#,
@@ -210,7 +218,11 @@ mod tests {
     #[test]
     fn validates_cookie_and_max_age_without_exposing_token_in_debug() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("web-session.json");
+        let path = directory
+            .path()
+            .canonicalize()
+            .expect("canonical temporary directory")
+            .join("web-session.json");
         let session = load_or_create_web_session(&path, NOW).expect("create session");
         assert!(session.matches_at(session.token(), NOW));
         assert!(!session.matches_at("wrong", NOW));

@@ -14,8 +14,7 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GRANT_ACCESS, GetSecurityInfo, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT,
-    SetEntriesInAclW, SetNamedSecurityInfoW, SetSecurityInfo, TRUSTEE_IS_SID, TRUSTEE_IS_USER,
-    TRUSTEE_W,
+    SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, CONTAINER_INHERIT_ACE,
@@ -24,7 +23,10 @@ use windows_sys::Win32::Security::{
     PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
     TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
-use windows_sys::Win32::Storage::FileSystem::{FILE_ALL_ACCESS, FILE_ATTRIBUTE_REPARSE_POINT};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ALL_ACCESS, FILE_ATTRIBUTE_REPARSE_POINT, FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW,
+    VOLUME_NAME_DOS,
+};
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -150,11 +152,14 @@ pub(super) fn set_private_file(file: &File) -> Result<(), FilesystemError> {
     let user = CurrentUser::load().map_err(|_| FilesystemError::ManagedFileUnavailable)?;
     let acl =
         private_acl(user.sid(), false).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
-    // SAFETY: the Rust File owns a live kernel handle and all ACL pointers are
-    // valid for the duration of this call.
+    // Standard Rust write handles do not request WRITE_DAC. Resolve the name
+    // of the already-open file, then let SetNamedSecurityInfoW acquire the
+    // access it needs without weakening the file's ordinary data handle.
+    let mut wide = path_for_file_handle(file)?;
+    // SAFETY: the path and ACL buffers remain live for this synchronous call.
     let status = unsafe {
-        SetSecurityInfo(
-            file.as_raw_handle() as HANDLE,
+        SetNamedSecurityInfoW(
+            wide.as_mut_ptr(),
             SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
             null_mut(),
@@ -168,6 +173,38 @@ pub(super) fn set_private_file(file: &File) -> Result<(), FilesystemError> {
     } else {
         Err(FilesystemError::ManagedFileUnavailable)
     }
+}
+
+fn path_for_file_handle(file: &File) -> Result<Vec<u16>, FilesystemError> {
+    let handle = file.as_raw_handle() as HANDLE;
+    // SAFETY: a null/zero buffer is the documented size query.
+    let required = unsafe {
+        GetFinalPathNameByHandleW(
+            handle,
+            null_mut(),
+            0,
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+        )
+    };
+    if required == 0 {
+        return Err(FilesystemError::ManagedFileUnavailable);
+    }
+    let mut path = vec![0_u16; required as usize + 1];
+    // SAFETY: `path` is writable for the advertised number of UTF-16 units.
+    let written = unsafe {
+        GetFinalPathNameByHandleW(
+            handle,
+            path.as_mut_ptr(),
+            path.len() as u32,
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+        )
+    };
+    if written == 0 || written as usize >= path.len() {
+        return Err(FilesystemError::ManagedFileUnavailable);
+    }
+    path.truncate(written as usize + 1);
+    path[written as usize] = 0;
+    Ok(path)
 }
 
 pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemError> {

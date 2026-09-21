@@ -44,7 +44,11 @@ fn rust_and_live_python_reuse_each_others_web_sessions() {
         return;
     };
     let directory = tempfile::tempdir().expect("temporary directory");
-    let config_path = directory.path().join("config.json");
+    let config_path = directory
+        .path()
+        .canonicalize()
+        .expect("canonical temporary directory")
+        .join("config.json");
     let session_path = web_session_path(&config_path).expect("session path");
 
     let rust_created =
