@@ -7,6 +7,7 @@
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 const MAX_HIDDEN_MODELS: usize = 1000;
 const MAX_MODEL_ID_BYTES: usize = 256;
@@ -224,6 +225,31 @@ fn account_segment(raw: Option<&Value>, field: &str) -> AccountResult<String> {
         )));
     }
     Ok(trimmed.to_owned())
+}
+
+/// Return the Python-derived managed credential path for one account.
+///
+/// The caller supplies already normalized configuration. Path errors keep
+/// Python's `AccountError` type; `_canonicalize_private_paths` converts them to
+/// `ConfigError` at the public configuration boundary.
+pub fn account_auth_path(
+    config: &Value,
+    account_id: &str,
+    config_path: &Path,
+) -> AccountResult<PathBuf> {
+    let id = account_segment(Some(&Value::from(account_id)), "account.id")?;
+    let root = crate::config::account_root(config);
+    let root = if root.is_absolute() {
+        root
+    } else {
+        config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(root)
+    };
+    Ok(crate::config::path_python_resolve(&root)
+        .join(id)
+        .join("auth.json.enc"))
 }
 
 fn account_name(raw: Option<&Value>, fallback: &str) -> AccountResult<String> {

@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::env;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf, absolute};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_CATALOG_ALIAS_BYTES: usize = 512;
@@ -1879,6 +1879,226 @@ fn python_iterable(raw: Option<&Value>) -> ConfigResult<Vec<Value>> {
 
 fn account_error(error: impl fmt::Display) -> ConfigError {
     ConfigError::python("AccountError", error.to_string())
+}
+
+pub(crate) fn path_python_resolve(path: &Path) -> PathBuf {
+    fn recurse(path: &Path, followed_links: usize) -> PathBuf {
+        let absolute = absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let mut resolved = PathBuf::new();
+        let components = absolute.components().collect::<Vec<_>>();
+        for (index, component) in components.iter().enumerate() {
+            use std::path::Component;
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    resolved.pop();
+                }
+                Component::Prefix(_) | Component::RootDir => resolved.push(component.as_os_str()),
+                Component::Normal(name) => {
+                    let candidate = resolved.join(name);
+                    let is_link = std::fs::symlink_metadata(&candidate)
+                        .is_ok_and(|metadata| metadata.file_type().is_symlink());
+                    if is_link
+                        && followed_links < 64
+                        && let Ok(target) = std::fs::read_link(&candidate)
+                    {
+                        let mut redirected = if target.is_absolute() {
+                            target
+                        } else {
+                            resolved.join(target)
+                        };
+                        for remaining in &components[index + 1..] {
+                            redirected.push(remaining.as_os_str());
+                        }
+                        return recurse(&redirected, followed_links + 1);
+                    }
+                    resolved.push(name);
+                }
+            }
+        }
+        resolved
+    }
+    recurse(path, 0)
+}
+
+pub(crate) fn account_root(config: &Value) -> PathBuf {
+    expand_user(Path::new(
+        config
+            .get("account_store_path")
+            .and_then(Value::as_str)
+            .unwrap_or("state/accounts"),
+    ))
+}
+
+pub(crate) fn expand_user(path: &Path) -> PathBuf {
+    let Some(value) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    let Some(rest) = value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    else {
+        return path.to_path_buf();
+    };
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map_or_else(|| path.to_path_buf(), |home| PathBuf::from(home).join(rest))
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        let character = byte as char;
+        if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | '~') {
+            encoded.push(character);
+        } else {
+            encoded.push('%');
+            encoded.push_str(format!("{byte:02X}").as_str());
+        }
+    }
+    encoded
+}
+
+fn canonical_account_paths(config: &mut Value, config_path: &Path) -> Result<(), ConfigError> {
+    let raw_accounts = config
+        .get("accounts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ConfigError::new("accounts must be a list"))?;
+    let entries = raw_accounts
+        .iter()
+        .enumerate()
+        .map(|(index, account)| {
+            (
+                index,
+                account
+                    .get("auth_file")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                account.get("id").and_then(Value::as_str).map(str::to_owned),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (index, raw_path, id) in entries {
+        if raw_path.is_empty() {
+            continue;
+        }
+        let Some(id) = id else {
+            return Err(ConfigError::new(
+                "account.id must be a safe single path segment",
+            ));
+        };
+        let expected = crate::accounts::account_auth_path(config, &id, config_path)
+            .map_err(|error| ConfigError::new(error.to_string()))?;
+        let mut actual = expand_user(Path::new(&raw_path));
+        if !actual.is_absolute() {
+            actual = config_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(actual);
+        }
+        let actual_is_symlink = std::fs::symlink_metadata(&actual)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink());
+        let actual = path_python_resolve(&actual);
+        if actual != expected || actual_is_symlink {
+            return Err(ConfigError::new(
+                "account.auth_file must be managed inside the account store",
+            ));
+        }
+        let account = config
+            .get_mut("accounts")
+            .and_then(Value::as_array_mut)
+            .and_then(|accounts| accounts.get_mut(index))
+            .ok_or_else(|| ConfigError::new("accounts must be a list"))?;
+        if let Some(object) = account.as_object_mut() {
+            object.insert(
+                "auth_file".to_owned(),
+                Value::from(expected.to_string_lossy().into_owned()),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Canonicalize configured account credentials against the derived account root.
+///
+/// This is the public Rust compatibility slice for Python
+/// `canonicalize_account_paths`. Account path errors are represented as
+/// `ConfigError` because Python's `_canonicalize_private_paths` catches the
+/// original `AccountError` and re-raises it as a `ConfigError`.
+pub fn canonicalize_account_paths(config: &mut Value, config_path: &Path) -> ConfigResult<()> {
+    canonical_account_paths(config, config_path)
+}
+
+fn canonical_secret_paths(config: &mut Value, config_path: &Path) -> Result<(), ConfigError> {
+    let base = config_path
+        .parent()
+        .ok_or_else(|| ConfigError::new("configuration path must have a parent"))?;
+    let mut root = expand_user(Path::new(
+        config
+            .get("secret_store_path")
+            .and_then(Value::as_str)
+            .unwrap_or("state/secrets"),
+    ));
+    if !root.is_absolute() {
+        root = base.join(root);
+    }
+    let root = path_python_resolve(&root);
+    let providers = config
+        .get_mut("providers")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| ConfigError::new("providers must be a list"))?;
+    for provider in providers {
+        let raw_path = provider
+            .get("api_key_file")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if raw_path.is_empty() {
+            continue;
+        }
+        let Some(id) = provider.get("id").and_then(Value::as_str) else {
+            return Err(ConfigError::new(
+                "provider.id must be a safe single path segment",
+            ));
+        };
+        let expected = root.join(percent_encode(id) + ".key.enc");
+        let actual = expand_user(Path::new(raw_path));
+        let actual = if actual.is_absolute() {
+            actual
+        } else {
+            config_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(actual)
+        };
+        let actual_is_symlink = std::fs::symlink_metadata(&actual)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink());
+        let actual = path_python_resolve(&actual);
+        if actual != expected || actual_is_symlink {
+            return Err(ConfigError::new(
+                "provider.api_key_file must be managed inside the secret store",
+            ));
+        }
+        if let Some(object) = provider.as_object_mut() {
+            object.insert(
+                "api_key_file".to_owned(),
+                Value::String(expected.to_string_lossy().into_owned()),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Canonicalize managed private paths for already normalized configuration.
+///
+/// This is the public Rust compatibility slice for Python
+/// `_canonicalize_private_paths`. Relative store paths and relative managed
+/// files are based on `config_path.parent`, `~` is expanded, missing path
+/// components are retained, existing links are followed, and the final managed
+/// input path must itself not be a symlink.
+pub fn canonicalize_private_paths(config: &mut Value, config_path: &Path) -> ConfigResult<()> {
+    canonical_account_paths(config, config_path)?;
+    canonical_secret_paths(config, config_path)
 }
 
 fn utc_date_parts(seconds: u64) -> (i64, u32, u32) {

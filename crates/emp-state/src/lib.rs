@@ -21,15 +21,16 @@ pub mod model_values;
 pub mod vault;
 
 pub use accounts::{
-    AccountError, AccountResult, normalize_account, normalize_context_windows,
+    AccountError, AccountResult, account_auth_path, normalize_account, normalize_context_windows,
     normalize_hidden_models,
 };
 pub use config::{
-    ConfigError, ConfigResult, canonical_catalog_json, catalog_etag, merge_web_update,
-    merge_web_update_with_time, normalize_catalog_presentations, normalize_codex_runtime_sources,
-    normalize_configuration, normalize_context_calibrations, normalize_model,
-    normalize_model_capability_sources, normalize_provider, normalize_provider_base_url,
-    normalize_provider_id, normalize_subscription_search,
+    ConfigError, ConfigResult, canonical_catalog_json, canonicalize_account_paths,
+    canonicalize_private_paths, catalog_etag, merge_web_update, merge_web_update_with_time,
+    normalize_catalog_presentations, normalize_codex_runtime_sources, normalize_configuration,
+    normalize_context_calibrations, normalize_model, normalize_model_capability_sources,
+    normalize_provider, normalize_provider_base_url, normalize_provider_id,
+    normalize_subscription_search,
 };
 pub use fernet::{Fernet, FernetError, FernetKey, FernetKeyError};
 pub use filesystem::{

@@ -181,6 +181,21 @@
       "fixture": "state/python-web-update-merge.json"
     },
     {
+      "id": "state.private-path-canonicalization.python-rust",
+      "level": "state",
+      "source": "easy_multi_provider/config.py:_canonicalize_private_paths",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": [
+        "relative stores and credential files resolve from the configuration parent",
+        "home-relative paths expand before strict-false resolution",
+        "managed account and provider filenames are derived from normalized identities",
+        "path escapes and final symlinks are rejected"
+      ],
+      "side_effects": ["none; path metadata is inspected but no state is written"],
+      "fixture": "state/python-private-path-canonicalization.json"
+    },
+    {
       "id": "state.capability-model-values.python-rust",
       "level": "state",
       "source": "easy_multi_provider/capabilities.py pure model value helpers",

@@ -36,8 +36,10 @@ Progress evidence on 2026-09-21:
   prefix conflicts, provider references and tail-control normalization. The
   pathless Web-update merge preserves credentials, runtime/path selections,
   discovery state, calibrations and capability provenance under frozen and live
-  Python oracles. Path-aware canonicalization, import merge behavior and Windows
-  ACL/reparse-point hardening remain.
+  Python oracles. Managed account and provider credential paths now use the same
+  config-relative, home-relative, strict-false resolution and final-symlink
+  checks as Python. Import merge behavior and Windows ACL/reparse-point hardening
+  remain.
   Account metadata normalization also matches Python's sorting, UTF-8 byte
   limits, truthiness, quota preservation and exact validation order.
 - Runtime compatibility run `35636981488` passed the complete Python suite,
@@ -57,6 +59,8 @@ Progress evidence on 2026-09-21:
   model-record normalization enabled against the live Python oracle.
 - Runtime compatibility run `35653303723` passed all seven jobs with complete
   top-level configuration normalization enabled against the live Python oracle.
+- Runtime compatibility run `35655058469` passed all seven jobs with pathless
+  Web-update merging enabled against the live Python oracle.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
