@@ -168,14 +168,24 @@ assert.doesNotMatch(html, /实际调用时自动使用其中兼容性最可靠�
 assert.match(html, /class="workspace-layout"/);
 assert.match(html, /<aside class="workspace-side">/);
 assert.match(html, /onclick="openUpdate\(\)"/);
+assert.doesNotMatch(html, /<details class="(?:header-menu|action-menu)">/, "primary actions must stay visible");
+for (const visibleControl of [
+  /onclick="selectMigrationFile\(\)"/,
+  /onclick="exportMigration\(\)"/,
+  /id="language_select"/,
+  /id="theme_select"/,
+  /onclick="quitEmp\(\)"/,
+]) assert.match(html, visibleControl, `page control must stay visible: ${visibleControl}`);
+assert.match(html, /button,\.repo-link\{[^}]*height:36px[^}]*margin:0[^}]*white-space:nowrap/);
+assert.match(html, /@media\(max-width:760px\)\{[\s\S]*?\.page-header\{flex-direction:column;align-items:stretch\}/);
 assert.match(html, /href="https:\/\/github.com\/Killow1998\/EasyMultiProvider" target="_blank" rel="noopener noreferrer"/);
 assert.doesNotMatch(html, /id="subscription_search_account"/);
 assert.doesNotMatch(html, /data-catalog-summary/);
-assert.match(html, /@phosphor-icons\/core 2\.1\.1, Regular weight, MIT/);
+assert.match(html, /Icon paths derived from Lucide \(ISC\)/);
 assert.strictEqual(
   Array.from(html.matchAll(/button\[data-icon="[^"]+"\](?:,\.quota-reset)?\{--button-icon:url\("data:image\/svg\+xml,%3Csvg%20/g)).length,
   14,
-  "all action icons must come from the embedded Phosphor set",
+  "all action icons must come from the embedded Lucide set",
 );
 for (const unwantedDefaultTip of [
   /长请求自动扩容/,
@@ -384,14 +394,16 @@ function duplicateAccountBehavior() {
   assert.match(html, /same-login-account/);
   assert.match(html, /usable-account/);
   assert.match(html, /模型显示由原生账户管理/);
-  const nativeRow = html.split("当前 Codex 登录")[1].split("</tr>")[0];
-  assert.doesNotMatch(nativeRow, /removeAccount\('@native'\)/);
-  const duplicateRow = html.split("</tr>").find(row => row.includes("same-login-account"));
-  assert(duplicateRow, "duplicate account row must render");
-  assert.match(duplicateRow, /account-duplicate/);
-  assert.doesNotMatch(duplicateRow, /editAccount\('same-login-account'\)/);
-  assert.match(duplicateRow, /refreshAccount\('same-login-account'\)/);
-  assert.match(duplicateRow, /openQuotaHistory\('same-login-account'\)/);
+  const cards = [...html.matchAll(/<article class="entity-card account-card[^\"]*"[\s\S]*?<\/article>/g)].map(match => match[0]);
+  assert.strictEqual(cards.length, 3, "each account should render as one aligned card");
+  const nativeCard = cards.find(card => card.includes("refreshAccount('@native')"));
+  assert.doesNotMatch(nativeCard, /removeAccount\('@native'\)/);
+  const duplicateCard = cards.find(card => card.includes("refreshAccount('same-login-account')"));
+  assert(duplicateCard, "duplicate account card must render");
+  assert.match(duplicateCard, /account-duplicate/);
+  assert.doesNotMatch(duplicateCard, /editAccount\('same-login-account'\)/);
+  assert.doesNotMatch(duplicateCard, /<details class="action-menu">/);
+  assert.match(duplicateCard, /openQuotaHistory\('same-login-account'\)/);
 }
 
 function quotaHistoryHtml() {
@@ -880,7 +892,7 @@ async function accountEmojiBehavior() {
   assert.strictEqual(run("__savedEmojiCandidate.accounts[0].prefix"), "ship");
   assert.strictEqual(run("__savedEmojiCandidate.catalog_presentations['ship/model-a'].catalog_alias"), "Keep me");
   run("state = __savedEmojiCandidate; renderAccounts()");
-  assert.match(getElement("accounts").innerHTML, /class="pill">🚢<\/span>/);
+  assert.match(getElement("accounts").innerHTML, /<strong>🚢<\/strong><span class="pill">ship<\/span>/);
 }
 
 async function quotaErrorBehavior() {
@@ -899,6 +911,23 @@ function modelGroupBehavior() {
   assert(html.indexOf("Provider B") < html.indexOf("Provider A"), "provider config order must be preserved");
   assert(html.indexOf("provider-b/new") < html.indexOf("provider-b/old"), "newer visible models must sort first");
   assert(html.indexOf("provider-b/old") < html.indexOf("provider-b/hidden"), "hidden models must sort last");
+  assert.strictEqual((html.match(/class="entity-card model-card/g) || []).length, 4);
+  assert.strictEqual((html.match(/<details class="action-menu">/g) || []).length, 0);
+  assert.strictEqual((html.match(/testModelVision\('/g) || []).length, 4);
+  assert.strictEqual((html.match(/removeModel\('/g) || []).length, 4);
+  assert.doesNotMatch(html, /<table>/, "model actions should not be squeezed into table cells");
+}
+
+function providerCardBehavior() {
+  run("state = {providers:[{id:'provider-a',name:'Provider A',base_url:'https://example.test/v1',protocol:'chat_completions',auth_mode:'api_key'}],models:[{provider:'provider-a',enabled:true}]}; renderProviders()");
+  const html = getElement("providers").innerHTML;
+  assert.match(html, /class="entity-card provider-card"/);
+  assert.match(html, /discoverProvider\('provider-a'\)/);
+  assert.match(html, /editProvider\('provider-a'\)/);
+  assert.doesNotMatch(html, /<details class="action-menu">/);
+  assert.match(html, /toggleProviderModels\('provider-a', false\)/);
+  assert.match(html, /removeProvider\('provider-a'\)/);
+  assert.doesNotMatch(html, /<table>/);
 }
 
 function officialPresetBehavior() {
@@ -928,10 +957,10 @@ function capabilityMetadataBehavior() {
   assert.match(html, /输入 文本\/图像/, "confirmed input modalities must display");
   assert.match(html, /输出 文本\/音频/, "confirmed output modalities must display");
   assert.match(html, /Responses\/Chat Completions/, "confirmed protocols must display");
-  const unconfirmedStart = html.indexOf("unconfirmed");
-  const unconfirmedEnd = html.indexOf("</tr>", unconfirmedStart);
-  const unconfirmedCell = unconfirmedEnd > unconfirmedStart ? html.substring(unconfirmedStart, unconfirmedEnd) : "";
-  assert.doesNotMatch(unconfirmedCell, /输入 文本/, "unknown provenance must not display as confirmed support");
+  const unconfirmedCard = [...html.matchAll(/<article class="entity-card model-card[^\"]*"[\s\S]*?<\/article>/g)].map(match => match[0]).find(card => card.includes('provider-a/unconfirmed'));
+  assert(unconfirmedCard, "unconfirmed model card must render");
+  assert.match(unconfirmedCard, /图像未知/);
+  assert.doesNotMatch(unconfirmedCard, /输入 文本/, "unknown provenance must not display as confirmed support");
 
   context.__testPickerModels = [
     {upstream_id:'multimodal',display_name:'Multimodal Model',input_modalities:['text','image'],output_modalities:['text','audio'],supported_protocols:['responses','chat_completions'],capability_sources:{input_modalities:{source:'official'},output_modalities:{source:'advertised'},supported_protocols:{source:'observed'}}},
@@ -1267,6 +1296,7 @@ function updateBehavior() {
   await accountEmojiBehavior();
   await quotaErrorBehavior();
   modelGroupBehavior();
+  providerCardBehavior();
   officialPresetBehavior();
   capabilityMetadataBehavior();
   await presentationBehavior();

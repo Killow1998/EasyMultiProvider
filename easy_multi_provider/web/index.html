@@ -24,22 +24,22 @@ section{background:var(--panel);border:1px solid var(--border);border-radius:6px
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.wide{grid-column:1/-1}
 label{display:block;color:var(--muted);font-size:12px;margin:0 0 4px}input,select,textarea{width:100%;background:var(--input);color:var(--text);border:1px solid var(--border-strong);border-radius:4px;padding:7px 8px;font:inherit}input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent-soft);border-color:var(--accent)}textarea{min-height:78px;resize:vertical}
 button{border:1px solid var(--accent);border-radius:4px;padding:6px 10px;background:var(--accent);color:#fff;cursor:pointer;margin:3px 3px 3px 0;font:600 13px/1.3 inherit;transition:background-color .12s,border-color .12s,color .12s}button:hover{background:var(--accent-hover);border-color:var(--accent-hover)}button.secondary{background:transparent;border-color:var(--border-strong);color:var(--text)}button.secondary:hover{background:var(--secondary-hover);border-color:var(--border-strong)}button.danger{background:transparent;border-color:var(--border-strong);color:var(--danger-text)}button.danger:hover{background:var(--danger-soft);border-color:var(--danger)}button:disabled{opacity:.5;cursor:not-allowed}button:focus-visible{outline:2px solid var(--accent-soft);outline-offset:2px}
-/* @phosphor-icons/core 2.1.1, Regular weight, MIT */
-button[data-icon="update"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm37.66-101.66a8,8,0,0,1-11.32,11.32L136,107.31V168a8,8,0,0,1-16,0V107.31l-18.34,18.35a8,8,0,0,1-11.32-11.32l32-32a8,8,0,0,1,11.32,0Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon]{display:inline-flex;align-items:center;gap:6px}button[data-icon]::before{content:"";width:14px;height:14px;flex:none;background:currentColor;mask:var(--button-icon) center/14px 14px no-repeat;-webkit-mask:var(--button-icon) center/14px 14px no-repeat}
-button[data-icon="download"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V32a8,8,0,0,0-16,0v92.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="upload"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0ZM93.66,77.66,120,51.31V144a8,8,0,0,0,16,0V51.31l26.34,26.35a8,8,0,0,0,11.32-11.32l-40-40a8,8,0,0,0-11.32,0l-40,40A8,8,0,0,0,93.66,77.66Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="save"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M219.31,72,184,36.69A15.86,15.86,0,0,0,172.69,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V83.31A15.86,15.86,0,0,0,219.31,72ZM168,208H88V152h80Zm40,0H184V152a16,16,0,0,0-16-16H88a16,16,0,0,0-16,16v56H48V48H172.69L208,83.31ZM160,72a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h56A8,8,0,0,1,160,72Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="refresh"],.quota-reset{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M224,48V96a8,8,0,0,1-8,8H168a8,8,0,0,1,0-16h28.69L182.06,73.37a79.56,79.56,0,0,0-56.13-23.43h-.45A79.52,79.52,0,0,0,69.59,72.71,8,8,0,0,1,58.41,61.27a96,96,0,0,1,135,.79L208,76.69V48a8,8,0,0,1,16,0ZM186.41,183.29a80,80,0,0,1-112.47-.66L59.31,168H88a8,8,0,0,0,0-16H40a8,8,0,0,0-8,8v48a8,8,0,0,0,16,0V179.31l14.63,14.63A95.43,95.43,0,0,0,130,222.06h.53a95.36,95.36,0,0,0,67.07-27.33,8,8,0,0,0-11.18-11.44Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="check"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M229.66,77.66l-128,128a8,8,0,0,1-11.32,0l-56-56a8,8,0,0,1,11.32-11.32L96,188.69,218.34,66.34a8,8,0,0,1,11.32,11.32Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="restore"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M224,128a96,96,0,0,1-94.71,96H128A95.38,95.38,0,0,1,62.1,197.8a8,8,0,0,1,11-11.63A80,80,0,1,0,71.43,71.39a3.07,3.07,0,0,1-.26.25L44.59,96H72a8,8,0,0,1,0,16H24a8,8,0,0,1-8-8V56a8,8,0,0,1,16,0V85.8L60.25,60A96,96,0,0,1,224,128Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="activity"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M240,128a8,8,0,0,1-8,8H204.94l-37.78,75.58A8,8,0,0,1,160,216h-.4a8,8,0,0,1-7.08-5.14L95.35,60.76,63.28,131.31A8,8,0,0,1,56,136H24a8,8,0,0,1,0-16H50.85L88.72,36.69a8,8,0,0,1,14.76.46l57.51,151,31.85-63.71A8,8,0,0,1,200,120h32A8,8,0,0,1,240,128Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="plus"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M224,128a8,8,0,0,1-8,8H136v80a8,8,0,0,1-16,0V136H40a8,8,0,0,1,0-16h80V40a8,8,0,0,1,16,0v80h80A8,8,0,0,1,224,128Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="edit"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M227.31,73.37,182.63,28.68a16,16,0,0,0-22.63,0L36.69,152A15.86,15.86,0,0,0,32,163.31V208a16,16,0,0,0,16,16H92.69A15.86,15.86,0,0,0,104,219.31L227.31,96a16,16,0,0,0,0-22.63ZM92.69,208H48V163.31l88-88L180.69,120ZM192,108.68,147.31,64l24-24L216,84.68Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="trash"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M216,48H176V40a24,24,0,0,0-24-24H104A24,24,0,0,0,80,40v8H40a8,8,0,0,0,0,16h8V208a16,16,0,0,0,16,16H192a16,16,0,0,0,16-16V64h8a8,8,0,0,0,0-16ZM96,40a8,8,0,0,1,8-8h48a8,8,0,0,1,8,8v8H96Zm96,168H64V64H192ZM112,104v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm48,0v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="chart"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M232,208a8,8,0,0,1-8,8H32a8,8,0,0,1-8-8V48a8,8,0,0,1,16,0v94.37L90.73,98a8,8,0,0,1,10.07-.38l58.81,44.11L218.73,90a8,8,0,1,1,10.54,12l-64,56a8,8,0,0,1-10.07.38L96.39,114.29,40,163.63V200H224A8,8,0,0,1,232,208Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="settings"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z%22%2F%3E%3C%2Fsvg%3E")}
-button[data-icon="test"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%20fill%3D%22black%22%3E%3Cpath%20d%3D%22M221.69,199.77,160,96.92V40h8a8,8,0,0,0,0-16H88a8,8,0,0,0,0,16h8V96.92L34.31,199.77A16,16,0,0,0,48,224H208a16,16,0,0,0,13.72-24.23ZM110.86,103.25A7.93,7.93,0,0,0,112,99.14V40h32V99.14a7.93,7.93,0,0,0,1.14,4.11L183.36,167c-12,2.37-29.07,1.37-51.75-10.11-15.91-8.05-31.05-12.32-45.22-12.81ZM48,208l28.54-47.58c14.25-1.74,30.31,1.85,47.82,10.72,19,9.61,35,12.88,48,12.88a69.89,69.89,0,0,0,19.55-2.7L208,208Z%22%2F%3E%3C%2Fsvg%3E")}
+/* Icon paths derived from Lucide (ISC): https://lucide.dev/license */
+button[data-icon="update"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M12%2020V6%22/%3E%3Cpath%20d%3D%22m5%2012%207-7%207%207%22/%3E%3C/svg%3E")}
+button[data-icon]{display:inline-flex;align-items:center;gap:6px}button[data-icon]::before{content:"";width:15px;height:15px;flex:none;background:currentColor;mask:var(--button-icon) center/15px 15px no-repeat;-webkit-mask:var(--button-icon) center/15px 15px no-repeat}
+button[data-icon="download"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M21%2015v4a2%202%200%200%201-2%202H5a2%202%200%200%201-2-2v-4%22/%3E%3Cpath%20d%3D%22M7%2010l5%205%205-5%22/%3E%3Cpath%20d%3D%22M12%2015V3%22/%3E%3C/svg%3E")}
+button[data-icon="upload"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M21%2015v4a2%202%200%200%201-2%202H5a2%202%200%200%201-2-2v-4%22/%3E%3Cpath%20d%3D%22M17%208l-5-5-5%205%22/%3E%3Cpath%20d%3D%22M12%203v12%22/%3E%3C/svg%3E")}
+button[data-icon="save"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M19%2021H5a2%202%200%200%201-2-2V5a2%202%200%200%201%202-2h11l5%205v11a2%202%200%200%201-2%202z%22/%3E%3Cpath%20d%3D%22M17%2021v-8H7v8%22/%3E%3Cpath%20d%3D%22M7%203v5h8%22/%3E%3C/svg%3E")}
+button[data-icon="refresh"],.quota-reset{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M3%2012a9%209%200%200%201%209-9%209.75%209.75%200%200%201%206.74%202.74L21%208%22/%3E%3Cpath%20d%3D%22M21%203v5h-5%22/%3E%3Cpath%20d%3D%22M21%2012a9%209%200%200%201-9%209%209.75%209.75%200%200%201-6.74-2.74L3%2016%22/%3E%3Cpath%20d%3D%22M8%2016H3v5%22/%3E%3C/svg%3E")}
+button[data-icon="check"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M20%206L9%2017l-5-5%22/%3E%3C/svg%3E")}
+button[data-icon="restore"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M9%2014%204%209l5-5%22/%3E%3Cpath%20d%3D%22M4%209h10.5a5.5%205.5%200%200%201%205.5%205.5A5.5%205.5%200%200%201%2014.5%2020H11%22/%3E%3C/svg%3E")}
+button[data-icon="activity"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M22%2012h-4l-3%209L9%203l-3%209H2%22/%3E%3C/svg%3E")}
+button[data-icon="plus"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M12%205v14%22/%3E%3Cpath%20d%3D%22M5%2012h14%22/%3E%3C/svg%3E")}
+button[data-icon="edit"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M17%203a2.828%202.828%200%201%201%204%204L7.5%2020.5%202%2022l1.5-5.5L17%203z%22/%3E%3C/svg%3E")}
+button[data-icon="trash"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M3%206h18%22/%3E%3Cpath%20d%3D%22M19%206v14a2%202%200%200%201-2%202H7a2%202%200%200%201-2-2V6%22/%3E%3Cpath%20d%3D%22M8%206V4a2%202%200%200%201%202-2h4a2%202%200%200%201%202%202v2%22/%3E%3Cpath%20d%3D%22M10%2011v6%22/%3E%3Cpath%20d%3D%22M14%2011v6%22/%3E%3C/svg%3E")}
+button[data-icon="chart"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M3%203v18h18%22/%3E%3Cpath%20d%3D%22M18%2017V9%22/%3E%3Cpath%20d%3D%22M13%2017V5%22/%3E%3Cpath%20d%3D%22M8%2017v-3%22/%3E%3C/svg%3E")}
+button[data-icon="settings"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M12.22%202h-.44a2%202%200%200%200-2%202v.18a2%202%200%200%201-1%201.73l-.43.25a2%202%200%200%201-2%200l-.15-.08a2%202%200%200%200-2.73.73l-.22.38a2%202%200%200%200%20.73%202.73l.15.1a2%202%200%200%201%201%201.72v.51a2%202%200%200%201-1%201.74l-.15.09a2%202%200%200%200-.73%202.73l.22.38a2%202%200%200%200%202.73.73l.15-.08a2%202%200%200%201%202%200l.43.25a2%202%200%200%201%201%201.73V20a2%202%200%200%200%202%202h.44a2%202%200%200%200%202-2v-.18a2%202%200%200%201%201-1.73l.43-.25a2%202%200%200%201%202%200l.15.08a2%202%200%200%200%202.73-.73l.22-.39a2%202%200%200%200-.73-2.73l-.15-.08a2%202%200%200%201-1-1.74v-.5a2%202%200%200%201%201-1.74l.15-.09a2%202%200%200%200%20.73-2.73l-.22-.38a2%202%200%200%200-2.73-.73l-.15.08a2%202%200%200%201-2%200l-.43-.25a2%202%200%200%201-1-1.73V4a2%202%200%200%200-2-2z%22/%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%223%22/%3E%3C/svg%3E")}
+button[data-icon="test"]{--button-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M10%202v7.527a2%202%200%200%201-.211.896L4.72%2020.55a1%201%200%200%200%20.9%201.45h12.76a1%201%200%200%200%20.9-1.45l-5.069-10.127A2%202%200%200%201%2014%209.527V2%22/%3E%3Cpath%20d%3D%22M8.5%202h7%22/%3E%3Cpath%20d%3D%22M7%2016h10%22/%3E%3C/svg%3E")}
 table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--border);vertical-align:top}th{color:var(--muted);font-weight:600;font-size:12px}td:last-child button{padding:5px 8px;margin-top:0;margin-bottom:3px}
 code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-space:pre-wrap;background:var(--panel-soft);border:1px solid var(--border);padding:9px;border-radius:4px;color:var(--code);overflow:auto}
 .muted{color:var(--muted)}.pill{display:inline-block;background:var(--accent-soft);border-radius:999px;padding:2px 7px;font-size:11px}.danger-text,.refresh-error{color:var(--danger-text)}
@@ -63,6 +63,106 @@ main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minma
 .cache-performance{margin-top:18px}.cache-performance h3{margin-bottom:6px}.cache-performance p{font-size:13px}.cache-model{margin-top:8px;border:1px solid var(--border);border-radius:6px;padding:10px 12px}.cache-model>summary{cursor:pointer;overflow-wrap:anywhere}.cache-model>summary span{margin-right:12px}.cache-periods{max-height:280px;overflow:auto}.cache-periods table{font-size:13px;min-width:450px}.cache-periods th{position:sticky;top:0;background:var(--panel)}.cache-model p{margin:10px 0}
 .usage-filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:12px 0}.usage-filters label{flex:1;min-width:145px}.usage-filters input,.usage-filters select{margin-top:4px}.usage-totals{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}.usage-total{background:var(--panel-soft);border:1px solid var(--border);border-radius:6px;padding:14px}.usage-total strong{display:block;font-size:25px;font-variant-numeric:tabular-nums}.usage-total span{color:var(--muted);font-size:12px}.usage-chart{width:100%;height:190px;display:block}.usage-chart text{fill:var(--muted);font-size:12px}.usage-chart rect{fill:var(--accent);cursor:pointer}.usage-chart rect:hover,.usage-chart rect:focus{fill:var(--success);outline:none}.usage-table{overflow:auto;max-height:370px}.usage-table table{font-size:12px;min-width:620px}.usage-table td small{display:block;color:var(--muted)}.usage-table td{font-variant-numeric:tabular-nums}.usage-notice{font-size:12px;color:var(--muted);margin:10px 0}.usage-warning{color:var(--warning)}
 </style>
+<style>
+/* Notion DESIGN.md controls: soft canvas, hairline borders, compact equal-height actions. */
+:root{--bg:#f7f7f5;--panel:#fff;--panel-soft:#fbfbfa;--input:#fff;--text:#37352f;--muted:#787066;--border:#e9e9e7;--border-strong:#d3d1cb;--accent:#2f6fdd;--accent-hover:#2563c5;--accent-soft:#edf2fd;--secondary-hover:#f1f1ef;--danger:#d44c47;--danger-soft:#fdebec;--danger-text:#c04b45;--warning:#c08b36;--warning-soft:#fdf6e5;--success:#448361;--code:#2c5fa8}
+:root[data-theme="dark"]{--bg:#191919;--panel:#202020;--panel-soft:#1f1f1f;--input:#252525;--text:#e9e9e7;--muted:#a2a29c;--border:#373737;--border-strong:#4d4d4d;--accent:#5b97f0;--accent-hover:#6ea5f2;--accent-soft:#253344;--secondary-hover:#2f2f2f;--danger:#e16259;--danger-soft:#3d2626;--danger-text:#e9877f;--warning:#d6a049;--warning-soft:#3a2f1e;--success:#6ea87e;--code:#a3c3f7}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#191919;--panel:#202020;--panel-soft:#1f1f1f;--input:#252525;--text:#e9e9e7;--muted:#a2a29c;--border:#373737;--border-strong:#4d4d4d;--accent:#5b97f0;--accent-hover:#6ea5f2;--accent-soft:#253344;--secondary-hover:#2f2f2f;--danger:#e16259;--danger-soft:#3d2626;--danger-text:#e9877f;--warning:#d6a049;--warning-soft:#3a2f1e;--success:#6ea87e;--code:#a3c3f7}}
+body{font-size:14px}
+main{max-width:1360px;padding:28px 20px 44px}
+h1{font-size:24px;letter-spacing:-.02em}
+h2{font-size:15px;margin:0 0 14px}
+.page-header{align-items:flex-start;padding-bottom:18px;margin-bottom:8px}
+.page-brand p{margin-top:4px}
+.page-header-controls{justify-content:flex-end;flex-wrap:wrap;gap:10px}
+.page-header-controls :is(button,select,a){height:36px;min-height:36px;font-size:14px}
+.header-group{gap:7px;padding-right:10px}
+section{border-radius:12px;padding:18px 20px;box-shadow:0 1px 2px rgba(15,15,15,.04)}
+button,.repo-link{display:inline-flex;align-items:center;justify-content:center;gap:6px;box-sizing:border-box;height:36px;min-height:36px;margin:0;padding:0 12px;border-radius:8px;font-family:inherit;font-size:14px;font-weight:500;line-height:1;white-space:nowrap;flex:0 0 auto;text-decoration:none}
+.repo-link{border:1px solid var(--border-strong);background:transparent;color:var(--text)}
+.repo-link:hover{background:var(--secondary-hover);border-color:var(--border-strong)}
+button:focus-visible,.repo-link:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.48;cursor:not-allowed;box-shadow:none}
+button:not(:disabled):hover{transform:none}
+.toolbar,.runtime-controls,.section-tools,.action-group,.entity-card-actions,.page-header-controls{flex-wrap:wrap}
+.toolbar,.runtime-controls,.section-tools,.action-group,.entity-card-actions{gap:8px}
+.integration-actions{gap:10px}
+.action-group{align-items:flex-start}
+.action-group>.toolbar,.action-group>.runtime-controls{align-items:center}
+.entity-card{border-radius:10px;background:var(--panel)}
+.entity-card:hover{border-color:var(--border-strong)}
+.entity-card-actions{padding-top:10px;border-top:1px solid var(--border)}
+.entity-card-actions button{min-width:74px}
+.display-row{border-radius:10px;background:var(--panel)}
+.modal{border-radius:12px;padding:20px}
+.modal-actions{flex-wrap:wrap}
+.notification-close,.modal-close{width:36px;height:36px;min-height:36px;padding:0}
+@media(max-width:760px){main{padding:18px 12px 32px}section{padding:16px}.page-header{flex-direction:column;align-items:stretch}.action-group{display:block}.action-group-label{display:block;margin-bottom:8px;padding-top:0}.action-group>.toolbar,.action-group>.runtime-controls{margin:0}}
+.workspace-layout{grid-template-columns:minmax(0,1.2fr) minmax(390px,.8fr);gap:18px}
+.workspace-column>section,.workspace-side>section{margin:16px 0}
+section{border-radius:14px;padding:20px;box-shadow:0 5px 22px rgba(2,11,24,.07)}
+section>h2{margin-bottom:16px}
+.integration-card,.health-stat,.usage-total{border-radius:10px;background:var(--panel-soft)}
+.integration-card{padding:16px}
+.pill{padding:3px 9px;border:1px solid var(--border);font-weight:600}
+button[data-icon]{display:inline-flex}
+.repo-link{border:1px solid var(--border-strong);background:transparent;color:var(--text);cursor:pointer}
+.toolbar,.runtime-controls,.section-tools,.action-group{gap:8px}
+.toolbar{align-items:center;margin-bottom:14px}
+.action-group{display:grid;grid-template-columns:70px minmax(0,1fr);align-items:start}
+.action-group-label{width:auto;padding-top:9px}
+.action-group>.toolbar,.action-group>.runtime-controls{margin:0;min-width:0}
+.search-toggle{align-items:center}
+.search-toggle .action-group-label{padding-top:0}
+.entity-list{display:grid;gap:10px}
+.entity-card{position:relative;display:grid;gap:10px 16px;min-width:0;padding:15px 16px;border:1px solid var(--border);border-radius:11px;background:var(--panel-soft)}
+.entity-card:hover{border-color:var(--border-strong)}
+.entity-card-title{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
+.entity-card-title strong{min-width:0;overflow-wrap:anywhere;font-size:14px}
+.entity-card-title .pill{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.entity-card-subtitle,.entity-card-meta{color:var(--muted);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+.entity-card-subtitle{margin-top:5px}
+.entity-card-subtitle span{display:block}
+.entity-card-subtitle code,.entity-card-meta code{word-break:break-all}
+.entity-card-status{color:var(--muted);font-size:12px;line-height:1.4;margin-top:7px}
+.entity-card-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;grid-column:1/-1;padding-top:10px;border-top:1px solid var(--border)}
+.entity-card-actions button{min-width:74px}
+.entity-card-actions button:disabled{min-width:74px}
+.entity-card-quota{min-width:0}
+.account-card{grid-template-columns:minmax(0,1fr) minmax(180px,225px)}
+.account-card .quota-stack{max-width:none;min-width:0}
+.account-duplicate .entity-card-main{opacity:.62}
+.provider-card .entity-card-meta,.model-card .entity-card-meta{margin-top:6px}
+.provider-card .endpoint{display:block;min-width:0;overflow-wrap:anywhere;color:var(--code)}
+.provider-card .entity-card-status{margin-top:7px}
+.model-card{grid-template-columns:minmax(0,1fr) auto}
+.model-card .entity-card-main{min-width:0}
+.model-card .entity-card-title strong{overflow-wrap:anywhere}
+.model-card .visibility{display:inline-flex;align-items:center;gap:6px;margin:0;color:var(--text);white-space:nowrap}
+.model-card .visibility input{width:auto;margin:0}
+.provider-model-group{border:0;padding:0;margin:18px 0 0}
+.provider-model-group:first-child{margin-top:0}
+.provider-model-group h3{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:13px;color:var(--text)}
+.provider-model-group .entity-list{margin-bottom:10px}
+.display-list{border:0;display:grid;gap:9px}
+.display-row{grid-template-columns:minmax(0,1fr) auto;gap:10px 12px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel-soft)}
+.display-row:last-child{border-bottom:1px solid var(--border)}
+.display-row .route,.display-row>label:not(.inline-check){grid-column:1/-1;min-width:0}
+.display-row .route strong{display:block;overflow-wrap:anywhere}
+.display-row .route code{margin-top:3px;font-size:11px;color:var(--muted)}
+.display-row>label:not(.inline-check) input{margin-top:5px}
+.display-row .inline-check{grid-column:1;align-self:center}
+.display-row>button{grid-column:2;justify-self:end}
+.section-tools{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}
+.section-tools input{grid-column:1/-1;max-width:none;min-width:0}
+.section-tools .spacer{display:none}
+.section-tools>button:last-child{justify-self:end}
+.modal{border-radius:14px;padding:22px}
+.modal-actions{flex-wrap:wrap}
+.choice{display:block;min-height:0;white-space:normal}
+@media(max-width:1180px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}}
+@media(max-width:760px){main{padding:18px 12px 32px}section{padding:15px}.page-header{flex-direction:column;align-items:stretch}.account-card{grid-template-columns:1fr}.entity-card{padding:13px}.action-group{grid-template-columns:1fr;gap:4px}.action-group-label{padding-top:0}.display-row{grid-template-columns:minmax(0,1fr) auto}}
+</style>
 </head>
 <body>
 <main>
@@ -79,10 +179,12 @@ main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minma
       <button type="button" class="secondary" data-icon="update" onclick="openUpdate()" data-i18n="check_update">检查更新</button>
     </div>
     <div class="header-group">
+      <span data-i18n="language_label">语言</span>
       <select id="language_select" aria-label="Language" onchange="setLanguage(this.value)"><option value="zh-CN">中文</option><option value="en">English</option></select>
+      <span data-i18n="theme_label">外观</span>
       <select id="theme_select" aria-label="Theme" onchange="setTheme(this.value)"><option value="system" data-i18n="theme_system">跟随系统</option><option value="light" data-i18n="theme_light">浅色</option><option value="dark" data-i18n="theme_dark">深色</option></select>
     </div>
-    <button type="button" class="secondary" onclick="quitEmp()">退出 EMP</button>
+    <button type="button" class="secondary" onclick="quitEmp()" data-i18n="quit_emp">退出 EMP</button>
   </div>
 </header>
 
@@ -97,7 +199,7 @@ main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minma
   <div id="codex_runtimes" class="runtime-list"></div>
   <p id="codex_runtime_dirty" class="muted" hidden></p>
   <div class="integration-actions">
-    <div class="action-group"><span class="action-group-label" data-i18n="client_scope">客户端</span><div class="runtime-controls"><button class="secondary" data-icon="check" onclick="useAutomaticCodexRuntimes()" data-i18n="automatic_runtimes">选择全部</button><button id="codex_runtime_save" class="secondary" data-icon="save" onclick="saveCodexRuntimeSelection()" data-i18n="save_runtimes">保存选择</button><button id="codex_runtime_scan" class="secondary" data-icon="refresh" onclick="scanCodexRuntimes()" data-i18n="rescan_runtimes">重新扫描</button></div></div>
+    <div class="action-group"><span class="action-group-label" data-i18n="client_scope">客户端</span><div class="runtime-controls"><button id="codex_runtime_save" class="secondary" data-icon="save" onclick="saveCodexRuntimeSelection()" data-i18n="save_runtimes">保存选择</button><button class="secondary" data-icon="check" onclick="useAutomaticCodexRuntimes()" data-i18n="automatic_runtimes">选择全部</button><button id="codex_runtime_scan" class="secondary" data-icon="refresh" onclick="scanCodexRuntimes()" data-i18n="rescan_runtimes">重新扫描</button></div></div>
     <div class="action-group"><span class="action-group-label" data-i18n="emp_scope">EMP</span><div class="toolbar"><button id="integration_toggle" data-icon="check" data-action="enable" onclick="confirmIntegrationAction(this.dataset.action)" data-i18n="enable_codex" disabled>启用 EMP</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">性能</button><button class="secondary" onclick="openUsage()" data-i18n="usage">用量与估算</button></div></div>
     <div class="action-group search-toggle"><span class="action-group-label" data-i18n="search_scope">工具</span><label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="saveSubscriptionSearch()"><span data-i18n="enable_subscription_search">联网搜索</span></label></div>
   </div>
@@ -182,10 +284,10 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const translations = {
   'zh-CN': {
-    subtitle:'管理 Codex 的账号和模型。', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', diagnostics:'性能与健康', usage:'用量与估算', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', accounts_title:'Subscription 账号', import_account:'导入账号', refresh_quotas:'刷新余量', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
+    subtitle:'管理 Codex 的账号和模型。', settings_menu:'设置与数据', language_label:'语言', theme_label:'外观', quit_emp:'退出 EMP', more_actions:'更多操作', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', diagnostics:'性能与健康', usage:'用量与估算', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', accounts_title:'Subscription 账号', import_account:'导入账号', refresh_quotas:'刷新余量', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
   },
   en: {
-    subtitle:'Manage Codex accounts and models.', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', diagnostics:'Performance & health', usage:'Usage & estimates', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', accounts_title:'Subscription accounts', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
+    subtitle:'Manage Codex accounts and models.', settings_menu:'Settings & data', language_label:'Language', theme_label:'Appearance', quit_emp:'Quit EMP', more_actions:'More actions', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', diagnostics:'Performance & health', usage:'Usage & estimates', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', accounts_title:'Subscription accounts', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
   }
 };
 Object.assign(translations['zh-CN'], {client_scope:'客户端', emp_scope:'EMP', search_scope:'工具'});
@@ -200,6 +302,7 @@ function applyTranslations() {
   if (document.documentElement) document.documentElement.lang = language;
   document.querySelectorAll('[data-i18n]').forEach(element => { element.textContent = t(element.dataset.i18n); });
   document.querySelectorAll('[data-i18n-placeholder]').forEach(element => { element.placeholder = t(element.dataset.i18nPlaceholder); });
+  document.querySelectorAll('[data-i18n-aria-label]').forEach(element => { element.setAttribute('aria-label', t(element.dataset.i18nAriaLabel)); });
 }
 function setLanguage(value) { language = value === 'en' ? 'en' : 'zh-CN'; savePreference('emp-language', language); if ($('language_select')) $('language_select').value = language; applyTranslations(); if (state) fill(); }
 function setTheme(value) { const theme = ['light','dark'].includes(value) ? value : 'system'; savePreference('emp-theme', theme); if (document.documentElement) document.documentElement.dataset.theme = theme; if ($('theme_select')) $('theme_select').value = theme; }
@@ -842,9 +945,17 @@ function renderAccounts() {
     const status = a.native ? (a.credential_set ? tr('使用 .codex 当前登录','Using current .codex login') : tr('未检测到 .codex 登录','No .codex login detected')) : (a.credential_status === 'invalid' ? tr('登录已失效','Sign-in expired') : (a.credential_set ? tr('凭据已保存','Credentials saved') : tr('未导入凭据','No credentials')));
     const remove = a.native ? '' : `<button class="danger" data-icon="trash" onclick="removeAccount('${esc(a.id)}')">${tr('删除','Delete')}</button>`;
     const edit = duplicateCurrent ? `<button class="secondary" data-icon="edit" disabled title="${esc(tr('模型显示由原生账户管理','Model visibility is managed by Native'))}">${tr('编辑','Edit')}</button>` : `<button class="secondary" data-icon="edit" onclick="editAccount('${esc(a.id)}')">${tr('编辑','Edit')}</button>`;
-    return `<tr${duplicateCurrent ? ' class="account-duplicate"' : ''}><td>${a.native ? tr('当前 Codex 登录','Current Codex login') : `<code>${esc(a.id)}</code>${a.name && a.name !== a.id ? '<br>'+esc(a.name) : ''}`}${a.quota && a.quota.account_label ? '<br><span class="muted">'+esc(a.quota.account_label)+'</span>' : ''}</td><td><span class="pill">${a.native ? 'Native' : esc(a.name || a.prefix)}</span></td><td>${quotaMetersHtml(a, busy, animateQuota)}<div class="muted quota-credit">${esc(creditText(a))}</div>${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</td><td>${status}${duplicateText ? '<br><span class="muted">'+duplicateText+'</span>' : ''}</td><td>${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" onclick="openQuotaHistory('${esc(a.id)}')">${tr('趋势','Trend')}</button>${remove}</td></tr>`;
+    const title = a.native ? tr('当前 Codex 登录','Current Codex login') : esc(a.name || a.id);
+    const subtitle = a.native ? '' : `<code>${esc(a.id)}</code>`;
+    return `<article class="entity-card account-card${duplicateCurrent ? ' account-duplicate' : ''}">
+      <div class="entity-card-main"><div class="entity-card-title"><strong>${title}</strong><span class="pill">${a.native ? 'Native' : esc(a.prefix || a.id)}</span></div>
+      <div class="entity-card-subtitle">${subtitle}${a.quota && a.quota.account_label ? `<span>${esc(a.quota.account_label)}</span>` : ''}</div>
+      <div class="entity-card-status">${status}${duplicateText ? `<br><span class="muted">${duplicateText}</span>` : ''}</div></div>
+      <div class="entity-card-quota">${quotaMetersHtml(a, busy, animateQuota)}<div class="muted quota-credit">${esc(creditText(a))}</div>${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</div>
+      <div class="entity-card-actions">${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" onclick="openQuotaHistory('${esc(a.id)}')">${tr('趋势','Trend')}</button>${remove}</div>
+    </article>`;
   }).join('');
-  $('accounts').innerHTML = `<table><tr><th>${tr('账户','Account')}</th><th>${tr('前缀','Prefix')}</th><th>${tr('余量','Quota')}</th><th>${tr('状态','Status')}</th><th>${tr('操作','Actions')}</th></tr>${rows}</table>`;
+  $('accounts').innerHTML = `<div class="entity-list">${rows}</div>`;
   quotaAnimationAccounts.clear();
 }
 function utcOffsetLabel(date) { const minutes = -date.getTimezoneOffset(); const sign = minutes >= 0 ? '+' : '-'; const absolute = Math.abs(minutes); const hours = Math.floor(absolute / 60); const remainder = absolute % 60; return `UTC${sign}${hours}${remainder ? ':' + String(remainder).padStart(2, '0') : ''}`; }
@@ -1194,10 +1305,14 @@ async function removeAccount(id) { if (!confirm(tr(`删除账户 ${id} 的本地
 function renderProviders() {
   const providers = state.providers || [];
   if (!providers.length) { $('providers').innerHTML = `<p class="muted">${tr('还没有 Provider。','No Providers yet.')}</p>`; return; }
-  $('providers').innerHTML = `<table><tr><th>ID</th><th>Endpoint</th><th>${tr('协议','Protocol')}</th><th>${tr('认证','Authentication')}</th><th>${tr('操作','Actions')}</th></tr>${providers.map(p => {
+  $('providers').innerHTML = `<div class="entity-list">${providers.map(p => {
     const models = (state.models || []).filter(model => model.provider === p.id); const allHidden = models.length > 0 && models.every(model => !model.enabled);
-    return `<tr><td><code>${esc(p.id)}</code><br>${esc(p.name)}</td><td>${esc(p.base_url)}</td><td>${esc(protocolLabel(p.protocol))}</td><td>${esc(authLabel(p.auth_mode))}${p.api_key_set ? tr(' · key已设置',' · key set') : ''}</td><td><button class="secondary" data-icon="download" onclick="discoverProvider('${esc(p.id)}')">${tr('拉取模型','Fetch models')}</button><button class="secondary" data-icon="edit" onclick="editProvider('${esc(p.id)}')">${tr('编辑','Edit')}</button><button class="secondary" ${models.length ? '' : 'disabled'} onclick="toggleProviderModels('${esc(p.id)}', ${allHidden})">${allHidden ? tr('显示全部模型','Show all models') : tr('隐藏全部模型','Hide all models')}</button><button class="danger" data-icon="trash" onclick="removeProvider('${esc(p.id)}')">${tr('删除','Delete')}</button></td></tr>`;
-  }).join('')}</table>`;
+    return `<article class="entity-card provider-card">
+      <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(p.name || p.id)}</strong><span class="pill">${esc(p.id)}</span></div>
+      <div class="entity-card-meta"><code class="endpoint">${esc(p.base_url)}</code>${esc(protocolLabel(p.protocol))} · ${esc(authLabel(p.auth_mode))}${p.api_key_set ? tr(' · Key 已设置',' · Key set') : ''} · ${tr(`${models.length} 个模型`,`${models.length} models`)}</div></div>
+      <div class="entity-card-actions"><button class="secondary" data-icon="download" onclick="discoverProvider('${esc(p.id)}')">${tr('拉取模型','Fetch models')}</button><button class="secondary" data-icon="edit" onclick="editProvider('${esc(p.id)}')">${tr('编辑','Edit')}</button><button class="secondary" ${models.length ? '' : 'disabled'} onclick="toggleProviderModels('${esc(p.id)}', ${allHidden})">${allHidden ? tr('显示全部模型','Show all models') : tr('隐藏全部模型','Hide all models')}</button><button class="danger" data-icon="trash" onclick="removeProvider('${esc(p.id)}')">${tr('删除','Delete')}</button></div>
+    </article>`;
+  }).join('')}</div>`;
 }
 async function toggleProviderModels(id, enabled) {
   const candidate = cloneState();
@@ -1242,7 +1357,23 @@ function renderModels() {
   const providerNames = Object.fromEntries((state.providers || []).map(p => [p.id, p.name || p.id])); const groups = {};
   models.forEach(model => { (groups[model.provider] ||= []).push(model); });
   const configuredOrder = (state.providers || []).map(provider => provider.id); const groupOrder = [...configuredOrder.filter(provider => groups[provider]), ...Object.keys(groups).filter(provider => !configuredOrder.includes(provider))];
-  $('models').innerHTML = groupOrder.map(provider => { const items = groups[provider]; const expanded = expandedModelGroups.has(provider); const shown = expanded ? items : items.slice(0, 6); const rows = shown.map(m => { const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : []; const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? tr('支持推理，档位未知','reasoning supported; levels unknown') : tr('无推理档位控制','no reasoning level control')); const capabilities = capabilitySummary(m); return `<tr class="${m.enabled ? '' : 'model-hidden'}"><td><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, m.context_window))}</strong><br><code>${esc(m.id)}</code><br><span class="muted">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? '<br>' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</span></td><td><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</td><td><button class="secondary" data-icon="edit" onclick="openManualModelModal('${esc(m.id)}')">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" onclick="testModel('${esc(m.id)}')">${tr('测试','Test')}</button><button class="secondary" data-icon="test" onclick="testModelVision('${esc(m.id)}')">${tr('测试图像','Test image')}</button><button class="danger" data-icon="trash" onclick="removeModel('${esc(m.id)}')">${tr('删除','Delete')}</button></td></tr>`; }).join(''); const toggle = items.length > 6 ? `<button type="button" class="secondary" onclick="toggleModelGroup('${esc(provider)}')">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : ''; return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><table><tr><th>${tr('模型','Model')}</th><th>${tr('显示','Visibility')}</th><th>${tr('操作','Actions')}</th></tr>${rows}</table>${toggle}</div>`; }).join('');
+  $('models').innerHTML = groupOrder.map(provider => {
+    const items = groups[provider]; const expanded = expandedModelGroups.has(provider); const shown = expanded ? items : items.slice(0, 6);
+    const rows = shown.map(m => {
+      const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : [];
+      const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? tr('支持推理，档位未知','reasoning supported; levels unknown') : tr('无推理档位控制','no reasoning level control'));
+      const capabilities = capabilitySummary(m);
+      return `<article class="entity-card model-card${m.enabled ? '' : ' model-hidden'}">
+        <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, m.context_window))}</strong></div>
+        <div class="entity-card-subtitle"><code>${esc(m.id)}</code></div>
+        <div class="entity-card-meta">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? '<br>' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</div></div>
+        <label class="visibility"><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</label>
+        <div class="entity-card-actions"><button class="secondary" data-icon="edit" onclick="openManualModelModal('${esc(m.id)}')">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" onclick="testModel('${esc(m.id)}')">${tr('测试','Test')}</button><button class="secondary" data-icon="test" onclick="testModelVision('${esc(m.id)}')">${tr('测试图像','Test image')}</button><button class="danger" data-icon="trash" onclick="removeModel('${esc(m.id)}')">${tr('删除','Delete')}</button></div>
+      </article>`;
+    }).join('');
+    const toggle = items.length > 6 ? `<button type="button" class="secondary" onclick="toggleModelGroup('${esc(provider)}')">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : '';
+    return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><div class="entity-list">${rows}</div>${toggle}</div>`;
+  }).join('');
 }
 function toggleModelGroup(provider) { if (expandedModelGroups.has(provider)) expandedModelGroups.delete(provider); else expandedModelGroups.add(provider); renderModels(); }
 function providerDiscoveryError(error) { const status = Number(error?.status || error?.payload?.error?.status || 0); if ([400,401,403].includes(status)) return tr('API Key 无效或没有读取模型列表的权限。','The API key is invalid or cannot read the model list.'); if (status === 429) return tr('请求过于频繁，请稍后重试。','Too many requests. Try again later.'); if (status >= 500) return tr('模型服务暂时不可用，请稍后重试。','The model service is temporarily unavailable. Try again later.'); return error?.message || tr('无法读取模型列表。','Could not read the model list.'); }
@@ -1413,7 +1544,11 @@ async function openUpdate() {
   openModal(tr('更新 EMP','Update EMP'), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite">${tr('正在检查…','Checking…')}</div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div id="update_manual" class="muted" hidden><p>${tr('推荐：在 Release 页面下载 Linux tar.gz，退出当前 EMP 后执行迁移命令。配置仍位于 ~/.config/easy-multi-provider/config.json，无需搬移。','Recommended: download the Linux tar.gz from Releases, exit this EMP, then run the migration commands. Configuration remains at ~/.config/easy-multi-provider/config.json and does not need to move.')}</p><p>${tr('若坚持系统级安装，可下载 .deb 后执行 sudo apt install ./EMP-linux-x86_64.deb；此方式以后仍需用包管理器更新。','To remain system-managed, download the .deb and run sudo apt install ./EMP-linux-x86_64.deb; future updates must also use the package manager.')}</p></div><div class="modal-actions"><button id="update_release" type="button" class="secondary" hidden onclick="openLatestRelease()">${tr('打开最新 Release','Open latest Release')}</button><button id="update_commands" type="button" class="secondary" hidden onclick="copyLinuxMigrationCommands()">${tr('复制迁移命令','Copy migration commands')}</button><button id="update_install" type="button" data-icon="update" hidden onclick="requestUpdate('install')">${tr('后台更新','Update in background')}</button></div>`, '', null);
   await requestUpdate('check');
 }
-function handleModalKeydown(event) { if (event.key === 'Escape' && !$('modal_backdrop').classList.contains('hidden')) closeModal(); }
+function handleModalKeydown(event) {
+  if (event.key === 'Escape') {
+    if (!$('modal_backdrop').classList.contains('hidden')) closeModal();
+  }
+}
 document.addEventListener('keydown', handleModalKeydown);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { startQuotaEvents(); requestQuotaSync(); } else stopQuotaEvents(); });
 if (window.addEventListener) {
