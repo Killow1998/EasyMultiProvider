@@ -1,0 +1,1712 @@
+{
+  "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config._normalize_model",
+  "status": "implemented",
+  "implementation": "crates/emp-state/src/config.rs",
+  "test": "crates/emp-state/tests/model_normalization_compat.rs",
+  "limitations": [
+    "serde_json preserves JSON integers only through the u64/i64 input boundary and cannot represent Python's arbitrary-size integers beyond it.",
+    "serde_json rejects nonfinite JSON numbers, so Python's OverflowError for int(float('1e400')) is outside this frozen JSON fixture."
+  ],
+  "valid": [
+    {
+      "name": "minimal-defaults-and-unknown-discard",
+      "input": {
+        "id": "provider-a/gpt.example:v1",
+        "provider": "provider-a",
+        "unknown": "discarded"
+      },
+      "expected": {
+        "id": "provider-a/gpt.example:v1",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      },
+      "notes": "Missing values use Python defaults; the unknown key is discarded."
+    },
+    {
+      "name": "fully-populated-record",
+      "input": {
+        "id": "provider-a/openai.gpt-5:experimental/route",
+        "provider": "provider-a",
+        "upstream_id": "  upstream-model  ",
+        "family_id": "gpt-5",
+        "display_name": "GPT-5",
+        "description": "Full synthetic model",
+        "reasoning_levels": [
+          "HIGH",
+          " low ",
+          "custom",
+          "HIGH"
+        ],
+        "supports_reasoning": true,
+        "supports_reasoning_summaries": false,
+        "reasoning_control": " low ",
+        "context_window": 128000,
+        "max_input_tokens": 100000,
+        "output_limit": 32000,
+        "created_at": 1750000000,
+        "enabled": false,
+        "visibility": "hide",
+        "input_modalities": [
+          " Image ",
+          "TEXT",
+          "image"
+        ],
+        "output_modalities": [
+          "text",
+          "IMAGE"
+        ],
+        "supported_protocols": [
+          " Responses ",
+          "chat_completions",
+          "auto",
+          "bad"
+        ],
+        "supports_image_detail_original": true,
+        "deployment_identity": " deployment-1 ",
+        "resolved_protocol": " responses ",
+        "protocol_observation": {
+          "source": "observed",
+          "confidence": "0.9",
+          "observed_at": "2026-09-21T12:00:00Z",
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "deployment_identity": "prod",
+          "upstream_model": "upstream",
+          "unknown": "discarded"
+        },
+        "context_calibrations": [
+          {
+            "endpoint_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "upstream_model": " upstream ",
+            "protocol": " responses ",
+            "deployment_identity": "prod",
+            "largest_success_estimate": "1_000",
+            "smallest_failure_estimate": 1.9,
+            "largest_success_source": " observed ",
+            "smallest_failure_confidence": "0.25",
+            "largest_success_observed_at": "2026-08-21",
+            "unknown": "discarded"
+          }
+        ],
+        "capabilities": {
+          "streaming": false,
+          "websocket": true,
+          "unknown_numeric_capability": 1
+        },
+        "capability_sources": {
+          "streaming": {
+            "source": "advertised",
+            "confidence": "0.75",
+            "unknown": "discard"
+          },
+          "input_modalities": {
+            "source": "observed",
+            "observed_at": "2026-09-21"
+          }
+        }
+      },
+      "expected": {
+        "id": "provider-a/openai.gpt-5:experimental/route",
+        "provider": "provider-a",
+        "upstream_id": "upstream-model",
+        "family_id": "gpt-5",
+        "display_name": "GPT-5",
+        "description": "Full synthetic model",
+        "supports_reasoning": true,
+        "supports_reasoning_summaries": false,
+        "reasoning_levels": [
+          "low",
+          "high",
+          "custom"
+        ],
+        "reasoning_control": "low",
+        "context_window": 128000,
+        "max_input_tokens": 100000,
+        "output_limit": 32000,
+        "created_at": 1750000000,
+        "enabled": false,
+        "visibility": "hide",
+        "input_modalities": [
+          "image",
+          "text"
+        ],
+        "output_modalities": [
+          "text",
+          "image"
+        ],
+        "supported_protocols": [
+          "responses",
+          "chat_completions"
+        ],
+        "supports_image_detail_original": true,
+        "deployment_identity": "deployment-1",
+        "resolved_protocol": "responses",
+        "protocol_observation": {
+          "source": "observed",
+          "confidence": 0.9,
+          "observed_at": "2026-09-21T12:00:00Z",
+          "endpoint_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "deployment_identity": "prod",
+          "upstream_model": "upstream"
+        },
+        "context_calibrations": [
+          {
+            "endpoint_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "upstream_model": "upstream",
+            "protocol": "responses",
+            "deployment_identity": "prod",
+            "largest_success_estimate": 1000,
+            "smallest_failure_estimate": 1,
+            "largest_success_source": "observed",
+            "smallest_failure_source": "unknown",
+            "largest_success_confidence": 1.0,
+            "smallest_failure_confidence": 0.25,
+            "largest_success_observed_at": "2026-08-21",
+            "smallest_failure_observed_at": null
+          }
+        ],
+        "capabilities": {
+          "streaming": false,
+          "websocket": true
+        },
+        "capability_sources": {
+          "max_input_tokens": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "supports_reasoning": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "supported_protocols": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "input_modalities": {
+            "source": "observed",
+            "confidence": 1.0,
+            "observed_at": "2026-09-21"
+          },
+          "supports_reasoning_summaries": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "reasoning_levels": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "streaming": {
+            "source": "advertised",
+            "confidence": 0.75,
+            "observed_at": null
+          },
+          "websocket": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "reasoning_control": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "context_window": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "output_limit": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "false-empty-null-and-containers-become-zero",
+      "input": {
+        "id": "provider-a/zeros",
+        "provider": "provider-a",
+        "context_window": false,
+        "max_input_tokens": "",
+        "created_at": [],
+        "output_limit": {}
+      },
+      "expected": {
+        "id": "provider-a/zeros",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      },
+      "notes": "Each falsy JSON value converts through int(value or 0)."
+    },
+    {
+      "name": "true-and-unicode-underscore-integers",
+      "input": {
+        "id": "provider-a/integers",
+        "provider": "provider-a",
+        "context_window": "　+１_٢　",
+        "max_input_tokens": "+1_000",
+        "output_limit": true,
+        "created_at": 9007199254740993
+      },
+      "expected": {
+        "id": "provider-a/integers",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 12,
+        "max_input_tokens": 1000,
+        "output_limit": 1,
+        "created_at": 9007199254740993,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "max_input_tokens": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "context_window": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_limit": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      },
+      "notes": "Python integer text parsing and an integer above f64's exact range."
+    },
+    {
+      "name": "floats-truncate-before-bounds",
+      "input": {
+        "id": "provider-a/fractions",
+        "provider": "provider-a",
+        "context_window": -0.9,
+        "max_input_tokens": 100000000.9,
+        "output_limit": 4096.9,
+        "created_at": 1750000000.9
+      },
+      "expected": {
+        "id": "provider-a/fractions",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 100000000,
+        "output_limit": 4096,
+        "created_at": 1750000000,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "max_input_tokens": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_limit": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "output-limit-presence-shadows-alias",
+      "input": {
+        "id": "provider-a/output-limit",
+        "provider": "provider-a",
+        "output_limit": "3_000",
+        "output_token_limit": 99000
+      },
+      "expected": {
+        "id": "provider-a/output-limit",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 3000,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_limit": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "null-output-limit-suppresses-alias",
+      "input": {
+        "id": "provider-a/null-output-limit",
+        "provider": "provider-a",
+        "output_limit": null,
+        "output_token_limit": 99000
+      },
+      "expected": {
+        "id": "provider-a/null-output-limit",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "empty-output-limit-suppresses-alias",
+      "input": {
+        "id": "provider-a/empty-output-limit",
+        "provider": "provider-a",
+        "output_limit": "",
+        "output_token_limit": 99000
+      },
+      "expected": {
+        "id": "provider-a/empty-output-limit",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "zero-output-limit-suppresses-alias",
+      "input": {
+        "id": "provider-a/zero-output-limit",
+        "provider": "provider-a",
+        "output_limit": 0,
+        "output_token_limit": 99000
+      },
+      "expected": {
+        "id": "provider-a/zero-output-limit",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "output-token-limit-alias-used-only-when-absent",
+      "input": {
+        "id": "provider-a/alias",
+        "provider": "provider-a",
+        "output_token_limit": true
+      },
+      "expected": {
+        "id": "provider-a/alias",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 1,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_limit": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "reasoning-derived-null-and-level-order",
+      "input": {
+        "id": "provider-a/reasoning",
+        "provider": "provider-a",
+        "reasoning_levels": [
+          "HIGH",
+          " low ",
+          "custom",
+          "HIGH"
+        ]
+      },
+      "expected": {
+        "id": "provider-a/reasoning",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": true,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [
+          "low",
+          "high",
+          "custom"
+        ],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "supports_reasoning": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "reasoning_levels": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "explicit-null-and-falsy-record-defaults",
+      "input": {
+        "id": "provider-a/defaults",
+        "provider": "provider-a",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "enabled": "",
+        "visibility": null,
+        "input_modalities": null,
+        "output_modalities": "not-a-list",
+        "supported_protocols": [],
+        "supports_image_detail_original": 7
+      },
+      "expected": {
+        "id": "provider-a/defaults",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": false,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "nested-boolean-capabilities-and-raw-union",
+      "input": {
+        "id": "provider-a/nested",
+        "provider": "provider-a",
+        "capabilities": {
+          "streaming": true,
+          "parallel_tools": false,
+          "unknown": true
+        },
+        "capability_sources": {
+          "streaming": {
+            "source": "inherited"
+          },
+          "parallel_tools": {
+            "source": "manual"
+          }
+        }
+      },
+      "expected": {
+        "id": "provider-a/nested",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {
+          "streaming": true,
+          "parallel_tools": false
+        },
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "streaming": {
+            "source": "inherited",
+            "confidence": 0.6,
+            "observed_at": null
+          },
+          "parallel_tools": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "raw-presence-union-precedence",
+      "input": {
+        "id": "provider-a/raw-union",
+        "provider": "provider-a",
+        "streaming": false,
+        "reasoning_levels": [
+          "high"
+        ],
+        "capabilities": {
+          "streaming": true,
+          "websocket": true
+        }
+      },
+      "expected": {
+        "id": "provider-a/raw-union",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": true,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [
+          "high"
+        ],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {
+          "streaming": true,
+          "websocket": true
+        },
+        "capability_sources": {
+          "supports_reasoning": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "reasoning_levels": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "streaming": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "websocket": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      },
+      "notes": "Raw top-level and nested capability keys both count as explicit."
+    },
+    {
+      "name": "explicit-null-reasoning-with-levels-derives-support",
+      "input": {
+        "id": "provider-a/additional",
+        "provider": "provider-a",
+        "reasoning_levels": [
+          "high"
+        ],
+        "supports_reasoning": null
+      },
+      "expected": {
+        "id": "provider-a/additional",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": true,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [
+          "high"
+        ],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "supports_reasoning": {
+            "source": "manual",
+            "confidence": 1.0,
+            "observed_at": null
+          },
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "reasoning_levels": {
+            "source": "inferred",
+            "confidence": 0.35,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "broad-provider-id-allows-path-and-colon",
+      "input": {
+        "id": "route/model:v1",
+        "provider": "provider/path:v2"
+      },
+      "expected": {
+        "id": "route/model:v1",
+        "provider": "provider/path:v2",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "created-at-u64-maximum",
+      "input": {
+        "id": "provider-a/additional",
+        "provider": "provider-a",
+        "created_at": 18446744073709551615
+      },
+      "expected": {
+        "id": "provider-a/additional",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 18446744073709551615,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "created-at-u64-maximum-unicode-text",
+      "input": {
+        "id": "provider-a/additional",
+        "provider": "provider-a",
+        "created_at": "１８_４４６_７４４_０７３_７０９_５５１_６１５"
+      },
+      "expected": {
+        "id": "provider-a/additional",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 18446744073709551615,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    },
+    {
+      "name": "model-id-has-no-provider-length-limit",
+      "input": {
+        "id": "provider-a/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "provider": "provider-a"
+      },
+      "expected": {
+        "id": "provider-a/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "provider": "provider-a",
+        "upstream_id": "",
+        "family_id": "",
+        "display_name": "",
+        "description": "",
+        "supports_reasoning": null,
+        "supports_reasoning_summaries": null,
+        "reasoning_levels": [],
+        "reasoning_control": "",
+        "context_window": 0,
+        "max_input_tokens": 0,
+        "output_limit": 0,
+        "created_at": 0,
+        "enabled": true,
+        "visibility": "list",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "supported_protocols": [],
+        "supports_image_detail_original": false,
+        "deployment_identity": "",
+        "resolved_protocol": "",
+        "protocol_observation": {
+          "source": "unknown",
+          "confidence": 0.0,
+          "observed_at": null,
+          "endpoint_fingerprint": "",
+          "deployment_identity": "",
+          "upstream_model": ""
+        },
+        "context_calibrations": [],
+        "capabilities": {},
+        "capability_sources": {
+          "input_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "output_modalities": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          },
+          "supports_image_detail_original": {
+            "source": "unknown",
+            "confidence": 0.0,
+            "observed_at": null
+          }
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "raw-not-object",
+      "input": [],
+      "error": "each model must be an object",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "reasoning-not-list",
+      "input": {
+        "id": "provider-a/bad",
+        "provider": "provider-a",
+        "reasoning_levels": {}
+      },
+      "error": "model.reasoning_levels must be a list",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "reasoning-nonstring-after-empty",
+      "input": {
+        "id": "provider-a/bad",
+        "provider": "provider-a",
+        "reasoning_levels": [
+          "",
+          2
+        ]
+      },
+      "error": "model.reasoning_levels must be a string",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "reasoning-empty-entry",
+      "input": {
+        "id": "provider-a/bad",
+        "provider": "provider-a",
+        "reasoning_levels": [
+          "high",
+          " "
+        ]
+      },
+      "error": "model.reasoning_levels entries must not be empty",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "support-reasoning-not-boolean",
+      "input": {
+        "id": "provider-a/bad",
+        "provider": "provider-a",
+        "supports_reasoning": "true"
+      },
+      "error": "model.supports_reasoning must be boolean or null",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "context-negative-float",
+      "input": {
+        "id": "provider-a/bad",
+        "provider": "provider-a",
+        "context_window": -1.2
+      },
+      "error": "model.context_window cannot be negative",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "context-too-large-exponent-text",
+      "input": {
+        "id": "provider-a/bad",
+        "provider": "provider-a",
+        "context_window": "1000000000000000000000000000001"
+      },
+      "error": "model.context_window is too large",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "output-too-large-before-created-at",
+      "input": {
+        "id": "provider-a/bad",
+        "provider": "provider-a",
+        "created_at": -1,
+        "output_limit": 100000001
+      },
+      "error": "model.output_limit is too large",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "created-at-negative",
+      "input": {
+        "id": "provider-a/bad",
+        "provider": "provider-a",
+        "created_at": -1
+      },
+      "error": "model.created_at cannot be negative",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "visibility-invalid",
+      "input": {
+        "id": "provider-a/bad",
+        "provider": "provider-a",
+        "visibility": " hidden "
+      },
+      "error": "model.visibility must be list or hide",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "max-input-too-large",
+      "input": {
+        "id": "provider-a/bad",
+        "provider": "provider-a",
+        "max_input_tokens": 100000001
+      },
+      "error": "model.max_input_tokens is too large",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "model-id-unsupported-character",
+      "input": {
+        "id": "provider-a/bad id",
+        "provider": "provider-a"
+      },
+      "error": "model.id contains unsupported characters",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "model-provider-unsupported-character",
+      "input": {
+        "id": "provider-a/good",
+        "provider": "provider-a special"
+      },
+      "error": "model.provider contains unsupported characters",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "nested-capability-number",
+      "input": {
+        "id": "provider-a/good",
+        "provider": "provider-a",
+        "capabilities": {
+          "websocket": 1
+        }
+      },
+      "error": "model.capabilities.websocket must be boolean",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "calibration-before-capability-source",
+      "input": {
+        "id": "provider-a/good",
+        "provider": "provider-a",
+        "context_calibrations": "bad",
+        "capability_sources": "bad"
+      },
+      "error": "model.context_calibrations must be a list",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "capability-source-not-object",
+      "input": {
+        "id": "provider-a/good",
+        "provider": "provider-a",
+        "capability_sources": {
+          "streaming": true
+        }
+      },
+      "error": "model.capability_sources.streaming must be an object",
+      "error_type": "ConfigError"
+    },
+    {
+      "name": "context-invalid-integer-text",
+      "input": {
+        "id": "provider-a/additional",
+        "provider": "provider-a",
+        "context_window": "bad"
+      },
+      "error_type": "ValueError",
+      "error": "invalid literal for int() with base 10: 'bad'"
+    },
+    {
+      "name": "output-nonempty-list-int-type-error",
+      "input": {
+        "id": "provider-a/additional",
+        "provider": "provider-a",
+        "output_limit": [
+          1
+        ]
+      },
+      "error_type": "TypeError",
+      "error": "int() argument must be a string, a bytes-like object or a real number, not 'list'"
+    },
+    {
+      "name": "created-at-object-int-type-error",
+      "input": {
+        "id": "provider-a/additional",
+        "provider": "provider-a",
+        "created_at": {
+          "value": 1
+        }
+      },
+      "error_type": "TypeError",
+      "error": "int() argument must be a string, a bytes-like object or a real number, not 'dict'"
+    }
+  ]
+}

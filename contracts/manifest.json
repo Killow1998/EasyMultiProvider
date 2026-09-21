@@ -138,6 +138,20 @@
       "fixture": "state/python-context-calibrations.json"
     },
     {
+      "id": "state.model-normalization.python-rust",
+      "level": "state",
+      "source": "easy_multi_provider/config.py:_normalize_model",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": [
+        "unknown model fields are intentionally discarded",
+        "output_limit presence takes precedence over output_token_limit",
+        "raw top-level and nested capability keys are unioned for explicitness"
+      ],
+      "side_effects": ["none; model normalization is pure"],
+      "fixture": "state/python-model-normalization.json"
+    },
+    {
       "id": "state.capability-model-values.python-rust",
       "level": "state",
       "source": "easy_multi_provider/capabilities.py pure model value helpers",

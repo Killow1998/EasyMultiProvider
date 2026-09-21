@@ -30,8 +30,10 @@ Progress evidence on 2026-09-21:
   explicitness, default source/confidence selection and supplied observations
   under frozen and live Python oracles. Context calibrations preserve the
   eight-record bound, validation order, Python numeric coercion, provenance
-  defaults and accepted ISO timestamp forms. Full model records, import merge
-  behavior and Windows ACL/reparse-point hardening remain.
+  defaults and accepted ISO timestamp forms. Complete model records now compose
+  those primitives in Python's validation order, including raw-key presence,
+  the legacy output-limit alias and Python conversion failures. Full config
+  composition, import merge behavior and Windows ACL/reparse-point hardening remain.
   Account metadata normalization also matches Python's sorting, UTF-8 byte
   limits, truthiness, quota preservation and exact validation order.
 - Runtime compatibility run `35636981488` passed the complete Python suite,
@@ -43,6 +45,10 @@ Progress evidence on 2026-09-21:
   metadata normalization was added to the live Python/Rust oracle.
 - Runtime compatibility run `35644867552` passed all seven jobs after the
   startup-output integration test was made independent of pipe-reader timing.
+- Runtime compatibility run `35648039395` passed all seven jobs with model
+  capability provenance in the live cross-language oracle.
+- Runtime compatibility run `35650033347` passed all seven jobs with context
+  calibration normalization and expanded Python ISO timestamp compatibility.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
