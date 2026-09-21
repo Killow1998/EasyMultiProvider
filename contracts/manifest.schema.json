@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Killow1998/EasyMultiProvider/contracts/manifest.schema.json",
+  "title": "EMP cross-language contract manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "baseline", "cases"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["emp_version", "git_revision", "codex_version"],
+      "properties": {
+        "emp_version": {"const": "0.11.6"},
+        "git_revision": {"pattern": "^[0-9a-f]{40}$"},
+        "codex_version": {"const": "0.155.0"}
+      }
+    },
+    "cases": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/case"}
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "level",
+        "source",
+        "transport",
+        "dialect",
+        "normalization",
+        "side_effects",
+        "fixture"
+      ],
+      "properties": {
+        "id": {"pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+        "level": {
+          "enum": ["bytes", "events", "api", "state"]
+        },
+        "source": {"type": "string", "minLength": 1},
+        "transport": {
+          "enum": ["none", "file", "sqlite", "http", "sse", "websocket", "process"]
+        },
+        "dialect": {
+          "enum": ["none", "codex_native", "responses", "chat_completions", "anthropic_messages"]
+        },
+        "normalization": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "side_effects": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "fixture": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

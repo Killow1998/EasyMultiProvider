@@ -8,6 +8,10 @@ on:
       - "tools/test_codex_runtime.py"
       - "pyproject.toml"
       - "uv.lock"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "contracts/**"
       - ".github/workflows/runtime-compatibility.yml"
   push:
     branches: [main]
@@ -17,6 +21,10 @@ on:
       - "tools/test_codex_runtime.py"
       - "pyproject.toml"
       - "uv.lock"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "contracts/**"
       - ".github/workflows/runtime-compatibility.yml"
   workflow_dispatch:
 
@@ -24,6 +32,17 @@ permissions:
   contents: read
 
 jobs:
+  rust-foundation:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace --all-targets
+
   full-unit-suite:
     runs-on: ubuntu-22.04
     steps:

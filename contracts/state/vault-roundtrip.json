@@ -1,0 +1,6 @@
+{
+  "status": "inventory_only",
+  "prefix": "easy-multi-provider-v1\n",
+  "directions": ["python_to_rust", "rust_to_python"],
+  "negative_cases": ["wrong_key", "tampered_ciphertext", "truncated_ciphertext"]
+}

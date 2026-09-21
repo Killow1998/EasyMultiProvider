@@ -1,0 +1,9 @@
+{
+  "status": "inventory_only",
+  "source": "tests/test_chat_projection_regressions.py",
+  "required_properties": [
+    "reasoning is emitted as reasoning items",
+    "visible answer text is not duplicated into reasoning",
+    "terminal event follows all deltas"
+  ]
+}

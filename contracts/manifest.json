@@ -1,0 +1,51 @@
+{
+  "$schema": "./manifest.schema.json",
+  "schema_version": 1,
+  "baseline": {
+    "emp_version": "0.11.6",
+    "git_revision": "47a8a0a5e06f82e3fd488fe00c4704fcf0b06f78",
+    "codex_version": "0.155.0"
+  },
+  "cases": [
+    {
+      "id": "web.index.exact-bytes",
+      "level": "bytes",
+      "source": "tests/test_web_dom.py and easy_multi_provider/server.py",
+      "transport": "http",
+      "dialect": "none",
+      "normalization": [],
+      "side_effects": ["none"],
+      "fixture": "../easy_multi_provider/web/index.html"
+    },
+    {
+      "id": "api.healthz.ok",
+      "level": "api",
+      "source": "easy_multi_provider/server.py:4044",
+      "transport": "http",
+      "dialect": "none",
+      "normalization": [],
+      "side_effects": ["service readiness may be observed"],
+      "fixture": "api/healthz-ok.json"
+    },
+    {
+      "id": "stream.reasoning-answer-separation",
+      "level": "events",
+      "source": "tests/test_chat_projection_regressions.py",
+      "transport": "sse",
+      "dialect": "chat_completions",
+      "normalization": ["generated response and item identifiers retain referential equality"],
+      "side_effects": ["none"],
+      "fixture": "protocol/chat-reasoning-answer.json"
+    },
+    {
+      "id": "state.vault.python-rust",
+      "level": "state",
+      "source": "tests/test_vault.py and easy_multi_provider/vault.py",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": ["fresh Fernet ciphertext may differ"],
+      "side_effects": ["private key and ciphertext files only"],
+      "fixture": "state/vault-roundtrip.json"
+    }
+  ]
+}

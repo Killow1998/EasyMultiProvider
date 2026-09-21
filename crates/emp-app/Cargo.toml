@@ -1,0 +1,15 @@
+[package]
+name = "emp-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "EMP native executable and local HTTP surface."
+
+[[bin]]
+name = "EMP"
+path = "src/main.rs"
+
+[dependencies]
+
+[lib]
+path = "src/lib.rs"
