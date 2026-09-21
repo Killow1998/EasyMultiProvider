@@ -138,6 +138,7 @@ fn open_lock_file(path: &Path) -> Result<File, LockError> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(&path)
         .map_err(|_| LockError::OpenFailed)?;
     let metadata = file.metadata().map_err(|_| LockError::OpenFailed)?;
