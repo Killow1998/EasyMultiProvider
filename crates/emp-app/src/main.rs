@@ -157,7 +157,11 @@ fn read_request(stream: &mut TcpStream) -> Option<String> {
     let mut buffer = [0_u8; 1024];
     let mut request = Vec::new();
     loop {
-        let count = stream.read(&mut buffer).ok()?;
+        let count = match stream.read(&mut buffer) {
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
         if count == 0 {
             break;
         }
@@ -183,7 +187,16 @@ fn request_path(request: &str) -> Option<&str> {
 }
 
 fn handle_connection(mut stream: TcpStream) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    // BSD platforms may propagate O_NONBLOCK from the listener to accepted
+    // sockets. Request workers use bounded blocking reads, so normalize that
+    // platform difference before installing the timeout.
+    if stream.set_nonblocking(false).is_err()
+        || stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .is_err()
+    {
+        return;
+    }
     let request = match read_request(&mut stream) {
         Some(request) => request,
         None => {
