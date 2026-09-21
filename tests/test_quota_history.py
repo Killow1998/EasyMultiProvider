@@ -1,12 +1,14 @@
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
+import sqlite3
 
 from easy_multi_provider.quota_history import QuotaHistoryStore
 
 
-def snapshot(used_primary=20, used_secondary=40):
-    return {
+def snapshot(used_primary=20, used_secondary=40, plan_type=None):
+    value = {
         "rate_limits": {
             "limitId": "codex",
             "primary": {
@@ -21,6 +23,9 @@ def snapshot(used_primary=20, used_secondary=40):
             },
         }
     }
+    if plan_type is not None:
+        value["plan_type"] = plan_type
+    return value
 
 
 class QuotaHistoryStoreTests(unittest.TestCase):
@@ -97,6 +102,52 @@ class QuotaHistoryStoreTests(unittest.TestCase):
 
         self.assertEqual(len(hour["series"][0]["points"]), 1)
         self.assertEqual(len(day["series"][0]["points"]), 2)
+
+    def test_plan_timeline_migrates_existing_history_and_tracks_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "history.sqlite3"
+            with closing(sqlite3.connect(path)) as connection:
+                with connection:
+                    connection.execute(
+                        """
+                        CREATE TABLE quota_samples (
+                            account_key TEXT NOT NULL,
+                            observed_at INTEGER NOT NULL,
+                            limit_id TEXT NOT NULL,
+                            window_kind TEXT NOT NULL,
+                            window_minutes INTEGER,
+                            used_percent REAL NOT NULL,
+                            resets_at INTEGER,
+                            PRIMARY KEY (account_key, observed_at, limit_id, window_kind)
+                        )
+                        """
+                    )
+            store = QuotaHistoryStore(path)
+            store.append_snapshot(
+                "ship", snapshot(plan_type="plus"), observed_at=2_000_100
+            )
+            store.append_snapshot(
+                "ship", snapshot(plan_type="ProLite"), observed_at=2_000_400
+            )
+            store.append_snapshot(
+                "ship", snapshot(plan_type="pro"), observed_at=2_000_700
+            )
+            result = store.query("ship", "1h", now=2_000_700)
+            with closing(sqlite3.connect(path)) as connection:
+                columns = {
+                    row[1]
+                    for row in connection.execute("PRAGMA table_info(quota_samples)")
+                }
+
+        self.assertIn("plan_type", columns)
+        self.assertEqual(
+            result["plans"],
+            [
+                {"observed_at": 2_000_100, "plan_type": "plus"},
+                {"observed_at": 2_000_400, "plan_type": "pro_lite"},
+                {"observed_at": 2_000_700, "plan_type": "pro"},
+            ],
+        )
 
 
 if __name__ == "__main__":

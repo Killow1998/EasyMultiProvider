@@ -818,7 +818,10 @@ class ServerAccountTests(unittest.TestCase):
             try:
                 with patch(
                     "easy_multi_provider.server.read_native_login_quota",
-                    return_value={"rate_limits": {"primary": {"usedPercent": 20}}},
+                    return_value={
+                        "plan_type": "plus",
+                        "rate_limits": {"primary": {"usedPercent": 20}},
+                    },
                 ):
                     connection = HTTPConnection(*server.server_address)
                     connection.request(
@@ -857,6 +860,7 @@ class ServerAccountTests(unittest.TestCase):
         self.assertEqual(history_payload["account_id"], "@native")
         self.assertEqual(history_payload["range"], "1d")
         self.assertEqual(history_payload["series"][0]["points"][0]["remaining_percent"], 80.0)
+        self.assertEqual(history_payload["plans"][0]["plan_type"], "plus")
 
     def test_compact_endpoint_routes_remote_compaction(self):
         with tempfile.TemporaryDirectory() as directory:

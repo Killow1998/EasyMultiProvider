@@ -40,6 +40,18 @@ def _integer(value: Any) -> Optional[int]:
     return int(number) if number is not None else None
 
 
+def _plan_type(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    value = value.strip().lower().replace("-", "_").replace(" ", "_")
+    value = "_".join(part for part in value.split("_") if part)
+    if not value or len(value) > 32 or not all(
+        character.isalnum() or character == "_" for character in value
+    ):
+        return None
+    return {"prolite": "pro_lite", "lite_pro": "pro_lite"}.get(value, value)
+
+
 def _rate_limit_buckets(snapshot: Mapping[str, Any]) -> Iterable[Tuple[str, Mapping[str, Any]]]:
     by_limit_id = snapshot.get("rate_limits_by_limit_id", snapshot.get("rateLimitsByLimitId"))
     if isinstance(by_limit_id, Mapping):
@@ -111,10 +123,19 @@ class QuotaHistoryStore:
                     window_minutes INTEGER,
                     used_percent REAL NOT NULL,
                     resets_at INTEGER,
+                    plan_type TEXT,
                     PRIMARY KEY (account_key, observed_at, limit_id, window_kind)
                 )
                 """
             )
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(quota_samples)")
+            }
+            if "plan_type" not in columns:
+                connection.execute(
+                    "ALTER TABLE quota_samples ADD COLUMN plan_type TEXT"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS quota_samples_lookup "
                 "ON quota_samples(account_key, observed_at)"
@@ -144,6 +165,7 @@ class QuotaHistoryStore:
         rows = _snapshot_rows(snapshot)
         if not rows:
             return 0
+        plan_type = _plan_type(snapshot.get("plan_type", snapshot.get("planType")))
         timestamp = int(time.time() if observed_at is None else observed_at)
         timestamp -= timestamp % SAMPLE_INTERVAL_SECONDS
         cutoff = timestamp - RETENTION_SECONDS
@@ -153,10 +175,19 @@ class QuotaHistoryStore:
                 connection.executemany(
                     "INSERT OR REPLACE INTO quota_samples "
                     "(account_key, observed_at, limit_id, window_kind, "
-                    "window_minutes, used_percent, resets_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "window_minutes, used_percent, resets_at, plan_type) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     [
-                        (account_key, timestamp, limit_id, kind, minutes, used, reset)
+                        (
+                            account_key,
+                            timestamp,
+                            limit_id,
+                            kind,
+                            minutes,
+                            used,
+                            reset,
+                            plan_type,
+                        )
                         for limit_id, kind, minutes, used, reset in rows
                     ],
                 )
@@ -182,18 +213,19 @@ class QuotaHistoryStore:
         timestamp = int(time.time() if now is None else now)
         cutoff = timestamp - RANGE_SECONDS[range_name]
         grouped: Dict[Tuple[str, Any], Dict[str, Any]] = {}
+        plans: Dict[int, str] = {}
         if self.path.exists():
             with self._lock:
                 if self.path.is_symlink():
                     raise QuotaHistoryError("quota history path must not be a symlink")
                 try:
-                    connection = sqlite3.connect(str(self.path), timeout=5)
-                except sqlite3.Error as exc:
+                    connection = self._connect()
+                except (OSError, QuotaHistoryError) as exc:
                     raise QuotaHistoryError("quota history is unavailable") from exc
                 try:
                     rows = connection.execute(
                         "SELECT observed_at, limit_id, window_kind, window_minutes, "
-                        "used_percent, resets_at FROM quota_samples "
+                        "used_percent, resets_at, plan_type FROM quota_samples "
                         "WHERE account_key = ? AND observed_at >= ? AND observed_at <= ? "
                         "ORDER BY observed_at, limit_id, window_kind",
                         (account_key, cutoff, timestamp),
@@ -202,7 +234,10 @@ class QuotaHistoryStore:
                     raise QuotaHistoryError("quota history is unavailable") from exc
                 finally:
                     connection.close()
-            for observed_at, limit_id, kind, minutes, used, resets_at in rows:
+            for observed_at, limit_id, kind, minutes, used, resets_at, plan_type in rows:
+                normalized_plan = _plan_type(plan_type)
+                if normalized_plan:
+                    plans[int(observed_at)] = normalized_plan
                 # Primary/secondary positions can swap between upstream versions.
                 # A quota window's duration, not its position, identifies its series.
                 key = (str(limit_id), minutes if minutes is not None else str(kind))
@@ -231,6 +266,10 @@ class QuotaHistoryStore:
             "sample_interval_seconds": SAMPLE_INTERVAL_SECONDS,
             "retention_days": RETENTION_SECONDS // (24 * 60 * 60),
             "series": list(grouped.values()),
+            "plans": [
+                {"observed_at": observed_at, "plan_type": plan_type}
+                for observed_at, plan_type in sorted(plans.items())
+            ],
         }
 
     def delete_account(self, account_key: str) -> None:

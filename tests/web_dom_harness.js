@@ -181,9 +181,10 @@ assert.match(html, /@media\(max-width:760px\)\{[\s\S]*?\.page-header\{flex-direc
 assert.match(html, /\.model-card\{grid-template-columns:minmax\(220px,1fr\) auto auto;/, "desktop model cards must keep details and actions on one compact row");
 assert.match(html, /\.model-card \.entity-card-actions\{grid-column:3;grid-row:1;flex-wrap:nowrap;/, "desktop model actions must remain aligned and visible");
 assert.match(html, /\.model-card \.entity-card-meta\{grid-column:1\/-1;grid-row:2;[^}]*white-space:normal;/, "model metadata must remain fully readable across the card");
-assert.match(html, /\.quota-credit span\{display:block;/, "credit details must use separate visual lines");
-assert.match(html, /\.account-card \.entity-card-quota\{grid-column:2;grid-row:1\/3\}/, "desktop quota must stay beside account actions");
-assert.match(html, /\.account-card \.entity-card-actions\{grid-column:1;grid-row:2;[^}]*border:0\}/, "desktop account actions must use the open space below account identity");
+assert.match(html, /\.credit-badge,.credit-monthly\{[^}]*border:1px solid var\(--border\)/, "credit values must use compact visual badges");
+assert.match(html, /\.account-card \.entity-card-quota\{[^}]*grid-column:1\/-1;grid-row:2/, "desktop quota must use a compact full-width row");
+assert.match(html, /\.account-card \.entity-card-actions\{grid-column:2;grid-row:1;[^}]*border:0/, "desktop account actions must stay at the upper right");
+assert.match(html, /\.plan-prolite\{--plan-color:#d9c98f\}\.plan-pro\{--plan-color:#f2b705\}/, "Pro Lite and Pro must have distinct gold plan colors");
 assert.match(html, /\.provider-card\{grid-template-columns:minmax\(220px,1fr\) auto;/, "provider cards must match the compact model-card layout");
 assert.match(html, /\.provider-card \.entity-card-actions\{grid-column:2;grid-row:1;flex-wrap:nowrap;/, "provider actions must stay visible on the title row");
 assert.match(html, /\.provider-card \.entity-card-meta\{grid-column:1\/-1;grid-row:2;/, "provider details must use one readable row across the card");
@@ -400,7 +401,7 @@ function pickerBehavior() {
 }
 
 function duplicateAccountBehavior() {
-  run("state = {native_account:{id:'@native',name:'当前 Codex 登录',prefix:'',native:true,credential_set:true,hidden_models:[],quota:{account_label:'n***@example.com'}},accounts:[{id:'same-login-account',prefix:'same-login-account',duplicate:true,duplicate_of:'当前 Codex 登录',credential_set:true},{id:'usable-account',name:'🥚',prefix:'usable-account',duplicate:false,credential_set:true,quota:{account_label:'u***@example.com'}}]}; renderAccounts()");
+  run("state = {native_account:{id:'@native',name:'当前 Codex 登录',prefix:'',native:true,credential_set:true,hidden_models:[],quota:{account_label:'n***@example.com',plan_type:'pro'}},accounts:[{id:'same-login-account',prefix:'same-login-account',duplicate:true,duplicate_of:'当前 Codex 登录',credential_set:true},{id:'usable-account',name:'🥚',prefix:'usable-account',duplicate:false,credential_set:true,quota:{account_label:'u***@example.com',plan_type:'ProLite'}}]}; renderAccounts()");
   const html = getElement("accounts").innerHTML;
   assert.match(html, /当前 Codex 登录/);
   assert.match(html, /Native/);
@@ -412,6 +413,7 @@ function duplicateAccountBehavior() {
   const nativeCard = cards.find(card => card.includes("refreshAccount('@native')"));
   assert.doesNotMatch(nativeCard, /removeAccount\('@native'\)/);
   assert.match(nativeCard, /title="n\*\*\*@example\.com · 使用 \.codex 当前登录"/);
+  assert.match(nativeCard, /class="subscription-plan plan-pro">Pro</);
   assert.doesNotMatch(nativeCard, /<div class="entity-card-status">使用 \.codex 当前登录/);
   const duplicateCard = cards.find(card => card.includes("refreshAccount('same-login-account')"));
   assert(duplicateCard, "duplicate account card must render");
@@ -424,17 +426,18 @@ function duplicateAccountBehavior() {
   assert.doesNotMatch(usableCard, /<span class="pill">usable-account<\/span>/, "an account ID must not be repeated as a badge");
   assert.doesNotMatch(usableCard, />u\*\*\*@example\.com</, "account labels must stay in the ID tooltip");
   assert.doesNotMatch(usableCard, /凭据已保存/, "successful credential state is redundant");
+  assert.match(usableCard, /class="subscription-plan plan-prolite">Pro Lite</);
 }
 
 function quotaHistoryHtml() {
   const content = getElement('quota_history_content').innerHTML;
-  return content.includes('id="quota_history_plot"') ? content + ['quota_history_controls','quota_history_legend','quota_history_plot'].map(id => getElement(id).innerHTML).join('') : content;
+  return content.includes('id="quota_history_plot"') ? content + ['quota_history_controls','quota_history_plan','quota_history_legend','quota_history_plot'].map(id => getElement(id).innerHTML).join('') : content;
 }
 
 function quotaHistoryBehavior() {
   run("renderQuotaHistory({series:[]}, '1d')");
   assert.match(quotaHistoryHtml(), /暂无额度记录/);
-  context.__quotaPayload = {series:[{limit_id:'codex',window_kind:'primary',window_minutes:10080,points:[{observed_at:1000,remaining_percent:80},{observed_at:1300,remaining_percent:75}]}]};
+  context.__quotaPayload = {plans:[{observed_at:900,plan_type:'plus'},{observed_at:1150,plan_type:'pro_lite'},{observed_at:1250,plan_type:'pro'}],series:[{limit_id:'codex',window_kind:'primary',window_minutes:10080,points:[{observed_at:1000,remaining_percent:80},{observed_at:1300,remaining_percent:75}]}]};
   run("renderQuotaHistory(__quotaPayload, '1h')");
   const html = quotaHistoryHtml();
   assert.match(html, /<svg/);
@@ -443,6 +446,10 @@ function quotaHistoryBehavior() {
   assert.match(html, /data-quota-point/);
   assert.match(html, /quota-hover-target/);
   assert.match(html, /quota-chart-tooltip/);
+  assert.match(html, /quota-plan-history/);
+  assert.match(html, /Plus/);
+  assert.match(html, /Pro Lite/);
+  assert.match(html, /--plan-color:#f2b705/);
   assert.doesNotMatch(html, /每 5 分钟|自动采样|保留 15 天/);
 
   for (const [seriesValues, expectedMin, expectedMax] of [
@@ -738,7 +745,7 @@ function quotaMeterBehavior() {
   assert.match(rendered, /class="quota-battery" role="progressbar"/);
   assert.match(rendered, /aria-valuenow="80"/);
   assert.match(rendered, /aria-valuenow="34\.5"/);
-  assert(rendered.indexOf("7d") < rendered.indexOf("5h"), "long quota window must render first");
+  assert(rendered.indexOf("5h") < rendered.indexOf("7d"), "5h and 7d must render from left to right");
   assert.match(rendered, /is-medium/);
   assert.doesNotMatch(rendered, /is-updated/, "ordinary rerenders must not replay quota animation");
 
@@ -754,6 +761,9 @@ function quotaMeterBehavior() {
   assert.match(rendered, /bonus · 1h/);
   assert.match(rendered, /aria-valuenow="8"/);
   assert.match(rendered, /is-low/);
+  assert.match(rendered, /class="quota-meter is-unreported" title="7d 未回传限制"/);
+  assert.match(rendered, /role="img" aria-label="7d 未回传限制"/);
+  assert.match(html, /\.quota-meter\.is-unreported \.quota-battery\{background:linear-gradient\(to bottom right/);
 
   run("refreshingAccounts.add('meter'); renderAccounts()");
   assert.match(getElement("accounts").innerHTML, /is-refreshing/);
@@ -764,15 +774,24 @@ function quotaMeterBehavior() {
 function creditLayoutBehavior() {
   context.__creditLayoutState = {
     native_account: null,
-    accounts: [{id:'credit-lines',name:'credit-lines',prefix:'credit-lines',credential_set:true,quota:{credits:{balance:1200,individual_limit:{remaining_percent:73},reset_credits:{available_count:2,credits:[{expires_at:1893553445},{expires_at:1896321906}]}}}}],
+    accounts: [{id:'credit-lines',name:'credit-lines',prefix:'credit-lines',credential_set:true,quota:{credits:{balance:1200,individual_limit:{remaining_percent:73},reset_credits:{available_count:2,credits:[{status:'available',title:'Rate-limit reset',description:'Reset an eligible Codex rate-limit window.',expires_at:1893553445},{status:'available',expires_at:1896321906}]}}}},{id:'no-resets',name:'no-resets',prefix:'no-resets',credential_set:true,quota:{credits:{balance:20,reset_credits:{available_count:0,credits:[]}}}}],
   };
   run("state = __creditLayoutState; renderAccounts()");
   const rendered = getElement("accounts").innerHTML;
-  const block = rendered.match(/<div class="muted quota-credit">([\s\S]*?)<\/div>/);
-  assert(block, "credit details must render in a dedicated block");
-  assert.strictEqual((block[1].match(/<span>/g) || []).length, 5, "credit, monthly, reset, and each expiry must have their own line");
-  assert.match(block[1], /<span>credit 1200<\/span><span>monthly 73% left<\/span><span>reset 2<\/span><span>expire /);
-  assert.doesNotMatch(block[1], / · /, "credit details must not be joined into one line");
+  assert.match(rendered, /class="credit-mark">C<\/span><span>Credit<\/span><strong>1200<\/strong>/);
+  assert.match(rendered, /class="credit-monthly"><span>月额度<\/span><strong>73%<\/strong>/);
+  assert.match(rendered, /onclick="openResetCredits\('credit-lines'\)"/);
+  assert.doesNotMatch(rendered, /openResetCredits\('no-resets'\)/, "accounts without reset opportunities must not show the reset option");
+  assert.doesNotMatch(rendered, /expire 20|到期 · 20/, "expiry details must stay out of the compact card");
+  run("openResetCredits('credit-lines')");
+  const modal = getElement('modal_body').innerHTML;
+  assert.match(modal, /新的额度与下一次刷新时间由 OpenAI 返回/);
+  assert.match(modal, /周额度低于 10%/);
+  assert.match(modal, /没有公布/);
+  assert.strictEqual((modal.match(/ UTC/g) || []).length, 2, "each reset expiry must use an absolute UTC date and time");
+  assert.strictEqual((modal.match(/data-reset-countdown=/g) || []).length, 2, "each reset expiry must also show remaining time");
+  assert.match(modal, /Rate-limit reset/);
+  run('closeModal()');
 }
 
 function invalidCredentialAccountBehavior() {
