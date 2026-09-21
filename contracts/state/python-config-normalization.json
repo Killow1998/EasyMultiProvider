@@ -1,0 +1,719 @@
+{
+  "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config.normalize",
+  "status": "implemented",
+  "implementation": "crates/emp-state/src/config.rs",
+  "test": "crates/emp-state/tests/config_normalization_compat.rs",
+  "limitations": [
+    "filesystem canonicalization, secret extraction, merge behavior and persistence are separate state transitions"
+  ],
+  "valid": [
+    {
+      "name": "minimal-fixed-native-path",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json"
+      },
+      "expected": {
+        "host": "127.0.0.1",
+        "port": 4200,
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "account_store_path": "state/accounts",
+        "secret_store_path": "state/secrets",
+        "codex_base_url": "https://chatgpt.com/backend-api/codex",
+        "accounts": [],
+        "providers": [],
+        "models": [],
+        "native_hidden_models": [],
+        "native_model_context_windows": {},
+        "catalog_presentations": {},
+        "catalog_family_presentations": {},
+        "subscription_search": {
+          "enabled": false,
+          "account_id": ""
+        },
+        "codex_runtime_sources": [
+          "auto"
+        ]
+      }
+    },
+    {
+      "name": "fully-populated-cross-entity-config",
+      "input": {
+        "host": " 127.0.0.1 ",
+        "port": "4_201",
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "account_store_path": " state/accounts ",
+        "secret_store_path": " state/secrets ",
+        "codex_base_url": "http://127.0.0.1:4201/backend-api/codex///",
+        "accounts": [
+          {
+            "id": "egg",
+            "prefix": "sub",
+            "name": "Egg",
+            "credential_status": "valid",
+            "enabled": true,
+            "hidden_models": [
+              "z-model",
+              "a-model",
+              "z-model"
+            ],
+            "model_context_windows": {
+              "gpt-5": 400000
+            },
+            "quota": {
+              "plan_type": "pro"
+            }
+          }
+        ],
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1/responses",
+            "protocol": "chat_completions",
+            "api_key": "synthetic-key",
+            "unknown": "discarded"
+          }
+        ],
+        "models": [
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-chat",
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "context_window": 128000,
+            "max_input_tokens": 120000,
+            "output_limit": 8192,
+            "input_modalities": [
+              "text"
+            ],
+            "unknown": "discarded"
+          }
+        ],
+        "native_hidden_models": [
+          "z-native",
+          "a-native",
+          "z-native"
+        ],
+        "native_model_context_windows": {
+          "native/model": 272000
+        },
+        "catalog_presentations": {
+          "deepseek/deepseek-chat": {
+            "catalog_alias": "DeepSeek Chat",
+            "show_context": false,
+            "reasoning_summary": " SHOW ",
+            "unknown": 1
+          }
+        },
+        "catalog_family_presentations": {
+          "deepseek": {
+            "catalog_alias": "DeepSeek",
+            "show_context": true,
+            "reasoning_summary": "hide"
+          }
+        },
+        "subscription_search": {
+          "enabled": true,
+          "account_id": "legacy-pinned"
+        },
+        "codex_runtime_sources": [
+          "configured",
+          "path_cli",
+          "configured"
+        ],
+        "unknown": "discarded"
+      },
+      "expected": {
+        "host": "127.0.0.1",
+        "port": 4201,
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "account_store_path": "state/accounts",
+        "secret_store_path": "state/secrets",
+        "codex_base_url": "http://127.0.0.1:4201/backend-api/codex",
+        "accounts": [
+          {
+            "id": "egg",
+            "name": "Egg",
+            "prefix": "sub",
+            "auth_file": "",
+            "credential_status": "valid",
+            "enabled": true,
+            "hidden_models": [
+              "a-model",
+              "z-model"
+            ],
+            "model_context_windows": {
+              "gpt-5": 400000
+            },
+            "quota": {
+              "plan_type": "pro"
+            }
+          }
+        ],
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "auth_mode": "api_key",
+            "api_key": "synthetic-key",
+            "api_key_file": "",
+            "anthropic_version": "2023-06-01",
+            "enabled": true,
+            "deployment_identity": "",
+            "resolved_protocol": "",
+            "protocol_observation": {
+              "source": "unknown",
+              "confidence": 0.0,
+              "observed_at": null,
+              "endpoint_fingerprint": "",
+              "deployment_identity": "",
+              "upstream_model": ""
+            },
+            "capabilities": {}
+          }
+        ],
+        "models": [
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-chat",
+            "family_id": "",
+            "display_name": "",
+            "description": "",
+            "supports_reasoning": true,
+            "supports_reasoning_summaries": null,
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "reasoning_control": "",
+            "context_window": 128000,
+            "max_input_tokens": 120000,
+            "output_limit": 8192,
+            "created_at": 0,
+            "enabled": true,
+            "visibility": "list",
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ],
+            "supported_protocols": [],
+            "supports_image_detail_original": false,
+            "deployment_identity": "",
+            "resolved_protocol": "",
+            "protocol_observation": {
+              "source": "unknown",
+              "confidence": 0.0,
+              "observed_at": null,
+              "endpoint_fingerprint": "",
+              "deployment_identity": "",
+              "upstream_model": ""
+            },
+            "context_calibrations": [],
+            "capabilities": {},
+            "capability_sources": {
+              "input_modalities": {
+                "source": "manual",
+                "confidence": 1.0,
+                "observed_at": null
+              },
+              "supports_reasoning": {
+                "source": "unknown",
+                "confidence": 0.0,
+                "observed_at": null
+              },
+              "reasoning_levels": {
+                "source": "inferred",
+                "confidence": 0.35,
+                "observed_at": null
+              },
+              "max_input_tokens": {
+                "source": "manual",
+                "confidence": 1.0,
+                "observed_at": null
+              },
+              "supports_image_detail_original": {
+                "source": "unknown",
+                "confidence": 0.0,
+                "observed_at": null
+              },
+              "output_modalities": {
+                "source": "unknown",
+                "confidence": 0.0,
+                "observed_at": null
+              },
+              "context_window": {
+                "source": "inferred",
+                "confidence": 0.35,
+                "observed_at": null
+              },
+              "output_limit": {
+                "source": "inferred",
+                "confidence": 0.35,
+                "observed_at": null
+              }
+            }
+          }
+        ],
+        "native_hidden_models": [
+          "a-native",
+          "z-native"
+        ],
+        "native_model_context_windows": {
+          "native/model": 272000
+        },
+        "catalog_presentations": {
+          "deepseek/deepseek-chat": {
+            "catalog_alias": "DeepSeek Chat",
+            "show_context": false,
+            "reasoning_summary": "show"
+          }
+        },
+        "catalog_family_presentations": {
+          "deepseek": {
+            "catalog_alias": "DeepSeek",
+            "show_context": true,
+            "reasoning_summary": "hide"
+          }
+        },
+        "subscription_search": {
+          "enabled": true,
+          "account_id": ""
+        },
+        "codex_runtime_sources": [
+          "configured",
+          "path_cli"
+        ]
+      }
+    },
+    {
+      "name": "empty-python-iterables-for-record-lists",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "accounts": "",
+        "providers": {},
+        "models": []
+      },
+      "expected": {
+        "host": "127.0.0.1",
+        "port": 4200,
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "account_store_path": "state/accounts",
+        "secret_store_path": "state/secrets",
+        "codex_base_url": "https://chatgpt.com/backend-api/codex",
+        "accounts": [],
+        "providers": [],
+        "models": [],
+        "native_hidden_models": [],
+        "native_model_context_windows": {},
+        "catalog_presentations": {},
+        "catalog_family_presentations": {},
+        "subscription_search": {
+          "enabled": false,
+          "account_id": ""
+        },
+        "codex_runtime_sources": [
+          "auto"
+        ]
+      }
+    },
+    {
+      "name": "explicit-null-and-empty-path-fallbacks",
+      "input": {
+        "native_catalog_path": null,
+        "account_store_path": null,
+        "secret_store_path": "",
+        "host": null
+      },
+      "expected": {
+        "host": "127.0.0.1",
+        "port": 4200,
+        "native_catalog_path": "",
+        "account_store_path": "state/accounts",
+        "secret_store_path": "state/secrets",
+        "codex_base_url": "https://chatgpt.com/backend-api/codex",
+        "accounts": [],
+        "providers": [],
+        "models": [],
+        "native_hidden_models": [],
+        "native_model_context_windows": {},
+        "catalog_presentations": {},
+        "catalog_family_presentations": {},
+        "subscription_search": {
+          "enabled": false,
+          "account_id": ""
+        },
+        "codex_runtime_sources": [
+          "auto"
+        ]
+      }
+    },
+    {
+      "name": "boolean-port-and-loopback-url",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "port": true,
+        "codex_base_url": "http://localhost:1/codex/"
+      },
+      "expected": {
+        "host": "127.0.0.1",
+        "port": 1,
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "account_store_path": "state/accounts",
+        "secret_store_path": "state/secrets",
+        "codex_base_url": "http://localhost:1/codex",
+        "accounts": [],
+        "providers": [],
+        "models": [],
+        "native_hidden_models": [],
+        "native_model_context_windows": {},
+        "catalog_presentations": {},
+        "catalog_family_presentations": {},
+        "subscription_search": {
+          "enabled": false,
+          "account_id": ""
+        },
+        "codex_runtime_sources": [
+          "auto"
+        ]
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "raw-not-object",
+      "input": [],
+      "error_type": "ConfigError",
+      "error": "configuration must be an object"
+    },
+    {
+      "name": "host-not-loopback",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "host": "0.0.0.0"
+      },
+      "error_type": "ConfigError",
+      "error": "host must be 127.0.0.1 for local-only management"
+    },
+    {
+      "name": "port-invalid-integer-text",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "port": "bad"
+      },
+      "error_type": "ValueError",
+      "error": "invalid literal for int() with base 10: 'bad'"
+    },
+    {
+      "name": "port-null-type-error",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "port": null
+      },
+      "error_type": "TypeError",
+      "error": "int() argument must be a string, a bytes-like object or a real number, not 'NoneType'"
+    },
+    {
+      "name": "url-validates-before-port-range",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "port": 0,
+        "codex_base_url": "not-a-url"
+      },
+      "error_type": "ConfigError",
+      "error": "codex_base_url must be an http(s) URL"
+    },
+    {
+      "name": "port-out-of-range",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "port": 0
+      },
+      "error_type": "ConfigError",
+      "error": "port must be between 1 and 65535"
+    },
+    {
+      "name": "accounts-null-not-iterable",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "accounts": null
+      },
+      "error_type": "TypeError",
+      "error": "'NoneType' object is not iterable"
+    },
+    {
+      "name": "account-error-type-preserved",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "accounts": [
+          {
+            "id": "bad id",
+            "prefix": "ok"
+          }
+        ]
+      },
+      "error_type": "AccountError",
+      "error": "account.id must be a safe single path segment"
+    },
+    {
+      "name": "duplicate-account-id-before-providers",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "accounts": [
+          {
+            "id": "a",
+            "prefix": "p1"
+          },
+          {
+            "id": "a",
+            "prefix": "p2"
+          }
+        ],
+        "providers": [
+          "invalid-provider"
+        ]
+      },
+      "error_type": "ConfigError",
+      "error": "account ids must be unique"
+    },
+    {
+      "name": "duplicate-account-prefix",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "accounts": [
+          {
+            "id": "a",
+            "prefix": "p"
+          },
+          {
+            "id": "b",
+            "prefix": "p"
+          }
+        ]
+      },
+      "error_type": "ConfigError",
+      "error": "account prefixes must be unique"
+    },
+    {
+      "name": "provider-error-before-model",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "providers": [
+          {
+            "id": "bad",
+            "base_url": "http://example.com"
+          }
+        ],
+        "models": [
+          "invalid-model"
+        ]
+      },
+      "error_type": "ConfigError",
+      "error": "provider.base_url must use HTTPS unless it targets loopback"
+    },
+    {
+      "name": "model-error-before-provider-duplicate",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1/responses",
+            "protocol": "chat_completions",
+            "api_key": "synthetic-key",
+            "unknown": "discarded"
+          },
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1/responses",
+            "protocol": "chat_completions",
+            "api_key": "synthetic-key",
+            "unknown": "discarded"
+          }
+        ],
+        "models": [
+          {
+            "id": "bad id",
+            "provider": "deepseek"
+          }
+        ]
+      },
+      "error_type": "ConfigError",
+      "error": "model.id contains unsupported characters"
+    },
+    {
+      "name": "duplicate-provider-id",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1/responses",
+            "protocol": "chat_completions",
+            "api_key": "synthetic-key",
+            "unknown": "discarded"
+          },
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1/responses",
+            "protocol": "chat_completions",
+            "api_key": "synthetic-key",
+            "unknown": "discarded"
+          }
+        ]
+      },
+      "error_type": "ConfigError",
+      "error": "provider ids must be unique"
+    },
+    {
+      "name": "account-prefix-provider-conflict-sorted",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "accounts": [
+          {
+            "id": "a",
+            "prefix": "zeta"
+          },
+          {
+            "id": "b",
+            "prefix": "alpha"
+          }
+        ],
+        "providers": [
+          {
+            "id": "zeta",
+            "base_url": "https://zeta.example/v1"
+          },
+          {
+            "id": "alpha",
+            "base_url": "https://alpha.example/v1"
+          }
+        ]
+      },
+      "error_type": "ConfigError",
+      "error": "account prefixes conflict with provider ids: alpha, zeta"
+    },
+    {
+      "name": "duplicate-model-id",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1/responses",
+            "protocol": "chat_completions",
+            "api_key": "synthetic-key",
+            "unknown": "discarded"
+          }
+        ],
+        "models": [
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-chat",
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "context_window": 128000,
+            "max_input_tokens": 120000,
+            "output_limit": 8192,
+            "input_modalities": [
+              "text"
+            ],
+            "unknown": "discarded"
+          },
+          {
+            "id": "deepseek/deepseek-chat",
+            "provider": "deepseek",
+            "upstream_id": "deepseek-chat",
+            "reasoning_levels": [
+              "low",
+              "high"
+            ],
+            "context_window": 128000,
+            "max_input_tokens": 120000,
+            "output_limit": 8192,
+            "input_modalities": [
+              "text"
+            ],
+            "unknown": "discarded"
+          }
+        ]
+      },
+      "error_type": "ConfigError",
+      "error": "model ids must be unique"
+    },
+    {
+      "name": "unknown-model-providers-sorted",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "providers": [
+          {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1/responses",
+            "protocol": "chat_completions",
+            "api_key": "synthetic-key",
+            "unknown": "discarded"
+          }
+        ],
+        "models": [
+          {
+            "id": "m/z",
+            "provider": "zeta"
+          },
+          {
+            "id": "m/a",
+            "provider": "alpha"
+          }
+        ]
+      },
+      "error_type": "ConfigError",
+      "error": "models reference unknown providers: alpha, zeta"
+    },
+    {
+      "name": "tail-hidden-model-error-after-relations",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "native_hidden_models": "bad"
+      },
+      "error_type": "AccountError",
+      "error": "native_hidden_models must be a bounded list"
+    },
+    {
+      "name": "tail-presentation-error-before-runtime",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "catalog_presentations": [],
+        "codex_runtime_sources": []
+      },
+      "error_type": "ConfigError",
+      "error": "catalog_presentations must be an object"
+    },
+    {
+      "name": "runtime-source-error",
+      "input": {
+        "native_catalog_path": "/synthetic/codex/models_cache.json",
+        "codex_runtime_sources": [
+          "auto",
+          "path_cli"
+        ]
+      },
+      "error_type": "ConfigError",
+      "error": "codex_runtime_sources auto cannot be combined"
+    }
+  ]
+}

@@ -101,6 +101,13 @@ jobs:
         run: >-
           uv run --frozen cargo test --locked -p emp-state --test model_normalization_compat
           model_normalization_matches_live_python_oracle_when_configured
+      - name: Python and Rust full configuration normalization
+        if: matrix.os == 'ubuntu-22.04'
+        env:
+          EMP_PYTHON_INTEROP: python
+        run: >-
+          uv run --frozen cargo test --locked -p emp-state --test config_normalization_compat
+          configuration_normalization_matches_live_python_oracle_when_configured
 
       - name: Python and Rust account normalization
         if: matrix.os == 'ubuntu-22.04'

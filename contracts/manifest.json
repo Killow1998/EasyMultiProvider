@@ -152,6 +152,20 @@
       "fixture": "state/python-model-normalization.json"
     },
     {
+      "id": "state.configuration-normalization.python-rust",
+      "level": "state",
+      "source": "easy_multi_provider/config.py:normalize",
+      "transport": "file",
+      "dialect": "none",
+      "normalization": [
+        "entity lists preserve input order",
+        "cross-entity uniqueness and references follow Python evaluation order",
+        "unknown top-level fields are discarded"
+      ],
+      "side_effects": ["none; top-level configuration normalization is pure"],
+      "fixture": "state/python-config-normalization.json"
+    },
+    {
       "id": "state.capability-model-values.python-rust",
       "level": "state",
       "source": "easy_multi_provider/capabilities.py pure model value helpers",
