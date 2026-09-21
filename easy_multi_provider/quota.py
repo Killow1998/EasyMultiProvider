@@ -477,9 +477,9 @@ def _run_quota_query(
 
     Policy flags keep the imported-account and native-login callers explicit:
     - allow_refresh: whether account/read may request token rotation.
-    - persist_path: when set and allow_refresh is True, a refreshed credential
-      is persisted to this encrypted EMP path; when None, temporary refreshed
-      state is discarded and the native auth file is never mutated.
+    - persist_path: when set, a changed credential is persisted to this
+      encrypted EMP path; when None, temporary state is discarded and the
+      native auth file is never mutated.
     """
     binary, identity = _trusted_codex_binary(codex_binary)
     requests = [
@@ -579,13 +579,14 @@ def _run_quota_query(
                     pass
             raise QuotaError("Codex account quota check failed") from exc
         finally:
-            # Token rotation and quota retrieval are separate operations. Keep
-            # Codex's refreshed credential even if the later query fails, or
-            # the vault can retain a refresh token that has already been used.
-            if process is not None and allow_refresh and persist_path is not None:
+            # Codex may rotate tokens while reading an expired login even
+            # without an explicit refresh request. Keep that credential if
+            # the later quota request fails, so the vault stays current.
+            if process is not None and persist_path is not None:
                 try:
                     refreshed_auth = json.loads(plain_auth.read_text(encoding="utf-8"))
-                    write_encrypted_json(Path(persist_path), validate_auth_json(refreshed_auth))
+                    if refreshed_auth != auth:
+                        write_encrypted_json(Path(persist_path), validate_auth_json(refreshed_auth))
                 except (OSError, ValueError, VaultError) as exc:
                     raise QuotaError("Codex refreshed credentials could not be saved", "quota_credentials_save_failed") from exc
         return parse_app_server_output(stdout)
@@ -594,9 +595,9 @@ def _run_quota_query(
 def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", timeout: int = 45) -> Dict[str, Any]:
     """Query quota for a normal imported EMP account.
 
-    Uses the account's encrypted EMP credential snapshot, may request token
-    refresh, and persists a validated refreshed credential back into the EMP
-    encrypted vault.
+    Read with the existing login first. Codex can reject a forced refresh
+    even while its current access token is valid. Retry with rotation only
+    after an actual authentication failure, and persist changed credentials.
     """
     auth_file = account.get("auth_file", "")
     if not auth_file:
@@ -605,12 +606,20 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
         auth = load_auth(account)
     except (AccountError, VaultError) as exc:
         raise QuotaError(str(exc)) from exc
+    persist_path = Path(auth_file)
+    try:
+        return _run_quota_query(
+            auth, codex_binary, timeout,
+            allow_refresh=False, persist_path=persist_path,
+        )
+    except QuotaError as exc:
+        if exc.code != "quota_auth_required":
+            raise
+    # The first process may have rotated an expired credential before its
+    # quota call failed. Retry from the saved copy, not the stale input.
     return _run_quota_query(
-        auth,
-        codex_binary,
-        timeout,
-        allow_refresh=True,
-        persist_path=Path(auth_file),
+        load_auth(account), codex_binary, timeout,
+        allow_refresh=True, persist_path=persist_path,
     )
 
 

@@ -623,9 +623,7 @@ class NativeLoginQuotaTests(unittest.TestCase):
                 read_native_login_quota(codex_binary=str(codex_file))
             persisted.assert_not_called()
 
-    def test_imported_quota_still_uses_refresh_token_true_and_persists(self):
-        # Non-duplicate imported account must keep refreshToken=True and persist
-        # a validated refreshed credential back to its EMP encrypted auth file.
+    def test_imported_quota_uses_existing_token_without_forced_refresh(self):
         process, _sent = self._fake_process_factory(True)
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             account_dir = Path(directory) / "primary"
@@ -648,18 +646,31 @@ class NativeLoginQuotaTests(unittest.TestCase):
             body_lines = process.stdin.body.splitlines()
             account_read = json.loads(body_lines[2])
             self.assertEqual(account_read["method"], "account/read")
-            self.assertIs(account_read["params"]["refreshToken"], True)
-            # The imported path must persist a refreshed credential back to the
-            # target EMP auth_file, and the written value must be a validated
-            # dict (not the raw account, not a path, not None).
-            persisted.assert_called_once()
-            call_args, call_kwargs = persisted.call_args
-            persisted_path = Path(call_args[0]) if call_args else Path(call_kwargs["path"])
-            self.assertEqual(persisted_path.resolve(), auth_file.resolve())
-            written_value = call_args[1] if len(call_args) > 1 else call_kwargs["value"]
-            self.assertIsInstance(written_value, dict)
-            self.assertIn("tokens", written_value)
-            self.assertIn("access_token", written_value["tokens"])
+            self.assertIs(account_read["params"]["refreshToken"], False)
+            persisted.assert_not_called()
+
+    def test_imported_quota_retries_auth_failure_with_saved_rotated_token(self):
+        original = {"tokens": {"access_token": "old-access", "refresh_token": "old-refresh"}}
+        rotated = {"tokens": {"access_token": "new-access", "refresh_token": "new-refresh"}}
+        with tempfile.TemporaryDirectory() as directory:
+            auth_file = Path(directory) / "auth.json.enc"
+            write_encrypted_json(auth_file, original)
+            calls = []
+
+            def query(auth, _binary, _timeout, *, allow_refresh, persist_path):
+                calls.append((auth, allow_refresh, persist_path))
+                if not allow_refresh:
+                    write_encrypted_json(auth_file, rotated)
+                    raise quota_module.QuotaError("login required", "quota_auth_required")
+                return {"plan_type": "plus"}
+
+            with patch.object(quota_module, "_run_quota_query", side_effect=query):
+                result = read_account_quota({"auth_file": str(auth_file)})
+            self.assertEqual(result["plan_type"], "plus")
+            self.assertEqual(calls, [
+                (original, False, auth_file),
+                (rotated, True, auth_file),
+            ])
 
 
 if __name__ == "__main__":
