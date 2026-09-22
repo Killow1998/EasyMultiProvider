@@ -190,11 +190,21 @@ pub(crate) fn responses_request(
         }
     };
     if route.dialect != emp_core::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
+        let mut usage = crate::services::usage::Observation::new(
+            state,
+            &route,
+            &body,
+            &incoming,
+            None,
+            "responses",
+        );
         let (compacted, candidate) =
             match external_compaction_response(state, &route, &body, &incoming, &ids) {
                 Ok(result) => result,
                 Err(error) => return ResponsesRequestResult::Buffered(error),
             };
+        usage.observe(&compacted);
+        usage.finish();
         persist_protocol_observation(state, &candidate);
         if python_truthy(body.get("stream")) {
             let stream_body = match generated_response_stream(compacted, &ids) {
@@ -266,6 +276,15 @@ pub(crate) fn responses_request(
                 .block_on(router.execute_complete(&candidate, &body, &incoming, &ids))
             {
                 Ok(result) => {
+                    let mut usage = crate::services::usage::Observation::new(
+                        state,
+                        &candidate,
+                        &body,
+                        &incoming,
+                        None,
+                        "responses",
+                    );
+                    usage.observe(&result.body);
                     if result.body["status"] == "completed" {
                         crate::services::context::record(state, &candidate, &body, true);
                     }
@@ -302,6 +321,14 @@ pub(crate) fn responses_request(
                     {
                         continue 'candidate;
                     }
+                    let _usage = crate::services::usage::Observation::new(
+                        state,
+                        &candidate,
+                        &body,
+                        &incoming,
+                        None,
+                        "responses",
+                    );
                     return ResponsesRequestResult::Buffered(router_error_response(error));
                 }
             }

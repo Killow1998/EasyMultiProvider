@@ -428,6 +428,15 @@ pub(crate) fn serve_responses_websocket(
                         return;
                     }
                 }
+                let owner = emp_state::usage::account_owner(&plan.headers);
+                let mut usage = crate::services::usage::Observation::new(
+                    state,
+                    &route,
+                    &Value::Object(request_body.clone()),
+                    &request_headers,
+                    Some(&owner),
+                    "responses",
+                );
                 if client.send_json(&plan.payload).is_err() {
                     native_upstream = None;
                     last_native_response_id = None;
@@ -460,6 +469,7 @@ pub(crate) fn serve_responses_websocket(
                             .and_then(Value::as_str)
                             .map(str::to_owned);
                     }
+                    usage.observe(&event);
                     // Native WS terminal policy preserves Python's generic
                     // stream failures; only successful turns calibrate here.
                     if crate::services::context::outcome(&event) == Some(true) {
@@ -562,6 +572,14 @@ pub(crate) fn serve_responses_websocket(
             {
                 return;
             }
+            let mut usage = crate::services::usage::Observation::new(
+                state,
+                &route,
+                &Value::Object(request_body.clone()),
+                &request_headers,
+                upstream.usage_owner.as_deref(),
+                "responses",
+            );
             loop {
                 match state
                     .backend
@@ -570,6 +588,7 @@ pub(crate) fn serve_responses_websocket(
                     .block_on(upstream.next_event())
                 {
                     Ok(Some(event)) => {
+                        usage.observe(&event.body);
                         crate::services::context::record_event(
                             state,
                             &route,
@@ -625,6 +644,14 @@ pub(crate) fn serve_responses_websocket(
                     continue;
                 }
             };
+            let mut usage = crate::services::usage::Observation::new(
+                state,
+                &candidate,
+                &Value::Object(request_body.clone()),
+                &request_headers,
+                None,
+                "responses",
+            );
             loop {
                 match state
                     .backend
@@ -633,6 +660,7 @@ pub(crate) fn serve_responses_websocket(
                     .block_on(upstream.next_event())
                 {
                     Ok(Some(event)) => {
+                        usage.observe(&event.body);
                         crate::services::context::record_event(
                             state,
                             &candidate,

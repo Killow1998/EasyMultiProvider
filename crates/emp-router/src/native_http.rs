@@ -58,6 +58,8 @@ pub struct NativeStreamEvent {
 }
 
 pub struct NativeStream {
+    /// Opaque hash of the credential owner selected by the application.
+    pub usage_owner: Option<String>,
     response: Option<HttpResponse>,
     requested_model: String,
     upstream_model: String,
@@ -1077,6 +1079,7 @@ impl<'a> NativeRouter<'a> {
             .to_ascii_lowercase()
             .contains("text/event-stream");
         Ok(NativeStream {
+            usage_owner: None,
             response: Some(response),
             requested_model: route.requested_model.clone(),
             upstream_model: route.upstream_model.clone(),

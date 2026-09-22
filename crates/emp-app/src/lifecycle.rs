@@ -229,6 +229,7 @@ impl ServerHandle {
     pub fn shutdown(self) -> Result<(), AppError> {
         let restoration = self.state.backend.integration.restore_owned();
         self.state.shutdown.store(true, Ordering::Release);
+        self.state.backend.usage.stop();
         self.state.backend.accounts.quota_condition.notify_all();
         self.state
             .backend
@@ -270,6 +271,12 @@ pub(crate) fn run_server(
         config["port"] = serde_json::json!(port);
     }
     server.reconcile_startup();
+    let usage_workers = crate::services::usage::workers(&server.state)?;
+    server
+        .workers
+        .lock()
+        .map_err(|_| AppError::ServerStopped)?
+        .extend(usage_workers);
     let result = server.state.backend.transport.runtime.block_on(async {
         // Register before announcing readiness, so immediate termination is safe.
         #[cfg(unix)]

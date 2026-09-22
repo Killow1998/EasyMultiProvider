@@ -434,6 +434,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "time",
 ]
 
 [[package]]
@@ -504,6 +505,9 @@ dependencies = [
  "fernet",
  "getrandom 0.2.17",
  "libc",
+ "num-bigint",
+ "num-traits",
+ "rusqlite",
  "scrypt",
  "serde",
  "serde_json",

@@ -121,11 +121,14 @@ pub(crate) fn compact_request(
             return json_error_response(500, status_text(500), "internal server error", None, &[]);
         }
     };
+    let mut usage =
+        crate::services::usage::Observation::new(state, &route, &body, &incoming, None, "compact");
     let (compacted, candidate) =
         match external_compaction_response(state, &route, &body, &incoming, &ids) {
             Ok(result) => result,
             Err(error) => return error,
         };
+    usage.observe(&compacted);
     persist_protocol_observation(state, &candidate);
     match serde_json::to_vec(&compacted) {
         Ok(body) => response("HTTP/1.1 200 OK", "application/json", &body, &[]),

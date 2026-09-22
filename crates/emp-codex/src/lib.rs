@@ -343,3 +343,5 @@ fn verified_owner_hint(authorization: &str) -> String {
 }
 
 pub mod runtime_inventory;
+
+pub mod usage_history;

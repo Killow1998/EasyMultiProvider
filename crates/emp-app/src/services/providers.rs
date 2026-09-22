@@ -99,6 +99,14 @@ pub(crate) fn open_external_stream(
                     {
                         continue 'candidate;
                     }
+                    let _usage = crate::services::usage::Observation::new(
+                        state,
+                        &candidate,
+                        body,
+                        incoming,
+                        None,
+                        "responses",
+                    );
                     return Err(ExternalStreamOpenError::Router(error));
                 }
             }

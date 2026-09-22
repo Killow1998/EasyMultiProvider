@@ -130,6 +130,7 @@ class EmpProcess:
         for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
                     "all_proxy", "EASY_MULTI_PROVIDER_MASTER_KEY_FILE"):
             environment.pop(key, None)
+        environment.update(HTTP_PROXY="http://127.0.0.1:1", HTTPS_PROXY="http://127.0.0.1:1", ALL_PROXY="http://127.0.0.1:1")
         environment.update(CODEX_HOME=str(home), PYTHONUNBUFFERED="1",
                            NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
         environment.update(environment_overrides or {})

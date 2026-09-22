@@ -44,6 +44,7 @@ pub(crate) struct BackendState {
     pub(crate) transport: TransportState,
     pub(crate) accounts: AccountState,
     pub(crate) integration: IntegrationState,
+    pub(crate) usage: crate::services::usage::UsageState,
 }
 
 pub(crate) struct TransportState {
@@ -114,6 +115,7 @@ impl BackendState {
         .map_err(|_| AppError::ServerStopped)?
         .with_lock_path(codex_home.join("easy-multi-provider/integration/lease.lock"));
         Ok(Self {
+            usage: crate::services::usage::UsageState::new(&state_root),
             configuration: ConfigurationState {
                 config: Mutex::new(config),
                 discovery_lock: Mutex::new(()),

@@ -135,7 +135,7 @@ WS share request/history preparation where Python behavior agrees, while
 keeping transport state explicit. Only composition/lifecycle starts background
 jobs. Preserve unknown native JSON fields.
 
-Usage/diagnostic persistence and update mechanics still need backend work.
+Diagnostic persistence and update mechanics still need backend work.
 Start with cohesive modules; introduce emp-observability or emp-update only
 when actual dependency boundaries justify a crate. Additional architecture
 must not block working product behavior.
@@ -389,8 +389,7 @@ performance gains.
   This measures local build storage, not release size or runtime memory.
 
 Remaining product acceptance work includes complete management operations,
-CLI desktop/help parity, usage/diagnostic persistence, startup target recovery,
-request draining, update/rollback packaging and full consumer/performance
+diagnostic persistence, request draining, update/rollback packaging and full consumer/performance
 verification. The full rewrite is not complete.
 
 Integration configuration now uses toml_edit, preserving quoted keys, multiline instructions, comments and nested
@@ -505,7 +504,24 @@ in the management snapshot. The test driver converts its ephemeral port into
 the assigned port through the public config API so both oracles can persist
 state normally. All 25 process differential scenarios, warnings-denied clippy
 and workspace tests passed. Windows/macOS execution, updater/package lifecycle,
-usage/diagnostics and final benchmarks still require completion.
+diagnostics and final benchmarks still require completion.
+
+Usage accounting is now connected to complete Responses, HTTP SSE, WebSocket
+turns, compact requests and final upstream errors. The existing usage UI reads
+the Python-compatible SQLite ledger and cached public price catalog. Decimal
+costs preserve cache/reasoning subsets, context/tier prices and unknown costs;
+later price snapshots fill only previously unpriced requests. Account grouping
+uses opaque hashes of the credentials actually selected, never stored secrets.
+Incremental rollout scanning resumes Python checkpoints, retries partial lines,
+deduplicates archived copies and reconciles history against realtime turns.
+Workers stop with the service and remain outside application request modules.
+Four real-process Python differential scenarios cover existing databases, late
+pricing, native/external complete and streamed generation, repeated response
+IDs, restart persistence, compaction, 429 outcomes and incremental history.
+All 29 process scenarios, formatting, warnings-denied clippy and workspace tests
+pass with the live Python oracle. Windows checkpoint identity interoperability
+still needs platform verification; source files and production state are not
+modified by the scanner. This does not establish full rewrite acceptance.
 
 ## Historical verification evidence
 

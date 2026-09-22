@@ -174,7 +174,7 @@ pub(crate) fn serve_external_stream(
                     )
                 }
             })?;
-    let completed = relay_external_stream(downstream, state, &candidate, body, upstream)?;
+    let completed = relay_external_stream(downstream, state, &candidate, body, incoming, upstream)?;
     if completed {
         persist_protocol_observation(state, &candidate);
     }
@@ -198,7 +198,7 @@ pub(crate) fn serve_native_stream(
         incoming,
         ids,
     )?;
-    relay_native_stream(downstream, state, route, body, upstream).map(|_| ())
+    relay_native_stream(downstream, state, route, body, incoming, upstream).map(|_| ())
 }
 
 fn relay_native_stream(
@@ -206,8 +206,17 @@ fn relay_native_stream(
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
+    incoming: &BTreeMap<String, String>,
     mut upstream: NativeStream,
 ) -> Result<bool, Vec<u8>> {
+    let mut usage = crate::services::usage::Observation::new(
+        state,
+        route,
+        body,
+        incoming,
+        upstream.usage_owner.as_deref(),
+        "responses",
+    );
     let response_headers = upstream.headers.clone();
     let mut monitor = DisconnectMonitor::start(downstream).ok();
     let mut pending = Vec::<Vec<u8>>::new();
@@ -247,6 +256,7 @@ fn relay_native_stream(
                 return Ok(false);
             }
         };
+        usage.observe(&event.body);
         crate::services::context::record_event(state, route, body, &event.body);
         let terminal = terminal_stream_event(&event.body);
         let completed = event.event == "response.completed";
@@ -308,8 +318,11 @@ fn relay_external_stream(
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
+    incoming: &BTreeMap<String, String>,
     mut upstream: ExternalStream,
 ) -> Result<bool, Vec<u8>> {
+    let mut usage =
+        crate::services::usage::Observation::new(state, route, body, incoming, None, "responses");
     let mut monitor = DisconnectMonitor::start(downstream).ok();
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;
@@ -348,6 +361,7 @@ fn relay_external_stream(
                 return Ok(false);
             }
         };
+        usage.observe(&event.body);
         crate::services::context::record_event(state, route, body, &event.body);
         let terminal = terminal_stream_event(&event.body);
         let completed =

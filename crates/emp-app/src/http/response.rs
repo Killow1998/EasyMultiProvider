@@ -102,6 +102,7 @@ pub(crate) fn json_error_response(
 pub(crate) fn status_text(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",

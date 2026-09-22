@@ -147,19 +147,35 @@ pub(crate) fn open_stream_result(
     ids: &ProjectionIds,
 ) -> Result<NativeStream, NativeHttpError> {
     let router = NativeRouter::new(&state.backend.transport.client);
+    let mut usage_owner = String::new();
     let result = state.backend.transport.runtime.block_on(router.open_stream(
         route,
         body,
         plaintext_collaboration(config),
         ids,
-        |refresh| resolve_headers(state, route, incoming, true, refresh),
+        |refresh| {
+            let headers = resolve_headers(state, route, incoming, true, refresh)?;
+            usage_owner = emp_state::usage::account_owner(&headers);
+            Ok(headers)
+        },
     ));
     match result {
         Ok(mut stream) => {
+            stream.usage_owner = Some(usage_owner);
             replace_catalog_etag(state, &mut stream.headers);
             Ok(stream)
         }
-        Err(error) => Err(error),
+        Err(error) => {
+            let _observation = crate::services::usage::Observation::new(
+                state,
+                route,
+                &Value::Object(body.clone()),
+                incoming,
+                Some(&usage_owner),
+                "responses",
+            );
+            Err(error)
+        }
     }
 }
 
@@ -171,7 +187,8 @@ pub(crate) fn complete(
     incoming: &BTreeMap<String, String>,
 ) -> Vec<u8> {
     let router = NativeRouter::new(&state.backend.transport.client);
-    match state
+    let mut usage_owner = String::new();
+    let result = state
         .backend
         .transport
         .runtime
@@ -180,10 +197,24 @@ pub(crate) fn complete(
             body,
             plaintext_collaboration(config),
             true,
-            |refresh| resolve_headers(state, route, incoming, false, refresh),
-        )) {
+            |refresh| {
+                let headers = resolve_headers(state, route, incoming, false, refresh)?;
+                usage_owner = emp_state::usage::account_owner(&headers);
+                Ok(headers)
+            },
+        ));
+    let mut usage = crate::services::usage::Observation::new(
+        state,
+        route,
+        &Value::Object(body.clone()),
+        incoming,
+        Some(&usage_owner),
+        "responses",
+    );
+    match result {
         Ok(mut result) => {
             if let Ok(value) = serde_json::from_slice::<Value>(&result.body) {
+                usage.observe(&value);
                 crate::services::context::record_event(
                     state,
                     route,
@@ -225,16 +256,34 @@ pub(crate) fn compact(
     incoming: &BTreeMap<String, String>,
 ) -> Vec<u8> {
     let router = NativeRouter::new(&state.backend.transport.client);
-    match state
+    let mut usage_owner = String::new();
+    let result = state
         .backend
         .transport
         .runtime
-        .block_on(
-            router.execute_compact(route, body, plaintext_collaboration(config), |refresh| {
-                resolve_headers(state, route, incoming, false, refresh)
-            }),
-        ) {
+        .block_on(router.execute_compact(
+            route,
+            body,
+            plaintext_collaboration(config),
+            |refresh| {
+                let headers = resolve_headers(state, route, incoming, false, refresh)?;
+                usage_owner = emp_state::usage::account_owner(&headers);
+                Ok(headers)
+            },
+        ));
+    let mut usage = crate::services::usage::Observation::new(
+        state,
+        route,
+        &Value::Object(body.clone()),
+        incoming,
+        Some(&usage_owner),
+        "compact",
+    );
+    match result {
         Ok(mut result) => {
+            if let Ok(value) = serde_json::from_slice::<Value>(&result.body) {
+                usage.observe(&value);
+            }
             replace_catalog_etag(state, &mut result.headers);
             let headers = result
                 .headers
