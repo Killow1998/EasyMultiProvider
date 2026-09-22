@@ -188,8 +188,21 @@ Progress evidence on 2026-09-21:
   the stricter credential-replacement comparison. Existing Python subscription
   tests, live AppState/HTTP-handler comparisons, restart checks and a failed
   secret/config commit fixture cover this slice. Native auth remains unchanged.
-  Next: port runtime/integration lifecycle effects of configuration writes,
-  then continue the native transport and history slices.
+- Native forwarding primitives now cover the request history projection,
+  response metadata allowlist, known model-alias headers, and request-local
+  credential/context header selection. Native opaque state and response.model
+  survive; complete foreign tool pairs lose only their optional item IDs,
+  while ambiguous pairs fail with Python's projection error. EMP summaries
+  decode with the same mixed Base64 alphabet and padding-bit behavior on
+  both native and portable routes. Live differential tests replay the existing
+  Python native model/history regressions, cover malformed history and Unicode
+  model aliases, and compare 60 credential/context header cases. Local format,
+  warnings-denied clippy and workspace tests pass with the Python oracle enabled.
+  These are pure boundaries, not an enabled native generation endpoint.
+  Next: port the collaboration adapter, connect native HTTP with Python's
+  compression/auth-refresh/retry behavior, then preserve native stream and
+  WebSocket fidelity. Runtime/integration lifecycle effects of configuration
+  writes also remain outstanding.
   The management UI is not yet fully functional; native generation,
   history/model-switch/compaction/subagent consumer tests, complete packaging
   and comparative performance gates remain required before cutover.

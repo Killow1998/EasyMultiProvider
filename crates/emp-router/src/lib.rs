@@ -26,6 +26,7 @@ use std::fmt;
 
 pub mod discovery;
 pub mod native_metadata;
+pub mod native_request;
 pub mod official_registry;
 
 pub const MAX_UPSTREAM_BODY_BYTES: usize = 64 * 1024 * 1024;
