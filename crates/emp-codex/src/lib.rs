@@ -156,6 +156,14 @@ pub fn account_auth_headers(auth: &Value) -> Option<BTreeMap<String, String>> {
         BTreeMap::from([("Authorization".to_owned(), format!("Bearer {access_token}"))]);
     let account_id = tokens
         .get("account_id")
+        .filter(|value| match value {
+            Value::Null => false,
+            Value::Bool(value) => *value,
+            Value::Number(value) => value.as_f64() != Some(0.0),
+            Value::String(value) => !value.is_empty(),
+            Value::Array(value) => !value.is_empty(),
+            Value::Object(value) => !value.is_empty(),
+        })
         .or_else(|| auth.get("account_id"))
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty());

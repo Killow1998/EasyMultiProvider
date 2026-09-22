@@ -78,6 +78,7 @@ mod chat_request;
 pub use chat_request::responses_to_chat;
 pub mod anthropic_projection;
 pub mod collaboration;
+pub mod context_error;
 pub mod native_responses;
 pub mod portable_responses;
 

@@ -58,6 +58,8 @@ fn rust_result(fixture: &Value) -> Value {
             native_catalog_owner(&opaque_headers),
         ],
         "auth_headers": account_auth_headers(&fixture["auth"]),
+        "auth_header_cases": fixture["auth_header_cases"].as_array().unwrap().iter()
+            .map(account_auth_headers).collect::<Vec<_>>(),
         "native_catalog": load_native_catalog(config),
         "native_model": model(config, "shared", None, &good_headers),
         "unsupported": model(config, "unsupported", None, &good_headers),
@@ -162,6 +164,16 @@ fn catalog_selection_matches_live_python_oracle_when_configured() {
                 "account_id": "workspace-a",
             }
         },
+        "auth_header_cases": [
+            {"tokens":{"access_token":"token","account_id":""},"account_id":"root"},
+            {"tokens":{"access_token":"token","account_id":null},"account_id":"root"},
+            {"tokens":{"access_token":"token","account_id":false},"account_id":"root"},
+            {"tokens":{"access_token":"token","account_id":0},"account_id":"root"},
+            {"tokens":{"access_token":"token","account_id":[]},"account_id":"root"},
+            {"tokens":{"access_token":"token","account_id":{}},"account_id":"root"},
+            {"tokens":{"access_token":"token","account_id":["not-a-string"]},"account_id":"root"},
+            {"tokens":{"access_token":"token","account_id":"nested"},"account_id":"root"}
+        ],
         "accounts": accounts,
     });
     let rust = rust_result(&fixture);
@@ -194,6 +206,7 @@ json.dump({
         account_catalog_owner_from_headers(opaque),
     ],
     "auth_headers": _auth_headers_from_value(fixture["auth"]),
+    "auth_header_cases": [_auth_headers_from_value(value) for value in fixture["auth_header_cases"]],
     "native_catalog": load_native_catalog(config),
     "native_model": route("shared"),
     "unsupported": route("unsupported"),

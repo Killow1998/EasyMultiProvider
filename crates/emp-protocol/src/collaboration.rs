@@ -440,7 +440,7 @@ fn python_repr(value: &Value) -> String {
     }
 }
 
-fn python_str(value: &Value) -> String {
+pub(crate) fn python_str(value: &Value) -> String {
     match value {
         Value::String(value) => value.clone(),
         Value::Null => "None".to_owned(),

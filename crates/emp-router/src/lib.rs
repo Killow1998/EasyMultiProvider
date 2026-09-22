@@ -25,12 +25,13 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
 pub mod discovery;
+pub mod native_http;
 pub mod native_metadata;
 pub mod native_request;
 pub mod official_registry;
 
 pub const MAX_UPSTREAM_BODY_BYTES: usize = 64 * 1024 * 1024;
-const MAX_UPSTREAM_ERROR_BYTES: usize = 64 * 1024;
+const MAX_UPSTREAM_ERROR_BYTES: usize = 4096;
 const EMP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,7 +332,7 @@ impl<'a> ExternalRouter<'a> {
             .and_then(|value| value.trim().parse::<u64>().ok());
         if !(200..300).contains(&status) {
             let raw = response
-                .read_limited(MAX_UPSTREAM_ERROR_BYTES)
+                .read_prefix(MAX_UPSTREAM_ERROR_BYTES)
                 .await
                 .map_err(transport_error)?;
             let detail = String::from_utf8_lossy(&raw);
@@ -504,7 +505,7 @@ impl<'a> ExternalRouter<'a> {
             .and_then(|value| value.trim().parse::<u64>().ok());
         if !(200..300).contains(&status) {
             let raw = response
-                .read_limited(MAX_UPSTREAM_ERROR_BYTES)
+                .read_prefix(MAX_UPSTREAM_ERROR_BYTES)
                 .await
                 .map_err(transport_error)?;
             let detail = String::from_utf8_lossy(&raw);

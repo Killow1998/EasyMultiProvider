@@ -304,6 +304,11 @@ struct CatalogSources {
     duplicates: BTreeMap<String, String>,
 }
 
+pub(super) fn response_catalog_etag(state: &ServerState) -> Option<String> {
+    let config = state.backend.config.lock().ok()?.clone();
+    emp_state::catalog_etag(&server_catalog(state, &config)).ok()
+}
+
 fn server_catalog(state: &ServerState, config: &Value) -> Value {
     let sources = catalog_sources(state, config);
     build_catalog(

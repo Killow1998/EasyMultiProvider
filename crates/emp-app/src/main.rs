@@ -1,8 +1,8 @@
 //! EMP native executable and local management HTTP surface.
 //!
 //! This bounded Rust slice serves the unchanged Web UI, the existing health
-//! check, and complete or streamed external `/v1/responses` requests. Native
-//! accounts, compact and management APIs remain later vertical slices.
+//! check, management APIs, external `/v1/responses` streams and complete
+//! native Responses requests. Native streaming and compaction remain pending.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -42,6 +42,7 @@ use serde_json::Value;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 mod catalog_api;
+mod native_api;
 
 pub const VERSION: &str = "0.11.6";
 
@@ -1605,7 +1606,25 @@ fn responses_request(
             ));
         }
     };
-    let incoming = BTreeMap::from([("X-EMP-Request-ID".to_owned(), request_id)]);
+    let mut incoming: BTreeMap<String, String> = request
+        .headers
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
+        .collect();
+    incoming.insert("X-EMP-Request-ID".to_owned(), request_id);
+    if route.dialect == emp_core::Dialect::CodexNative
+        && body.get("stream").and_then(Value::as_bool) != Some(true)
+    {
+        return ResponsesRequestResult::Buffered(native_api::complete(
+            state,
+            &route,
+            &config,
+            body.as_object().expect("validated request object"),
+            &incoming,
+        ));
+    }
     if body.get("stream").and_then(Value::as_bool) == Some(true) {
         return match serve_external_stream(stream, state, &route, &body, &incoming, &ids) {
             Ok(()) => ResponsesRequestResult::Streamed,
@@ -2903,6 +2922,7 @@ fn main() -> std::process::ExitCode {
 mod tests {
     mod catalog_api_contract;
     mod config_api_contract;
+    mod native_api_contract;
     use super::*;
     use std::io::{BufRead, BufReader};
     use std::net::TcpStream;
@@ -3128,7 +3148,17 @@ mod tests {
         let body = if body.is_empty() {
             Value::Null
         } else {
-            serde_json::from_slice(&body).expect("upstream request JSON")
+            let decoded = emp_transport::decode_content(
+                body,
+                headers
+                    .get("content-encoding")
+                    .map(String::as_str)
+                    .unwrap_or(""),
+                4 * 1024 * 1024,
+                None,
+            )
+            .expect("decode upstream request");
+            serde_json::from_slice(&decoded).expect("upstream request JSON")
         };
         (path, headers, body)
     }
@@ -3301,6 +3331,10 @@ mod tests {
 
     #[test]
     fn native_catalog_model_reaches_the_native_transport_boundary() {
+        let upstream = OneShotUpstream::start(json!({
+            "id":"resp_native_fixture","object":"response","status":"completed",
+            "model":"gpt-native-fixture","output":[]
+        }));
         let directory = tempfile::tempdir().expect("temporary directory");
         let root = canonical_root(&directory);
         let catalog = root.join("models_cache.json");
@@ -3319,8 +3353,15 @@ mod tests {
         let config = root.join("config.json");
         std::fs::write(
             &config,
-            serde_json::to_vec_pretty(&json!({"native_catalog_path": catalog}))
-                .expect("encode config"),
+            serde_json::to_vec_pretty(&json!({
+                "native_catalog_path": catalog,
+                "codex_base_url": upstream.base_url(),
+                "providers":[{
+                    "id":"native-forward","base_url":upstream.base_url(),
+                    "protocol":"responses","auth_mode":"forward"
+                }]
+            }))
+            .expect("encode config"),
         )
         .expect("write config");
         let server = ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config)
@@ -3335,16 +3376,20 @@ mod tests {
             &server,
             "/v1/responses",
             &body,
-            &[&session_cookie_header(&server)],
+            &[
+                &session_cookie_header(&server),
+                "Authorization: Bearer native-fixture",
+            ],
         );
         assert!(
-            response.starts_with("HTTP/1.1 501 Not Implemented\r\n"),
-            "catalog model must resolve before the pending native transport boundary: {response}"
+            response.starts_with("HTTP/1.1 200 OK\r\n"),
+            "catalog model must cross the native transport boundary: {response}"
         );
-        assert!(
-            response.contains("unsupported_complete_dialect"),
-            "{response}"
-        );
+        let (path, headers, body) = upstream.observed();
+        assert_eq!(path, "/v1/responses");
+        assert_eq!(headers["content-encoding"], "zstd");
+        assert_eq!(headers["authorization"], "Bearer native-fixture");
+        assert_eq!(body["model"], "gpt-native-fixture");
         server.shutdown().expect("shutdown");
     }
 

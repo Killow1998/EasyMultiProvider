@@ -393,11 +393,29 @@ impl HttpResponse {
         self.read_limited(usize::MAX).await
     }
 
-    pub async fn read_limited(mut self, limit: usize) -> Result<Vec<u8>, HttpTransportError> {
-        if self
-            .header("content-length")
-            .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > limit)
+    pub async fn read_limited(self, limit: usize) -> Result<Vec<u8>, HttpTransportError> {
+        self.read_body(limit, false).await
+    }
+
+    /// Read at most `limit` bytes and discard the rest of this response. Unlike
+    /// read_limited, a larger declared or streamed body is not an error.
+    pub async fn read_prefix(self, limit: usize) -> Result<Vec<u8>, HttpTransportError> {
+        self.read_body(limit, true).await
+    }
+
+    async fn read_body(
+        mut self,
+        limit: usize,
+        prefix: bool,
+    ) -> Result<Vec<u8>, HttpTransportError> {
+        if prefix && limit == 0 {
+            return Ok(Vec::new());
+        }
+        if !prefix
+            && self
+                .header("content-length")
+                .and_then(|value| value.parse::<usize>().ok())
+                .is_some_and(|length| length > limit)
         {
             return Err(HttpTransportError::new(
                 HttpTransportErrorKind::ResponseTooLarge,
@@ -424,6 +442,14 @@ impl HttpResponse {
             let Some(chunk) = chunk else {
                 return Ok(result);
             };
+            if prefix {
+                let count = chunk.len().min(limit - result.len());
+                result.extend_from_slice(&chunk[..count]);
+                if result.len() == limit {
+                    return Ok(result);
+                }
+                continue;
+            }
             let next_length = result
                 .len()
                 .checked_add(chunk.len())

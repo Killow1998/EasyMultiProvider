@@ -198,7 +198,16 @@ Progress evidence on 2026-09-21:
   Python native model/history regressions, cover malformed history and Unicode
   model aliases, and compare 60 credential/context header cases. Local format,
   warnings-denied clippy and workspace tests pass with the Python oracle enabled.
-  These are pure boundaries, not an enabled native generation endpoint.
+  On 2026-09-22 those boundaries were connected into the executable for
+  complete, non-streaming native `/v1/responses` requests. Real loopback tests
+  start Rust EMP and verify zstd request bodies, upstream model selection,
+  forward and vault-owned account credentials, thread/subagent headers, opaque
+  request and response fields, response.model, rewritten model headers and the
+  server-owned catalog ETag. Account 401 performs at most one serialized quota
+  refresh, persists a rotated imported credential and retries with that owner;
+  a failed refresh preserves the original 401 and makes no second request.
+  Endpoint tests also cover the one-shot reasoning_effort fallback, direct
+  429/504/context/forward-401 outcomes and one pre-header network retry.
   Collaboration preparation/restoration now matches the existing Python
   regression suite and additional malformed-container fixtures. Only marked
   plaintext calls change transport namespace; encrypted tasks stay unchanged,
@@ -208,13 +217,20 @@ Progress evidence on 2026-09-21:
   these deterministic IDs are compared without normalization. Native zstd
   request encoding also passes both-direction Python/Rust decoding for empty,
   Unicode and 256 KiB fixtures. The HTTP response exposes header iteration for
-  the native metadata filter. These additions pass local workspace checks;
-  no new CI run has been requested.
-  Next: connect native HTTP with Python's request/response projection,
-  compression/auth-refresh/retry behavior, then preserve native stream and
-  WebSocket fidelity. Runtime/integration lifecycle effects of configuration
-  writes also remain outstanding.
-  The management UI is not yet fully functional; native generation,
+  the native metadata filter. A live HTTP differential oracle sends the same
+  fixtures through Python and Rust and compares wire requests, output/error
+  payloads, selected headers, refresh counts and retry decisions, including a
+  context marker beyond Python's 4 KiB error prefix. The complete local
+  workspace passes formatting, warnings-denied clippy, all tests and configured
+  live Python oracles. No new CI run has been requested.
+  Remaining non-blocking parity gaps for the complete endpoint are Python's
+  request-side context preflight callback, non-boolean `stream` truthiness,
+  legacy non-RFC2822 Retry-After date forms and exact malformed upstream JSON
+  wording when plaintext collaboration response restoration is enabled.
+  Next: preserve native HTTP SSE streaming and cancellation, then native
+  WebSocket/incremental request fidelity. Runtime/integration lifecycle effects
+  of configuration writes also remain outstanding.
+  The management UI is not yet fully functional; native streaming/WebSocket generation,
   history/model-switch/compaction/subagent consumer tests, complete packaging
   and comparative performance gates remain required before cutover.
 
