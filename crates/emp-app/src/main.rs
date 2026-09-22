@@ -1,10 +1,10 @@
 //! EMP native executable and local management HTTP surface.
 //!
-//! This bounded Rust slice serves the unchanged Web UI and the existing health
-//! check with the Python-compatible management bootstrap contract. Production
-//! API routes remain absent; only their authentication boundary is present so
-//! the binary cannot be mistaken for a complete router port.
+//! This bounded Rust slice serves the unchanged Web UI, the existing health
+//! check, and complete external `/v1/responses` requests. Native accounts,
+//! streaming, compact and management APIs remain later vertical slices.
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -15,10 +15,20 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use emp_core::{RouteResolutionError, resolve_route_without_catalog};
+use emp_router::{ExternalRouter, ProjectionIds, RouterError};
 use emp_state::{
-    WEB_SESSION_TOKEN_BYTES, WebSession, WebSessionError, config_path, load_or_create_web_session,
+    ConfigError, FilesystemError, VaultStore, WEB_SESSION_TOKEN_BYTES, WebSession, WebSessionError,
+    config_path, load_configuration, load_or_create_web_session, provider_api_key,
     web_session_path,
 };
+use emp_transport::{
+    ContentDecodeError, HttpClient, HttpClientPolicy, ProxyEnvironment, ProxyPolicy,
+    RequestCapacityError, RequestLimits, RequestLimitsConfig, RequestLimitsError, TimeoutPolicy,
+    TransportKind, decode_content,
+};
+use serde_json::Value;
+use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 pub const VERSION: &str = "0.11.6";
 
@@ -33,7 +43,7 @@ const LOGIN_HTML: &str = r#"<!doctype html><html lang="zh-CN"><meta charset="utf
 
 const LOGIN_HTML_BYTES: &[u8] = LOGIN_HTML.as_bytes();
 
-const MAX_REQUEST_BYTES: usize = 8 * 1024;
+const MAX_HEADER_BYTES: usize = 8 * 1024;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -42,6 +52,10 @@ pub enum AppError {
     ServerStopped,
     RandomUnavailable,
     WebSession(WebSessionError),
+    Config(ConfigError),
+    Filesystem(FilesystemError),
+    Transport(emp_transport::HttpTransportError),
+    RequestLimits(RequestLimitsError),
 }
 
 impl std::fmt::Display for AppError {
@@ -54,6 +68,10 @@ impl std::fmt::Display for AppError {
             Self::ServerStopped => formatter.write_str("server task stopped before shutdown"),
             Self::RandomUnavailable => formatter.write_str("secure randomness is unavailable"),
             Self::WebSession(error) => write!(formatter, "{error}"),
+            Self::Config(error) => write!(formatter, "{error}"),
+            Self::Filesystem(error) => write!(formatter, "{error}"),
+            Self::Transport(error) => write!(formatter, "{error}"),
+            Self::RequestLimits(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -69,6 +87,30 @@ impl From<std::io::Error> for AppError {
 impl From<WebSessionError> for AppError {
     fn from(value: WebSessionError) -> Self {
         Self::WebSession(value)
+    }
+}
+
+impl From<ConfigError> for AppError {
+    fn from(value: ConfigError) -> Self {
+        Self::Config(value)
+    }
+}
+
+impl From<FilesystemError> for AppError {
+    fn from(value: FilesystemError) -> Self {
+        Self::Filesystem(value)
+    }
+}
+
+impl From<emp_transport::HttpTransportError> for AppError {
+    fn from(value: emp_transport::HttpTransportError) -> Self {
+        Self::Transport(value)
+    }
+}
+
+impl From<RequestLimitsError> for AppError {
+    fn from(value: RequestLimitsError) -> Self {
+        Self::RequestLimits(value)
     }
 }
 
@@ -204,8 +246,16 @@ impl SessionStore {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequestMethod {
+    Get,
+    Head,
+    Post,
+}
+
 #[derive(Clone, Copy)]
 struct Request<'a> {
+    method: RequestMethod,
     target: &'a str,
     headers: &'a str,
 }
@@ -378,7 +428,34 @@ fn bad_request_response() -> Vec<u8> {
     )
 }
 
-fn read_request(stream: &mut TcpStream) -> Option<String> {
+fn json_error_response(
+    status: u16,
+    status_text: &str,
+    message: &str,
+    code: Option<&str>,
+    headers: &[(&str, &str)],
+) -> Vec<u8> {
+    let mut error = serde_json::Map::new();
+    if let Some(code) = code {
+        error.insert("code".to_owned(), Value::String(code.to_owned()));
+    }
+    error.insert("message".to_owned(), Value::String(message.to_owned()));
+    let body = serde_json::to_vec(&serde_json::json!({"error": error}))
+        .expect("error response is JSON serializable");
+    response(
+        &format!("HTTP/1.1 {status} {status_text}"),
+        "application/json",
+        &body,
+        headers,
+    )
+}
+
+struct RequestHead {
+    head: String,
+    body_prefix: Vec<u8>,
+}
+
+fn read_request_head(stream: &mut TcpStream) -> Option<RequestHead> {
     let mut buffer = [0_u8; 1024];
     let mut request = Vec::new();
     loop {
@@ -391,30 +468,42 @@ fn read_request(stream: &mut TcpStream) -> Option<String> {
             break;
         }
         request.extend_from_slice(&buffer[..count]);
-        if request.len() > MAX_REQUEST_BYTES {
+        if let Some(separator) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            if separator > MAX_HEADER_BYTES {
+                return None;
+            }
+            let body_prefix = request.split_off(separator + 4);
+            request.truncate(separator + 4);
+            return Some(RequestHead {
+                head: String::from_utf8(request).ok()?,
+                body_prefix,
+            });
+        }
+        if request.len() > MAX_HEADER_BYTES + 3 {
             return None;
         }
-        if request.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
-        }
     }
-    String::from_utf8(request).ok()
+    None
 }
 
-fn request_target(request: &str) -> Option<&str> {
+fn request_line(request: &str) -> Option<(RequestMethod, &str)> {
     let request_line = request.lines().next()?;
     let mut parts = request_line.split_whitespace();
-    let method = parts.next()?;
-    if method != "GET" && method != "HEAD" {
-        return None;
-    }
-    parts.next()
+    let method = match parts.next()? {
+        "GET" => RequestMethod::Get,
+        "HEAD" => RequestMethod::Head,
+        "POST" => RequestMethod::Post,
+        _ => return None,
+    };
+    let target = parts.next()?;
+    (parts.next()? == "HTTP/1.1" && parts.next().is_none()).then_some((method, target))
 }
 
 fn parse_request(request: &str) -> Option<Request<'_>> {
     let headers_end = request.find("\r\n\r\n")?;
-    let target = request_target(request)?;
+    let (method, target) = request_line(request)?;
     Some(Request {
+        method,
         target,
         headers: &request[..headers_end],
     })
@@ -512,6 +601,421 @@ fn parse_origin(origin: &str, port: u16) -> Option<bool> {
     Some((host == "127.0.0.1" || host == "localhost") && origin_port == port)
 }
 
+const MAX_NATIVE_AUTH_BYTES: usize = 1024 * 1024;
+
+fn codex_auth_path() -> PathBuf {
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".codex"))
+        })
+        .unwrap_or_else(|| PathBuf::from(".codex"))
+        .join("auth.json")
+}
+
+fn native_access_token(path: &Path) -> Option<String> {
+    let raw = std::fs::read(path).ok()?;
+    if raw.len() > MAX_NATIVE_AUTH_BYTES {
+        return None;
+    }
+    let auth: Value = serde_json::from_slice(&raw).ok()?;
+    let auth = auth.as_object()?;
+    let tokens = auth
+        .get("tokens")
+        .and_then(Value::as_object)
+        .unwrap_or(auth);
+    tokens
+        .get("access_token")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn valid_caller_authorization(value: Option<&str>, auth_path: &Path) -> bool {
+    let Some(supplied) = value
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    native_access_token(auth_path)
+        .is_some_and(|candidate| constant_time_eq(supplied.as_bytes(), candidate.as_bytes()))
+}
+
+fn proxy_allowed(request: Request<'_>, state: &ServerState, now: f64) -> bool {
+    if !same_origin(request, state.port) {
+        return false;
+    }
+    let supplied_cookie = request.session_cookie();
+    state.sessions.contains(supplied_cookie.as_deref(), now)
+        || valid_caller_authorization(
+            request.header("Authorization"),
+            &state.backend.native_auth_path,
+        )
+}
+
+fn random_hex(bytes: usize) -> Result<String, AppError> {
+    let mut raw = vec![0_u8; bytes];
+    getrandom::getrandom(&mut raw).map_err(|_| AppError::RandomUnavailable)?;
+    let mut encoded = String::with_capacity(bytes * 2);
+    for byte in raw {
+        use std::fmt::Write as _;
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    Ok(encoded)
+}
+
+fn projection_ids() -> Result<ProjectionIds, AppError> {
+    Ok(ProjectionIds::new(
+        format!("resp_{}", random_hex(16)?),
+        format!("msg_{}", random_hex(16)?),
+        format!("rs_{}", random_hex(16)?),
+        format!("rs_{}", random_hex(16)?),
+    ))
+}
+
+fn status_text(status: u16) -> &'static str {
+    match status {
+        200 => "OK",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        413 => "Content Too Large",
+        415 => "Unsupported Media Type",
+        422 => "Unprocessable Content",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        _ => "Error",
+    }
+}
+
+fn capacity_response(error: &RequestCapacityError) -> Vec<u8> {
+    let capacity = error.http_status() == 503;
+    let code = if capacity {
+        "request_capacity_unavailable"
+    } else {
+        "request_too_large"
+    };
+    let mut detail = serde_json::json!({
+        "code": code,
+        "message": error.to_string(),
+        "limit_bytes": error.limit,
+    });
+    if capacity {
+        detail["memory"] = serde_json::json!({
+            "used_percent": error.memory_used_percent,
+            "used_bytes": error.memory_used_bytes,
+            "total_bytes": error.memory_total_bytes,
+            "available_bytes": error.available_bytes,
+            "required_bytes": error.required_memory_bytes,
+        });
+    }
+    let body = serde_json::to_vec(&serde_json::json!({"error": detail}))
+        .expect("capacity response is JSON serializable");
+    let retry = capacity.then_some(("Retry-After", "2"));
+    response(
+        &format!(
+            "HTTP/1.1 {} {}",
+            error.http_status(),
+            status_text(error.http_status())
+        ),
+        "application/json",
+        &body,
+        &retry.into_iter().collect::<Vec<_>>(),
+    )
+}
+
+enum BodyError {
+    Invalid(String),
+    Capacity(RequestCapacityError),
+    Decode(ContentDecodeError),
+}
+
+fn read_json_body(
+    stream: &mut TcpStream,
+    request: Request<'_>,
+    mut body: Vec<u8>,
+    state: &ServerState,
+) -> Result<Value, BodyError> {
+    let content_type = request
+        .header("Content-Type")
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .unwrap_or_default();
+    if !content_type.eq_ignore_ascii_case("application/json") {
+        return Err(BodyError::Invalid(
+            "Content-Type must be application/json".to_owned(),
+        ));
+    }
+    let raw_length = request.header("Content-Length").unwrap_or("0");
+    if raw_length.starts_with('-') {
+        if raw_length.parse::<i128>().is_ok_and(|value| value < 0) {
+            return Err(BodyError::Invalid(
+                "Content-Length cannot be negative".to_owned(),
+            ));
+        }
+        return Err(BodyError::Invalid("invalid Content-Length".to_owned()));
+    }
+    let length = raw_length
+        .parse::<u128>()
+        .map_err(|_| BodyError::Invalid("invalid Content-Length".to_owned()))?;
+    let length = usize::try_from(length).map_err(|_| {
+        BodyError::Capacity(RequestCapacityError {
+            limit: RequestLimitsConfig::default().maximum,
+            decoded: false,
+            reason: emp_transport::RequestCapacityReason::HardLimit,
+            available_bytes: 0,
+            required_memory_bytes: 0,
+            memory_total_bytes: 0,
+            memory_used_bytes: 0,
+            memory_used_percent: None,
+        })
+    })?;
+    let mut budget = state.backend.request_limits.request(TransportKind::Http);
+    budget.ensure(length).map_err(BodyError::Capacity)?;
+    if body.len() > length {
+        body.truncate(length);
+    }
+    while body.len() < length {
+        let remaining = length - body.len();
+        let mut chunk = [0_u8; 64 * 1024];
+        let read_length = remaining.min(chunk.len());
+        let count = stream
+            .read(&mut chunk[..read_length])
+            .map_err(|_| BodyError::Invalid("request body is incomplete".to_owned()))?;
+        if count == 0 {
+            return Err(BodyError::Invalid("request body is incomplete".to_owned()));
+        }
+        body.extend_from_slice(&chunk[..count]);
+    }
+    let body = decode_content(
+        body,
+        request.header("Content-Encoding").unwrap_or_default(),
+        RequestLimitsConfig::default().maximum,
+        Some(&mut budget),
+    )
+    .map_err(BodyError::Decode)?;
+    let value: Value = serde_json::from_slice(&body)
+        .map_err(|error| BodyError::Invalid(format!("request body must be valid JSON: {error}")))?;
+    if !value.is_object() {
+        return Err(BodyError::Invalid(
+            "request body must be a JSON object".to_owned(),
+        ));
+    }
+    Ok(value)
+}
+
+fn body_error_response(error: BodyError) -> Vec<u8> {
+    match error {
+        BodyError::Invalid(message) => {
+            json_error_response(400, status_text(400), &message, None, &[])
+        }
+        BodyError::Capacity(error) => capacity_response(&error),
+        BodyError::Decode(ContentDecodeError::Capacity(error)) => capacity_response(&error),
+        BodyError::Decode(error) => json_error_response(
+            error.http_status(),
+            status_text(error.http_status()),
+            &error.to_string(),
+            (error.http_status() == 413).then_some("request_too_large"),
+            &[],
+        ),
+    }
+}
+
+fn hydrate_provider_keys(config: &mut Value, vault: &VaultStore) {
+    let Some(providers) = config.get_mut("providers").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for provider in providers {
+        let key = provider_api_key(provider, vault);
+        if let Some(provider) = provider.as_object_mut() {
+            provider.insert("api_key".to_owned(), Value::String(key));
+        }
+    }
+}
+
+fn route_resolution_response(error: RouteResolutionError) -> Vec<u8> {
+    let error_class = if error.status() >= 500 {
+        "upstream_5xx"
+    } else {
+        "router_error"
+    };
+    let body = serde_json::to_vec(&serde_json::json!({
+        "error": {
+            "code": error_class,
+            "type": error_class,
+            "message": error.to_string(),
+        }
+    }))
+    .expect("route resolution response is JSON serializable");
+    response(
+        &format!(
+            "HTTP/1.1 {} {}",
+            error.status(),
+            status_text(error.status())
+        ),
+        "application/json",
+        &body,
+        &[],
+    )
+}
+
+fn request_router_error_response(status: u16, message: &str) -> Vec<u8> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "error": {
+            "code": "router_error",
+            "type": "router_error",
+            "message": message,
+        }
+    }))
+    .expect("request router response is JSON serializable");
+    response(
+        &format!("HTTP/1.1 {status} {}", status_text(status)),
+        "application/json",
+        &body,
+        &[],
+    )
+}
+
+fn router_error_response(error: RouterError) -> Vec<u8> {
+    let failure_reason = error.failure_reason().map(str::to_owned);
+    let error_class = error.error_class().as_str();
+    let code = if error_class == "rate_limit" {
+        "rate_limit_exceeded".to_owned()
+    } else {
+        failure_reason
+            .clone()
+            .unwrap_or_else(|| error_class.to_owned())
+    };
+    let mut detail = serde_json::json!({
+        "code": code,
+        "type": error_class,
+        "message": error.to_string(),
+    });
+    if let Some(reason) = failure_reason {
+        detail["failure_reason"] = Value::String(reason);
+    }
+    if let Some(delay) = error.retry_after_seconds() {
+        detail["retry_after_seconds"] = Value::from(delay);
+    }
+    let body = serde_json::to_vec(&serde_json::json!({"error": detail}))
+        .expect("router response is JSON serializable");
+    let retry = error.retry_after_seconds().map(|delay| delay.to_string());
+    let headers = retry
+        .as_deref()
+        .map(|value| vec![("Retry-After", value)])
+        .unwrap_or_default();
+    response(
+        &format!(
+            "HTTP/1.1 {} {}",
+            error.status(),
+            status_text(error.status())
+        ),
+        "application/json",
+        &body,
+        &headers,
+    )
+}
+
+fn responses_request(
+    stream: &mut TcpStream,
+    request: Request<'_>,
+    body_prefix: Vec<u8>,
+    state: &ServerState,
+    now: f64,
+) -> Vec<u8> {
+    if !proxy_allowed(request, state, now) {
+        let status = if same_origin(request, state.port) {
+            401
+        } else {
+            403
+        };
+        return json_error_response(
+            status,
+            status_text(status),
+            "proxy caller authentication is required",
+            None,
+            &[],
+        );
+    }
+    let body = match read_json_body(stream, request, body_prefix, state) {
+        Ok(body) => body,
+        Err(error) => return body_error_response(error),
+    };
+    let Some(model) = body
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return request_router_error_response(400, "request.model is required");
+    };
+    let mut config = state.backend.config.clone();
+    hydrate_provider_keys(&mut config, &state.backend.vault);
+    let route = match resolve_route_without_catalog(&config, model) {
+        Ok(route) => route,
+        Err(error) => return route_resolution_response(error),
+    };
+    if body.get("stream").and_then(Value::as_bool) == Some(true) {
+        return json_error_response(
+            501,
+            status_text(501),
+            "streaming external responses are not available in this Rust slice",
+            Some("streaming_not_implemented"),
+            &[],
+        );
+    }
+    let ids = match projection_ids() {
+        Ok(ids) => ids,
+        Err(_) => {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        }
+    };
+    let request_id = match random_hex(8) {
+        Ok(value) => value,
+        Err(_) => {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        }
+    };
+    let incoming = BTreeMap::from([("X-EMP-Request-ID".to_owned(), request_id)]);
+    let router = ExternalRouter::new(&state.backend.client);
+    match state
+        .backend
+        .runtime
+        .block_on(router.execute_complete(&route, &body, &incoming, &ids))
+    {
+        Ok(result) => {
+            let body = match serde_json::to_vec(&result.body) {
+                Ok(body) => body,
+                Err(_) => {
+                    return json_error_response(
+                        500,
+                        status_text(500),
+                        "internal server error",
+                        None,
+                        &[],
+                    );
+                }
+            };
+            response(
+                &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
+                &result.content_type,
+                &body,
+                &[],
+            )
+        }
+        Err(error) => router_error_response(error),
+    }
+}
+
 fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     if stream.set_nonblocking(false).is_err()
         || stream
@@ -520,7 +1024,7 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     {
         return;
     }
-    let raw = match read_request(&mut stream) {
+    let raw = match read_request_head(&mut stream) {
         Some(raw) => raw,
         None => {
             let _ = stream.write_all(&bad_request_response());
@@ -529,7 +1033,12 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
             return;
         }
     };
-    let response = match parse_request(&raw) {
+    let response = match parse_request(&raw.head) {
+        Some(request)
+            if request.method == RequestMethod::Post && request.raw_path() == "/v1/responses" =>
+        {
+            responses_request(&mut stream, request, raw.body_prefix, state, system_now())
+        }
         Some(request) => route_request(request, state),
         None => bad_request_response(),
     };
@@ -600,7 +1109,17 @@ struct ServerState {
     shutdown: Arc<AtomicBool>,
     sessions: Arc<SessionStore>,
     bootstrap: BootstrapToken,
+    backend: BackendState,
     port: u16,
+}
+
+struct BackendState {
+    config: Value,
+    vault: VaultStore,
+    client: HttpClient,
+    runtime: Runtime,
+    request_limits: Arc<RequestLimits>,
+    native_auth_path: PathBuf,
 }
 
 impl ServerHandle {
@@ -620,7 +1139,35 @@ impl ServerHandle {
         let session_path = web_session_path(config_path)?;
         let session =
             load_or_create_web_session(&session_path, now).map_err(AppError::WebSession)?;
-        Self::start_with_session(host, port, session_path, session)
+        let config = load_configuration(Some(config_path))?;
+        let state_root = config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("state");
+        let vault = VaultStore::from_environment(&state_root.join("master.key"))?;
+        let client = HttpClient::new(HttpClientPolicy::new(
+            ProxyPolicy::from_environment(ProxyEnvironment::capture()),
+            TimeoutPolicy::default(),
+        ))?;
+        let runtime = RuntimeBuilder::new_multi_thread()
+            .enable_all()
+            .thread_name("emp-upstream")
+            .build()?;
+        let request_limits = RequestLimits::new(
+            RequestLimitsConfig::default(),
+            || None,
+            || system_now().max(0.0) as u64,
+            random_hex(8)?,
+        )?;
+        let backend = BackendState {
+            config,
+            vault,
+            client,
+            runtime,
+            request_limits,
+            native_auth_path: codex_auth_path(),
+        };
+        Self::start_with_session(host, port, session_path, session, backend)
     }
 
     fn start_with_session(
@@ -628,6 +1175,7 @@ impl ServerHandle {
         port: u16,
         session_path: PathBuf,
         session: WebSession,
+        backend: BackendState,
     ) -> Result<Self, AppError> {
         let listener = TcpListener::bind((host, port))?;
         listener.set_nonblocking(true)?;
@@ -647,6 +1195,7 @@ impl ServerHandle {
                 token: URL_SAFE_NO_PAD.encode(random),
                 used: AtomicBool::new(false),
             },
+            backend,
             port: local_addr.port(),
         });
         let workers = Arc::new(Mutex::new(Vec::new()));
@@ -767,8 +1316,11 @@ fn main() -> std::process::ExitCode {
 mod tests {
     use super::*;
     use std::net::TcpStream;
+    use std::process::Command;
+    use std::sync::mpsc;
 
     use emp_state::WEB_SESSION_TOKEN_LENGTH;
+    use serde_json::json;
     use tempfile::TempDir;
 
     fn canonical_root(directory: &TempDir) -> PathBuf {
@@ -828,6 +1380,161 @@ mod tests {
             )
             .expect("write request");
         complete_response(&mut stream)
+    }
+
+    fn post(server: &ServerHandle, target: &str, body: &[u8], headers: &[&str]) -> String {
+        let mut stream = TcpStream::connect(server.local_addr()).expect("connect");
+        let host = if headers.iter().any(|header| {
+            header
+                .split_once(':')
+                .is_some_and(|(name, _)| name.eq_ignore_ascii_case("host"))
+        }) {
+            String::new()
+        } else {
+            format!("Host: 127.0.0.1:{}\r\n", server.local_addr().port())
+        };
+        let content_type = if headers.iter().any(|header| {
+            header
+                .split_once(':')
+                .is_some_and(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        }) {
+            String::new()
+        } else {
+            "Content-Type: application/json\r\n".to_owned()
+        };
+        let full_headers = headers.join("\r\n");
+        stream
+            .write_all(
+                format!(
+                    "POST {target} HTTP/1.1\r\n{host}{content_type}Content-Length: {}\r\n{full_headers}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .expect("write request head");
+        stream.write_all(body).expect("write request body");
+        complete_response(&mut stream)
+    }
+
+    struct OneShotUpstream {
+        address: SocketAddr,
+        observed: mpsc::Receiver<(String, BTreeMap<String, String>, Value)>,
+        worker: Option<JoinHandle<()>>,
+    }
+
+    impl OneShotUpstream {
+        fn start(response_body: Value) -> Self {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream");
+            let address = listener.local_addr().expect("upstream address");
+            let (sender, observed) = mpsc::sync_channel(1);
+            let worker = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().expect("accept upstream");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("upstream timeout");
+                let raw = read_request_head(&mut stream).expect("upstream request head");
+                let request = parse_request(&raw.head).expect("upstream HTTP request");
+                let headers = request
+                    .headers
+                    .lines()
+                    .skip(1)
+                    .filter_map(|line| line.split_once(':'))
+                    .map(|(name, value)| {
+                        (name.trim().to_ascii_lowercase(), value.trim().to_owned())
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let length = headers["content-length"]
+                    .parse::<usize>()
+                    .expect("upstream Content-Length");
+                let mut body = raw.body_prefix;
+                while body.len() < length {
+                    let mut chunk = [0_u8; 4096];
+                    let count = stream.read(&mut chunk).expect("read upstream body");
+                    assert!(count > 0, "upstream body ended early");
+                    body.extend_from_slice(&chunk[..count]);
+                }
+                body.truncate(length);
+                let body = serde_json::from_slice(&body).expect("upstream request JSON");
+                sender
+                    .send((request.target.to_owned(), headers, body))
+                    .expect("record upstream request");
+                let encoded = serde_json::to_vec(&response_body).expect("upstream response JSON");
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            encoded.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .expect("write upstream response head");
+                stream
+                    .write_all(&encoded)
+                    .expect("write upstream response body");
+            });
+            Self {
+                address,
+                observed,
+                worker: Some(worker),
+            }
+        }
+
+        fn base_url(&self) -> String {
+            format!("http://{}/v1", self.address)
+        }
+
+        fn observed(&self) -> (String, BTreeMap<String, String>, Value) {
+            self.observed
+                .recv_timeout(Duration::from_secs(5))
+                .expect("upstream observation")
+        }
+    }
+
+    impl Drop for OneShotUpstream {
+        fn drop(&mut self) {
+            if let Some(worker) = self.worker.take() {
+                if !worker.is_finished()
+                    && let Ok(mut stream) = TcpStream::connect(self.address)
+                {
+                    let _ = stream.write_all(
+                        b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}",
+                    );
+                }
+                worker.join().expect("join upstream");
+            }
+        }
+    }
+
+    fn configured_server(base_url: &str) -> (TempDir, ServerHandle) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config = canonical_root(&directory).join("config.json");
+        std::fs::write(
+            &config,
+            serde_json::to_vec_pretty(&json!({
+                "providers": [{
+                    "id": "demo", "name": "Demo", "base_url": base_url,
+                    "protocol": "chat_completions", "auth_mode": "api_key",
+                    "api_key": "upstream-secret"
+                }],
+                "models": [{
+                    "id": "demo/model", "provider": "demo",
+                    "upstream_id": "upstream-model", "enabled": true
+                }]
+            }))
+            .expect("encode config"),
+        )
+        .expect("write config");
+        let server = ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config)
+            .expect("start configured server");
+        (directory, server)
+    }
+
+    fn session_cookie_header(server: &ServerHandle) -> String {
+        let cookie = server.session_cookie();
+        format!(
+            "Cookie: {}",
+            cookie.split(';').next().expect("session cookie pair")
+        )
     }
 
     fn test_server() -> (TempDir, ServerHandle) {
@@ -1107,5 +1814,171 @@ mod tests {
             parse_session_cookie("emp_session=\"é\"").as_deref(),
             Some("é")
         );
+    }
+
+    #[test]
+    fn caller_authorization_tracks_the_live_native_token() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let auth = directory.path().join("auth.json");
+        std::fs::write(&auth, br#"{"tokens":{"access_token":"native-secret"}}"#)
+            .expect("write auth");
+        assert!(valid_caller_authorization(
+            Some("Bearer native-secret"),
+            &auth
+        ));
+        assert!(!valid_caller_authorization(
+            Some("bearer native-secret"),
+            &auth
+        ));
+        assert!(!valid_caller_authorization(Some("Bearer wrong"), &auth));
+        std::fs::write(&auth, br#"{"access_token":"rotated"}"#).expect("rotate auth");
+        assert!(valid_caller_authorization(Some("Bearer rotated"), &auth));
+        assert!(!valid_caller_authorization(
+            Some("Bearer native-secret"),
+            &auth
+        ));
+
+        if let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let script = r#"
+import json
+from easy_multi_provider.accounts import valid_caller_authorization
+values = ["Bearer rotated", "bearer rotated", "Bearer wrong", "Bearer ", ""]
+print(json.dumps([valid_caller_authorization(value) for value in values]))
+"#;
+            let output = Command::new(python)
+                .arg("-c")
+                .arg(script)
+                .env("CODEX_HOME", directory.path())
+                .current_dir(root)
+                .output()
+                .expect("spawn Python authorization oracle");
+            assert!(
+                output.status.success(),
+                "Python authorization oracle failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let python: Value =
+                serde_json::from_slice(&output.stdout).expect("Python authorization JSON");
+            let rust = json!([
+                valid_caller_authorization(Some("Bearer rotated"), &auth),
+                valid_caller_authorization(Some("bearer rotated"), &auth),
+                valid_caller_authorization(Some("Bearer wrong"), &auth),
+                valid_caller_authorization(Some("Bearer "), &auth),
+                valid_caller_authorization(Some(""), &auth),
+            ]);
+            assert_eq!(rust, python);
+        }
+    }
+
+    #[test]
+    fn responses_authentication_precedes_request_body_reads() {
+        let (_directory, server) = test_server();
+        let mut stream = TcpStream::connect(server.local_addr()).expect("connect");
+        stream
+            .write_all(
+                format!(
+                    "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n",
+                    server.local_addr().port()
+                )
+                .as_bytes(),
+            )
+            .expect("write unauthenticated head only");
+        let response = complete_response(&mut stream);
+        assert!(response.starts_with("HTTP/1.1 401 Unauthorized\r\n"));
+        assert!(response.contains("proxy caller authentication is required"));
+        server.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn complete_chat_request_crosses_the_real_server_boundary() {
+        let upstream = OneShotUpstream::start(json!({
+            "id": "chat_upstream", "model": "upstream-model",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "answer"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+        }));
+        let (_directory, server) = configured_server(&upstream.base_url());
+        let request_body = serde_json::to_vec(&json!({
+            "model": "demo/model",
+            "input": [{
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}]
+            }],
+            "stream": false
+        }))
+        .expect("request JSON");
+        let response = post(
+            &server,
+            "/v1/responses",
+            &request_body,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        let response_body: Value = serde_json::from_str(
+            response
+                .split_once("\r\n\r\n")
+                .expect("response separator")
+                .1,
+        )
+        .expect("response JSON");
+        assert_eq!(response_body["model"], "demo/model");
+        assert_eq!(response_body["status"], "completed");
+        assert_eq!(response_body["output"][0]["content"][0]["text"], "answer");
+
+        let (path, headers, upstream_body) = upstream.observed();
+        assert_eq!(path, "/v1/chat/completions");
+        assert_eq!(headers["authorization"], "Bearer upstream-secret");
+        assert_eq!(headers["x-emp-request-id"].len(), 16);
+        assert_eq!(upstream_body["model"], "upstream-model");
+        assert_eq!(upstream_body["stream"], false);
+        server.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn response_body_errors_keep_the_python_status_boundary() {
+        let (_directory, server) = test_server();
+        let cookie = session_cookie_header(&server);
+        let wrong_type = post(
+            &server,
+            "/v1/responses",
+            b"{}",
+            &[&cookie, "Content-Type: text/plain"],
+        );
+        assert!(wrong_type.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+        assert!(wrong_type.contains("Content-Type must be application/json"));
+
+        let non_object = post(&server, "/v1/responses", b"[]", &[&cookie]);
+        assert!(non_object.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+        assert!(non_object.contains("request body must be a JSON object"));
+
+        let missing_model = post(&server, "/v1/responses", b"{}", &[&cookie]);
+        assert!(missing_model.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+        assert!(missing_model.contains("request.model is required"));
+
+        let unknown_stream = post(
+            &server,
+            "/v1/responses",
+            br#"{"model":"anything","stream":true}"#,
+            &[&cookie],
+        );
+        assert!(unknown_stream.starts_with("HTTP/1.1 404 Not Found\r\n"));
+        server.shutdown().expect("shutdown");
+
+        let (_directory, server) = configured_server("http://127.0.0.1:9/v1");
+        let cookie = session_cookie_header(&server);
+        let stream = post(
+            &server,
+            "/v1/responses",
+            br#"{"model":"demo/model","stream":true}"#,
+            &[&cookie],
+        );
+        assert!(stream.starts_with("HTTP/1.1 501 Not Implemented\r\n"));
+        assert!(stream.contains("streaming_not_implemented"));
+        server.shutdown().expect("shutdown");
     }
 }

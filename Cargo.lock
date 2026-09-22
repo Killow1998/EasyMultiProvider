@@ -406,9 +406,14 @@ name = "emp-app"
 version = "0.11.6"
 dependencies = [
  "base64 0.22.1",
+ "emp-core",
+ "emp-router",
  "emp-state",
+ "emp-transport",
  "getrandom 0.2.17",
+ "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

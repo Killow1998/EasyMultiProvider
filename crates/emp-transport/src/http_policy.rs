@@ -302,6 +302,48 @@ impl Default for ProxyEnvironment {
     }
 }
 
+impl ProxyEnvironment {
+    /// Snapshot conventional proxy environment variables once at service
+    /// construction. Secrets remain inside the transport policy and Debug only
+    /// reports whether each lane is configured.
+    pub fn capture() -> Self {
+        fn value(names: &[&str]) -> Option<String> {
+            names
+                .iter()
+                .find_map(std::env::var_os)
+                .and_then(|value| value.into_string().ok())
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+        }
+
+        let mut no_proxy = value(&["no_proxy", "NO_PROXY"])
+            .into_iter()
+            .flat_map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for loopback in loopback_no_proxy() {
+            if !no_proxy.iter().any(|value| value == &loopback) {
+                no_proxy.push(loopback);
+            }
+        }
+        Self {
+            http: value(&["http_proxy", "HTTP_PROXY"]),
+            https: value(&["https_proxy", "HTTPS_PROXY"]),
+            ws: value(&["ws_proxy", "WS_PROXY"]),
+            wss: value(&["wss_proxy", "WSS_PROXY"]),
+            socks: value(&["socks_proxy", "SOCKS_PROXY"]),
+            all: value(&["all_proxy", "ALL_PROXY"]),
+            no_proxy,
+        }
+    }
+}
+
 fn loopback_no_proxy() -> Vec<String> {
     ["localhost", "127.0.0.1", "::1"]
         .into_iter()

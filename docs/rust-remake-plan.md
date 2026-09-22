@@ -107,15 +107,27 @@ Progress evidence on 2026-09-21:
   oracles. Cross-platform run `35686632489` then passed the complete Python and
   pinned-Codex lanes on all three systems plus the Linux Rust workspace; the
   macOS and Windows workspaces exposed one shared test-CA merge failure. The
-  fixture now uses an explicit configured-roots-only verifier while production
-  clients retain platform trust by default, and awaits the next large-slice CI
-  run for macOS/Windows evidence. Pure immutable route resolution now also
+  configured-roots-only verifier retained production platform trust, but run
+  `35688802145` showed the trusted request still returned a network failure on
+  macOS and Windows. The fixture now removes DNS override from its success path,
+  uses a loopback IP SAN and sends its complete generated chain; this passed
+  locally and awaits a later milestone CI run for cross-platform evidence. Pure
+  immutable route resolution now also
   matches the live Python oracle for explicit, Subscription-prefix, unique
   forward and implicit-native selection, including exact 404/503 outcomes,
-  endpoint/deployment identities and unresolved `auto` protocol state. Native
-  catalog filesystem ownership, automatic protocol negotiation, bounded
-  pre-output compatibility retry, the downstream server boundary and
-  pinned-Codex tool round trips remain in Stage 3.
+  endpoint/deployment identities and unresolved `auto` protocol state. The
+  Rust executable now accepts authenticated, non-stream `/v1/responses`
+  requests for resolved external models, reads the live native Codex bearer or
+  existing browser session, enforces the shared request budget and content
+  decoding boundary, hydrates provider credentials only in a request-local
+  snapshot, uses the native connection pool and projects the complete result
+  back to Responses JSON. A real loopback Chat upstream smoke and the live
+  Python authorization oracle pass, as do local workspace fmt, warnings-denied
+  clippy and all test targets. Streaming remains deliberately explicit as 501
+  after a successful route resolution until the downstream SSE state machine
+  lands. Native catalog filesystem ownership, automatic protocol negotiation,
+  bounded pre-output compatibility retry and pinned-Codex tool round trips
+  remain in Stage 3.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
