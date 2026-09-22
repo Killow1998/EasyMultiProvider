@@ -3,8 +3,8 @@ use emp_transport::{
     ProxyPolicy, TimeoutPolicy,
 };
 use rcgen::{
-    BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
-    KeyUsagePurpose,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
+    Issuer, KeyPair, KeyUsagePurpose, date_time_ymd,
 };
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -140,6 +140,12 @@ impl TlsTestServer {
         // trust-chain and hostname checks.
         let mut ca_params = CertificateParams::new(Vec::<String>::new())
             .expect("empty CA subject alternative names");
+        ca_params.not_before = date_time_ymd(2025, 1, 1);
+        ca_params.not_after = date_time_ymd(2030, 1, 1);
+        ca_params.distinguished_name = DistinguishedName::new();
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, "EMP test root");
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         ca_params.key_usages = vec![
             KeyUsagePurpose::DigitalSignature,
@@ -152,6 +158,12 @@ impl TlsTestServer {
 
         let mut leaf_params = CertificateParams::new(vec!["localhost".to_owned()])
             .expect("localhost TLS subject alternative name");
+        leaf_params.not_before = date_time_ymd(2025, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        leaf_params.distinguished_name = DistinguishedName::new();
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "localhost");
         leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         leaf_params.use_authority_key_identifier_extension = true;
@@ -165,10 +177,7 @@ impl TlsTestServer {
         let server_config = Arc::new(
             ServerConfig::builder()
                 .with_no_client_auth()
-                .with_single_cert(
-                    vec![leaf_certificate.der().clone(), ca_certificate.der().clone()],
-                    private_key,
-                )
+                .with_single_cert(vec![leaf_certificate.der().clone()], private_key)
                 .expect("TLS server configuration"),
         );
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind TLS server");
