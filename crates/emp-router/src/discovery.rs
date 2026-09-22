@@ -16,6 +16,7 @@ use time::format_description::well_known::Rfc3339;
 use url::Url;
 
 use super::{RouterError, RouterErrorKind};
+use crate::official_registry::enrich_discovered_models;
 
 pub const MAX_DISCOVERY_BODY_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_DISCOVERED_MODELS: usize = 1000;
@@ -140,7 +141,7 @@ pub async fn discover_generic_models(
     let headers = bearer_discovery_headers(key);
     let mut budget = DiscoveryBudget::new();
     let value = get_json(client, &format!("{base}/models"), headers, &mut budget).await?;
-    project_generic_models(&value)
+    project_generic_models(&value).map(|models| enrich_discovered_models(provider, models))
 }
 
 pub async fn discover_gemini_models(
@@ -186,7 +187,7 @@ pub async fn discover_gemini_models(
             break;
         }
     }
-    Ok(result)
+    Ok(enrich_discovered_models(provider, result))
 }
 
 pub fn project_gemini_models(value: &Map<String, Value>) -> Result<Vec<Value>, RouterError> {
@@ -312,7 +313,7 @@ pub async fn discover_anthropic_models(
             quote_query(&after_id)
         );
     }
-    Ok(result)
+    Ok(enrich_discovered_models(provider, result))
 }
 
 pub fn project_anthropic_models(value: &Map<String, Value>) -> Result<Vec<Value>, RouterError> {

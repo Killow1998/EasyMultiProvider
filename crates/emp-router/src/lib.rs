@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
 pub mod discovery;
+pub mod official_registry;
 
 pub const MAX_UPSTREAM_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_UPSTREAM_ERROR_BYTES: usize = 64 * 1024;
