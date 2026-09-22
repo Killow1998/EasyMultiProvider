@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/emp-app",
+    "crates/emp-codex",
     "crates/emp-core",
     "crates/emp-protocol",
     "crates/emp-router",

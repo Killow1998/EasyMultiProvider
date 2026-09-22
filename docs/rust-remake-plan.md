@@ -135,7 +135,7 @@ Progress evidence on 2026-09-21:
   match, and falls back for complete or streamed requests only after an
   explicit pre-output 404/405/415/501 rejection. Candidate order has a live
   Python oracle and real loopback tests prove Chat-to-Responses fallback. With
-  one local build job and low process priority, the 24-test `emp-app` binary
+  one local build job and low process priority, the 25-test `emp-app` binary
   suite, focused Router oracle and warnings-denied crate clippy pass. External
   complete and streamed requests now also make Python's single route-local
   pre-output retry for HTTP 504 or an unclassified HTTP 429 whose retry delay is
@@ -145,7 +145,11 @@ Progress evidence on 2026-09-21:
   endpoint/deployment/model identity on both the provider and explicit model,
   reload the normalized configuration, and preserve access to the encrypted
   provider credential. No CI was dispatched for these local slices. Native
-  catalog ownership and pinned-Codex tool round trips remain in Stage 3.
+  and per-account model resolution now reads the same original/preserved
+  catalog as Python, validates account-cache owner and base-URL identity,
+  applies account-specific context clamps, and has a live Python oracle plus a
+  real endpoint smoke. Native HTTP/WebSocket transport and pinned-Codex tool
+  round trips remain in Stage 3.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

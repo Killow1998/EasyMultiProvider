@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 base64 = "0.22"
+emp-codex = { path = "../emp-codex" }
 emp-core = { path = "../emp-core" }
 emp-router = { path = "../emp-router" }
 emp-state = { path = "../emp-state" }

@@ -15,7 +15,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use emp_core::{ResolvedRoute, RouteResolutionError, resolve_route_without_catalog};
+use emp_codex::{account_auth_headers, subscription_route_model};
+use emp_core::{ResolvedRoute, RouteResolutionError, resolve_route};
 use emp_router::{
     ExternalRouter, ExternalStream, ProjectionIds, RouterError, RouterErrorKind,
     StreamResponseEvent, protocol_candidates,
@@ -849,6 +850,18 @@ fn hydrate_provider_keys(config: &mut Value, vault: &VaultStore) {
     }
 }
 
+fn account_catalog_headers(
+    account: &serde_json::Map<String, Value>,
+    vault: &VaultStore,
+) -> Option<BTreeMap<String, String>> {
+    let path = account
+        .get("auth_file")
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())?;
+    let auth = vault.read_encrypted_json(Path::new(path)).ok()?;
+    account_auth_headers(&auth)
+}
+
 fn route_resolution_response(error: RouteResolutionError) -> Vec<u8> {
     let error_class = if error.status() >= 500 {
         "upstream_5xx"
@@ -1517,7 +1530,23 @@ fn responses_request(
         }
     };
     hydrate_provider_keys(&mut config, &state.backend.vault);
-    let route = match resolve_route_without_catalog(&config, model) {
+    if let Some(config) = config.as_object_mut() {
+        config.insert(
+            "_native_auth_path".to_owned(),
+            Value::String(
+                state
+                    .backend
+                    .native_auth_path
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        );
+    }
+    let route = match resolve_route(&config, model, |config, slug, account| {
+        subscription_route_model(config, slug, account, |account| {
+            account_catalog_headers(account, &state.backend.vault)
+        })
+    }) {
         Ok(route) => route,
         Err(error) => {
             return ResponsesRequestResult::Buffered(route_resolution_response(error));
@@ -2258,6 +2287,55 @@ mod tests {
         let server = ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config)
             .expect("start configured server");
         (directory, server)
+    }
+
+    #[test]
+    fn native_catalog_model_reaches_the_native_transport_boundary() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = canonical_root(&directory);
+        let catalog = root.join("models_cache.json");
+        std::fs::write(
+            &catalog,
+            serde_json::to_vec(&json!({
+                "models": [{
+                    "slug": "gpt-native-fixture",
+                    "context_window": 272000,
+                    "supported_in_api": true
+                }]
+            }))
+            .expect("encode native catalog"),
+        )
+        .expect("write native catalog");
+        let config = root.join("config.json");
+        std::fs::write(
+            &config,
+            serde_json::to_vec_pretty(&json!({"native_catalog_path": catalog}))
+                .expect("encode config"),
+        )
+        .expect("write config");
+        let server = ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config)
+            .expect("start native catalog server");
+        let body = serde_json::to_vec(&json!({
+            "model": "gpt-native-fixture",
+            "input": "hello",
+            "stream": false
+        }))
+        .expect("request JSON");
+        let response = post(
+            &server,
+            "/v1/responses",
+            &body,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 501 Not Implemented\r\n"),
+            "catalog model must resolve before the pending native transport boundary: {response}"
+        );
+        assert!(
+            response.contains("unsupported_complete_dialect"),
+            "{response}"
+        );
+        server.shutdown().expect("shutdown");
     }
 
     fn assert_saved_protocol_observation(

@@ -1,0 +1,14 @@
+[package]
+name = "emp-codex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Codex account and model-catalog compatibility for EMP."
+
+[dependencies]
+base64 = "0.22"
+serde_json = { workspace = true }
+sha2 = "0.10.9"
+
+[dev-dependencies]
+tempfile = "3.27"

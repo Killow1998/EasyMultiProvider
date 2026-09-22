@@ -406,6 +406,7 @@ name = "emp-app"
 version = "0.11.6"
 dependencies = [
  "base64 0.22.1",
+ "emp-codex",
  "emp-core",
  "emp-router",
  "emp-state",
@@ -414,6 +415,16 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "emp-codex"
+version = "0.11.6"
+dependencies = [
+ "base64 0.22.1",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]
