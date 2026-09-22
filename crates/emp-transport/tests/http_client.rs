@@ -156,8 +156,9 @@ impl TlsTestServer {
         let ca_certificate = ca_params.self_signed(&ca_key).expect("generate TLS CA");
         let issuer = Issuer::new(ca_params, ca_key);
 
-        let mut leaf_params = CertificateParams::new(vec!["localhost".to_owned()])
-            .expect("localhost TLS subject alternative name");
+        let mut leaf_params =
+            CertificateParams::new(vec!["localhost".to_owned(), "127.0.0.1".to_owned()])
+                .expect("loopback TLS subject alternative names");
         leaf_params.not_before = date_time_ymd(2025, 1, 1);
         leaf_params.not_after = date_time_ymd(2030, 1, 1);
         leaf_params.distinguished_name = DistinguishedName::new();
@@ -177,7 +178,12 @@ impl TlsTestServer {
         let server_config = Arc::new(
             ServerConfig::builder()
                 .with_no_client_auth()
-                .with_single_cert(vec![leaf_certificate.der().clone()], private_key)
+                // Send the complete generated chain so every verifier receives
+                // identical issuer material from this synthetic fixture.
+                .with_single_cert(
+                    vec![leaf_certificate.der().clone(), ca_certificate.der().clone()],
+                    private_key,
+                )
                 .expect("TLS server configuration"),
         );
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind TLS server");
@@ -602,16 +608,13 @@ async fn proxy_credentials_stay_separate_from_origin_authorization() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
     let server = TlsTestServer::start();
-    let mut untrusted_config = HttpClientConfig::default();
-    untrusted_config
-        .add_dns_override("localhost", server.address)
-        .expect("untrusted test DNS override");
-    let untrusted = HttpClient::with_config(HttpClientPolicy::default(), untrusted_config)
-        .expect("untrusted client");
+    let untrusted =
+        HttpClient::with_config(HttpClientPolicy::default(), HttpClientConfig::default())
+            .expect("untrusted client");
     let error = untrusted
         .open(
             HttpMethod::Get,
-            &server.url("localhost"),
+            &server.url("127.0.0.1"),
             BTreeMap::new(),
             None,
             false,
@@ -628,14 +631,14 @@ async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
         .use_only_configured_root_certificates()
         .expect("hermetic test trust store");
     config
-        .add_dns_override("localhost", server.address)
-        .expect("test DNS override");
+        .add_dns_override("wrong.test", server.address)
+        .expect("wrong-host test DNS override");
     let trusted =
         HttpClient::with_config(HttpClientPolicy::default(), config).expect("trusted client");
     let response = trusted
         .open(
             HttpMethod::Get,
-            &server.url("localhost"),
+            &server.url("127.0.0.1"),
             BTreeMap::new(),
             None,
             false,
@@ -649,7 +652,7 @@ async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
     let wrong_host = trusted
         .open(
             HttpMethod::Get,
-            &server.url("127.0.0.1"),
+            &server.url("wrong.test"),
             BTreeMap::new(),
             None,
             false,
