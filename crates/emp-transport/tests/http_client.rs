@@ -2,7 +2,10 @@ use emp_transport::{
     HttpClient, HttpClientConfig, HttpClientPolicy, HttpMethod, HttpTransportErrorKind,
     ProxyPolicy, TimeoutPolicy,
 };
-use rcgen::{CertifiedKey, generate_simple_self_signed};
+use rcgen::{
+    BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
+    KeyUsagePurpose,
+};
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use serde_json::{Value, json};
@@ -131,16 +134,41 @@ struct TlsTestServer {
 impl TlsTestServer {
     fn start() -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let CertifiedKey { cert, signing_key } =
-            generate_simple_self_signed(vec!["localhost".to_owned()])
-                .expect("generate TLS certificate");
-        let certificate_der = cert.der().to_vec();
-        let private_key =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
+        // Windows and macOS platform verifiers reject a self-signed leaf even
+        // when it is supplied as an extra root. Use a real test CA and a
+        // separately signed server leaf so every platform exercises the same
+        // trust-chain and hostname checks.
+        let mut ca_params = CertificateParams::new(Vec::<String>::new())
+            .expect("empty CA subject alternative names");
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+        ];
+        let ca_key = KeyPair::generate().expect("generate TLS CA key");
+        let ca_certificate = ca_params.self_signed(&ca_key).expect("generate TLS CA");
+        let issuer = Issuer::new(ca_params, ca_key);
+
+        let mut leaf_params = CertificateParams::new(vec!["localhost".to_owned()])
+            .expect("localhost TLS subject alternative name");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        leaf_params.use_authority_key_identifier_extension = true;
+        let leaf_key = KeyPair::generate().expect("generate TLS leaf key");
+        let leaf_certificate = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("sign TLS leaf");
+
+        let certificate_der = ca_certificate.der().to_vec();
+        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
         let server_config = Arc::new(
             ServerConfig::builder()
                 .with_no_client_auth()
-                .with_single_cert(vec![cert.der().clone()], private_key)
+                .with_single_cert(
+                    vec![leaf_certificate.der().clone(), ca_certificate.der().clone()],
+                    private_key,
+                )
                 .expect("TLS server configuration"),
         );
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind TLS server");
