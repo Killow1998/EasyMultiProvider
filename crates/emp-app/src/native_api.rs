@@ -4,7 +4,8 @@
 use super::{ServerState, native_auth_document, refresh_account_serialized, response, status_text};
 use emp_codex::account_auth_headers;
 use emp_core::ResolvedRoute;
-use emp_router::native_http::{NativeHttpError, NativeRouter};
+use emp_router::ProjectionIds;
+use emp_router::native_http::{NativeHttpError, NativeRouter, NativeStream, NativeWebSocketPlan};
 use emp_router::native_request::{NativeAuth, request_headers};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -51,6 +52,7 @@ fn resolve_headers(
     state: &ServerState,
     route: &ResolvedRoute,
     incoming: &BTreeMap<String, String>,
+    stream: bool,
     refresh: bool,
 ) -> Result<BTreeMap<String, String>, NativeHttpError> {
     let provider = route.provider.value();
@@ -78,8 +80,77 @@ fn resolve_headers(
     } else {
         NativeAuth::Forward
     };
-    request_headers(auth, incoming, false)
+    request_headers(auth, incoming, stream)
         .map_err(|error| NativeHttpError::router(error.status(), error.to_string()))
+}
+
+fn plaintext_collaboration(config: &Value) -> bool {
+    config
+        .get("providers")
+        .and_then(Value::as_array)
+        .is_some_and(|providers| {
+            providers.iter().any(|provider| {
+                provider.get("auth_mode").and_then(Value::as_str) == Some("api_key")
+            })
+        })
+}
+
+fn error_response(mut error: NativeHttpError) -> Vec<u8> {
+    error.headers.remove("x-models-etag");
+    let headers = error
+        .headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    response(
+        &format!("HTTP/1.1 {} {}", error.status, status_text(error.status)),
+        "application/json",
+        &serde_json::to_vec(&error.body).expect("safe native error JSON"),
+        &headers,
+    )
+}
+
+fn replace_catalog_etag(state: &ServerState, headers: &mut BTreeMap<String, String>) {
+    headers.remove("x-models-etag");
+    if let Some(etag) = super::catalog_api::response_catalog_etag(state) {
+        headers.insert("X-Models-Etag".to_owned(), etag);
+    }
+}
+
+pub(super) fn open_stream(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    config: &Value,
+    body: &Map<String, Value>,
+    incoming: &BTreeMap<String, String>,
+    ids: &ProjectionIds,
+) -> Result<NativeStream, Vec<u8>> {
+    open_stream_result(state, route, config, body, incoming, ids).map_err(error_response)
+}
+
+pub(super) fn open_stream_result(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    config: &Value,
+    body: &Map<String, Value>,
+    incoming: &BTreeMap<String, String>,
+    ids: &ProjectionIds,
+) -> Result<NativeStream, NativeHttpError> {
+    let router = NativeRouter::new(&state.backend.client);
+    let result = state.backend.runtime.block_on(router.open_stream(
+        route,
+        body,
+        plaintext_collaboration(config),
+        ids,
+        |refresh| resolve_headers(state, route, incoming, true, refresh),
+    ));
+    match result {
+        Ok(mut stream) => {
+            replace_catalog_etag(state, &mut stream.headers);
+            Ok(stream)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(super) fn complete(
@@ -89,28 +160,17 @@ pub(super) fn complete(
     body: &Map<String, Value>,
     incoming: &BTreeMap<String, String>,
 ) -> Vec<u8> {
-    let plaintext = config
-        .get("providers")
-        .and_then(Value::as_array)
-        .is_some_and(|providers| {
-            providers.iter().any(|provider| {
-                provider.get("auth_mode").and_then(Value::as_str) == Some("api_key")
-            })
-        });
     let router = NativeRouter::new(&state.backend.client);
     match state.backend.runtime.block_on(router.execute_complete(
         route,
         body,
-        plaintext,
+        plaintext_collaboration(config),
         true,
-        |refresh| resolve_headers(state, route, incoming, refresh),
+        |refresh| resolve_headers(state, route, incoming, false, refresh),
     )) {
         Ok(mut result) => {
             // EMP's current catalog identity supersedes an upstream's catalog.
-            result.headers.remove("x-models-etag");
-            if let Some(etag) = super::catalog_api::response_catalog_etag(state) {
-                result.headers.insert("X-Models-Etag".to_owned(), etag);
-            }
+            replace_catalog_etag(state, &mut result.headers);
             let headers = result
                 .headers
                 .iter()
@@ -123,19 +183,54 @@ pub(super) fn complete(
                 &headers,
             )
         }
-        Err(mut error) => {
-            error.headers.remove("x-models-etag");
-            let headers = error
+        Err(error) => error_response(error),
+    }
+}
+
+pub(super) fn compact(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    config: &Value,
+    body: &Map<String, Value>,
+    incoming: &BTreeMap<String, String>,
+) -> Vec<u8> {
+    let router = NativeRouter::new(&state.backend.client);
+    match state.backend.runtime.block_on(router.execute_compact(
+        route,
+        body,
+        plaintext_collaboration(config),
+        |refresh| resolve_headers(state, route, incoming, false, refresh),
+    )) {
+        Ok(mut result) => {
+            replace_catalog_etag(state, &mut result.headers);
+            let headers = result
                 .headers
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_str()))
                 .collect::<Vec<_>>();
             response(
-                &format!("HTTP/1.1 {} {}", error.status, status_text(error.status)),
-                "application/json",
-                &serde_json::to_vec(&error.body).expect("safe native error JSON"),
+                &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
+                &result.content_type,
+                &result.body,
                 &headers,
             )
         }
+        Err(error) => error_response(error),
     }
+}
+
+pub(super) fn websocket_plan(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    config: &Value,
+    body: &Map<String, Value>,
+    incoming: &BTreeMap<String, String>,
+) -> Result<NativeWebSocketPlan, NativeHttpError> {
+    let headers = resolve_headers(state, route, incoming, true, false)?;
+    NativeRouter::new(&state.backend.client).prepare_websocket(
+        route,
+        body,
+        plaintext_collaboration(config),
+        headers,
+    )
 }

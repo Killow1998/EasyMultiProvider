@@ -761,7 +761,7 @@ impl ExternalStream {
         match &self.projection {
             StreamProjection::Responses { .. } => {
                 validate_responses_body(&value, true).map_err(responses_validation_error)?;
-                for event in response_json_stream_events(value, &self.ids)? {
+                for event in response_json_stream_events(value, &self.ids, true)? {
                     self.consume_json(event, ChatFrame::Sse)?;
                 }
                 self.finish_projection()
@@ -812,11 +812,13 @@ impl ExternalStream {
     }
 }
 
-fn response_json_stream_events(
+pub fn response_json_stream_events(
     mut response: Value,
     ids: &ProjectionIds,
+    validate_output_items: bool,
 ) -> Result<Vec<Value>, RouterError> {
-    validate_responses_body(&response, true).map_err(responses_validation_error)?;
+    validate_responses_body(&response, validate_output_items)
+        .map_err(responses_validation_error)?;
     let root = response
         .as_object_mut()
         .expect("validated Responses object");

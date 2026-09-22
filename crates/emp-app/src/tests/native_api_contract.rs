@@ -11,6 +11,10 @@ struct ObservedNativeRequest {
 
 fn receive_native_request(stream: &mut TcpStream) -> ObservedNativeRequest {
     let raw = read_request_head(stream).expect("native request head");
+    finish_native_request(stream, raw)
+}
+
+fn finish_native_request(stream: &mut TcpStream, raw: RequestHead) -> ObservedNativeRequest {
     let request = parse_request(&raw.head).expect("native HTTP request");
     let headers = request
         .headers
@@ -337,6 +341,133 @@ fn forward_server(base_url: &str) -> (TempDir, ServerHandle) {
     (directory, server)
 }
 
+struct NativeSseUpstream {
+    address: SocketAddr,
+    observed: mpsc::Receiver<ObservedNativeRequest>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl NativeSseUpstream {
+    fn start(ordinary_json: bool) -> Self {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind native SSE");
+        let address = listener.local_addr().unwrap();
+        let (sender, observed) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept native SSE");
+            let raw = read_request_head(&mut stream).unwrap();
+            let request = parse_request(&raw.head).unwrap();
+            let observed = if request
+                .header("Upgrade")
+                .is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
+            {
+                stream.write_all(b"HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                stream.flush().unwrap();
+                drop(stream);
+                let (mut stream2, _) = listener.accept().expect("accept HTTP fallback");
+                let observed = receive_native_request(&mut stream2);
+                stream = stream2;
+                observed
+            } else {
+                finish_native_request(&mut stream, raw)
+            };
+            sender.send(observed).unwrap();
+            if ordinary_json {
+                let body=br#"{"id":"resp_json","object":"response","status":"completed","model":"upstream","output":[],"future":"kept"}"#;
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nOpenAI-Model: upstream\r\nConnection: close\r\n\r\n",body.len()).unwrap();
+                stream.write_all(body).unwrap();
+                return;
+            }
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nOpenAI-Model: upstream\r\nX-Codex-Turn-State: stream-turn\r\nX-Models-Etag: stale-stream-etag\r\nConnection: close\r\n\r\n").unwrap();
+            let wire=concat!(
+                "event: response.created\n",
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream\",\"status\":\"in_progress\",\"model\":\"upstream\",\"headers\":{\"openai-model\":\"upstream\"}}}\n\n",
+                "data: {not-json}\n\n",
+                "event: response.output_text.delta\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream\",\"object\":\"response\",\"status\":\"completed\",\"model\":\"upstream\",\"output\":[],\"headers\":{\"x-openai-model\":\"upstream\"},\"future\":{\"opaque\":true}}}\n\n"
+            ).as_bytes();
+            for chunk in wire.chunks(17) {
+                stream.write_all(chunk).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+        Self {
+            address,
+            observed,
+            worker: Some(worker),
+        }
+    }
+    fn base_url(&self) -> String {
+        format!("http://{}/v1", self.address)
+    }
+    fn observed(&self) -> ObservedNativeRequest {
+        self.observed.recv_timeout(Duration::from_secs(5)).unwrap()
+    }
+}
+impl Drop for NativeSseUpstream {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            worker.join().unwrap();
+        }
+    }
+}
+
+struct NativeErrorSseUpstream {
+    address: SocketAddr,
+    worker: Option<JoinHandle<()>>,
+}
+impl NativeErrorSseUpstream {
+    fn start(wire: Vec<u8>) -> Self {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = receive_native_request(&mut stream);
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
+            for chunk in wire.chunks(13) {
+                stream.write_all(chunk).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+        Self {
+            address,
+            worker: Some(worker),
+        }
+    }
+    fn base_url(&self) -> String {
+        format!("http://{}/v1", self.address)
+    }
+}
+impl Drop for NativeErrorSseUpstream {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            worker.join().unwrap();
+        }
+    }
+}
+
+fn native_alias_server(base_url: &str) -> (TempDir, ServerHandle) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical_root(&directory);
+    let config = root.join("config.json");
+    let native = root.join("codex/auth.json");
+    std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+    std::fs::write(&config,serde_json::to_vec(&json!({
+        "providers":[{"id":"native","base_url":base_url,"protocol":"responses","auth_mode":"forward"}],
+        "models":[{"id":"native/alias","provider":"native","upstream_id":"upstream","enabled":true}]
+    })).unwrap()).unwrap();
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config,
+        "missing-test-codex",
+        native,
+    )
+    .unwrap();
+    (directory, server)
+}
+
 fn response_parts(wire: &str) -> (&str, &[u8]) {
     let (head, body) = wire.split_once("\r\n\r\n").expect("response separator");
     (head, body.as_bytes())
@@ -572,4 +703,451 @@ fn native_endpoint_matches_retry_and_terminal_error_decisions() {
         }
         server.shutdown().unwrap();
     }
+}
+
+#[test]
+fn native_sse_and_ordinary_json_cross_the_real_endpoint() {
+    for ordinary in [false, true] {
+        let upstream = NativeSseUpstream::start(ordinary);
+        let (_directory, server) = native_alias_server(&upstream.base_url());
+        let cookie = session_cookie_header(&server);
+        let body =
+            serde_json::to_vec(&json!({"model":"native/alias","input":"hello","stream":true}))
+                .unwrap();
+        let wire = post_stream(
+            &server,
+            "/v1/responses",
+            &body,
+            &[
+                &cookie,
+                "Authorization: Bearer caller",
+                "thread-id: stream-thread",
+                "x-openai-subagent: stream-subagent",
+            ],
+        );
+        assert!(wire.starts_with("HTTP/1.1 200 OK\r\n"), "{wire}");
+        let (head, events) = wire.split_once("\r\n\r\n").unwrap();
+        assert!(head.contains("openai-model: native/alias\r\n"), "{head}");
+        if !ordinary {
+            assert!(head.contains("x-codex-turn-state: stream-turn\r\n"));
+            assert!(!head.contains("stale-stream-etag"));
+            assert!(events.contains("response.created"));
+            assert!(events.contains("response.output_text.delta"));
+            assert!(events.contains("response.completed"));
+            assert!(!events.contains("not-json"));
+            assert!(events.contains("\"openai-model\":\"native/alias\""));
+            assert!(events.contains("\"x-openai-model\":\"native/alias\""));
+            assert!(events.contains("\"model\":\"upstream\""));
+            assert!(events.contains("\"future\":{\"opaque\":true}"));
+        } else {
+            assert!(events.contains("response.created"));
+            assert!(events.contains("response.completed"));
+            assert!(events.contains("\"future\":\"kept\""));
+        }
+        let observed = upstream.observed();
+        assert_eq!(observed.headers["content-encoding"], "zstd");
+        assert_eq!(observed.headers["authorization"], "Bearer caller");
+        assert_eq!(observed.headers["thread-id"], "stream-thread");
+        assert_eq!(observed.headers["x-openai-subagent"], "stream-subagent");
+        assert_eq!(observed.body["model"], "upstream");
+        assert_eq!(observed.body["stream"], true);
+        server.shutdown().unwrap();
+    }
+}
+
+#[test]
+fn native_sse_context_and_incomplete_boundaries_match_codex_http_behavior() {
+    let cases=[
+        ("context",b"data: {\"type\":\"error\",\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"maximum context length exceeded\"}}\n\n".to_vec(),413,false),
+        ("pre_incomplete",b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_x\",\"status\":\"in_progress\"}}\n\n".to_vec(),502,false),
+        ("post_incomplete",b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_x\",\"status\":\"in_progress\"}}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n".to_vec(),200,true),
+        ("failed",b"data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_x\",\"status\":\"failed\",\"error\":{\"status\":429,\"error_class\":\"rate_limit\",\"code\":\"rate_limit_exceeded\",\"retry_after_seconds\":3}}}\n\n".to_vec(),429,false),
+    ];
+    for (name, wire, expected, streamed) in cases {
+        let upstream = NativeErrorSseUpstream::start(wire);
+        let (_directory, server) = native_alias_server(&upstream.base_url());
+        let cookie = session_cookie_header(&server);
+        let body =
+            serde_json::to_vec(&json!({"model":"native/alias","input":"hello","stream":true}))
+                .unwrap();
+        let response = post_stream(
+            &server,
+            "/v1/responses",
+            &body,
+            &[&cookie, "Authorization: Bearer caller"],
+        );
+        let status: u16 = response.split_whitespace().nth(1).unwrap().parse().unwrap();
+        assert_eq!(status, expected, "{name}: {response}");
+        if streamed {
+            assert!(response.contains("response.output_text.delta"));
+            assert!(response.contains("response.failed"));
+            assert!(response.contains("stream_incomplete"));
+        }
+        if name == "failed" {
+            assert!(response.contains("Retry-After: 3\r\n"));
+        }
+        server.shutdown().unwrap();
+    }
+}
+
+#[test]
+fn native_sse_downstream_disconnect_cancels_upstream() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let (head_sender, head_ready) = mpsc::sync_channel(1);
+    let (closed_sender, closed) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = receive_native_request(&mut stream);
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+        stream.flush().unwrap();
+        head_sender.send(()).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut byte = [0u8; 1];
+        let ended = match stream.read(&mut byte) {
+            Ok(0) => true,
+            Err(error) => matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
+            ),
+            Ok(_) => false,
+        };
+        closed_sender.send(ended).unwrap();
+    });
+    let (_directory, server) = native_alias_server(&format!("http://{address}/v1"));
+    let cookie = session_cookie_header(&server);
+    let body =
+        serde_json::to_vec(&json!({"model":"native/alias","input":"hello","stream":true})).unwrap();
+    let downstream = open_post_stream(
+        &server,
+        "/v1/responses",
+        &body,
+        &[&cookie, "Authorization: Bearer caller"],
+    );
+    head_ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    drop(downstream);
+    assert!(
+        closed.recv_timeout(Duration::from_secs(3)).unwrap(),
+        "Rust EMP retained native upstream after Codex disconnected"
+    );
+    server.shutdown().unwrap();
+    worker.join().unwrap();
+}
+
+fn send_masked_websocket_text(stream: &mut TcpStream, value: &Value) {
+    let payload = serde_json::to_vec(value).unwrap();
+    let mask = [1u8, 2, 3, 4];
+    let mut frame = vec![0x81];
+    if payload.len() < 126 {
+        frame.push(0x80 | payload.len() as u8);
+    } else {
+        frame.push(0x80 | 126);
+        frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    }
+    frame.extend_from_slice(&mask);
+    frame.extend(
+        payload
+            .iter()
+            .enumerate()
+            .map(|(index, byte)| byte ^ mask[index % 4]),
+    );
+    stream.write_all(&frame).unwrap();
+    stream.flush().unwrap();
+}
+
+fn receive_websocket_json(stream: &mut TcpStream) -> Value {
+    let mut header = [0u8; 2];
+    stream.read_exact(&mut header).unwrap();
+    assert_eq!(header[0] & 0x0f, 1);
+    assert_eq!(header[1] & 0x80, 0);
+    let mut length = usize::from(header[1] & 0x7f);
+    if length == 126 {
+        let mut raw = [0u8; 2];
+        stream.read_exact(&mut raw).unwrap();
+        length = usize::from(u16::from_be_bytes(raw));
+    } else if length == 127 {
+        let mut raw = [0u8; 8];
+        stream.read_exact(&mut raw).unwrap();
+        length = usize::try_from(u64::from_be_bytes(raw)).unwrap();
+    }
+    let mut payload = vec![0u8; length];
+    stream.read_exact(&mut payload).unwrap();
+    serde_json::from_slice(&payload).unwrap()
+}
+
+#[test]
+fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_previous() {
+    let upstream = NativeSseUpstream::start(false);
+    let (_directory, server) = native_alias_server(&upstream.base_url());
+    let cookie = session_cookie_header(&server);
+    let mut stream = TcpStream::connect(server.local_addr()).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(stream,"GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: websocket-thread\r\n\r\n",server.local_addr().port()).unwrap();
+    stream.flush().unwrap();
+    let mut handshake = Vec::new();
+    while !handshake.windows(4).any(|part| part == b"\r\n\r\n") {
+        let mut byte = [0u8; 1];
+        stream.read_exact(&mut byte).unwrap();
+        handshake.push(byte[0]);
+    }
+    let handshake = String::from_utf8(handshake).unwrap();
+    assert!(handshake.starts_with("HTTP/1.1 101 Switching Protocols\r\n"));
+    assert!(handshake.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"));
+    send_masked_websocket_text(
+        &mut stream,
+        &json!({"type":"response.create","model":"native/alias","input":"hello"}),
+    );
+    let mut events = Vec::new();
+    loop {
+        let event = receive_websocket_json(&mut stream);
+        let terminal = event["type"] == "response.completed";
+        events.push(event);
+        if terminal {
+            break;
+        }
+    }
+    assert_eq!(events[0]["type"], "codex.response.metadata");
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "response.metadata")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "response.output_text.delta")
+    );
+    assert_eq!(events.last().unwrap()["response"]["model"], "upstream");
+    send_masked_websocket_text(
+        &mut stream,
+        &json!({"type":"response.create","model":"native/alias","previous_response_id":"resp_stream","input":[]}),
+    );
+    assert_eq!(
+        receive_websocket_json(&mut stream)["type"],
+        "codex.response.metadata"
+    );
+    let recovery = receive_websocket_json(&mut stream);
+    assert_eq!(recovery["error"]["code"], "previous_response_not_found");
+    send_masked_websocket_text(
+        &mut stream,
+        &json!({"type":"response.create","model":"native/alias","generate":false,"input":[]}),
+    );
+    assert_eq!(
+        receive_websocket_json(&mut stream)["type"],
+        "codex.response.metadata"
+    );
+    assert_eq!(
+        receive_websocket_json(&mut stream)["type"],
+        "response.created"
+    );
+    assert_eq!(
+        receive_websocket_json(&mut stream)["type"],
+        "response.completed"
+    );
+    let mask = [5u8, 6, 7, 8];
+    let close = [0x03u8, 0xe8];
+    let mut frame = vec![0x88, 0x80 | 2];
+    frame.extend_from_slice(&mask);
+    frame.extend(
+        close
+            .iter()
+            .enumerate()
+            .map(|(index, byte)| byte ^ mask[index % 4]),
+    );
+    stream.write_all(&frame).unwrap();
+    stream.flush().unwrap();
+    let observed = upstream.observed();
+    assert_eq!(observed.headers["authorization"], "Bearer caller");
+    assert_eq!(observed.headers["thread-id"], "websocket-thread");
+    assert_eq!(observed.body["stream"], true);
+    drop(stream);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn native_compact_endpoint_preserves_opaque_response_and_owned_headers() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let (sender, observed) = mpsc::sync_channel(1);
+    let raw=br#"{ "type":"compaction", "encrypted_content":"opaque-ciphertext", "future":{"kept":true} }"#.to_vec();
+    let returned = raw.clone();
+    let worker = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        sender.send(receive_native_request(&mut stream)).unwrap();
+        write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nOpenAI-Model: upstream\r\nX-Models-Etag: stale-compact\r\nConnection: close\r\n\r\n",returned.len()).unwrap();
+        stream.write_all(&returned).unwrap();
+    });
+    let (_directory, server) = native_alias_server(&format!("http://{address}/v1"));
+    let cookie = session_cookie_header(&server);
+    let body=serde_json::to_vec(&json!({"model":"native/alias","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"history"}]}]})).unwrap();
+    let response = post(
+        &server,
+        "/v1/responses/compact",
+        &body,
+        &[
+            &cookie,
+            "Authorization: Bearer caller",
+            "thread-id: compact-thread",
+        ],
+    );
+    let (head, body) = response_parts(&response);
+    assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert_eq!(body, raw);
+    assert!(head.contains("openai-model: native/alias\r\n"));
+    assert!(!head.contains("stale-compact"));
+    let request = observed.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(request.path, "/v1/responses/compact");
+    assert_eq!(request.headers["content-encoding"], "zstd");
+    assert_eq!(request.headers["thread-id"], "compact-thread");
+    assert_eq!(request.body["model"], "upstream");
+    server.shutdown().unwrap();
+    worker.join().unwrap();
+}
+
+struct NativeWebSocketUpstream {
+    address: SocketAddr,
+    requests: mpsc::Receiver<(BTreeMap<String, String>, Value)>,
+    worker: Option<JoinHandle<()>>,
+}
+impl NativeWebSocketUpstream {
+    fn start() -> Self {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, requests) = mpsc::sync_channel(2);
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let raw = read_request_head(&mut stream).unwrap();
+            let request = parse_request(&raw.head).unwrap();
+            assert_eq!(request.target, "/v1/responses");
+            let headers = request
+                .headers
+                .lines()
+                .skip(1)
+                .filter_map(|line| line.split_once(':'))
+                .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
+                .collect::<BTreeMap<_, _>>();
+            let accept = websocket_accept(&headers["sec-websocket-key"]).unwrap();
+            write!(stream,"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\nOpenAI-Model: upstream\r\nX-Codex-Turn-State: native-ws-turn\r\nX-Models-Etag: stale-native-ws\r\n\r\n").unwrap();
+            stream.flush().unwrap();
+            let mut websocket = WebSocketConnection::new(&mut stream);
+            for (index, id) in ["resp_one", "resp_two"].into_iter().enumerate() {
+                let received = websocket.receive_text();
+                let Ok(Some(text)) = received else {
+                    return;
+                };
+                let body: Value = serde_json::from_str(&text).unwrap();
+                sender.send((headers.clone(), body.clone())).unwrap();
+                if index == 1 {
+                    assert_eq!(body["previous_response_id"], "resp_one");
+                }
+                websocket.send_json(&json!({"type":"response.created","response":{"id":id,"status":"in_progress"}})).unwrap();
+                if index == 0 {
+                    websocket.send_json(&json!({"type":"response.output_text.delta","delta":"native websocket"})).unwrap();
+                }
+                websocket.send_json(&json!({"type":"response.completed","response":{"id":id,"object":"response","status":"completed","model":"upstream","output":[]} })).unwrap();
+            }
+        });
+        Self {
+            address,
+            requests,
+            worker: Some(worker),
+        }
+    }
+    fn base_url(&self) -> String {
+        format!("http://{}/v1", self.address)
+    }
+}
+impl Drop for NativeWebSocketUpstream {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[test]
+fn responses_websocket_reuses_matching_native_upstream_for_incremental_turn() {
+    let upstream = NativeWebSocketUpstream::start();
+    let (_directory, server) = native_alias_server(&upstream.base_url());
+    let cookie = session_cookie_header(&server);
+    let mut stream = TcpStream::connect(server.local_addr()).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(stream,"GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: native-ws-thread\r\n\r\n",server.local_addr().port()).unwrap();
+    stream.flush().unwrap();
+    let mut head = Vec::new();
+    while !head.windows(4).any(|part| part == b"\r\n\r\n") {
+        let mut byte = [0u8; 1];
+        stream.read_exact(&mut byte).unwrap();
+        head.push(byte[0]);
+    }
+    assert!(String::from_utf8(head).unwrap().starts_with("HTTP/1.1 101"));
+    send_masked_websocket_text(
+        &mut stream,
+        &json!({"type":"response.create","model":"native/alias","input":"first"}),
+    );
+    let mut first = Vec::new();
+    loop {
+        let event = receive_websocket_json(&mut stream);
+        let done = event["type"] == "response.completed";
+        first.push(event);
+        if done {
+            break;
+        }
+    }
+    assert_eq!(first[0]["type"], "codex.response.metadata");
+    assert!(
+        first
+            .iter()
+            .any(|event| event["type"] == "response.metadata"
+                && event["headers"]["openai-model"] == "native/alias")
+    );
+    assert!(
+        first
+            .iter()
+            .any(|event| event["type"] == "response.output_text.delta")
+    );
+    send_masked_websocket_text(
+        &mut stream,
+        &json!({"type":"response.create","model":"native/alias","previous_response_id":"resp_one","input":[{"type":"message","role":"user","content":[]}]}),
+    );
+    let mut second = Vec::new();
+    loop {
+        let event = receive_websocket_json(&mut stream);
+        let done = event["type"] == "response.completed";
+        second.push(event);
+        if done {
+            break;
+        }
+    }
+    assert_eq!(second[0]["type"], "codex.response.metadata");
+    assert!(
+        !second
+            .iter()
+            .any(|event| event["error"]["code"] == "previous_response_not_found")
+    );
+    assert_eq!(second.last().unwrap()["response"]["id"], "resp_two");
+    let (first_headers, first_body) = upstream
+        .requests
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let (_, second_body) = upstream
+        .requests
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(first_headers["authorization"], "Bearer caller");
+    assert_eq!(first_body["type"], "response.create");
+    assert_eq!(first_body["model"], "upstream");
+    assert_eq!(second_body["previous_response_id"], "resp_one");
+    drop(stream);
+    server.shutdown().unwrap();
 }

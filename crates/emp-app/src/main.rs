@@ -1,8 +1,8 @@
 //! EMP native executable and local management HTTP surface.
 //!
 //! This bounded Rust slice serves the unchanged Web UI, the existing health
-//! check, management APIs, external `/v1/responses` streams and complete
-//! native Responses requests. Native streaming and compaction remain pending.
+//! check, management APIs, and native/external Responses HTTP and WebSocket
+//! traffic while the remaining Python behavior is migrated behind the same UI.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -14,7 +14,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
 use emp_codex::quota::{
     QuotaError, consume_native_quota_reset, read_native_login_quota, run_quota_query_persisting,
     run_quota_reset_persisting,
@@ -22,9 +22,11 @@ use emp_codex::quota::{
 use emp_codex::quota_history::{QuotaHistoryError, QuotaHistoryStore};
 use emp_codex::{account_auth_headers, subscription_route_model};
 use emp_core::{ResolvedRoute, RouteResolutionError, resolve_route};
+use emp_router::native_http::NativeStream;
+use emp_router::native_metadata::native_response_headers;
 use emp_router::{
     ExternalRouter, ExternalStream, ProjectionIds, RouterError, RouterErrorKind,
-    StreamResponseEvent, protocol_candidates,
+    StreamResponseEvent, protocol_candidates, response_json_stream_events,
 };
 use emp_state::{
     ConfigError, FilesystemError, VaultStore, WEB_SESSION_TOKEN_BYTES, WebSession, WebSessionError,
@@ -33,10 +35,11 @@ use emp_state::{
     save_configuration, web_session_path,
 };
 use emp_transport::{
-    ContentDecodeError, FailureClass, FailurePhase, HttpClient, HttpClientPolicy, ProxyEnvironment,
-    ProxyPolicy, RequestCapacityError, RequestLimits, RequestLimitsConfig, RequestLimitsError,
-    TimeoutPolicy, TransportKind, UpstreamFailure, decode_content, external_http_retry_allowed,
-    normalize_error_class, protocol_fallback_allowed, public_failure_message,
+    ClientWebSocket, ContentDecodeError, FailureClass, FailurePhase, HttpClient, HttpClientPolicy,
+    ProxyEnvironment, ProxyPolicy, RequestCapacityError, RequestLimits, RequestLimitsConfig,
+    RequestLimitsError, TimeoutPolicy, TransportKind, UpstreamFailure, WebSocketConnection,
+    decode_content, external_http_retry_allowed, normalize_error_class, protocol_fallback_allowed,
+    public_failure_message, websocket_accept,
 };
 use serde_json::Value;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
@@ -63,6 +66,8 @@ const MAX_PRE_OUTPUT_BUFFER_EVENTS: usize = 256;
 const QUOTA_EVENT_SLOT_LIMIT: usize = 4;
 const QUOTA_EVENT_KEEP_ALIVE: Duration = Duration::from_secs(15);
 const QUOTA_SAMPLE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const MAX_EXTERNAL_COMPACTION_SUMMARY_CHARS: usize = 256 * 1024;
+const COMPACTION_PROMPT: &str = "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another language model that will resume the task.\n\nInclude current progress, key decisions, constraints, user preferences, remaining steps, and critical data or references. Be concise, structured, and focused on seamless continuation.";
 
 #[derive(Debug)]
 pub enum AppError {
@@ -1296,6 +1301,13 @@ impl DisconnectMonitor {
             _ = &mut self.disconnected => StreamPoll::Disconnected,
         }
     }
+
+    async fn next_native_event(&mut self, stream: &mut NativeStream) -> NativeStreamPoll {
+        tokio::select! {
+            result = stream.next_event() => NativeStreamPoll::Event(result),
+            _ = &mut self.disconnected => NativeStreamPoll::Disconnected,
+        }
+    }
 }
 
 impl Drop for DisconnectMonitor {
@@ -1312,10 +1324,35 @@ enum StreamPoll {
     Disconnected,
 }
 
+enum NativeStreamPoll {
+    Event(Result<Option<emp_router::native_http::NativeStreamEvent>, RouterError>),
+    Disconnected,
+}
+
 fn write_stream_head(stream: &mut TcpStream) -> std::io::Result<()> {
+    write_stream_head_with_headers(stream, &BTreeMap::new())
+}
+
+fn write_stream_head_with_headers(
+    stream: &mut TcpStream,
+    headers: &BTreeMap<String, String>,
+) -> std::io::Result<()> {
     stream.write_all(
-        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
-    )
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n",
+    )?;
+    for (name, value) in headers {
+        if matches!(
+            name.to_ascii_lowercase().as_str(),
+            "content-type" | "content-length" | "connection" | "cache-control"
+        ) {
+            continue;
+        }
+        stream.write_all(name.as_bytes())?;
+        stream.write_all(b": ")?;
+        stream.write_all(value.as_bytes())?;
+        stream.write_all(b"\r\n")?;
+    }
+    stream.write_all(b"Connection: close\r\n\r\n")
 }
 
 fn write_stream_frames(stream: &mut TcpStream, frames: &[Vec<u8>]) -> std::io::Result<()> {
@@ -1400,6 +1437,118 @@ fn serve_external_stream(
         Some("router_error"),
         &[],
     ))
+}
+
+fn serve_native_stream(
+    downstream: &mut TcpStream,
+    state: &ServerState,
+    route: &ResolvedRoute,
+    config: &Value,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+    ids: &ProjectionIds,
+) -> Result<(), Vec<u8>> {
+    let upstream = native_api::open_stream(
+        state,
+        route,
+        config,
+        body.as_object().expect("validated request object"),
+        incoming,
+        ids,
+    )?;
+    relay_native_stream(downstream, state, upstream).map(|_| ())
+}
+
+fn relay_native_stream(
+    downstream: &mut TcpStream,
+    state: &ServerState,
+    mut upstream: NativeStream,
+) -> Result<bool, Vec<u8>> {
+    let response_headers = upstream.headers.clone();
+    let mut monitor = DisconnectMonitor::start(downstream).ok();
+    let mut pending = Vec::<Vec<u8>>::new();
+    let mut pending_bytes = 0_usize;
+    let mut started = false;
+    loop {
+        let polled = match monitor.as_mut() {
+            Some(monitor) => state
+                .backend
+                .runtime
+                .block_on(monitor.next_native_event(&mut upstream)),
+            None => NativeStreamPoll::Event(state.backend.runtime.block_on(upstream.next_event())),
+        };
+        let event = match polled {
+            NativeStreamPoll::Disconnected => return Ok(false),
+            NativeStreamPoll::Event(Ok(Some(event))) => event,
+            NativeStreamPoll::Event(Ok(None)) => return Ok(false),
+            NativeStreamPoll::Event(Err(error)) if !started => {
+                return Err(pre_output_router_error_response(&error));
+            }
+            NativeStreamPoll::Event(Err(error)) => {
+                let response_id = match random_hex(16) {
+                    Ok(value) => format!("resp_{value}"),
+                    Err(_) => return Ok(false),
+                };
+                let failure = stream_failure_value(&error, &response_id);
+                if let Ok(frame) = sse_frame("response.failed", &failure) {
+                    let _ = write_stream_frames(downstream, &[frame]);
+                }
+                return Ok(false);
+            }
+        };
+        let terminal = terminal_stream_event(&event.body);
+        let completed = event.event == "response.completed";
+        let failed = matches!(event.event.as_str(), "response.failed" | "error");
+        let frame = event.frame;
+        if started {
+            if write_stream_frames(downstream, &[frame]).is_err() {
+                return Ok(false);
+            }
+            if terminal {
+                state.backend.runtime.block_on(upstream.finish());
+                return Ok(completed);
+            }
+            continue;
+        }
+        if failed {
+            if let Some(response) = pre_output_failure_response(&event.body) {
+                return Err(response);
+            }
+            if write_stream_head_with_headers(downstream, &response_headers).is_err()
+                || write_stream_frames(downstream, &[frame]).is_err()
+            {
+                return Ok(false);
+            }
+            return Ok(false);
+        }
+        let (output_emitted, tool_activity) = stream_event_activity(&event.body);
+        pending_bytes = pending_bytes.saturating_add(frame.len());
+        pending.push(frame);
+        if pending.len() > MAX_PRE_OUTPUT_BUFFER_EVENTS
+            || pending_bytes > MAX_PRE_OUTPUT_BUFFER_BYTES
+        {
+            return Err(json_error_response(
+                502,
+                status_text(502),
+                "EMP could not parse the upstream response stream.",
+                Some("pre_output_buffer_limit"),
+                &[],
+            ));
+        }
+        if output_emitted || tool_activity || terminal {
+            if write_stream_head_with_headers(downstream, &response_headers).is_err()
+                || write_stream_frames(downstream, &pending).is_err()
+            {
+                return Ok(false);
+            }
+            started = true;
+            pending.clear();
+            if terminal {
+                state.backend.runtime.block_on(upstream.finish());
+                return Ok(completed);
+            }
+        }
+    }
 }
 
 fn relay_external_stream(
@@ -1512,6 +1661,177 @@ enum ResponsesRequestResult {
     Streamed,
 }
 
+fn has_trailing_compaction_trigger(body: &Value) -> bool {
+    body.get("input")
+        .and_then(Value::as_array)
+        .and_then(|items| items.last())
+        .and_then(Value::as_object)
+        .and_then(|item| item.get("type"))
+        .and_then(Value::as_str)
+        == Some("compaction_trigger")
+}
+
+fn compaction_summary_body(body: &Value) -> Value {
+    let mut input = match body.get("input") {
+        Some(Value::Array(items)) => items.clone(),
+        Some(Value::Object(item)) => vec![Value::Object(item.clone())],
+        Some(Value::String(text)) => vec![serde_json::json!({
+            "type":"message",
+            "role":"user",
+            "content":[{"type":"input_text","text":text}]
+        })],
+        _ => Vec::new(),
+    };
+    input.retain(|item| item.get("type").and_then(Value::as_str) != Some("compaction_trigger"));
+    input.push(serde_json::json!({
+        "type":"message",
+        "role":"user",
+        "content":[{"type":"input_text","text":COMPACTION_PROMPT}]
+    }));
+    serde_json::json!({
+        "model":body.get("model").cloned().unwrap_or(Value::Null),
+        "input":input,
+        "stream":false,
+        "tools":[]
+    })
+}
+
+fn response_output_text(value: &Value) -> Option<String> {
+    if let Some(text) = value
+        .get("output_text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        return Some(text.to_owned());
+    }
+    let mut parts = Vec::new();
+    for item in value
+        .get("output")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for part in item
+            .get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if matches!(
+                part.get("type").and_then(Value::as_str),
+                Some("output_text" | "text")
+            ) && let Some(text) = part.get("text").and_then(Value::as_str)
+            {
+                parts.push(text);
+            }
+        }
+    }
+    let text = parts.join("\n");
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
+fn external_compaction_error(reason: &str) -> Vec<u8> {
+    let message = format!("external_compaction_failed: reason={reason}");
+    let body = serde_json::to_vec(&serde_json::json!({
+        "error": {
+            "code":"external_compaction_failed",
+            "type":"external_compaction_failed",
+            "message":message,
+            "failure_reason":reason
+        }
+    }))
+    .expect("external compaction error is serializable");
+    response("HTTP/1.1 502 Bad Gateway", "application/json", &body, &[])
+}
+
+fn external_compaction_response(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+    ids: &ProjectionIds,
+) -> Result<(Value, ResolvedRoute), Vec<u8>> {
+    let summary_body = compaction_summary_body(body);
+    let router = ExternalRouter::new(&state.backend.client);
+    let candidates = protocol_candidates(route);
+    for (index, protocol) in candidates.iter().copied().enumerate() {
+        let candidate = route
+            .with_protocol(protocol)
+            .map_err(route_resolution_response)?;
+        match state.backend.runtime.block_on(router.execute_complete(
+            &candidate,
+            &summary_body,
+            incoming,
+            ids,
+        )) {
+            Ok(result) => {
+                let Some(summary) = response_output_text(&result.body) else {
+                    return Err(external_compaction_error("summary_empty"));
+                };
+                if summary.chars().count() > MAX_EXTERNAL_COMPACTION_SUMMARY_CHARS {
+                    return Err(external_compaction_error("summary_too_large"));
+                }
+                let encoded = URL_SAFE.encode(summary.as_bytes());
+                let item_id = random_hex(16)
+                    .map(|value| format!("cmp_{value}"))
+                    .map_err(|_| external_compaction_error("invalid_response"))?;
+                let response_id = random_hex(16)
+                    .map(|value| format!("resp_{value}"))
+                    .map_err(|_| external_compaction_error("invalid_response"))?;
+                let created_at = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|duration| duration.as_secs())
+                    .unwrap_or_default();
+                return Ok((
+                    serde_json::json!({
+                        "id":response_id,
+                        "object":"response",
+                        "created_at":created_at,
+                        "status":"completed",
+                        "model":body.get("model").cloned().unwrap_or(Value::Null),
+                        "output":[{
+                            "id":item_id,
+                            "type":"compaction",
+                            "encrypted_content":format!("emp1:{encoded}")
+                        }],
+                        "usage":Value::Null
+                    }),
+                    candidate,
+                ));
+            }
+            Err(error)
+                if index + 1 < candidates.len()
+                    && protocol_fallback_allowed(error.status(), false, false) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(router_error_response(error)),
+        }
+    }
+    Err(external_compaction_error("invalid_response"))
+}
+
+fn generated_response_stream(
+    response_value: Value,
+    ids: &ProjectionIds,
+) -> Result<Vec<u8>, Vec<u8>> {
+    let events =
+        response_json_stream_events(response_value, ids, false).map_err(router_error_response)?;
+    let mut output = Vec::new();
+    for event in events {
+        let event_type = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("message");
+        output.extend(sse_frame(event_type, &event).map_err(|_| {
+            json_error_response(500, status_text(500), "internal server error", None, &[])
+        })?);
+    }
+    Ok(output)
+}
+
 fn responses_request(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -1614,9 +1934,52 @@ fn responses_request(
         .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
         .collect();
     incoming.insert("X-EMP-Request-ID".to_owned(), request_id);
-    if route.dialect == emp_core::Dialect::CodexNative
-        && body.get("stream").and_then(Value::as_bool) != Some(true)
-    {
+    if route.dialect != emp_core::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
+        let (compacted, candidate) =
+            match external_compaction_response(state, &route, &body, &incoming, &ids) {
+                Ok(result) => result,
+                Err(error) => return ResponsesRequestResult::Buffered(error),
+            };
+        persist_protocol_observation(state, &candidate);
+        if body.get("stream").and_then(Value::as_bool) == Some(true) {
+            let stream_body = match generated_response_stream(compacted, &ids) {
+                Ok(body) => body,
+                Err(error) => return ResponsesRequestResult::Buffered(error),
+            };
+            if write_stream_head(stream).is_err()
+                || write_stream_frames(stream, &[stream_body]).is_err()
+            {
+                return ResponsesRequestResult::Streamed;
+            }
+            return ResponsesRequestResult::Streamed;
+        }
+        let compacted = match serde_json::to_vec(&compacted) {
+            Ok(body) => body,
+            Err(_) => {
+                return ResponsesRequestResult::Buffered(json_error_response(
+                    500,
+                    status_text(500),
+                    "internal server error",
+                    None,
+                    &[],
+                ));
+            }
+        };
+        return ResponsesRequestResult::Buffered(response(
+            "HTTP/1.1 200 OK",
+            "application/json",
+            &compacted,
+            &[],
+        ));
+    }
+    if route.dialect == emp_core::Dialect::CodexNative {
+        if body.get("stream").and_then(Value::as_bool) == Some(true) {
+            return match serve_native_stream(stream, state, &route, &config, &body, &incoming, &ids)
+            {
+                Ok(()) => ResponsesRequestResult::Streamed,
+                Err(response) => ResponsesRequestResult::Buffered(response),
+            };
+        }
         return ResponsesRequestResult::Buffered(native_api::complete(
             state,
             &route,
@@ -1689,6 +2052,102 @@ fn responses_request(
         Some("router_error"),
         &[],
     ))
+}
+
+fn compact_request(
+    stream: &mut TcpStream,
+    request: Request<'_>,
+    body_prefix: Vec<u8>,
+    state: &ServerState,
+    now: f64,
+) -> Vec<u8> {
+    if !proxy_allowed(request, state, now) {
+        let status = if same_origin(request, state.port) {
+            401
+        } else {
+            403
+        };
+        return json_error_response(
+            status,
+            status_text(status),
+            "proxy caller authentication is required",
+            None,
+            &[],
+        );
+    }
+    let body = match read_json_body(stream, request, body_prefix, state) {
+        Ok(body) => body,
+        Err(error) => return body_error_response(error),
+    };
+    let Some(model) = body
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return request_router_error_response(400, "request.model is required");
+    };
+    let mut config = match state.backend.config.lock() {
+        Ok(config) => config.clone(),
+        Err(_) => {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        }
+    };
+    hydrate_provider_keys(&mut config, &state.backend.vault);
+    if let Some(config) = config.as_object_mut() {
+        config.insert(
+            "_native_auth_path".to_owned(),
+            Value::String(
+                state
+                    .backend
+                    .native_auth_path
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        );
+    }
+    let route = match resolve_route(&config, model, |config, slug, account| {
+        subscription_route_model(config, slug, account, |account| {
+            account_catalog_headers(account, &state.backend.vault)
+        })
+    }) {
+        Ok(route) => route,
+        Err(error) => return route_resolution_response(error),
+    };
+    let mut incoming = request
+        .headers
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
+        .collect::<BTreeMap<_, _>>();
+    if let Ok(id) = random_hex(8) {
+        incoming.insert("X-EMP-Request-ID".to_owned(), id);
+    }
+    if route.dialect == emp_core::Dialect::CodexNative {
+        return native_api::compact(
+            state,
+            &route,
+            &config,
+            body.as_object().expect("validated request object"),
+            &incoming,
+        );
+    }
+    let ids = match projection_ids() {
+        Ok(ids) => ids,
+        Err(_) => {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        }
+    };
+    let (compacted, candidate) =
+        match external_compaction_response(state, &route, &body, &incoming, &ids) {
+            Ok(result) => result,
+            Err(error) => return error,
+        };
+    persist_protocol_observation(state, &candidate);
+    match serde_json::to_vec(&compacted) {
+        Ok(body) => response("HTTP/1.1 200 OK", "application/json", &body, &[]),
+        Err(_) => json_error_response(500, status_text(500), "internal server error", None, &[]),
+    }
 }
 
 struct QuotaEventSlot<'a> {
@@ -1784,6 +2243,443 @@ fn serve_quota_events(stream: &mut TcpStream, request: Request<'_>, state: &Serv
     }
 }
 
+fn websocket_router_error(error: &RouterError) -> Value {
+    let failure = stream_failure_value(error, "resp_websocket_error");
+    serde_json::json!({
+        "type":"error", "status":error.status(),
+        "error":failure["response"]["error"]
+    })
+}
+
+fn native_stream_error_value(
+    status: u16,
+    error_class: FailureClass,
+    failure_reason: Option<&str>,
+    response_id: &str,
+) -> Value {
+    let mut error = serde_json::json!({
+        "code":stream_error_code(error_class),
+        "message":format!("HTTP {status}: {}",public_failure_message(error_class,failure_reason,status)),
+        "status":status,"error_class":error_class.as_str()
+    });
+    if let Some(reason) = failure_reason {
+        error["failure_reason"] = Value::String(safe_failure_reason(reason));
+    }
+    serde_json::json!({"type":"response.failed","response":{"id":response_id,"object":"response","status":"failed","error":error}})
+}
+
+fn native_websocket_identity_headers(
+    headers: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "authorization" | "chatgpt-account-id"
+            )
+        })
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+        .collect()
+}
+
+fn serve_responses_websocket(
+    stream: &mut TcpStream,
+    request: Request<'_>,
+    state: &ServerState,
+    now: f64,
+) {
+    if !proxy_allowed(request, state, now) {
+        let status = if same_origin(request, state.port) {
+            401
+        } else {
+            403
+        };
+        let response = json_error_response(
+            status,
+            status_text(status),
+            "proxy caller authentication is required",
+            None,
+            &[],
+        );
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+        return;
+    }
+    let connection_tokens = request
+        .header("Connection")
+        .unwrap_or_default()
+        .split(',')
+        .map(|value| value.trim().to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    if request
+        .header("Upgrade")
+        .is_none_or(|value| !value.eq_ignore_ascii_case("websocket"))
+        || !connection_tokens.iter().any(|value| value == "upgrade")
+        || request.header("Sec-WebSocket-Version") != Some("13")
+    {
+        let response = json_error_response(
+            400,
+            status_text(400),
+            "invalid websocket upgrade",
+            None,
+            &[],
+        );
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+        return;
+    }
+    let accept = match websocket_accept(request.header("Sec-WebSocket-Key").unwrap_or_default()) {
+        Ok(value) => value,
+        Err(error) => {
+            let response =
+                json_error_response(400, status_text(400), &error.to_string(), None, &[]);
+            let _ = stream.write_all(&response);
+            let _ = stream.flush();
+            return;
+        }
+    };
+    let incoming = request
+        .headers
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
+        .collect::<BTreeMap<_, _>>();
+    let head = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+    );
+    if stream.write_all(head.as_bytes()).is_err() || stream.flush().is_err() {
+        return;
+    }
+    let _ = stream.set_read_timeout(None);
+    let mut websocket = WebSocketConnection::new(stream);
+    let mut native_upstream: Option<(String, BTreeMap<String, String>, ClientWebSocket)> = None;
+    let mut last_native_response_id: Option<String> = None;
+    loop {
+        let text = match websocket.receive_text() {
+            Ok(Some(value)) => value,
+            Ok(None) => return,
+            Err(error) => {
+                websocket.close(error.close_code(), &error.to_string());
+                return;
+            }
+        };
+        let mut request_body = match serde_json::from_str::<Value>(&text) {
+            Ok(Value::Object(value)) => value,
+            _ => {
+                let _=websocket.send_json(&serde_json::json!({"type":"error","status":400,"error":{"code":"invalid_request","message":"websocket request must be a JSON object"}}));
+                continue;
+            }
+        };
+        if request_body
+            .remove("type")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .as_deref()
+            != Some("response.create")
+        {
+            let _=websocket.send_json(&serde_json::json!({"type":"error","status":400,"error":{"code":"invalid_request","message":"websocket request.type must be response.create"}}));
+            continue;
+        }
+        let etag = catalog_api::response_catalog_etag(state).unwrap_or_default();
+        if websocket.send_json(&serde_json::json!({"type":"codex.response.metadata","headers":{"x-models-etag":etag}})).is_err(){return;}
+        let Some(model) = request_body
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        else {
+            let _=websocket.send_json(&serde_json::json!({"type":"error","status":400,"error":{"code":"invalid_request","message":"request.model is required"}}));
+            continue;
+        };
+        let mut config = match state.backend.config.lock() {
+            Ok(config) => config.clone(),
+            Err(_) => {
+                let _=websocket.send_json(&serde_json::json!({"type":"error","status":500,"error":{"code":"internal_error","message":"internal server error"}}));
+                continue;
+            }
+        };
+        hydrate_provider_keys(&mut config, &state.backend.vault);
+        if let Some(config) = config.as_object_mut() {
+            config.insert(
+                "_native_auth_path".to_owned(),
+                Value::String(
+                    state
+                        .backend
+                        .native_auth_path
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            );
+        }
+        let route = match resolve_route(&config, model, |config, slug, account| {
+            subscription_route_model(config, slug, account, |account| {
+                account_catalog_headers(account, &state.backend.vault)
+            })
+        }) {
+            Ok(route) => route,
+            Err(error) => {
+                let _=websocket.send_json(&serde_json::json!({"type":"error","status":error.status(),"error":{"code":"router_error","message":error.to_string()}}));
+                continue;
+            }
+        };
+        let ids = match projection_ids() {
+            Ok(ids) => ids,
+            Err(_) => {
+                let _=websocket.send_json(&serde_json::json!({"type":"error","status":500,"error":{"code":"internal_error","message":"internal server error"}}));
+                continue;
+            }
+        };
+        let generate = request_body
+            .remove("generate")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+        if !generate {
+            let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
+            let usage = serde_json::json!({"input_tokens":0,"input_tokens_details":Value::Null,"output_tokens":0,"output_tokens_details":Value::Null,"total_tokens":0});
+            if websocket
+                .send_json(&serde_json::json!({"type":"response.created","response":{"id":id}}))
+                .is_err()
+            {
+                return;
+            }
+            if websocket.send_json(&serde_json::json!({"type":"response.completed","response":{"id":id,"object":"response","status":"completed","output":[],"usage":usage}})).is_err(){return;}
+            continue;
+        }
+        let mut request_headers = incoming.clone();
+        if let Ok(id) = random_hex(8) {
+            request_headers.insert("X-EMP-Request-ID".to_owned(), id);
+        }
+        if route.dialect == emp_core::Dialect::CodexNative {
+            let plan = match native_api::websocket_plan(
+                state,
+                &route,
+                &config,
+                &request_body,
+                &request_headers,
+            ) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    let _=websocket.send_json(&serde_json::json!({"type":"error","status":error.status,"error":error.body["error"]}));
+                    continue;
+                }
+            };
+            let previous = request_body
+                .get("previous_response_id")
+                .and_then(Value::as_str);
+            let plan_identity = native_websocket_identity_headers(&plan.headers);
+            let route_matches = native_upstream
+                .as_ref()
+                .is_some_and(|(url, headers, _)| url == &plan.url && headers == &plan_identity);
+            if previous
+                .is_some_and(|id| !route_matches || last_native_response_id.as_deref() != Some(id))
+            {
+                last_native_response_id = None;
+                let _=websocket.send_json(&serde_json::json!({"type":"error","error":{"code":"previous_response_not_found","message":"Previous response was not found. Retrying the full request."}}));
+                continue;
+            }
+            if !route_matches {
+                native_upstream = None;
+                last_native_response_id = None;
+            }
+            let mut connected_now = false;
+            if native_upstream.is_none()
+                && let Ok(client) =
+                    ClientWebSocket::connect(&plan.url, &plan.headers, Duration::from_secs(15))
+            {
+                native_upstream = Some((plan.url.clone(), plan_identity.clone(), client));
+                connected_now = true;
+            }
+            if let Some((_, _, client)) = native_upstream.as_mut() {
+                if connected_now {
+                    let selected = native_response_headers(
+                        &serde_json::json!({"headers":client.response_headers()}),
+                        &plan.requested_model,
+                        &plan.upstream_model,
+                    );
+                    let state_headers = selected
+                        .into_iter()
+                        .filter(|(name, _)| !name.eq_ignore_ascii_case("x-models-etag"))
+                        .collect::<serde_json::Map<_, _>>();
+                    if !state_headers.is_empty()
+                        && websocket
+                            .send_json(&serde_json::json!({"type":"response.metadata","headers":state_headers}))
+                            .is_err()
+                    {
+                        return;
+                    }
+                }
+                if client.send_json(&plan.payload).is_err() {
+                    native_upstream = None;
+                    last_native_response_id = None;
+                    let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
+                    let error =
+                        native_stream_error_value(502, FailureClass::Network, Some("network"), &id);
+                    let _ = websocket.send_json(&error);
+                    continue;
+                }
+                let mut terminal = false;
+                let mut completed_id = None;
+                let mut projected_error = false;
+                while let Ok(Some(event)) = client.receive_json() {
+                    let event = match plan.project_event(&event) {
+                        Ok(event) => event,
+                        Err(error) => {
+                            let _ = websocket.send_json(&serde_json::json!({
+                                "type":"error",
+                                "status":error.status,
+                                "error":error.body["error"]
+                            }));
+                            projected_error = true;
+                            break;
+                        }
+                    };
+                    if event.get("type").and_then(Value::as_str) == Some("response.completed") {
+                        completed_id = event
+                            .get("response")
+                            .and_then(|response| response.get("id"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                    }
+                    terminal = terminal_stream_event(&event);
+                    if websocket.send_json(&event).is_err() {
+                        return;
+                    }
+                    if terminal {
+                        break;
+                    }
+                }
+                if terminal {
+                    last_native_response_id = completed_id;
+                    continue;
+                }
+                native_upstream = None;
+                last_native_response_id = None;
+                if projected_error {
+                    continue;
+                }
+                if previous.is_some() {
+                    let _=websocket.send_json(&serde_json::json!({"type":"error","error":{"code":"previous_response_not_found","message":"Previous response was not found. Retrying the full request."}}));
+                } else {
+                    let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
+                    let error = native_stream_error_value(
+                        502,
+                        FailureClass::StreamIncomplete,
+                        Some("stream_incomplete"),
+                        &id,
+                    );
+                    let _ = websocket.send_json(&error);
+                }
+                continue;
+            }
+            if previous.is_some() {
+                let _=websocket.send_json(&serde_json::json!({"type":"error","error":{"code":"previous_response_not_found","message":"Previous response was not found. Retrying the full request."}}));
+                continue;
+            }
+        }
+        request_body.insert("stream".to_owned(), Value::Bool(true));
+        let mut sent_output = false;
+        if route.dialect == emp_core::Dialect::CodexNative {
+            let mut upstream = match native_api::open_stream_result(
+                state,
+                &route,
+                &config,
+                &request_body,
+                &request_headers,
+                &ids,
+            ) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    let _=websocket.send_json(&serde_json::json!({"type":"error","status":error.status,"error":error.body["error"]}));
+                    continue;
+                }
+            };
+            let state_headers = upstream
+                .headers
+                .iter()
+                .filter(|(name, _)| !name.eq_ignore_ascii_case("x-models-etag"))
+                .map(|(name, value)| (name.clone(), Value::String(value.clone())))
+                .collect::<serde_json::Map<_, _>>();
+            if !state_headers.is_empty()
+                && websocket
+                    .send_json(
+                        &serde_json::json!({"type":"response.metadata","headers":state_headers}),
+                    )
+                    .is_err()
+            {
+                return;
+            }
+            loop {
+                match state.backend.runtime.block_on(upstream.next_event()) {
+                    Ok(Some(event)) => {
+                        sent_output |= stream_event_activity(&event.body).0;
+                        if websocket.send_json(&event.body).is_err() {
+                            return;
+                        }
+                        if terminal_stream_event(&event.body) {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        if sent_output {
+                            let id = format!(
+                                "resp_{}",
+                                random_hex(16).unwrap_or_else(|_| "0".repeat(32))
+                            );
+                            let failure = stream_failure_value(&error, &id);
+                            let _ = websocket.send_json(&failure);
+                        } else {
+                            let _ = websocket.send_json(&websocket_router_error(&error));
+                        }
+                        break;
+                    }
+                }
+            }
+        } else {
+            let router = ExternalRouter::new(&state.backend.client);
+            let mut upstream = match state.backend.runtime.block_on(router.open_stream(
+                &route,
+                &Value::Object(request_body.clone()),
+                &request_headers,
+                &ids,
+            )) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    let _ = websocket.send_json(&websocket_router_error(&error));
+                    continue;
+                }
+            };
+            loop {
+                match state.backend.runtime.block_on(upstream.next_event()) {
+                    Ok(Some(event)) => {
+                        sent_output |= stream_event_activity(&event.body).0;
+                        if websocket.send_json(&event.body).is_err() {
+                            return;
+                        }
+                        if terminal_stream_event(&event.body) {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        if sent_output {
+                            let id = format!(
+                                "resp_{}",
+                                random_hex(16).unwrap_or_else(|_| "0".repeat(32))
+                            );
+                            let failure = stream_failure_value(&error, &id);
+                            let _ = websocket.send_json(&failure);
+                        } else {
+                            let _ = websocket.send_json(&websocket_router_error(&error));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     if stream.set_nonblocking(false).is_err()
         || stream
@@ -1803,6 +2699,16 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     };
     let response = match parse_request(&raw.head) {
         Some(request)
+            if request.method == RequestMethod::Get
+                && request.raw_path() == "/v1/responses"
+                && request
+                    .header("Upgrade")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("websocket")) =>
+        {
+            serve_responses_websocket(&mut stream, request, state, system_now());
+            None
+        }
+        Some(request)
             if request.method == RequestMethod::Post
                 && matches!(
                     request.raw_path(),
@@ -1810,6 +2716,18 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
                 ) =>
         {
             Some(catalog_api::management_request(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                system_now(),
+            ))
+        }
+        Some(request)
+            if request.method == RequestMethod::Post
+                && request.raw_path() == "/v1/responses/compact" =>
+        {
+            Some(compact_request(
                 &mut stream,
                 request,
                 raw.body_prefix,
@@ -4208,6 +5126,107 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
         assert_eq!(headers["x-emp-request-id"].len(), 16);
         assert_eq!(upstream_body["model"], "upstream-model");
         assert_eq!(upstream_body["stream"], false);
+        server.shutdown().expect("shutdown");
+    }
+
+    fn chat_summary_upstream(summary: &str) -> OneShotUpstream {
+        OneShotUpstream::start(json!({
+            "id": "chat_summary", "model": "upstream-model",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": summary},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+        }))
+    }
+
+    #[test]
+    fn external_compact_endpoint_uses_the_selected_model_and_returns_a_portable_checkpoint() {
+        let upstream = chat_summary_upstream("portable checkpoint");
+        let (_directory, server) = configured_server(&upstream.base_url());
+        let request_body = serde_json::to_vec(&json!({
+            "model": "demo/model",
+            "input": [{
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "history"}]
+            }],
+            "reasoning":{"effort":"high"}
+        }))
+        .expect("request JSON");
+        let response = post(
+            &server,
+            "/v1/responses/compact",
+            &request_body,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        let response_body: Value = serde_json::from_str(
+            response
+                .split_once("\r\n\r\n")
+                .expect("response separator")
+                .1,
+        )
+        .expect("response JSON");
+        assert_eq!(response_body["model"], "demo/model");
+        assert_eq!(response_body["status"], "completed");
+        assert_eq!(response_body["usage"], Value::Null);
+        let encoded = response_body["output"][0]["encrypted_content"]
+            .as_str()
+            .expect("checkpoint")
+            .strip_prefix("emp1:")
+            .expect("portable prefix");
+        assert_eq!(
+            URL_SAFE.decode(encoded).expect("checkpoint base64"),
+            b"portable checkpoint"
+        );
+
+        let (path, _, upstream_body) = upstream.observed();
+        assert_eq!(path, "/v1/chat/completions");
+        assert_eq!(upstream_body["model"], "upstream-model");
+        assert_eq!(upstream_body["stream"], false);
+        assert!(
+            upstream_body["messages"]
+                .as_array()
+                .expect("summary messages")
+                .last()
+                .and_then(|message| message.get("content"))
+                .and_then(Value::as_str)
+                .is_some_and(|text| text == COMPACTION_PROMPT)
+        );
+        assert!(upstream_body.get("reasoning_effort").is_none());
+        server.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn external_compaction_trigger_streams_one_emp_owned_checkpoint() {
+        let upstream = chat_summary_upstream("stream checkpoint");
+        let (_directory, server) = configured_server(&upstream.base_url());
+        let request_body = serde_json::to_vec(&json!({
+            "model": "demo/model",
+            "stream": true,
+            "input": [{
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "history"}]
+            }, {"type":"compaction_trigger"}]
+        }))
+        .expect("request JSON");
+        let response = post_stream(
+            &server,
+            "/v1/responses",
+            &request_body,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(response.contains("Content-Type: text/event-stream\r\n"));
+        assert!(!response.contains("Content-Length:"));
+        assert!(response.contains("event: response.output_item.done\n"));
+        assert!(response.contains("event: response.completed\n"));
+        assert_eq!(response.matches("\"type\": \"compaction\"").count(), 3);
+
+        let (_, _, upstream_body) = upstream.observed();
+        assert!(!upstream_body.to_string().contains("compaction_trigger"));
         server.shutdown().expect("shutdown");
     }
 

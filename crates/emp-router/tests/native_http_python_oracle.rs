@@ -152,6 +152,51 @@ fn serve(
     if case == "network_once" && attempt == 0 {
         return;
     }
+    if case.starts_with("stream_") {
+        if case == "stream_account_refresh" && attempt == 0 {
+            let body = br#"{"error":{"message":"expired selected credential"}}"#;
+            write!(stream,"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();
+            stream.write_all(body).unwrap();
+            return;
+        }
+        if case == "stream_reasoning" && request.body.get("reasoning_effort").is_some() {
+            let body = br#"{"error":{"message":"unknown field reasoning_effort"}}"#;
+            write!(stream,"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();
+            stream.write_all(body).unwrap();
+            return;
+        }
+        if case == "stream_rate" {
+            let body = br#"{"error":{"message":"rate limited"}}"#;
+            write!(stream,"HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nRetry-After: 1.2\r\nConnection: close\r\n\r\n",body.len()).unwrap();
+            stream.write_all(body).unwrap();
+            return;
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nOpenAI-Model: upstream\r\nX-Codex-Turn-State: fixture-turn\r\nConnection: close\r\n\r\n").unwrap();
+        let frame = |value: &[u8]| {
+            let mut frame = Vec::from(&b"data: "[..]);
+            frame.extend_from_slice(value);
+            frame.extend_from_slice(b"\n\n");
+            frame
+        };
+        let mut frames=vec![
+            frame(br#"{"type":"response.created","response":{"id":"resp_stream","status":"in_progress","headers":{"openai-model":"upstream"}}}"#),
+            frame(b"{bad-json}"),
+        ];
+        if case == "stream_collaboration" {
+            frames.push(frame(br#"{"type":"response.output_item.done","item":{"type":"function_call","namespace":"emp_collaboration","name":"spawn_agent","arguments":"{}"}}"#));
+        }
+        frames.push(frame(
+            br#"{"type":"response.output_text.delta","delta":"hello"}"#,
+        ));
+        frames.push(frame(br#"{"type":"response.completed","response":{"id":"resp_stream","object":"response","status":"completed","model":"upstream","output":[],"headers":{"x-openai-model":"upstream"},"future":true}}"#));
+        for frame in frames {
+            for chunk in frame.chunks(11) {
+                stream.write_all(chunk).unwrap();
+                stream.flush().unwrap();
+            }
+        }
+        return;
+    }
     let (status, body) = match case.as_str() {
         "account_refresh" if attempt == 0 => (
             401,
@@ -447,5 +492,168 @@ async fn native_complete_http_matches_python_retries_errors_and_wire_requests() 
             Some("zstd")
         );
         assert_eq!(actual.body["model"], "upstream");
+    }
+}
+
+fn stream_fixtures() -> Value {
+    json!([
+        {"case":"stream_success","auth":"forward"},
+        {"case":"stream_account_refresh","auth":"account"},
+        {"case":"stream_reasoning","auth":"forward","reasoning_effort":"low"},
+        {"case":"stream_collaboration","auth":"forward","plaintext":true},
+        {"case":"stream_rate","auth":"forward"}
+    ])
+}
+
+fn python_stream_results(python: &str, base_url: &str, fixtures: &Value) -> Value {
+    let script = r#"
+import json, sys
+from unittest.mock import patch
+import easy_multi_provider.router as router
+from easy_multi_provider.server import _router_error_body
+from easy_multi_provider.transport import sse_json_events
+base_url,fixtures=sys.argv[1],json.loads(sys.argv[2]); results=[]
+for fixture in fixtures:
+    account=fixture['auth']=='account'; refreshes=[0]
+    provider={'id':'native','base_url':base_url,'protocol':'responses','auth_mode':'account' if account else 'forward'}
+    if account: provider['account']={'id':'fixture'}
+    model={'id':'requested'}
+    if fixture.get('plaintext'): model['_emp_plaintext_collaboration']=True
+    body={'model':'requested','input':'hello','stream':True,'_case':fixture['case']}
+    if 'reasoning_effort' in fixture: body['reasoning_effort']=fixture['reasoning_effort']
+    if fixture.get('plaintext'):
+        body['tools']=[{'type':'namespace','name':'collaboration','tools':[{'type':'function','name':'spawn_agent','parameters':{'type':'object','properties':{'message':{'type':'string','encrypted':True}}}}]}]
+    incoming={'Authorization':'Bearer caller','thread-id':'thread-fixture','x-openai-subagent':'subagent-fixture','X-EMP-Request-ID':'0123456789abcdef'}
+    def selected(*args,**kwargs):
+        suffix='rotated' if refreshes[0] else 'selected'; return {'Authorization':'Bearer '+suffix,'chatgpt-account-id':suffix+'-owner'}
+    def refresh(*args,**kwargs): refreshes[0]+=1
+    try:
+        with patch.object(router,'auth_headers',side_effect=selected),patch.object(router,'refresh_account_quota',side_effect=refresh):
+            events=list(sse_json_events(router.forward_responses_stream(provider,body,model,incoming,upstream_model='upstream')))
+        result={'status':200,'events':events,'headers':provider.get('_emp_response_headers',{}),'refreshes':refreshes[0]}
+    except router.RouterError as exc:
+        payload=_router_error_body(exc); headers=dict(getattr(exc,'response_headers',{}))
+        if payload.get('error',{}).get('retry_after_seconds') is not None: headers['Retry-After']=str(payload['error']['retry_after_seconds'])
+        result={'status':exc.status,'body':payload,'headers':headers,'refreshes':refreshes[0]}
+    results.append(result)
+json.dump(results,sys.stdout,sort_keys=True)
+"#;
+    let output = Command::new(python)
+        .args(["-c", script, base_url, &fixtures.to_string()])
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_stream_http_matches_python_events_headers_and_retry_decisions() {
+    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+        return;
+    };
+    let fixtures = stream_fixtures();
+    let python_upstream = NativeUpstream::start();
+    let expected = python_stream_results(&python, &python_upstream.base_url(), &fixtures);
+    let python_requests = python_upstream.requests();
+    let rust_upstream = NativeUpstream::start();
+    let client = HttpClient::new(HttpClientPolicy::default()).unwrap();
+    let router = NativeRouter::new(&client);
+    let incoming = BTreeMap::from([
+        ("Authorization".to_owned(), "Bearer caller".to_owned()),
+        ("thread-id".to_owned(), "thread-fixture".to_owned()),
+        (
+            "x-openai-subagent".to_owned(),
+            "subagent-fixture".to_owned(),
+        ),
+        ("X-EMP-Request-ID".to_owned(), "0123456789abcdef".to_owned()),
+    ]);
+    let ids = emp_router::ProjectionIds::new(
+        "resp_fallback",
+        "msg_fallback",
+        "rs_fallback",
+        "rs_late_fallback",
+    );
+    let mut actual = Vec::new();
+    for fixture in fixtures.as_array().unwrap() {
+        let account = fixture["auth"] == "account";
+        let route = route(&rust_upstream.base_url(), account);
+        let mut body =
+            json!({"model":"requested","input":"hello","stream":true,"_case":fixture["case"]})
+                .as_object()
+                .unwrap()
+                .clone();
+        if let Some(effort) = fixture.get("reasoning_effort") {
+            body.insert("reasoning_effort".into(), effort.clone());
+        }
+        if fixture["plaintext"] == true {
+            body.insert("tools".into(),json!([{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":"object","properties":{"message":{"type":"string","encrypted":true}}}}]}]));
+        }
+        let mut refreshes = 0u64;
+        let opened = router
+            .open_stream(
+                &route,
+                &body,
+                fixture["plaintext"] == true,
+                &ids,
+                |refresh| {
+                    if refresh {
+                        refreshes += 1;
+                    }
+                    let suffix = if refreshes > 0 { "rotated" } else { "selected" };
+                    let selected = BTreeMap::from([
+                        ("Authorization".to_owned(), format!("Bearer {suffix}")),
+                        ("chatgpt-account-id".to_owned(), format!("{suffix}-owner")),
+                    ]);
+                    request_headers(
+                        if account {
+                            NativeAuth::Account(&selected)
+                        } else {
+                            NativeAuth::Forward
+                        },
+                        &incoming,
+                        true,
+                    )
+                    .map_err(|error| NativeHttpError::router(error.status(), error.to_string()))
+                },
+            )
+            .await;
+        match opened{
+            Ok(mut stream)=>{let headers=lower_headers(stream.headers.clone());let mut events=Vec::new();while let Some(event)=stream.next_event().await.unwrap(){events.push(event.body);if matches!(event.event.as_str(),"response.completed"|"response.incomplete"|"response.failed"|"error"){break;}}actual.push(json!({"status":200,"events":events,"headers":headers,"refreshes":refreshes}));}
+            Err(error)=>actual.push(json!({"status":error.status,"body":error.body,"headers":lower_headers(error.headers),"refreshes":refreshes})),
+        }
+    }
+    let mut expected = expected.as_array().unwrap().clone();
+    for result in &mut expected {
+        let headers = result["headers"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+            .collect::<Map<_, _>>();
+        result["headers"] = Value::Object(headers);
+    }
+    assert_eq!(actual, expected);
+    let rust_requests = rust_upstream.requests();
+    assert_eq!(rust_requests.len(), python_requests.len());
+    for (index, (actual, expected)) in rust_requests.iter().zip(&python_requests).enumerate() {
+        assert_eq!(actual.body, expected.body, "stream body {index}");
+        for name in [
+            "authorization",
+            "chatgpt-account-id",
+            "thread-id",
+            "x-openai-subagent",
+            "content-encoding",
+        ] {
+            assert_eq!(
+                actual.headers.get(name),
+                expected.headers.get(name),
+                "stream header {name} {index}"
+            );
+        }
     }
 }

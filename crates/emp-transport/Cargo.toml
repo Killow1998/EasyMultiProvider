@@ -6,12 +6,18 @@ license.workspace = true
 description = "Bounded transport primitives for EMP."
 
 [dependencies]
+base64 = "0.22"
 flate2 = "1.1"
+getrandom = "0.2.17"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "socks"] }
+ring = "0.17.14"
+rustls = "0.23.45"
+rustls-native-certs = "0.8.4"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10.9"
 tokio = { version = "1.53.1", features = ["time"] }
+url = "2.5.7"
 zstd = "0.13"
 
 [dev-dependencies]

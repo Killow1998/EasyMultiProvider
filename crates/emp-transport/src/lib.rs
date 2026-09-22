@@ -12,6 +12,7 @@ mod content_encoding;
 mod failure;
 mod http_client;
 mod http_policy;
+mod websocket;
 pub use admission::{
     MAX_EXPANDED_REQUEST_BYTES, MAX_PROXY_REQUEST_BYTES, MEMORY_RESERVATION_FACTOR,
     MIN_MEMORY_HEADROOM_BYTES, MemoryStatus, REQUEST_GROWTH_QUANTUM, RequestBudget,
@@ -31,6 +32,9 @@ pub use http_policy::{
     ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod, IdleConnectionPool,
     ProxyEnvironment, ProxyOrigin, ProxyPolicy, RedirectPolicy, RequestPlan, RetryPolicy,
     StreamTimeoutError, StreamingReadState, TimeoutPolicy,
+};
+pub use websocket::{
+    ClientWebSocket, ClientWebSocketError, WebSocketConnection, WebSocketError, websocket_accept,
 };
 
 pub const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;
