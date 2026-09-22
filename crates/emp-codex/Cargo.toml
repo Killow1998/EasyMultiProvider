@@ -9,6 +9,7 @@ description = "Codex account and model-catalog compatibility for EMP."
 base64 = "0.22"
 emp-state = { path = "../emp-state" }
 emp-history = { path = "../emp-history" }
+emp-transport = { path = "../emp-transport" }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde_json = { workspace = true }
 sha2 = "0.10.9"

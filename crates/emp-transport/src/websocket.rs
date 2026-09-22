@@ -217,6 +217,11 @@ trait ReadWrite: Read + Write + Send {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
 }
 type OpenedWebSocketTransport = (Box<dyn ReadWrite>, bool, Option<String>);
+impl ReadWrite for socket2::Socket {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        socket2::Socket::set_read_timeout(self, timeout)
+    }
+}
 impl ReadWrite for TcpStream {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         TcpStream::set_read_timeout(self, timeout)
@@ -650,6 +655,8 @@ pub struct ClientWebSocket {
     closed: bool,
     response_headers: std::collections::BTreeMap<String, String>,
     compression: Option<PerMessageDeflate>,
+    max_message_bytes: usize,
+    local_control: bool,
 }
 
 impl ClientWebSocket {
@@ -676,14 +683,67 @@ impl ClientWebSocket {
                 "native upstream websocket endpoint is invalid",
             ));
         }
+        let (stream, absolute_form, proxy_authorization) =
+            websocket_connection(&parsed, proxy, timeout)?;
+        Self::handshake(
+            stream,
+            &parsed,
+            headers,
+            absolute_form,
+            proxy_authorization,
+            true,
+            Duration::from_secs(300),
+        )
+    }
+
+    /// Read-only Codex control transport. It never consults proxy settings.
+    pub fn connect_local(
+        path: &std::path::Path,
+        timeout: Duration,
+    ) -> Result<Self, ClientWebSocketError> {
+        std::fs::metadata(path).map_err(local_socket_error)?;
+        let address = socket2::SockAddr::unix(path).map_err(local_socket_error)?;
+        let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)
+            .map_err(local_socket_error)?;
+        socket
+            .connect_timeout(&address, timeout)
+            .map_err(local_socket_error)?;
+        socket
+            .set_read_timeout(Some(timeout))
+            .map_err(local_socket_error)?;
+        socket
+            .set_write_timeout(Some(timeout))
+            .map_err(local_socket_error)?;
+        let url = Url::parse("ws://localhost/").expect("constant local WebSocket URL");
+        let mut client = Self::handshake(
+            Box::new(socket),
+            &url,
+            &std::collections::BTreeMap::new(),
+            false,
+            None,
+            false,
+            timeout,
+        )?;
+        client.max_message_bytes = 2 * 1024 * 1024;
+        client.local_control = true;
+        Ok(client)
+    }
+
+    fn handshake(
+        mut stream: Box<dyn ReadWrite>,
+        parsed: &Url,
+        headers: &std::collections::BTreeMap<String, String>,
+        absolute_form: bool,
+        proxy_authorization: Option<String>,
+        negotiate_compression: bool,
+        read_timeout: Duration,
+    ) -> Result<Self, ClientWebSocketError> {
         let host = parsed.host_str().ok_or_else(|| {
             ClientWebSocketError::new(502, "native upstream websocket endpoint is invalid")
         })?;
         let port = parsed.port_or_known_default().ok_or_else(|| {
             ClientWebSocketError::new(502, "native upstream websocket endpoint is invalid")
         })?;
-        let (mut stream, absolute_form, proxy_authorization) =
-            websocket_connection(&parsed, proxy, timeout)?;
         let mut nonce = [0u8; 16];
         getrandom::getrandom(&mut nonce).map_err(|_| {
             ClientWebSocketError::new(500, "native websocket randomness is unavailable")
@@ -706,8 +766,13 @@ impl ClientWebSocket {
             path = format!("{}://{authority}{path}", parsed.scheme());
         }
         let mut request = format!(
-            "GET {path} HTTP/1.1\r\nHost: {authority}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n"
+            "GET {path} HTTP/1.1\r\nHost: {authority}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n"
         );
+        if negotiate_compression {
+            request.push_str(
+                "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n",
+            );
+        }
         if let Some(authorization) = proxy_authorization {
             request.push_str("Proxy-Authorization: ");
             request.push_str(&authorization);
@@ -801,19 +866,25 @@ impl ClientWebSocket {
             ));
         }
         let compression = match response_headers.get("sec-websocket-extensions") {
+            Some(_) if !negotiate_compression => {
+                return Err(ClientWebSocketError::new(
+                    502,
+                    "local control websocket returned an unsolicited extension",
+                ));
+            }
             Some(value) => Some(PerMessageDeflate::negotiated(value)?),
             None => None,
         };
-        stream
-            .set_read_timeout(Some(Duration::from_secs(300)))
-            .map_err(|_| {
-                ClientWebSocketError::new(503, "native upstream websocket timeout setup failed")
-            })?;
+        stream.set_read_timeout(Some(read_timeout)).map_err(|_| {
+            ClientWebSocketError::new(503, "native upstream websocket timeout setup failed")
+        })?;
         Ok(Self {
             stream,
             closed: false,
             response_headers,
             compression,
+            max_message_bytes: MAX_PROXY_REQUEST_BYTES,
+            local_control: false,
         })
     }
     pub fn response_headers(&self) -> &std::collections::BTreeMap<String, String> {
@@ -821,9 +892,13 @@ impl ClientWebSocket {
     }
     fn read_exact(&mut self, length: usize) -> Result<Vec<u8>, ClientWebSocketError> {
         let mut value = vec![0u8; length];
-        self.stream
-            .read_exact(&mut value)
-            .map_err(|_| ClientWebSocketError::new(502, "native upstream websocket closed"))?;
+        self.stream.read_exact(&mut value).map_err(|error| {
+            if self.local_control {
+                local_socket_error(error)
+            } else {
+                ClientWebSocketError::new(502, "native upstream websocket closed")
+            }
+        })?;
         Ok(value)
     }
     fn send_frame(
@@ -878,6 +953,18 @@ impl ClientWebSocket {
         }
     }
     pub fn receive_json(&mut self) -> Result<Option<Value>, ClientWebSocketError> {
+        let value = self.receive_value()?;
+        if value.as_ref().is_some_and(|value| !value.is_object()) {
+            return Err(ClientWebSocketError::new(
+                502,
+                "native upstream websocket event is not an object",
+            ));
+        }
+        Ok(value)
+    }
+
+    /// Control RPC skips unrelated JSON values; native Responses requires objects.
+    pub fn receive_value(&mut self) -> Result<Option<Value>, ClientWebSocketError> {
         let mut message = Vec::new();
         let mut started = false;
         let mut compressed = false;
@@ -919,7 +1006,7 @@ impl ClientWebSocket {
                 && message
                     .len()
                     .checked_add(length)
-                    .is_none_or(|size| size > MAX_PROXY_REQUEST_BYTES)
+                    .is_none_or(|size| size > self.max_message_bytes)
             {
                 return Err(ClientWebSocketError::new(
                     502,
@@ -928,7 +1015,7 @@ impl ClientWebSocket {
             }
             let payload = self.read_exact(length)?;
             match opcode {
-                1 => {
+                1 | 2 if opcode == 1 || self.local_control => {
                     if started {
                         return Err(ClientWebSocketError::new(
                             502,
@@ -983,12 +1070,6 @@ impl ClientWebSocket {
                         "native upstream websocket event is invalid JSON",
                     )
                 })?;
-                if !value.is_object() {
-                    return Err(ClientWebSocketError::new(
-                        502,
-                        "native upstream websocket event is not an object",
-                    ));
-                }
                 return Ok(Some(value));
             }
         }
@@ -1004,4 +1085,18 @@ impl Drop for ClientWebSocket {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+fn local_socket_error(error: std::io::Error) -> ClientWebSocketError {
+    use std::io::ErrorKind;
+    let status = match error.kind() {
+        ErrorKind::PermissionDenied => 403,
+        ErrorKind::TimedOut | ErrorKind::WouldBlock => 504,
+        ErrorKind::NotFound
+        | ErrorKind::ConnectionRefused
+        | ErrorKind::ConnectionReset
+        | ErrorKind::UnexpectedEof => 503,
+        _ => 500,
+    };
+    ClientWebSocketError::new(status, "local Codex control socket is unavailable")
 }

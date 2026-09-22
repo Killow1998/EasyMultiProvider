@@ -70,7 +70,9 @@ impl RuntimeStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(IntegrationError("runtime recovery record is unreadable")),
         };
-        let mut record: RuntimeRecord = serde_json::from_slice(&bytes)
+        let raw: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| IntegrationError("runtime recovery record is unreadable"))?;
+        let mut record: RuntimeRecord = serde_json::from_value(raw)
             .map_err(|_| IntegrationError("runtime recovery record is invalid"))?;
         if !record.valid() {
             return Err(IntegrationError("runtime recovery record is invalid"));

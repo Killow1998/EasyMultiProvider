@@ -129,6 +129,15 @@ impl IntegrationManager {
         self
     }
 
+    pub fn operation_lock(&self) -> Result<IntegrationFileLock, IntegrationError> {
+        IntegrationFileLock::acquire(
+            &self.lease_path.with_file_name("operation.lock"),
+            self.lock_timeout,
+            Duration::from_millis(20),
+        )
+        .map_err(|_| IntegrationError("unable to acquire integration operation lock"))
+    }
+
     pub fn config_path(&self) -> &Path {
         &self.config_path
     }

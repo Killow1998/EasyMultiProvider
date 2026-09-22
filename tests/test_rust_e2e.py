@@ -21,6 +21,7 @@ import zstandard
 
 from tests import test_chat_projection_regressions as chat_cases
 from tests.test_server import _masked_text_frame, _read_text_frame
+from tests.test_shared_app_server_runtime import _UnixModelListServer
 from tests.rust_e2e_support import ROOT, EmpProcess, Upstream, normalized_ids
 from easy_multi_provider.integration import IntegrationManager
 
@@ -184,6 +185,52 @@ class RustEndToEnd(unittest.TestCase):
                 all_outputs.append(outputs)
         self.assertEqual(all_outputs[0], all_outputs[1])
 
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "existing Codex Unix socket fixture")
+    def test_runtime_verification_reads_the_actual_shared_catalog(self):
+        # Reuse the Python control-socket fixture: real initialize/model-list
+        # messages, pagination, and no process-stop or model-generation command.
+        for stale_name in (False, True):
+            results = []
+            with tempfile.TemporaryDirectory(prefix="e-", dir="/tmp") as temporary:
+                for name, command in [
+                    ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                    ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+                ]:
+                    with self.subTest(backend=name, stale_name=stale_name):
+                        backend = EmpProcess(command, self.upstream, Path(temporary) / name)
+                        try:
+                            status, _, raw = backend.request(
+                                "POST", "/api/integration/enable", {"confirm_reload": True})
+                            self.assertEqual(status, 200, raw)
+                            enabled = json.loads(raw)
+                            self.assertEqual(enabled["runtime"]["state"], "stopped_waiting_for_start")
+                            # Valid native login uses remote catalog discovery,
+                            # so no static catalog override is written.
+                            self.assertNotIn("model_catalog_json", tomlkit.parse(backend.codex_config.read_text()))
+                            status, _, raw = backend.request("GET", "/v1/models?client_version=0.155.0")
+                            self.assertEqual(status, 200, raw)
+                            models = [{"id": row["slug"], "displayName": row["display_name"],
+                                       "description": row.get("description") or ""}
+                                      for row in json.loads(raw)["models"]]
+                            if stale_name:
+                                models[0]["displayName"] = "Old model name"
+                            pages = {"": {"data": models[:1], "nextCursor": "next"},
+                                     "next": {"data": models[1:]}}
+                            with _UnixModelListServer(backend.codex_config.parent, pages) as control:
+                                status, _, raw = backend.request("POST", "/api/integration/verify", {})
+                                self.assertEqual(status, 200, raw)
+                                verified = json.loads(raw)
+                            self.assertEqual([row["method"] for row in control.requests],
+                                             ["initialize", "initialized", "model/list", "model/list"])
+                            runtime = verified["runtime"]
+                            self.assertEqual(runtime["state"], "reload_required" if stale_name else "emp_loaded")
+                            self.assertEqual(runtime["verified"], not stale_name)
+                            results.append({"runtime": runtime, "next_action": verified["next_action"],
+                                            "configuration": verified["configuration"]})
+                        finally:
+                            backend.close()
+            self.assertEqual(results[0], results[1])
+
     def test_management_image_and_request_limits_match_python(self):
         for path in ("/api/models/vision-test-image", "/api/request-limits"):
             results = []
@@ -257,6 +304,31 @@ class RustEndToEnd(unittest.TestCase):
                         self.assertEqual(status, 200, raw)
                         self.assertEqual(json.loads(raw), {"status": "stopping"})
                         self.assertEqual(backend.process.wait(timeout=8), 0)
+                    finally:
+                        backend.close()
+
+    def test_empty_picker_cannot_enable_integration(self):
+        with tempfile.TemporaryDirectory(prefix="emp-empty-e2e-") as temporary:
+            for name, command in [
+                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+            ]:
+                with self.subTest(backend=name):
+                    backend = EmpProcess(command, self.upstream, Path(temporary) / name)
+                    try:
+                        original = backend.codex_config.read_bytes()
+                        _, _, raw = backend.request("GET", "/api/config")
+                        config = json.loads(raw)
+                        config["models"] = []
+                        config["port"] = backend.port
+                        status, _, raw = backend.request("POST", "/api/config", config)
+                        self.assertEqual(status, 200, raw)
+                        status, _, raw = backend.request(
+                            "POST", "/api/integration/enable", {"confirm_reload": True})
+                        self.assertEqual(status, 409, raw)
+                        self.assertEqual(json.loads(raw)["error"]["code"], "empty_emp_catalog")
+                        self.assertEqual(backend.codex_config.read_bytes(), original)
+                        self.assertFalse((backend.codex_config.parent / "easy-multi-provider/integration/lease.json").exists())
                     finally:
                         backend.close()
 

@@ -412,6 +412,20 @@ than a second temporary-file implementation. User-selected paths are resolved
 before acquiring service ownership, matching Python's startup path handling.
 CLI help/desktop defaults and live runtime synchronization still need work.
 
+Runtime verification now queries the actual shared Codex control WebSocket,
+including paginated model lists and model names/descriptions. Enable, restore,
+reload and verify persist the resulting observation separately from the
+configuration lease; reload follows Python's read-only observation behavior.
+Empty model pickers are rejected before changing Codex configuration, and
+native-auth integrations use the dynamic catalog. Python-driven process tests
+verify matching/stale catalogs and the empty-picker rejection through real
+HTTP and control sockets. Seventeen process scenarios and the additional
+empty-picker scenario passed; workspace tests with the live Python oracle,
+formatting and warnings-denied clippy passed locally. Runtime installation
+discovery/selection remains separate outstanding work. Next, reuse the actual
+Codex 0.155.0 consumer scripts against the Rust process before completing the
+remaining backend operations. No production service was switched or CI run.
+
 ## Historical verification evidence
 
 These dated records describe their recorded revisions only. Statements such

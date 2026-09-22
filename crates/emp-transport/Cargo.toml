@@ -15,6 +15,7 @@ rustls = "0.23.45"
 rustls-native-certs = "0.8.4"
 serde.workspace = true
 serde_json.workspace = true
+socket2 = { version = "0.6.5", features = ["all"] }
 sha2 = "0.10.9"
 tokio = { version = "1.53.1", features = ["time"] }
 url = "2.5.7"

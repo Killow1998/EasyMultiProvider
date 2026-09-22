@@ -137,10 +137,7 @@ impl BackendState {
                 quota_sampler_wait: Mutex::new(()),
                 quota_sampler_condition: Condvar::new(),
             },
-            integration: IntegrationState {
-                manager: integration,
-                owned: AtomicBool::new(false),
-            },
+            integration: IntegrationState::new(integration),
         })
     }
 }

@@ -4,7 +4,7 @@ use crate::api::accounts::management_account_import_request;
 use crate::api::catalog;
 use crate::api::compact::compact_request;
 use crate::api::inspection;
-use crate::api::integration::management_integration_request;
+use crate::api::integration::{management_integration_request, read_integration_request};
 use crate::api::lifecycle::quit_request;
 use crate::api::migration::management_migration_request;
 use crate::api::quota::management_quota_request;
@@ -32,7 +32,6 @@ use crate::http::response::status_text;
 use crate::http::response::unauthorized_response;
 use crate::services::accounts::accounts_snapshot;
 use crate::services::accounts::delete_account_state;
-use crate::services::integration::integration_summary;
 use crate::services::quota::QuotaHistoryResponseError;
 use crate::services::quota::quota_history_response;
 use crate::util::system_now;
@@ -286,13 +285,7 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
                 return response("HTTP/1.1 200 OK", "application/json", &body, &[]);
             }
             if request.method == RequestMethod::Get && path == "/api/integration" {
-                return match integration_summary(state) {
-                    Ok(summary) => {
-                        let body = serde_json::to_vec(&summary).unwrap();
-                        response("HTTP/1.1 200 OK", "application/json", &body, &[])
-                    }
-                    Err(error) => json_error_response(503, status_text(503), &error, None, &[]),
-                };
+                return read_integration_request(state);
             }
             if request.method == RequestMethod::Get
                 && path.starts_with("/api/accounts/")

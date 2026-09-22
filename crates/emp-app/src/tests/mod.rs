@@ -1809,7 +1809,12 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     let directory = tempfile::tempdir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("emp-config.json");
-    std::fs::write(&config, b"{}").unwrap();
+    // Python rejects applying an empty model picker; this success scenario needs
+    // the same visible model fixture as tests.test_server._integration_test_config.
+    std::fs::write(&config, serde_json::to_vec(&json!({
+        "providers":[{"id":"external","base_url":"https://example.invalid/v1","protocol":"responses"}],
+        "models":[{"id":"external/model-a","provider":"external","upstream_id":"model-a","enabled":true}]
+    })).unwrap()).unwrap();
     let codex_config = root.join("config.toml");
     std::fs::write(
         &codex_config,

@@ -3,7 +3,8 @@ use emp_integration::IntegrationManager;
 use std::sync::atomic::AtomicBool;
 
 use crate::app::ServerState;
-use emp_integration::IntegrationStatus;
+use crate::services::runtime::RuntimeState;
+use emp_integration::{IntegrationResult, IntegrationStatus};
 use serde_json::Value;
 
 fn codex_compatibility(state: &ServerState) -> Value {
@@ -44,13 +45,21 @@ fn codex_compatibility(state: &ServerState) -> Value {
     })
 }
 
-pub(crate) fn integration_summary(state: &ServerState) -> Result<Value, String> {
-    let status = state
+pub(crate) fn integration_summary_with_result(
+    state: &ServerState,
+    result: Option<&IntegrationResult>,
+) -> Result<Value, String> {
+    let mut status = state
         .backend
         .integration
         .manager
         .status()
         .map_err(|error| error.to_string())?;
+    if let Some(result) = result.filter(|result| !result.ok()) {
+        status.state = "conflict".to_owned();
+        status.relation = result.relation.clone();
+        status.conflicts = result.conflicts.clone();
+    }
     Ok(integration_summary_from_status(state, &status))
 }
 
@@ -60,11 +69,31 @@ fn integration_summary_from_status(state: &ServerState, status: &IntegrationStat
         "native" | "restored" => "native",
         state => state,
     };
-    let next_action = match status.state.as_str() {
-        "prepared" | "restoring" | "conflict" => "restore",
-        "active" => "none",
-        "native" | "restored" => "enable default Codex",
-        _ => "none",
+    let mut runtime = state.backend.integration.runtime.snapshot();
+    let runtime_state = runtime["state"]
+        .as_str()
+        .unwrap_or("not_checked")
+        .to_owned();
+    let action_required = matches!(
+        runtime_state.as_str(),
+        "catalog_unverified"
+            | "reload_required"
+            | "stop_failed"
+            | "verification_failed"
+            | "unsupported"
+    );
+    runtime["action_required"] = Value::Bool(action_required);
+    let next_action = match runtime_state.as_str() {
+        "catalog_unverified" => "restart Codex clients safely and check model display",
+        "reload_required" => "wait for shared backend owner restart",
+        "stopped_waiting_for_start" => "wait for shared backend owner start",
+        _ if action_required => "check shared Codex backend",
+        _ => match status.state.as_str() {
+            "prepared" | "restoring" | "conflict" => "restore",
+            "active" => "none",
+            "native" => "enable default Codex",
+            _ => "none",
+        },
     };
     serde_json::json!({
         "codex_compatibility":codex_compatibility(state),
@@ -75,11 +104,7 @@ fn integration_summary_from_status(state: &ServerState, status: &IntegrationStat
             "lease_status":status.lease.as_ref().map_or("none",|lease|lease.status.as_str()),
             "conflicts":status.conflicts,
         },
-        "runtime":{
-            "state":"not_checked","target":"native","verified":false,
-            "confidence":"not_checked","action_required":false,
-            "detail":"Codex runtime has not been checked","last_known":Value::Null
-        },
+        "runtime":runtime,
         "service_health":"ready",
         "next_action":next_action,
     })
@@ -88,15 +113,29 @@ fn integration_summary_from_status(state: &ServerState, status: &IntegrationStat
 pub(crate) struct IntegrationState {
     pub(crate) manager: IntegrationManager,
     pub(crate) owned: AtomicBool,
+    pub(crate) runtime: RuntimeState,
 }
 
 impl IntegrationState {
+    pub(crate) fn new(manager: IntegrationManager) -> Self {
+        let runtime = RuntimeState::new(manager.lease_path().with_file_name("runtime.json"));
+        Self {
+            manager,
+            owned: AtomicBool::new(false),
+            runtime,
+        }
+    }
+
     /// Restore only the lease acquired by this running service.
     pub(crate) fn restore_owned(&self) -> Result<(), crate::error::AppError> {
         use std::sync::atomic::Ordering;
         if !self.owned.load(Ordering::Acquire) {
             return Ok(());
         }
+        let _operation = self
+            .manager
+            .operation_lock()
+            .map_err(|_| crate::error::AppError::ServerStopped)?;
         let result = self
             .manager
             .restore()

@@ -1,20 +1,23 @@
-//! Api integration.
-
+//! Integration mutations and read-only verification of the shared Codex runtime.
 use crate::app::ServerState;
 use crate::http::auth::same_origin;
-use crate::http::request::Request;
-use crate::http::request::read_json_body;
-use crate::http::response::body_error_response;
-use crate::http::response::cross_origin_response;
-use crate::http::response::json_error_response;
-use crate::http::response::response;
-use crate::http::response::status_text;
-use crate::http::response::unauthorized_response;
-use crate::services::catalog::refresh_catalog;
-use crate::services::integration::integration_summary;
-use serde_json::Value;
+use crate::http::request::{Request, read_json_body};
+use crate::http::response::{
+    body_error_response, cross_origin_response, json_error_response, response, status_text,
+    unauthorized_response,
+};
+use crate::services::accounts::native_auth_document;
+use crate::services::catalog::{refresh_catalog, server_catalog};
+use crate::services::integration::integration_summary_with_result;
+use crate::services::runtime::sync_runtime;
+use emp_integration::IntegrationResult;
+use serde_json::{Value, json};
 use std::net::TcpStream;
 use std::sync::atomic::Ordering;
+
+pub(crate) fn read_integration_request(state: &ServerState) -> Vec<u8> {
+    summary_response(state, 200, None, None)
+}
 
 pub(crate) fn management_integration_request(
     stream: &mut TcpStream,
@@ -36,78 +39,168 @@ pub(crate) fn management_integration_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
-    if body.get("confirm_reload").and_then(Value::as_bool) != Some(true) {
-        let mut summary = match integration_summary(state) {
-            Ok(summary) => summary,
-            Err(error) => {
-                return json_error_response(503, status_text(503), &error, None, &[]);
-            }
-        };
-        summary["error"] = serde_json::json!({
-            "message":"Confirmation is required before changing Codex integration files"
-        });
-        let body = serde_json::to_vec(&summary).unwrap();
-        return response("HTTP/1.1 409 Conflict", "application/json", &body, &[]);
-    }
     let operation = request.raw_path().rsplit('/').next().unwrap_or_default();
+    let confirmed = body.get("confirm_reload") == Some(&Value::Bool(true));
+    if matches!(operation, "enable" | "restore") && !confirmed {
+        return summary_response(
+            state,
+            409,
+            None,
+            Some(
+                json!({"message":"Confirmation is required before changing Codex integration files"}),
+            ),
+        );
+    }
+    let manager = &state.backend.integration.manager;
+    let _operation = match manager.operation_lock() {
+        Ok(lock) => lock,
+        Err(_) => return unavailable(409),
+    };
+    if matches!(operation, "reload" | "verify") {
+        let result = match sync_runtime(state, None, confirmed, operation == "verify") {
+            Ok(result) => result,
+            Err(_) => return unavailable(409),
+        };
+        let successful = operation == "verify"
+            || matches!(
+                result.state,
+                "catalog_unverified"
+                    | "emp_loaded"
+                    | "native_loaded"
+                    | "reload_required"
+                    | "stopped_waiting_for_start"
+            );
+        let error = (!successful).then(|| json!({"message":result.detail}));
+        return summary_response(state, if successful { 200 } else { 409 }, None, error);
+    }
     let result = match operation {
         "enable" => {
-            let (catalog, _) = match refresh_catalog(state) {
-                Ok(result) => result,
-                Err(()) => {
-                    return json_error_response(
-                        500,
-                        status_text(500),
-                        "internal server error",
-                        None,
-                        &[],
-                    );
-                }
+            let config = match state.backend.configuration.config.lock() {
+                Ok(config) => config.clone(),
+                Err(_) => return unavailable(503),
             };
-            state.backend.integration.manager.enable(
-                &format!("http://127.0.0.1:{}/v1", state.port),
-                Some(&catalog.to_string_lossy()),
+            let catalog = server_catalog(state, &config);
+            let visible = catalog["models"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|model| {
+                    model
+                        .get("slug")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| !id.is_empty())
+                        && model
+                            .get("visibility")
+                            .and_then(Value::as_str)
+                            .unwrap_or("list")
+                            == "list"
+                });
+            if !visible {
+                return summary_response(
+                    state,
+                    409,
+                    None,
+                    Some(json!({
+                        "code":"empty_emp_catalog",
+                        "message":"Keep at least one native or additional model visible before applying EMP to Codex"
+                    })),
+                );
+            }
+            let (catalog_path, _) = match refresh_catalog(state) {
+                Ok(value) => value,
+                Err(_) => return unavailable(503),
+            };
+            let dynamic = native_auth_document(&state.backend.accounts.native_auth_path)
+                .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
+                .is_some();
+            let base_url = format!("http://127.0.0.1:{}/v1", state.port);
+            let path = catalog_path.to_string_lossy();
+            if dynamic {
+                let status = match manager.status() {
+                    Ok(status) => status,
+                    Err(_) => return unavailable(409),
+                };
+                if status.relation == "applied"
+                    && let Some(lease) = &status.lease
+                    && lease.fields["openai_base_url"].applied.value.as_deref() == Some(&base_url)
+                    && lease.fields["model_catalog_json"].applied.value.as_deref()
+                        == Some(path.as_ref())
+                {
+                    match manager.restore() {
+                        Ok(result) if !result.ok() => {
+                            return summary_response(state, 409, Some(&result), None);
+                        }
+                        Err(_) => return unavailable(409),
+                        _ => {}
+                    }
+                }
+            }
+            manager.enable(
+                &base_url,
+                if dynamic { None } else { Some(path.as_ref()) },
                 true,
             )
         }
-        "restore" => state.backend.integration.manager.restore(),
-        "reload" | "verify" => {
-            return match integration_summary(state) {
-                Ok(summary) => {
-                    let body = serde_json::to_vec(&summary).unwrap();
-                    response("HTTP/1.1 200 OK", "application/json", &body, &[])
-                }
-                Err(error) => json_error_response(503, status_text(503), &error, None, &[]),
-            };
-        }
-        _ => {
-            return json_error_response(404, status_text(404), "not found", None, &[]);
-        }
+        "restore" => manager.restore(),
+        _ => return json_error_response(404, status_text(404), "not found", None, &[]),
     };
     let result = match result {
         Ok(result) => result,
-        Err(error) => {
-            return json_error_response(409, status_text(409), &error.to_string(), None, &[]);
-        }
+        Err(_) => return unavailable(409),
     };
-    if result.ok() && result.state == "active" {
+    if result.ok() {
+        let active = result.state == "active";
         state
             .backend
             .integration
             .owned
-            .store(true, Ordering::Release);
-    } else if result.ok() && result.state == "restored" {
-        state
-            .backend
-            .integration
-            .owned
-            .store(false, Ordering::Release);
-    }
-    match integration_summary(state) {
-        Ok(summary) => {
-            let body = serde_json::to_vec(&summary).unwrap();
-            response("HTTP/1.1 200 OK", "application/json", &body, &[])
+            .store(active, Ordering::Release);
+        if sync_runtime(
+            state,
+            Some(if active { "emp" } else { "native" }),
+            confirmed,
+            false,
+        )
+        .is_err()
+        {
+            return unavailable(409);
         }
-        Err(error) => json_error_response(503, status_text(503), &error, None, &[]),
     }
+    summary_response(
+        state,
+        if result.ok() { 200 } else { 409 },
+        Some(&result),
+        None,
+    )
+}
+
+fn unavailable(status: u16) -> Vec<u8> {
+    json_error_response(
+        status,
+        status_text(status),
+        "integration state is unavailable",
+        (status == 503).then_some("integration_unavailable"),
+        &[],
+    )
+}
+
+fn summary_response(
+    state: &ServerState,
+    status: u16,
+    result: Option<&IntegrationResult>,
+    error: Option<Value>,
+) -> Vec<u8> {
+    let mut summary = match integration_summary_with_result(state, result) {
+        Ok(value) => value,
+        Err(_) => return unavailable(503),
+    };
+    if let Some(error) = error {
+        summary["error"] = error;
+    }
+    response(
+        &format!("HTTP/1.1 {status} {}", status_text(status)),
+        "application/json",
+        &serde_json::to_vec(&summary).expect("integration summary"),
+        &[],
+    )
 }
