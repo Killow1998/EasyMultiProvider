@@ -1,0 +1,38 @@
+{
+  "status": "socket_client_implemented_router_integration_pending",
+  "source": [
+    "easy_multi_provider/http_pool.py",
+    "tests/test_http_pool.py",
+    "tests/test_http_pool_tls.py"
+  ],
+  "rust_evidence": [
+    "crates/emp-transport/tests/http_client.rs:socket_behavior_matches_the_live_python_oracle_when_configured",
+    "crates/emp-transport/tests/http_client.rs:tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name"
+  ],
+  "fixture_steps": [
+    "send two complete requests with different origin Authorization values",
+    "open a streaming response, observe the first line, and cancel before EOF",
+    "send a complete request after cancellation",
+    "receive a redirect with an origin Authorization value",
+    "repeat trusted, untrusted, and wrong-host TLS handshakes"
+  ],
+  "compared_observations": [
+    "successful status, response bytes, and EOF terminal state",
+    "stream first-line availability before EOF",
+    "complete responses reuse one connection without retaining Authorization",
+    "cancelled responses are discarded instead of reused",
+    "redirect failure class, absent HTTP status, terminal error state, and no-retry decision",
+    "dropped POST and redirect each produce exactly one upstream request",
+    "proxy credentials remain separate from origin Authorization",
+    "untrusted and wrong-host certificates fail while an explicitly trusted hostname succeeds concurrently"
+  ],
+  "remaining": [
+    "wire the client into Router endpoint execution",
+    "exercise SOCKS against a live local proxy rather than policy-only resolution",
+    "map native transport failures through the Router response surface"
+  ],
+  "side_effects": [
+    "tests bind ephemeral loopback ports only",
+    "dropping an unread stream closes its connection"
+  ]
+}

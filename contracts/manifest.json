@@ -108,6 +108,19 @@
       "fixture": "transport/python-http-client-policy.json"
     },
     {
+      "id": "transport.http-client.python-rust",
+      "level": "api",
+      "source": "easy_multi_provider/http_pool.py and tests/test_http_pool.py and tests/test_http_pool_tls.py",
+      "transport": "http",
+      "dialect": "none",
+      "normalization": [
+        "ephemeral client ports and connection identifiers are compared only for equality or inequality",
+        "language-specific exception class names map to the shared transport failure class"
+      ],
+      "side_effects": ["loopback-only HTTP and TLS test sockets; no production configuration or service state"],
+      "fixture": "transport/python-http-client.json"
+    },
+    {
       "id": "state.vault.python-rust",
       "level": "state",
       "source": "tests/test_vault.py and easy_multi_provider/vault.py",

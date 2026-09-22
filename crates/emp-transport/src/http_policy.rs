@@ -371,22 +371,30 @@ impl ProxyPolicy {
     }
 
     fn origin_for(&self, route: &UrlTarget) -> HttpResult<ProxyOrigin> {
+        self.proxy_url_for_target(route)?
+            .as_deref()
+            .map(ProxyOrigin::proxy)
+            .unwrap_or(Ok(ProxyOrigin::Direct))
+    }
+
+    fn proxy_url_for_target(&self, route: &UrlTarget) -> HttpResult<Option<String>> {
         let host = route.host.as_deref().unwrap_or("");
         if self.bypass_loopback && is_loopback(host) {
-            return Ok(ProxyOrigin::Direct);
+            return Ok(None);
         }
         let bypass = self
             .environment
             .as_ref()
             .is_some_and(|settings| no_proxy_matches(host, &settings.no_proxy));
         if bypass {
-            return Ok(ProxyOrigin::Direct);
+            return Ok(None);
         }
         if let Some(proxy) = self.explicit.as_deref().filter(|value| !value.is_empty()) {
-            return ProxyOrigin::proxy(proxy);
+            ProxyOrigin::proxy(proxy)?;
+            return Ok(Some(proxy.to_owned()));
         }
         let Some(settings) = self.environment.as_ref() else {
-            return Ok(ProxyOrigin::Direct);
+            return Ok(None);
         };
         let candidates: &[(&Option<String>, bool)] = match route.scheme.as_str() {
             "https" | "wss" => &[
@@ -404,18 +412,21 @@ impl ProxyPolicy {
             ],
             _ => &[(&settings.all, false)],
         };
-        candidates
+        let selected = candidates
             .iter()
             .find(|(value, _)| value.as_deref().is_some_and(|value| !value.is_empty()))
             .map(|(value, socks)| {
                 let value = value.as_deref().unwrap_or_default();
                 if *socks && value.starts_with("http://") {
-                    ProxyOrigin::proxy(&format!("socks5h://{}", &value[7..]))
+                    format!("socks5h://{}", &value[7..])
                 } else {
-                    ProxyOrigin::proxy(value)
+                    value.to_owned()
                 }
-            })
-            .unwrap_or(Ok(ProxyOrigin::Direct))
+            });
+        if let Some(proxy) = selected.as_deref() {
+            ProxyOrigin::proxy(proxy)?;
+        }
+        Ok(selected)
     }
 }
 
@@ -620,6 +631,11 @@ impl HttpClientPolicy {
             retry_policy: RetryPolicy::Disabled,
             timeout_policy: self.timeout_policy,
         })
+    }
+
+    pub(crate) fn transport_proxy_for(&self, route: &RouteIdentity) -> HttpResult<Option<String>> {
+        let target = parse_url(&route.route_url())?;
+        self.proxy_policy.proxy_url_for_target(&target)
     }
 }
 

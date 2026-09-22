@@ -7,7 +7,14 @@ description = "Bounded transport primitives for EMP."
 
 [dependencies]
 flate2 = "1.1"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "socks"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10.9"
+tokio = { version = "1.53.1", features = ["time"] }
 zstd = "0.13"
+
+[dev-dependencies]
+rcgen = "0.14.10"
+rustls = "0.23"
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
