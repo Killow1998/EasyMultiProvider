@@ -8,6 +8,7 @@ description = "State cryptography and filesystem vault compatibility for EMP."
 [dependencies]
 atomic-write-file = "0.3.1"
 base64 = "0.22"
+emp-core = { path = "../emp-core" }
 fernet = { version = "0.2.2", default-features = false, features = ["rustcrypto"] }
 getrandom = "0.2.17"
 scrypt = "0.12.0"

@@ -13,6 +13,7 @@ use crate::model_values::{
     normalize_reasoning_levels, normalize_supported_protocols, output_modalities_known,
     supported_protocols_known,
 };
+use emp_core::{deployment_identity, endpoint_fingerprint};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -2234,7 +2235,7 @@ fn utc_date_parts(seconds: u64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
-fn observed_at_now() -> String {
+pub fn observed_at_now() -> String {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -2252,6 +2253,112 @@ fn observed_at_now() -> String {
             "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{microseconds:06}+00:00"
         )
     }
+}
+
+/// Return a normalized configuration with one successful automatic protocol
+/// observation applied. Explicit providers and missing identities are left
+/// unchanged, matching the Python server's request-completion callback.
+pub fn remember_resolved_protocol_at(
+    config: &Value,
+    provider_id: &str,
+    requested_model: &str,
+    protocol: &str,
+    observed_at: &str,
+) -> ConfigResult<Option<Value>> {
+    if !matches!(
+        protocol,
+        "responses" | "chat_completions" | "anthropic_messages"
+    ) {
+        return Ok(None);
+    }
+    let mut updated = config.clone();
+    let Some(root) = updated.as_object_mut() else {
+        return Ok(None);
+    };
+    let Some(providers) = root.get("providers").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    let Some(provider_index) = providers.iter().position(|provider| {
+        provider.get("id").and_then(Value::as_str) == Some(provider_id)
+            && provider.get("protocol").and_then(Value::as_str) == Some("auto")
+    }) else {
+        return Ok(None);
+    };
+
+    let model_index = root
+        .get("models")
+        .and_then(Value::as_array)
+        .and_then(|models| {
+            models.iter().position(|model| {
+                model.get("id").and_then(Value::as_str) == Some(requested_model)
+                    && model.get("provider").and_then(Value::as_str) == Some(provider_id)
+            })
+        });
+    let provider = providers[provider_index]
+        .as_object()
+        .expect("normalized providers are objects")
+        .clone();
+    let model = model_index
+        .and_then(|index| root.get("models")?.as_array()?.get(index))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let upstream_model = model
+        .get("upstream_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(requested_model);
+    let observation = serde_json::json!({
+        "source": "observed",
+        "confidence": 1.0,
+        "observed_at": observed_at,
+        "endpoint_fingerprint": endpoint_fingerprint(
+            provider.get("base_url").and_then(Value::as_str)
+        ),
+        "deployment_identity": deployment_identity(&provider, &model),
+        "upstream_model": upstream_model,
+    });
+
+    let provider = root
+        .get_mut("providers")
+        .and_then(Value::as_array_mut)
+        .and_then(|providers| providers.get_mut(provider_index))
+        .and_then(Value::as_object_mut)
+        .expect("normalized providers are objects");
+    provider.insert(
+        "resolved_protocol".to_owned(),
+        Value::String(protocol.to_owned()),
+    );
+    provider.insert("protocol_observation".to_owned(), observation.clone());
+    if let Some(index) = model_index
+        && let Some(model) = root
+            .get_mut("models")
+            .and_then(Value::as_array_mut)
+            .and_then(|models| models.get_mut(index))
+            .and_then(Value::as_object_mut)
+    {
+        model.insert(
+            "resolved_protocol".to_owned(),
+            Value::String(protocol.to_owned()),
+        );
+        model.insert("protocol_observation".to_owned(), observation);
+    }
+    normalize_configuration(Some(&updated)).map(Some)
+}
+
+pub fn remember_resolved_protocol(
+    config: &Value,
+    provider_id: &str,
+    requested_model: &str,
+    protocol: &str,
+) -> ConfigResult<Option<Value>> {
+    remember_resolved_protocol_at(
+        config,
+        provider_id,
+        requested_model,
+        protocol,
+        &observed_at_now(),
+    )
 }
 
 fn values_by_id(raw: Option<&Value>) -> Map<String, Value> {

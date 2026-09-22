@@ -453,6 +453,7 @@ version = "0.11.6"
 dependencies = [
  "atomic-write-file",
  "base64 0.22.1",
+ "emp-core",
  "fernet",
  "getrandom 0.2.17",
  "libc",
