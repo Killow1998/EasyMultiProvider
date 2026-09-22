@@ -68,6 +68,7 @@ fn hard_and_memory_limits_have_distinct_retry_semantics() {
     let mut budget = limits.request(TransportKind::WebSocket);
     let memory = budget.ensure(65).expect_err("memory pressure");
     assert_eq!(memory.reason, RequestCapacityReason::MemoryLimit);
+    assert!(!memory.decoded);
     assert_eq!(memory.http_status(), 503);
     assert_eq!(memory.websocket_close_code(), 1013);
     assert_eq!(memory.required_memory_bytes, 1024);

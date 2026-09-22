@@ -1,6 +1,9 @@
 use emp_transport::{
-    MemoryStatus, RequestLimits, RequestLimitsConfig, SseJsonParser, TransportKind, sse_json_events,
+    MemoryStatus, RequestLimits, RequestLimitsConfig, SseJsonParser, TransportKind, decode_content,
+    sse_json_events,
 };
+use flate2::Compression;
+use flate2::write::{GzEncoder, ZlibEncoder};
 use serde_json::{Value, json};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -186,4 +189,85 @@ print(json.dumps({"snapshot": snapshot, "errors": errors},
         ]
     });
     assert_eq!(rust, oracle);
+}
+
+fn gzip(value: &[u8]) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(value).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn deflate(value: &[u8]) -> Vec<u8> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(value).unwrap();
+    encoder.finish().unwrap()
+}
+
+#[test]
+fn content_decoding_matches_live_python_oracle_when_configured() {
+    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+        return;
+    };
+    let raw = b"portable compressed history ".repeat(20);
+    let gzipped = gzip(&raw);
+    let cases = json!([
+        {"encoding": "identity", "body": raw},
+        {"encoding": "gzip", "body": gzipped},
+        {"encoding": "deflate", "body": deflate(&raw)},
+        {"encoding": "zstd", "body": zstd::stream::encode_all(raw.as_slice(), 0).unwrap()},
+        {"encoding": "gzip, zstd", "body": zstd::stream::encode_all(gzip(&raw).as_slice(), 0).unwrap()}
+    ]);
+    let script = r#"
+import json, sys
+from easy_multi_provider.transport import decode_content
+cases = json.load(sys.stdin)
+json.dump([
+    list(decode_content(bytes(case["body"]), case["encoding"], 1048576))
+    for case in cases
+], sys.stdout, separators=(",", ":"))
+"#;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut child = Command::new(python)
+        .arg("-c")
+        .arg(script)
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn Python content decoder oracle");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(serde_json::to_string(&cases).unwrap().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().expect("wait for decoder oracle");
+    assert!(
+        output.status.success(),
+        "Python decoder oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let oracle: Value = serde_json::from_slice(&output.stdout).expect("decoder oracle JSON");
+    let rust = cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| {
+            let bytes = case["body"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|byte| byte.as_u64().unwrap() as u8)
+                .collect::<Vec<_>>();
+            Value::Array(
+                decode_content(bytes, case["encoding"].as_str().unwrap(), 1_048_576, None)
+                    .unwrap()
+                    .into_iter()
+                    .map(|byte| Value::from(u64::from(byte)))
+                    .collect(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(Value::Array(rust), oracle);
 }

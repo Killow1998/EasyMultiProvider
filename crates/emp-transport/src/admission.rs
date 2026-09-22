@@ -118,6 +118,7 @@ pub enum RequestCapacityReason {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RequestCapacityError {
     pub limit: usize,
+    pub decoded: bool,
     pub reason: RequestCapacityReason,
     pub available_bytes: usize,
     pub required_memory_bytes: usize,
@@ -291,6 +292,7 @@ impl RequestLimits {
         };
         let mut state = self.lock_state().map_err(|_| RequestCapacityError {
             limit: target,
+            decoded: false,
             reason: RequestCapacityReason::MemoryLimit,
             available_bytes: 0,
             required_memory_bytes: usize::MAX,
@@ -360,6 +362,7 @@ impl RequestLimits {
                 } else {
                     target
                 },
+                decoded: false,
                 reason,
                 available_bytes: memory.available,
                 required_memory_bytes: required,
