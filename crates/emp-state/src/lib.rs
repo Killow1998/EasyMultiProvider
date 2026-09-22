@@ -13,6 +13,7 @@
 
 pub mod accounts;
 pub mod config;
+pub mod discovery_merge;
 pub mod fernet;
 pub mod filesystem;
 pub mod lock;
