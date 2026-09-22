@@ -126,7 +126,6 @@ def fake_lifecycle_state(order=None, restore_result=None, restore_error=None):
             self.usage_prices = SimpleNamespace(start=lambda **kwargs: None, stop=lambda: None)
             self.usage_history = SimpleNamespace(start=lambda: None, stop=lambda: None)
             self.usage = SimpleNamespace(price_pending=lambda: None)
-            self.bootstrap_token = "BOOTSTRAP-LIFECYCLE-SECRET"
             self.session_token = "SESSION-LIFECYCLE-SECRET"
             self.config = {
                 "host": "127.0.0.1",
@@ -1465,7 +1464,6 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
                 for path in sorted((root / "state" / "logs").glob("*.jsonl"))
             )
             for secret in (
-                "BOOTSTRAP-LIFECYCLE-SECRET",
                 "SESSION-LIFECYCLE-SECRET",
                 str(config_file),
             ):

@@ -3856,7 +3856,7 @@ class ServerAccountTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
-    def test_web_root_requires_bootstrap_url_before_issuing_session(self):
+    def test_web_root_issues_session_to_each_local_browser(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             save(normalize({}), config_path)
@@ -3865,37 +3865,33 @@ class ServerAccountTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                connection = HTTPConnection(*server.server_address)
-                connection.request("GET", "/")
-                response = connection.getresponse()
-                self.assertEqual(response.status, 401)
-                self.assertIsNone(response.getheader("Set-Cookie"))
-                response.read()
-                connection.close()
-
                 for path, headers in (
-                    ("/?bootstrap=%E4%B8%AD%E6%96%87", {}),
-                    ("/?bootstrap=%FF", {}),
+                    ("/", {}),
+                    ("/index.html", {}),
+                    ("/?bootstrap=legacy-link", {}),
                     ("/", {"Cookie": 'emp_session="\u00e9"'}),
                 ):
                     with self.subTest(path=path, headers=headers):
                         connection = HTTPConnection(*server.server_address)
                         connection.request("GET", path, headers=headers)
                         response = connection.getresponse()
-                        self.assertEqual(response.status, 401)
-                        self.assertIsNone(response.getheader("Set-Cookie"))
+                        self.assertEqual(response.status, 200)
+                        self.assertIn("emp_session=", response.getheader("Set-Cookie"))
+                        self.assertIn("Max-Age=", response.getheader("Set-Cookie"))
                         response.read()
                         connection.close()
-                        self.assertFalse(state.bootstrap_used)
 
-                connection = HTTPConnection(*server.server_address)
-                connection.request("GET", "/?bootstrap=" + state.bootstrap_token)
-                response = connection.getresponse()
-                self.assertEqual(response.status, 303)
-                self.assertIn("emp_session=", response.getheader("Set-Cookie"))
-                self.assertIn("Max-Age=", response.getheader("Set-Cookie"))
-                response.read()
-                connection.close()
+                for headers in (
+                    {"Host": "evil.example:%d" % server.server_address[1]},
+                    {"Origin": "http://evil.example:%d" % server.server_address[1]},
+                ):
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request("GET", "/", headers=headers)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 403)
+                    self.assertIsNone(response.getheader("Set-Cookie"))
+                    response.read()
+                    connection.close()
             finally:
                 server.shutdown()
                 server.server_close()
@@ -3912,16 +3908,15 @@ class ServerAccountTests(unittest.TestCase):
             threading.Thread(target=server.serve_forever, daemon=True).start()
             try:
                 headers = {"Cookie": "emp_session=" + original.session_token}
-                for expired, expected in ((False, 200), (True, 401)):
+                for expired in (False, True):
                     if expired:
                         restarted.session_expires_at = 0
                     connection = HTTPConnection(*server.server_address)
                     connection.request("GET", "/", headers=headers)
                     response = connection.getresponse()
-                    self.assertEqual(response.status, expected)
-                    body = response.read().decode("utf-8")
-                    if expired:
-                        self.assertIn("请从 EMP 打开管理页", body)
+                    self.assertEqual(response.status, 200)
+                    self.assertIn("emp_session=", response.getheader("Set-Cookie"))
+                    response.read()
                     connection.close()
                 session_path = path.parent / "state" / "web-session.json"
                 saved = json.loads(session_path.read_text(encoding="utf-8"))

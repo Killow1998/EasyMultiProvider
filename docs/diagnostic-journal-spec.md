@@ -57,7 +57,7 @@ Lifecycle:
   hostname, environment contents, or an absolute config path.
 - `proxy_selected`: only `environment`, `system`, or `direct`; never proxy URL.
 - `startup_reconcile`: action/state/relation/conflict codes and duration.
-- `service_listening`: local host and effective port; never bootstrap/session
+- `service_listening`: local host and effective port; never management session
   tokens.
 - `shutdown_start` and `shutdown_complete`: reason and restore result.
 - `startup_failure` / `internal_error`: operation stage, exception class, and a
@@ -157,7 +157,7 @@ emitted for a disabled journal.
   normalized record to the journal, outside its lock.
 - HTTP access and lifecycle events use the same journal instance.
 - Startup prints `Diagnostic log: <path>` after successful journal creation.
-  It must not print or log the bootstrap/session secret.
+  It must not print or log the management session secret.
 - The authenticated diagnostics endpoint revalidates recent route records from
   managed log parts, aggregates at most 512 across runs, and returns only safe
   health/model summaries plus the latest 64 normalized request facts. It never

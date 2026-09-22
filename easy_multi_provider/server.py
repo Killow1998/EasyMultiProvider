@@ -1329,8 +1329,6 @@ class AppState:
     ):
         self.path = Path(path or config_path())
         self.lock = threading.RLock()
-        self.bootstrap_token = secrets.token_urlsafe(32)
-        self.bootstrap_used = False
         self._load_web_session()
         self.journal = journal if journal is not None else NullJournal()
         usage_state = self.path.resolve().parent / "state"
@@ -3208,7 +3206,7 @@ def make_handler(state: AppState):
             super().send_response(code, message)
 
         def log_message(self, format: str, *args: Any) -> None:
-            # The bootstrap URL contains a one-time secret; never log its query.
+            # Management URLs may contain sensitive query values; never log them.
             message = format % args if args else format
             message = message.replace(self.path, urlparse(self.path).path)
             super().log_message("%s", message)
@@ -3247,23 +3245,6 @@ def make_handler(state: AppState):
                 and supplied.value.isascii()
                 and hmac.compare_digest(supplied.value, state.session_token)
             )
-
-        def _has_bootstrap(self) -> bool:
-            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-            values = query.get("bootstrap", [])
-            if (
-                len(values) != 1
-                or not values[0].isascii()
-                or not hmac.compare_digest(values[0], state.bootstrap_token)
-            ):
-                return False
-            with state.lock:
-                if state.bootstrap_used:
-                    return False
-                if time.time() >= state.session_expires_at:
-                    state._load_web_session()
-                state.bootstrap_used = True
-                return True
 
         def _management_allowed(self) -> bool:
             return self._same_origin() and self._has_session()
@@ -4008,32 +3989,9 @@ def make_handler(state: AppState):
                 self._error(401 if self._same_origin() else 403, "management session is required")
                 return
             if path in ("/", "/index.html"):
-                if not self._has_session():
-                    if not self._has_bootstrap():
-                        self._send(401, (
-                            '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
-                            '<meta name="viewport" content="width=device-width,initial-scale=1">'
-                            '<title>登录 EMP</title><body style="font-family:system-ui;max-width:36rem;'
-                            'margin:12vh auto;padding:24px;line-height:1.7">'
-                            '<h1>请从 EMP 打开管理页</h1>'
-                            '<p>此浏览器尚未登录，或登录已过期。</p>'
-                            '<p>请打开 EMP 启动时自动弹出的网页；也可以使用终端中 '
-                            'Open in browser 后的完整链接。</p>'
-                            '<p>登录有效期为 30 天，期间重启 EMP 无需重新登录。</p>'
-                            '</body></html>'
-                        ).encode("utf-8"), "text/html; charset=utf-8",
-                            headers={"Cache-Control": "no-store"})
-                        return
-                    self._send(
-                        303,
-                        b"",
-                        "text/plain; charset=utf-8",
-                        {
-                            "Location": "/",
-                            "Set-Cookie": self._session_header(),
-                        },
-                    )
-                    return
+                with state.lock:
+                    if time.time() >= state.session_expires_at:
+                        state._load_web_session()
                 self._send(
                     200,
                     WEB_FILE.read_bytes(),
@@ -5233,14 +5191,13 @@ def _serve_owned(
 
             print("EMP listening on %s" % base_url, flush=True)
             print("Network proxy: %s" % proxy_source, flush=True)
-            bootstrap_url = "%s/?bootstrap=%s" % (base_url, state.bootstrap_token)
-            print("Open in browser: %s" % bootstrap_url, flush=True)
+            print("Open in browser: %s" % base_url, flush=True)
             if open_browser:
                 opened = False
                 try:
                     import webbrowser
 
-                    opened = bool(webbrowser.open(bootstrap_url, new=2))
+                    opened = bool(webbrowser.open(base_url, new=2))
                 except Exception:
                     pass
                 if not opened:
