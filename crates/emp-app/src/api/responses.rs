@@ -266,6 +266,9 @@ pub(crate) fn responses_request(
                 .block_on(router.execute_complete(&candidate, &body, &incoming, &ids))
             {
                 Ok(result) => {
+                    if result.body["status"] == "completed" {
+                        crate::services::context::record(state, &candidate, &body, true);
+                    }
                     let body = match serde_json::to_vec(&result.body) {
                         Ok(body) => body,
                         Err(_) => {
@@ -287,6 +290,9 @@ pub(crate) fn responses_request(
                     ));
                 }
                 Err(error) => {
+                    if error.error_class() == emp_transport::FailureClass::ContextLengthExceeded {
+                        crate::services::context::record(state, &candidate, &body, false);
+                    }
                     if let Some(delay) = external_retry_delay(&error, attempt, &candidate) {
                         thread::sleep(delay);
                         continue;

@@ -15,17 +15,34 @@ import sys
 import tempfile
 import tomlkit
 import unittest
+from datetime import datetime
 from contextlib import ExitStack
 
 import zstandard
 
 from tests import test_chat_projection_regressions as chat_cases
+from tests import test_context_guard as context_cases
 from tests.test_tool_bridge import function, namespace
 from easy_multi_provider.tool_bridge import ExternalTools
 from tests.test_server import _masked_text_frame, _read_text_frame
 from tests.test_shared_app_server_runtime import _UnixModelListServer
 from tests.rust_e2e_support import ROOT, EmpProcess, Upstream, normalized_ids
 from easy_multi_provider.integration import IntegrationManager
+
+
+def normalize_observation_times(value):
+    if isinstance(value, list):
+        return [normalize_observation_times(item) for item in value]
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if (key == "observed_at" or key.endswith("_observed_at")) and isinstance(item, str):
+                datetime.fromisoformat(item.replace("Z", "+00:00"))
+                result[key] = "<observation timestamp>"
+            else:
+                result[key] = normalize_observation_times(item)
+        return result
+    return value
 
 
 @unittest.skipUnless(os.environ.get("EMP_RUST_BINARY"), "set EMP_RUST_BINARY for real-process E2E")
@@ -324,8 +341,55 @@ class RustEndToEnd(unittest.TestCase):
                     backend.close()
             self.assertEqual(results[0], results[1])
 
+    def test_calibrated_context_budget_is_an_input_boundary(self):
+        fixture = context_cases.ContextGuardTests()
+        fixture.setUp()
+        provider = dict(fixture.provider, protocol="chat_completions", base_url=self.upstream.base_url,
+                        auth_mode="api_key", api_key="fixture-key")
+        model = dict(fixture.model, provider="demo", output_limit=128)
+        observation = context_cases.assess_context(provider, model, "chat_completions",
+            {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 128}).to_safe_dict()
+        self.assertTrue(context_cases.update_calibration(model, observation, "explicit_failure", 1250))
+        results = []
+        with tempfile.TemporaryDirectory(prefix="emp-context-") as temporary:
+            root = Path(temporary)
+            (root / "native.json").write_text('{"models":[]}')
+            for name, command in [
+                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+            ]:
+                home = root / name
+                home.mkdir()
+                config_path = home / "emp.json"
+                config_path.write_text(json.dumps({"native_catalog_path": str(root / "native.json"),
+                    "providers": [provider], "models": [model]}))
+                backend = EmpProcess.from_config(command, config_path, home)
+                try:
+                    status, _, raw = backend.request("GET", "/api/capabilities")
+                    self.assertEqual(status, 200, raw)
+                    capabilities = json.loads(raw)
+                    context = capabilities["capabilities"][0]["context"]
+                    self.assertEqual(context["safe_input_limit"], 1249)
+                    self.assertEqual(context["context_limit"], 4096)
+                    self.assertEqual(context["source"], "observed")
+                    reply = {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}]}
+                    self.upstream.configure(reply)
+                    status, _, raw = backend.request("POST", "/v1/responses",
+                        {"model": "demo/model", "input": "x" * 2000, "max_output_tokens": 128})
+                    self.assertEqual(status, 200, raw)
+                    forwarded = self.upstream.requests.get(timeout=5)
+                    # The active user turn cannot be silently truncated to fit.
+                    status, _, raw = backend.request("POST", "/v1/responses",
+                        {"model": "demo/model", "input": "x" * 3500, "max_output_tokens": 128})
+                    self.assertGreaterEqual(status, 400, raw)
+                    self.assertTrue(self.upstream.requests.empty(), "blocked input reached generation")
+                    results.append((capabilities, forwarded[2], status, json.loads(raw)))
+                finally:
+                    backend.close()
+            self.assertEqual(results[0], results[1])
+
     def test_management_image_and_request_limits_match_python(self):
-        for path in ("/api/models/vision-test-image", "/api/request-limits"):
+        for path in ("/api/models/vision-test-image", "/api/request-limits", "/api/capabilities"):
             results = []
             for backend in self.backends:
                 with self.subTest(path=path, port=backend.port):
@@ -334,10 +398,12 @@ class RustEndToEnd(unittest.TestCase):
                     status, headers, raw = backend.request("GET", path)
                     self.assertEqual(status, 200, raw)
                     payload = json.loads(raw)
+                    if path == "/api/capabilities":
+                        payload = normalize_observation_times(payload)
                     if path == "/api/request-limits":
                         run_id = payload.pop("run_id")
                         self.assertRegex(run_id, r"^[0-9a-f]{32}$")
-                    else:
+                    elif path == "/api/models/vision-test-image":
                         self.assertEqual(headers.get("cache-control"), "no-store")
                     results.append(payload)
             self.assertEqual(results[0], results[1])

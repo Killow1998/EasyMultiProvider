@@ -1,6 +1,8 @@
 //! Conservative destination context assessment and request-local compaction.
 
 use serde_json::{Map, Value, json};
+mod calibration;
+pub use calibration::{status, update as update_calibration};
 use std::collections::BTreeSet;
 
 pub const SAFETY_RESERVE_TOKENS: u64 = 256;
@@ -12,6 +14,8 @@ const REDUCE_PROMPT: &str = "Merge the visible portable checkpoints and any visi
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContextAssessment {
+    pub provider_id: String,
+    pub model_id: String,
     pub input_estimate: Option<u64>,
     pub output_reserve: Option<u64>,
     pub context_limit: Option<u64>,
@@ -38,10 +42,18 @@ pub fn assess(
     let output_reserve = positive_integer(payload.get("max_output_tokens"))
         .or_else(|| positive_integer(payload.get("max_tokens")))
         .or_else(|| positive_integer(model.get("output_limit")));
-    let (context_limit, source, confidence) = context_window(provider, model);
-    let safe_input_limit = context_limit
-        .zip(output_reserve)
-        .map(|(limit, output)| limit.saturating_sub(output.saturating_add(SAFETY_RESERVE_TOKENS)));
+    let limits = calibration::limits(
+        provider,
+        model,
+        protocol,
+        output_reserve.map(|output| output.saturating_add(SAFETY_RESERVE_TOKENS)),
+    );
+    let (context_limit, safe_input_limit, source, confidence) = (
+        limits.context,
+        limits.input,
+        limits.source,
+        limits.confidence,
+    );
     let decision = match (input_estimate, safe_input_limit) {
         (None, Some(_)) => "block",
         (Some(estimate), Some(limit)) if estimate > limit => {
@@ -57,6 +69,8 @@ pub fn assess(
         _ => "allow",
     };
     ContextAssessment {
+        provider_id: emp_core::capability_view::safe_id(provider.get("id"), "unknown"),
+        model_id: emp_core::capability_view::safe_id(model.get("id"), "unknown"),
         input_estimate,
         output_reserve,
         context_limit,
@@ -480,7 +494,7 @@ fn context_window(
             .and_then(Value::as_f64)
             .unwrap_or(100.0);
         if percentage.is_finite() && percentage > 0.0 && percentage <= 100.0 {
-            limit = ((limit as f64 * percentage / 100.0).round() as u64).max(1);
+            limit = ((limit as f64 * percentage / 100.0).round_ties_even() as u64).max(1);
         }
         let provenance = source
             .get("capability_sources")
@@ -501,8 +515,13 @@ fn context_window(
                 "inferred" => 0.35,
                 _ => 0.0,
             });
-        if name != "unknown" {
-            return (Some(limit), name.to_owned(), confidence.clamp(0.0, 1.0));
+        if matches!(
+            name,
+            "official" | "advertised" | "observed" | "manual" | "inferred"
+        ) && confidence.is_finite()
+            && (0.0..=1.0).contains(&confidence)
+        {
+            return (Some(limit), name.to_owned(), confidence);
         }
     }
     (None, "unknown".to_owned(), 0.0)

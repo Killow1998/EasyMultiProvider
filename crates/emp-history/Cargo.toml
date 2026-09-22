@@ -6,5 +6,7 @@ license.workspace = true
 description = "Codex-visible history continuity and portable checkpoint projection."
 
 [dependencies]
+emp-core = { path = "../emp-core" }
+time = { version = "0.3.55", features = ["parsing"] }
 base64 = "0.22"
 serde_json = { workspace = true }

@@ -1,9 +1,7 @@
 //! History reconstruction and destination context preparation.
 
 use crate::app::ServerState;
-use crate::http::response::json_error_response;
 use crate::http::response::response;
-use crate::http::response::status_text;
 use crate::services::compaction::compaction_summary_body;
 use crate::services::compaction::has_trailing_compaction_trigger;
 use crate::services::compaction::response_output_text;
@@ -86,7 +84,7 @@ pub(crate) fn prepare_history(
 pub(crate) enum DestinationPrepareError {
     Router(RouterError),
     History(&'static str),
-    Context(emp_history::context::ContextAssessment),
+    Context(Box<emp_history::context::ContextAssessment>),
 }
 
 pub(crate) fn prepare_destination_context(
@@ -125,7 +123,7 @@ pub(crate) fn prepare_destination_context(
         return Ok(body.clone());
     }
     let Some(safe_budget) = assessment.safe_input_limit else {
-        return Err(DestinationPrepareError::Context(assessment));
+        return Err(DestinationPrepareError::Context(assessment.into()));
     };
     let router = ExternalRouter::new(&state.backend.transport.client);
     let mut summary_failure = None;
@@ -153,6 +151,9 @@ pub(crate) fn prepare_destination_context(
         },
     )
     .map_err(|reason| {
+        if reason == "compaction_unit_too_large" {
+            return DestinationPrepareError::Context(Box::new(assessment.clone()));
+        }
         summary_failure.take().map_or(
             DestinationPrepareError::History(reason),
             DestinationPrepareError::Router,
@@ -172,7 +173,7 @@ pub(crate) fn prepare_destination_context(
         &payload,
     );
     if final_assessment.blocked() {
-        return Err(DestinationPrepareError::Context(final_assessment));
+        return Err(DestinationPrepareError::Context(final_assessment.into()));
     }
     Ok(compacted)
 }
@@ -188,13 +189,14 @@ pub(crate) fn destination_error_response(error: DestinationPrepareError) -> Vec<
             let limit = assessment
                 .safe_input_limit
                 .map_or_else(|| "unknown".to_owned(), |value| value.to_string());
-            json_error_response(
-                413,
-                status_text(413),
-                &format!(
-                    "context length exceeded: estimated input {estimate} tokens, safe input limit {limit}; next action: reduce input or use native remote compaction"
-                ),
-                Some("context_length_exceeded"),
+            let body = serde_json::json!({"error":{
+                "code":"context_length_exceeded", "type":"context_length_exceeded",
+                "message":format!("context length exceeded: estimated input {estimate} tokens, safe input limit {limit}; provider {}, model {}; next action: reduce input or use native remote compaction", assessment.provider_id, assessment.model_id)
+            }});
+            response(
+                "HTTP/1.1 413 Payload Too Large",
+                "application/json",
+                &serde_json::to_vec(&body).expect("context error JSON"),
                 &[],
             )
         }

@@ -389,12 +389,11 @@ performance gains.
   This measures local build storage, not release size or runtime memory.
 
 Remaining product acceptance work includes complete management operations,
-runtime synchronization and offline CLI parity, usage/diagnostic persistence,
-service ownership/draining, update/rollback packaging and consumer/performance
+CLI desktop/help parity, usage/diagnostic persistence, startup target recovery,
+request draining, update/rollback packaging and full consumer/performance
 verification. The full rewrite is not complete.
 
-The next local control-plane work replaces line-based TOML edits with
-toml_edit, preserving quoted keys, multiline instructions, comments and nested
+Integration configuration now uses toml_edit, preserving quoted keys, multiline instructions, comments and nested
 configuration in real Python/Rust enable/restore round trips. The service now
 holds Python's state/service.lock for its lifetime and uses the same lease.lock
 path as the Python application. A competing Python or Rust process is rejected
@@ -410,7 +409,7 @@ Both implementations consume the same Python-created integration lease.
 Integration and runtime persistence now reuse emp-state's atomic writer rather
 than a second temporary-file implementation. User-selected paths are resolved
 before acquiring service ownership, matching Python's startup path handling.
-CLI help/desktop defaults and live runtime synchronization still need work.
+CLI help/desktop defaults still need work. Live runtime verification is described below.
 
 Runtime verification now queries the actual shared Codex control WebSocket,
 including paginated model lists and model names/descriptions. Enable, restore,
@@ -422,9 +421,7 @@ verify matching/stale catalogs and the empty-picker rejection through real
 HTTP and control sockets. Seventeen process scenarios and the additional
 empty-picker scenario passed; workspace tests with the live Python oracle,
 formatting and warnings-denied clippy passed locally. Runtime installation
-discovery/selection remains separate outstanding work. Next, reuse the actual
-Codex 0.155.0 consumer scripts against the Rust process before completing the
-remaining backend operations. No production service was switched or CI run.
+discovery/selection and actual Codex consumer verification followed below. No production service was switched or CI run.
 
 The existing official Codex consumer scripts now accept EMP_RUST_BINARY and
 launch the Rust process while keeping their upstream fixtures and observable
@@ -444,8 +441,7 @@ Nineteen Python/Rust process scenarios pass, including a three-protocol tool
 namespace/history/choice round trip. Workspace all-target tests with live
 Python oracles and warnings-denied clippy pass locally. tools/test_codex_runtime.py
 is the isolated consumer entry point; tests use the lowest advertised effort.
-Runtime discovery/selection and the remaining management/lifecycle operations
-are next. These results do not establish full migration or performance parity.
+The runtime discovery work follows below. These results do not establish full migration or performance parity.
 
 Codex installation scanning and source selection now use bounded version
 probes and a 60-second inventory cache. Known app/plugin, managed-package,
@@ -456,8 +452,21 @@ multiple installation priorities, target selection, invalid selections and
 restart output using the same executable files. Focused E2E, formatting,
 warnings-denied clippy and the full workspace with live Python oracles passed.
 The platform layouts are implemented but Windows/macOS execution still awaits
-cross-platform acceptance. Next: connect context capability status and the
-remaining management observability, preserving existing frontend assets.
+cross-platform acceptance.
+
+The unchanged UI's /api/capabilities now reports protocol provenance and
+context budgets. Fresh explicit-failure evidence limits input directly;
+output reserves are not subtracted from that bound twice. Successful external
+requests persist numeric, deployment-bound calibration, with at most eight
+records per model. Real HTTP tests reuse Python's context fixture to verify
+an allowed request and rejection of an oversized active input without
+truncation or an upstream call. They exposed and fixed a Rust 409/history
+error that Python reports as a 413/context error. The complete error JSON
+now matches. All 21 process differential scenarios, warnings-denied clippy
+and workspace tests with live Python oracles pass locally. Observation
+comparisons normalize only generated observation timestamps and IDs.
+Further native/stream failure observation hooks, diagnostics/usage, startup
+recovery and the remaining management/lifecycle work remain in progress.
 
 ## Historical verification evidence
 

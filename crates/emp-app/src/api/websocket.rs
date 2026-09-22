@@ -612,6 +612,14 @@ pub(crate) fn serve_responses_websocket(
                             return;
                         }
                         if terminal_stream_event(&event.body) {
+                            if event.body["type"] == "response.completed" {
+                                crate::services::context::record(
+                                    state,
+                                    &route,
+                                    &Value::Object(request_body.clone()),
+                                    true,
+                                );
+                            }
                             break;
                         }
                     }

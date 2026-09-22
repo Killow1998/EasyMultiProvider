@@ -893,3 +893,5 @@ mod tests {
         assert_eq!(admission.available_bytes, None);
     }
 }
+
+pub mod capability_view;

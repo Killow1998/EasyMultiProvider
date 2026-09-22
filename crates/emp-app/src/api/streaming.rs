@@ -175,11 +175,15 @@ pub(crate) fn serve_external_stream(
                 Ok(upstream) => {
                     let completed = relay_external_stream(downstream, state, upstream)?;
                     if completed {
+                        crate::services::context::record(state, &candidate, body, true);
                         persist_protocol_observation(state, &candidate);
                     }
                     return Ok(());
                 }
                 Err(error) => {
+                    if error.error_class() == emp_transport::FailureClass::ContextLengthExceeded {
+                        crate::services::context::record(state, &candidate, body, false);
+                    }
                     if let Some(delay) = external_retry_delay(&error, attempt, &candidate) {
                         thread::sleep(delay);
                         continue;

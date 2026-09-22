@@ -274,7 +274,7 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             if request.method == RequestMethod::Get
                 && matches!(
                     path,
-                    "/api/models/vision-test-image" | "/api/request-limits"
+                    "/api/models/vision-test-image" | "/api/request-limits" | "/api/capabilities"
                 )
             {
                 return inspection::read_request(request, state);
