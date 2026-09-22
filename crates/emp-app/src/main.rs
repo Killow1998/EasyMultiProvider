@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -57,6 +57,9 @@ const LOGIN_HTML_BYTES: &[u8] = LOGIN_HTML.as_bytes();
 const MAX_HEADER_BYTES: usize = 8 * 1024;
 const MAX_PRE_OUTPUT_BUFFER_BYTES: usize = 1024 * 1024;
 const MAX_PRE_OUTPUT_BUFFER_EVENTS: usize = 256;
+const QUOTA_EVENT_SLOT_LIMIT: usize = 4;
+const QUOTA_EVENT_KEEP_ALIVE: Duration = Duration::from_secs(15);
+const QUOTA_SAMPLE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug)]
 pub enum AppError {
@@ -1649,6 +1652,99 @@ fn responses_request(
     ))
 }
 
+struct QuotaEventSlot<'a> {
+    active: &'a AtomicUsize,
+}
+
+impl QuotaEventSlot<'_> {
+    fn acquire(active: &AtomicUsize) -> Option<QuotaEventSlot<'_>> {
+        active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < QUOTA_EVENT_SLOT_LIMIT).then_some(count + 1)
+            })
+            .ok()
+            .map(|_| QuotaEventSlot { active })
+    }
+}
+
+impl Drop for QuotaEventSlot<'_> {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn serve_quota_events(stream: &mut TcpStream, request: Request<'_>, state: &ServerState, now: f64) {
+    if !same_origin(request, state.port) {
+        let _ = stream.write_all(&cross_origin_response("management session is required"));
+        let _ = stream.flush();
+        return;
+    }
+    let cookie = request.session_cookie();
+    if !state.sessions.contains(cookie.as_deref(), now) {
+        let _ = stream.write_all(&unauthorized_response());
+        let _ = stream.flush();
+        return;
+    }
+    let Some(_slot) = QuotaEventSlot::acquire(&state.backend.quota_event_slots) else {
+        let response = json_error_response(
+            503,
+            status_text(503),
+            "Too many quota subscribers",
+            None,
+            &[("Retry-After", "15")],
+        );
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+        return;
+    };
+    if stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .is_err()
+        || stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\nConnection: close\r\n\r\n",
+            )
+            .is_err()
+        || stream.flush().is_err()
+    {
+        return;
+    }
+    let mut observed_revision = u64::MAX;
+    loop {
+        if state.shutdown.load(Ordering::Acquire) {
+            break;
+        }
+        let revision = match state.backend.quota_revision.lock() {
+            Ok(revision) => revision,
+            Err(_) => break,
+        };
+        let (revision, _) = match state.backend.quota_condition.wait_timeout_while(
+            revision,
+            QUOTA_EVENT_KEEP_ALIVE,
+            |revision| *revision == observed_revision && !state.shutdown.load(Ordering::Acquire),
+        ) {
+            Ok(result) => result,
+            Err(_) => break,
+        };
+        let current = *revision;
+        drop(revision);
+        if state.shutdown.load(Ordering::Acquire)
+            || !state.sessions.contains(cookie.as_deref(), system_now())
+        {
+            break;
+        }
+        let frame: &[u8] = if current != observed_revision {
+            b"event: quota-updated\ndata: {}\n\n"
+        } else {
+            b": keep-alive\n\n"
+        };
+        observed_revision = current;
+        if stream.write_all(frame).is_err() || stream.flush().is_err() {
+            break;
+        }
+    }
+}
+
 fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     if stream.set_nonblocking(false).is_err()
         || stream
@@ -1674,6 +1770,13 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
                 ResponsesRequestResult::Buffered(response) => Some(response),
                 ResponsesRequestResult::Streamed => None,
             }
+        }
+        Some(request)
+            if request.method == RequestMethod::Get
+                && request.raw_path() == "/api/accounts/events" =>
+        {
+            serve_quota_events(&mut stream, request, state, system_now());
+            None
         }
         Some(request)
             if request.method == RequestMethod::Post
@@ -1980,7 +2083,7 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
         .inspect(|_| record_quota_snapshot(state, account_id, &quota))
 }
 
-fn refresh_account_by_id(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
+fn refresh_account_by_id_inner(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
     if account_id != "@native" {
         return refresh_imported_account(state, account_id);
     }
@@ -2005,6 +2108,33 @@ fn refresh_account_by_id(state: &ServerState, account_id: &str) -> Result<Value,
         .clone();
     record_quota_snapshot(state, account_id, &quota);
     Ok(native_account_snapshot(state, &config))
+}
+
+fn notify_quota_update(state: &ServerState, account_id: &str, error: Option<&str>) {
+    if let Ok(mut errors) = state.backend.quota_refresh_errors.lock() {
+        match error {
+            Some(error) => {
+                errors.insert(account_id.to_owned(), error.to_owned());
+            }
+            None => {
+                errors.remove(account_id);
+            }
+        }
+    }
+    if let Ok(mut revision) = state.backend.quota_revision.lock() {
+        *revision = revision.wrapping_add(1);
+        state.backend.quota_condition.notify_all();
+    }
+}
+
+fn refresh_account_by_id(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
+    let result = refresh_account_by_id_inner(state, account_id);
+    notify_quota_update(
+        state,
+        account_id,
+        result.as_ref().err().map(|error| error.code()),
+    );
+    result
 }
 
 fn quota_history_response(
@@ -2185,24 +2315,14 @@ fn management_quota_request(
             }
         };
         let (account_snapshot, refresh_error) = match refresh_account_by_id(state, &account) {
-            Ok(snapshot) => {
-                if let Ok(mut errors) = state.backend.quota_refresh_errors.lock() {
-                    errors.remove(&account);
-                }
-                (snapshot, Value::Null)
-            }
-            Err(error) => {
-                if let Ok(mut errors) = state.backend.quota_refresh_errors.lock() {
-                    errors.insert(account.clone(), error.code().to_owned());
-                }
-                (
-                    Value::Null,
-                    serde_json::json!({
-                        "code": error.code(),
-                        "message": error.to_string(),
-                    }),
-                )
-            }
+            Ok(snapshot) => (snapshot, Value::Null),
+            Err(error) => (
+                Value::Null,
+                serde_json::json!({
+                    "code": error.code(),
+                    "message": error.to_string(),
+                }),
+            ),
         };
         let response_body = serde_json::to_vec(&serde_json::json!({
             "outcome": outcome,
@@ -2215,25 +2335,17 @@ fn management_quota_request(
     let refreshed = refresh_account_by_id(state, &account);
     match refreshed {
         Ok(account_snapshot) => {
-            if let Ok(mut errors) = state.backend.quota_refresh_errors.lock() {
-                errors.remove(&account);
-            }
             let body = serde_json::to_vec(&serde_json::json!({"account": account_snapshot}))
                 .expect("account snapshot is serializable");
             response("HTTP/1.1 200 OK", "application/json", &body, &[])
         }
-        Err(error) => {
-            if let Ok(mut errors) = state.backend.quota_refresh_errors.lock() {
-                errors.insert(account, error.code().to_owned());
-            }
-            json_error_response(
-                503,
-                status_text(503),
-                &error.to_string(),
-                Some(error.code()),
-                &[],
-            )
-        }
+        Err(error) => json_error_response(
+            503,
+            status_text(503),
+            &error.to_string(),
+            Some(error.code()),
+            &[],
+        ),
     }
 }
 
@@ -2356,6 +2468,108 @@ struct BackendState {
     quota_refresh_errors: Mutex<BTreeMap<String, String>>,
     quota_refresh_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
     quota_history: QuotaHistoryStore,
+    quota_revision: Mutex<u64>,
+    quota_condition: Condvar,
+    quota_event_slots: AtomicUsize,
+    quota_sampler_wait: Mutex<()>,
+    quota_sampler_condition: Condvar,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct QuotaSampleCounts {
+    sampled: usize,
+    failed: usize,
+}
+
+fn quota_sample_targets(state: &ServerState) -> Vec<String> {
+    let mut targets = Vec::new();
+    if regular_file(&state.backend.native_auth_path) {
+        targets.push("@native".to_owned());
+    }
+    let accounts = state
+        .backend
+        .config
+        .lock()
+        .ok()
+        .and_then(|config| config.get("accounts").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
+    for account in accounts {
+        let Some(account_id) = account.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if account
+            .get("auth_file")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            continue;
+        }
+        if quota_owner_key(state, account_id).as_deref() == Ok(account_id) {
+            targets.push(account_id.to_owned());
+        }
+    }
+    targets
+}
+
+fn refresh_account_serialized(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
+    let refresh_lock = state
+        .backend
+        .quota_refresh_locks
+        .lock()
+        .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?
+        .entry(account_id.to_owned())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone();
+    let _guard = refresh_lock
+        .lock()
+        .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?;
+    refresh_account_by_id(state, account_id)
+}
+
+fn sample_quotas_once(state: &Arc<ServerState>) -> QuotaSampleCounts {
+    let targets = quota_sample_targets(state);
+    if targets.is_empty() {
+        return QuotaSampleCounts::default();
+    }
+    let worker_count = 4.min(targets.len());
+    let counts = Arc::new(Mutex::new(QuotaSampleCounts::default()));
+    let mut workers = Vec::with_capacity(worker_count);
+    for offset in 0..worker_count {
+        let state = Arc::clone(state);
+        let counts = Arc::clone(&counts);
+        let batch = targets
+            .iter()
+            .skip(offset)
+            .step_by(worker_count)
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Ok(worker) = thread::Builder::new()
+            .name("emp-quota-refresh".to_owned())
+            .spawn(move || {
+                for account_id in batch {
+                    if state.shutdown.load(Ordering::Acquire) {
+                        return;
+                    }
+                    let sampled = refresh_account_serialized(&state, &account_id).is_ok();
+                    if let Ok(mut counts) = counts.lock() {
+                        if sampled {
+                            counts.sampled += 1;
+                        } else {
+                            counts.failed += 1;
+                        }
+                    }
+                }
+            })
+        {
+            workers.push(worker);
+        }
+    }
+    for worker in workers {
+        let _ = worker.join();
+    }
+    counts
+        .lock()
+        .map_or_else(|_| QuotaSampleCounts::default(), |counts| *counts)
 }
 
 impl ServerHandle {
@@ -2418,6 +2632,11 @@ impl ServerHandle {
             quota_refresh_errors: Mutex::new(BTreeMap::new()),
             quota_refresh_locks: Mutex::new(BTreeMap::new()),
             quota_history: QuotaHistoryStore::new(state_root.join("quota_history.sqlite3")),
+            quota_revision: Mutex::new(0),
+            quota_condition: Condvar::new(),
+            quota_event_slots: AtomicUsize::new(0),
+            quota_sampler_wait: Mutex::new(()),
+            quota_sampler_condition: Condvar::new(),
         };
         Self::start_with_session(host, port, session_path, session, backend)
     }
@@ -2457,6 +2676,7 @@ impl ServerHandle {
             workers,
         };
         handle.add_worker()?;
+        handle.add_quota_sampler()?;
         Ok(handle)
     }
 
@@ -2490,6 +2710,47 @@ impl ServerHandle {
         Ok(())
     }
 
+    fn add_quota_sampler(&self) -> Result<(), AppError> {
+        let state = Arc::clone(&self.state);
+        let worker = thread::Builder::new()
+            .name("emp-quota-sampler".to_owned())
+            .spawn(move || {
+                while !state.shutdown.load(Ordering::Acquire) {
+                    let deadline = Instant::now() + QUOTA_SAMPLE_INTERVAL;
+                    let mut wait = match state.backend.quota_sampler_wait.lock() {
+                        Ok(wait) => wait,
+                        Err(_) => return,
+                    };
+                    loop {
+                        if state.shutdown.load(Ordering::Acquire) {
+                            return;
+                        }
+                        let now = Instant::now();
+                        if now >= deadline {
+                            break;
+                        }
+                        let result = state
+                            .backend
+                            .quota_sampler_condition
+                            .wait_timeout(wait, deadline.saturating_duration_since(now));
+                        match result {
+                            Ok((next, _)) => wait = next,
+                            Err(_) => return,
+                        }
+                    }
+                    drop(wait);
+                    if !state.shutdown.load(Ordering::Acquire) {
+                        sample_quotas_once(&state);
+                    }
+                }
+            })
+            .map_err(AppError::Io)?;
+        if let Ok(mut workers) = self.workers.lock() {
+            workers.push(worker);
+        }
+        Ok(())
+    }
+
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
@@ -2513,6 +2774,8 @@ impl ServerHandle {
 
     pub fn shutdown(self) -> Result<(), AppError> {
         self.state.shutdown.store(true, Ordering::Release);
+        self.state.backend.quota_condition.notify_all();
+        self.state.backend.quota_sampler_condition.notify_all();
         let workers = match Arc::try_unwrap(self.workers) {
             Ok(workers) => workers,
             Err(_) => return Err(AppError::ServerStopped),
@@ -2567,6 +2830,7 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader};
     use std::net::TcpStream;
     use std::process::Command;
     use std::sync::mpsc;
@@ -2675,6 +2939,55 @@ mod tests {
             .expect("write request head");
         stream.write_all(body).expect("write request body");
         complete_response(&mut stream)
+    }
+
+    fn read_sse_frame(reader: &mut BufReader<TcpStream>) -> String {
+        let mut frame = String::new();
+        loop {
+            let mut line = String::new();
+            let count = reader.read_line(&mut line).expect("read SSE frame");
+            assert!(count > 0, "SSE stream ended before a complete frame");
+            if line == "\r\n" || line == "\n" {
+                return frame;
+            }
+            frame.push_str(&line);
+        }
+    }
+
+    fn open_quota_events(server: &ServerHandle, cookie: &str) -> BufReader<TcpStream> {
+        let mut stream = TcpStream::connect(server.local_addr()).expect("connect SSE");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("SSE response timeout");
+        stream
+            .write_all(
+                format!(
+                    "GET /api/accounts/events HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{cookie}\r\nConnection: close\r\n\r\n",
+                    server.local_addr().port()
+                )
+                .as_bytes(),
+            )
+            .expect("write SSE request");
+        let mut reader = BufReader::new(stream);
+        let mut head = String::new();
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read SSE headers");
+            assert!(!line.is_empty(), "SSE response ended before headers");
+            if line == "\r\n" {
+                break;
+            }
+            head.push_str(&line);
+        }
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
+        assert!(head.contains("Content-Type: text/event-stream\r\n"));
+        assert!(head.contains("Cache-Control: no-store\r\n"));
+        assert!(head.contains("X-Accel-Buffering: no\r\n"));
+        assert_eq!(
+            read_sse_frame(&mut reader),
+            "event: quota-updated\ndata: {}\n"
+        );
+        reader
     }
 
     fn open_post_stream(
@@ -2956,6 +3269,68 @@ mod tests {
         server.shutdown().expect("shutdown");
     }
 
+    #[test]
+    fn quota_events_are_bounded_authenticated_and_revision_driven() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config = canonical_root(&directory).join("config.json");
+        std::fs::write(&config, b"{}").expect("write config");
+        let server = ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config)
+            .expect("start quota event server");
+        let cookie = session_cookie_header(&server);
+
+        let denied = request(&server, "/api/accounts/events", &[]);
+        assert!(
+            denied.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
+            "{denied}"
+        );
+        let cross_origin = request(
+            &server,
+            "/api/accounts/events",
+            &[&cookie, "Origin: https://example.invalid"],
+        );
+        assert!(
+            cross_origin.starts_with("HTTP/1.1 403 Forbidden\r\n"),
+            "{cross_origin}"
+        );
+
+        let mut streams = (0..QUOTA_EVENT_SLOT_LIMIT)
+            .map(|_| open_quota_events(&server, &cookie))
+            .collect::<Vec<_>>();
+        let excess = request(&server, "/api/accounts/events", &[&cookie]);
+        assert!(
+            excess.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+            "{excess}"
+        );
+        assert!(excess.contains("Retry-After: 15\r\n"));
+
+        notify_quota_update(&server.state, "@native", Some("quota_auth_required"));
+        assert_eq!(
+            read_sse_frame(&mut streams[0]),
+            "event: quota-updated\ndata: {}\n"
+        );
+        let accounts = request(&server, "/api/accounts", &[&cookie]);
+        assert!(accounts.starts_with("HTTP/1.1 200 OK\r\n"), "{accounts}");
+        let accounts: Value = serde_json::from_str(
+            accounts
+                .split_once("\r\n\r\n")
+                .expect("response separator")
+                .1,
+        )
+        .expect("account state");
+        assert_eq!(accounts["refresh_errors"]["@native"], "quota_auth_required");
+
+        notify_quota_update(&server.state, "@native", None);
+        assert_eq!(
+            read_sse_frame(&mut streams[0]),
+            "event: quota-updated\ndata: {}\n"
+        );
+        server.shutdown().expect("shutdown");
+        let mut tail = Vec::new();
+        streams[0]
+            .read_to_end(&mut tail)
+            .expect("quota stream closes during shutdown");
+    }
+
     #[cfg(unix)]
     #[test]
     fn native_and_imported_quota_refresh_cross_the_management_boundary() {
@@ -3023,7 +3398,7 @@ for line in sys.stdin:
             auth["tokens"]["access_token"] = "imported-rotated"
             (home / "auth.json").write_text(json.dumps(auth))
         elif started == "imported-rotated":
-            assert request["params"] == {"refreshToken": True}
+            assert request["params"] in ({"refreshToken": False}, {"refreshToken": True})
         print(json.dumps({"id": request["id"], "result": {"account": {"email": "xian@example.com", "planType": "pro"}}}), flush=True)
     elif method == "account/rateLimits/read":
         if started == "imported-original":
@@ -3265,6 +3640,14 @@ for line in sys.stdin:
         assert!(
             missing_history.starts_with("HTTP/1.1 404 Not Found\r\n"),
             "{missing_history}"
+        );
+        assert_eq!(
+            sample_quotas_once(&server.state),
+            QuotaSampleCounts {
+                sampled: 2,
+                failed: 0,
+            },
+            "the sampler must refresh native and the unique imported account while skipping the duplicate"
         );
         server.shutdown().expect("shutdown");
     }

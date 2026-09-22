@@ -135,7 +135,7 @@ Progress evidence on 2026-09-21:
   match, and falls back for complete or streamed requests only after an
   explicit pre-output 404/405/415/501 rejection. Candidate order has a live
   Python oracle and real loopback tests prove Chat-to-Responses fallback. With
-  one local build job and low process priority, the 26-test `emp-app` binary
+  one local build job and low process priority, the 27-test `emp-app` binary
   suite, focused Router oracle and warnings-denied crate clippy pass. External
   complete and streamed requests now also make Python's single route-local
   pre-output retry for HTTP 504 or an unclassified HTTP 429 whose retry delay is
@@ -159,8 +159,10 @@ Progress evidence on 2026-09-21:
   write Python-compatible five-minute history buckets to the same bounded,
   private SQLite format; plan changes, swapped window positions, old-schema
   migration, duplicate-account ownership, and the authenticated history API
-  have live-oracle and endpoint coverage. Periodic background sampling and
-  quota events, native HTTP/WebSocket generation, and pinned-Codex tool round
+  have live-oracle and endpoint coverage. A bounded four-worker sampler now
+  refreshes unique owners every five minutes, while the four-slot authenticated
+  SSE endpoint sends revision events, keep-alives, refresh error changes, and
+  prompt shutdown. Native HTTP/WebSocket generation and pinned-Codex tool round
   trips remain.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
