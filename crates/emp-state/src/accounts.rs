@@ -5,7 +5,7 @@
 //! values are passed through as opaque JSON objects.
 
 use serde_json::{Map, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -129,6 +129,82 @@ pub fn same_account_auth(left: &Value, right: &Value) -> bool {
         return left_accounts == right_accounts;
     }
     left.iter().any(|identity| right.contains(identity))
+}
+
+/// Catalog/UI duplicate detection uses any shared identity, unlike credential
+/// replacement's stricter `same_account_auth` account-ID comparison.
+pub fn duplicate_account_status(
+    native: Option<&Value>,
+    accounts: &[(String, Value)],
+) -> BTreeMap<String, String> {
+    let mut seen = BTreeMap::new();
+    if let Some(native) = native.filter(|auth| validate_auth_json(auth).is_ok()) {
+        for identity in auth_identities(native) {
+            seen.insert(identity, "当前 Codex 登录".to_owned());
+        }
+    }
+    let mut duplicates = BTreeMap::new();
+    for (id, auth) in accounts {
+        if validate_auth_json(auth).is_err() {
+            continue;
+        }
+        let identities = auth_identities(auth);
+        if let Some(source) = identities.iter().find_map(|identity| seen.get(identity)) {
+            duplicates.insert(id.clone(), source.clone());
+            continue;
+        }
+        for identity in identities {
+            seen.insert(identity, id.clone());
+        }
+    }
+    duplicates
+}
+
+/// Move legacy duplicate-account hidden models to the native owner once.
+/// Inputs are normalized configurations; order and unrelated state survive.
+pub fn migrate_duplicate_native_visibility(
+    config: &Value,
+    duplicates: &BTreeMap<String, String>,
+) -> (Value, bool) {
+    let mut result = config.clone();
+    let mut hidden = config
+        .get("native_hidden_models")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut changed = false;
+    if let Some(accounts) = result.get_mut("accounts").and_then(Value::as_array_mut) {
+        for account in accounts {
+            let id = account
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if duplicates
+                .get(id)
+                .is_none_or(|source| source != "当前 Codex 登录")
+            {
+                continue;
+            }
+            let legacy = account
+                .get("hidden_models")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if !legacy.is_empty() {
+                for model in legacy {
+                    if !hidden.contains(&model) {
+                        hidden.push(model);
+                    }
+                }
+                account["hidden_models"] = Value::Array(Vec::new());
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        result["native_hidden_models"] = Value::Array(hidden);
+    }
+    (result, changed)
 }
 
 /// Apply Python `str.strip()` semantics, including the four C0 file separators.
