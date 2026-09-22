@@ -1,0 +1,22 @@
+{
+  "status": "differentially_implemented",
+  "source": [
+    "easy_multi_provider/protocol_projection.py:responses_to_anthropic",
+    "easy_multi_provider/protocol_projection.py:_response_from_anthropic",
+    "tests/test_router.py",
+    "tests/test_v06_final_review.py"
+  ],
+  "rust_evidence": [
+    "crates/emp-protocol/tests/anthropic_projection.rs",
+    "crates/emp-protocol/tests/anthropic_python_oracle.rs"
+  ],
+  "covered_cases": [
+    "instructions, images, structured output, reasoning effort and generation controls",
+    "function and custom tool definitions, choices, calls, outputs and parallel boundaries",
+    "collaboration turns, standalone tool output and portable compaction history",
+    "complete text, function calls, custom calls, cache usage and incomplete terminal reasons",
+    "invalid or lossy request content fails before transport with content-free diagnostics",
+    "malformed or unsupported upstream content fails without entering Codex history"
+  ],
+  "side_effects": ["none; identifiers are injected by the caller"]
+}

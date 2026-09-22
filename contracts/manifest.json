@@ -38,6 +38,16 @@
       "fixture": "protocol/chat-reasoning-answer.json"
     },
     {
+      "id": "protocol.anthropic.python-rust",
+      "level": "api",
+      "source": "easy_multi_provider/protocol_projection.py:responses_to_anthropic and _response_from_anthropic",
+      "transport": "http",
+      "dialect": "anthropic_messages",
+      "normalization": ["generated response and message identifiers retain their type prefixes and referential equality"],
+      "side_effects": ["none; request and complete-response projections are pure"],
+      "fixture": "protocol/python-anthropic-projection.json"
+    },
+    {
       "id": "transport.sse-json.python-rust",
       "level": "events",
       "source": "easy_multi_provider/transport.py:sse_json_events and tests/test_sse_failure_reasons.py",
