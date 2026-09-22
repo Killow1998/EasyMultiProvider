@@ -11,6 +11,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod merged_catalog;
 pub mod quota;
 pub mod quota_history;
 
@@ -140,7 +141,7 @@ pub fn account_auth_headers(auth: &Value) -> Option<BTreeMap<String, String>> {
     Some(headers)
 }
 
-fn account_catalog<F>(
+pub fn account_catalog<F>(
     config: &Map<String, Value>,
     account: &Map<String, Value>,
     account_headers: &mut F,
