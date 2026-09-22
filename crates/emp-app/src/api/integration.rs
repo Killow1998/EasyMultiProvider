@@ -113,7 +113,7 @@ pub(crate) fn management_integration_request(
             let dynamic = native_auth_document(&state.backend.accounts.native_auth_path)
                 .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
                 .is_some();
-            let base_url = format!("http://127.0.0.1:{}/v1", state.port);
+            let base_url = state.base_url.clone();
             let path = catalog_path.to_string_lossy();
             if dynamic {
                 let status = match manager.status() {
@@ -141,7 +141,12 @@ pub(crate) fn management_integration_request(
                 true,
             )
         }
-        "restore" => manager.restore(),
+        "restore" => {
+            if state.backend.integration.search.restore().is_err() {
+                return unavailable(409);
+            }
+            manager.restore()
+        }
         _ => return json_error_response(404, status_text(404), "not found", None, &[]),
     };
     let result = match result {
@@ -149,6 +154,13 @@ pub(crate) fn management_integration_request(
         Err(_) => return unavailable(409),
     };
     if result.ok() {
+        if result.state == "active" && crate::services::integration::sync_search(state).is_err() {
+            let _ = manager.restore();
+            return unavailable(409);
+        }
+        if let Ok(mut conflicts) = state.backend.integration.startup_conflicts.lock() {
+            conflicts.clear();
+        }
         let active = result.state == "active";
         state
             .backend

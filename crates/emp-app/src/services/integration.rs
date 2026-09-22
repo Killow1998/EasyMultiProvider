@@ -17,6 +17,17 @@ pub(crate) fn integration_summary_with_result(
         .manager
         .status()
         .map_err(|error| error.to_string())?;
+    let conflicts = state
+        .backend
+        .integration
+        .startup_conflicts
+        .lock()
+        .map_err(|_| "integration state is unavailable")?
+        .clone();
+    if !conflicts.is_empty() {
+        status.state = "conflict".to_owned();
+        status.conflicts = conflicts;
+    }
     if let Some(result) = result.filter(|result| !result.ok()) {
         status.state = "conflict".to_owned();
         status.relation = result.relation.clone();
@@ -74,7 +85,9 @@ fn integration_summary_from_status(state: &ServerState, status: &IntegrationStat
 
 pub(crate) struct IntegrationState {
     pub(crate) manager: IntegrationManager,
+    pub(crate) search: emp_integration::search::SearchFeatureManager,
     pub(crate) owned: AtomicBool,
+    pub(crate) startup_conflicts: std::sync::Mutex<Vec<String>>,
     pub(crate) runtime: RuntimeState,
     pub(crate) inventory: emp_codex::runtime_inventory::RuntimeInventory,
 }
@@ -87,8 +100,13 @@ impl IntegrationState {
     ) -> Self {
         let runtime = RuntimeState::new(manager.lease_path().with_file_name("runtime.json"));
         Self {
+            search: emp_integration::search::SearchFeatureManager::new(
+                manager.config_path().to_owned(),
+                manager.lease_path().with_file_name("search.json"),
+            ),
             manager,
             owned: AtomicBool::new(false),
+            startup_conflicts: std::sync::Mutex::new(Vec::new()),
             runtime,
             inventory: emp_codex::runtime_inventory::RuntimeInventory::new(
                 codex_home,
@@ -107,6 +125,9 @@ impl IntegrationState {
             .manager
             .operation_lock()
             .map_err(|_| crate::error::AppError::ServerStopped)?;
+        self.search
+            .restore()
+            .map_err(|_| crate::error::AppError::ServerStopped)?;
         let result = self
             .manager
             .restore()
@@ -117,4 +138,16 @@ impl IntegrationState {
         self.owned.store(false, Ordering::Release);
         Ok(())
     }
+}
+
+pub(crate) fn sync_search(state: &ServerState) -> Result<(), ()> {
+    let enabled = state.backend.configuration.config.lock().map_err(|_| ())?["subscription_search"]
+        ["enabled"]
+        == true;
+    state
+        .backend
+        .integration
+        .search
+        .apply(enabled)
+        .map_err(|_| ())
 }

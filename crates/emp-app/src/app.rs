@@ -36,6 +36,7 @@ pub(crate) struct ServerState {
     pub(crate) bootstrap: BootstrapToken,
     pub(crate) backend: BackendState,
     pub(crate) port: u16,
+    pub(crate) base_url: String,
 }
 
 pub(crate) struct BackendState {

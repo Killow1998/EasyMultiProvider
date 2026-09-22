@@ -197,6 +197,7 @@ fn update_configuration(request: Request<'_>, state: &ServerState, incoming: &Va
     };
     *current = saved;
     drop(current);
+    crate::services::runtime::mark_active_pending(state, "EMP configuration changed");
     read_management_request(request, state)
 }
 

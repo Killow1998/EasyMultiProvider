@@ -185,3 +185,65 @@ pub(crate) fn helper_binary(state: &ServerState) -> String {
         .inventory
         .executable(&runtime_preferences(state))
 }
+
+pub(crate) fn mark_pending(state: &ServerState, target: &str, detail: &str) -> Result<(), ()> {
+    let config = state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .map_err(|_| ())?
+        .clone();
+    let catalog = server_catalog(state, &config);
+    let expected = catalog["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|model| {
+            model
+                .get("visibility")
+                .and_then(Value::as_str)
+                .unwrap_or("list")
+                == "list"
+        })
+        .filter_map(|model| model["slug"].as_str())
+        .filter(|slug| slug.contains('/'))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let runtime = &state.backend.integration.runtime;
+    let relation = state
+        .backend
+        .integration
+        .manager
+        .status()
+        .map_err(|_| ())?
+        .relation;
+    let mut data = runtime.data.lock().map_err(|_| ())?;
+    data.intent = target.to_owned();
+    data.expected = expected;
+    data.snapshot = json!({"state":"reload_required","target":target,"verified":false,"confidence":"pending","detail":detail,"last_known":null});
+    runtime
+        .store
+        .save(
+            "reload_required",
+            target,
+            &relation,
+            &data.expected,
+            false,
+            detail,
+        )
+        .map_err(|_| ())?;
+    Ok(())
+}
+
+pub(crate) fn mark_active_pending(state: &ServerState, detail: &str) {
+    if state
+        .backend
+        .integration
+        .manager
+        .status()
+        .is_ok_and(|status| status.state == "active")
+    {
+        let _ = mark_pending(state, "emp", detail);
+    }
+}

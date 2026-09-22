@@ -748,3 +748,5 @@ mod tests {
         assert!(restored.contains("title = \"keep\""));
     }
 }
+
+pub mod search;

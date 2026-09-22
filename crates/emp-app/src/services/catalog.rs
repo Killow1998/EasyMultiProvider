@@ -17,6 +17,8 @@ pub(crate) fn refresh_catalog(state: &ServerState) -> Result<(PathBuf, usize), (
     let catalog = server_catalog(state, &config);
     let path = generated_catalog_path(state);
     write_catalog_json(&path, &catalog).map_err(|_| ())?;
+    drop(config);
+    crate::services::runtime::mark_active_pending(state, "EMP model catalog changed");
     Ok((path, catalog["models"].as_array().map_or(0, Vec::len)))
 }
 

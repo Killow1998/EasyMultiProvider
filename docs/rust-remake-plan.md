@@ -468,6 +468,21 @@ comparisons normalize only generated observation timestamps and IDs.
 Further native/stream failure observation hooks, diagnostics/usage, startup
 recovery and the remaining management/lifecycle work remain in progress.
 
+Startup now compares the inherited integration lease with the bound listener
+and generated catalog before re-adoption. A different instance's lease and
+Codex TOML remain byte-identical across startup and shutdown. Matching leases
+are re-adopted, their catalog refreshed, and runtime state marked pending;
+configuration/catalog edits also invalidate the previous runtime observation.
+Standalone subscription search now leases and restores only its two Codex
+fields. The HTTP enable/restore flow and owned shutdown preserve unrelated
+preferences and reject external edits to search fields without overwriting
+them. Python-created leases, process restarts, exact restored TOML, conflicts
+and pending runtime status are covered by real-process differential tests.
+All 23 process scenarios, warnings-denied clippy and workspace tests passed
+locally. No production service was replaced. Remaining work includes the
+native/stream observation hooks, remaining automatic WebSocket routing,
+usage/diagnostics, CLI/desktop lifecycle, updater/packaging and full acceptance.
+
 ## Historical verification evidence
 
 These dated records describe their recorded revisions only. Statements such

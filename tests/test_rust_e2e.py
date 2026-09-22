@@ -148,6 +148,107 @@ class RustEndToEnd(unittest.TestCase):
                     self.assertEqual(owner.config_path.read_bytes(), before)
                     self.assertEqual(owner.request("GET", "/healthz")[0], 200)
 
+    def test_startup_recovers_only_its_own_listener_and_catalog(self):
+        from easy_multi_provider.catalog import generated_catalog_path
+        for mismatch in (True, False):
+            results = []
+            with tempfile.TemporaryDirectory(prefix="emp-recovery-") as temporary:
+                root = Path(temporary)
+                for name, command in [
+                    ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                    ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+                ]:
+                    home = root / name
+                    home.mkdir()
+                    config_path = home / "emp.json"
+                    config_path.write_text(json.dumps({"native_catalog_path": str(home / "native.json")}))
+                    (home / "native.json").write_text('{"models":[]}')
+                    codex_config = home / "config.toml"
+                    codex_config.write_text('# original\nmodel = "fixture-native"\n')
+                    lease_path = home / "easy-multi-provider/integration/lease.json"
+                    with socket.socket() as reservation:
+                        reservation.bind(("127.0.0.1", 0))
+                        port = reservation.getsockname()[1]
+                    manager = IntegrationManager(codex_config, lease_path)
+                    target = "http://127.0.0.1:%d/v1" % (1 if mismatch else port)
+                    catalog = "wrong-catalog.json" if mismatch else str(generated_catalog_path(home))
+                    manager.enable(target, catalog, True)
+                    original_lease = lease_path.read_bytes()
+                    applied = codex_config.read_bytes()
+                    backend = EmpProcess.from_config(command, config_path, home, port=port)
+                    try:
+                        status, _, raw = backend.request("GET", "/api/integration")
+                        self.assertEqual(status, 200, raw)
+                        summary = json.loads(raw)
+                        if mismatch:
+                            self.assertEqual(summary["configuration"]["state"], "conflict")
+                            self.assertEqual(summary["configuration"]["conflicts"],
+                                             ["listener_mismatch", "catalog_mismatch"])
+                            self.assertEqual(lease_path.read_bytes(), original_lease)
+                        else:
+                            self.assertEqual(summary["configuration"]["state"], "emp_applied")
+                            self.assertEqual(summary["runtime"]["state"], "reload_required")
+                            self.assertEqual(summary["runtime"]["confidence"], "pending")
+                        results.append((summary["configuration"], summary["runtime"], summary["next_action"]))
+                    finally:
+                        backend.close()
+                    if mismatch:
+                        self.assertEqual(codex_config.read_bytes(), applied)
+                        self.assertEqual(lease_path.read_bytes(), original_lease)
+                    else:
+                        self.assertEqual(codex_config.read_text(), '# original\nmodel = "fixture-native"\n')
+                self.assertEqual(results[0], results[1])
+
+    def test_subscription_search_enable_restore_and_external_edit(self):
+        # Same user-owned TOML as test_search_integration, exercised via HTTP.
+        original = '# user preferences\nmodel = "native"\n[features]\nunified_exec = true\n'
+        for edited in (False, True):
+            results = []
+            with tempfile.TemporaryDirectory(prefix="emp-search-") as temporary:
+                for name, command in [
+                    ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                    ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+                ]:
+                    backend = EmpProcess(command, self.upstream, Path(temporary) / name)
+                    try:
+                        backend.codex_config.write_text(original)
+                        status, _, raw = backend.request("GET", "/api/config")
+                        self.assertEqual(status, 200, raw)
+                        config = json.loads(raw)
+                        config["port"] = backend.port
+                        config["subscription_search"] = {"enabled": True}
+                        status, _, raw = backend.request("POST", "/api/config", config)
+                        self.assertEqual(status, 200, raw)
+                        status, _, raw = backend.request("POST", "/api/integration/enable", {"confirm_reload": True})
+                        self.assertEqual(status, 200, raw)
+                        parsed = tomlkit.parse(backend.codex_config.read_text())
+                        self.assertEqual(parsed["web_search"], "live")
+                        self.assertTrue(parsed["features"]["standalone_web_search"])
+                        self.assertTrue(parsed["features"]["unified_exec"])
+                        search_lease = backend.codex_config.parent / "easy-multi-provider/integration/search.json"
+                        lease = json.loads(search_lease.read_text())
+                        self.assertEqual(lease["config_path"], str(backend.codex_config))
+                        applied = {key: lease[key] for key in ("schema", "version", "status", "original", "applied")}
+                        if edited:
+                            parsed["web_search"] = "disabled"
+                            backend.codex_config.write_text(tomlkit.dumps(parsed))
+                            before = backend.codex_config.read_bytes()
+                        status, _, raw = backend.request("POST", "/api/integration/restore", {"confirm_reload": True})
+                        self.assertEqual(status, 409 if edited else 200, raw)
+                        if edited:
+                            self.assertEqual(backend.codex_config.read_bytes(), before)
+                            results.append((applied, status, json.loads(raw)))
+                        else:
+                            final = tomlkit.parse(backend.codex_config.read_text())
+                            self.assertNotIn("web_search", final)
+                            self.assertNotIn("standalone_web_search", final["features"])
+                            self.assertTrue(final["features"]["unified_exec"])
+                            self.assertEqual(json.loads(search_lease.read_text())["status"], "restored")
+                            results.append((applied, backend.codex_config.read_text()))
+                    finally:
+                        backend.close()
+                self.assertEqual(results[0], results[1])
+
     def test_offline_doctor_and_restore_match_python_commands(self):
         # Exercise test_integration_cli's native/active/restore/repeated-restore
         # flows through executables instead of importing either CLI dispatcher.

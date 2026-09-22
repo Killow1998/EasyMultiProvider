@@ -111,6 +111,7 @@ impl ServerHandle {
             },
             backend,
             port: local_addr.port(),
+            base_url: format!("http://{local_addr}/v1"),
         });
         let workers = Arc::new(Mutex::new(Vec::new()));
         let handle = Self {
@@ -218,15 +219,10 @@ impl ServerHandle {
     }
 
     fn reconcile_startup(&self) {
-        if let Ok(result) = self.state.backend.integration.manager.recover(true, true)
-            && result.ok()
-            && result.state == "active"
-        {
-            self.state
-                .backend
-                .integration
-                .owned
-                .store(true, Ordering::Release);
+        if crate::services::startup::reconcile(&self.state).is_err() {
+            eprintln!(
+                "EMP integration recovery is unavailable; inspect integration status before applying changes"
+            );
         }
     }
 
