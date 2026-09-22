@@ -26,10 +26,10 @@ use emp_state::{
     web_session_path,
 };
 use emp_transport::{
-    ContentDecodeError, FailureClass, HttpClient, HttpClientPolicy, ProxyEnvironment, ProxyPolicy,
-    RequestCapacityError, RequestLimits, RequestLimitsConfig, RequestLimitsError, TimeoutPolicy,
-    TransportKind, decode_content, normalize_error_class, protocol_fallback_allowed,
-    public_failure_message,
+    ContentDecodeError, FailureClass, FailurePhase, HttpClient, HttpClientPolicy, ProxyEnvironment,
+    ProxyPolicy, RequestCapacityError, RequestLimits, RequestLimitsConfig, RequestLimitsError,
+    TimeoutPolicy, TransportKind, UpstreamFailure, decode_content, external_http_retry_allowed,
+    normalize_error_class, protocol_fallback_allowed, public_failure_message,
 };
 use serde_json::Value;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
@@ -1182,6 +1182,28 @@ fn pre_output_router_error_response(error: &RouterError) -> Vec<u8> {
     )
 }
 
+fn external_retry_delay(
+    error: &RouterError,
+    attempt: usize,
+    route: &ResolvedRoute,
+) -> Option<Duration> {
+    let failure = UpstreamFailure {
+        error_class: error.error_class(),
+        status: error.status(),
+        phase: FailurePhase::TerminalValidation,
+        terminal_event: false,
+        failure_reason: error.failure_reason().map(str::to_owned),
+        retry_after_seconds: error.retry_after_seconds(),
+    };
+    let free_route = route
+        .upstream_model
+        .trim()
+        .to_ascii_lowercase()
+        .ends_with(":free");
+    external_http_retry_allowed(&failure, attempt, false, false, free_route)
+        .then(|| Duration::from_secs(failure.retry_after_seconds.unwrap_or(1)))
+}
+
 struct DisconnectMonitor {
     disconnected: tokio::sync::oneshot::Receiver<()>,
     stop: Arc<AtomicBool>,
@@ -1270,25 +1292,32 @@ fn serve_external_stream(
 ) -> Result<(), Vec<u8>> {
     let router = ExternalRouter::new(&state.backend.client);
     let candidates = protocol_candidates(route);
-    for (index, protocol) in candidates.iter().copied().enumerate() {
+    'candidate: for (index, protocol) in candidates.iter().copied().enumerate() {
         let candidate = route
             .with_protocol(protocol)
             .map_err(route_resolution_response)?;
-        match state
-            .backend
-            .runtime
-            .block_on(router.open_stream(&candidate, body, incoming, ids))
-        {
-            Ok(upstream) => {
-                return relay_external_stream(downstream, state, upstream);
-            }
-            Err(error)
-                if index + 1 < candidates.len()
-                    && protocol_fallback_allowed(error.status(), false, false) =>
+        for attempt in 0..2 {
+            match state
+                .backend
+                .runtime
+                .block_on(router.open_stream(&candidate, body, incoming, ids))
             {
-                continue;
+                Ok(upstream) => {
+                    return relay_external_stream(downstream, state, upstream);
+                }
+                Err(error) => {
+                    if let Some(delay) = external_retry_delay(&error, attempt, &candidate) {
+                        thread::sleep(delay);
+                        continue;
+                    }
+                    if index + 1 < candidates.len()
+                        && protocol_fallback_allowed(error.status(), false, false)
+                    {
+                        continue 'candidate;
+                    }
+                    return Err(pre_output_router_error_response(&error));
+                }
             }
-            Err(error) => return Err(pre_output_router_error_response(&error)),
         }
     }
     Err(json_error_response(
@@ -1481,46 +1510,51 @@ fn responses_request(
     }
     let router = ExternalRouter::new(&state.backend.client);
     let candidates = protocol_candidates(&route);
-    for (index, protocol) in candidates.iter().copied().enumerate() {
+    'candidate: for (index, protocol) in candidates.iter().copied().enumerate() {
         let candidate = match route.with_protocol(protocol) {
             Ok(candidate) => candidate,
             Err(error) => {
                 return ResponsesRequestResult::Buffered(route_resolution_response(error));
             }
         };
-        match state
-            .backend
-            .runtime
-            .block_on(router.execute_complete(&candidate, &body, &incoming, &ids))
-        {
-            Ok(result) => {
-                let body = match serde_json::to_vec(&result.body) {
-                    Ok(body) => body,
-                    Err(_) => {
-                        return ResponsesRequestResult::Buffered(json_error_response(
-                            500,
-                            status_text(500),
-                            "internal server error",
-                            None,
-                            &[],
-                        ));
-                    }
-                };
-                return ResponsesRequestResult::Buffered(response(
-                    &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
-                    &result.content_type,
-                    &body,
-                    &[],
-                ));
-            }
-            Err(error)
-                if index + 1 < candidates.len()
-                    && protocol_fallback_allowed(error.status(), false, false) =>
+        for attempt in 0..2 {
+            match state
+                .backend
+                .runtime
+                .block_on(router.execute_complete(&candidate, &body, &incoming, &ids))
             {
-                continue;
-            }
-            Err(error) => {
-                return ResponsesRequestResult::Buffered(router_error_response(error));
+                Ok(result) => {
+                    let body = match serde_json::to_vec(&result.body) {
+                        Ok(body) => body,
+                        Err(_) => {
+                            return ResponsesRequestResult::Buffered(json_error_response(
+                                500,
+                                status_text(500),
+                                "internal server error",
+                                None,
+                                &[],
+                            ));
+                        }
+                    };
+                    return ResponsesRequestResult::Buffered(response(
+                        &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
+                        &result.content_type,
+                        &body,
+                        &[],
+                    ));
+                }
+                Err(error) => {
+                    if let Some(delay) = external_retry_delay(&error, attempt, &candidate) {
+                        thread::sleep(delay);
+                        continue;
+                    }
+                    if index + 1 < candidates.len()
+                        && protocol_fallback_allowed(error.status(), false, false)
+                    {
+                        continue 'candidate;
+                    }
+                    return ResponsesRequestResult::Buffered(router_error_response(error));
+                }
             }
         }
     }
@@ -2098,6 +2132,15 @@ mod tests {
         content_type: &'static str,
         success_body: Vec<u8>,
     ) -> (String, mpsc::Receiver<String>, JoinHandle<()>) {
+        two_attempt_upstream(404, None, content_type, success_body)
+    }
+
+    fn two_attempt_upstream(
+        first_status: u16,
+        retry_after: Option<u64>,
+        content_type: &'static str,
+        success_body: Vec<u8>,
+    ) -> (String, mpsc::Receiver<String>, JoinHandle<()>) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind fallback upstream");
         let address = listener.local_addr().expect("fallback upstream address");
         let (path_sender, paths) = mpsc::sync_channel(2);
@@ -2108,17 +2151,22 @@ mod tests {
                 path_sender.send(path).expect("record fallback path");
                 let (status, response_type, body) = if attempt == 0 {
                     (
-                        404,
+                        first_status,
                         "application/json",
-                        br#"{"error":{"message":"unsupported endpoint"}}"#.to_vec(),
+                        br#"{"error":{"message":"temporary upstream rejection"}}"#.to_vec(),
                     )
                 } else {
                     (200, content_type, success_body.clone())
                 };
+                let retry_header = (attempt == 0)
+                    .then_some(retry_after)
+                    .flatten()
+                    .map(|delay| format!("Retry-After: {delay}\r\n"))
+                    .unwrap_or_default();
                 stream
                     .write_all(
                         format!(
-                            "HTTP/1.1 {status} {}\r\nContent-Type: {response_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            "HTTP/1.1 {status} {}\r\nContent-Type: {response_type}\r\nContent-Length: {}\r\n{retry_header}Connection: close\r\n\r\n",
                             status_text(status),
                             body.len()
                         )
@@ -2817,7 +2865,7 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
     fn stream_errors_keep_pre_and_post_output_boundaries() {
         let upstream = OneShotUpstream::start_error(
             429,
-            Some(4),
+            Some(6),
             json!({"error":{"message":"provider detail must not escape"}}),
         );
         let (_directory, server) = configured_server(&upstream.base_url());
@@ -2833,7 +2881,7 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
             &[&session_cookie_header(&server)],
         );
         assert!(response.starts_with("HTTP/1.1 429 Too Many Requests\r\n"));
-        assert!(response.contains("Retry-After: 4\r\n"));
+        assert!(response.contains("Retry-After: 6\r\n"));
         assert!(response.contains("\"type\":\"rate_limit\""));
         assert!(response.contains("\"code\":\"rate_limit_exceeded\""));
         assert!(!response.contains("provider detail must not escape"));
@@ -2936,6 +2984,71 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
         );
         server.shutdown().expect("shutdown");
         worker.join().expect("join stream fallback upstream");
+    }
+
+    #[test]
+    fn external_pre_output_retry_is_single_and_route_local() {
+        let complete_body = serde_json::to_vec(&json!({
+            "id":"chat_upstream", "model":"upstream-model", "object":"chat.completion",
+            "choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
+        }))
+        .expect("complete Chat body");
+        let (base_url, paths, worker) =
+            two_attempt_upstream(429, Some(0), "application/json", complete_body);
+        let (_directory, server) = configured_server(&base_url);
+        let complete_request = serde_json::to_vec(&json!({
+            "model":"demo/model", "stream":false,
+            "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+        }))
+        .expect("complete request JSON");
+        let response = post(
+            &server,
+            "/v1/responses",
+            &complete_request,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(response.contains("\"text\":\"answer\""));
+        assert_eq!(
+            [
+                paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+                paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+            ],
+            ["/v1/chat/completions", "/v1/chat/completions"]
+        );
+        server.shutdown().expect("shutdown");
+        worker.join().expect("join complete retry upstream");
+
+        let stream_body = upstream_sse(&[
+            json!({"id":"chat_upstream","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":null}]}),
+            json!({"id":"chat_upstream","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}),
+        ]);
+        let (base_url, paths, worker) =
+            two_attempt_upstream(429, Some(0), "text/event-stream", stream_body);
+        let (_directory, server) = configured_server(&base_url);
+        let stream_request = serde_json::to_vec(&json!({
+            "model":"demo/model", "stream":true,
+            "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+        }))
+        .expect("stream request JSON");
+        let response = post_stream(
+            &server,
+            "/v1/responses",
+            &stream_request,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(response.contains("event: response.completed\n"));
+        assert_eq!(
+            [
+                paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+                paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+            ],
+            ["/v1/chat/completions", "/v1/chat/completions"]
+        );
+        server.shutdown().expect("shutdown");
+        worker.join().expect("join stream retry upstream");
     }
 
     #[test]

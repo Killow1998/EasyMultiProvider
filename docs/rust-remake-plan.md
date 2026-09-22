@@ -135,11 +135,14 @@ Progress evidence on 2026-09-21:
   match, and falls back for complete or streamed requests only after an
   explicit pre-output 404/405/415/501 rejection. Candidate order has a live
   Python oracle and real loopback tests prove Chat-to-Responses fallback. With
-  one local build job and low process priority, the 23-test `emp-app` binary
-  suite, focused Router oracle and warnings-denied crate clippy pass. No CI was
-  dispatched for these local slices. Persisting new successful protocol
-  observations with the native catalog, bounded pre-output compatibility retry
-  and pinned-Codex tool round trips remain in Stage 3.
+  one local build job and low process priority, the 24-test `emp-app` binary
+  suite, focused Router oracle and warnings-denied crate clippy pass. External
+  complete and streamed requests now also make Python's single route-local
+  pre-output retry for HTTP 504 or an unclassified HTTP 429 whose retry delay is
+  at most five seconds; explicit quota/capacity failures, free-route 429s and
+  longer cooldowns remain visible to Codex. No CI was dispatched for these
+  local slices. Persisting new successful protocol observations with the native
+  catalog and pinned-Codex tool round trips remain in Stage 3.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
