@@ -445,6 +445,7 @@ name = "emp-protocol"
 version = "0.11.6"
 dependencies = [
  "base64 0.22.1",
+ "ring",
  "serde_json",
  "sha2 0.10.9",
  "url",
