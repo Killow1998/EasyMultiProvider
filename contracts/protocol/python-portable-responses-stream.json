@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "protocol.portable-responses-stream.python-rust",
+  "python_oracle": "easy_multi_provider.dialects.project_stream_event",
+  "rust_test": "crates/emp-protocol/tests/portable_stream_python_oracle.rs",
+  "same_stream_cases": [
+    "reasoning item and plaintext delta suppression",
+    "visible message and output-text preservation",
+    "opt-in reasoning summary and opaque state",
+    "custom-tool item and argument-delta translation",
+    "completed response projection",
+    "external compaction rejection"
+  ],
+  "comparison": {
+    "events": "exact projected JSON sequence",
+    "errors": [
+      "index",
+      "item_type",
+      "part_types",
+      "failure_class"
+    ]
+  }
+}
