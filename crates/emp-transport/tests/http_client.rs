@@ -229,40 +229,39 @@ impl Drop for TlsTestServer {
 fn serve_tls_connection(stream: TcpStream, config: Arc<ServerConfig>) {
     let connection = ServerConnection::new(config).expect("TLS server connection");
     let mut stream = BufReader::new(StreamOwned::new(connection, stream));
+    let mut request_line = String::new();
+    match stream.read_line(&mut request_line) {
+        Ok(0) | Err(_) => return,
+        Ok(_) => {}
+    }
+    let mut content_length = 0;
     loop {
-        let mut request_line = String::new();
-        match stream.read_line(&mut request_line) {
+        let mut header = String::new();
+        match stream.read_line(&mut header) {
             Ok(0) | Err(_) => return,
-            Ok(_) => {}
-        }
-        let mut content_length = 0;
-        loop {
-            let mut header = String::new();
-            match stream.read_line(&mut header) {
-                Ok(0) | Err(_) => return,
-                Ok(_) if header == "\r\n" => break,
-                Ok(_) => {
-                    if let Some((name, value)) = header.split_once(':')
-                        && name.eq_ignore_ascii_case("content-length")
-                    {
-                        content_length = value.trim().parse::<usize>().unwrap_or(0);
-                    }
+            Ok(_) if header == "\r\n" => break,
+            Ok(_) => {
+                if let Some((name, value)) = header.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse::<usize>().unwrap_or(0);
                 }
             }
         }
-        let mut body = vec![0_u8; content_length];
-        if stream.read_exact(&mut body).is_err() {
-            return;
-        }
-        let stream = stream.get_mut();
-        if stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
-            .is_err()
-            || stream.flush().is_err()
-        {
-            return;
-        }
     }
+    let mut body = vec![0_u8; content_length];
+    if stream.read_exact(&mut body).is_err() {
+        return;
+    }
+    let stream = stream.get_mut();
+    if stream
+        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+        .is_err()
+    {
+        return;
+    }
+    stream.conn.send_close_notify();
+    let _ = stream.flush();
 }
 
 fn serve_connection(
