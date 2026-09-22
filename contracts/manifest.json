@@ -58,6 +58,16 @@
       "fixture": "protocol/python-anthropic-stream.json"
     },
     {
+      "id": "protocol.portable-responses.python-rust",
+      "level": "api",
+      "source": "easy_multi_provider/dialects.py:project_request and project_response",
+      "transport": "http",
+      "dialect": "portable_responses",
+      "normalization": [],
+      "side_effects": ["none; request and complete-response projections are pure"],
+      "fixture": "protocol/python-portable-responses.json"
+    },
+    {
       "id": "transport.sse-json.python-rust",
       "level": "events",
       "source": "easy_multi_provider/transport.py:sse_json_events and tests/test_sse_failure_reasons.py",

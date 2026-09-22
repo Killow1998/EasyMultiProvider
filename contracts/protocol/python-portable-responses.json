@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "protocol.portable-responses.python-rust",
+  "python_oracle": {
+    "module": "easy_multi_provider.dialects",
+    "functions": [
+      "project_request",
+      "project_response",
+      "custom_tool_names"
+    ]
+  },
+  "rust_test": "crates/emp-protocol/tests/portable_python_oracle.rs",
+  "request_cases": [
+    "visible multimodal history and instruction hoisting",
+    "paired function and custom tools",
+    "nested tool namespaces and collision rejection",
+    "opaque reasoning state only when enabled",
+    "EMP compaction summary reconstruction",
+    "official OpenAI-only request controls",
+    "invalid stream, opaque state, unsupported item, and tool-pair failures"
+  ],
+  "response_cases": [
+    "plaintext reasoning suppression",
+    "summary and opaque state opt-in",
+    "custom tool call restoration",
+    "invalid output and external compaction rejection"
+  ],
+  "comparison": {
+    "success": "exact JSON value",
+    "failure": [
+      "index",
+      "item_type",
+      "part_types",
+      "failure_class"
+    ]
+  }
+}

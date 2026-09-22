@@ -172,6 +172,14 @@ jobs:
         run: >-
           uv run --frozen cargo test --locked -p emp-protocol --test python_oracle
 
+      - name: Python and Rust portable Responses interoperability
+        if: matrix.os == 'ubuntu-22.04'
+        env:
+          EMP_PYTHON_INTEROP: python
+        run: >-
+          uv run --frozen cargo test --locked -p emp-protocol
+          --test portable_python_oracle
+
       - name: Python and Rust SSE parsing interoperability
         if: matrix.os == 'ubuntu-22.04'
         env:

@@ -8,3 +8,4 @@ license.workspace = true
 base64 = "0.22"
 serde_json.workspace = true
 sha2 = "0.10.9"
+url = "2.5.7"
