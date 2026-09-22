@@ -26,7 +26,14 @@ fn settings_save_matches_python_state_and_preserves_credentials_across_restart()
     let upstream = CatalogUpstream::start(200);
     let (directory, server) = catalog_server(&upstream);
     let root = canonical_root(&directory);
-    let initial = server.state.backend.config.lock().expect("config").clone();
+    let initial = server
+        .state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .expect("config")
+        .clone();
     let cookie = session_cookie_header(&server);
     let mut valid = parsed_body(&request(&server, "/api/config", &[&cookie]));
     valid["native_model_context_windows"] = json!({"native":150000});
@@ -48,7 +55,8 @@ fn settings_save_matches_python_state_and_preserves_credentials_across_restart()
     let cases = vec![valid, excessive, invalid_type, private_file, restored];
     let mut actual = Vec::new();
     for (index, incoming) in cases.iter().enumerate() {
-        let before = std::fs::read(&server.state.backend.config_path).expect("before");
+        let before =
+            std::fs::read(&server.state.backend.configuration.config_path).expect("before");
         let wire = post(
             &server,
             "/api/config",
@@ -68,7 +76,7 @@ fn settings_save_matches_python_state_and_preserves_credentials_across_restart()
         );
         if status == 400 {
             assert_eq!(
-                std::fs::read(&server.state.backend.config_path).expect("after"),
+                std::fs::read(&server.state.backend.configuration.config_path).expect("after"),
                 before
             );
         }
@@ -82,12 +90,16 @@ fn settings_save_matches_python_state_and_preserves_credentials_across_restart()
     );
     assert_eq!(saved["native_catalog_path"], initial["native_catalog_path"]);
     assert_eq!(
-        provider_api_key(&saved["providers"][0], &server.state.backend.vault),
+        provider_api_key(
+            &saved["providers"][0],
+            &server.state.backend.configuration.vault
+        ),
         "synthetic-test-key"
     );
     let key_path = server
         .state
         .backend
+        .configuration
         .vault
         .ensure_master_key()
         .map(Path::to_path_buf);
@@ -180,12 +192,24 @@ fn startup_and_save_move_duplicate_visibility_to_native_without_touching_auth() 
     let native_bytes =
         br#"{"tokens":{"access_token":"shared-fixture-token","account_id":"native-owner"}}"#;
     std::fs::write(&native_path, native_bytes).expect("native fixture");
-    let mut config = server.state.backend.config.lock().expect("config").clone();
+    let mut config = server
+        .state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .expect("config")
+        .clone();
     let auth_path =
         emp_state::account_auth_path(&config, "duplicate", &path).expect("account path");
-    server.state.backend.vault.write_encrypted_json(&auth_path,&json!({"tokens":{"access_token":"shared-fixture-token","account_id":"different-owner"}})).expect("encrypted auth");
+    server.state.backend.configuration.vault.write_encrypted_json(&auth_path,&json!({"tokens":{"access_token":"shared-fixture-token","account_id":"different-owner"}})).expect("encrypted auth");
     config["accounts"] = json!([{"id":"duplicate","prefix":"duplicate","auth_file":auth_path,"hidden_models":["native"]}]);
-    save_configuration(&config, Some(&path), &server.state.backend.vault).expect("fixture config");
+    save_configuration(
+        &config,
+        Some(&path),
+        &server.state.backend.configuration.vault,
+    )
+    .expect("fixture config");
     server.shutdown().expect("shutdown fixture server");
     let restarted = ServerHandle::start_with_config_options(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -254,7 +278,14 @@ fn failed_config_commit_restores_provider_secret_and_keeps_memory_snapshot() {
     let upstream = CatalogUpstream::start(200);
     let (directory, server) = catalog_server(&upstream);
     let root = canonical_root(&directory);
-    let before = server.state.backend.config.lock().expect("config").clone();
+    let before = server
+        .state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .expect("config")
+        .clone();
     let key_path = Path::new(
         before["providers"][0]["api_key_file"]
             .as_str()
@@ -277,7 +308,16 @@ fn failed_config_commit_restores_provider_secret_and_keeps_memory_snapshot() {
     );
     assert!(result.starts_with("HTTP/1.1 500"), "{result}");
     assert!(!result.contains("replacement-fixture-key"));
-    assert_eq!(*server.state.backend.config.lock().expect("config"), before);
+    assert_eq!(
+        *server
+            .state
+            .backend
+            .configuration
+            .config
+            .lock()
+            .expect("config"),
+        before
+    );
     assert_eq!(
         std::fs::read(key_path).expect("restored encrypted key"),
         encrypted

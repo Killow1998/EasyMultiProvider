@@ -14,12 +14,13 @@ base64 = "0.22"
 emp-codex = { path = "../emp-codex" }
 emp-core = { path = "../emp-core" }
 emp-history = { path = "../emp-history" }
+emp-integration = { path = "../emp-integration" }
 emp-router = { path = "../emp-router" }
 emp-state = { path = "../emp-state" }
 emp-transport = { path = "../emp-transport" }
 getrandom = "0.2.17"
 serde_json = { workspace = true }
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 
 [lib]
 path = "src/lib.rs"

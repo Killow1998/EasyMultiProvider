@@ -1,4 +1,20 @@
-//! Public hooks for integration tests.  The executable remains the primary
-//! artifact for this bounded slice.
+//! EMP application composition and consumer interfaces.
+mod api;
+mod app;
+mod cli;
+mod error;
+mod http;
+mod lifecycle;
+mod services;
+mod util;
+mod web;
 
-pub const WEB_INDEX_BYTES: &[u8] = include_bytes!("../../../easy_multi_provider/web/index.html");
+pub const VERSION: &str = "0.11.6";
+pub use web::WEB_INDEX_BYTES;
+
+pub fn run() -> Result<(), String> {
+    cli::run()
+}
+
+#[cfg(test)]
+mod tests;

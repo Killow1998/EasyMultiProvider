@@ -164,7 +164,7 @@ fn catalog_http_contract_matches_live_python_handler() {
         })
         .collect::<Vec<_>>();
     let fixture = json!({
-        "config":server.state.backend.config.lock().expect("config").clone(),
+        "config":server.state.backend.configuration.config.lock().expect("config").clone(),
         "catalog_path":canonical_root(&directory).join("codex/easy-multi-provider/catalog.json"),
         "discovered":actual[5]["payload"]["models"], "cases":cases,
     });
@@ -357,7 +357,10 @@ fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
     let saved = load_configuration(Some(&config_path)).expect("saved config");
     assert_eq!(saved["models"][0]["enabled"], false);
     assert_eq!(
-        provider_api_key(&saved["providers"][0], &server.state.backend.vault),
+        provider_api_key(
+            &saved["providers"][0],
+            &server.state.backend.configuration.vault
+        ),
         "synthetic-test-key"
     );
 
@@ -433,7 +436,7 @@ fn discovery_authentication_precedes_body_and_invalid_selection_does_not_write()
         "provider is required"
     );
     assert!(upstream.requests.try_recv().is_err());
-    let before = std::fs::read(&server.state.backend.config_path).expect("config");
+    let before = std::fs::read(&server.state.backend.configuration.config_path).expect("config");
     for selected in [json!(["not-advertised"]), json!(false), json!([1])] {
         let body =
             serde_json::to_vec(&json!({"provider":"demo","selected":selected})).expect("JSON");
@@ -441,7 +444,7 @@ fn discovery_authentication_precedes_body_and_invalid_selection_does_not_write()
         assert!(invalid.starts_with("HTTP/1.1 400"), "{invalid}");
         upstream.observed();
         assert_eq!(
-            std::fs::read(&server.state.backend.config_path).expect("config"),
+            std::fs::read(&server.state.backend.configuration.config_path).expect("config"),
             before
         );
     }
@@ -477,7 +480,7 @@ fn selection_rolls_back_config_and_keys_if_catalog_destination_is_unsafe() {
     let protected = root.join("protected.txt");
     std::fs::write(&protected, b"unchanged").expect("protected file");
     symlink(&protected, catalog_dir.join("catalog.json")).expect("unsafe destination");
-    let before = std::fs::read(&server.state.backend.config_path).expect("config");
+    let before = std::fs::read(&server.state.backend.configuration.config_path).expect("config");
     let result = post(
         &server,
         "/api/providers/discover",
@@ -487,14 +490,20 @@ fn selection_rolls_back_config_and_keys_if_catalog_destination_is_unsafe() {
     assert!(result.starts_with("HTTP/1.1 500"), "{result}");
     upstream.observed();
     assert_eq!(
-        std::fs::read(&server.state.backend.config_path).expect("config"),
+        std::fs::read(&server.state.backend.configuration.config_path).expect("config"),
         before
     );
     assert_eq!(
         std::fs::read(&protected).expect("protected file"),
         b"unchanged"
     );
-    let config = server.state.backend.config.lock().expect("config lock");
+    let config = server
+        .state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .expect("config lock");
     assert_eq!(config["models"].as_array().map(Vec::len), Some(1));
     assert_eq!(config["models"][0]["enabled"], true);
     drop(config);

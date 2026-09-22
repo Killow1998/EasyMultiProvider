@@ -193,7 +193,8 @@ by ETags, fingerprints, usage IDs and match keys remains exact.
 
 Root acceptance: explicit ownership, a thin entry and a running Rust server
 that still serves unchanged assets and existing HTTP/SSE/WS operations.
-Run affected regressions before proceeding. This is the immediate next action.
+The implementation and local evidence are recorded below. Continue completing
+the missing management operations and runtime/integration behavior.
 
 ### Major branches — complete backend operations
 
@@ -257,6 +258,12 @@ never overwrite production state or installations.
 
 ## Fast feedback and build storage
 
+- New behavioral acceptance tests use Python drivers to launch the actual
+  Python/Rust processes, send the same inputs through public endpoints and
+  compare outputs, errors, retry counts, terminal events and persistent effects.
+  Reuse existing Python scenario bodies/assertions; internal Rust structure is
+  not the test target. Retain useful existing regressions without adding
+  implementation-mirroring tests.
 - During edits, run focused checks/tests for affected owners. Reuse fixtures;
   do not add tests merely proving files moved or run the workspace after every
   helper change.
@@ -351,6 +358,41 @@ Co-authored-by: Point <point@local.invalid>
 Preserve interrupted or unrelated work. Report completed user operations and
 verified evidence, not helper counts, speculative percentages or unmeasured
 performance gains.
+
+## Implementation evidence — 2026-09-22
+
+- The entry is now nine lines. Application construction, lifecycle, HTTP
+  framing/authentication/dispatch, browser assets, domain APIs and services
+  have separate modules. Config/vault, transport, accounts/quota and integration
+  state have explicit owners. The listener is owned by lifecycle rather than
+  shared with every handler; account identity and notifications no longer
+  depend on catalog or quota handlers. The longest production app module is
+  the WebSocket turn state machine, rather than a renamed monolithic entry.
+- Interrupted integration work was retained and connected. SIGTERM/Ctrl-C and
+  authenticated quit now run owned-lease restoration. The browser still uses
+  the original asset bytes. No Python production code or installation changed.
+- The Python E2E driver launches two real processes against one loopback fake
+  upstream. Existing Chat regression scenario bodies/assertions run unchanged
+  over HTTP. Checks cover bootstrap/config/assets, native/Chat/Anthropic JSON,
+  compressed input, SSE reasoning/refusal/tools/usage, WS turns, a 503 without
+  replay, quit, and SIGTERM with exact Python/Rust restored TOML comparison.
+- These endpoint tests found and fixed generic Rust 503 wording and an extra
+  blank line left by repeated insertion/removal of integration fields.
+- Local formatting, workspace clippy with warnings denied and workspace
+  all-target tests passed with the live Python oracle enabled. Existing
+  integration and app endpoint regressions were preserved. No new CI run was
+  dispatched; this is not new cross-platform or performance evidence.
+- Cargo clean removed 38.8 GiB of logical artifacts; the worktree excluding
+  target measured 12 MiB. After rebuilding and the workspace checks, target
+  measured about 2.8 GiB, versus about 37 GiB allocated before cleanup.
+  Dev/test retain limited app debug symbols and omit dependency debug symbols.
+  This measures local build storage, not release size or runtime memory.
+
+Remaining product acceptance work includes complete management operations,
+runtime synchronization and offline CLI parity, usage/diagnostic persistence,
+service ownership/draining, update/rollback packaging and consumer/performance
+verification. The integration draft's TOML parsing and recovery need further
+review before production use. The full rewrite is not complete.
 
 ## Historical verification evidence
 

@@ -1,0 +1,16 @@
+[package]
+name = "emp-integration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Transactional field-level Codex configuration integration for EMP."
+
+[dependencies]
+emp-state = { path = "../emp-state" }
+getrandom = "0.2.17"
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { version = "0.3.47", features = ["formatting"] }
+
+[dev-dependencies]
+tempfile = "3.27"

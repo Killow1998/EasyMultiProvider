@@ -1,13 +1,22 @@
-//! Application-owned credentials for native Responses. Python remains the
-//! production service; this completes the Rust non-streaming HTTP path.
+//! Native credential selection and request forwarding.
 
-use super::{ServerState, native_auth_document, refresh_account_serialized, response, status_text};
+use crate::app::ServerState;
+use crate::http::response::response;
+use crate::http::response::status_text;
+use crate::services::accounts::native_auth_document;
+use crate::services::catalog::response_catalog_etag;
+use crate::services::quota::refresh_account_serialized;
 use emp_codex::account_auth_headers;
 use emp_core::ResolvedRoute;
 use emp_router::ProjectionIds;
-use emp_router::native_http::{NativeHttpError, NativeRouter, NativeStream, NativeWebSocketPlan};
-use emp_router::native_request::{NativeAuth, request_headers};
-use serde_json::{Map, Value};
+use emp_router::native_http::NativeHttpError;
+use emp_router::native_http::NativeRouter;
+use emp_router::native_http::NativeStream;
+use emp_router::native_http::NativeWebSocketPlan;
+use emp_router::native_request::NativeAuth;
+use emp_router::native_request::request_headers;
+use serde_json::Map;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -39,6 +48,7 @@ fn account_headers(
     }
     let auth = state
         .backend
+        .configuration
         .vault
         .read_encrypted_json(Path::new(path))
         .map_err(|_| NativeHttpError::router(503, "stored encrypted auth.json is invalid"))?;
@@ -73,7 +83,7 @@ fn resolve_headers(
         selected = Some(account_headers(state, account)?);
         NativeAuth::Account(selected.as_ref().expect("account headers"))
     } else if provider.get("implicit_native") == Some(&Value::Bool(true)) {
-        selected = native_auth_document(&state.backend.native_auth_path)
+        selected = native_auth_document(&state.backend.accounts.native_auth_path)
             .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
             .and_then(|auth| account_auth_headers(&auth));
         NativeAuth::Implicit(selected.as_ref())
@@ -112,12 +122,12 @@ fn error_response(mut error: NativeHttpError) -> Vec<u8> {
 
 fn replace_catalog_etag(state: &ServerState, headers: &mut BTreeMap<String, String>) {
     headers.remove("x-models-etag");
-    if let Some(etag) = super::catalog_api::response_catalog_etag(state) {
+    if let Some(etag) = response_catalog_etag(state) {
         headers.insert("X-Models-Etag".to_owned(), etag);
     }
 }
 
-pub(super) fn open_stream(
+pub(crate) fn open_stream(
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
@@ -128,7 +138,7 @@ pub(super) fn open_stream(
     open_stream_result(state, route, config, body, incoming, ids).map_err(error_response)
 }
 
-pub(super) fn open_stream_result(
+pub(crate) fn open_stream_result(
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
@@ -136,8 +146,8 @@ pub(super) fn open_stream_result(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<NativeStream, NativeHttpError> {
-    let router = NativeRouter::new(&state.backend.client);
-    let result = state.backend.runtime.block_on(router.open_stream(
+    let router = NativeRouter::new(&state.backend.transport.client);
+    let result = state.backend.transport.runtime.block_on(router.open_stream(
         route,
         body,
         plaintext_collaboration(config),
@@ -153,21 +163,25 @@ pub(super) fn open_stream_result(
     }
 }
 
-pub(super) fn complete(
+pub(crate) fn complete(
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
     body: &Map<String, Value>,
     incoming: &BTreeMap<String, String>,
 ) -> Vec<u8> {
-    let router = NativeRouter::new(&state.backend.client);
-    match state.backend.runtime.block_on(router.execute_complete(
-        route,
-        body,
-        plaintext_collaboration(config),
-        true,
-        |refresh| resolve_headers(state, route, incoming, false, refresh),
-    )) {
+    let router = NativeRouter::new(&state.backend.transport.client);
+    match state
+        .backend
+        .transport
+        .runtime
+        .block_on(router.execute_complete(
+            route,
+            body,
+            plaintext_collaboration(config),
+            true,
+            |refresh| resolve_headers(state, route, incoming, false, refresh),
+        )) {
         Ok(mut result) => {
             // EMP's current catalog identity supersedes an upstream's catalog.
             replace_catalog_etag(state, &mut result.headers);
@@ -187,20 +201,23 @@ pub(super) fn complete(
     }
 }
 
-pub(super) fn compact(
+pub(crate) fn compact(
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
     body: &Map<String, Value>,
     incoming: &BTreeMap<String, String>,
 ) -> Vec<u8> {
-    let router = NativeRouter::new(&state.backend.client);
-    match state.backend.runtime.block_on(router.execute_compact(
-        route,
-        body,
-        plaintext_collaboration(config),
-        |refresh| resolve_headers(state, route, incoming, false, refresh),
-    )) {
+    let router = NativeRouter::new(&state.backend.transport.client);
+    match state
+        .backend
+        .transport
+        .runtime
+        .block_on(
+            router.execute_compact(route, body, plaintext_collaboration(config), |refresh| {
+                resolve_headers(state, route, incoming, false, refresh)
+            }),
+        ) {
         Ok(mut result) => {
             replace_catalog_etag(state, &mut result.headers);
             let headers = result
@@ -219,7 +236,7 @@ pub(super) fn compact(
     }
 }
 
-pub(super) fn websocket_plan(
+pub(crate) fn websocket_plan(
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
@@ -227,7 +244,7 @@ pub(super) fn websocket_plan(
     incoming: &BTreeMap<String, String>,
 ) -> Result<NativeWebSocketPlan, NativeHttpError> {
     let headers = resolve_headers(state, route, incoming, true, false)?;
-    NativeRouter::new(&state.backend.client).prepare_websocket(
+    NativeRouter::new(&state.backend.transport.client).prepare_websocket(
         route,
         body,
         plaintext_collaboration(config),

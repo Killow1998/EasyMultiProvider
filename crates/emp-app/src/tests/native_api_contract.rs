@@ -250,6 +250,7 @@ fn account_server(
     server
         .state
         .backend
+        .configuration
         .vault
         .write_encrypted_json(
             &auth_path,
@@ -509,6 +510,7 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
     server
         .state
         .backend
+        .configuration
         .vault
         .write_encrypted_json(
             &auth_path,
@@ -630,6 +632,7 @@ for line in sys.stdin:
         server
             .state
             .backend
+            .configuration
             .vault
             .read_encrypted_json(&auth_path)
             .unwrap()["tokens"]["access_token"],
