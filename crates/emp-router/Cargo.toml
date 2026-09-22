@@ -8,8 +8,11 @@ description = "Behavior-compatible request orchestration for EMP."
 [dependencies]
 emp-core = { path = "../emp-core" }
 emp-protocol = { path = "../emp-protocol" }
+emp-state = { path = "../emp-state" }
 emp-transport = { path = "../emp-transport" }
 serde_json.workspace = true
+time = { version = "0.3.55", features = ["parsing"] }
+tokio = { version = "1.53.1", features = ["time"] }
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time"] }

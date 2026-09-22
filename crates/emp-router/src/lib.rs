@@ -24,6 +24,8 @@ use serde_json::{Map, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
+pub mod discovery;
+
 pub const MAX_UPSTREAM_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_UPSTREAM_ERROR_BYTES: usize = 64 * 1024;
 const EMP_VERSION: &str = env!("CARGO_PKG_VERSION");

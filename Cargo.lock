@@ -455,8 +455,10 @@ version = "0.11.6"
 dependencies = [
  "emp-core",
  "emp-protocol",
+ "emp-state",
  "emp-transport",
  "serde_json",
+ "time",
  "tokio",
 ]
 
