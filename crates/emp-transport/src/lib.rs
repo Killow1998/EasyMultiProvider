@@ -7,6 +7,14 @@
 use serde_json::{Map, Value};
 use std::fmt;
 
+mod admission;
+pub use admission::{
+    MAX_EXPANDED_REQUEST_BYTES, MAX_PROXY_REQUEST_BYTES, MEMORY_RESERVATION_FACTOR,
+    MIN_MEMORY_HEADROOM_BYTES, MemoryStatus, REQUEST_GROWTH_QUANTUM, RequestBudget,
+    RequestCapacityError, RequestCapacityReason, RequestLimitNotice, RequestLimits,
+    RequestLimitsConfig, RequestLimitsError, RequestLimitsSnapshot, TransportKind,
+};
+
 pub const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

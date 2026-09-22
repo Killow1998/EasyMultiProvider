@@ -48,6 +48,16 @@
       "fixture": "transport/python-sse-json.json"
     },
     {
+      "id": "transport.request-admission.python-rust",
+      "level": "api",
+      "source": "easy_multi_provider/request_limits.py and tests/test_adaptive_request_limits.py",
+      "transport": "http",
+      "dialect": "responses",
+      "normalization": ["run identifier and notice timestamps use injected deterministic values"],
+      "side_effects": ["per-request memory reservation exists only for the budget lifetime"],
+      "fixture": "transport/python-request-admission.json"
+    },
+    {
       "id": "state.vault.python-rust",
       "level": "state",
       "source": "tests/test_vault.py and easy_multi_provider/vault.py",

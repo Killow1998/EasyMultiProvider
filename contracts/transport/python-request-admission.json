@@ -1,0 +1,29 @@
+{
+  "status": "differentially_implemented",
+  "source": [
+    "easy_multi_provider/request_limits.py",
+    "tests/test_adaptive_request_limits.py"
+  ],
+  "rust_evidence": [
+    "crates/emp-transport/tests/request_admission.rs",
+    "crates/emp-transport/tests/python_oracle.rs:request_admission_matches_live_python_oracle_when_configured"
+  ],
+  "limits": {
+    "baseline_bytes": 67108864,
+    "maximum_bytes": 1073741824,
+    "growth_quantum_bytes": 16777216,
+    "reservation_factor": 8,
+    "memory_headroom_bytes": 536870912,
+    "notice_history": 20
+  },
+  "covered_cases": [
+    "baseline requests allocate no expanded-memory reservation",
+    "growth is quantized independently for each request",
+    "concurrent reservations cannot spend the same available memory",
+    "dropping or consuming a budget releases its reservation exactly once",
+    "hard size limits map to HTTP 413 and WebSocket 1009",
+    "memory pressure maps to retryable HTTP 503 and WebSocket 1013",
+    "missing memory information fails closed",
+    "diagnostic notices contain sizes and status but no request content"
+  ]
+}

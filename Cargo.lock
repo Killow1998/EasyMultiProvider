@@ -244,6 +244,7 @@ dependencies = [
 name = "emp-transport"
 version = "0.11.6"
 dependencies = [
+ "serde",
  "serde_json",
 ]
 
