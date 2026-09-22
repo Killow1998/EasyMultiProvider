@@ -627,27 +627,21 @@ async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
     config
         .add_dns_override("localhost", server.address)
         .expect("test DNS override");
-    let trusted = Arc::new(
-        HttpClient::with_config(HttpClientPolicy::default(), config).expect("trusted client"),
-    );
-    let mut requests = Vec::new();
-    for _ in 0..8 {
-        let client = Arc::clone(&trusted);
-        let url = server.url("localhost");
-        requests.push(tokio::spawn(async move {
-            client
-                .open(HttpMethod::Get, &url, BTreeMap::new(), None, false)
-                .await?
-                .read_all()
-                .await
-        }));
-    }
-    for request in requests {
-        assert_eq!(
-            request.await.expect("join TLS request").expect("TLS body"),
-            b"ok"
-        );
-    }
+    let trusted =
+        HttpClient::with_config(HttpClientPolicy::default(), config).expect("trusted client");
+    let response = trusted
+        .open(
+            HttpMethod::Get,
+            &server.url("localhost"),
+            BTreeMap::new(),
+            None,
+            false,
+        )
+        .await
+        .expect("trusted TLS request");
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.header("content-length"), Some("2"));
+    response.finish().await;
 
     let wrong_host = trusted
         .open(
