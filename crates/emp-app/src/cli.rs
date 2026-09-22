@@ -6,10 +6,13 @@ use crate::lifecycle::run_server;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
+use std::process::ExitCode;
+mod control;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Cli {
     Version,
+    Control(control::Control),
     Serve {
         config: Option<PathBuf>,
         host: IpAddr,
@@ -29,6 +32,9 @@ where
     };
     if command == "--version" {
         return Ok(Cli::Version);
+    }
+    if matches!(command.as_str(), "doctor" | "restore") {
+        return control::Control::parse(&command, arguments).map(Cli::Control);
     }
     if command != "serve" {
         return Err(format!("unknown command: {command}"));
@@ -87,12 +93,13 @@ fn print_version() {
     println!("EMP {VERSION}");
 }
 
-pub(crate) fn run() -> Result<(), String> {
+pub(crate) fn run() -> Result<ExitCode, String> {
     match parse_cli(std::env::args().skip(1))? {
         Cli::Version => print_version(),
+        Cli::Control(command) => return command.run(),
         Cli::Serve { config, host, port } => {
             run_server(config.as_deref(), host, port).map_err(|error| error.to_string())?;
         }
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }

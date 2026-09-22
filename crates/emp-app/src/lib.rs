@@ -12,7 +12,7 @@ mod web;
 pub const VERSION: &str = "0.11.6";
 pub use web::WEB_INDEX_BYTES;
 
-pub fn run() -> Result<(), String> {
+pub fn run() -> Result<std::process::ExitCode, String> {
     cli::run()
 }
 

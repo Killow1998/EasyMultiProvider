@@ -10,6 +10,8 @@ use std::time::Duration;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+pub mod runtime;
+
 pub const MANAGED_FIELDS: [&str; 2] = ["openai_base_url", "model_catalog_json"];
 const LEASE_SCHEMA: &str = "easy-multi-provider.integration-lease";
 const LEASE_VERSION: u64 = 2;
@@ -476,7 +478,8 @@ impl IntegrationManager {
         let mut bytes = serde_json::to_vec_pretty(lease)
             .map_err(|_| IntegrationError("unable to write integration lease"))?;
         bytes.push(b'\n');
-        atomic_write(&self.lease_path, &bytes)
+        emp_state::filesystem::atomic_write_private_state(&self.lease_path, &bytes)
+            .map_err(|_| IntegrationError("unable to write integration lease"))
     }
 
     fn make_lease(
@@ -704,24 +707,8 @@ fn absolute(path: &Path) -> Result<PathBuf, IntegrationError> {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), IntegrationError> {
-    if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        return Err(IntegrationError("integration target must not be a symlink"));
-    }
-    let parent = path
-        .parent()
-        .ok_or(IntegrationError("integration target is invalid"))?;
-    fs::create_dir_all(parent)
-        .map_err(|_| IntegrationError("unable to write integration state"))?;
-    let temporary = parent.join(format!(".emp-integration-{}", random_hex(8)));
-    fs::write(&temporary, bytes)
-        .map_err(|_| IntegrationError("unable to write integration state"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
-            .map_err(|_| IntegrationError("unable to write integration state"))?;
-    }
-    fs::rename(&temporary, path).map_err(|_| IntegrationError("unable to write integration state"))
+    emp_state::filesystem::atomic_write_config(path, bytes)
+        .map_err(|_| IntegrationError("unable to write integration state"))
 }
 
 #[cfg(test)]

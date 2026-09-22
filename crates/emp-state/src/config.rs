@@ -1988,6 +1988,12 @@ pub fn generated_catalog_path(codex_home: Option<&Path>) -> PathBuf {
         .join("catalog.json")
 }
 
+/// Resolve a user-selected path as Python's expanduser().resolve() does,
+/// including nonexistent final components.
+pub fn resolve_user_path(path: &Path) -> PathBuf {
+    path_python_resolve(&expand_user(path))
+}
+
 pub(crate) fn path_python_resolve(path: &Path) -> PathBuf {
     fn recurse(path: &Path, followed_links: usize) -> PathBuf {
         let absolute = absolute(path).unwrap_or_else(|_| path.to_path_buf());

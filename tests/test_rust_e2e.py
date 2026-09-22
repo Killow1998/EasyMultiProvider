@@ -22,6 +22,7 @@ import zstandard
 from tests import test_chat_projection_regressions as chat_cases
 from tests.test_server import _masked_text_frame, _read_text_frame
 from tests.rust_e2e_support import ROOT, EmpProcess, Upstream, normalized_ids
+from easy_multi_provider.integration import IntegrationManager
 
 
 @unittest.skipUnless(os.environ.get("EMP_RUST_BINARY"), "set EMP_RUST_BINARY for real-process E2E")
@@ -126,6 +127,62 @@ class RustEndToEnd(unittest.TestCase):
                     self.assertIn(b"another EMP service owns this configuration", result.stderr)
                     self.assertEqual(owner.config_path.read_bytes(), before)
                     self.assertEqual(owner.request("GET", "/healthz")[0], 200)
+
+    def test_offline_doctor_and_restore_match_python_commands(self):
+        # Exercise test_integration_cli's native/active/restore/repeated-restore
+        # flows through executables instead of importing either CLI dispatcher.
+        all_outputs = []
+        with tempfile.TemporaryDirectory(prefix="emp-offline-e2e-") as temporary:
+            for name, command in [
+                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+            ]:
+                root = Path(temporary) / name
+                root.mkdir()
+                home = root / "codex"
+                home.mkdir()
+                state = root / "offline-state"
+                environment = {**os.environ, "CODEX_HOME": str(home), "PYTHONPATH": str(ROOT)}
+                config = home / "config.toml"
+                config.write_text('# offline preferences\nopenai_base_url = "native"\n')
+                outputs = []
+
+                def invoke(operation, as_json=False):
+                    result = subprocess.run(
+                        command + [operation, "--state-dir", "offline-state"]
+                        + (["--json"] if as_json else []),
+                        cwd=root, env=environment, capture_output=True, text=True, timeout=8,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stderr, "")
+                    if as_json:
+                        payload = json.loads(result.stdout)
+                        last = payload.get("runtime", {}).get("last_known")
+                        if last is not None:
+                            self.assertIsInstance(last["observed_at"], str)
+                            last["observed_at"] = "<generated timestamp>"
+                        outputs.append(payload)
+                    else:
+                        outputs.append(result.stdout)
+
+                invoke("doctor")
+                invoke("doctor", True)
+                manager = IntegrationManager(config, state / "lease.json",
+                                             instance_id="e2e", lock_path=state / "lease.lock")
+                manager.enable("http://127.0.0.1:43123/v1", "fixture-catalog.json", True)
+                invoke("doctor", True)
+                invoke("restore", True)
+                invoke("doctor", True)
+                invoke("restore")
+                self.assertEqual(tomlkit.parse(config.read_text())["openai_base_url"], "native")
+                recovery = json.loads((state / "runtime.json").read_text())
+                if os.name == "posix":
+                    self.assertEqual(state.stat().st_mode & 0o777, 0o700)
+                    self.assertEqual((state / "runtime.json").stat().st_mode & 0o777, 0o600)
+                recovery["updated_at"] = "<generated timestamp>"
+                outputs.append(recovery)
+                all_outputs.append(outputs)
+        self.assertEqual(all_outputs[0], all_outputs[1])
 
     def test_management_image_and_request_limits_match_python(self):
         for path in ("/api/models/vision-test-image", "/api/request-limits"):

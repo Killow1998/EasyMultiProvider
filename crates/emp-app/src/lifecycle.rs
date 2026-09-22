@@ -64,6 +64,8 @@ impl ServerHandle {
         if !is_loopback(host) {
             return Err(AppError::HostNotLoopback);
         }
+        let resolved_config = emp_state::config::resolve_user_path(config_path);
+        let config_path = resolved_config.as_path();
         let service_owner = emp_state::IntegrationFileLock::acquire(
             &config_path
                 .parent()

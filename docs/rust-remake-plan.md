@@ -403,6 +403,15 @@ and request-limit APIs are connected and compared through authenticated HTTP.
 All 15 Python process scenarios, app/integration regressions, and focused
 warnings-denied clippy pass. This work remains local; no CI was requested.
 
+Offline doctor/restore now run from the Rust executable. Python-driven checks
+compare human and JSON output, process exit codes, repeated restore, relative
+state-directory resolution, durable runtime records and private permissions.
+Both implementations consume the same Python-created integration lease.
+Integration and runtime persistence now reuse emp-state's atomic writer rather
+than a second temporary-file implementation. User-selected paths are resolved
+before acquiring service ownership, matching Python's startup path handling.
+CLI help/desktop defaults and live runtime synchronization still need work.
+
 ## Historical verification evidence
 
 These dated records describe their recorded revisions only. Statements such

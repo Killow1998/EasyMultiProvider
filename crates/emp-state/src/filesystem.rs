@@ -412,8 +412,13 @@ fn set_private_directory(_: &Path) -> Result<(), FilesystemError> {
 
 /// Atomically replace a private configuration file without changing the
 /// permissions of a caller-owned parent directory.
-pub(crate) fn atomic_write_config(path: &Path, data: &[u8]) -> Result<(), FilesystemError> {
+pub fn atomic_write_config(path: &Path, data: &[u8]) -> Result<(), FilesystemError> {
     atomic_write(path, data, CONFIG_FILE_MODE, false)
+}
+
+/// Persist EMP-owned state with a private file and a private parent directory.
+pub fn atomic_write_private_state(path: &Path, data: &[u8]) -> Result<(), FilesystemError> {
+    atomic_write(path, data, CONFIG_FILE_MODE, true)
 }
 
 /// Write a generated catalog with the same atomic replacement and private-file

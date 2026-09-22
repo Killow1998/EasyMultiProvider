@@ -165,15 +165,15 @@ fn parse_origin(origin: &str, port: u16) -> Option<bool> {
 pub(crate) const MAX_NATIVE_AUTH_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn codex_auth_path() -> PathBuf {
-    std::env::var_os("CODEX_HOME")
+    let home = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
         .or_else(|| {
             std::env::var_os("HOME")
                 .or_else(|| std::env::var_os("USERPROFILE"))
                 .map(|home| PathBuf::from(home).join(".codex"))
         })
-        .unwrap_or_else(|| PathBuf::from(".codex"))
-        .join("auth.json")
+        .unwrap_or_else(|| PathBuf::from(".codex"));
+    emp_state::config::resolve_user_path(&home).join("auth.json")
 }
 
 fn native_access_token(path: &Path) -> Option<String> {

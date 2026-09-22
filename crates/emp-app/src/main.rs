@@ -1,6 +1,6 @@
 fn main() -> std::process::ExitCode {
     match emp_app::run() {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("{error}");
             std::process::ExitCode::FAILURE
