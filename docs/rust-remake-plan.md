@@ -391,8 +391,17 @@ performance gains.
 Remaining product acceptance work includes complete management operations,
 runtime synchronization and offline CLI parity, usage/diagnostic persistence,
 service ownership/draining, update/rollback packaging and consumer/performance
-verification. The integration draft's TOML parsing and recovery need further
-review before production use. The full rewrite is not complete.
+verification. The full rewrite is not complete.
+
+The next local control-plane work replaces line-based TOML edits with
+toml_edit, preserving quoted keys, multiline instructions, comments and nested
+configuration in real Python/Rust enable/restore round trips. The service now
+holds Python's state/service.lock for its lifetime and uses the same lease.lock
+path as the Python application. A competing Python or Rust process is rejected
+without changing the running owner's config. The unchanged UI's vision image
+and request-limit APIs are connected and compared through authenticated HTTP.
+All 15 Python process scenarios, app/integration regressions, and focused
+warnings-denied clippy pass. This work remains local; no CI was requested.
 
 ## Historical verification evidence
 

@@ -36,3 +36,6 @@ pub(crate) fn redirect_response(cookie: &str) -> Vec<u8> {
         &[("Location", "/"), ("Set-Cookie", cookie)],
     )
 }
+
+pub(crate) const VISION_TEST_IMAGE_BYTES: &[u8] =
+    include_bytes!("../../../easy_multi_provider/web/vision-test-icon.png");

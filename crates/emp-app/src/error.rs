@@ -10,6 +10,7 @@ pub(crate) enum AppError {
     HostNotLoopback,
     Io(std::io::Error),
     ServerStopped,
+    ServiceOwned,
     RandomUnavailable,
     WebSession(WebSessionError),
     Config(ConfigError),
@@ -25,6 +26,9 @@ impl std::fmt::Display for AppError {
                 formatter.write_str("host must be 127.0.0.1 for local-only management")
             }
             Self::Io(error) => write!(formatter, "{error}"),
+            Self::ServiceOwned => {
+                formatter.write_str("another EMP service owns this configuration")
+            }
             Self::ServerStopped => formatter.write_str("server task stopped before shutdown"),
             Self::RandomUnavailable => formatter.write_str("secure randomness is unavailable"),
             Self::WebSession(error) => write!(formatter, "{error}"),

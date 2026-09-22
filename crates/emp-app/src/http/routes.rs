@@ -3,6 +3,7 @@
 use crate::api::accounts::management_account_import_request;
 use crate::api::catalog;
 use crate::api::compact::compact_request;
+use crate::api::inspection;
 use crate::api::integration::management_integration_request;
 use crate::api::lifecycle::quit_request;
 use crate::api::migration::management_migration_request;
@@ -256,6 +257,14 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         }
         let supplied_cookie = request.session_cookie();
         if state.sessions.contains(supplied_cookie.as_deref(), now) {
+            if request.method == RequestMethod::Get
+                && matches!(
+                    path,
+                    "/api/models/vision-test-image" | "/api/request-limits"
+                )
+            {
+                return inspection::read_request(request, state);
+            }
             if request.method == RequestMethod::Get
                 && (path == "/api/config"
                     || (path.starts_with("/api/accounts/") && path.ends_with("/models")))

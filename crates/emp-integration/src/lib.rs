@@ -122,6 +122,11 @@ impl IntegrationManager {
         })
     }
 
+    pub fn with_lock_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.lock_path = path.into();
+        self
+    }
+
     pub fn config_path(&self) -> &Path {
         &self.config_path
     }
@@ -536,197 +541,84 @@ impl IntegrationManager {
 }
 
 fn states(document: &str) -> Result<BTreeMap<String, FieldState>, IntegrationError> {
-    let mut result = MANAGED_FIELDS
+    let parsed = document
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|_| IntegrationError("unable to parse Codex TOML config"))?;
+    MANAGED_FIELDS
         .into_iter()
-        .map(|name| (name.to_owned(), FieldState::absent()))
-        .collect::<BTreeMap<_, _>>();
-    let mut in_multiline = None::<&str>;
-    let mut in_table = false;
-    for line in document.lines() {
-        let trimmed = line.trim_start();
-        if let Some(delimiter) = in_multiline {
-            if trimmed.matches(delimiter).count() % 2 == 1 {
-                in_multiline = None;
-            }
-            continue;
-        }
-        if trimmed.starts_with("\"\"\"") && trimmed.matches("\"\"\"").count() % 2 == 1 {
-            in_multiline = Some("\"\"\"");
-            continue;
-        }
-        if trimmed.starts_with("'''") && trimmed.matches("'''").count() % 2 == 1 {
-            in_multiline = Some("'''");
-            continue;
-        }
-        if trimmed.starts_with('[') {
-            in_table = true;
-            continue;
-        }
-        if in_table || trimmed.starts_with('#') || trimmed.is_empty() {
-            continue;
-        }
-        for name in MANAGED_FIELDS {
-            if let Some(rest) = assignment_rest(trimmed, name) {
-                if result[name].present {
-                    return Err(IntegrationError("managed TOML field is duplicated"));
-                }
-                result.insert(name.to_owned(), FieldState::value(parse_toml_string(rest)?));
-            }
-        }
-    }
-    Ok(result)
-}
-
-fn assignment_rest<'a>(line: &'a str, name: &str) -> Option<&'a str> {
-    let rest = line.strip_prefix(name)?;
-    let rest = rest.trim_start();
-    rest.strip_prefix('=').map(str::trim_start)
-}
-
-fn parse_toml_string(rest: &str) -> Result<String, IntegrationError> {
-    if let Some(rest) = rest.strip_prefix('"') {
-        let mut escaped = false;
-        for (index, character) in rest.char_indices() {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if character == '\\' {
-                escaped = true;
-                continue;
-            }
-            if character == '"' {
-                let literal = &rest[..=index];
-                let encoded = format!("\"{literal}");
-                return serde_json::from_str(&encoded)
-                    .map_err(|_| IntegrationError("managed TOML field is not a string"));
-            }
-        }
-    } else if let Some(rest) = rest.strip_prefix('\'')
-        && let Some(end) = rest.find('\'')
-    {
-        return Ok(rest[..end].to_owned());
-    }
-    Err(IntegrationError("managed TOML field is not a string"))
+        .map(|name| {
+            let state = match parsed.get(name) {
+                None => FieldState::absent(),
+                Some(value) => FieldState::value(
+                    value
+                        .as_str()
+                        .ok_or(IntegrationError("managed TOML field is not a string"))?,
+                ),
+            };
+            Ok((name.to_owned(), state))
+        })
+        .collect()
 }
 
 fn set_states(
-    mut document: String,
+    document: String,
     desired: &BTreeMap<String, FieldState>,
 ) -> Result<String, IntegrationError> {
-    for name in MANAGED_FIELDS {
-        document = set_field(document, name, &desired[name])?;
-    }
-    Ok(document)
-}
-
-fn set_field(document: String, name: &str, state: &FieldState) -> Result<String, IntegrationError> {
-    let mut offset = 0;
-    let mut in_table = false;
-    for segment in document.split_inclusive('\n') {
-        let line = segment.trim_end_matches(['\r', '\n']);
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('[') {
-            in_table = true;
-        }
-        if !in_table && assignment_rest(trimmed, name).is_some() {
-            let start = offset;
-            let end = offset + segment.len();
-            if !state.present {
-                let mut result = document.clone();
-                result.replace_range(start..end, "");
-                return Ok(result);
-            }
-            let equals = line
-                .find('=')
-                .ok_or(IntegrationError("unable to edit Codex TOML config"))?;
-            let value_start =
-                equals + 1 + line[equals + 1..].len() - line[equals + 1..].trim_start().len();
-            let (_, value_end) = toml_token_bounds(&line[value_start..])?;
-            let encoded = serde_json::to_string(state.value.as_deref().unwrap_or_default())
-                .map_err(|_| IntegrationError("unable to edit Codex TOML config"))?;
-            let mut replacement = line.to_owned();
-            replacement.replace_range(value_start..value_start + value_end, &encoded);
-            replacement.push_str(&segment[line.len()..]);
-            let mut result = document.clone();
-            result.replace_range(start..end, &replacement);
-            return Ok(result);
-        }
-        offset += segment.len();
-    }
-    if !state.present {
-        return Ok(document);
-    }
-    let mut insertion = document
+    // Root comments are independent of the first key/table in tomlkit. Keep
+    // them outside the edit tree so removing a managed key cannot remove them.
+    let header_len: usize = document
         .split_inclusive('\n')
-        .scan(0usize, |offset, line| {
-            let start = *offset;
-            *offset += line.len();
-            Some((start, line))
-        })
-        .find(|(_, line)| line.trim_start().starts_with('['))
-        .map(|(offset, _)| offset)
-        .unwrap_or(document.len());
-    // Keep one existing table separator after all inserted root fields. Adding
-    // each field after that separator would accumulate blank lines on restore.
-    while insertion > 0 && insertion < document.len() {
-        let previous_end = document[..insertion - 1]
-            .rfind('\n')
-            .map_or(0, |index| index + 1);
-        if document[previous_end..insertion].trim().is_empty() {
-            insertion = previous_end;
+        .take_while(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))
+        .map(str::len)
+        .sum();
+    let (header, body) = document.split_at(header_len);
+    let mut parsed = body
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|_| IntegrationError("unable to parse Codex TOML config"))?;
+    let mut inserted = false;
+    for name in MANAGED_FIELDS {
+        let state = &desired[name];
+        if !state.present {
+            parsed.as_table_mut().remove(name);
+            continue;
+        }
+        let mut replacement = toml_edit::Value::from(state.value.as_deref().unwrap_or_default());
+        if let Some(current) = parsed.get(name).and_then(toml_edit::Item::as_value) {
+            *replacement.decor_mut() = current.decor().clone();
         } else {
-            break;
+            inserted = true;
+        }
+        parsed[name] = toml_edit::Item::Value(replacement);
+    }
+    if inserted {
+        // Python's tomlkit retains this separator when managed fields are removed.
+        for (_, item) in parsed.iter_mut() {
+            let table = match item {
+                toml_edit::Item::Table(table) => Some(table),
+                toml_edit::Item::ArrayOfTables(tables) => tables.iter_mut().next(),
+                _ => None,
+            };
+            if let Some(table) = table {
+                let prefix = table
+                    .decor()
+                    .prefix()
+                    .and_then(|raw| raw.as_str())
+                    .unwrap_or("");
+                if !prefix.starts_with(['\r', '\n']) {
+                    let prefix = format!("\n{prefix}");
+                    table.decor_mut().set_prefix(prefix);
+                }
+                break;
+            }
         }
     }
-    let mut result = document;
-    let prefix = if insertion > 0 && !result[..insertion].ends_with('\n') {
+    let rendered = parsed.to_string();
+    let newline = if !header.is_empty() && !header.ends_with('\n') && !rendered.is_empty() {
         "\n"
     } else {
         ""
     };
-    let value = serde_json::to_string(state.value.as_deref().unwrap_or_default())
-        .map_err(|_| IntegrationError("unable to edit Codex TOML config"))?;
-    let separator = if insertion < result.len()
-        && !result[insertion..].starts_with(['\r', '\n'])
-        && result[insertion..].trim_start().starts_with('[')
-    {
-        "\n"
-    } else {
-        ""
-    };
-    result.insert_str(insertion, &format!("{prefix}{name} = {value}\n{separator}"));
-    Ok(result)
-}
-
-fn toml_token_bounds(value: &str) -> Result<(usize, usize), IntegrationError> {
-    let leading = value.len() - value.trim_start().len();
-    let value = &value[leading..];
-    let quote = value
-        .chars()
-        .next()
-        .ok_or(IntegrationError("managed TOML field is not a string"))?;
-    if !matches!(quote, '"' | '\'') {
-        return Err(IntegrationError("managed TOML field is not a string"));
-    }
-    let mut escaped = false;
-    for (index, character) in value[quote.len_utf8()..].char_indices() {
-        if quote == '"' && escaped {
-            escaped = false;
-            continue;
-        }
-        if quote == '"' && character == '\\' {
-            escaped = true;
-            continue;
-        }
-        if character == quote {
-            return Ok((
-                leading,
-                leading + quote.len_utf8() + index + character.len_utf8(),
-            ));
-        }
-    }
-    Err(IntegrationError("managed TOML field is not a string"))
+    Ok(format!("{header}{newline}{rendered}"))
 }
 
 fn relation(current: &BTreeMap<String, FieldState>, lease: &LeaseRecord) -> String {

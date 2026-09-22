@@ -31,6 +31,7 @@ use tokio::runtime::Runtime;
 
 pub(crate) struct ServerState {
     pub(crate) shutdown: Arc<AtomicBool>,
+    pub(crate) _service_owner: emp_state::IntegrationFileLock,
     pub(crate) sessions: Arc<SessionStore>,
     pub(crate) bootstrap: BootstrapToken,
     pub(crate) backend: BackendState,
@@ -94,7 +95,7 @@ impl BackendState {
             RequestLimitsConfig::default(),
             || None,
             || system_now().max(0.0) as u64,
-            random_hex(8)?,
+            random_hex(16)?,
         )?;
         let codex_home = native_auth_path
             .parent()
@@ -108,7 +109,8 @@ impl BackendState {
                 .join("lease.json"),
             None,
         )
-        .map_err(|_| AppError::ServerStopped)?;
+        .map_err(|_| AppError::ServerStopped)?
+        .with_lock_path(codex_home.join("easy-multi-provider/integration/lease.lock"));
         Ok(Self {
             configuration: ConfigurationState {
                 config: Mutex::new(config),

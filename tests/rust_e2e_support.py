@@ -120,6 +120,7 @@ class EmpProcess:
             environment.pop(key, None)
         environment.update(CODEX_HOME=str(home), PYTHONUNBUFFERED="1",
                            NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
+        self.environment = environment
         self.process = subprocess.Popen(
             command + ["serve", "--config", str(self.config_path),
                        "--host", "127.0.0.1", "--port", "0"],

@@ -64,12 +64,21 @@ impl ServerHandle {
         if !is_loopback(host) {
             return Err(AppError::HostNotLoopback);
         }
+        let service_owner = emp_state::IntegrationFileLock::acquire(
+            &config_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("state/service.lock"),
+            Duration::ZERO,
+            Duration::from_millis(20),
+        )
+        .map_err(|_| AppError::ServiceOwned)?;
         let now = system_now();
         let session_path = web_session_path(config_path)?;
         let session =
             load_or_create_web_session(&session_path, now).map_err(AppError::WebSession)?;
         let backend = BackendState::new(config_path, codex_binary, native_auth_path)?;
-        Self::start_with_session(host, port, session_path, session, backend)
+        Self::start_with_session(host, port, session_path, session, backend, service_owner)
     }
 
     fn start_with_session(
@@ -78,6 +87,7 @@ impl ServerHandle {
         session_path: PathBuf,
         session: WebSession,
         backend: BackendState,
+        service_owner: emp_state::IntegrationFileLock,
     ) -> Result<Self, AppError> {
         let listener = TcpListener::bind((host, port))?;
         listener.set_nonblocking(true)?;
@@ -91,6 +101,7 @@ impl ServerHandle {
         getrandom::getrandom(&mut random).map_err(|_| AppError::RandomUnavailable)?;
         let state = Arc::new(ServerState {
             shutdown,
+            _service_owner: service_owner,
             sessions,
             bootstrap: BootstrapToken {
                 token: URL_SAFE_NO_PAD.encode(random),

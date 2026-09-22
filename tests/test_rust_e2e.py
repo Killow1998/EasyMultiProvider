@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import tempfile
 import tomlkit
@@ -109,6 +110,40 @@ class RustEndToEnd(unittest.TestCase):
                 config = json.loads(raw)
                 self.assertEqual(len(config["models"]), 4)
                 self.assertEqual(config["emp_version"], "0.11.6")
+
+    def test_existing_service_rejects_a_second_python_or_rust_owner(self):
+        for owner in self.backends:
+            before = owner.config_path.read_bytes()
+            for command in ([sys.executable, "-m", "easy_multi_provider"],
+                            [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]):
+                with self.subTest(owner=owner.port, contender=command[-1]):
+                    result = subprocess.run(
+                        command + ["serve", "--config", str(owner.config_path),
+                                   "--host", "127.0.0.1", "--port", "0"],
+                        env=owner.environment, cwd=ROOT, capture_output=True, timeout=8,
+                    )
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(b"another EMP service owns this configuration", result.stderr)
+                    self.assertEqual(owner.config_path.read_bytes(), before)
+                    self.assertEqual(owner.request("GET", "/healthz")[0], 200)
+
+    def test_management_image_and_request_limits_match_python(self):
+        for path in ("/api/models/vision-test-image", "/api/request-limits"):
+            results = []
+            for backend in self.backends:
+                with self.subTest(path=path, port=backend.port):
+                    status, _, raw = backend.request("GET", path, auth=False)
+                    self.assertEqual(status, 401, raw)
+                    status, headers, raw = backend.request("GET", path)
+                    self.assertEqual(status, 200, raw)
+                    payload = json.loads(raw)
+                    if path == "/api/request-limits":
+                        run_id = payload.pop("run_id")
+                        self.assertRegex(run_id, r"^[0-9a-f]{32}$")
+                    else:
+                        self.assertEqual(headers.get("cache-control"), "no-store")
+                    results.append(payload)
+            self.assertEqual(results[0], results[1])
 
     def test_complete_chat_reasoning_usage_and_compressed_input(self):
         result = self.compare_exchange(
@@ -226,6 +261,45 @@ class RustEndToEnd(unittest.TestCase):
             self.upstream.requests.get(timeout=5)
         self.assertEqual(normalized_ids(results[0]), normalized_ids(results[1]))
         self.assertEqual(results[1][-1]["response"]["output_text"], "Four.")
+
+    def test_integration_preserves_multiline_preferences_and_quoted_keys(self):
+        # Extend test_integration's real-user TOML round trip with instructions
+        # containing managed-looking text. Those lines are string data.
+        original = (
+            '# keep this header\n'
+            '"openai_base_url"   = "native"  # keep this inline comment\n'
+            "instructions = '''Read this example literally:\n"
+            'openai_base_url = "this is instruction text"\n'
+            "[example]\nend of instructions'''\n"
+            '\n[nested]\nopenai_base_url = "nested-value"\nenabled = true\n'
+        )
+        restored = []
+        with tempfile.TemporaryDirectory(prefix="emp-preferences-e2e-") as temporary:
+            for name, command in [
+                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+            ]:
+                with self.subTest(backend=name):
+                    backend = EmpProcess(command, self.upstream, Path(temporary) / name)
+                    try:
+                        backend.codex_config.write_text(original)
+                        status, _, raw = backend.request(
+                            "POST", "/api/integration/enable", {"confirm_reload": True})
+                        self.assertEqual(status, 200, raw)
+                        applied = tomlkit.parse(backend.codex_config.read_text())
+                        self.assertEqual(applied["openai_base_url"],
+                                         f"http://127.0.0.1:{backend.port}/v1")
+                        self.assertEqual(applied["instructions"],
+                                         tomlkit.parse(original)["instructions"])
+                        self.assertEqual(applied["nested"], tomlkit.parse(original)["nested"])
+                        status, _, raw = backend.request(
+                            "POST", "/api/integration/restore", {"confirm_reload": True})
+                        self.assertEqual(status, 200, raw)
+                        restored.append(backend.codex_config.read_text())
+                        self.assertEqual(tomlkit.parse(restored[-1]), tomlkit.parse(original))
+                    finally:
+                        backend.close()
+        self.assertEqual(restored[0], restored[1])
 
 
 if __name__ == "__main__":
