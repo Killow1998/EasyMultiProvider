@@ -183,6 +183,14 @@ pub(crate) fn complete(
             |refresh| resolve_headers(state, route, incoming, false, refresh),
         )) {
         Ok(mut result) => {
+            if let Ok(value) = serde_json::from_slice::<Value>(&result.body) {
+                crate::services::context::record_event(
+                    state,
+                    route,
+                    &Value::Object(body.clone()),
+                    &serde_json::json!({"type":format!("response.{}",value["status"].as_str().unwrap_or("unknown")),"response":value}),
+                );
+            }
             // EMP's current catalog identity supersedes an upstream's catalog.
             replace_catalog_etag(state, &mut result.headers);
             let headers = result
@@ -197,7 +205,15 @@ pub(crate) fn complete(
                 &headers,
             )
         }
-        Err(error) => error_response(error),
+        Err(error) => {
+            crate::services::context::record_event(
+                state,
+                route,
+                &Value::Object(body.clone()),
+                &serde_json::json!({"type":"error","error":error.body["error"]}),
+            );
+            error_response(error)
+        }
     }
 }
 

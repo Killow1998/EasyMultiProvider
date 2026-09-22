@@ -6,7 +6,6 @@ use crate::http::response::status_text;
 use crate::services::events::sse_frame;
 use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
-use crate::services::failures::external_retry_delay;
 use crate::services::failures::pre_output_failure_response;
 use crate::services::failures::pre_output_router_error_response;
 use crate::services::failures::route_resolution_response;
@@ -15,14 +14,11 @@ use crate::services::native;
 use crate::services::providers::persist_protocol_observation;
 use crate::util::random_hex;
 use emp_core::ResolvedRoute;
-use emp_router::ExternalRouter;
 use emp_router::ExternalStream;
 use emp_router::ProjectionIds;
 use emp_router::RouterError;
 use emp_router::StreamResponseEvent;
 use emp_router::native_http::NativeStream;
-use emp_router::protocol_candidates;
-use emp_transport::protocol_fallback_allowed;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -159,52 +155,30 @@ pub(crate) fn serve_external_stream(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), Vec<u8>> {
-    let router = ExternalRouter::new(&state.backend.transport.client);
-    let candidates = protocol_candidates(route);
-    'candidate: for (index, protocol) in candidates.iter().copied().enumerate() {
-        let candidate = route
-            .with_protocol(protocol)
-            .map_err(route_resolution_response)?;
-        for attempt in 0..2 {
-            match state
-                .backend
-                .transport
-                .runtime
-                .block_on(router.open_stream(&candidate, body, incoming, ids))
-            {
-                Ok(upstream) => {
-                    let completed = relay_external_stream(downstream, state, upstream)?;
-                    if completed {
-                        crate::services::context::record(state, &candidate, body, true);
-                        persist_protocol_observation(state, &candidate);
-                    }
-                    return Ok(());
+    let (upstream, candidate) =
+        crate::services::providers::open_external_stream(state, route, body, incoming, ids)
+            .map_err(|error| match error {
+                crate::services::providers::ExternalStreamOpenError::Router(error) => {
+                    pre_output_router_error_response(&error)
                 }
-                Err(error) => {
-                    if error.error_class() == emp_transport::FailureClass::ContextLengthExceeded {
-                        crate::services::context::record(state, &candidate, body, false);
-                    }
-                    if let Some(delay) = external_retry_delay(&error, attempt, &candidate) {
-                        thread::sleep(delay);
-                        continue;
-                    }
-                    if index + 1 < candidates.len()
-                        && protocol_fallback_allowed(error.status(), false, false)
-                    {
-                        continue 'candidate;
-                    }
-                    return Err(pre_output_router_error_response(&error));
+                crate::services::providers::ExternalStreamOpenError::Route(error) => {
+                    route_resolution_response(error)
                 }
-            }
-        }
+                crate::services::providers::ExternalStreamOpenError::Unsupported => {
+                    json_error_response(
+                        503,
+                        status_text(503),
+                        "provider protocol is unsupported",
+                        Some("router_error"),
+                        &[],
+                    )
+                }
+            })?;
+    let completed = relay_external_stream(downstream, state, &candidate, body, upstream)?;
+    if completed {
+        persist_protocol_observation(state, &candidate);
     }
-    Err(json_error_response(
-        503,
-        status_text(503),
-        "provider protocol is unsupported",
-        Some("router_error"),
-        &[],
-    ))
+    Ok(())
 }
 
 pub(crate) fn serve_native_stream(
@@ -224,12 +198,14 @@ pub(crate) fn serve_native_stream(
         incoming,
         ids,
     )?;
-    relay_native_stream(downstream, state, upstream).map(|_| ())
+    relay_native_stream(downstream, state, route, body, upstream).map(|_| ())
 }
 
 fn relay_native_stream(
     downstream: &mut TcpStream,
     state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
     mut upstream: NativeStream,
 ) -> Result<bool, Vec<u8>> {
     let response_headers = upstream.headers.clone();
@@ -271,6 +247,7 @@ fn relay_native_stream(
                 return Ok(false);
             }
         };
+        crate::services::context::record_event(state, route, body, &event.body);
         let terminal = terminal_stream_event(&event.body);
         let completed = event.event == "response.completed";
         let failed = matches!(event.event.as_str(), "response.failed" | "error");
@@ -329,6 +306,8 @@ fn relay_native_stream(
 fn relay_external_stream(
     downstream: &mut TcpStream,
     state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
     mut upstream: ExternalStream,
 ) -> Result<bool, Vec<u8>> {
     let mut monitor = DisconnectMonitor::start(downstream).ok();
@@ -369,6 +348,7 @@ fn relay_external_stream(
                 return Ok(false);
             }
         };
+        crate::services::context::record_event(state, route, body, &event.body);
         let terminal = terminal_stream_event(&event.body);
         let completed =
             event.body.get("type").and_then(Value::as_str) == Some("response.completed");

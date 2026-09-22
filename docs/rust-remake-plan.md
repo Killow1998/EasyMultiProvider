@@ -483,6 +483,18 @@ locally. No production service was replaced. Remaining work includes the
 native/stream observation hooks, remaining automatic WebSocket routing,
 usage/diagnostics, CLI/desktop lifecycle, updater/packaging and full acceptance.
 
+HTTP SSE and downstream WebSocket turns now share external protocol selection
+and pre-output retry policy. A real WebSocket differential scenario covers
+explicit Chat and automatic detection. Native HTTP, SSE and native WebSocket
+successes now retain numeric context evidence; HTTP stream context failures
+use structured provider evidence. Native incremental requests retain unknown
+history completeness and are not rejected by treating their delta as a full
+conversation. Complete native requests now use the context guard as Python
+does. Native complete-response tests also compare the resulting capability
+budget. All 40 official-Codex/process consumer scenarios, warnings-denied
+clippy and workspace tests passed locally. CLI/desktop entry, complete
+usage/diagnostics and packaging remain the next application branches.
+
 ## Historical verification evidence
 
 These dated records describe their recorded revisions only. Statements such

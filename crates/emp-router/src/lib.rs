@@ -1400,3 +1400,5 @@ fn tool_response_error(message: &'static str) -> RouterError {
         message,
     )
 }
+
+pub use emp_protocol::context_error::is_explicit_context_error;

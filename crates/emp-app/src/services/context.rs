@@ -3,15 +3,41 @@ use crate::app::ServerState;
 use emp_core::ResolvedRoute;
 use serde_json::Value;
 
+pub(crate) fn payload(state: &ServerState, route: &ResolvedRoute, body: &Value) -> Option<Value> {
+    if route.dialect == emp_core::Dialect::CodexNative {
+        let body = body.as_object()?;
+        let config = state.backend.configuration.config.lock().ok()?.clone();
+        let plaintext = config["providers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|provider| provider["auth_mode"] == "api_key");
+        emp_router::native_http::NativeRouter::new(&state.backend.transport.client)
+            .prepare_websocket(route, body, plaintext, std::collections::BTreeMap::new())
+            .ok()
+            .map(|plan| plan.payload)
+    } else {
+        emp_router::project_external_payload(route, body).ok()
+    }
+}
+
 pub(crate) fn record(state: &ServerState, route: &ResolvedRoute, body: &Value, success: bool) {
-    let Ok(payload) = emp_router::project_external_payload(route, body) else {
-        return;
-    };
+    if let Some(payload) = payload(state, route, body) {
+        record_payload(state, route, &payload, success);
+    }
+}
+
+pub(crate) fn record_payload(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    payload: &Value,
+    success: bool,
+) {
     let assessment = emp_history::context::assess(
         route.provider.value(),
         route.model.value(),
         route.protocol.as_config_str(),
-        &payload,
+        payload,
     );
     let Some(estimate) = assessment.input_estimate else {
         return;
@@ -61,5 +87,41 @@ pub(crate) fn record(state: &ServerState, route: &ResolvedRoute, body: &Value, s
         && let Ok(saved) = emp_state::load_configuration(Some(&configuration.config_path))
     {
         *current = saved;
+    }
+}
+
+pub(crate) fn outcome(event: &Value) -> Option<bool> {
+    let kind = event["type"].as_str()?;
+    let response = &event["response"];
+    if kind == "response.completed"
+        && matches!(response["status"].as_str(), None | Some("completed"))
+        && (response["error"].is_null()
+            || response["error"]
+                .as_object()
+                .is_some_and(|error| error.is_empty()))
+    {
+        return Some(true);
+    }
+    if matches!(kind, "response.failed" | "response.incomplete" | "error") {
+        let error = event.get("error").or_else(|| response.get("error"))?;
+        if emp_router::is_explicit_context_error(
+            200,
+            "application/json",
+            &serde_json::to_vec(error).ok()?,
+        ) {
+            return Some(false);
+        }
+    }
+    None
+}
+
+pub(crate) fn record_event(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    event: &Value,
+) {
+    if let Some(success) = outcome(event) {
+        record(state, route, body, success);
     }
 }

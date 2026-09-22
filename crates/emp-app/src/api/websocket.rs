@@ -24,7 +24,6 @@ use crate::util::random_hex;
 use emp_codex::subscription_route_model;
 use emp_core::resolve_route;
 use emp_history::HistoryError;
-use emp_router::ExternalRouter;
 use emp_router::RouterError;
 use emp_router::native_metadata::native_response_headers;
 use emp_transport::ClientWebSocket;
@@ -461,6 +460,16 @@ pub(crate) fn serve_responses_websocket(
                             .and_then(Value::as_str)
                             .map(str::to_owned);
                     }
+                    // Native WS terminal policy preserves Python's generic
+                    // stream failures; only successful turns calibrate here.
+                    if crate::services::context::outcome(&event) == Some(true) {
+                        crate::services::context::record_payload(
+                            state,
+                            &route,
+                            &plan.payload,
+                            true,
+                        );
+                    }
                     terminal = terminal_stream_event(&event);
                     if websocket.send_json(&event).is_err() {
                         return;
@@ -561,6 +570,12 @@ pub(crate) fn serve_responses_websocket(
                     .block_on(upstream.next_event())
                 {
                     Ok(Some(event)) => {
+                        crate::services::context::record_event(
+                            state,
+                            &route,
+                            &Value::Object(request_body.clone()),
+                            &event.body,
+                        );
                         sent_output |= stream_event_activity(&event.body).0;
                         if websocket.send_json(&event.body).is_err() {
                             return;
@@ -586,16 +601,27 @@ pub(crate) fn serve_responses_websocket(
                 }
             }
         } else {
-            let router = ExternalRouter::new(&state.backend.transport.client);
-            let mut upstream = match state.backend.transport.runtime.block_on(router.open_stream(
+            let (mut upstream, candidate) = match crate::services::providers::open_external_stream(
+                state,
                 &route,
                 &Value::Object(request_body.clone()),
                 &request_headers,
                 &ids,
-            )) {
-                Ok(stream) => stream,
+            ) {
+                Ok(result) => result,
                 Err(error) => {
-                    let _ = websocket.send_json(&websocket_router_error(&error));
+                    let event = match error {
+                        crate::services::providers::ExternalStreamOpenError::Router(error) => {
+                            websocket_router_error(&error)
+                        }
+                        crate::services::providers::ExternalStreamOpenError::Route(error) => {
+                            serde_json::json!({"type":"error","status":error.status(),"error":{"code":"router_error","message":error.to_string()}})
+                        }
+                        crate::services::providers::ExternalStreamOpenError::Unsupported => {
+                            serde_json::json!({"type":"error","status":503,"error":{"code":"router_error","message":"provider protocol is unsupported"}})
+                        }
+                    };
+                    let _ = websocket.send_json(&event);
                     continue;
                 }
             };
@@ -607,17 +633,20 @@ pub(crate) fn serve_responses_websocket(
                     .block_on(upstream.next_event())
                 {
                     Ok(Some(event)) => {
+                        crate::services::context::record_event(
+                            state,
+                            &candidate,
+                            &Value::Object(request_body.clone()),
+                            &event.body,
+                        );
                         sent_output |= stream_event_activity(&event.body).0;
                         if websocket.send_json(&event.body).is_err() {
                             return;
                         }
                         if terminal_stream_event(&event.body) {
                             if event.body["type"] == "response.completed" {
-                                crate::services::context::record(
-                                    state,
-                                    &route,
-                                    &Value::Object(request_body.clone()),
-                                    true,
+                                crate::services::providers::persist_protocol_observation(
+                                    state, &candidate,
                                 );
                             }
                             break;

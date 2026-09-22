@@ -542,6 +542,14 @@ class RustEndToEnd(unittest.TestCase):
         result = self.compare_exchange(
             {"model": "native/model", "input": "hello"}, upstream)
         self.assertEqual(result, upstream)
+        contexts = []
+        for backend in self.backends:
+            status, _, raw = backend.request("GET", "/api/capabilities")
+            self.assertEqual(status, 200, raw)
+            record = next(item for item in json.loads(raw)["capabilities"] if item["model_id"] == "native/model")
+            self.assertIsNotNone(record["context"]["largest_success_estimate"])
+            contexts.append(record["context"])
+        self.assertEqual(contexts[0], contexts[1])
 
     def test_upstream_503_is_visible_without_replay(self):
         self.compare_exchange(
@@ -620,10 +628,23 @@ class RustEndToEnd(unittest.TestCase):
             self.assertEqual(restored[0], restored[1])
 
     def test_websocket_turn_uses_same_stream_contract(self):
+        for automatic in (False, True):
+            with self.subTest(automatic=automatic):
+                self._websocket_chat_turn(automatic)
+
+    def _websocket_chat_turn(self, automatic):
         chunks = [{"choices": [{"delta": {"content": "Four."}, "finish_reason": "stop"}]}]
         wire = ("data: " + json.dumps(chunks[0]) + "\n\ndata: [DONE]\n\n").encode()
         results = []
         for backend in self.backends:
+            if automatic:
+                status, _, raw = backend.request("GET", "/api/config")
+                self.assertEqual(status, 200, raw)
+                config = json.loads(raw)
+                config["port"] = backend.port
+                next(provider for provider in config["providers"] if provider["id"] == "test")["protocol"] = "auto"
+                status, _, raw = backend.request("POST", "/api/config", config)
+                self.assertEqual(status, 200, raw)
             self.upstream.configure(wire, content_type="text/event-stream")
             with socket.create_connection(("127.0.0.1", backend.port), timeout=8) as client:
                 with client.makefile("rb") as reader:
