@@ -758,6 +758,19 @@ enum BodyError {
     Decode(ContentDecodeError),
 }
 
+fn body_size_error(limit: usize, decoded: bool) -> BodyError {
+    BodyError::Capacity(RequestCapacityError {
+        limit,
+        decoded,
+        reason: emp_transport::RequestCapacityReason::HardLimit,
+        available_bytes: 0,
+        required_memory_bytes: 0,
+        memory_total_bytes: 0,
+        memory_used_bytes: 0,
+        memory_used_percent: None,
+    })
+}
+
 fn read_json_body(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -786,20 +799,22 @@ fn read_json_body(
     let length = raw_length
         .parse::<u128>()
         .map_err(|_| BodyError::Invalid("invalid Content-Length".to_owned()))?;
-    let length = usize::try_from(length).map_err(|_| {
-        BodyError::Capacity(RequestCapacityError {
-            limit: RequestLimitsConfig::default().maximum,
-            decoded: false,
-            reason: emp_transport::RequestCapacityReason::HardLimit,
-            available_bytes: 0,
-            required_memory_bytes: 0,
-            memory_total_bytes: 0,
-            memory_used_bytes: 0,
-            memory_used_percent: None,
-        })
-    })?;
-    let mut budget = state.backend.request_limits.request(TransportKind::Http);
-    budget.ensure(length).map_err(BodyError::Capacity)?;
+    // Python attaches a dynamic request budget only to model-generation paths.
+    // Management requests retain their fixed wire and decoded-body ceiling.
+    let management = request.raw_path().starts_with("/api/");
+    let limit = if management {
+        5 * 1024 * 1024
+    } else {
+        RequestLimitsConfig::default().maximum
+    };
+    let length = usize::try_from(length).map_err(|_| body_size_error(limit, false))?;
+    let mut budget =
+        (!management).then(|| state.backend.request_limits.request(TransportKind::Http));
+    if let Some(budget) = &mut budget {
+        budget.ensure(length).map_err(BodyError::Capacity)?;
+    } else if length > limit {
+        return Err(body_size_error(limit, false));
+    }
     if body.len() > length {
         body.truncate(length);
     }
@@ -818,10 +833,13 @@ fn read_json_body(
     let body = decode_content(
         body,
         request.header("Content-Encoding").unwrap_or_default(),
-        RequestLimitsConfig::default().maximum,
-        Some(&mut budget),
+        limit,
+        budget.as_mut(),
     )
-    .map_err(BodyError::Decode)?;
+    .map_err(|error| match error {
+        ContentDecodeError::DecodedTooLarge { limit } => body_size_error(limit, true),
+        error => BodyError::Decode(error),
+    })?;
     let value: Value = serde_json::from_slice(&body)
         .map_err(|error| BodyError::Invalid(format!("request body must be valid JSON: {error}")))?;
     if !value.is_object() {

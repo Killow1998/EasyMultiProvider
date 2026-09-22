@@ -157,15 +157,26 @@ impl fmt::Display for RequestCapacityError {
         match self.reason {
             RequestCapacityReason::HardLimit => write!(
                 formatter,
-                "request body is too large (EMP limit: {} bytes)",
+                "{}request body is too large (EMP limit: {} bytes)",
+                if self.decoded { "decoded " } else { "" },
                 self.limit
             ),
-            RequestCapacityReason::MemoryLimit => write!(
-                formatter,
-                "EMP out of memory safeguard blocked this request ({:.1} MiB available; {:.1} MiB required including safety headroom). Free memory and retry.",
-                self.available_bytes as f64 / (1024.0 * 1024.0),
-                self.required_memory_bytes as f64 / (1024.0 * 1024.0),
-            ),
+            RequestCapacityReason::MemoryLimit => {
+                formatter.write_str(
+                    "EMP out of memory safeguard blocked this request (system memory: ",
+                )?;
+                if let Some(used) = self.memory_used_percent {
+                    write!(formatter, "{used:.1}% used, ")?;
+                }
+                write!(
+                    formatter,
+                    "{:.1} of {:.1} MiB used; {:.1} MiB available; {:.1} MiB required including safety headroom). Free memory and retry.",
+                    self.memory_used_bytes as f64 / (1024.0 * 1024.0),
+                    self.memory_total_bytes as f64 / (1024.0 * 1024.0),
+                    self.available_bytes as f64 / (1024.0 * 1024.0),
+                    self.required_memory_bytes as f64 / (1024.0 * 1024.0)
+                )
+            }
         }
     }
 }

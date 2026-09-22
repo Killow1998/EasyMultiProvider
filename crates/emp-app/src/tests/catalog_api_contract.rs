@@ -229,6 +229,79 @@ json.dump(results, sys.stdout, ensure_ascii=False)
 }
 
 #[test]
+fn management_body_limits_match_python_before_and_after_decompression() {
+    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+        return;
+    };
+    let script = r#"
+import base64, gzip, io, json, sys
+from email.message import Message
+from types import SimpleNamespace
+from easy_multi_provider.server import make_handler
+limit = 5 * 1024 * 1024
+payload = b'{"padding":"' + b'x' * limit + b'"}'
+cases = []
+for data, size, encoding in [(b'',len(payload),''), (gzip.compress(payload), None, 'gzip')]:
+    handler = object.__new__(make_handler(SimpleNamespace()))
+    handler.path = '/api/catalog/refresh'
+    handler.headers = Message()
+    handler.headers['Content-Type'] = 'application/json'
+    handler.headers['Content-Length'] = str(size if size is not None else len(data))
+    handler.headers['Content-Encoding'] = encoding
+    handler.rfile = io.BytesIO(data)
+    handler._management_allowed = lambda: True
+    handler._record_http_request_start_once = lambda: None
+    handler._record_management_event = lambda *args, **kwargs: None
+    handler._record_request_rejection = lambda *args, **kwargs: None
+    captured = {}
+    handler._send = lambda status, body, *args, **kwargs: captured.update(status=status,payload=json.loads(body))
+    handler._do_POST()
+    cases.append({'data':base64.b64encode(data).decode(), 'length':handler.headers['Content-Length'], 'encoding':encoding, 'expected':captured})
+json.dump(cases, sys.stdout)
+"#;
+    let output = Command::new(python)
+        .args(["-c", script])
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .output()
+        .expect("Python body oracle");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let cases: Vec<Value> = serde_json::from_slice(&output.stdout).expect("body fixtures");
+    let upstream = CatalogUpstream::start(200);
+    let (_directory, server) = catalog_server(&upstream);
+    for case in cases {
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(case["data"].as_str().expect("base64"))
+            .expect("body");
+        let mut stream = TcpStream::connect(server.local_addr()).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("timeout");
+        write!(stream,"POST /api/catalog/refresh HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nContent-Encoding: {}\r\n{}\r\nConnection: close\r\n\r\n",server.local_addr(),case["length"].as_str().expect("length"),case["encoding"].as_str().expect("encoding"),session_cookie_header(&server)).expect("request headers");
+        stream.write_all(&data).expect("request body");
+        stream.shutdown(Shutdown::Write).expect("finish request");
+        let mut wire = String::new();
+        stream.read_to_string(&mut wire).expect("response");
+        let status: u16 = wire
+            .split_whitespace()
+            .nth(1)
+            .expect("status")
+            .parse()
+            .expect("status number");
+        assert_eq!(
+            json!({"status":status,"payload":parsed_body(&wire)}),
+            case["expected"]
+        );
+        assert_eq!(status, 413);
+    }
+    assert!(upstream.requests.try_recv().is_err());
+    server.shutdown().expect("shutdown");
+}
+
+#[test]
 fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
     let upstream = CatalogUpstream::start(200);
     let (directory, server) = catalog_server(&upstream);

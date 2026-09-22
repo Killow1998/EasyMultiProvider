@@ -12,6 +12,62 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 #[test]
+fn capacity_error_messages_match_python_with_decoded_and_memory_details() {
+    use emp_transport::{RequestCapacityError, RequestCapacityReason};
+    let mut cases = Vec::new();
+    for reason in [
+        RequestCapacityReason::HardLimit,
+        RequestCapacityReason::MemoryLimit,
+    ] {
+        for decoded in [false, true] {
+            for memory_used_percent in [None, Some(87.5)] {
+                cases.push(RequestCapacityError {
+                    limit: 5 * 1024 * 1024,
+                    decoded,
+                    reason,
+                    available_bytes: 512 * 1024 * 1024,
+                    required_memory_bytes: 768 * 1024 * 1024,
+                    memory_total_bytes: 4096 * 1024 * 1024,
+                    memory_used_bytes: 3584 * 1024 * 1024,
+                    memory_used_percent,
+                });
+            }
+        }
+    }
+    // Keep the synthetic status within usize on all supported targets.
+    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+        return;
+    };
+    let mut child = Command::new(python)
+        .args([
+            "-c",
+            r#"
+import json,sys
+from easy_multi_provider.transport import RequestBodyTooLarge
+json.dump([str(RequestBodyTooLarge(**case)) for case in json.load(sys.stdin)],sys.stdout)
+"#,
+        ])
+        .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("capacity message oracle");
+    serde_json::to_writer(child.stdin.take().expect("stdin"), &cases).expect("capacity fixtures");
+    let output = child.wait_with_output().expect("oracle output");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected: Value = serde_json::from_slice(&output.stdout).expect("oracle JSON");
+    assert_eq!(
+        json!(cases.iter().map(ToString::to_string).collect::<Vec<_>>()),
+        expected
+    );
+}
+
+#[test]
 fn sse_parser_matches_live_python_oracle_when_configured() {
     let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
         return;
