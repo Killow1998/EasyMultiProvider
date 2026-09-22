@@ -1,13 +1,13 @@
 use super::*;
 
-struct CatalogUpstream {
+pub(super) struct CatalogUpstream {
     address: SocketAddr,
     requests: mpsc::Receiver<(String, BTreeMap<String, String>, Value)>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
 impl CatalogUpstream {
-    fn start(status: u16) -> Self {
+    pub(super) fn start(status: u16) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("discovery listener");
         listener
             .set_nonblocking(true)
@@ -70,7 +70,7 @@ impl Drop for CatalogUpstream {
         }
     }
 }
-fn catalog_server(upstream: &CatalogUpstream) -> (TempDir, ServerHandle) {
+pub(super) fn catalog_server(upstream: &CatalogUpstream) -> (TempDir, ServerHandle) {
     let directory = tempfile::tempdir().expect("temp dir");
     let root = canonical_root(&directory);
     let config_path = root.join("config.json");
@@ -100,7 +100,7 @@ fn catalog_server(upstream: &CatalogUpstream) -> (TempDir, ServerHandle) {
     .expect("server");
     (directory, server)
 }
-fn parsed_body(wire: &str) -> Value {
+pub(super) fn parsed_body(wire: &str) -> Value {
     serde_json::from_str(wire.split_once("\r\n\r\n").expect("response head").1).expect("JSON")
 }
 

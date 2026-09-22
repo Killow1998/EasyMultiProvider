@@ -10,12 +10,14 @@ use emp_codex::{
     management_views::{model_views, subscription_model_options},
     merged_catalog::build_catalog,
     preserve_native_catalog,
+    subscription_contexts::validate_subscription_contexts,
 };
 use emp_router::discovery::discover_models;
 use emp_state::{
-    ConfigError, discovery_merge::merge_selected_models, filesystem::write_catalog_json,
-    load_configuration, observed_at_now, provider_api_key, public_configuration_with_file_status,
-    same_account_auth, save_configuration_in_transaction, validate_auth_json,
+    ConfigError, VaultStore, canonicalize_private_paths, discovery_merge::merge_selected_models,
+    duplicate_account_status, filesystem::write_catalog_json, load_configuration, merge_web_update,
+    migrate_duplicate_native_visibility, observed_at_now, provider_api_key,
+    public_configuration_with_file_status, save_configuration_in_transaction,
     with_file_transaction,
 };
 use serde_json::{Value, json};
@@ -41,6 +43,9 @@ pub(super) fn management_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
+    if request.raw_path() == "/api/config" {
+        return update_configuration(request, state, &body);
+    }
     if request.raw_path() == "/api/catalog/refresh" {
         let config = match state.backend.config.lock() {
             Ok(config) => config,
@@ -138,6 +143,43 @@ pub(super) fn management_request(
         "added":merged.added,"hidden":merged.hidden,"catalog_path":catalog_path,
         "model_count":catalog["models"].as_array().map_or(0,Vec::len),
     }))
+}
+
+fn update_configuration(request: Request<'_>, state: &ServerState, incoming: &Value) -> Vec<u8> {
+    let mut current = match state.backend.config.lock() {
+        Ok(config) => config,
+        Err(_) => return internal_error(),
+    };
+    let mut updated = match merge_web_update(&current, incoming) {
+        Ok(updated) => updated,
+        Err(error) => return config_error(&error.to_string()),
+    };
+    if let Err(error) = canonicalize_private_paths(&mut updated, &state.backend.config_path) {
+        return config_error(&error.to_string());
+    }
+    let sources = catalog_sources(state, &updated);
+    if let Err(error) =
+        validate_subscription_contexts(&updated, Some(&current), &sources.native, &sources.accounts)
+    {
+        return config_error(&error.to_string());
+    }
+    let (updated, _) = migrate_duplicate_native_visibility(&updated, &sources.duplicates);
+    let saved = with_file_transaction(|transaction| -> Result<Value, ConfigError> {
+        save_configuration_in_transaction(
+            &updated,
+            Some(&state.backend.config_path),
+            &state.backend.vault,
+            transaction,
+        )?;
+        load_configuration(Some(&state.backend.config_path))
+    });
+    let saved = match saved {
+        Ok(saved) => saved,
+        Err(_) => return internal_error(),
+    };
+    *current = saved;
+    drop(current);
+    read_management_request(request, state)
 }
 
 pub(super) fn models_request(request: Request<'_>, state: &ServerState) -> Vec<u8> {
@@ -275,13 +317,6 @@ fn server_catalog(state: &ServerState, config: &Value) -> Value {
 fn catalog_sources(state: &ServerState, config: &Value) -> CatalogSources {
     let native = load_native_catalog(config);
     let mut account_catalogs = BTreeMap::new();
-    let mut duplicates = BTreeMap::new();
-    let mut seen = Vec::<(String, Value)>::new();
-    if let Some(auth) = native_auth_document(&state.backend.native_auth_path)
-        .filter(|auth| validate_auth_json(auth).is_ok())
-    {
-        seen.push(("当前 Codex 登录".to_owned(), auth));
-    }
     for account in config
         .get("accounts")
         .and_then(Value::as_array)
@@ -295,27 +330,6 @@ fn catalog_sources(state: &ServerState, config: &Value) -> CatalogSources {
             .get("id")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if let Some(auth) = account
-            .get("auth_file")
-            .and_then(Value::as_str)
-            .and_then(|path| {
-                state
-                    .backend
-                    .vault
-                    .read_encrypted_json(Path::new(path))
-                    .ok()
-            })
-            .filter(|auth| validate_auth_json(auth).is_ok())
-        {
-            if let Some((source, _)) = seen
-                .iter()
-                .find(|(_, previous)| same_account_auth(&auth, previous))
-            {
-                duplicates.insert(id.to_owned(), source.clone());
-            } else {
-                seen.push((id.to_owned(), auth));
-            }
-        }
         let catalog = account_catalog(
             config.as_object().expect("config object"),
             account_map,
@@ -326,8 +340,38 @@ fn catalog_sources(state: &ServerState, config: &Value) -> CatalogSources {
     CatalogSources {
         native,
         accounts: account_catalogs,
-        duplicates,
+        duplicates: duplicate_accounts(
+            config,
+            &state.backend.vault,
+            &state.backend.native_auth_path,
+        ),
     }
+}
+
+pub(super) fn duplicate_accounts(
+    config: &Value,
+    vault: &VaultStore,
+    native_auth_path: &Path,
+) -> BTreeMap<String, String> {
+    let native = native_auth_document(native_auth_path);
+    let credentials = config
+        .get("accounts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|account| {
+            let id = account.get("id")?.as_str()?;
+            let path = account.get("auth_file")?.as_str()?;
+            if path.is_empty() {
+                return None;
+            }
+            vault
+                .read_encrypted_json(Path::new(path))
+                .ok()
+                .map(|auth| (id.to_owned(), auth))
+        })
+        .collect::<Vec<_>>();
+    duplicate_account_status(native.as_ref(), &credentials)
 }
 fn json_response(value: &Value) -> Vec<u8> {
     response(

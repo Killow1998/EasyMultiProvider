@@ -179,9 +179,18 @@ Progress evidence on 2026-09-21:
   limits also replay existing Python UI/context tests. Local formatting,
   warnings-denied clippy and workspace tests pass with the Python oracle enabled.
   These additions have not yet received a new cross-platform CI run.
-  Next: wire configuration writes with subscription-limit validation and
-  runtime/integration state, then continue the native transport and history
-  slices. The management UI is not yet fully functional; native generation,
+  Configuration writes now merge the browser payload through the existing
+  secret/provenance rules, validate each native/account owner's subscription
+  limit, persist encrypted credentials, and preserve the old in-memory state
+  on a failed commit. Unchanged context settings remain valid after an upstream
+  catalog limit shrinks, matching Python. Startup and saves migrate duplicate
+  native visibility once; duplicate labels use identity overlap rather than
+  the stricter credential-replacement comparison. Existing Python subscription
+  tests, live AppState/HTTP-handler comparisons, restart checks and a failed
+  secret/config commit fixture cover this slice. Native auth remains unchanged.
+  Next: port runtime/integration lifecycle effects of configuration writes,
+  then continue the native transport and history slices.
+  The management UI is not yet fully functional; native generation,
   history/model-switch/compaction/subagent consumer tests, complete packaging
   and comparative performance gates remain required before cutover.
 

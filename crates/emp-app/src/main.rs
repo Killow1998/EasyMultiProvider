@@ -1787,7 +1787,7 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
             if request.method == RequestMethod::Post
                 && matches!(
                     request.raw_path(),
-                    "/api/providers/discover" | "/api/catalog/refresh"
+                    "/api/providers/discover" | "/api/catalog/refresh" | "/api/config"
                 ) =>
         {
             Some(catalog_api::management_request(
@@ -1874,8 +1874,12 @@ fn native_account_snapshot(state: &ServerState, config: &Value) -> Value {
 
 fn accounts_snapshot(state: &ServerState) -> Option<Value> {
     let config = state.backend.config.lock().ok()?.clone();
-    let public =
-        public_configuration_with_file_status(&config, &BTreeMap::new(), regular_file).ok()?;
+    let duplicates = catalog_api::duplicate_accounts(
+        &config,
+        &state.backend.vault,
+        &state.backend.native_auth_path,
+    );
+    let public = public_configuration_with_file_status(&config, &duplicates, regular_file).ok()?;
     let errors = state
         .backend
         .quota_refresh_errors
@@ -2646,12 +2650,32 @@ impl ServerHandle {
         let session_path = web_session_path(config_path)?;
         let session =
             load_or_create_web_session(&session_path, now).map_err(AppError::WebSession)?;
-        let config = load_configuration(Some(config_path))?;
+        let mut config = load_configuration(Some(config_path))?;
         let state_root = config_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("state");
         let vault = VaultStore::from_environment(&state_root.join("master.key"))?;
+        let duplicates = catalog_api::duplicate_accounts(&config, &vault, &native_auth_path);
+        let (migrated, changed) =
+            emp_state::migrate_duplicate_native_visibility(&config, &duplicates);
+        config = migrated;
+        if changed
+            || config
+                .get("providers")
+                .and_then(Value::as_array)
+                .is_some_and(|providers| {
+                    providers.iter().any(|provider| {
+                        provider
+                            .get("api_key")
+                            .and_then(Value::as_str)
+                            .is_some_and(|key| !key.is_empty())
+                    })
+                })
+        {
+            save_configuration(&config, Some(config_path), &vault)?;
+            config = load_configuration(Some(config_path))?;
+        }
         let client = HttpClient::new(HttpClientPolicy::new(
             ProxyPolicy::from_environment(ProxyEnvironment::capture()),
             TimeoutPolicy::default(),
@@ -2878,6 +2902,7 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     mod catalog_api_contract;
+    mod config_api_contract;
     use super::*;
     use std::io::{BufRead, BufReader};
     use std::net::TcpStream;
