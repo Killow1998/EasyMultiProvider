@@ -28,6 +28,16 @@
       "fixture": "api/healthz-ok.json"
     },
     {
+      "id": "core.route-resolution.python-rust",
+      "level": "api",
+      "source": "easy_multi_provider/route_plan.py and easy_multi_provider/capabilities.py",
+      "transport": "none",
+      "dialect": "none",
+      "normalization": [],
+      "side_effects": ["none; native catalog lookup is an injected pure fixture"],
+      "fixture": "core/python-route-resolution.json"
+    },
+    {
       "id": "stream.reasoning-answer-separation",
       "level": "events",
       "source": "tests/test_chat_projection_regressions.py",

@@ -203,6 +203,7 @@ impl<'a> ExternalRouter<'a> {
         let headers = upstream_headers(provider, route.protocol, incoming)?;
         let portable_body = body_with_supported_effort(route, body);
         let payload = match route.protocol {
+            Protocol::Auto => return Err(unresolved_protocol()),
             Protocol::ChatCompletions => {
                 responses_to_chat(&portable_body, &route.upstream_model).map_err(protocol_error)?
             }
@@ -288,6 +289,7 @@ impl<'a> ExternalRouter<'a> {
             .map(String::as_str)
             .collect::<Vec<_>>();
         let projected = match route.protocol {
+            Protocol::Auto => return Err(unresolved_protocol()),
             Protocol::ChatCompletions => response_from_chat(
                 &upstream,
                 &route.requested_model,
@@ -350,6 +352,7 @@ impl<'a> ExternalRouter<'a> {
             .map(String::as_str)
             .collect::<Vec<_>>();
         let (payload, projection) = match route.protocol {
+            Protocol::Auto => return Err(unresolved_protocol()),
             Protocol::ChatCompletions => {
                 let mut payload = responses_to_chat(&portable_body, &route.upstream_model)
                     .map_err(protocol_error)?;
@@ -1030,6 +1033,7 @@ fn endpoint(provider: &Map<String, Value>, protocol: Protocol) -> Result<String,
         .ok_or_else(|| invalid_request("provider base URL is missing"))?
         .trim_end_matches('/');
     let suffix = match protocol {
+        Protocol::Auto => return Err(unresolved_protocol()),
         Protocol::Responses => "/responses",
         Protocol::ChatCompletions => "/chat/completions",
         Protocol::AnthropicMessages => "/messages",
@@ -1146,6 +1150,17 @@ fn invalid_request(message: &'static str) -> RouterError {
         Some("invalid_request".to_owned()),
         None,
         message,
+    )
+}
+
+fn unresolved_protocol() -> RouterError {
+    RouterError::new(
+        RouterErrorKind::UnsupportedProtocol,
+        501,
+        FailureClass::ProtocolRejection,
+        Some("protocol_not_negotiated".to_owned()),
+        None,
+        "automatic protocol must be negotiated before external routing",
     )
 }
 

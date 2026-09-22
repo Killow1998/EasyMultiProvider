@@ -1,0 +1,199 @@
+{
+  "reference_revision": "47a8a0a5e06f82e3fd488fe00c4704fcf0b06f78",
+  "endpoints": [
+    "https://user:secret@Example.COM:443/v1/?token=hidden#fragment",
+    "https://example.com/a/../v1//",
+    "http://example.com:8080/v1",
+    "https://[2001:db8::1]:443/v1",
+    "https://例子.测试/路径/../v1",
+    "not an endpoint",
+    ""
+  ],
+  "identities": [
+    {
+      "provider": {"deployment_identity": "provider-prod"},
+      "model": {"deployment_id": "model/prod"}
+    },
+    {
+      "provider": {"deployment": "provider:blue"},
+      "model": {"deployment_identity": "contains space"}
+    },
+    {
+      "provider": {"deployment": "also invalid!"},
+      "model": {}
+    }
+  ],
+  "upstreams": [
+    {
+      "provider": {"id": "demo"},
+      "model": {"upstream_id": "demo/gpt-upstream"},
+      "requested": "demo/logical"
+    },
+    {
+      "provider": {"id": "demo"},
+      "model": {},
+      "requested": "demo/logical"
+    },
+    {
+      "provider": {"id": "demo"},
+      "model": {"upstream_id": "other/gpt-upstream"},
+      "requested": "demo/logical"
+    }
+  ],
+  "routes": [
+    {
+      "name": "explicit portable Responses",
+      "model_id": "demo/logical",
+      "config": {
+        "providers": [{
+          "id": "demo",
+          "enabled": true,
+          "auth_mode": "api_key",
+          "protocol": "responses",
+          "base_url": "https://user:secret@example.com/v1/?key=hidden",
+          "deployment": "provider-blue"
+        }],
+        "models": [{
+          "id": "demo/logical",
+          "provider": "demo",
+          "enabled": true,
+          "upstream_id": "demo/upstream",
+          "deployment_id": "model/prod"
+        }]
+      },
+      "catalog": {}
+    },
+    {
+      "name": "explicit auto remains unresolved",
+      "model_id": "auto/glm",
+      "config": {
+        "providers": [{
+          "id": "auto",
+          "auth_mode": "api_key",
+          "protocol": "auto",
+          "base_url": "https://gateway.example/v1"
+        }],
+        "models": [{"id": "auto/glm", "provider": "auto", "upstream_id": "glm"}]
+      },
+      "catalog": {}
+    },
+    {
+      "name": "missing explicit provider",
+      "model_id": "missing/model",
+      "config": {
+        "providers": [],
+        "models": [{"id": "missing/model", "provider": "missing"}]
+      },
+      "catalog": {}
+    },
+    {
+      "name": "disabled explicit provider",
+      "model_id": "disabled/model",
+      "config": {
+        "providers": [{
+          "id": "disabled",
+          "enabled": false,
+          "auth_mode": "api_key",
+          "protocol": "chat_completions",
+          "base_url": "https://disabled.example/v1"
+        }],
+        "models": [{"id": "disabled/model", "provider": "disabled"}]
+      },
+      "catalog": {}
+    },
+    {
+      "name": "subscription account prefix",
+      "model_id": "secondary/gpt-current",
+      "config": {
+        "codex_base_url": "https://chatgpt.com/backend-api/codex/",
+        "accounts": [{
+          "id": "plus",
+          "name": "Plus",
+          "prefix": "secondary",
+          "auth_file": "/tmp/plus-auth.json",
+          "enabled": true
+        }],
+        "providers": [],
+        "models": []
+      },
+      "catalog": {
+        "plus": [{
+          "slug": "gpt-current",
+          "context_window": 272000,
+          "supported_in_api": true
+        }]
+      }
+    },
+    {
+      "name": "unique forward provider inherits native catalog",
+      "model_id": "gpt-current",
+      "config": {
+        "codex_base_url": "https://chatgpt.com/backend-api/codex",
+        "providers": [{
+          "id": "native-forward",
+          "name": "Native",
+          "auth_mode": "forward",
+          "protocol": "responses",
+          "base_url": "https://chatgpt.com/backend-api/codex/"
+        }],
+        "models": []
+      },
+      "catalog": {
+        "_native": [{"slug": "gpt-current", "context_window": 256000}]
+      }
+    },
+    {
+      "name": "implicit native model",
+      "model_id": "gpt-native",
+      "config": {
+        "codex_base_url": "https://chatgpt.com/backend-api/codex",
+        "_native_auth_path": "/tmp/native-auth.json",
+        "providers": [],
+        "models": []
+      },
+      "catalog": {
+        "_native": [{"slug": "gpt-native", "visibility": "hide"}]
+      }
+    },
+    {
+      "name": "unsupported native model stays unknown",
+      "model_id": "gpt-unsupported",
+      "config": {"providers": [], "models": []},
+      "catalog": {
+        "_native": [{"slug": "gpt-unsupported", "supported_in_api": false}]
+      }
+    },
+    {
+      "name": "multiple forward providers are ambiguous",
+      "model_id": "gpt-any",
+      "config": {
+        "providers": [
+          {"id": "a", "auth_mode": "forward", "protocol": "responses", "base_url": "https://a.example/v1"},
+          {"id": "b", "auth_mode": "forward", "protocol": "responses", "base_url": "https://b.example/v1"}
+        ],
+        "models": []
+      },
+      "catalog": {}
+    },
+    {
+      "name": "explicit model precedes native identity",
+      "model_id": "gpt-native",
+      "config": {
+        "providers": [{
+          "id": "external",
+          "auth_mode": "api_key",
+          "protocol": "anthropic_messages",
+          "base_url": "https://anthropic.example/v1"
+        }],
+        "models": [{
+          "id": "gpt-native",
+          "provider": "external",
+          "upstream_id": "claude-upstream"
+        }]
+      },
+      "catalog": {
+        "_native": [{"slug": "gpt-native"}]
+      }
+    }
+  ]
+}

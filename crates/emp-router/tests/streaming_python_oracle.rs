@@ -284,6 +284,7 @@ fn stream_fixtures() -> Value {
 
 fn provider(base_url: &str, protocol: Protocol) -> Map<String, Value> {
     let (wire_protocol, auth_mode) = match protocol {
+        Protocol::Auto => panic!("oracle fixture requires a concrete protocol"),
         Protocol::ChatCompletions => ("chat_completions", "api_key"),
         Protocol::AnthropicMessages => ("anthropic_messages", "anthropic_api_key"),
         Protocol::Responses => ("responses", "api_key"),
@@ -299,6 +300,7 @@ fn provider(base_url: &str, protocol: Protocol) -> Map<String, Value> {
 
 fn route(base_url: &str, protocol: Protocol, upstream_model: &str) -> ResolvedRoute {
     let dialect = match protocol {
+        Protocol::Auto => panic!("oracle fixture requires a concrete protocol"),
         Protocol::ChatCompletions => Dialect::ChatCompletions,
         Protocol::AnthropicMessages => Dialect::AnthropicMessages,
         Protocol::Responses => Dialect::PortableResponses,

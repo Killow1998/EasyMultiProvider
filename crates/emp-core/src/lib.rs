@@ -11,6 +11,14 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
+mod route;
+
+pub use route::{
+    RouteResolutionError, classify_dialect, deployment_identity, endpoint_fingerprint,
+    normalize_endpoint, resolve_route, resolve_route_without_catalog, resolved_route_from_parts,
+    resolved_upstream_model,
+};
+
 /// Route selector provenance retained from the Python resolver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,13 +39,27 @@ pub enum Dialect {
     AnthropicMessages,
 }
 
-/// A concrete upstream protocol selected for one request.
+/// A configured protocol identity.  `Auto` is retained because route
+/// resolution is an observation over configuration; concrete protocol
+/// selection happens later and may attempt multiple transports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Protocol {
+    Auto,
     Responses,
     ChatCompletions,
     AnthropicMessages,
+}
+
+impl Protocol {
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Responses => "responses",
+            Self::ChatCompletions => "chat_completions",
+            Self::AnthropicMessages => "anthropic_messages",
+        }
+    }
 }
 
 /// HTTP method retained for future prepared-request checks.

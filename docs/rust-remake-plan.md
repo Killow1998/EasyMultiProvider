@@ -104,9 +104,18 @@ Progress evidence on 2026-09-21:
   timeouts, cancellation by drop, route-scoped pools, proxy isolation, TLS and
   no transport replay. On 2026-09-21 the full local Rust workspace passed fmt,
   clippy with warnings denied, every test target, and all configured live Python
-  oracles. Cross-platform CI is the next gate for this completed external-stream
-  slice; native/account ownership, bounded pre-output compatibility retry, the
-  downstream server boundary and pinned-Codex tool round trips remain in Stage 3.
+  oracles. Cross-platform run `35686632489` then passed the complete Python and
+  pinned-Codex lanes on all three systems plus the Linux Rust workspace; the
+  macOS and Windows workspaces exposed one shared test-CA merge failure. The
+  fixture now uses an explicit configured-roots-only verifier while production
+  clients retain platform trust by default, and awaits the next large-slice CI
+  run for macOS/Windows evidence. Pure immutable route resolution now also
+  matches the live Python oracle for explicit, Subscription-prefix, unique
+  forward and implicit-native selection, including exact 404/503 outcomes,
+  endpoint/deployment identities and unresolved `auto` protocol state. Native
+  catalog filesystem ownership, automatic protocol negotiation, bounded
+  pre-output compatibility retry, the downstream server boundary and
+  pinned-Codex tool round trips remain in Stage 3.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
