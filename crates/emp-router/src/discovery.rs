@@ -10,18 +10,91 @@ use emp_transport::{
     FailureClass, HttpClient, HttpMethod, HttpTransportErrorKind, status_error_class,
 };
 use serde_json::{Map, Value, json};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use url::Url;
 
 use super::{RouterError, RouterErrorKind};
 
 pub const MAX_DISCOVERY_BODY_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_DISCOVERED_MODELS: usize = 1000;
+const MAX_DISCOVERY_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const MAX_DISCOVERY_FIELD_BYTES: usize = 4096;
+const MAX_DISCOVERY_TOKEN_BYTES: usize = 4096;
 const MAX_CONTEXT_WINDOW: u64 = 100_000_000;
 const MAX_MODEL_TIMESTAMP: i64 = 4_102_444_800;
 const DISCOVERY_WALL_CLOCK: Duration = Duration::from_secs(60);
+const MAX_DISCOVERY_PAGES: usize = 20;
+
+struct DiscoveryBudget {
+    deadline: Instant,
+    bytes: usize,
+}
+
+impl DiscoveryBudget {
+    fn new() -> Self {
+        Self {
+            deadline: Instant::now() + DISCOVERY_WALL_CLOCK,
+            bytes: 0,
+        }
+    }
+
+    fn remaining(&self) -> Result<Duration, RouterError> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(discovery_timeout)
+    }
+
+    fn record(&mut self, count: usize) -> Result<(), RouterError> {
+        self.bytes = self.bytes.checked_add(count).ok_or_else(|| {
+            discovery_error(
+                RouterErrorKind::Protocol,
+                502,
+                FailureClass::ProtocolError,
+                "provider discovery response exceeded its total limit",
+            )
+        })?;
+        if self.bytes > MAX_DISCOVERY_TOTAL_BYTES {
+            return Err(discovery_error(
+                RouterErrorKind::Protocol,
+                502,
+                FailureClass::ProtocolError,
+                "provider discovery response exceeded its total limit",
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub async fn discover_models(
+    client: &HttpClient,
+    provider: &Map<String, Value>,
+) -> Result<Vec<Value>, RouterError> {
+    let protocol = provider
+        .get("protocol")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let auth_mode = provider
+        .get("auth_mode")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if protocol == "anthropic_messages" || (protocol == "auto" && auth_mode == "anthropic_api_key")
+    {
+        return discover_anthropic_models(client, provider).await;
+    }
+    let is_native_gemini = provider
+        .get("base_url")
+        .and_then(Value::as_str)
+        .and_then(|value| Url::parse(value).ok())
+        .and_then(|value| value.host_str().map(str::to_owned))
+        .as_deref()
+        == Some("generativelanguage.googleapis.com");
+    if is_native_gemini {
+        return discover_gemini_models(client, provider).await;
+    }
+    discover_generic_models(client, provider).await
+}
 
 pub async fn discover_generic_models(
     client: &HttpClient,
@@ -64,99 +137,343 @@ pub async fn discover_generic_models(
         .into_iter()
         .find_map(|suffix| base.strip_suffix(suffix))
         .unwrap_or(base);
-    let mut headers = BTreeMap::new();
-    headers.insert("Accept".to_owned(), "application/json".to_owned());
-    headers.insert(
-        "User-Agent".to_owned(),
-        format!("EMP/{}", env!("CARGO_PKG_VERSION")),
-    );
-    headers.insert("Authorization".to_owned(), format!("Bearer {key}"));
-    let raw = tokio::time::timeout(DISCOVERY_WALL_CLOCK, async {
-        let response = client
-            .open(
-                HttpMethod::Get,
-                &format!("{base}/models"),
-                headers,
-                None,
-                false,
-            )
-            .await
-            .map_err(|error| {
-                discovery_error(
-                    RouterErrorKind::Transport,
-                    502,
-                    match error.kind() {
-                        HttpTransportErrorKind::ConnectTimeout => FailureClass::ConnectTimeout,
-                        HttpTransportErrorKind::ReadTimeout => FailureClass::Timeout,
-                        _ => FailureClass::Network,
-                    },
-                    match error.kind() {
-                        HttpTransportErrorKind::ConnectTimeout
-                        | HttpTransportErrorKind::ReadTimeout => "provider discovery timed out",
-                        _ => "provider discovery transport failed",
-                    },
-                )
-            })?;
-        let status = response.status();
-        if !(200..300).contains(&status) {
-            return Err(discovery_error(
-                RouterErrorKind::Upstream,
-                status,
-                status_error_class(Some(status)),
-                "provider discovery request failed",
-            ));
+    let headers = bearer_discovery_headers(key);
+    let mut budget = DiscoveryBudget::new();
+    let value = get_json(client, &format!("{base}/models"), headers, &mut budget).await?;
+    project_generic_models(&value)
+}
+
+pub async fn discover_gemini_models(
+    client: &HttpClient,
+    provider: &Map<String, Value>,
+) -> Result<Vec<Value>, RouterError> {
+    if provider.get("auth_mode").and_then(Value::as_str) != Some("api_key") {
+        return Err(discovery_error(
+            RouterErrorKind::InvalidRequest,
+            400,
+            FailureClass::RouterError,
+            "provider discovery requires an API key",
+        ));
+    }
+    let key = required_key(provider)?;
+    let base = provider
+        .get("base_url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim_end_matches('/');
+    if base.is_empty() {
+        return Err(discovery_error(
+            RouterErrorKind::InvalidRequest,
+            400,
+            FailureClass::RouterError,
+            "provider base URL is missing",
+        ));
+    }
+    let base = base.strip_suffix("/openai").unwrap_or(base);
+    let headers = gemini_discovery_headers(key);
+    let mut budget = DiscoveryBudget::new();
+    let mut result = Vec::new();
+    let mut page_token = None::<String>;
+    for _ in 0..MAX_DISCOVERY_PAGES {
+        let url = page_token.as_ref().map_or_else(
+            || format!("{base}/models"),
+            |token| format!("{base}/models?pageToken={}", quote_query(token)),
+        );
+        let value = get_json(client, &url, headers.clone(), &mut budget).await?;
+        append_gemini_models(&value, &mut result)?;
+        page_token = pagination_token(value.get("nextPageToken"))?;
+        if page_token.is_none() {
+            break;
         }
-        response
-            .read_limited(MAX_DISCOVERY_BODY_BYTES)
-            .await
-            .map_err(|error| {
-                let timed_out = error.kind() == HttpTransportErrorKind::ReadTimeout;
-                discovery_error(
-                    if timed_out {
-                        RouterErrorKind::Transport
-                    } else {
-                        RouterErrorKind::Protocol
-                    },
-                    if timed_out { 504 } else { 502 },
-                    if timed_out {
-                        FailureClass::Timeout
-                    } else {
-                        FailureClass::ProtocolError
-                    },
-                    if timed_out {
-                        "provider discovery timed out"
-                    } else {
-                        "provider discovery response exceeded its limit"
-                    },
-                )
+    }
+    Ok(result)
+}
+
+pub fn project_gemini_models(value: &Map<String, Value>) -> Result<Vec<Value>, RouterError> {
+    let mut result = Vec::new();
+    append_gemini_models(value, &mut result)?;
+    Ok(result)
+}
+
+fn append_gemini_models(
+    value: &Map<String, Value>,
+    result: &mut Vec<Value>,
+) -> Result<(), RouterError> {
+    let items = value
+        .get("models")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    for item in items {
+        if result.len() >= MAX_DISCOVERED_MODELS {
+            return Err(model_count_error());
+        }
+        let Some(item) = item.as_object() else {
+            continue;
+        };
+        if item
+            .get("supportedGenerationMethods")
+            .and_then(Value::as_array)
+            .is_some_and(|methods| {
+                !methods.is_empty()
+                    && !methods
+                        .iter()
+                        .any(|method| method.as_str() == Some("generateContent"))
             })
-    })
-    .await
-    .map_err(|_| {
-        discovery_error(
-            RouterErrorKind::Transport,
-            504,
-            FailureClass::Timeout,
-            "provider discovery timed out",
-        )
-    })??;
-    let value: Value = serde_json::from_slice(&raw).map_err(|_| {
-        discovery_error(
-            RouterErrorKind::Protocol,
-            502,
-            FailureClass::ProtocolError,
-            "provider discovery returned invalid JSON",
-        )
-    })?;
-    let value = value.as_object().ok_or_else(|| {
-        discovery_error(
-            RouterErrorKind::Protocol,
-            502,
-            FailureClass::ProtocolError,
-            "provider discovery returned an invalid shape",
-        )
-    })?;
-    project_generic_models(value)
+        {
+            continue;
+        }
+        let Some(model_id) = model_id(item.get("name")) else {
+            continue;
+        };
+        let (supports_reasoning, reasoning_levels) = advertised_reasoning(item);
+        let supports_summaries = advertised_reasoning_summaries(item);
+        let raw_input =
+            non_null(item.get("inputModalities")).or_else(|| item.get("supportedInputModalities"));
+        let raw_output = non_null(item.get("outputModalities"))
+            .or_else(|| item.get("supportedOutputModalities"));
+        let input_limit = positive_int(item.get("inputTokenLimit"));
+        let output_limit = positive_int(item.get("outputTokenLimit"));
+        let display_name = model_text(item.get("displayName"), &model_id, "display name")?;
+        let description = model_text(item.get("description"), "", "description")?;
+        result.push(json!({
+            "upstream_id": model_id,
+            "display_name": display_name,
+            "description": description,
+            "context_window": input_limit,
+            "max_input_tokens": input_limit,
+            "output_limit": output_limit,
+            "supports_reasoning": supports_reasoning,
+            "supports_reasoning_summaries": supports_summaries,
+            "reasoning_levels": reasoning_levels,
+            "input_modalities": normalize_input_modalities(raw_input),
+            "output_modalities": normalize_output_modalities(raw_output),
+            "supports_image_detail_original": false,
+            "capability_sources": {
+                "supports_reasoning": source(if supports_reasoning.is_some() { "advertised" } else { "unknown" }),
+                "supports_reasoning_summaries": source(if supports_summaries.is_some() { "advertised" } else { "unknown" }),
+                "reasoning_levels": source(if reasoning_levels.is_empty() { "unknown" } else { "advertised" }),
+                "input_modalities": source(input_modalities_metadata_source(raw_input)),
+                "output_modalities": source(output_modalities_metadata_source(raw_output)),
+                "supports_image_detail_original": source("unknown"),
+                "context_window": source(if input_limit > 0 { "advertised" } else { "unknown" }),
+                "max_input_tokens": source(if input_limit > 0 { "advertised" } else { "unknown" }),
+                "output_limit": source(if output_limit > 0 { "advertised" } else { "unknown" }),
+            },
+            "created_at": created_timestamp(first_truthy(item, &["created", "created_at", "updated_at"])),
+        }));
+    }
+    Ok(())
+}
+
+pub async fn discover_anthropic_models(
+    client: &HttpClient,
+    provider: &Map<String, Value>,
+) -> Result<Vec<Value>, RouterError> {
+    let key = required_key(provider)?;
+    let base = provider
+        .get("base_url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim_end_matches('/');
+    if base.is_empty() {
+        return Err(discovery_error(
+            RouterErrorKind::InvalidRequest,
+            400,
+            FailureClass::RouterError,
+            "provider base URL is missing",
+        ));
+    }
+    let base = ["/messages", "/chat/completions", "/responses"]
+        .into_iter()
+        .find_map(|suffix| base.strip_suffix(suffix))
+        .unwrap_or(base);
+    let version = provider
+        .get("anthropic_version")
+        .and_then(Value::as_str)
+        .unwrap_or("2023-06-01");
+    let headers = anthropic_discovery_headers(key, version);
+    let mut budget = DiscoveryBudget::new();
+    let mut result = Vec::new();
+    let mut url = format!("{base}/models?limit=1000");
+    for _ in 0..MAX_DISCOVERY_PAGES {
+        let value = get_json(client, &url, headers.clone(), &mut budget).await?;
+        append_anthropic_models(&value, &mut result)?;
+        let has_more = value.get("has_more").is_some_and(python_truthy);
+        let after_id = value.get("last_id").filter(|value| python_truthy(value));
+        if !has_more || after_id.is_none() {
+            break;
+        }
+        let after_id = after_id
+            .and_then(python_scalar)
+            .ok_or_else(pagination_error)?;
+        url = format!(
+            "{base}/models?limit=1000&after_id={}",
+            quote_query(&after_id)
+        );
+    }
+    Ok(result)
+}
+
+pub fn project_anthropic_models(value: &Map<String, Value>) -> Result<Vec<Value>, RouterError> {
+    let mut result = Vec::new();
+    append_anthropic_models(value, &mut result)?;
+    Ok(result)
+}
+
+fn append_anthropic_models(
+    value: &Map<String, Value>,
+    result: &mut Vec<Value>,
+) -> Result<(), RouterError> {
+    let items = value
+        .get("data")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    for item in items {
+        if result.len() >= MAX_DISCOVERED_MODELS {
+            return Err(model_count_error());
+        }
+        let Some(item) = item.as_object() else {
+            continue;
+        };
+        let Some(model_id) = model_id(item.get("id")) else {
+            continue;
+        };
+        let capabilities = item
+            .get("capabilities")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let thinking = nested_supported(&capabilities, "thinking");
+        let effort = nested_supported(&capabilities, "effort");
+        let image = nested_supported(&capabilities, "image_input");
+        let pdf = nested_supported(&capabilities, "pdf_input");
+        let structured_output = nested_supported(&capabilities, "structured_outputs");
+        let explicit_reasoning = [thinking, effort].into_iter().flatten().collect::<Vec<_>>();
+        let supports_reasoning = (!explicit_reasoning.is_empty())
+            .then(|| explicit_reasoning.into_iter().any(|value| value));
+        let supports_summaries = advertised_reasoning_summaries(item);
+        let mut reasoning_levels = Vec::new();
+        if effort == Some(true) {
+            let effort = capabilities
+                .get("effort")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            for level in ["low", "medium", "high", "xhigh", "max"] {
+                if nested_supported(&effort, level) == Some(true) {
+                    reasoning_levels.push(level.to_owned());
+                }
+            }
+        }
+        let mut projected_capabilities = Map::new();
+        let mut extra_sources = Map::new();
+        if let Some(supported) = structured_output {
+            projected_capabilities.insert("structured_output".to_owned(), supported.into());
+            extra_sources.insert("structured_output".to_owned(), source("advertised"));
+        }
+        let modality_evidence = image.is_some() || pdf.is_some();
+        let mut raw_input = vec![Value::String("text".to_owned())];
+        if image == Some(true) {
+            raw_input.push(Value::String("image".to_owned()));
+        }
+        if pdf == Some(true) {
+            raw_input.push(Value::String("pdf".to_owned()));
+        }
+        let raw_input = Value::Array(raw_input);
+        let max_input = positive_int(item.get("max_input_tokens"));
+        let max_output = positive_int(item.get("max_tokens"));
+        let display_name = model_text(item.get("display_name"), &model_id, "display name")?;
+        let mut capability_sources = Map::from_iter([
+            (
+                "supports_reasoning".to_owned(),
+                source(if supports_reasoning.is_some() {
+                    "advertised"
+                } else {
+                    "unknown"
+                }),
+            ),
+            (
+                "supports_reasoning_summaries".to_owned(),
+                source(if supports_summaries.is_some() {
+                    "advertised"
+                } else {
+                    "unknown"
+                }),
+            ),
+            (
+                "reasoning_levels".to_owned(),
+                source(if reasoning_levels.is_empty() {
+                    "unknown"
+                } else {
+                    "advertised"
+                }),
+            ),
+            (
+                "input_modalities".to_owned(),
+                source(if modality_evidence {
+                    "advertised"
+                } else {
+                    "unknown"
+                }),
+            ),
+            (
+                "output_modalities".to_owned(),
+                source(output_modalities_metadata_source(None)),
+            ),
+            (
+                "supports_image_detail_original".to_owned(),
+                source("unknown"),
+            ),
+            (
+                "context_window".to_owned(),
+                source(if max_input > 0 {
+                    "advertised"
+                } else {
+                    "unknown"
+                }),
+            ),
+            (
+                "max_input_tokens".to_owned(),
+                source(if max_input > 0 {
+                    "advertised"
+                } else {
+                    "unknown"
+                }),
+            ),
+            (
+                "output_limit".to_owned(),
+                source(if max_output > 0 {
+                    "advertised"
+                } else {
+                    "unknown"
+                }),
+            ),
+        ]);
+        capability_sources.extend(extra_sources);
+        let mut entry = json!({
+            "upstream_id": model_id,
+            "display_name": display_name,
+            "description": "",
+            "context_window": max_input,
+            "max_input_tokens": max_input,
+            "output_limit": max_output,
+            "supports_reasoning": supports_reasoning,
+            "supports_reasoning_summaries": supports_summaries,
+            "reasoning_levels": reasoning_levels,
+            "input_modalities": normalize_input_modalities(Some(&raw_input)),
+            "output_modalities": normalize_output_modalities(None),
+            "supports_image_detail_original": false,
+            "capability_sources": capability_sources,
+            "created_at": created_timestamp(item.get("created_at")),
+        });
+        if !projected_capabilities.is_empty() {
+            entry["capabilities"] = Value::Object(projected_capabilities);
+        }
+        result.push(entry);
+    }
+    Ok(())
 }
 
 pub fn project_generic_models(value: &Map<String, Value>) -> Result<Vec<Value>, RouterError> {
@@ -557,6 +874,194 @@ fn python_scalar(value: &Value) -> Option<String> {
         Value::String(value) => Some(value.clone()),
         Value::Array(_) | Value::Object(_) => None,
     }
+}
+
+fn non_null(value: Option<&Value>) -> Option<&Value> {
+    value.filter(|value| !value.is_null())
+}
+
+fn nested_supported(container: &Map<String, Value>, field: &str) -> Option<bool> {
+    container
+        .get(field)
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("supported"))
+        .and_then(Value::as_bool)
+}
+
+fn required_key(provider: &Map<String, Value>) -> Result<&str, RouterError> {
+    provider
+        .get("api_key")
+        .and_then(Value::as_str)
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| {
+            discovery_error(
+                RouterErrorKind::MissingCredential,
+                503,
+                FailureClass::Auth,
+                "provider API key is not configured",
+            )
+        })
+}
+
+fn common_discovery_headers() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("Accept".to_owned(), "application/json".to_owned()),
+        (
+            "User-Agent".to_owned(),
+            format!("EMP/{}", env!("CARGO_PKG_VERSION")),
+        ),
+    ])
+}
+
+fn bearer_discovery_headers(key: &str) -> BTreeMap<String, String> {
+    let mut headers = common_discovery_headers();
+    headers.insert("Authorization".to_owned(), format!("Bearer {key}"));
+    headers
+}
+
+fn gemini_discovery_headers(key: &str) -> BTreeMap<String, String> {
+    let mut headers = common_discovery_headers();
+    headers.insert("x-goog-api-key".to_owned(), key.to_owned());
+    headers
+}
+
+fn anthropic_discovery_headers(key: &str, version: &str) -> BTreeMap<String, String> {
+    let mut headers = common_discovery_headers();
+    headers.insert("x-api-key".to_owned(), key.to_owned());
+    headers.insert("anthropic-version".to_owned(), version.to_owned());
+    headers
+}
+
+async fn get_json(
+    client: &HttpClient,
+    url: &str,
+    headers: BTreeMap<String, String>,
+    budget: &mut DiscoveryBudget,
+) -> Result<Map<String, Value>, RouterError> {
+    let response = tokio::time::timeout(
+        budget.remaining()?,
+        client.open(HttpMethod::Get, url, headers, None, false),
+    )
+    .await
+    .map_err(|_| discovery_timeout())?
+    .map_err(transport_error)?;
+    let status = response.status();
+    if !(200..300).contains(&status) {
+        return Err(discovery_error(
+            RouterErrorKind::Upstream,
+            status,
+            status_error_class(Some(status)),
+            "provider discovery request failed",
+        ));
+    }
+    let raw = tokio::time::timeout(
+        budget.remaining()?,
+        response.read_limited(MAX_DISCOVERY_BODY_BYTES),
+    )
+    .await
+    .map_err(|_| discovery_timeout())?
+    .map_err(read_error)?;
+    budget.record(raw.len())?;
+    let value: Value = serde_json::from_slice(&raw).map_err(|_| {
+        discovery_error(
+            RouterErrorKind::Protocol,
+            502,
+            FailureClass::ProtocolError,
+            "provider discovery returned invalid JSON",
+        )
+    })?;
+    value.as_object().cloned().ok_or_else(|| {
+        discovery_error(
+            RouterErrorKind::Protocol,
+            502,
+            FailureClass::ProtocolError,
+            "provider discovery returned an invalid shape",
+        )
+    })
+}
+
+fn transport_error(error: emp_transport::HttpTransportError) -> RouterError {
+    discovery_error(
+        RouterErrorKind::Transport,
+        502,
+        match error.kind() {
+            HttpTransportErrorKind::ConnectTimeout => FailureClass::ConnectTimeout,
+            HttpTransportErrorKind::ReadTimeout => FailureClass::Timeout,
+            _ => FailureClass::Network,
+        },
+        match error.kind() {
+            HttpTransportErrorKind::ConnectTimeout | HttpTransportErrorKind::ReadTimeout => {
+                "provider discovery timed out"
+            }
+            _ => "provider discovery transport failed",
+        },
+    )
+}
+
+fn read_error(error: emp_transport::HttpTransportError) -> RouterError {
+    match error.kind() {
+        HttpTransportErrorKind::ReadTimeout => discovery_timeout(),
+        HttpTransportErrorKind::ResponseTooLarge => discovery_error(
+            RouterErrorKind::Protocol,
+            502,
+            FailureClass::ProtocolError,
+            "provider discovery response exceeded its limit",
+        ),
+        _ => transport_error(error),
+    }
+}
+
+fn discovery_timeout() -> RouterError {
+    discovery_error(
+        RouterErrorKind::Transport,
+        504,
+        FailureClass::Timeout,
+        "provider discovery timed out",
+    )
+}
+
+fn model_count_error() -> RouterError {
+    discovery_error(
+        RouterErrorKind::Protocol,
+        502,
+        FailureClass::ProtocolError,
+        "provider model list exceeded its limit",
+    )
+}
+
+fn pagination_error() -> RouterError {
+    discovery_error(
+        RouterErrorKind::Protocol,
+        502,
+        FailureClass::ProtocolError,
+        "provider pagination token is invalid",
+    )
+}
+
+fn pagination_token(value: Option<&Value>) -> Result<Option<String>, RouterError> {
+    let Some(value) = value.filter(|value| python_truthy(value)) else {
+        return Ok(None);
+    };
+    let token = value.as_str().ok_or_else(pagination_error)?;
+    if token.len() > MAX_DISCOVERY_TOKEN_BYTES {
+        return Err(pagination_error());
+    }
+    Ok(Some(token.to_owned()))
+}
+
+fn quote_query(value: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            result.push(char::from(byte));
+        } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            result.push('%');
+            result.push(char::from(HEX[usize::from(byte >> 4)]));
+            result.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    result
 }
 
 fn source(source: &str) -> Value {
