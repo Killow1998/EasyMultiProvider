@@ -283,30 +283,7 @@ impl<'a> ExternalRouter<'a> {
         let provider = route.provider.value();
         let endpoint = endpoint(provider, route.protocol)?;
         let headers = upstream_headers(provider, route.protocol, incoming)?;
-        let portable_body = body_with_supported_effort(route, body);
-        let payload = match route.protocol {
-            Protocol::Auto => return Err(unresolved_protocol()),
-            Protocol::ChatCompletions => {
-                responses_to_chat(&portable_body, &route.upstream_model).map_err(protocol_error)?
-            }
-            Protocol::AnthropicMessages => {
-                responses_to_anthropic(&portable_body, &route.upstream_model)
-                    .map_err(anthropic_error)?
-            }
-            Protocol::Responses => {
-                let preserve_state = route
-                    .model
-                    .value()
-                    .get("_emp_preserve_reasoning_state")
-                    .and_then(Value::as_bool)
-                    == Some(true);
-                let mut payload =
-                    project_portable_request(provider, &portable_body, preserve_state)
-                        .map_err(portable_request_error)?;
-                payload["model"] = Value::String(route.upstream_model.clone());
-                payload
-            }
-        };
+        let payload = project_external_payload(route, body)?;
         let encoded = serde_json::to_vec(&payload).map_err(|_| {
             RouterError::new(
                 RouterErrorKind::InvalidRequest,
@@ -569,6 +546,33 @@ impl<'a> ExternalRouter<'a> {
             StreamProjection::Responses { .. } => {}
         }
         Ok(stream)
+    }
+}
+
+/// Project the exact upstream request judged by EMP's destination context guard.
+pub fn project_external_payload(route: &ResolvedRoute, body: &Value) -> Result<Value, RouterError> {
+    let provider = route.provider.value();
+    let portable_body = body_with_supported_effort(route, body);
+    match route.protocol {
+        Protocol::Auto => Err(unresolved_protocol()),
+        Protocol::ChatCompletions => {
+            responses_to_chat(&portable_body, &route.upstream_model).map_err(protocol_error)
+        }
+        Protocol::AnthropicMessages => {
+            responses_to_anthropic(&portable_body, &route.upstream_model).map_err(anthropic_error)
+        }
+        Protocol::Responses => {
+            let preserve_state = route
+                .model
+                .value()
+                .get("_emp_preserve_reasoning_state")
+                .and_then(Value::as_bool)
+                == Some(true);
+            let mut payload = project_portable_request(provider, &portable_body, preserve_state)
+                .map_err(portable_request_error)?;
+            payload["model"] = Value::String(route.upstream_model.clone());
+            Ok(payload)
+        }
     }
 }
 

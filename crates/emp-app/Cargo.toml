@@ -13,6 +13,7 @@ path = "src/main.rs"
 base64 = "0.22"
 emp-codex = { path = "../emp-codex" }
 emp-core = { path = "../emp-core" }
+emp-history = { path = "../emp-history" }
 emp-router = { path = "../emp-router" }
 emp-state = { path = "../emp-state" }
 emp-transport = { path = "../emp-transport" }
@@ -24,4 +25,5 @@ tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "sync", "
 path = "src/lib.rs"
 
 [dev-dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 tempfile = "3.27"

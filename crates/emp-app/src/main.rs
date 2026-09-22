@@ -14,7 +14,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
-use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD};
 use emp_codex::quota::{
     QuotaError, consume_native_quota_reset, read_native_login_quota, run_quota_query_persisting,
     run_quota_reset_persisting,
@@ -22,24 +22,28 @@ use emp_codex::quota::{
 use emp_codex::quota_history::{QuotaHistoryError, QuotaHistoryStore};
 use emp_codex::{account_auth_headers, subscription_route_model};
 use emp_core::{ResolvedRoute, RouteResolutionError, resolve_route};
+use emp_history::HistoryError;
 use emp_router::native_http::NativeStream;
 use emp_router::native_metadata::native_response_headers;
 use emp_router::{
     ExternalRouter, ExternalStream, ProjectionIds, RouterError, RouterErrorKind,
-    StreamResponseEvent, protocol_candidates, response_json_stream_events,
+    StreamResponseEvent, project_external_payload, protocol_candidates,
+    response_json_stream_events,
 };
 use emp_state::{
-    ConfigError, FilesystemError, VaultStore, WEB_SESSION_TOKEN_BYTES, WebSession, WebSessionError,
-    config_path, load_configuration, load_or_create_web_session, provider_api_key,
+    ConfigError, ExportGroups, FileTransaction, FilesystemError, VaultStore,
+    WEB_SESSION_TOKEN_BYTES, WebSession, WebSessionError, config_path,
+    export_migration_bundle_with_summary, import_migration_bundle, load_configuration,
+    load_or_create_web_session, normalize_account, normalize_configuration, provider_api_key,
     public_configuration_with_file_status, remember_resolved_protocol, same_account_auth,
-    save_configuration, web_session_path,
+    save_configuration, save_configuration_in_transaction, validate_auth_json, web_session_path,
 };
 use emp_transport::{
     ClientWebSocket, ContentDecodeError, FailureClass, FailurePhase, HttpClient, HttpClientPolicy,
-    ProxyEnvironment, ProxyPolicy, RequestCapacityError, RequestLimits, RequestLimitsConfig,
-    RequestLimitsError, TimeoutPolicy, TransportKind, UpstreamFailure, WebSocketConnection,
-    decode_content, external_http_retry_allowed, normalize_error_class, protocol_fallback_allowed,
-    public_failure_message, websocket_accept,
+    HttpMethod, ProxyEnvironment, ProxyPolicy, RequestCapacityError, RequestLimits,
+    RequestLimitsConfig, RequestLimitsError, TimeoutPolicy, TransportKind, UpstreamFailure,
+    WebSocketConnection, decode_content, external_http_retry_allowed, normalize_error_class,
+    protocol_fallback_allowed, public_failure_message, websocket_accept,
 };
 use serde_json::Value;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
@@ -275,6 +279,7 @@ enum RequestMethod {
     Get,
     Head,
     Post,
+    Delete,
 }
 
 #[derive(Clone, Copy)]
@@ -517,6 +522,7 @@ fn request_line(request: &str) -> Option<(RequestMethod, &str)> {
         "GET" => RequestMethod::Get,
         "HEAD" => RequestMethod::Head,
         "POST" => RequestMethod::Post,
+        "DELETE" => RequestMethod::Delete,
         _ => return None,
     };
     let target = parts.next()?;
@@ -1661,6 +1667,198 @@ enum ResponsesRequestResult {
     Streamed,
 }
 
+fn history_error_message(error: &HistoryError) -> &'static str {
+    match error.reason() {
+        "thread_missing" | "thread_identity_missing" => {
+            "This task's local history is unavailable. For a Side chat, continue in the original task or start a new task."
+        }
+        "state_database_missing" | "database_missing" => {
+            "Local Codex history was not found. Use the same Codex data directory as your client."
+        }
+        _ => "History reconstruction failed. Continue in the original task or start a new task.",
+    }
+}
+
+fn history_error_detail(error: &HistoryError) -> Value {
+    serde_json::json!({
+        "type":"invalid_request_error",
+        "code":"invalid_prompt",
+        "message":history_error_message(error),
+        "error_class":"history_reconstruction_failed",
+        "reason":error.reason()
+    })
+}
+
+fn history_http_error(error: &HistoryError) -> Vec<u8> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "error": {
+            "code":"history_reconstruction_failed",
+            "message":history_error_message(error),
+            "error_class":"history_reconstruction_failed",
+            "reason":error.reason()
+        }
+    }))
+    .expect("history error is serializable");
+    response("HTTP/1.1 409 Conflict", "application/json", &body, &[])
+}
+
+fn history_stream_error(error: &HistoryError) -> Value {
+    let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
+    serde_json::json!({
+        "type":"response.failed",
+        "response":{
+            "id":id,
+            "object":"response",
+            "status":"failed",
+            "error":history_error_detail(error)
+        }
+    })
+}
+
+fn prepare_history(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+) -> Result<Value, HistoryError> {
+    let reader = emp_codex::history::CodexHomeHistoryReader::new(&state.backend.codex_home);
+    emp_history::prepare(
+        body,
+        incoming,
+        route.dialect == emp_core::Dialect::CodexNative,
+        &reader,
+    )
+}
+
+fn python_truthy(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(Value::Number(value)) => value.as_f64() != Some(0.0),
+        Some(Value::String(value)) => !value.is_empty(),
+        Some(Value::Array(value)) => !value.is_empty(),
+        Some(Value::Object(value)) => !value.is_empty(),
+    }
+}
+
+enum DestinationPrepareError {
+    Router(RouterError),
+    History(&'static str),
+    Context(emp_history::context::ContextAssessment),
+}
+
+fn prepare_destination_context(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+) -> Result<Value, DestinationPrepareError> {
+    if route.dialect == emp_core::Dialect::CodexNative {
+        return Ok(body.clone());
+    }
+    let protocol =
+        protocol_candidates(route)
+            .into_iter()
+            .next()
+            .ok_or(DestinationPrepareError::History(
+                "history_compaction_failed",
+            ))?;
+    let candidate = route
+        .with_protocol(protocol)
+        .map_err(|_| DestinationPrepareError::History("history_compaction_failed"))?;
+    let guard_body = if has_trailing_compaction_trigger(body) {
+        compaction_summary_body(body)
+    } else {
+        body.clone()
+    };
+    let payload = project_external_payload(&candidate, &guard_body)
+        .map_err(DestinationPrepareError::Router)?;
+    let assessment = emp_history::context::assess(
+        candidate.provider.value(),
+        candidate.model.value(),
+        candidate.protocol.as_config_str(),
+        &payload,
+    );
+    if !assessment.blocked() {
+        return Ok(body.clone());
+    }
+    let Some(safe_budget) = assessment.safe_input_limit else {
+        return Err(DestinationPrepareError::Context(assessment));
+    };
+    let router = ExternalRouter::new(&state.backend.client);
+    let mut summary_failure = None;
+    let compacted = emp_history::context::compact_with(
+        body,
+        candidate.model.value(),
+        safe_budget,
+        |summary_body| {
+            let ids = match projection_ids() {
+                Ok(ids) => ids,
+                Err(_) => return Err(()),
+            };
+            match state.backend.runtime.block_on(router.execute_complete(
+                &candidate,
+                summary_body,
+                incoming,
+                &ids,
+            )) {
+                Ok(result) => response_output_text(&result.body).ok_or(()),
+                Err(error) => {
+                    summary_failure = Some(error);
+                    Err(())
+                }
+            }
+        },
+    )
+    .map_err(|reason| {
+        summary_failure.take().map_or(
+            DestinationPrepareError::History(reason),
+            DestinationPrepareError::Router,
+        )
+    })?;
+    let final_guard_body = if has_trailing_compaction_trigger(&compacted) {
+        compaction_summary_body(&compacted)
+    } else {
+        compacted.clone()
+    };
+    let payload = project_external_payload(&candidate, &final_guard_body)
+        .map_err(DestinationPrepareError::Router)?;
+    let final_assessment = emp_history::context::assess(
+        candidate.provider.value(),
+        candidate.model.value(),
+        candidate.protocol.as_config_str(),
+        &payload,
+    );
+    if final_assessment.blocked() {
+        return Err(DestinationPrepareError::Context(final_assessment));
+    }
+    Ok(compacted)
+}
+
+fn destination_error_response(error: DestinationPrepareError) -> Vec<u8> {
+    match error {
+        DestinationPrepareError::Router(error) => router_error_response(error),
+        DestinationPrepareError::History(reason) => history_http_error(&HistoryError::new(reason)),
+        DestinationPrepareError::Context(assessment) => {
+            let estimate = assessment
+                .input_estimate
+                .map_or_else(|| "unknown".to_owned(), |value| value.to_string());
+            let limit = assessment
+                .safe_input_limit
+                .map_or_else(|| "unknown".to_owned(), |value| value.to_string());
+            json_error_response(
+                413,
+                status_text(413),
+                &format!(
+                    "context length exceeded: estimated input {estimate} tokens, safe input limit {limit}; next action: reduce input or use native remote compaction"
+                ),
+                Some("context_length_exceeded"),
+                &[],
+            )
+        }
+    }
+}
+
 fn has_trailing_compaction_trigger(body: &Value) -> bool {
     body.get("input")
         .and_then(Value::as_array)
@@ -1853,7 +2051,7 @@ fn responses_request(
             &[],
         ));
     }
-    let body = match read_json_body(stream, request, body_prefix, state) {
+    let mut body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,
         Err(error) => return ResponsesRequestResult::Buffered(body_error_response(error)),
     };
@@ -1934,6 +2132,42 @@ fn responses_request(
         .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
         .collect();
     incoming.insert("X-EMP-Request-ID".to_owned(), request_id);
+    body = match prepare_history(state, &route, &body, &incoming) {
+        Ok(body) => body,
+        Err(error) if python_truthy(body.get("stream")) => {
+            let failed = history_stream_error(&error);
+            let frame = match sse_frame("response.failed", &failed) {
+                Ok(frame) => frame,
+                Err(_) => {
+                    return ResponsesRequestResult::Buffered(json_error_response(
+                        500,
+                        status_text(500),
+                        "internal server error",
+                        None,
+                        &[],
+                    ));
+                }
+            };
+            let _ = write_stream_head(stream);
+            let _ = write_stream_frames(stream, &[frame]);
+            return ResponsesRequestResult::Streamed;
+        }
+        Err(error) => return ResponsesRequestResult::Buffered(history_http_error(&error)),
+    };
+    body = match prepare_destination_context(state, &route, &body, &incoming) {
+        Ok(body) => body,
+        Err(DestinationPrepareError::History(reason)) if python_truthy(body.get("stream")) => {
+            let failed = history_stream_error(&HistoryError::new(reason));
+            if let Ok(frame) = sse_frame("response.failed", &failed) {
+                let _ = write_stream_head(stream);
+                let _ = write_stream_frames(stream, &[frame]);
+            }
+            return ResponsesRequestResult::Streamed;
+        }
+        Err(error) => {
+            return ResponsesRequestResult::Buffered(destination_error_response(error));
+        }
+    };
     if route.dialect != emp_core::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
         let (compacted, candidate) =
             match external_compaction_response(state, &route, &body, &incoming, &ids) {
@@ -1941,7 +2175,7 @@ fn responses_request(
                 Err(error) => return ResponsesRequestResult::Buffered(error),
             };
         persist_protocol_observation(state, &candidate);
-        if body.get("stream").and_then(Value::as_bool) == Some(true) {
+        if python_truthy(body.get("stream")) {
             let stream_body = match generated_response_stream(compacted, &ids) {
                 Ok(body) => body,
                 Err(error) => return ResponsesRequestResult::Buffered(error),
@@ -1973,7 +2207,7 @@ fn responses_request(
         ));
     }
     if route.dialect == emp_core::Dialect::CodexNative {
-        if body.get("stream").and_then(Value::as_bool) == Some(true) {
+        if python_truthy(body.get("stream")) {
             return match serve_native_stream(stream, state, &route, &config, &body, &incoming, &ids)
             {
                 Ok(()) => ResponsesRequestResult::Streamed,
@@ -1988,7 +2222,7 @@ fn responses_request(
             &incoming,
         ));
     }
-    if body.get("stream").and_then(Value::as_bool) == Some(true) {
+    if python_truthy(body.get("stream")) {
         return match serve_external_stream(stream, state, &route, &body, &incoming, &ids) {
             Ok(()) => ResponsesRequestResult::Streamed,
             Err(response) => ResponsesRequestResult::Buffered(response),
@@ -2075,7 +2309,7 @@ fn compact_request(
             &[],
         );
     }
-    let body = match read_json_body(stream, request, body_prefix, state) {
+    let mut body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
@@ -2123,6 +2357,14 @@ fn compact_request(
     if let Ok(id) = random_hex(8) {
         incoming.insert("X-EMP-Request-ID".to_owned(), id);
     }
+    body = match prepare_history(state, &route, &body, &incoming) {
+        Ok(body) => body,
+        Err(error) => return history_http_error(&error),
+    };
+    body = match prepare_destination_context(state, &route, &body, &incoming) {
+        Ok(body) => body,
+        Err(error) => return destination_error_response(error),
+    };
     if route.dialect == emp_core::Dialect::CodexNative {
         return native_api::compact(
             state,
@@ -2148,6 +2390,149 @@ fn compact_request(
         Ok(body) => response("HTTP/1.1 200 OK", "application/json", &body, &[]),
         Err(_) => json_error_response(500, status_text(500), "internal server error", None, &[]),
     }
+}
+
+fn native_search_request(
+    stream: &mut TcpStream,
+    request: Request<'_>,
+    body_prefix: Vec<u8>,
+    state: &ServerState,
+    now: f64,
+) -> Vec<u8> {
+    if !proxy_allowed(request, state, now) {
+        let status = if same_origin(request, state.port) {
+            401
+        } else {
+            403
+        };
+        return json_error_response(
+            status,
+            status_text(status),
+            "proxy caller authentication is required",
+            None,
+            &[],
+        );
+    }
+    let body = match read_json_body(stream, request, body_prefix, state) {
+        Ok(body) => body,
+        Err(error) => return body_error_response(error),
+    };
+    let config = match state.backend.config.lock() {
+        Ok(config) => config.clone(),
+        Err(_) => {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        }
+    };
+    if config
+        .get("subscription_search")
+        .and_then(Value::as_object)
+        .and_then(|search| search.get("enabled"))
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return json_error_response(
+            403,
+            status_text(403),
+            "Subscription web search is disabled",
+            Some("router_error"),
+            &[],
+        );
+    }
+    let mut headers = BTreeMap::from([
+        ("Content-Type".to_owned(), "application/json".to_owned()),
+        ("Accept".to_owned(), "application/json".to_owned()),
+        ("User-Agent".to_owned(), format!("EMP/{VERSION}")),
+    ]);
+    let credentials = native_auth_document(&state.backend.native_auth_path)
+        .and_then(|auth| account_auth_headers(&auth))
+        .or_else(|| {
+            config
+                .get("accounts")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|account| account.get("enabled") != Some(&Value::Bool(false)))
+                .find_map(|account| {
+                    let path = account.get("auth_file")?.as_str()?;
+                    let auth = state
+                        .backend
+                        .vault
+                        .read_encrypted_json(Path::new(path))
+                        .ok()?;
+                    account_auth_headers(&auth)
+                })
+        });
+    if let Some(credentials) = credentials {
+        headers.extend(credentials);
+    } else {
+        for name in ["authorization", "chatgpt-account-id"] {
+            if let Some(value) = request.header(name) {
+                headers.insert(name.to_owned(), value.to_owned());
+            }
+        }
+    }
+    if let Ok(id) = random_hex(8) {
+        headers.insert("X-EMP-Request-ID".to_owned(), id);
+    }
+    let base = config
+        .get("codex_base_url")
+        .and_then(Value::as_str)
+        .unwrap_or("https://chatgpt.com/backend-api/codex")
+        .trim_end_matches('/');
+    let endpoint = if base.ends_with("/alpha/search") {
+        base.to_owned()
+    } else {
+        format!("{base}/alpha/search")
+    };
+    let encoded = match serde_json::to_vec(&body) {
+        Ok(body) => body,
+        Err(_) => return request_router_error_response(400, "request body is invalid"),
+    };
+    let upstream = match state.backend.runtime.block_on(state.backend.client.open(
+        HttpMethod::Post,
+        &endpoint,
+        headers,
+        Some(encoded),
+        false,
+    )) {
+        Ok(response) => response,
+        Err(_) => {
+            return json_error_response(
+                503,
+                status_text(503),
+                "Cannot connect to subscription web search",
+                Some("network_error"),
+                &[],
+            );
+        }
+    };
+    let status = upstream.status();
+    let content_type = upstream
+        .header("content-type")
+        .unwrap_or("application/json")
+        .to_owned();
+    let raw = match state
+        .backend
+        .runtime
+        .block_on(upstream.read_limited(64 * 1024 * 1024))
+    {
+        Ok(raw) => raw,
+        Err(_) => {
+            return json_error_response(
+                502,
+                status_text(502),
+                "native search response is too large or incomplete",
+                Some("protocol_error"),
+                &[],
+            );
+        }
+    };
+    response(
+        &format!("HTTP/1.1 {status} {}", status_text(status)),
+        &content_type,
+        &raw,
+        &[],
+    )
 }
 
 struct QuotaEventSlot<'a> {
@@ -2283,6 +2668,13 @@ fn native_websocket_identity_headers(
         .collect()
 }
 
+struct NativeUpstreamConnection {
+    url: String,
+    proxy: Option<String>,
+    identity: BTreeMap<String, String>,
+    client: ClientWebSocket,
+}
+
 fn serve_responses_websocket(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -2354,7 +2746,7 @@ fn serve_responses_websocket(
     }
     let _ = stream.set_read_timeout(None);
     let mut websocket = WebSocketConnection::new(stream);
-    let mut native_upstream: Option<(String, BTreeMap<String, String>, ClientWebSocket)> = None;
+    let mut native_upstream: Option<NativeUpstreamConnection> = None;
     let mut last_native_response_id: Option<String> = None;
     loop {
         let text = match websocket.receive_text() {
@@ -2449,6 +2841,73 @@ fn serve_responses_websocket(
         if let Ok(id) = random_hex(8) {
             request_headers.insert("X-EMP-Request-ID".to_owned(), id);
         }
+        request_body = match prepare_history(
+            state,
+            &route,
+            &Value::Object(request_body),
+            &request_headers,
+        ) {
+            Ok(Value::Object(body)) => body,
+            Ok(_) => {
+                let error = HistoryError::new("invalid_history_projection");
+                if websocket.send_json(&history_stream_error(&error)).is_err() {
+                    return;
+                }
+                continue;
+            }
+            Err(error) => {
+                if websocket.send_json(&history_stream_error(&error)).is_err() {
+                    return;
+                }
+                continue;
+            }
+        };
+        request_body = match prepare_destination_context(
+            state,
+            &route,
+            &Value::Object(request_body.clone()),
+            &request_headers,
+        ) {
+            Ok(Value::Object(body)) => body,
+            Ok(_) => {
+                let error = HistoryError::new("invalid_history_projection");
+                if websocket.send_json(&history_stream_error(&error)).is_err() {
+                    return;
+                }
+                continue;
+            }
+            Err(DestinationPrepareError::Router(error)) => {
+                if websocket
+                    .send_json(&websocket_router_error(&error))
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            Err(DestinationPrepareError::History(reason)) => {
+                if websocket
+                    .send_json(&history_stream_error(&HistoryError::new(reason)))
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            Err(DestinationPrepareError::Context(_)) => {
+                let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
+                let failed = native_stream_error_value(
+                    413,
+                    FailureClass::ContextLengthExceeded,
+                    Some("context_length_exceeded"),
+                    &id,
+                );
+                if websocket.send_json(&failed).is_err() {
+                    return;
+                }
+                continue;
+            }
+        };
         if route.dialect == emp_core::Dialect::CodexNative {
             let plan = match native_api::websocket_plan(
                 state,
@@ -2467,9 +2926,12 @@ fn serve_responses_websocket(
                 .get("previous_response_id")
                 .and_then(Value::as_str);
             let plan_identity = native_websocket_identity_headers(&plan.headers);
-            let route_matches = native_upstream
-                .as_ref()
-                .is_some_and(|(url, headers, _)| url == &plan.url && headers == &plan_identity);
+            let proxy = state.backend.client.websocket_proxy_for(&plan.url);
+            let route_matches = native_upstream.as_ref().is_some_and(|upstream| {
+                upstream.url == plan.url
+                    && proxy.as_ref().is_ok_and(|proxy| proxy == &upstream.proxy)
+                    && upstream.identity == plan_identity
+            });
             if previous
                 .is_some_and(|id| !route_matches || last_native_response_id.as_deref() != Some(id))
             {
@@ -2483,13 +2945,24 @@ fn serve_responses_websocket(
             }
             let mut connected_now = false;
             if native_upstream.is_none()
-                && let Ok(client) =
-                    ClientWebSocket::connect(&plan.url, &plan.headers, Duration::from_secs(15))
+                && let Ok(selected_proxy) = &proxy
+                && let Ok(client) = ClientWebSocket::connect_with_proxy(
+                    &plan.url,
+                    &plan.headers,
+                    Duration::from_secs(15),
+                    selected_proxy.as_deref(),
+                )
             {
-                native_upstream = Some((plan.url.clone(), plan_identity.clone(), client));
+                native_upstream = Some(NativeUpstreamConnection {
+                    url: plan.url.clone(),
+                    proxy: selected_proxy.clone(),
+                    identity: plan_identity.clone(),
+                    client,
+                });
                 connected_now = true;
             }
-            if let Some((_, _, client)) = native_upstream.as_mut() {
+            if let Some(upstream) = native_upstream.as_mut() {
+                let client = &mut upstream.client;
                 if connected_now {
                     let selected = native_response_headers(
                         &serde_json::json!({"headers":client.response_headers()}),
@@ -2707,6 +3180,45 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
         {
             serve_responses_websocket(&mut stream, request, state, system_now());
             None
+        }
+        Some(request)
+            if request.method == RequestMethod::Post
+                && request.raw_path() == "/v1/alpha/search" =>
+        {
+            Some(native_search_request(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                system_now(),
+            ))
+        }
+        Some(request)
+            if request.method == RequestMethod::Post
+                && request.raw_path() == "/api/accounts/import" =>
+        {
+            Some(management_account_import_request(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                system_now(),
+            ))
+        }
+        Some(request)
+            if request.method == RequestMethod::Post
+                && matches!(
+                    request.raw_path(),
+                    "/api/migration/export" | "/api/migration/import"
+                ) =>
+        {
+            Some(management_migration_request(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                system_now(),
+            ))
         }
         Some(request)
             if request.method == RequestMethod::Post
@@ -3325,6 +3837,406 @@ fn management_quota_request(
     }
 }
 
+fn management_migration_request(
+    stream: &mut TcpStream,
+    request: Request<'_>,
+    body_prefix: Vec<u8>,
+    state: &ServerState,
+    now: f64,
+) -> Vec<u8> {
+    if !same_origin(request, state.port) {
+        return cross_origin_response("management session is required");
+    }
+    if !state
+        .sessions
+        .contains(request.session_cookie().as_deref(), now)
+    {
+        return unauthorized_response();
+    }
+    let body = match read_json_body(stream, request, body_prefix, state) {
+        Ok(body) => body,
+        Err(error) => return body_error_response(error),
+    };
+    let password = body
+        .get("password")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if request.raw_path() == "/api/migration/export" {
+        let group_values = body.get("groups").and_then(Value::as_array);
+        let groups = match group_values {
+            Some(values) => {
+                let Some(values) = values.iter().map(Value::as_str).collect::<Option<Vec<_>>>()
+                else {
+                    return json_error_response(
+                        400,
+                        status_text(400),
+                        "select at least one valid export category",
+                        None,
+                        &[],
+                    );
+                };
+                match ExportGroups::from_list(&values) {
+                    Ok(groups) => Some(groups),
+                    Err(error) => {
+                        return json_error_response(
+                            400,
+                            status_text(400),
+                            &error.to_string(),
+                            None,
+                            &[],
+                        );
+                    }
+                }
+            }
+            None => None,
+        };
+        let config = match state.backend.config.lock() {
+            Ok(config) => config.clone(),
+            Err(_) => {
+                return json_error_response(
+                    500,
+                    status_text(500),
+                    "internal server error",
+                    None,
+                    &[],
+                );
+            }
+        };
+        let (bundle, summary) = match export_migration_bundle_with_summary(
+            &config,
+            password,
+            &state.backend.vault,
+            groups.as_ref(),
+            Some(&state.backend.native_auth_path),
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                return json_error_response(400, status_text(400), &error.to_string(), None, &[]);
+            }
+        };
+        let summary = serde_json::json!({
+            "accounts":summary.accounts,
+            "providers":summary.providers,
+            "models":summary.models,
+            "groups":summary.groups,
+            "native_login_included":summary.native_login_included,
+            "native_login_missing":summary.native_login_missing,
+        })
+        .to_string();
+        return response(
+            "HTTP/1.1 200 OK",
+            "application/octet-stream",
+            &bundle,
+            &[
+                ("Cache-Control", "no-store"),
+                ("Content-Disposition", "attachment; filename=\"EMP.emp\""),
+                ("X-EMP-Export-Summary", &summary),
+            ],
+        );
+    }
+    let Some(encoded) = body
+        .get("bundle")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return json_error_response(
+            400,
+            status_text(400),
+            "migration bundle is required",
+            None,
+            &[],
+        );
+    };
+    let bundle = match STANDARD.decode(encoded) {
+        Ok(bundle) => bundle,
+        Err(_) => {
+            return json_error_response(
+                400,
+                status_text(400),
+                "migration bundle is not valid base64",
+                None,
+                &[],
+            );
+        }
+    };
+    let current = match state.backend.config.lock() {
+        Ok(config) => config.clone(),
+        Err(_) => {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        }
+    };
+    let (updated, summary) = match import_migration_bundle(
+        &current,
+        &bundle,
+        password,
+        &state.backend.config_path,
+        &state.backend.vault,
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            return json_error_response(400, status_text(400), &error.to_string(), None, &[]);
+        }
+    };
+    match state.backend.config.lock() {
+        Ok(mut config) => *config = updated,
+        Err(_) => {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        }
+    }
+    let body = serde_json::to_vec(&serde_json::json!({
+        "status":"ok",
+        "accounts":summary.accounts,
+        "providers":summary.providers,
+        "models":summary.models,
+        "renamed_accounts":summary.renamed_accounts,
+    }))
+    .expect("migration response is serializable");
+    response("HTTP/1.1 200 OK", "application/json", &body, &[])
+}
+
+fn import_account_state(state: &ServerState, body: &Value) -> Result<Value, String> {
+    let metadata = body
+        .as_object()
+        .ok_or_else(|| "account import body must be an object".to_owned())?;
+    let auth = metadata
+        .get("auth_json")
+        .ok_or_else(|| "auth_json must be a JSON object".to_owned())?;
+    let auth = validate_auth_json(auth).map_err(|error| error.to_string())?;
+    let current = state
+        .backend
+        .config
+        .lock()
+        .map_err(|_| "internal server error".to_owned())?
+        .clone();
+    let account_id = metadata
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "account.id must be a safe single path segment".to_owned())?;
+    let auth_path = emp_state::account_auth_path(&current, account_id, &state.backend.config_path)
+        .map_err(|error| error.to_string())?;
+    let raw = serde_json::json!({
+        "id":metadata.get("id").cloned().unwrap_or(Value::Null),
+        "name":metadata.get("name").cloned().unwrap_or_else(|| Value::String(account_id.to_owned())),
+        "prefix":metadata.get("prefix").cloned().unwrap_or(Value::Null),
+        "auth_file":auth_path.to_string_lossy(),
+        "credential_status":"unknown",
+        "enabled":metadata.get("enabled").cloned().unwrap_or(Value::Bool(true)),
+        "hidden_models":metadata.get("hidden_models").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
+        "model_context_windows":metadata.get("model_context_windows").cloned().unwrap_or_else(|| Value::Object(serde_json::Map::new())),
+    });
+    let account = normalize_account(&raw).map_err(|error| error.to_string())?;
+    let prefix = account
+        .get("prefix")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let existing = current
+        .get("accounts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if existing.iter().any(|item| {
+        item.get("id").and_then(Value::as_str) != Some(account_id)
+            && item.get("prefix").and_then(Value::as_str) == Some(prefix)
+    }) {
+        return Err(format!("account prefix is already in use: {prefix}"));
+    }
+    let mut accounts = existing
+        .into_iter()
+        .filter(|item| item.get("id").and_then(Value::as_str) != Some(account_id))
+        .collect::<Vec<_>>();
+    accounts.push(account.clone());
+    let mut updated = current.clone();
+    updated["accounts"] = Value::Array(accounts);
+    let mut updated = normalize_configuration(Some(&updated)).map_err(|error| error.to_string())?;
+    let config_toml = auth_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("config.toml");
+    let mut transaction = FileTransaction::new();
+    let operation = (|| -> Result<Value, String> {
+        transaction
+            .remember(&auth_path)
+            .map_err(|error| error.to_string())?;
+        transaction
+            .remember(&config_toml)
+            .map_err(|error| error.to_string())?;
+        state
+            .backend
+            .vault
+            .write_encrypted_json(&auth_path, &auth)
+            .map_err(|error| error.to_string())?;
+        std::fs::write(&config_toml, b"cli_auth_credentials_store = \"file\"\n")
+            .map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&config_toml, std::fs::Permissions::from_mode(0o600))
+                .map_err(|error| error.to_string())?;
+        }
+        let duplicates = catalog_api::duplicate_accounts(
+            &updated,
+            &state.backend.vault,
+            &state.backend.native_auth_path,
+        );
+        (updated, _) = emp_state::migrate_duplicate_native_visibility(&updated, &duplicates);
+        save_configuration_in_transaction(
+            &updated,
+            Some(&state.backend.config_path),
+            &state.backend.vault,
+            &mut transaction,
+        )
+        .map_err(|error| error.to_string())?;
+        load_configuration(Some(&state.backend.config_path)).map_err(|error| error.to_string())
+    })();
+    let committed = match operation {
+        Ok(config) => {
+            transaction.commit();
+            config
+        }
+        Err(error) => {
+            let _ = transaction.rollback();
+            return Err(error);
+        }
+    };
+    *state
+        .backend
+        .config
+        .lock()
+        .map_err(|_| "internal server error".to_owned())? = committed;
+    notify_quota_update(state, account_id, None);
+    account_public_snapshot(state, account_id).ok_or_else(|| "account import failed".to_owned())
+}
+
+fn delete_account_state(state: &ServerState, account_id: &str) -> Result<(), String> {
+    let current = state
+        .backend
+        .config
+        .lock()
+        .map_err(|_| "internal server error".to_owned())?
+        .clone();
+    let accounts = current
+        .get("accounts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let target = accounts
+        .iter()
+        .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
+        .ok_or_else(|| format!("unknown account: {account_id}"))?;
+    let expected = emp_state::account_auth_path(&current, account_id, &state.backend.config_path)
+        .map_err(|error| error.to_string())?;
+    let configured = target
+        .get("auth_file")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .ok_or_else(|| "refusing to delete credentials outside the account store".to_owned())?;
+    if configured != expected {
+        return Err("refusing to delete credentials outside the account store".to_owned());
+    }
+    let owner = quota_owner_key(state, account_id).map_err(|error| error.to_string())?;
+    let mut updated = current.clone();
+    updated["accounts"] = Value::Array(
+        accounts
+            .into_iter()
+            .filter(|account| account.get("id").and_then(Value::as_str) != Some(account_id))
+            .collect(),
+    );
+    if updated
+        .get("subscription_search")
+        .and_then(Value::as_object)
+        .and_then(|search| search.get("account_id"))
+        .and_then(Value::as_str)
+        == Some(account_id)
+        && let Some(search) = updated
+            .get_mut("subscription_search")
+            .and_then(Value::as_object_mut)
+    {
+        search.insert("enabled".to_owned(), Value::Bool(false));
+        search.insert("account_id".to_owned(), Value::String(String::new()));
+    }
+    let config_toml = expected
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("config.toml");
+    let mut transaction = FileTransaction::new();
+    let operation = (|| -> Result<Value, String> {
+        transaction
+            .remember(&expected)
+            .map_err(|error| error.to_string())?;
+        transaction
+            .remember(&config_toml)
+            .map_err(|error| error.to_string())?;
+        save_configuration_in_transaction(
+            &updated,
+            Some(&state.backend.config_path),
+            &state.backend.vault,
+            &mut transaction,
+        )
+        .map_err(|error| error.to_string())?;
+        for path in [&expected, &config_toml] {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        load_configuration(Some(&state.backend.config_path)).map_err(|error| error.to_string())
+    })();
+    let committed = match operation {
+        Ok(config) => {
+            transaction.commit();
+            config
+        }
+        Err(error) => {
+            let _ = transaction.rollback();
+            return Err(error);
+        }
+    };
+    *state
+        .backend
+        .config
+        .lock()
+        .map_err(|_| "internal server error".to_owned())? = committed;
+    if owner == account_id {
+        state
+            .backend
+            .quota_history
+            .delete_account(account_id)
+            .map_err(|error| error.to_string())?;
+    }
+    notify_quota_update(state, account_id, None);
+    Ok(())
+}
+
+fn management_account_import_request(
+    stream: &mut TcpStream,
+    request: Request<'_>,
+    body_prefix: Vec<u8>,
+    state: &ServerState,
+    now: f64,
+) -> Vec<u8> {
+    if !same_origin(request, state.port) {
+        return cross_origin_response("management session is required");
+    }
+    if !state
+        .sessions
+        .contains(request.session_cookie().as_deref(), now)
+    {
+        return unauthorized_response();
+    }
+    let body = match read_json_body(stream, request, body_prefix, state) {
+        Ok(body) => body,
+        Err(error) => return body_error_response(error),
+    };
+    match import_account_state(state, &body) {
+        Ok(account) => {
+            let body = serde_json::to_vec(&serde_json::json!({"account":account})).unwrap();
+            response("HTTP/1.1 200 OK", "application/json", &body, &[])
+        }
+        Err(error) => json_error_response(400, status_text(400), &error, None, &[]),
+    }
+}
+
 fn route_request(request: Request<'_>, state: &ServerState) -> Vec<u8> {
     route_request_at(request, state, system_now())
 }
@@ -3419,6 +4331,17 @@ fn route_request_at(request: Request<'_>, state: &ServerState, now: f64) -> Vec<
                     }
                 };
             }
+            if request.method == RequestMethod::Delete && path.starts_with("/api/accounts/") {
+                let account_id =
+                    percent_decode(path["/api/accounts/".len()..].trim_end_matches('/'), false);
+                return match delete_account_state(state, &account_id) {
+                    Ok(()) => {
+                        let body = serde_json::to_vec(&serde_json::json!({"status":"ok"})).unwrap();
+                        response("HTTP/1.1 200 OK", "application/json", &body, &[])
+                    }
+                    Err(error) => json_error_response(400, status_text(400), &error, None, &[]),
+                };
+            }
             return not_found_response();
         }
         return unauthorized_response();
@@ -3451,6 +4374,7 @@ struct BackendState {
     runtime: Runtime,
     request_limits: Arc<RequestLimits>,
     native_auth_path: PathBuf,
+    codex_home: PathBuf,
     codex_binary: String,
     native_quota: Mutex<Option<Value>>,
     quota_refresh_errors: Mutex<BTreeMap<String, String>>,
@@ -3627,6 +4551,10 @@ impl ServerHandle {
             || system_now().max(0.0) as u64,
             random_hex(8)?,
         )?;
+        let codex_home = native_auth_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
         let backend = BackendState {
             config: Mutex::new(config),
             discovery_lock: Mutex::new(()),
@@ -3636,6 +4564,7 @@ impl ServerHandle {
             runtime,
             request_limits,
             native_auth_path,
+            codex_home,
             codex_binary: codex_binary.to_owned(),
             native_quota: Mutex::new(None),
             quota_refresh_errors: Mutex::new(BTreeMap::new()),
@@ -3950,6 +4879,21 @@ mod tests {
             )
             .expect("write request head");
         stream.write_all(body).expect("write request body");
+        complete_response(&mut stream)
+    }
+
+    fn delete(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
+        let mut stream = TcpStream::connect(server.local_addr()).expect("connect");
+        let full_headers = headers.join("\r\n");
+        stream
+            .write_all(
+                format!(
+                    "DELETE {target} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{full_headers}\r\nConnection: close\r\n\r\n",
+                    server.local_addr().port()
+                )
+                .as_bytes(),
+            )
+            .expect("write DELETE request");
         complete_response(&mut stream)
     }
 
@@ -5228,6 +6172,344 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
         let (_, _, upstream_body) = upstream.observed();
         assert!(!upstream_body.to_string().contains("compaction_trigger"));
         server.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn native_checkpoint_switch_to_external_rebuilds_visible_codex_history() {
+        let upstream = OneShotUpstream::start(json!({
+            "id": "chat_upstream", "model": "upstream-model",
+            "object": "chat.completion",
+            "choices": [{"index":0,"message":{"role":"assistant","content":"continued"},"finish_reason":"stop"}]
+        }));
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = canonical_root(&directory);
+        let config = root.join("config.json");
+        std::fs::write(
+            &config,
+            serde_json::to_vec_pretty(&json!({
+                "providers":[{"id":"demo","name":"Demo","base_url":upstream.base_url(),"protocol":"chat_completions","auth_mode":"api_key","api_key":"upstream-secret"}],
+                "models":[{"id":"demo/model","provider":"demo","upstream_id":"upstream-model","enabled":true}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let thread_id = "01a00000-0000-7000-8000-000000000001";
+        let turn_id = "01a00000-0000-7000-8000-000000000002";
+        let rollout = root.join("rollout.jsonl");
+        let records = [
+            json!({"type":"session_meta","payload":{"id":thread_id,"history_mode":"legacy"}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"old"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":"keep this constraint"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":"completed old work"}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"old"}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"compact"}}),
+            json!({"type":"compacted","payload":{"message":""}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"compact"}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":turn_id}}),
+        ];
+        std::fs::write(
+            &rollout,
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let database = rusqlite::Connection::open(root.join("state_5.sqlite")).unwrap();
+        database.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, history_mode TEXT, model TEXT)", []).unwrap();
+        database
+            .execute(
+                "INSERT INTO threads VALUES (?1, ?2, 'legacy', 'gpt-native')",
+                rusqlite::params![thread_id, rollout.to_str().unwrap()],
+            )
+            .unwrap();
+        drop(database);
+        let server = ServerHandle::start_with_config_options(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+            &config,
+            "codex",
+            root.join("auth.json"),
+        )
+        .expect("start history server");
+        let body = serde_json::to_vec(&json!({
+            "model":"demo/model",
+            "stream":false,
+            "input":[
+                {"type":"compaction","encrypted_content":"native-opaque"},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"continue now"}]}
+            ]
+        })).unwrap();
+        let metadata = format!("{{\"thread_id\":\"{thread_id}\",\"turn_id\":\"{turn_id}\"}}");
+        let response = post(
+            &server,
+            "/v1/responses",
+            &body,
+            &[
+                &session_cookie_header(&server),
+                &format!("thread-id: {thread_id}"),
+                &format!("x-codex-turn-metadata: {metadata}"),
+            ],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        let (_, _, upstream_body) = upstream.observed();
+        let projected = upstream_body.to_string();
+        assert!(projected.contains("keep this constraint"));
+        assert!(projected.contains("completed old work"));
+        assert!(projected.contains("continue now"));
+        assert!(!projected.contains("native-opaque"));
+        server.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn long_to_short_external_switch_compacts_before_the_destination_request() {
+        let listener =
+            TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind compaction upstream");
+        let address = listener.local_addr().unwrap();
+        let (sender, observed) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let mut requests = Vec::new();
+            loop {
+                let (mut stream, _) = listener.accept().expect("accept compaction request");
+                let (_, _, body) = receive_upstream_request(&mut stream);
+                let wire = body.to_string();
+                let summary = wire.contains("structured portable checkpoint")
+                    || wire.contains("Merge the visible portable checkpoints");
+                requests.push(body);
+                let answer = if summary {
+                    "checkpoint"
+                } else {
+                    "final answer"
+                };
+                let response_body = serde_json::to_vec(&json!({
+                    "id":"chat","object":"chat.completion","model":"short-model",
+                    "choices":[{"index":0,"message":{"role":"assistant","content":answer},"finish_reason":"stop"}]
+                })).unwrap();
+                stream.write_all(format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response_body.len()
+                ).as_bytes()).unwrap();
+                stream.write_all(&response_body).unwrap();
+                if !summary {
+                    sender.send(requests).unwrap();
+                    break;
+                }
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let root = canonical_root(&directory);
+        let config = root.join("config.json");
+        std::fs::write(&config, serde_json::to_vec_pretty(&json!({
+            "providers":[{"id":"short","name":"Short","base_url":format!("http://{address}/v1"),"protocol":"chat_completions","auth_mode":"api_key","api_key":"key"}],
+            "models":[{"id":"short/model","provider":"short","upstream_id":"short-model","enabled":true,
+                "context_window":1200,"output_limit":64,
+                "capability_sources":{"context_window":{"source":"manual","confidence":1.0}}}]
+        })).unwrap()).unwrap();
+        let server = ServerHandle::start_with_config_options(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+            &config,
+            "codex",
+            root.join("auth.json"),
+        )
+        .unwrap();
+        let body = serde_json::to_vec(&json!({
+            "model":"short/model","stream":false,"max_output_tokens":64,
+            "input":[
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"x".repeat(500)}]},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"y".repeat(500)}]},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"z".repeat(500)}]},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"w".repeat(500)}]},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"active request"}]}
+            ]
+        })).unwrap();
+        let response = post(
+            &server,
+            "/v1/responses",
+            &body,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        let requests = observed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            requests.len() >= 2,
+            "summary request plus destination request"
+        );
+        let final_request = requests.last().unwrap().to_string();
+        assert!(final_request.contains("checkpoint"));
+        assert!(final_request.contains("active request"));
+        assert!(!final_request.contains(&"x".repeat(500)));
+        for summary in &requests[..requests.len() - 1] {
+            assert_eq!(summary["stream"], false);
+            assert!(!summary.to_string().contains("active request"));
+        }
+        server.shutdown().unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn migration_export_and_import_cross_the_authenticated_http_boundary() {
+        let source_directory = tempfile::tempdir().unwrap();
+        let source_root = canonical_root(&source_directory);
+        let source_config = source_root.join("config.json");
+        std::fs::write(&source_config, serde_json::to_vec_pretty(&json!({
+            "providers":[{"id":"demo","name":"Demo","base_url":"https://api.example.com/v1","protocol":"responses","auth_mode":"api_key","api_key":"secret"}],
+            "models":[{"id":"demo/model","provider":"demo","upstream_id":"model","enabled":true}]
+        })).unwrap()).unwrap();
+        let source = ServerHandle::start_with_config_options(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+            &source_config,
+            "codex",
+            source_root.join("auth.json"),
+        )
+        .unwrap();
+        let export = post(
+            &source,
+            "/api/migration/export",
+            br#"{"password":"12345678","groups":["external"]}"#,
+            &[&session_cookie_header(&source)],
+        );
+        assert!(export.starts_with("HTTP/1.1 200 OK\r\n"), "{export}");
+        assert!(export.contains("Content-Disposition: attachment; filename=\"EMP.emp\"\r\n"));
+        let bundle = export.split_once("\r\n\r\n").unwrap().1.as_bytes();
+        assert!(bundle.starts_with(b"EMP-MIGRATION\x01\n"));
+        source.shutdown().unwrap();
+
+        let target_directory = tempfile::tempdir().unwrap();
+        let target_root = canonical_root(&target_directory);
+        let target_config = target_root.join("config.json");
+        std::fs::write(&target_config, b"{}").unwrap();
+        let target = ServerHandle::start_with_config_options(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+            &target_config,
+            "codex",
+            target_root.join("auth.json"),
+        )
+        .unwrap();
+        let import_body = serde_json::to_vec(&json!({
+            "password":"12345678",
+            "bundle":STANDARD.encode(bundle)
+        }))
+        .unwrap();
+        let imported = post(
+            &target,
+            "/api/migration/import",
+            &import_body,
+            &[&session_cookie_header(&target)],
+        );
+        assert!(imported.starts_with("HTTP/1.1 200 OK\r\n"), "{imported}");
+        let config = request(&target, "/api/config", &[&session_cookie_header(&target)]);
+        assert!(config.contains("demo/model"));
+        assert!(!config.contains("\"api_key\":\"secret\""));
+        let stored = target.state.backend.config.lock().unwrap().clone();
+        let provider = stored["providers"].as_array().unwrap()[0].clone();
+        assert_eq!(
+            provider_api_key(&provider, &target.state.backend.vault),
+            "secret"
+        );
+        target.shutdown().unwrap();
+    }
+
+    #[test]
+    fn account_import_and_delete_keep_credentials_managed_and_private() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = canonical_root(&directory);
+        let config = root.join("config.json");
+        std::fs::write(&config, b"{}").unwrap();
+        let server = ServerHandle::start_with_config_options(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+            &config,
+            "codex",
+            root.join("auth.json"),
+        )
+        .unwrap();
+        let imported = post(
+            &server,
+            "/api/accounts/import",
+            &serde_json::to_vec(&json!({
+                "id":"egg","name":"Egg","prefix":"egg","enabled":true,
+                "auth_json":{"tokens":{"access_token":"account-secret","account_id":"account-id"}}
+            }))
+            .unwrap(),
+            &[&session_cookie_header(&server)],
+        );
+        assert!(imported.starts_with("HTTP/1.1 200 OK\r\n"), "{imported}");
+        assert!(imported.contains("\"credential_set\":true"));
+        assert!(!imported.contains("account-secret"));
+        let stored = server.state.backend.config.lock().unwrap().clone();
+        let auth_path = PathBuf::from(stored["accounts"][0]["auth_file"].as_str().unwrap());
+        assert!(auth_path.is_file());
+        assert!(auth_path.parent().unwrap().join("config.toml").is_file());
+        assert_eq!(
+            server
+                .state
+                .backend
+                .vault
+                .read_encrypted_json(&auth_path)
+                .unwrap()["tokens"]["access_token"],
+            "account-secret"
+        );
+        let removed = delete(
+            &server,
+            "/api/accounts/egg",
+            &[&session_cookie_header(&server)],
+        );
+        assert!(removed.starts_with("HTTP/1.1 200 OK\r\n"), "{removed}");
+        assert!(!auth_path.exists());
+        assert!(!auth_path.parent().unwrap().join("config.toml").exists());
+        assert!(
+            server.state.backend.config.lock().unwrap()["accounts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        server.shutdown().unwrap();
+    }
+
+    #[test]
+    fn native_search_forwards_raw_json_with_the_best_available_login() {
+        let upstream = OneShotUpstream::start(json!({"data":[{"title":"result"}]}));
+        let directory = tempfile::tempdir().unwrap();
+        let root = canonical_root(&directory);
+        let config = root.join("config.json");
+        std::fs::write(
+            &config,
+            serde_json::to_vec_pretty(&json!({
+                "codex_base_url":format!("http://{}/backend",upstream.address),
+                "subscription_search":{"enabled":true,"account_id":""}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let server = ServerHandle::start_with_config_options(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+            &config,
+            "codex",
+            root.join("missing-auth.json"),
+        )
+        .unwrap();
+        let response = post(
+            &server,
+            "/v1/alpha/search",
+            br#"{"query":"codex"}"#,
+            &[
+                &session_cookie_header(&server),
+                "Authorization: Bearer caller-token",
+                "chatgpt-account-id: caller-account",
+            ],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(response.contains("\"title\":\"result\""));
+        let (path, headers, body) = upstream.observed();
+        assert_eq!(path, "/backend/alpha/search");
+        assert_eq!(headers["authorization"], "Bearer caller-token");
+        assert_eq!(headers["chatgpt-account-id"], "caller-account");
+        assert_eq!(body, json!({"query":"codex"}));
+        server.shutdown().unwrap();
     }
 
     fn upstream_sse(events: &[Value]) -> Vec<u8> {

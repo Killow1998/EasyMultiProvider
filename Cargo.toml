@@ -4,6 +4,7 @@ members = [
     "crates/emp-app",
     "crates/emp-codex",
     "crates/emp-core",
+    "crates/emp-history",
     "crates/emp-protocol",
     "crates/emp-router",
     "crates/emp-state",

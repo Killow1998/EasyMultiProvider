@@ -7,7 +7,7 @@ description = "Bounded transport primitives for EMP."
 
 [dependencies]
 base64 = "0.22"
-flate2 = "1.1"
+flate2 = { version = "1.1", features = ["zlib-rs"] }
 getrandom = "0.2.17"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "socks"] }
 ring = "0.17.14"

@@ -190,6 +190,25 @@ impl HttpClient {
         &self.policy
     }
 
+    /// Resolve the immutable proxy selected for one WebSocket route.
+    pub fn websocket_proxy_for(&self, url: &str) -> Result<Option<String>, HttpTransportError> {
+        let policy_url = if let Some(rest) = url.strip_prefix("ws://") {
+            format!("http://{rest}")
+        } else if let Some(rest) = url.strip_prefix("wss://") {
+            format!("https://{rest}")
+        } else {
+            return Err(HttpTransportError::new(
+                HttpTransportErrorKind::InvalidRequest,
+            ));
+        };
+        let plan = self
+            .policy
+            .plan(HttpMethod::Get, &policy_url, BTreeMap::new(), true)?;
+        self.policy
+            .transport_proxy_for(&plan.route)
+            .map_err(Into::into)
+    }
+
     pub async fn open(
         &self,
         method: HttpMethod,

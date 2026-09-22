@@ -1,5 +1,6 @@
 use crate::MAX_PROXY_REQUEST_BYTES;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress};
 use ring::digest::{SHA1_FOR_LEGACY_USE_ONLY, digest};
 use serde_json::Value;
 use std::fmt;
@@ -212,8 +213,417 @@ impl<S> Drop for WebSocketConnection<'_, S> {
     }
 }
 
-trait ReadWrite: Read + Write + Send {}
-impl<T: Read + Write + Send> ReadWrite for T {}
+trait ReadWrite: Read + Write + Send {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+}
+type OpenedWebSocketTransport = (Box<dyn ReadWrite>, bool, Option<String>);
+impl ReadWrite for TcpStream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        TcpStream::set_read_timeout(self, timeout)
+    }
+}
+impl<S: ReadWrite> ReadWrite for rustls::StreamOwned<rustls::ClientConnection, S> {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.sock.set_read_timeout(timeout)
+    }
+}
+impl ReadWrite for Box<dyn ReadWrite> {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.as_ref().set_read_timeout(timeout)
+    }
+}
+
+fn connect_tcp(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<TcpStream, ClientWebSocketError> {
+    let addresses = (host, port).to_socket_addrs().map_err(|_| {
+        ClientWebSocketError::new(503, "native upstream websocket connection failed")
+    })?;
+    for address in addresses {
+        if let Ok(tcp) = TcpStream::connect_timeout(&address, timeout) {
+            tcp.set_read_timeout(Some(timeout)).map_err(|_| {
+                ClientWebSocketError::new(503, "native upstream websocket connection failed")
+            })?;
+            tcp.set_write_timeout(Some(timeout)).map_err(|_| {
+                ClientWebSocketError::new(503, "native upstream websocket connection failed")
+            })?;
+            return Ok(tcp);
+        }
+    }
+    Err(ClientWebSocketError::new(
+        503,
+        "native upstream websocket connection failed",
+    ))
+}
+
+fn tls_stream(
+    stream: Box<dyn ReadWrite>,
+    host: &str,
+) -> Result<Box<dyn ReadWrite>, ClientWebSocketError> {
+    let loaded = rustls_native_certs::load_native_certs();
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in loaded.certs {
+        let _ = roots.add(certificate);
+    }
+    if roots.is_empty() {
+        return Err(ClientWebSocketError::new(
+            503,
+            "native upstream websocket TLS verification failed",
+        ));
+    }
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let server_name = rustls::pki_types::ServerName::try_from(host.to_owned()).map_err(|_| {
+        ClientWebSocketError::new(502, "native upstream websocket endpoint is invalid")
+    })?;
+    let connection =
+        rustls::ClientConnection::new(Arc::new(config), server_name).map_err(|_| {
+            ClientWebSocketError::new(503, "native upstream websocket TLS setup failed")
+        })?;
+    Ok(Box::new(rustls::StreamOwned::new(connection, stream)))
+}
+
+fn read_http_head(stream: &mut dyn ReadWrite) -> Result<Vec<u8>, ClientWebSocketError> {
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        if head.len() >= 64 * 1024 {
+            return Err(ClientWebSocketError::new(
+                502,
+                "native websocket handshake is too large",
+            ));
+        }
+        let mut byte = [0_u8; 1];
+        stream.read_exact(&mut byte).map_err(|_| {
+            ClientWebSocketError::new(503, "native upstream websocket handshake failed")
+        })?;
+        head.push(byte[0]);
+    }
+    Ok(head)
+}
+
+fn proxy_authorization(proxy: &Url) -> Option<String> {
+    let username = proxy.username();
+    let password = proxy.password();
+    (!username.is_empty() || password.is_some()).then(|| {
+        format!(
+            "Basic {}",
+            STANDARD.encode(format!("{username}:{}", password.unwrap_or_default()))
+        )
+    })
+}
+
+fn socks_connect(
+    stream: &mut dyn ReadWrite,
+    proxy: &Url,
+    host: &str,
+    port: u16,
+) -> Result<(), ClientWebSocketError> {
+    let credential = (!proxy.username().is_empty() || proxy.password().is_some())
+        .then(|| (proxy.username(), proxy.password().unwrap_or_default()));
+    let methods: &[u8] = if credential.is_some() { &[0, 2] } else { &[0] };
+    stream
+        .write_all(&[&[5, methods.len() as u8], methods].concat())
+        .and_then(|_| stream.flush())
+        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+    let mut selected = [0_u8; 2];
+    stream
+        .read_exact(&mut selected)
+        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+    if selected[0] != 5 || selected[1] == 255 {
+        return Err(ClientWebSocketError::new(
+            503,
+            "native websocket proxy rejected authentication",
+        ));
+    }
+    if selected[1] == 2 {
+        let (username, password) = credential.ok_or_else(|| {
+            ClientWebSocketError::new(503, "native websocket proxy rejected authentication")
+        })?;
+        if username.len() > 255 || password.len() > 255 {
+            return Err(ClientWebSocketError::new(
+                502,
+                "native websocket proxy credential is invalid",
+            ));
+        }
+        let mut request = vec![1, username.len() as u8];
+        request.extend_from_slice(username.as_bytes());
+        request.push(password.len() as u8);
+        request.extend_from_slice(password.as_bytes());
+        stream
+            .write_all(&request)
+            .and_then(|_| stream.flush())
+            .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+        let mut response = [0_u8; 2];
+        stream
+            .read_exact(&mut response)
+            .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+        if response != [1, 0] {
+            return Err(ClientWebSocketError::new(
+                503,
+                "native websocket proxy rejected authentication",
+            ));
+        }
+    } else if selected[1] != 0 {
+        return Err(ClientWebSocketError::new(
+            503,
+            "native websocket proxy selected an unsupported method",
+        ));
+    }
+    if host.len() > 255 {
+        return Err(ClientWebSocketError::new(
+            502,
+            "native upstream websocket endpoint is invalid",
+        ));
+    }
+    let mut request = vec![5, 1, 0, 3, host.len() as u8];
+    request.extend_from_slice(host.as_bytes());
+    request.extend_from_slice(&port.to_be_bytes());
+    stream
+        .write_all(&request)
+        .and_then(|_| stream.flush())
+        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+    let mut response = [0_u8; 4];
+    stream
+        .read_exact(&mut response)
+        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+    if response[0] != 5 || response[1] != 0 {
+        return Err(ClientWebSocketError::new(
+            503,
+            "native websocket proxy rejected the connection",
+        ));
+    }
+    let address_bytes = match response[3] {
+        1 => 4,
+        4 => 16,
+        3 => {
+            let mut length = [0_u8; 1];
+            stream
+                .read_exact(&mut length)
+                .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+            usize::from(length[0])
+        }
+        _ => {
+            return Err(ClientWebSocketError::new(
+                503,
+                "native websocket proxy returned an invalid response",
+            ));
+        }
+    };
+    let mut ignored = vec![0_u8; address_bytes + 2];
+    stream
+        .read_exact(&mut ignored)
+        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))
+}
+
+fn websocket_connection(
+    target: &Url,
+    proxy: Option<&str>,
+    timeout: Duration,
+) -> Result<OpenedWebSocketTransport, ClientWebSocketError> {
+    let host = target.host_str().ok_or_else(|| {
+        ClientWebSocketError::new(502, "native upstream websocket endpoint is invalid")
+    })?;
+    let port = target.port_or_known_default().ok_or_else(|| {
+        ClientWebSocketError::new(502, "native upstream websocket endpoint is invalid")
+    })?;
+    let Some(proxy) = proxy else {
+        let tcp = connect_tcp(host, port, timeout)?;
+        let stream: Box<dyn ReadWrite> = Box::new(tcp);
+        return Ok((
+            if target.scheme() == "wss" {
+                tls_stream(stream, host)?
+            } else {
+                stream
+            },
+            false,
+            None,
+        ));
+    };
+    let proxy = Url::parse(proxy)
+        .map_err(|_| ClientWebSocketError::new(502, "native websocket proxy is invalid"))?;
+    let proxy_host = proxy
+        .host_str()
+        .ok_or_else(|| ClientWebSocketError::new(502, "native websocket proxy is invalid"))?;
+    let proxy_port = proxy
+        .port_or_known_default()
+        .ok_or_else(|| ClientWebSocketError::new(502, "native websocket proxy is invalid"))?;
+    let tcp = connect_tcp(proxy_host, proxy_port, timeout)?;
+    let mut stream: Box<dyn ReadWrite> = Box::new(tcp);
+    if proxy.scheme() == "https" {
+        stream = tls_stream(stream, proxy_host)?;
+    }
+    if matches!(proxy.scheme(), "socks5" | "socks5h") {
+        socks_connect(stream.as_mut(), &proxy, host, port)?;
+        if target.scheme() == "wss" {
+            stream = tls_stream(stream, host)?;
+        }
+        return Ok((stream, false, None));
+    }
+    if !matches!(proxy.scheme(), "http" | "https") {
+        return Err(ClientWebSocketError::new(
+            502,
+            "native websocket proxy is unsupported",
+        ));
+    }
+    let authorization = proxy_authorization(&proxy);
+    if target.scheme() == "wss" {
+        let authority = format!("{host}:{port}");
+        let auth = authorization
+            .as_deref()
+            .map(|value| format!("Proxy-Authorization: {value}\r\n"))
+            .unwrap_or_default();
+        write!(
+            stream,
+            "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n{auth}Connection: keep-alive\r\n\r\n"
+        )
+        .and_then(|_| stream.flush())
+        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+        let head = read_http_head(stream.as_mut())?;
+        let status = std::str::from_utf8(&head)
+            .ok()
+            .and_then(|value| value.lines().next())
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|status| status.parse::<u16>().ok())
+            .unwrap_or(502);
+        if status != 200 {
+            return Err(ClientWebSocketError::new(
+                status,
+                "native websocket proxy rejected the connection",
+            ));
+        }
+        stream = tls_stream(stream, host)?;
+        Ok((stream, false, None))
+    } else {
+        Ok((stream, true, authorization))
+    }
+}
+
+struct PerMessageDeflate {
+    compressor: Compress,
+    decompressor: Decompress,
+    client_no_context_takeover: bool,
+    server_no_context_takeover: bool,
+}
+
+impl PerMessageDeflate {
+    fn negotiated(value: &str) -> Result<Self, ClientWebSocketError> {
+        let mut parts = value.split(';').map(str::trim);
+        if parts.next() != Some("permessage-deflate") {
+            return Err(ClientWebSocketError::new(
+                502,
+                "native websocket extension is unsupported",
+            ));
+        }
+        let mut client_bits = 15_u8;
+        let mut server_bits = 15_u8;
+        let mut client_no_context_takeover = false;
+        let mut server_no_context_takeover = false;
+        for parameter in parts {
+            if parameter == "client_no_context_takeover" {
+                client_no_context_takeover = true;
+            } else if parameter == "server_no_context_takeover" {
+                server_no_context_takeover = true;
+            } else if let Some(value) = parameter.strip_prefix("client_max_window_bits=") {
+                client_bits = value.parse().map_err(|_| {
+                    ClientWebSocketError::new(502, "native websocket extension is invalid")
+                })?;
+            } else if let Some(value) = parameter.strip_prefix("server_max_window_bits=") {
+                server_bits = value.parse().map_err(|_| {
+                    ClientWebSocketError::new(502, "native websocket extension is invalid")
+                })?;
+            } else if !parameter.is_empty() {
+                return Err(ClientWebSocketError::new(
+                    502,
+                    "native websocket extension is unsupported",
+                ));
+            }
+        }
+        if !(9..=15).contains(&client_bits) || !(9..=15).contains(&server_bits) {
+            return Err(ClientWebSocketError::new(
+                502,
+                "native websocket extension is invalid",
+            ));
+        }
+        Ok(Self {
+            compressor: Compress::new_with_window_bits(Compression::fast(), false, client_bits),
+            decompressor: Decompress::new_with_window_bits(false, server_bits),
+            client_no_context_takeover,
+            server_no_context_takeover,
+        })
+    }
+
+    fn compress(&mut self, payload: &[u8]) -> Result<Vec<u8>, ClientWebSocketError> {
+        let before_in = self.compressor.total_in();
+        let mut output = Vec::with_capacity(payload.len().saturating_add(64));
+        loop {
+            output.reserve(8192);
+            let consumed = usize::try_from(self.compressor.total_in() - before_in)
+                .unwrap_or(payload.len())
+                .min(payload.len());
+            self.compressor
+                .compress_vec(&payload[consumed..], &mut output, FlushCompress::Sync)
+                .map_err(|_| {
+                    ClientWebSocketError::new(502, "native websocket compression failed")
+                })?;
+            let consumed =
+                usize::try_from(self.compressor.total_in() - before_in).unwrap_or(payload.len());
+            if consumed >= payload.len() && output.ends_with(&[0, 0, 255, 255]) {
+                output.truncate(output.len() - 4);
+                break;
+            }
+            if output.len() > MAX_PROXY_REQUEST_BYTES {
+                return Err(ClientWebSocketError::new(
+                    413,
+                    "native websocket request is too large",
+                ));
+            }
+        }
+        if self.client_no_context_takeover {
+            self.compressor.reset();
+        }
+        Ok(output)
+    }
+
+    fn decompress(&mut self, payload: &[u8]) -> Result<Vec<u8>, ClientWebSocketError> {
+        let mut encoded = Vec::with_capacity(payload.len() + 4);
+        encoded.extend_from_slice(payload);
+        encoded.extend_from_slice(&[0, 0, 255, 255]);
+        let before_in = self.decompressor.total_in();
+        let mut output = Vec::with_capacity(encoded.len().saturating_mul(2).max(8192));
+        loop {
+            output.reserve(8192);
+            let consumed = usize::try_from(self.decompressor.total_in() - before_in)
+                .unwrap_or(encoded.len())
+                .min(encoded.len());
+            self.decompressor
+                .decompress_vec(&encoded[consumed..], &mut output, FlushDecompress::Sync)
+                .map_err(|_| {
+                    ClientWebSocketError::new(
+                        502,
+                        "native upstream websocket compression is invalid",
+                    )
+                })?;
+            if output.len() > MAX_PROXY_REQUEST_BYTES {
+                return Err(ClientWebSocketError::new(
+                    502,
+                    "native upstream websocket event is too large",
+                ));
+            }
+            let consumed =
+                usize::try_from(self.decompressor.total_in() - before_in).unwrap_or(encoded.len());
+            if consumed >= encoded.len() {
+                break;
+            }
+        }
+        if self.server_no_context_takeover {
+            self.decompressor.reset(false);
+        }
+        Ok(output)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientWebSocketError {
@@ -239,6 +649,7 @@ pub struct ClientWebSocket {
     stream: Box<dyn ReadWrite>,
     closed: bool,
     response_headers: std::collections::BTreeMap<String, String>,
+    compression: Option<PerMessageDeflate>,
 }
 
 impl ClientWebSocket {
@@ -246,6 +657,15 @@ impl ClientWebSocket {
         url: &str,
         headers: &std::collections::BTreeMap<String, String>,
         timeout: Duration,
+    ) -> Result<Self, ClientWebSocketError> {
+        Self::connect_with_proxy(url, headers, timeout, None)
+    }
+
+    pub fn connect_with_proxy(
+        url: &str,
+        headers: &std::collections::BTreeMap<String, String>,
+        timeout: Duration,
+        proxy: Option<&str>,
     ) -> Result<Self, ClientWebSocketError> {
         let parsed = Url::parse(url).map_err(|_| {
             ClientWebSocketError::new(502, "native upstream websocket endpoint is invalid")
@@ -262,48 +682,8 @@ impl ClientWebSocket {
         let port = parsed.port_or_known_default().ok_or_else(|| {
             ClientWebSocketError::new(502, "native upstream websocket endpoint is invalid")
         })?;
-        let mut addresses = (host, port).to_socket_addrs().map_err(|_| {
-            ClientWebSocketError::new(503, "native upstream websocket connection failed")
-        })?;
-        let address = addresses.next().ok_or_else(|| {
-            ClientWebSocketError::new(503, "native upstream websocket connection failed")
-        })?;
-        let tcp = TcpStream::connect_timeout(&address, timeout).map_err(|_| {
-            ClientWebSocketError::new(503, "native upstream websocket connection failed")
-        })?;
-        tcp.set_read_timeout(Some(timeout)).map_err(|_| {
-            ClientWebSocketError::new(503, "native upstream websocket connection failed")
-        })?;
-        tcp.set_write_timeout(Some(timeout)).map_err(|_| {
-            ClientWebSocketError::new(503, "native upstream websocket connection failed")
-        })?;
-        let mut stream: Box<dyn ReadWrite> = if parsed.scheme() == "wss" {
-            let loaded = rustls_native_certs::load_native_certs();
-            let mut roots = rustls::RootCertStore::empty();
-            for certificate in loaded.certs {
-                let _ = roots.add(certificate);
-            }
-            if roots.is_empty() {
-                return Err(ClientWebSocketError::new(
-                    503,
-                    "native upstream websocket TLS verification failed",
-                ));
-            }
-            let config = rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-            let server_name =
-                rustls::pki_types::ServerName::try_from(host.to_owned()).map_err(|_| {
-                    ClientWebSocketError::new(502, "native upstream websocket endpoint is invalid")
-                })?;
-            let connection =
-                rustls::ClientConnection::new(Arc::new(config), server_name).map_err(|_| {
-                    ClientWebSocketError::new(503, "native upstream websocket TLS setup failed")
-                })?;
-            Box::new(rustls::StreamOwned::new(connection, tcp))
-        } else {
-            Box::new(tcp)
-        };
+        let (mut stream, absolute_form, proxy_authorization) =
+            websocket_connection(&parsed, proxy, timeout)?;
         let mut nonce = [0u8; 16];
         getrandom::getrandom(&mut nonce).map_err(|_| {
             ClientWebSocketError::new(500, "native websocket randomness is unavailable")
@@ -322,9 +702,17 @@ impl ClientWebSocket {
             path.push('?');
             path.push_str(query);
         }
+        if absolute_form {
+            path = format!("{}://{authority}{path}", parsed.scheme());
+        }
         let mut request = format!(
-            "GET {path} HTTP/1.1\r\nHost: {authority}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n"
+            "GET {path} HTTP/1.1\r\nHost: {authority}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n"
         );
+        if let Some(authorization) = proxy_authorization {
+            request.push_str("Proxy-Authorization: ");
+            request.push_str(&authorization);
+            request.push_str("\r\n");
+        }
         for (name, value) in headers {
             let lower = name.to_ascii_lowercase();
             if matches!(
@@ -412,10 +800,20 @@ impl ClientWebSocket {
                 "native websocket handshake is invalid",
             ));
         }
+        let compression = match response_headers.get("sec-websocket-extensions") {
+            Some(value) => Some(PerMessageDeflate::negotiated(value)?),
+            None => None,
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(300)))
+            .map_err(|_| {
+                ClientWebSocketError::new(503, "native upstream websocket timeout setup failed")
+            })?;
         Ok(Self {
             stream,
             closed: false,
             response_headers,
+            compression,
         })
     }
     pub fn response_headers(&self) -> &std::collections::BTreeMap<String, String> {
@@ -428,12 +826,17 @@ impl ClientWebSocket {
             .map_err(|_| ClientWebSocketError::new(502, "native upstream websocket closed"))?;
         Ok(value)
     }
-    fn send_frame(&mut self, opcode: u8, payload: &[u8]) -> Result<(), ClientWebSocketError> {
+    fn send_frame(
+        &mut self,
+        opcode: u8,
+        payload: &[u8],
+        compressed: bool,
+    ) -> Result<(), ClientWebSocketError> {
         let mut mask = [0u8; 4];
         getrandom::getrandom(&mut mask).map_err(|_| {
             ClientWebSocketError::new(500, "native websocket randomness is unavailable")
         })?;
-        let mut frame = vec![0x80 | opcode];
+        let mut frame = vec![0x80 | if compressed { 0x40 } else { 0 } | opcode];
         match payload.len() {
             length if length < 126 => frame.push(0x80 | length as u8),
             length if length <= u16::MAX as usize => {
@@ -461,19 +864,28 @@ impl ClientWebSocket {
         let payload = serde_json::to_vec(value).map_err(|_| {
             ClientWebSocketError::new(500, "native websocket request serialization failed")
         })?;
-        if payload.len() > 4 * 1024 * 1024 {
+        if payload.len() > MAX_PROXY_REQUEST_BYTES {
             return Err(ClientWebSocketError::new(
                 413,
                 "native websocket request is too large",
             ));
         }
-        self.send_frame(1, &payload)
+        if let Some(compression) = self.compression.as_mut() {
+            let payload = compression.compress(&payload)?;
+            self.send_frame(1, &payload, true)
+        } else {
+            self.send_frame(1, &payload, false)
+        }
     }
     pub fn receive_json(&mut self) -> Result<Option<Value>, ClientWebSocketError> {
+        let mut message = Vec::new();
+        let mut started = false;
+        let mut compressed = false;
         loop {
             let header = self.read_exact(2)?;
             let final_frame = header[0] & 0x80 != 0;
-            if header[0] & 0x70 != 0 {
+            let rsv1 = header[0] & 0x40 != 0;
+            if header[0] & 0x30 != 0 {
                 return Err(ClientWebSocketError::new(
                     502,
                     "native upstream websocket extension is unsupported",
@@ -494,16 +906,21 @@ impl ClientWebSocket {
                 let raw = self.read_exact(8)?;
                 length = u64::from_be_bytes(raw.try_into().expect("eight bytes"));
             }
-            if !final_frame {
+            if opcode >= 8 && (!final_frame || length > 125 || rsv1) {
                 return Err(ClientWebSocketError::new(
                     502,
-                    "fragmented native upstream websocket event is unsupported",
+                    "native upstream websocket control frame is invalid",
                 ));
             }
             let length = usize::try_from(length).map_err(|_| {
                 ClientWebSocketError::new(502, "native upstream websocket event is too large")
             })?;
-            if length > MAX_PROXY_REQUEST_BYTES {
+            if opcode < 8
+                && message
+                    .len()
+                    .checked_add(length)
+                    .is_none_or(|size| size > MAX_PROXY_REQUEST_BYTES)
+            {
                 return Err(ClientWebSocketError::new(
                     502,
                     "native upstream websocket event is too large",
@@ -512,26 +929,37 @@ impl ClientWebSocket {
             let payload = self.read_exact(length)?;
             match opcode {
                 1 => {
-                    let value: Value = serde_json::from_slice(&payload).map_err(|_| {
-                        ClientWebSocketError::new(
-                            502,
-                            "native upstream websocket event is invalid JSON",
-                        )
-                    })?;
-                    if !value.is_object() {
+                    if started {
                         return Err(ClientWebSocketError::new(
                             502,
-                            "native upstream websocket event is not an object",
+                            "native upstream websocket frame sequence is invalid",
                         ));
                     }
-                    return Ok(Some(value));
+                    if rsv1 && self.compression.is_none() {
+                        return Err(ClientWebSocketError::new(
+                            502,
+                            "native upstream websocket extension is unsupported",
+                        ));
+                    }
+                    started = true;
+                    compressed = rsv1;
+                    message.extend_from_slice(&payload);
+                }
+                0 => {
+                    if !started || rsv1 {
+                        return Err(ClientWebSocketError::new(
+                            502,
+                            "native upstream websocket frame sequence is invalid",
+                        ));
+                    }
+                    message.extend_from_slice(&payload);
                 }
                 8 => {
                     self.closed = true;
                     return Ok(None);
                 }
                 9 => {
-                    self.send_frame(10, &payload)?;
+                    self.send_frame(10, &payload, false)?;
                 }
                 10 => {}
                 _ => {
@@ -541,11 +969,33 @@ impl ClientWebSocket {
                     ));
                 }
             }
+            if final_frame && started {
+                if compressed {
+                    message = self
+                        .compression
+                        .as_mut()
+                        .expect("RSV1 requires negotiated compression")
+                        .decompress(&message)?;
+                }
+                let value: Value = serde_json::from_slice(&message).map_err(|_| {
+                    ClientWebSocketError::new(
+                        502,
+                        "native upstream websocket event is invalid JSON",
+                    )
+                })?;
+                if !value.is_object() {
+                    return Err(ClientWebSocketError::new(
+                        502,
+                        "native upstream websocket event is not an object",
+                    ));
+                }
+                return Ok(Some(value));
+            }
         }
     }
     pub fn close(&mut self) {
         if !self.closed {
-            let _ = self.send_frame(8, &1000u16.to_be_bytes());
+            let _ = self.send_frame(8, &1000u16.to_be_bytes(), false);
             self.closed = true;
         }
     }
