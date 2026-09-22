@@ -422,6 +422,7 @@ name = "emp-codex"
 version = "0.11.6"
 dependencies = [
  "base64 0.22.1",
+ "libc",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",

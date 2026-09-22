@@ -15,6 +15,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use emp_codex::quota::{QuotaError, read_native_login_quota, run_quota_query_persisting};
 use emp_codex::{account_auth_headers, subscription_route_model};
 use emp_core::{ResolvedRoute, RouteResolutionError, resolve_route};
 use emp_router::{
@@ -24,7 +25,8 @@ use emp_router::{
 use emp_state::{
     ConfigError, FilesystemError, VaultStore, WEB_SESSION_TOKEN_BYTES, WebSession, WebSessionError,
     config_path, load_configuration, load_or_create_web_session, provider_api_key,
-    remember_resolved_protocol, save_configuration, web_session_path,
+    public_configuration_with_file_status, remember_resolved_protocol, same_account_auth,
+    save_configuration, web_session_path,
 };
 use emp_transport::{
     ContentDecodeError, FailureClass, FailurePhase, HttpClient, HttpClientPolicy, ProxyEnvironment,
@@ -1669,6 +1671,19 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
                 ResponsesRequestResult::Streamed => None,
             }
         }
+        Some(request)
+            if request.method == RequestMethod::Post
+                && request.raw_path().starts_with("/api/accounts/")
+                && request.raw_path().ends_with("/quota") =>
+        {
+            Some(management_quota_request(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                system_now(),
+            ))
+        }
         Some(request) => Some(route_request(request, state)),
         None => Some(bad_request_response()),
     };
@@ -1677,6 +1692,325 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
         let _ = stream.flush();
     }
     let _ = stream.shutdown(Shutdown::Write);
+}
+
+fn regular_file(path: &Path) -> bool {
+    fs_metadata(path)
+        .is_some_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+}
+
+fn fs_metadata(path: &Path) -> Option<std::fs::Metadata> {
+    std::fs::symlink_metadata(path).ok()
+}
+
+fn native_account_snapshot(state: &ServerState, config: &Value) -> Value {
+    let quota = state
+        .backend
+        .native_quota
+        .lock()
+        .ok()
+        .and_then(|quota| quota.clone())
+        .unwrap_or(Value::Null);
+    serde_json::json!({
+        "id": "@native",
+        "name": "Current Codex login",
+        "prefix": "",
+        "native": true,
+        "credential_set": regular_file(&state.backend.native_auth_path),
+        "hidden_models": config
+            .get("native_hidden_models")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())),
+        "model_context_windows": config
+            .get("native_model_context_windows")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
+        "quota": quota,
+    })
+}
+
+fn accounts_snapshot(state: &ServerState) -> Option<Value> {
+    let config = state.backend.config.lock().ok()?.clone();
+    let public =
+        public_configuration_with_file_status(&config, &BTreeMap::new(), regular_file).ok()?;
+    let errors = state
+        .backend
+        .quota_refresh_errors
+        .lock()
+        .ok()
+        .map(|errors| {
+            errors
+                .iter()
+                .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+                .collect::<serde_json::Map<_, _>>()
+        })?;
+    Some(serde_json::json!({
+        "native_account": native_account_snapshot(state, &config),
+        "accounts": public
+            .get("accounts")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())),
+        "refresh_errors": errors,
+    }))
+}
+
+fn account_public_snapshot(state: &ServerState, account_id: &str) -> Option<Value> {
+    accounts_snapshot(state)?
+        .get("accounts")?
+        .as_array()?
+        .iter()
+        .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
+        .cloned()
+}
+
+fn native_auth_document(path: &Path) -> Option<Value> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_NATIVE_AUTH_BYTES as u64
+    {
+        return None;
+    }
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
+fn save_account_quota_state(
+    state: &ServerState,
+    account_id: &str,
+    auth_file: &str,
+    status: &str,
+    quota: Option<&Value>,
+) -> Result<Value, QuotaError> {
+    let mut config = state
+        .backend
+        .config
+        .lock()
+        .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?;
+    let Some(account) = config
+        .get_mut("accounts")
+        .and_then(Value::as_array_mut)
+        .and_then(|accounts| {
+            accounts.iter_mut().find(|account| {
+                account.get("id").and_then(Value::as_str) == Some(account_id)
+                    && account.get("auth_file").and_then(Value::as_str) == Some(auth_file)
+            })
+        })
+    else {
+        return Err(QuotaError::new(
+            "account changed during quota refresh",
+            "quota_error",
+        ));
+    };
+    account["credential_status"] = Value::String(status.to_owned());
+    if let Some(quota) = quota {
+        account["quota"] = quota.clone();
+    }
+    save_configuration(
+        &config,
+        Some(&state.backend.config_path),
+        &state.backend.vault,
+    )
+    .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?;
+    *config = load_configuration(Some(&state.backend.config_path))
+        .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?;
+    drop(config);
+    account_public_snapshot(state, account_id)
+        .ok_or_else(|| QuotaError::new("account changed during quota refresh", "quota_error"))
+}
+
+fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
+    let target = state
+        .backend
+        .config
+        .lock()
+        .ok()
+        .and_then(|config| {
+            config
+                .get("accounts")?
+                .as_array()?
+                .iter()
+                .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
+                .cloned()
+        })
+        .ok_or_else(|| QuotaError::new(format!("unknown account: {account_id}"), "quota_error"))?;
+    let auth_file = target
+        .get("auth_file")
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| QuotaError::new("account credentials are not configured", "quota_error"))?
+        .to_owned();
+    let auth_path = Path::new(&auth_file);
+    let read_auth = || {
+        state
+            .backend
+            .vault
+            .read_encrypted_json(auth_path)
+            .map_err(|_| QuotaError::new("stored encrypted auth.json is invalid", "quota_error"))
+    };
+    let query = |auth: &Value, allow_refresh: bool| {
+        run_quota_query_persisting(
+            auth,
+            &state.backend.codex_binary,
+            Duration::from_secs(45),
+            allow_refresh,
+            |refreshed| {
+                state
+                    .backend
+                    .vault
+                    .write_encrypted_json(auth_path, refreshed)
+                    .map_err(|_| ())
+            },
+        )
+    };
+    let auth = read_auth()?;
+    if native_auth_document(&state.backend.native_auth_path)
+        .is_some_and(|native| same_account_auth(&auth, &native))
+    {
+        return match read_native_login_quota(
+            &state.backend.native_auth_path,
+            &state.backend.codex_binary,
+            Duration::from_secs(45),
+        ) {
+            Ok(quota) => {
+                save_account_quota_state(state, account_id, &auth_file, "valid", Some(&quota))
+            }
+            Err(error) => {
+                if error.code() == "quota_auth_required" {
+                    let _ =
+                        save_account_quota_state(state, account_id, &auth_file, "invalid", None);
+                }
+                Err(error)
+            }
+        };
+    }
+    let quota = match query(&auth, false) {
+        Ok(quota) => quota,
+        Err(error) if error.code() == "quota_auth_required" => {
+            let refreshed = read_auth()?;
+            match query(&refreshed, true) {
+                Ok(quota) => quota,
+                Err(error) => {
+                    if error.code() == "quota_auth_required" {
+                        let _ = save_account_quota_state(
+                            state, account_id, &auth_file, "invalid", None,
+                        );
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Err(error) => return Err(error),
+    };
+    save_account_quota_state(state, account_id, &auth_file, "valid", Some(&quota))
+}
+
+fn management_quota_request(
+    stream: &mut TcpStream,
+    request: Request<'_>,
+    body_prefix: Vec<u8>,
+    state: &ServerState,
+    now: f64,
+) -> Vec<u8> {
+    if !same_origin(request, state.port) {
+        return cross_origin_response("management session is required");
+    }
+    let supplied_cookie = request.session_cookie();
+    if !state.sessions.contains(supplied_cookie.as_deref(), now) {
+        return unauthorized_response();
+    }
+    if let Err(error) = read_json_body(stream, request, body_prefix, state) {
+        return body_error_response(error);
+    }
+    let path = request.raw_path();
+    let raw_account = &path["/api/accounts/".len()..path.len() - "/quota".len()];
+    let account = percent_decode(raw_account.trim_end_matches('/'), false);
+    let known_account = account == "@native"
+        || state.backend.config.lock().is_ok_and(|config| {
+            config
+                .get("accounts")
+                .and_then(Value::as_array)
+                .is_some_and(|accounts| {
+                    accounts.iter().any(|candidate| {
+                        candidate.get("id").and_then(Value::as_str) == Some(account.as_str())
+                    })
+                })
+        });
+    if !known_account {
+        return json_error_response(
+            503,
+            status_text(503),
+            &format!("unknown account: {account}"),
+            Some("quota_error"),
+            &[],
+        );
+    }
+    let refresh_lock = match state.backend.quota_refresh_locks.lock() {
+        Ok(mut locks) => Arc::clone(
+            locks
+                .entry(account.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        ),
+        Err(_) => {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        }
+    };
+    let _refresh_guard = match refresh_lock.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        }
+    };
+    let refreshed = if account == "@native" {
+        read_native_login_quota(
+            &state.backend.native_auth_path,
+            &state.backend.codex_binary,
+            Duration::from_secs(45),
+        )
+        .and_then(|quota| {
+            if let Ok(mut current) = state.backend.native_quota.lock() {
+                *current = Some(quota);
+            } else {
+                return Err(QuotaError::new(
+                    "Codex account quota check failed",
+                    "quota_error",
+                ));
+            }
+            let config = match state.backend.config.lock() {
+                Ok(config) => config.clone(),
+                Err(_) => {
+                    return Err(QuotaError::new(
+                        "Codex account quota check failed",
+                        "quota_error",
+                    ));
+                }
+            };
+            Ok(native_account_snapshot(state, &config))
+        })
+    } else {
+        refresh_imported_account(state, &account)
+    };
+    match refreshed {
+        Ok(account_snapshot) => {
+            if let Ok(mut errors) = state.backend.quota_refresh_errors.lock() {
+                errors.remove(&account);
+            }
+            let body = serde_json::to_vec(&serde_json::json!({"account": account_snapshot}))
+                .expect("account snapshot is serializable");
+            response("HTTP/1.1 200 OK", "application/json", &body, &[])
+        }
+        Err(error) => {
+            if let Ok(mut errors) = state.backend.quota_refresh_errors.lock() {
+                errors.insert(account, error.code().to_owned());
+            }
+            json_error_response(
+                503,
+                status_text(503),
+                &error.to_string(),
+                Some(error.code()),
+                &[],
+            )
+        }
+    }
 }
 
 fn route_request(request: Request<'_>, state: &ServerState) -> Vec<u8> {
@@ -1722,6 +2056,20 @@ fn route_request_at(request: Request<'_>, state: &ServerState, now: f64) -> Vec<
         }
         let supplied_cookie = request.session_cookie();
         if state.sessions.contains(supplied_cookie.as_deref(), now) {
+            if request.method == RequestMethod::Get && path == "/api/accounts" {
+                let Some(snapshot) = accounts_snapshot(state) else {
+                    return json_error_response(
+                        500,
+                        status_text(500),
+                        "internal server error",
+                        None,
+                        &[],
+                    );
+                };
+                let body =
+                    serde_json::to_vec(&snapshot).expect("account snapshot is JSON serializable");
+                return response("HTTP/1.1 200 OK", "application/json", &body, &[]);
+            }
             return not_found_response();
         }
         return unauthorized_response();
@@ -1753,6 +2101,10 @@ struct BackendState {
     runtime: Runtime,
     request_limits: Arc<RequestLimits>,
     native_auth_path: PathBuf,
+    codex_binary: String,
+    native_quota: Mutex<Option<Value>>,
+    quota_refresh_errors: Mutex<BTreeMap<String, String>>,
+    quota_refresh_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
 }
 
 impl ServerHandle {
@@ -1764,6 +2116,16 @@ impl ServerHandle {
         host: IpAddr,
         port: u16,
         config_path: &Path,
+    ) -> Result<Self, AppError> {
+        Self::start_with_config_options(host, port, config_path, "codex", codex_auth_path())
+    }
+
+    fn start_with_config_options(
+        host: IpAddr,
+        port: u16,
+        config_path: &Path,
+        codex_binary: &str,
+        native_auth_path: PathBuf,
     ) -> Result<Self, AppError> {
         if !is_loopback(host) {
             return Err(AppError::HostNotLoopback);
@@ -1799,7 +2161,11 @@ impl ServerHandle {
             client,
             runtime,
             request_limits,
-            native_auth_path: codex_auth_path(),
+            native_auth_path,
+            codex_binary: codex_binary.to_owned(),
+            native_quota: Mutex::new(None),
+            quota_refresh_errors: Mutex::new(BTreeMap::new()),
+            quota_refresh_locks: Mutex::new(BTreeMap::new()),
         };
         Self::start_with_session(host, port, session_path, session, backend)
     }
@@ -2334,6 +2700,212 @@ mod tests {
         assert!(
             response.contains("unsupported_complete_dialect"),
             "{response}"
+        );
+        server.shutdown().expect("shutdown");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_and_imported_quota_refresh_cross_the_management_boundary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = canonical_root(&directory);
+        let auth_path = root.join("auth.json");
+        let original_auth = serde_json::to_vec(&json!({
+            "tokens": {"access_token": "native-secret", "account_id": "workspace"}
+        }))
+        .expect("encode auth");
+        std::fs::write(&auth_path, &original_auth).expect("write native auth");
+        let account_root = root.join("state").join("accounts");
+        let imported_auth = account_root.join("egg").join("auth.json.enc");
+        let duplicate_auth = account_root.join("native-copy").join("auth.json.enc");
+        let config = root.join("config.json");
+        std::fs::write(
+            &config,
+            serde_json::to_vec_pretty(&json!({
+                "native_hidden_models": ["gpt-hidden"],
+                "native_model_context_windows": {"gpt-visible": 200000},
+                "account_store_path": account_root,
+                "accounts": [{
+                    "id": "egg",
+                    "name": "egg",
+                    "prefix": "egg",
+                    "auth_file": imported_auth,
+                }, {
+                    "id": "native-copy",
+                    "name": "Native copy",
+                    "prefix": "native-copy",
+                    "auth_file": duplicate_auth,
+                }]
+            }))
+            .expect("encode config"),
+        )
+        .expect("write config");
+
+        let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("target");
+        std::fs::create_dir_all(&target).expect("create target directory");
+        let executable_root = tempfile::Builder::new()
+            .prefix("emp-fake-codex-")
+            .tempdir_in(target)
+            .expect("fake Codex directory");
+        let executable = executable_root.path().join("codex");
+        std::fs::write(
+            &executable,
+            r#"#!/usr/bin/env python3
+import json, pathlib, os, sys
+home = pathlib.Path(os.environ["CODEX_HOME"])
+started = ""
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "initialize":
+        print(json.dumps({"id": request["id"], "result": {}}), flush=True)
+    elif method == "account/read":
+        auth = json.loads((home / "auth.json").read_text())
+        started = auth["tokens"]["access_token"]
+        if started == "imported-original":
+            assert request["params"] == {"refreshToken": False}
+            auth["tokens"]["access_token"] = "imported-rotated"
+            (home / "auth.json").write_text(json.dumps(auth))
+        elif started == "imported-rotated":
+            assert request["params"] == {"refreshToken": True}
+        print(json.dumps({"id": request["id"], "result": {"account": {"email": "xian@example.com", "planType": "pro"}}}), flush=True)
+    elif method == "account/rateLimits/read":
+        if started == "imported-original":
+            print(json.dumps({"id": request["id"], "error": {"message": "failed to fetch codex rate limits: GET https://example.invalid failed: 401 Unauthorized; content-type=text/plain; body=private-token"}}), flush=True)
+        else:
+            used = 11 if started == "imported-rotated" else 7
+            if started == "native-secret":
+                auth = json.loads((home / "auth.json").read_text())
+                auth["tokens"]["access_token"] = "isolated-rotation"
+                (home / "auth.json").write_text(json.dumps(auth))
+            print(json.dumps({"id": request["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": used, "windowDurationMins": 300}}}}), flush=True)
+"#,
+        )
+        .expect("write fake Codex");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+            .expect("make fake Codex executable");
+
+        let server = ServerHandle::start_with_config_options(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+            &config,
+            executable.to_str().expect("UTF-8 executable path"),
+            auth_path.clone(),
+        )
+        .expect("start quota server");
+        server
+            .state
+            .backend
+            .vault
+            .write_encrypted_json(
+                &imported_auth,
+                &json!({
+                    "tokens": {
+                        "access_token": "imported-original",
+                        "account_id": "workspace-egg"
+                    }
+                }),
+            )
+            .expect("write imported auth");
+        server
+            .state
+            .backend
+            .vault
+            .write_encrypted_json(
+                &duplicate_auth,
+                &json!({
+                    "tokens": {
+                        "access_token": "stale-native-snapshot",
+                        "account_id": "workspace"
+                    }
+                }),
+            )
+            .expect("write duplicate auth");
+        let cookie = session_cookie_header(&server);
+        let before = request(&server, "/api/accounts", &[&cookie]);
+        assert!(before.starts_with("HTTP/1.1 200 OK\r\n"), "{before}");
+        let before: Value =
+            serde_json::from_str(before.split_once("\r\n\r\n").expect("response separator").1)
+                .expect("account snapshot");
+        assert_eq!(before["native_account"]["credential_set"], true);
+        assert_eq!(before["native_account"]["quota"], Value::Null);
+
+        let refreshed = post(&server, "/api/accounts/%40native/quota", b"{}", &[&cookie]);
+        assert!(refreshed.starts_with("HTTP/1.1 200 OK\r\n"), "{refreshed}");
+        let refreshed: Value = serde_json::from_str(
+            refreshed
+                .split_once("\r\n\r\n")
+                .expect("response separator")
+                .1,
+        )
+        .expect("refreshed account");
+        assert_eq!(refreshed["account"]["quota"]["plan_type"], "pro");
+        assert_eq!(
+            refreshed["account"]["quota"]["rate_limits"]["primary"]["usedPercent"],
+            7
+        );
+        assert_eq!(
+            std::fs::read(&auth_path).expect("native auth after refresh"),
+            original_auth,
+            "native quota refresh must never persist isolated token rotation"
+        );
+
+        let imported = post(&server, "/api/accounts/egg/quota", b"{}", &[&cookie]);
+        assert!(imported.starts_with("HTTP/1.1 200 OK\r\n"), "{imported}");
+        let imported: Value = serde_json::from_str(
+            imported
+                .split_once("\r\n\r\n")
+                .expect("response separator")
+                .1,
+        )
+        .expect("imported account response");
+        assert_eq!(imported["account"]["credential_status"], "valid");
+        assert_eq!(
+            imported["account"]["quota"]["rate_limits"]["primary"]["usedPercent"],
+            11
+        );
+        let persisted_auth = server
+            .state
+            .backend
+            .vault
+            .read_encrypted_json(&imported_auth)
+            .expect("read rotated imported auth");
+        assert_eq!(
+            persisted_auth["tokens"]["access_token"], "imported-rotated",
+            "a rotation completed before the first 401 must be reused by the retry"
+        );
+
+        let duplicate = post(
+            &server,
+            "/api/accounts/native-copy/quota",
+            b"{}",
+            &[&cookie],
+        );
+        assert!(duplicate.starts_with("HTTP/1.1 200 OK\r\n"), "{duplicate}");
+        let duplicate: Value = serde_json::from_str(
+            duplicate
+                .split_once("\r\n\r\n")
+                .expect("response separator")
+                .1,
+        )
+        .expect("duplicate account response");
+        assert_eq!(
+            duplicate["account"]["quota"]["rate_limits"]["primary"]["usedPercent"], 7,
+            "a duplicate account must query the live native credential"
+        );
+        assert_eq!(
+            server
+                .state
+                .backend
+                .vault
+                .read_encrypted_json(&duplicate_auth)
+                .expect("read duplicate snapshot")["tokens"]["access_token"],
+            "stale-native-snapshot",
+            "native refresh must not overwrite the imported snapshot"
         );
         server.shutdown().expect("shutdown");
     }

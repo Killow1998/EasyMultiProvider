@@ -9,6 +9,7 @@ description = "Codex account and model-catalog compatibility for EMP."
 base64 = "0.22"
 serde_json = { workspace = true }
 sha2 = "0.10.9"
-
-[dev-dependencies]
 tempfile = "3.27"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
