@@ -1,8 +1,8 @@
 //! EMP native executable and local management HTTP surface.
 //!
 //! This bounded Rust slice serves the unchanged Web UI, the existing health
-//! check, and complete external `/v1/responses` requests. Native accounts,
-//! streaming, compact and management APIs remain later vertical slices.
+//! check, and complete or streamed external `/v1/responses` requests. Native
+//! accounts, compact and management APIs remain later vertical slices.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -15,17 +15,20 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use emp_core::{RouteResolutionError, resolve_route_without_catalog};
-use emp_router::{ExternalRouter, ProjectionIds, RouterError};
+use emp_core::{ResolvedRoute, RouteResolutionError, resolve_route_without_catalog};
+use emp_router::{
+    ExternalRouter, ExternalStream, ProjectionIds, RouterError, RouterErrorKind,
+    StreamResponseEvent,
+};
 use emp_state::{
     ConfigError, FilesystemError, VaultStore, WEB_SESSION_TOKEN_BYTES, WebSession, WebSessionError,
     config_path, load_configuration, load_or_create_web_session, provider_api_key,
     web_session_path,
 };
 use emp_transport::{
-    ContentDecodeError, HttpClient, HttpClientPolicy, ProxyEnvironment, ProxyPolicy,
+    ContentDecodeError, FailureClass, HttpClient, HttpClientPolicy, ProxyEnvironment, ProxyPolicy,
     RequestCapacityError, RequestLimits, RequestLimitsConfig, RequestLimitsError, TimeoutPolicy,
-    TransportKind, decode_content,
+    TransportKind, decode_content, normalize_error_class, public_failure_message,
 };
 use serde_json::Value;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
@@ -44,6 +47,8 @@ const LOGIN_HTML: &str = r#"<!doctype html><html lang="zh-CN"><meta charset="utf
 const LOGIN_HTML_BYTES: &[u8] = LOGIN_HTML.as_bytes();
 
 const MAX_HEADER_BYTES: usize = 8 * 1024;
+const MAX_PRE_OUTPUT_BUFFER_BYTES: usize = 1024 * 1024;
+const MAX_PRE_OUTPUT_BUFFER_EVENTS: usize = 256;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -926,66 +931,522 @@ fn router_error_response(error: RouterError) -> Vec<u8> {
     )
 }
 
+fn stream_error_code(error_class: FailureClass) -> &'static str {
+    match error_class {
+        FailureClass::ContextLengthExceeded => "context_length_exceeded",
+        FailureClass::PaymentRequired => "payment_required",
+        FailureClass::RateLimit => "rate_limit_exceeded",
+        _ => "upstream_error",
+    }
+}
+
+fn safe_failure_reason(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect()
+}
+
+fn stream_failure_value(error: &RouterError, response_id: &str) -> Value {
+    let error_class = error.error_class();
+    let mut detail = serde_json::json!({
+        "code": stream_error_code(error_class),
+        "message": format!(
+            "HTTP {}: {}",
+            error.status(),
+            public_failure_message(error_class, error.failure_reason(), error.status())
+        ),
+        "status": error.status(),
+        "error_class": error_class.as_str(),
+    });
+    if let Some(reason) = error.failure_reason() {
+        let reason = safe_failure_reason(reason);
+        if !reason.is_empty() {
+            detail["failure_reason"] = Value::String(reason);
+        }
+    }
+    if error.kind() == RouterErrorKind::Transport {
+        detail["transport_failure"] = Value::Bool(true);
+    }
+    if let Some(delay) = error.retry_after_seconds() {
+        detail["retry_after_seconds"] = Value::from(delay);
+        if error_class == FailureClass::RateLimit {
+            detail["message"] = Value::String(format!(
+                "{} Please try again in {delay}s.",
+                detail["message"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+    serde_json::json!({
+        "type": "response.failed",
+        "response": {
+            "id": response_id,
+            "object": "response",
+            "status": "failed",
+            "error": detail,
+        }
+    })
+}
+
+fn sse_frame(event: &str, body: &Value) -> Result<Vec<u8>, serde_json::Error> {
+    let compact = serde_json::to_vec(body)?;
+    let mut data = Vec::with_capacity(compact.len() + compact.len() / 8);
+    let mut in_string = false;
+    let mut escaped = false;
+    for byte in compact {
+        data.push(byte);
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+        } else if byte == b'"' {
+            in_string = true;
+        } else if matches!(byte, b',' | b':') {
+            data.push(b' ');
+        }
+    }
+    let mut frame = Vec::with_capacity(event.len() + data.len() + 16);
+    frame.extend_from_slice(b"event: ");
+    frame.extend_from_slice(event.as_bytes());
+    frame.extend_from_slice(b"\ndata: ");
+    frame.extend_from_slice(&data);
+    frame.extend_from_slice(b"\n\n");
+    Ok(frame)
+}
+
+fn stream_event_activity(event: &Value) -> (bool, bool) {
+    let event_type = event
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let item = event.get("item").and_then(Value::as_object);
+    let item_type = item
+        .and_then(|item| item.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let tool_activity = matches!(
+        item_type,
+        "function_call" | "custom_tool_call" | "tool_call" | "tool_search_call"
+    ) || event_type.contains("function_call")
+        || event_type.contains("tool_call");
+    let mut output_emitted = tool_activity;
+    if event_type.ends_with(".delta") || event_type.ends_with(".done") {
+        output_emitted |= [
+            "output_text",
+            "output_image",
+            "image_generation",
+            "reasoning",
+        ]
+        .iter()
+        .any(|marker| event_type.contains(marker));
+    } else {
+        output_emitted |=
+            event_type.contains("output_image") || event_type.contains("image_generation");
+    }
+    output_emitted |= event
+        .get("part")
+        .and_then(Value::as_object)
+        .and_then(|part| part.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|part_type| {
+            matches!(
+                part_type,
+                "output_text" | "output_image" | "reasoning_text" | "summary_text"
+            )
+        });
+    if let Some(content) = item
+        .and_then(|item| item.get("content"))
+        .and_then(Value::as_array)
+    {
+        output_emitted |= content.iter().any(|part| {
+            part.get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|part_type| {
+                    matches!(
+                        part_type,
+                        "output_text" | "output_image" | "image" | "image_url" | "reasoning_text"
+                    )
+                })
+        });
+    }
+    (output_emitted, tool_activity)
+}
+
+fn terminal_stream_event(event: &Value) -> bool {
+    event
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|event_type| {
+            matches!(
+                event_type,
+                "response.completed" | "response.incomplete" | "response.failed" | "error"
+            )
+        })
+}
+
+fn pre_output_failure_response(event: &Value) -> Option<Vec<u8>> {
+    if event.get("type").and_then(Value::as_str) != Some("response.failed") {
+        return None;
+    }
+    let error = event.get("response")?.get("error")?.as_object()?;
+    let status = error
+        .get("status")?
+        .as_u64()
+        .and_then(|status| u16::try_from(status).ok())?;
+    if !(400..=599).contains(&status) {
+        return None;
+    }
+    let error_class_name = error
+        .get("error_class")
+        .and_then(Value::as_str)
+        .unwrap_or("upstream_error");
+    let error_class = normalize_error_class(Some(error_class_name), FailureClass::StreamError);
+    let failure_reason = error.get("failure_reason").and_then(Value::as_str);
+    let code = error
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| stream_error_code(error_class));
+    let mut detail = serde_json::json!({
+        "type": error_class_name,
+        "code": code,
+        "message": public_failure_message(error_class, failure_reason, status),
+        "param": Value::Null,
+    });
+    if let Some(reason) = failure_reason {
+        detail["failure_reason"] = Value::String(reason.to_owned());
+    }
+    let retry_after = error.get("retry_after_seconds").and_then(Value::as_u64);
+    if let Some(delay) = retry_after {
+        detail["retry_after_seconds"] = Value::from(delay);
+    }
+    let body = serde_json::to_vec(&serde_json::json!({"error": detail})).ok()?;
+    let retry = retry_after.map(|delay| delay.to_string());
+    let headers = retry
+        .as_deref()
+        .map(|value| vec![("Retry-After", value)])
+        .unwrap_or_default();
+    Some(response(
+        &format!("HTTP/1.1 {status} {}", status_text(status)),
+        "application/json",
+        &body,
+        &headers,
+    ))
+}
+
+fn pre_output_router_error_response(error: &RouterError) -> Vec<u8> {
+    let error_class = error.error_class();
+    let mut detail = serde_json::json!({
+        "type": error_class.as_str(),
+        "code": stream_error_code(error_class),
+        "message": public_failure_message(error_class, error.failure_reason(), error.status()),
+        "param": Value::Null,
+    });
+    if let Some(reason) = error.failure_reason()
+        && error_class != FailureClass::StreamIncomplete
+    {
+        detail["failure_reason"] = Value::String(safe_failure_reason(reason));
+    }
+    if let Some(delay) = error.retry_after_seconds() {
+        detail["retry_after_seconds"] = Value::from(delay);
+    }
+    let body = serde_json::to_vec(&serde_json::json!({"error": detail}))
+        .expect("stream error response is JSON serializable");
+    let retry = error.retry_after_seconds().map(|delay| delay.to_string());
+    let headers = retry
+        .as_deref()
+        .map(|value| vec![("Retry-After", value)])
+        .unwrap_or_default();
+    response(
+        &format!(
+            "HTTP/1.1 {} {}",
+            error.status(),
+            status_text(error.status())
+        ),
+        "application/json",
+        &body,
+        &headers,
+    )
+}
+
+struct DisconnectMonitor {
+    disconnected: tokio::sync::oneshot::Receiver<()>,
+    stop: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl DisconnectMonitor {
+    fn start(stream: &TcpStream) -> std::io::Result<Self> {
+        let probe = stream.try_clone()?;
+        probe.set_read_timeout(Some(Duration::from_millis(50)))?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let (sender, disconnected) = tokio::sync::oneshot::channel();
+        let worker = thread::spawn(move || {
+            let mut byte = [0_u8; 1];
+            while !worker_stop.load(Ordering::Acquire) {
+                match probe.peek(&mut byte) {
+                    Ok(0) => {
+                        let _ = sender.send(());
+                        return;
+                    }
+                    Ok(_) => thread::sleep(Duration::from_millis(10)),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock
+                                | std::io::ErrorKind::TimedOut
+                                | std::io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(_) => {
+                        let _ = sender.send(());
+                        return;
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            disconnected,
+            stop,
+            worker: Some(worker),
+        })
+    }
+
+    async fn next_event(&mut self, stream: &mut ExternalStream) -> StreamPoll {
+        tokio::select! {
+            result = stream.next_event() => StreamPoll::Event(result),
+            _ = &mut self.disconnected => StreamPoll::Disconnected,
+        }
+    }
+}
+
+impl Drop for DisconnectMonitor {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+enum StreamPoll {
+    Event(Result<Option<StreamResponseEvent>, RouterError>),
+    Disconnected,
+}
+
+fn write_stream_head(stream: &mut TcpStream) -> std::io::Result<()> {
+    stream.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
+    )
+}
+
+fn write_stream_frames(stream: &mut TcpStream, frames: &[Vec<u8>]) -> std::io::Result<()> {
+    for frame in frames {
+        stream.write_all(frame)?;
+    }
+    stream.flush()
+}
+
+fn serve_external_stream(
+    downstream: &mut TcpStream,
+    state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+    ids: &ProjectionIds,
+) -> Result<(), Vec<u8>> {
+    let router = ExternalRouter::new(&state.backend.client);
+    let mut upstream = state
+        .backend
+        .runtime
+        .block_on(router.open_stream(route, body, incoming, ids))
+        .map_err(|error| pre_output_router_error_response(&error))?;
+    let mut monitor = DisconnectMonitor::start(downstream).ok();
+    let mut pending = Vec::<Vec<u8>>::new();
+    let mut pending_bytes = 0_usize;
+    let mut started = false;
+    loop {
+        let polled = match monitor.as_mut() {
+            Some(monitor) => state
+                .backend
+                .runtime
+                .block_on(monitor.next_event(&mut upstream)),
+            None => StreamPoll::Event(state.backend.runtime.block_on(upstream.next_event())),
+        };
+        let event = match polled {
+            StreamPoll::Disconnected => return Ok(()),
+            StreamPoll::Event(Ok(Some(event))) => event,
+            StreamPoll::Event(Ok(None)) => return Ok(()),
+            StreamPoll::Event(Err(error)) if !started => {
+                return Err(pre_output_router_error_response(&error));
+            }
+            StreamPoll::Event(Err(error)) => {
+                let response_id = match random_hex(16) {
+                    Ok(value) => format!("resp_{value}"),
+                    Err(_) => return Ok(()),
+                };
+                let failure = stream_failure_value(&error, &response_id);
+                if let Ok(frame) = sse_frame("response.failed", &failure) {
+                    let _ = write_stream_frames(downstream, &[frame]);
+                }
+                return Ok(());
+            }
+        };
+        let terminal = terminal_stream_event(&event.body);
+        let failed = matches!(
+            event.body.get("type").and_then(Value::as_str),
+            Some("response.failed" | "error")
+        );
+        let frame = match sse_frame(&event.event, &event.body) {
+            Ok(frame) => frame,
+            Err(_) if !started => {
+                return Err(json_error_response(
+                    500,
+                    status_text(500),
+                    "internal server error",
+                    None,
+                    &[],
+                ));
+            }
+            Err(_) => return Ok(()),
+        };
+        if started {
+            if write_stream_frames(downstream, &[frame]).is_err() || terminal {
+                return Ok(());
+            }
+            continue;
+        }
+        if failed {
+            if let Some(response) = pre_output_failure_response(&event.body) {
+                return Err(response);
+            }
+            if write_stream_head(downstream).is_err()
+                || write_stream_frames(downstream, &[frame]).is_err()
+            {
+                return Ok(());
+            }
+            return Ok(());
+        }
+        let (output_emitted, tool_activity) = stream_event_activity(&event.body);
+        pending_bytes = pending_bytes.saturating_add(frame.len());
+        pending.push(frame);
+        if pending.len() > MAX_PRE_OUTPUT_BUFFER_EVENTS
+            || pending_bytes > MAX_PRE_OUTPUT_BUFFER_BYTES
+        {
+            return Err(json_error_response(
+                502,
+                status_text(502),
+                "EMP could not parse the upstream response stream.",
+                Some("pre_output_buffer_limit"),
+                &[],
+            ));
+        }
+        if output_emitted || tool_activity || terminal {
+            if write_stream_head(downstream).is_err()
+                || write_stream_frames(downstream, &pending).is_err()
+            {
+                return Ok(());
+            }
+            started = true;
+            pending.clear();
+            if terminal {
+                return Ok(());
+            }
+        }
+    }
+}
+
+enum ResponsesRequestResult {
+    Buffered(Vec<u8>),
+    Streamed,
+}
+
 fn responses_request(
     stream: &mut TcpStream,
     request: Request<'_>,
     body_prefix: Vec<u8>,
     state: &ServerState,
     now: f64,
-) -> Vec<u8> {
+) -> ResponsesRequestResult {
     if !proxy_allowed(request, state, now) {
         let status = if same_origin(request, state.port) {
             401
         } else {
             403
         };
-        return json_error_response(
+        return ResponsesRequestResult::Buffered(json_error_response(
             status,
             status_text(status),
             "proxy caller authentication is required",
             None,
             &[],
-        );
+        ));
     }
     let body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,
-        Err(error) => return body_error_response(error),
+        Err(error) => return ResponsesRequestResult::Buffered(body_error_response(error)),
     };
     let Some(model) = body
         .get("model")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
     else {
-        return request_router_error_response(400, "request.model is required");
+        return ResponsesRequestResult::Buffered(request_router_error_response(
+            400,
+            "request.model is required",
+        ));
     };
     let mut config = state.backend.config.clone();
     hydrate_provider_keys(&mut config, &state.backend.vault);
     let route = match resolve_route_without_catalog(&config, model) {
         Ok(route) => route,
-        Err(error) => return route_resolution_response(error),
+        Err(error) => {
+            return ResponsesRequestResult::Buffered(route_resolution_response(error));
+        }
     };
-    if body.get("stream").and_then(Value::as_bool) == Some(true) {
-        return json_error_response(
-            501,
-            status_text(501),
-            "streaming external responses are not available in this Rust slice",
-            Some("streaming_not_implemented"),
-            &[],
-        );
-    }
     let ids = match projection_ids() {
         Ok(ids) => ids,
         Err(_) => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+            return ResponsesRequestResult::Buffered(json_error_response(
+                500,
+                status_text(500),
+                "internal server error",
+                None,
+                &[],
+            ));
         }
     };
     let request_id = match random_hex(8) {
         Ok(value) => value,
         Err(_) => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+            return ResponsesRequestResult::Buffered(json_error_response(
+                500,
+                status_text(500),
+                "internal server error",
+                None,
+                &[],
+            ));
         }
     };
     let incoming = BTreeMap::from([("X-EMP-Request-ID".to_owned(), request_id)]);
+    if body.get("stream").and_then(Value::as_bool) == Some(true) {
+        return match serve_external_stream(stream, state, &route, &body, &incoming, &ids) {
+            Ok(()) => ResponsesRequestResult::Streamed,
+            Err(response) => ResponsesRequestResult::Buffered(response),
+        };
+    }
     let router = ExternalRouter::new(&state.backend.client);
     match state
         .backend
@@ -996,23 +1457,23 @@ fn responses_request(
             let body = match serde_json::to_vec(&result.body) {
                 Ok(body) => body,
                 Err(_) => {
-                    return json_error_response(
+                    return ResponsesRequestResult::Buffered(json_error_response(
                         500,
                         status_text(500),
                         "internal server error",
                         None,
                         &[],
-                    );
+                    ));
                 }
             };
-            response(
+            ResponsesRequestResult::Buffered(response(
                 &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
                 &result.content_type,
                 &body,
                 &[],
-            )
+            ))
         }
-        Err(error) => router_error_response(error),
+        Err(error) => ResponsesRequestResult::Buffered(router_error_response(error)),
     }
 }
 
@@ -1037,13 +1498,18 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
         Some(request)
             if request.method == RequestMethod::Post && request.raw_path() == "/v1/responses" =>
         {
-            responses_request(&mut stream, request, raw.body_prefix, state, system_now())
+            match responses_request(&mut stream, request, raw.body_prefix, state, system_now()) {
+                ResponsesRequestResult::Buffered(response) => Some(response),
+                ResponsesRequestResult::Streamed => None,
+            }
         }
-        Some(request) => route_request(request, state),
-        None => bad_request_response(),
+        Some(request) => Some(route_request(request, state)),
+        None => Some(bad_request_response()),
     };
-    let _ = stream.write_all(&response);
-    let _ = stream.flush();
+    if let Some(response) = response {
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+    }
     let _ = stream.shutdown(Shutdown::Write);
 }
 
@@ -1359,6 +1825,15 @@ mod tests {
         }
     }
 
+    fn response_until_close(stream: &mut TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("response timeout");
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).expect("read response");
+        String::from_utf8(response).expect("UTF-8 response")
+    }
+
     fn request(server: &ServerHandle, target: &str, headers: &[&str]) -> String {
         let mut stream = TcpStream::connect(server.local_addr()).expect("connect");
         let host = if headers.iter().any(|header| {
@@ -1416,61 +1891,119 @@ mod tests {
         complete_response(&mut stream)
     }
 
+    fn open_post_stream(
+        server: &ServerHandle,
+        target: &str,
+        body: &[u8],
+        headers: &[&str],
+    ) -> TcpStream {
+        let mut stream = TcpStream::connect(server.local_addr()).expect("connect");
+        let full_headers = headers.join("\r\n");
+        stream
+            .write_all(
+                format!(
+                    "POST {target} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{full_headers}\r\nConnection: close\r\n\r\n",
+                    server.local_addr().port(),
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .expect("write stream request head");
+        stream.write_all(body).expect("write stream request body");
+        stream
+    }
+
+    fn post_stream(server: &ServerHandle, target: &str, body: &[u8], headers: &[&str]) -> String {
+        let mut stream = open_post_stream(server, target, body, headers);
+        response_until_close(&mut stream)
+    }
+
     struct OneShotUpstream {
         address: SocketAddr,
         observed: mpsc::Receiver<(String, BTreeMap<String, String>, Value)>,
         worker: Option<JoinHandle<()>>,
     }
 
+    fn receive_upstream_request(
+        stream: &mut TcpStream,
+    ) -> (String, BTreeMap<String, String>, Value) {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("upstream timeout");
+        let raw = read_request_head(stream).expect("upstream request head");
+        let request = parse_request(&raw.head).expect("upstream HTTP request");
+        let path = request.target.to_owned();
+        let headers = request
+            .headers
+            .lines()
+            .skip(1)
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
+            .collect::<BTreeMap<_, _>>();
+        let length = headers["content-length"]
+            .parse::<usize>()
+            .expect("upstream Content-Length");
+        let mut body = raw.body_prefix;
+        while body.len() < length {
+            let mut chunk = [0_u8; 4096];
+            let count = stream.read(&mut chunk).expect("read upstream body");
+            assert!(count > 0, "upstream body ended early");
+            body.extend_from_slice(&chunk[..count]);
+        }
+        body.truncate(length);
+        let body = serde_json::from_slice(&body).expect("upstream request JSON");
+        (path, headers, body)
+    }
+
     impl OneShotUpstream {
         fn start(response_body: Value) -> Self {
+            let encoded = serde_json::to_vec(&response_body).expect("upstream response JSON");
+            Self::start_wire(200, "application/json", None, vec![encoded])
+        }
+
+        fn start_sse(chunks: Vec<Vec<u8>>) -> Self {
+            Self::start_wire(200, "text/event-stream", None, chunks)
+        }
+
+        fn start_error(status: u16, retry_after: Option<u64>, response_body: Value) -> Self {
+            let encoded = serde_json::to_vec(&response_body).expect("upstream error JSON");
+            Self::start_wire(status, "application/json", retry_after, vec![encoded])
+        }
+
+        fn start_wire(
+            status: u16,
+            content_type: &'static str,
+            retry_after: Option<u64>,
+            chunks: Vec<Vec<u8>>,
+        ) -> Self {
             let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream");
             let address = listener.local_addr().expect("upstream address");
             let (sender, observed) = mpsc::sync_channel(1);
             let worker = thread::spawn(move || {
                 let (mut stream, _) = listener.accept().expect("accept upstream");
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .expect("upstream timeout");
-                let raw = read_request_head(&mut stream).expect("upstream request head");
-                let request = parse_request(&raw.head).expect("upstream HTTP request");
-                let headers = request
-                    .headers
-                    .lines()
-                    .skip(1)
-                    .filter_map(|line| line.split_once(':'))
-                    .map(|(name, value)| {
-                        (name.trim().to_ascii_lowercase(), value.trim().to_owned())
-                    })
-                    .collect::<BTreeMap<_, _>>();
-                let length = headers["content-length"]
-                    .parse::<usize>()
-                    .expect("upstream Content-Length");
-                let mut body = raw.body_prefix;
-                while body.len() < length {
-                    let mut chunk = [0_u8; 4096];
-                    let count = stream.read(&mut chunk).expect("read upstream body");
-                    assert!(count > 0, "upstream body ended early");
-                    body.extend_from_slice(&chunk[..count]);
-                }
-                body.truncate(length);
-                let body = serde_json::from_slice(&body).expect("upstream request JSON");
+                let (path, headers, body) = receive_upstream_request(&mut stream);
                 sender
-                    .send((request.target.to_owned(), headers, body))
+                    .send((path, headers, body))
                     .expect("record upstream request");
-                let encoded = serde_json::to_vec(&response_body).expect("upstream response JSON");
+                let content_length = chunks.iter().map(Vec::len).sum::<usize>();
+                let retry_after = retry_after
+                    .map(|delay| format!("Retry-After: {delay}\r\n"))
+                    .unwrap_or_default();
                 stream
                     .write_all(
                         format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                            encoded.len()
+                            "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {content_length}\r\n{retry_after}Connection: close\r\n\r\n",
+                            status_text(status)
                         )
                         .as_bytes(),
                     )
                     .expect("write upstream response head");
-                stream
-                    .write_all(&encoded)
-                    .expect("write upstream response body");
+                for chunk in chunks {
+                    stream
+                        .write_all(&chunk)
+                        .expect("write upstream response body");
+                    stream.flush().expect("flush upstream response body");
+                }
             });
             Self {
                 address,
@@ -1506,6 +2039,14 @@ mod tests {
     }
 
     fn configured_server(base_url: &str) -> (TempDir, ServerHandle) {
+        configured_protocol_server(base_url, "chat_completions", "api_key")
+    }
+
+    fn configured_protocol_server(
+        base_url: &str,
+        protocol: &str,
+        auth_mode: &str,
+    ) -> (TempDir, ServerHandle) {
         let directory = tempfile::tempdir().expect("temporary directory");
         let config = canonical_root(&directory).join("config.json");
         std::fs::write(
@@ -1513,7 +2054,7 @@ mod tests {
             serde_json::to_vec_pretty(&json!({
                 "providers": [{
                     "id": "demo", "name": "Demo", "base_url": base_url,
-                    "protocol": "chat_completions", "auth_mode": "api_key",
+                    "protocol": protocol, "auth_mode": auth_mode,
                     "api_key": "upstream-secret"
                 }],
                 "models": [{
@@ -1939,6 +2480,370 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
         server.shutdown().expect("shutdown");
     }
 
+    fn upstream_sse(events: &[Value]) -> Vec<u8> {
+        let mut wire = Vec::new();
+        for event in events {
+            wire.extend_from_slice(b"data: ");
+            wire.extend_from_slice(
+                serde_json::to_string(event)
+                    .expect("upstream SSE JSON")
+                    .as_bytes(),
+            );
+            wire.extend_from_slice(b"\n\n");
+        }
+        wire.extend_from_slice(b"data: [DONE]\n\n");
+        wire
+    }
+
+    fn assert_stream_protocol(
+        protocol: &str,
+        auth_mode: &str,
+        expected_path: &str,
+        events: &[Value],
+    ) {
+        let upstream = OneShotUpstream::start_sse(vec![upstream_sse(events)]);
+        let (_directory, server) =
+            configured_protocol_server(&upstream.base_url(), protocol, auth_mode);
+        let request_body = serde_json::to_vec(&json!({
+            "model": "demo/model",
+            "input": [{
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}]
+            }],
+            "stream": true
+        }))
+        .expect("request JSON");
+        let response = post_stream(
+            &server,
+            "/v1/responses",
+            &request_body,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(response.contains("Content-Type: text/event-stream\r\n"));
+        assert!(!response.contains("Content-Length:"));
+        assert!(response.contains("event: response.created\n"), "{response}");
+        assert!(
+            response.contains("event: response.output_text.delta\n"),
+            "{response}"
+        );
+        assert!(
+            response.contains("event: response.completed\n"),
+            "{response}"
+        );
+        let (path, headers, upstream_body) = upstream.observed();
+        assert_eq!(path, expected_path);
+        if auth_mode == "anthropic_api_key" {
+            assert_eq!(headers["x-api-key"], "upstream-secret");
+        } else {
+            assert_eq!(headers["authorization"], "Bearer upstream-secret");
+        }
+        assert_eq!(upstream_body["model"], "upstream-model");
+        assert_eq!(upstream_body["stream"], true);
+        server.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn streamed_external_protocols_cross_the_real_server_boundary() {
+        let chat = [
+            json!({"id":"chat_upstream","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":null}]}),
+            json!({"id":"chat_upstream","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}),
+        ];
+        assert_stream_protocol("chat_completions", "api_key", "/v1/chat/completions", &chat);
+
+        let anthropic = [
+            json!({"type":"message_start","message":{"usage":{"input_tokens":3}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"answer"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}),
+            json!({"type":"message_stop"}),
+        ];
+        assert_stream_protocol(
+            "anthropic_messages",
+            "anthropic_api_key",
+            "/v1/messages",
+            &anthropic,
+        );
+
+        let response = json!({
+            "id":"responses_upstream", "object":"response", "status":"completed",
+            "model":"upstream-model",
+            "output":[{"id":"msg_visible","type":"message","status":"completed",
+                "role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}],
+            "usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
+        });
+        let responses = [
+            json!({"type":"response.created","response":{"id":"responses_upstream","object":"response","status":"in_progress","model":"upstream-model","output":[]}}),
+            json!({"type":"response.output_item.added","output_index":0,"item":{"id":"msg_visible","type":"message","status":"in_progress","role":"assistant","content":[]}}),
+            json!({"type":"response.content_part.added","item_id":"msg_visible","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}),
+            json!({"type":"response.output_text.delta","item_id":"msg_visible","output_index":0,"content_index":0,"delta":"answer"}),
+            json!({"type":"response.output_text.done","item_id":"msg_visible","output_index":0,"content_index":0,"text":"answer"}),
+            json!({"type":"response.content_part.done","item_id":"msg_visible","output_index":0,"content_index":0,"part":{"type":"output_text","text":"answer","annotations":[]}}),
+            json!({"type":"response.output_item.done","output_index":0,"item":{"id":"msg_visible","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}}),
+            json!({"type":"response.completed","response":response}),
+        ];
+        assert_stream_protocol("responses", "api_key", "/v1/responses", &responses);
+    }
+
+    #[test]
+    fn streaming_flushes_before_upstream_eof() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream");
+        let address = listener.local_addr().expect("upstream address");
+        let first_event = json!({
+            "id":"chat_upstream",
+            "choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":null}]
+        });
+        let first = format!(
+            "data: {}\n\n",
+            serde_json::to_string(&first_event).expect("first upstream event")
+        )
+        .into_bytes();
+        let last = upstream_sse(&[json!({
+            "id":"chat_upstream",
+            "choices":[{"index":0,"delta":{},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
+        })]);
+        let content_length = first.len() + last.len();
+        let (first_sent, first_ready) = mpsc::sync_channel(1);
+        let (release, released) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept upstream");
+            let _ = receive_upstream_request(&mut stream);
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("write upstream response head");
+            stream.write_all(&first).expect("write first SSE event");
+            stream.flush().expect("flush first SSE event");
+            first_sent.send(()).expect("announce first SSE event");
+            released
+                .recv_timeout(Duration::from_secs(3))
+                .expect("release terminal SSE event");
+            stream.write_all(&last).expect("write terminal SSE event");
+        });
+        let (_directory, server) = configured_server(&format!("http://{address}/v1"));
+        let body = serde_json::to_vec(&json!({
+            "model":"demo/model", "stream":true,
+            "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+        }))
+        .expect("request JSON");
+        let mut downstream = open_post_stream(
+            &server,
+            "/v1/responses",
+            &body,
+            &[&session_cookie_header(&server)],
+        );
+        first_ready
+            .recv_timeout(Duration::from_secs(2))
+            .expect("upstream first event");
+        downstream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("downstream timeout");
+        let mut response = Vec::new();
+        while !response
+            .windows(b"event: response.output_text.delta\n".len())
+            .any(|window| window == b"event: response.output_text.delta\n")
+        {
+            let mut chunk = [0_u8; 4096];
+            let count = downstream.read(&mut chunk).expect("incremental SSE read");
+            assert!(count > 0, "downstream ended before visible output");
+            response.extend_from_slice(&chunk[..count]);
+        }
+        release.send(()).expect("release terminal SSE event");
+        downstream
+            .read_to_end(&mut response)
+            .expect("finish downstream SSE");
+        let response = String::from_utf8(response).expect("UTF-8 SSE response");
+        assert!(response.contains("event: response.completed\n"));
+        server.shutdown().expect("shutdown");
+        worker.join().expect("join upstream");
+    }
+
+    #[test]
+    fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream");
+        let address = listener.local_addr().expect("upstream address");
+        let (head_sent, head_ready) = mpsc::sync_channel(1);
+        let (closed_sender, closed) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept upstream");
+            let _ = receive_upstream_request(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")
+                .expect("write upstream response head");
+            stream.flush().expect("flush upstream response head");
+            head_sent.send(()).expect("announce upstream head");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .expect("upstream close timeout");
+            let mut byte = [0_u8; 1];
+            let closed_by_emp = match stream.read(&mut byte) {
+                Ok(0) => true,
+                Err(error) => matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
+                ),
+                Ok(_) => false,
+            };
+            closed_sender
+                .send(closed_by_emp)
+                .expect("report upstream cancellation");
+        });
+        let (_directory, server) = configured_server(&format!("http://{address}/v1"));
+        let body = serde_json::to_vec(&json!({
+            "model":"demo/model", "stream":true,
+            "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+        }))
+        .expect("request JSON");
+        let downstream = open_post_stream(
+            &server,
+            "/v1/responses",
+            &body,
+            &[&session_cookie_header(&server)],
+        );
+        head_ready
+            .recv_timeout(Duration::from_secs(2))
+            .expect("upstream response head");
+        drop(downstream);
+        assert!(
+            closed
+                .recv_timeout(Duration::from_secs(3))
+                .expect("upstream cancellation result"),
+            "EMP kept the upstream stream open after its downstream disconnected"
+        );
+        server.shutdown().expect("shutdown");
+        worker.join().expect("join upstream");
+    }
+
+    #[test]
+    fn stream_errors_keep_pre_and_post_output_boundaries() {
+        let upstream = OneShotUpstream::start_error(
+            429,
+            Some(4),
+            json!({"error":{"message":"provider detail must not escape"}}),
+        );
+        let (_directory, server) = configured_server(&upstream.base_url());
+        let body = serde_json::to_vec(&json!({
+            "model":"demo/model", "stream":true,
+            "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+        }))
+        .expect("request JSON");
+        let response = post(
+            &server,
+            "/v1/responses",
+            &body,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 429 Too Many Requests\r\n"));
+        assert!(response.contains("Retry-After: 4\r\n"));
+        assert!(response.contains("\"type\":\"rate_limit\""));
+        assert!(response.contains("\"code\":\"rate_limit_exceeded\""));
+        assert!(!response.contains("provider detail must not escape"));
+        server.shutdown().expect("shutdown");
+
+        let partial = format!(
+            "data: {}\n\n",
+            serde_json::to_string(&json!({
+                "id":"chat_upstream",
+                "choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]
+            }))
+            .expect("partial upstream event")
+        )
+        .into_bytes();
+        let upstream = OneShotUpstream::start_sse(vec![partial]);
+        let (_directory, server) = configured_server(&upstream.base_url());
+        let response = post_stream(
+            &server,
+            "/v1/responses",
+            &body,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(response.contains("event: response.output_text.delta\n"));
+        assert!(response.contains("event: response.failed\n"));
+        assert!(response.contains("\"status\": 502"));
+        assert!(!response.contains("event: response.completed\n"));
+        server.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn stream_boundary_helpers_match_live_python() {
+        fn semantic_frames(value: &Value) -> Vec<Value> {
+            value
+                .as_array()
+                .expect("frame array")
+                .iter()
+                .map(|frame| {
+                    let frame = frame.as_str().expect("frame string");
+                    let (event, data) = frame
+                        .strip_prefix("event: ")
+                        .and_then(|frame| frame.split_once("\ndata: "))
+                        .expect("SSE event and data lines");
+                    let data = data.strip_suffix("\n\n").expect("SSE terminator");
+                    json!({
+                        "event": event,
+                        "data": serde_json::from_str::<Value>(data).expect("SSE JSON data"),
+                    })
+                })
+                .collect()
+        }
+
+        let events = [
+            json!({"type":"response.created","response":{"status":"in_progress","output":[]}}),
+            json!({"type":"response.output_text.delta","delta":"回答, key: value"}),
+            json!({"type":"response.output_item.added","item":{"id":"call_1","type":"function_call"}}),
+        ];
+        let rust = json!({
+            "frames": events.iter().map(|event| {
+                String::from_utf8(sse_frame(event["type"].as_str().unwrap(), event).unwrap()).unwrap()
+            }).collect::<Vec<_>>(),
+            "activity": events.iter().map(|event| {
+                let (output, tool) = stream_event_activity(event);
+                json!([output, tool])
+            }).collect::<Vec<_>>(),
+        });
+        let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+            return;
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let script = r#"
+import json
+from easy_multi_provider.stream_adapters import _sse_frame
+from easy_multi_provider.transport_failures import event_activity
+events = [
+    {"type":"response.created","response":{"status":"in_progress","output":[]}},
+    {"type":"response.output_text.delta","delta":"回答, key: value"},
+    {"type":"response.output_item.added","item":{"id":"call_1","type":"function_call"}},
+]
+print(json.dumps({
+    "frames":[_sse_frame(event["type"], event).decode() for event in events],
+    "activity":[list(event_activity(event)) for event in events],
+}, ensure_ascii=False))
+"#;
+        let output = Command::new(python)
+            .arg("-c")
+            .arg(script)
+            .current_dir(root)
+            .output()
+            .expect("spawn Python stream boundary oracle");
+        assert!(
+            output.status.success(),
+            "Python stream boundary oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let python: Value = serde_json::from_slice(&output.stdout).expect("Python oracle JSON");
+        assert_eq!(rust["activity"], python["activity"]);
+        assert_eq!(
+            semantic_frames(&rust["frames"]),
+            semantic_frames(&python["frames"])
+        );
+    }
+
     #[test]
     fn response_body_errors_keep_the_python_status_boundary() {
         let (_directory, server) = test_server();
@@ -1977,8 +2882,8 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
             br#"{"model":"demo/model","stream":true}"#,
             &[&cookie],
         );
-        assert!(stream.starts_with("HTTP/1.1 501 Not Implemented\r\n"));
-        assert!(stream.contains("streaming_not_implemented"));
+        assert!(stream.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+        assert!(stream.contains("network"));
         server.shutdown().expect("shutdown");
     }
 }

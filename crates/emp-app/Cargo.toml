@@ -17,7 +17,7 @@ emp-state = { path = "../emp-state" }
 emp-transport = { path = "../emp-transport" }
 getrandom = "0.2.17"
 serde_json = { workspace = true }
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "time"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lib]
 path = "src/lib.rs"

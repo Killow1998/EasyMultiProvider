@@ -116,18 +116,25 @@ Progress evidence on 2026-09-21:
   matches the live Python oracle for explicit, Subscription-prefix, unique
   forward and implicit-native selection, including exact 404/503 outcomes,
   endpoint/deployment identities and unresolved `auto` protocol state. The
-  Rust executable now accepts authenticated, non-stream `/v1/responses`
-  requests for resolved external models, reads the live native Codex bearer or
-  existing browser session, enforces the shared request budget and content
-  decoding boundary, hydrates provider credentials only in a request-local
-  snapshot, uses the native connection pool and projects the complete result
-  back to Responses JSON. A real loopback Chat upstream smoke and the live
-  Python authorization oracle pass, as do local workspace fmt, warnings-denied
-  clippy and all test targets. Streaming remains deliberately explicit as 501
-  after a successful route resolution until the downstream SSE state machine
-  lands. Native catalog filesystem ownership, automatic protocol negotiation,
-  bounded pre-output compatibility retry and pinned-Codex tool round trips
-  remain in Stage 3.
+  Rust executable now accepts authenticated complete and streamed
+  `/v1/responses` requests for resolved external models, reads the live native
+  Codex bearer or existing browser session, enforces the shared request budget
+  and content-decoding boundary, hydrates provider credentials only in a
+  request-local snapshot, uses the native connection pool, and projects Chat,
+  Anthropic or Responses results back to the Codex Responses contract. The
+  downstream SSE boundary buffers lifecycle-only events until visible output,
+  tool activity or a terminal event; restores HTTP status and retry metadata
+  for pre-output failures; flushes every later event; emits a terminal
+  `response.failed` after post-output transport/protocol failures; and drops the
+  upstream response when the downstream socket closes. Real loopback smokes
+  cover all three external protocols, incremental delivery before upstream EOF,
+  pre/post-output failure boundaries and disconnect cancellation. SSE framing
+  and activity classification are also compared with the live Python oracle.
+  With one local build job and low process priority, the 22-test `emp-app`
+  binary suite and warnings-denied crate clippy pass. No CI was dispatched for
+  this local slice. Native catalog filesystem ownership, automatic protocol
+  negotiation, bounded pre-output compatibility retry and pinned-Codex tool
+  round trips remain in Stage 3.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
