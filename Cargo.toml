@@ -5,6 +5,7 @@ members = [
     "crates/emp-core",
     "crates/emp-protocol",
     "crates/emp-state",
+    "crates/emp-transport",
 ]
 
 [workspace.package]

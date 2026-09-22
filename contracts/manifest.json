@@ -38,6 +38,16 @@
       "fixture": "protocol/chat-reasoning-answer.json"
     },
     {
+      "id": "transport.sse-json.python-rust",
+      "level": "events",
+      "source": "easy_multi_provider/transport.py:sse_json_events and tests/test_sse_failure_reasons.py",
+      "transport": "sse",
+      "dialect": "responses",
+      "normalization": ["network chunk boundaries may differ while parsed JSON object order remains exact"],
+      "side_effects": ["none; framing and JSON parsing are pure"],
+      "fixture": "transport/python-sse-json.json"
+    },
+    {
       "id": "state.vault.python-rust",
       "level": "state",
       "source": "tests/test_vault.py and easy_multi_provider/vault.py",

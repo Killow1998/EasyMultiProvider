@@ -1,0 +1,9 @@
+[package]
+name = "emp-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bounded transport primitives for EMP."
+
+[dependencies]
+serde_json.workspace = true

@@ -1,0 +1,22 @@
+{
+  "status": "differentially_implemented",
+  "source": [
+    "easy_multi_provider/transport.py:sse_json_events",
+    "tests/test_stream_adapters.py:StreamAdapterTransportMatrixTests.test_sse_parser_limits_aggregate_multiline_event_size",
+    "tests/test_sse_failure_reasons.py"
+  ],
+  "rust_evidence": [
+    "crates/emp-transport/tests/sse_parser.rs",
+    "crates/emp-transport/tests/python_oracle.rs"
+  ],
+  "covered_cases": [
+    "arbitrary network splits including inside multibyte UTF-8 retain the same JSON objects",
+    "LF and CRLF delimiters and multiline data fields are accepted",
+    "comments, event names and IDs do not change data projection",
+    "DONE suppresses its own event without hiding later terminal data",
+    "a final data event is flushed without a blank delimiter",
+    "each event has an independent 1 MiB aggregate data limit",
+    "invalid JSON and non-object JSON have stable content-free failure reasons"
+  ],
+  "side_effects": ["none; the parser retains bytes only until the current bounded event finishes"]
+}
