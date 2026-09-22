@@ -495,6 +495,18 @@ budget. All 40 official-Codex/process consumer scenarios, warnings-denied
 clippy and workspace tests passed locally. CLI/desktop entry, complete
 usage/diagnostics and packaging remain the next application branches.
 
+The native command entry now uses configured host/port defaults, supports
+--open-browser, reproduces the Python help/version surface, and starts the
+desktop service without arguments using the platform's per-user config path.
+Browser commands are launched without a shell. A real-process fixture compares
+the Python packaged entry with Rust using an isolated HOME and a recording
+browser executable; no personal browser is opened. CLI overrides are reflected
+in the management snapshot. The test driver converts its ephemeral port into
+the assigned port through the public config API so both oracles can persist
+state normally. All 25 process differential scenarios, warnings-denied clippy
+and workspace tests passed. Windows/macOS execution, updater/package lifecycle,
+usage/diagnostics and final benchmarks still require completion.
+
 ## Historical verification evidence
 
 These dated records describe their recorded revisions only. Statements such

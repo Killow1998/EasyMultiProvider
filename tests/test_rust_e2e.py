@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import tomlkit
 import unittest
 from datetime import datetime
@@ -248,6 +249,67 @@ class RustEndToEnd(unittest.TestCase):
                     finally:
                         backend.close()
                 self.assertEqual(results[0], results[1])
+
+    def test_command_help_matches_python(self):
+        source = "import sys; sys.argv[0]='EMP'; from easy_multi_provider.main import main; raise SystemExit(main())"
+        for arguments in (["--help"], ["serve", "--help"], ["doctor", "--help"], ["restore", "--help"], ["--version"]):
+            results = []
+            for command in ([sys.executable, "-c", source], [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]):
+                result = subprocess.run(command + arguments, cwd=ROOT, capture_output=True, timeout=8)
+                results.append((result.returncode, result.stdout, result.stderr))
+            self.assertEqual(results[0], results[1])
+
+    @unittest.skipUnless(os.name == "posix", "browser fixture requires an executable script")
+    def test_desktop_launch_and_configured_listener_defaults(self):
+        # Packaged Python's no-argument entry is the behavior oracle for native EMP.
+        frozen_entry = "import sys; sys.frozen=True; from easy_multi_provider.main import main; raise SystemExit(main())"
+        for desktop in (False, True):
+            for name, command in [
+                ("python", [sys.executable, "-c", frozen_entry] if desktop else [sys.executable, "-m", "easy_multi_provider"]),
+                ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+            ]:
+                with self.subTest(backend=name, desktop=desktop), tempfile.TemporaryDirectory(prefix="emp-desktop-") as temporary:
+                    root = Path(temporary)
+                    home = root / "codex"
+                    home.mkdir()
+                    user_home = root / "user"
+                    user_home.mkdir()
+                    config_root = root / "Desktop settings"
+                    config_path = config_root / "easy-multi-provider/config.json"
+                    config_path.parent.mkdir(parents=True)
+                    browser_log = root / "browser-url.txt"
+                    browser = root / "browser"
+                    browser.write_text("#!" + sys.executable + "\nimport sys\nfrom pathlib import Path\nPath(" + repr(str(browser_log)) + ").write_text(sys.argv[1])\n")
+                    browser.chmod(0o700)
+                    with socket.socket() as reservation:
+                        reservation.bind(("127.0.0.1", 0))
+                        port = reservation.getsockname()[1]
+                    (root / "native.json").write_text('{"models":[]}')
+                    config_path.write_text(json.dumps({"host": "127.0.0.1", "port": port,
+                        "native_catalog_path": str(root / "native.json")}))
+                    arguments = [] if desktop else ["serve", "--config", str(config_path)]
+                    environment = {"HOME": str(user_home), "XDG_CONFIG_HOME": str(config_root), "BROWSER": str(browser)}
+                    # macOS uses Application Support rather than XDG.
+                    if sys.platform == "darwin" and desktop:
+                        configured = user_home / "Library/Application Support/EasyMultiProvider/config.json"
+                        configured.parent.mkdir(parents=True)
+                        configured.write_bytes(config_path.read_bytes())
+                        config_path = configured
+                    backend = EmpProcess.from_config(command, config_path, home,
+                        environment_overrides=environment, arguments=arguments)
+                    try:
+                        self.assertEqual(backend.port, port)
+                        self.assertEqual(backend.request("GET", "/healthz")[0], 200)
+                        if desktop:
+                            deadline = time.monotonic() + 3
+                            while not browser_log.exists() and time.monotonic() < deadline:
+                                time.sleep(0.01)
+                            self.assertTrue(browser_log.exists(), "desktop did not launch configured browser")
+                            self.assertTrue(browser_log.read_text().startswith("http://127.0.0.1:%d/?bootstrap=" % port))
+                        else:
+                            self.assertFalse(browser_log.exists())
+                    finally:
+                        backend.close()
 
     def test_offline_doctor_and_restore_match_python_commands(self):
         # Exercise test_integration_cli's native/active/restore/repeated-restore

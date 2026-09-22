@@ -1,22 +1,24 @@
-//! Command line entry and dispatch.
-
+//! Command line entry and dispatch; desktop launch is the native package default.
 use crate::VERSION;
 use crate::error::AppError;
 use crate::lifecycle::run_server;
-use std::net::IpAddr;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::process::ExitCode;
 mod control;
+pub(crate) mod desktop;
+mod help;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Cli {
     Version,
+    Help(Option<String>),
     Control(control::Control),
     Serve {
         config: Option<PathBuf>,
-        host: IpAddr,
-        port: u16,
+        host: Option<String>,
+        port: Option<u16>,
+        open_browser: bool,
     },
 }
 
@@ -26,80 +28,128 @@ where
 {
     let mut arguments = arguments.into_iter();
     let Some(command) = arguments.next() else {
-        return Err(
-            "usage: EMP [--version] | serve [--config PATH] --host HOST --port PORT".to_string(),
-        );
+        return Ok(Cli::Serve {
+            config: Some(desktop::config_path()),
+            host: None,
+            port: None,
+            open_browser: true,
+        });
     };
     if command == "--version" {
         return Ok(Cli::Version);
     }
+    if matches!(command.as_str(), "--help" | "-h") {
+        return Ok(Cli::Help(None));
+    }
+    let arguments = arguments.collect::<Vec<_>>();
+    if matches!(command.as_str(), "serve" | "doctor" | "restore")
+        && arguments
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        return Ok(Cli::Help(Some(command)));
+    }
     if matches!(command.as_str(), "doctor" | "restore") {
-        return control::Control::parse(&command, arguments).map(Cli::Control);
+        return control::Control::parse(&command, arguments.into_iter()).map(Cli::Control);
     }
     if command != "serve" {
         return Err(format!("unknown command: {command}"));
     }
-
     let mut config = None;
     let mut host = None;
     let mut port = None;
+    let mut open_browser = false;
+    let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "--config" => {
-                if config.is_some() {
-                    return Err("--config was provided more than once".to_string());
-                }
-                config = Some(PathBuf::from(
-                    arguments.next().ok_or("--config requires a value")?,
-                ));
-            }
-            "--host" => {
-                if host.is_some() {
-                    return Err("--host was provided more than once".to_string());
-                }
-                host = Some(arguments.next().ok_or("--host requires a value")?);
-            }
+        let (name, inline) = argument
+            .split_once('=')
+            .map_or((argument.as_str(), None), |(name, value)| {
+                (name, Some(value.to_owned()))
+            });
+        let mut next_value = || {
+            inline
+                .clone()
+                .or_else(|| arguments.next())
+                .ok_or_else(|| format!("{name} requires a value"))
+        };
+        match name {
+            "--config" => config = Some(PathBuf::from(next_value()?)),
+            "--host" => host = Some(next_value()?),
             "--port" => {
-                if port.is_some() {
-                    return Err("--port was provided more than once".to_string());
-                }
-                let raw = arguments.next().ok_or("--port requires a value")?;
+                let raw = next_value()?;
                 port = Some(
                     raw.parse::<u16>()
                         .map_err(|_| format!("invalid port: {raw}"))?,
                 );
             }
-            unknown => return Err(format!("unknown serve option: {unknown}")),
+            "--open-browser" if inline.is_none() => open_browser = true,
+            _ => return Err(format!("unknown serve option: {argument}")),
         }
     }
-
-    let host = host.ok_or("serve requires --host")?;
-    let port = port.ok_or("serve requires --port")?;
-    let host = host
-        .parse::<IpAddr>()
-        .map_err(|_| format!("invalid host: {host}"))?;
-    if !is_loopback(host) {
-        return Err(AppError::HostNotLoopback.to_string());
-    }
-    Ok(Cli::Serve { config, host, port })
+    Ok(Cli::Serve {
+        config,
+        host,
+        port,
+        open_browser,
+    })
 }
 
 pub(crate) fn is_loopback(host: IpAddr) -> bool {
     host == IpAddr::V4(Ipv4Addr::LOCALHOST)
-        || matches!(host, IpAddr::V6(address) if address.is_loopback())
 }
 
-fn print_version() {
-    println!("EMP {VERSION}");
+fn serve(
+    config: Option<PathBuf>,
+    host: Option<String>,
+    port: Option<u16>,
+    open_browser: bool,
+) -> Result<(), AppError> {
+    let configured = emp_state::load_configuration(config.as_deref())?;
+    let host = host
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| configured["host"].as_str().unwrap_or("127.0.0.1"));
+    if host != "127.0.0.1" {
+        return Err(AppError::HostNotLoopback);
+    }
+    let port = port.unwrap_or_else(|| configured["port"].as_u64().unwrap_or(4200) as u16);
+    run_server(
+        config.as_deref(),
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        port,
+        open_browser,
+    )
+}
+fn serve_error(error: AppError) -> String {
+    match error {
+        AppError::ServiceOwned => "another EMP service owns this configuration",
+        AppError::Config(_) | AppError::HostNotLoopback => "EMP configuration is invalid",
+        AppError::Io(_) | AppError::Filesystem(_) => {
+            "EMP integration state is not readable or writable"
+        }
+        _ => "EMP integration operation failed",
+    }
+    .to_owned()
 }
 
 pub(crate) fn run() -> Result<ExitCode, String> {
-    match parse_cli(std::env::args().skip(1))? {
-        Cli::Version => print_version(),
-        Cli::Control(command) => return command.run(),
-        Cli::Serve { config, host, port } => {
-            run_server(config.as_deref(), host, port).map_err(|error| error.to_string())?;
+    let command = match parse_cli(std::env::args().skip(1)) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("usage: EMP [-h] [--version] COMMAND ...\nEMP: error: {error}");
+            return Ok(ExitCode::from(2));
         }
+    };
+    match command {
+        Cli::Version => println!("EMP {VERSION}"),
+        Cli::Help(command) => print!("{}", help::text(command.as_deref())),
+        Cli::Control(command) => return command.run(),
+        Cli::Serve {
+            config,
+            host,
+            port,
+            open_browser,
+        } => serve(config, host, port, open_browser).map_err(serve_error)?,
     }
     Ok(ExitCode::SUCCESS)
 }

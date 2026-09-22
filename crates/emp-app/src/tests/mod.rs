@@ -972,8 +972,9 @@ fn cli_accepts_optional_config() {
         parsed,
         Cli::Serve {
             config: None,
-            host: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            port: 0,
+            host: Some("127.0.0.1".to_owned()),
+            port: Some(0),
+            open_browser: false,
         }
     );
 }

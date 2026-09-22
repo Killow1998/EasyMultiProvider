@@ -117,15 +117,15 @@ class EmpProcess:
         self.start(command, self.config_path, home)
 
     @classmethod
-    def from_config(cls, command, config_path, home, *, environment_overrides=None, port=0):
+    def from_config(cls, command, config_path, home, *, environment_overrides=None, port=0, arguments=None):
         """Use an existing consumer fixture without replacing its configuration."""
         instance = cls.__new__(cls)
         instance.config_path = config_path
         instance.codex_config = home / "config.toml"
-        instance.start(command, config_path, home, environment_overrides=environment_overrides, port=port)
+        instance.start(command, config_path, home, environment_overrides=environment_overrides, port=port, arguments=arguments)
         return instance
 
-    def start(self, command, config_path, home, *, environment_overrides=None, port=0):
+    def start(self, command, config_path, home, *, environment_overrides=None, port=0, arguments=None):
         environment = dict(os.environ)
         for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
                     "all_proxy", "EASY_MULTI_PROVIDER_MASTER_KEY_FILE"):
@@ -134,9 +134,10 @@ class EmpProcess:
                            NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
         environment.update(environment_overrides or {})
         self.environment = environment
+        if arguments is None:
+            arguments = ["serve", "--config", str(config_path), "--host", "127.0.0.1", "--port", str(port)]
         self.process = subprocess.Popen(
-            command + ["serve", "--config", str(config_path),
-                       "--host", "127.0.0.1", "--port", str(port)],
+            command + arguments,
             cwd=ROOT, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True,
         )
@@ -162,6 +163,17 @@ class EmpProcess:
                     status, headers, _ = self.request("GET", url.path + "?" + url.query)
                     assert status == 303, status
                     self.cookie = headers["set-cookie"].split(";", 1)[0]
+                    # The fixture asks the OS for a port; persisted production
+                    # configuration needs the assigned nonzero port in Python.
+                    # Apply this through the same UI API in both implementations.
+                    if port == 0:
+                        status, _, raw = self.request("GET", "/api/config")
+                        assert status == 200, raw
+                        config = json.loads(raw)
+                        if config["port"] == 0:
+                            config["port"] = self.port
+                            status, _, raw = self.request("POST", "/api/config", config)
+                            assert status == 200, raw
                     break
         except BaseException:
             self.close()

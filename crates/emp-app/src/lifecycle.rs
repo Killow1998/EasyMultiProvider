@@ -248,11 +248,27 @@ impl ServerHandle {
     }
 }
 
-pub(crate) fn run_server(config: Option<&Path>, host: IpAddr, port: u16) -> Result<(), AppError> {
+pub(crate) fn run_server(
+    config: Option<&Path>,
+    host: IpAddr,
+    port: u16,
+    open_browser: bool,
+) -> Result<(), AppError> {
     let server = match config {
         Some(config) => ServerHandle::start_with_config(host, port, config)?,
         None => ServerHandle::start(host, port)?,
     };
+    {
+        let mut config = server
+            .state
+            .backend
+            .configuration
+            .config
+            .lock()
+            .map_err(|_| AppError::ServerStopped)?;
+        config["host"] = serde_json::json!(host.to_string());
+        config["port"] = serde_json::json!(port);
+    }
     server.reconcile_startup();
     let result = server.state.backend.transport.runtime.block_on(async {
         // Register before announcing readiness, so immediate termination is safe.
@@ -269,7 +285,11 @@ pub(crate) fn run_server(config: Option<&Path>, host: IpAddr, port: u16) -> Resu
         let local_addr = server.local_addr();
         println!("EMP listening on http://{local_addr}");
         println!("Shutdown: terminate the process (SIGINT/SIGTERM where supported)");
-        println!("Open in browser: {}", server.bootstrap_url());
+        let bootstrap_url = server.bootstrap_url();
+        println!("Open in browser: {bootstrap_url}");
+        if open_browser && !crate::cli::desktop::open_browser(&bootstrap_url) {
+            println!("Browser did not open automatically; use the URL above.");
+        }
         let requested = async {
             while !server.state.shutdown.load(Ordering::Acquire) {
                 tokio::time::sleep(Duration::from_millis(25)).await;
