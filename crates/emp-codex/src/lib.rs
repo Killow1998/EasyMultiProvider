@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod quota;
+pub mod quota_history;
 
 const MAX_ACCOUNT_CATALOG_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CONTEXT_WINDOW: u64 = 100_000_000;

@@ -155,8 +155,13 @@ Progress evidence on 2026-09-21:
   to the vault and reused for the one refresh-token retry. Quota reset now
   validates and preserves the client UUID through the consume RPC, accepts only
   Python's allowlisted outcomes, and refreshes the quota snapshot separately so
-  a refresh failure cannot invite another redemption. Quota history/events,
-  native HTTP/WebSocket generation, and pinned-Codex tool round trips remain.
+  a refresh failure cannot invite another redemption. Quota refreshes now also
+  write Python-compatible five-minute history buckets to the same bounded,
+  private SQLite format; plan changes, swapped window positions, old-schema
+  migration, duplicate-account ownership, and the authenticated history API
+  have live-oracle and endpoint coverage. Periodic background sampling and
+  quota events, native HTTP/WebSocket generation, and pinned-Codex tool round
+  trips remain.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

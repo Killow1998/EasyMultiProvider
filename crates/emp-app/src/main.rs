@@ -19,6 +19,7 @@ use emp_codex::quota::{
     QuotaError, consume_native_quota_reset, read_native_login_quota, run_quota_query_persisting,
     run_quota_reset_persisting,
 };
+use emp_codex::quota_history::{QuotaHistoryError, QuotaHistoryStore};
 use emp_codex::{account_auth_headers, subscription_route_model};
 use emp_core::{ResolvedRoute, RouteResolutionError, resolve_route};
 use emp_router::{
@@ -1822,6 +1823,75 @@ fn save_account_quota_state(
         .ok_or_else(|| QuotaError::new("account changed during quota refresh", "quota_error"))
 }
 
+fn quota_owner_key(state: &ServerState, account_id: &str) -> Result<String, QuotaError> {
+    if account_id == "@native" {
+        return Ok(account_id.to_owned());
+    }
+    let accounts = state
+        .backend
+        .config
+        .lock()
+        .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?
+        .get("accounts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !accounts
+        .iter()
+        .any(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
+    {
+        return Err(QuotaError::new(
+            format!("unknown account: {account_id}"),
+            "quota_error",
+        ));
+    }
+    let mut owners = Vec::<(String, Value)>::new();
+    if let Some(native) = native_auth_document(&state.backend.native_auth_path) {
+        owners.push(("@native".to_owned(), native));
+    }
+    for account in accounts {
+        let Some(id) = account.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let auth = account
+            .get("auth_file")
+            .and_then(Value::as_str)
+            .filter(|path| !path.is_empty())
+            .and_then(|path| {
+                state
+                    .backend
+                    .vault
+                    .read_encrypted_json(Path::new(path))
+                    .ok()
+            });
+        let source = auth.as_ref().and_then(|auth| {
+            owners
+                .iter()
+                .find(|(_, seen)| same_account_auth(auth, seen))
+                .map(|(owner, _)| owner.clone())
+        });
+        if id == account_id {
+            return Ok(source.unwrap_or_else(|| id.to_owned()));
+        }
+        if source.is_none()
+            && let Some(auth) = auth
+        {
+            owners.push((id.to_owned(), auth));
+        }
+    }
+    Ok(account_id.to_owned())
+}
+
+fn record_quota_snapshot(state: &ServerState, account_id: &str, quota: &Value) {
+    let Ok(owner) = quota_owner_key(state, account_id) else {
+        return;
+    };
+    let _ = state
+        .backend
+        .quota_history
+        .append_snapshot(&owner, quota, system_now().trunc() as i64);
+}
+
 fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
     let target = state
         .backend
@@ -1877,6 +1947,7 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
         ) {
             Ok(quota) => {
                 save_account_quota_state(state, account_id, &auth_file, "valid", Some(&quota))
+                    .inspect(|_| record_quota_snapshot(state, account_id, &quota))
             }
             Err(error) => {
                 if error.code() == "quota_auth_required" {
@@ -1906,6 +1977,7 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
         Err(error) => return Err(error),
     };
     save_account_quota_state(state, account_id, &auth_file, "valid", Some(&quota))
+        .inspect(|_| record_quota_snapshot(state, account_id, &quota))
 }
 
 fn refresh_account_by_id(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
@@ -1918,7 +1990,7 @@ fn refresh_account_by_id(state: &ServerState, account_id: &str) -> Result<Value,
         Duration::from_secs(45),
     )?;
     if let Ok(mut current) = state.backend.native_quota.lock() {
-        *current = Some(quota);
+        *current = Some(quota.clone());
     } else {
         return Err(QuotaError::new(
             "Codex account quota check failed",
@@ -1931,7 +2003,29 @@ fn refresh_account_by_id(state: &ServerState, account_id: &str) -> Result<Value,
         .lock()
         .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?
         .clone();
+    record_quota_snapshot(state, account_id, &quota);
     Ok(native_account_snapshot(state, &config))
+}
+
+fn quota_history_response(
+    state: &ServerState,
+    account_id: &str,
+    range_name: &str,
+    now: i64,
+) -> Result<Value, QuotaHistoryResponseError> {
+    let owner = quota_owner_key(state, account_id).map_err(QuotaHistoryResponseError::Account)?;
+    let mut result = state
+        .backend
+        .quota_history
+        .query(&owner, range_name, now)
+        .map_err(QuotaHistoryResponseError::History)?;
+    result["account_id"] = Value::String(account_id.to_owned());
+    Ok(result)
+}
+
+enum QuotaHistoryResponseError {
+    Account(QuotaError),
+    History(QuotaHistoryError),
 }
 
 fn consume_quota_reset_for_account(
@@ -2200,6 +2294,32 @@ fn route_request_at(request: Request<'_>, state: &ServerState, now: f64) -> Vec<
                     serde_json::to_vec(&snapshot).expect("account snapshot is JSON serializable");
                 return response("HTTP/1.1 200 OK", "application/json", &body, &[]);
             }
+            if request.method == RequestMethod::Get
+                && path.starts_with("/api/accounts/")
+                && path.ends_with("/quota-history")
+            {
+                let raw_account =
+                    &path["/api/accounts/".len()..path.len() - "/quota-history".len()];
+                let account_id = percent_decode(raw_account, false);
+                let range = query_values(request.target, "range")
+                    .into_iter()
+                    .find(|value| !value.is_empty())
+                    .unwrap_or_else(|| "1d".to_owned());
+                return match quota_history_response(state, &account_id, &range, now.trunc() as i64)
+                {
+                    Ok(payload) => {
+                        let body = serde_json::to_vec(&payload)
+                            .expect("quota history snapshot is serializable");
+                        response("HTTP/1.1 200 OK", "application/json", &body, &[])
+                    }
+                    Err(QuotaHistoryResponseError::History(error)) => {
+                        json_error_response(400, status_text(400), &error.to_string(), None, &[])
+                    }
+                    Err(QuotaHistoryResponseError::Account(error)) => {
+                        json_error_response(404, status_text(404), &error.to_string(), None, &[])
+                    }
+                };
+            }
             return not_found_response();
         }
         return unauthorized_response();
@@ -2235,6 +2355,7 @@ struct BackendState {
     native_quota: Mutex<Option<Value>>,
     quota_refresh_errors: Mutex<BTreeMap<String, String>>,
     quota_refresh_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
+    quota_history: QuotaHistoryStore,
 }
 
 impl ServerHandle {
@@ -2296,6 +2417,7 @@ impl ServerHandle {
             native_quota: Mutex::new(None),
             quota_refresh_errors: Mutex::new(BTreeMap::new()),
             quota_refresh_locks: Mutex::new(BTreeMap::new()),
+            quota_history: QuotaHistoryStore::new(state_root.join("quota_history.sqlite3")),
         };
         Self::start_with_session(host, port, session_path, session, backend)
     }
@@ -3069,6 +3191,80 @@ for line in sys.stdin:
                 .expect("read duplicate snapshot")["tokens"]["access_token"],
             "stale-native-snapshot",
             "native refresh must not overwrite the imported snapshot"
+        );
+
+        let native_history = request(
+            &server,
+            "/api/accounts/%40native/quota-history?range=all",
+            &[&cookie],
+        );
+        assert!(
+            native_history.starts_with("HTTP/1.1 200 OK\r\n"),
+            "{native_history}"
+        );
+        let native_history: Value = serde_json::from_str(
+            native_history
+                .split_once("\r\n\r\n")
+                .expect("response separator")
+                .1,
+        )
+        .expect("native quota history");
+        assert_eq!(native_history["account_id"], "@native");
+        assert_eq!(
+            native_history["series"][0]["points"][0]["remaining_percent"],
+            93.0
+        );
+        assert_eq!(native_history["plans"][0]["plan_type"], "pro");
+
+        let duplicate_history = request(
+            &server,
+            "/api/accounts/native-copy/quota-history?range=all",
+            &[&cookie],
+        );
+        let duplicate_history: Value = serde_json::from_str(
+            duplicate_history
+                .split_once("\r\n\r\n")
+                .expect("response separator")
+                .1,
+        )
+        .expect("duplicate quota history");
+        assert_eq!(duplicate_history["account_id"], "native-copy");
+        assert_eq!(duplicate_history["series"], native_history["series"]);
+
+        let imported_history = request(
+            &server,
+            "/api/accounts/egg/quota-history?range=all",
+            &[&cookie],
+        );
+        let imported_history: Value = serde_json::from_str(
+            imported_history
+                .split_once("\r\n\r\n")
+                .expect("response separator")
+                .1,
+        )
+        .expect("imported quota history");
+        assert_eq!(
+            imported_history["series"][0]["points"][0]["remaining_percent"],
+            89.0
+        );
+
+        let invalid_history = request(
+            &server,
+            "/api/accounts/egg/quota-history?range=forever",
+            &[&cookie],
+        );
+        assert!(
+            invalid_history.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "{invalid_history}"
+        );
+        let missing_history = request(
+            &server,
+            "/api/accounts/missing/quota-history?range=all",
+            &[&cookie],
+        );
+        assert!(
+            missing_history.starts_with("HTTP/1.1 404 Not Found\r\n"),
+            "{missing_history}"
         );
         server.shutdown().expect("shutdown");
     }

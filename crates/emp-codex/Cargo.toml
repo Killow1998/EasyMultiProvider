@@ -7,6 +7,7 @@ description = "Codex account and model-catalog compatibility for EMP."
 
 [dependencies]
 base64 = "0.22"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde_json = { workspace = true }
 sha2 = "0.10.9"
 tempfile = "3.27"
