@@ -48,6 +48,16 @@
       "fixture": "protocol/python-anthropic-projection.json"
     },
     {
+      "id": "protocol.anthropic-stream.python-rust",
+      "level": "events",
+      "source": "easy_multi_provider/stream_adapters.py:stream_anthropic_completion",
+      "transport": "sse",
+      "dialect": "anthropic_messages",
+      "normalization": ["generated response and message UUIDs retain type and referential equality"],
+      "side_effects": ["none; parsed upstream events drive a request-local state machine"],
+      "fixture": "protocol/python-anthropic-stream.json"
+    },
+    {
       "id": "transport.sse-json.python-rust",
       "level": "events",
       "source": "easy_multi_provider/transport.py:sse_json_events and tests/test_sse_failure_reasons.py",

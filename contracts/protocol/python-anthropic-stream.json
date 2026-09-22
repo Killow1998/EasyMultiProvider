@@ -1,0 +1,24 @@
+{
+  "status": "differentially_implemented",
+  "source": [
+    "easy_multi_provider/stream_adapters.py:stream_anthropic_completion",
+    "tests/test_router.py:test_anthropic_stream_preserves_mixed_text_function_and_custom_tools",
+    "tests/test_v06_final_review.py:test_anthropic_stream_requires_message_stop",
+    "tests/test_cache_usage.py:test_anthropic_stream_retains_start_usage_and_cumulative_output_delta"
+  ],
+  "rust_evidence": [
+    "crates/emp-protocol/tests/anthropic_stream.rs",
+    "crates/emp-protocol/tests/anthropic_python_oracle.rs:stream_projection_matches_live_python_oracle_when_configured",
+    "crates/emp-protocol/tests/anthropic_python_oracle.rs:stream_failures_match_live_python_status_and_class_when_configured"
+  ],
+  "covered_cases": [
+    "created, text, function, custom tool and terminal events preserve exact sequence and output indices",
+    "thinking and redacted-thinking blocks never leak into answer or diagnostics",
+    "implicit text blocks close only after message_stop while explicit unfinished blocks fail closed",
+    "message_start and message_delta usage combine with Anthropic cache-read and cache-write accounting",
+    "max token completion becomes response.incomplete",
+    "missing message_stop and empty output classify as stream_incomplete",
+    "malformed tool JSON and unknown stop reasons classify as protocol_error"
+  ],
+  "side_effects": ["none; response and message identifiers are injected by the caller"]
+}
