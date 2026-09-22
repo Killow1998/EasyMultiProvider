@@ -5,15 +5,15 @@
 //! and bounded summaries can cross the protocol boundary.
 
 use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE};
+use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use url::Url;
 
-const COMPACTION_PREFIX: &str = "emp1:";
-const COMPACTION_SUMMARY_PREFIX: &str =
+pub(crate) const COMPACTION_PREFIX: &str = "emp1:";
+pub(crate) const COMPACTION_SUMMARY_PREFIX: &str =
     "Another model produced a continuation summary. Continue from this summary:";
 const PORTABLE_TOP_LEVEL: &[&str] = &[
     "model",
@@ -48,7 +48,12 @@ pub struct PortableProjectionError {
 }
 
 impl PortableProjectionError {
-    fn new(index: usize, item_type: &str, part_types: Vec<String>, failure_class: &str) -> Self {
+    pub(crate) fn new(
+        index: usize,
+        item_type: &str,
+        part_types: Vec<String>,
+        failure_class: &str,
+    ) -> Self {
         Self {
             index,
             item_type: item_type.chars().take(64).collect(),
@@ -308,12 +313,18 @@ fn custom_arguments(value: Option<&Value>) -> Result<String, PortableProjectionE
         .map_err(|_| error(0, "custom_tool_call", "invalid_tool_arguments"))
 }
 
-fn decode_compaction(value: &str) -> Option<String> {
-    let encoded = value.strip_prefix(COMPACTION_PREFIX)?;
-    let decoded = URL_SAFE
-        .decode(encoded)
-        .or_else(|_| STANDARD.decode(encoded))
-        .ok()?;
+pub(crate) fn decode_compaction(value: &str) -> Option<String> {
+    // Python translates the URL-safe alphabet before strict decoding, so mixed
+    // alphabets are valid too. It does not reject nonzero unused padding bits.
+    let encoded = value
+        .strip_prefix(COMPACTION_PREFIX)?
+        .replace('-', "+")
+        .replace('_', "/");
+    let engine = GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        GeneralPurposeConfig::new().with_decode_allow_trailing_bits(true),
+    );
+    let decoded = engine.decode(encoded).ok()?;
     let summary = String::from_utf8(decoded).ok()?;
     (!summary.is_empty()).then_some(summary)
 }
