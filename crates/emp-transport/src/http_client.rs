@@ -6,6 +6,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Certificate, Client, Method, Proxy, StatusCode};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
+use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -18,6 +19,7 @@ pub enum HttpTransportErrorKind {
     ClientBuild,
     ConnectTimeout,
     ReadTimeout,
+    ResponseTooLarge,
     Network,
     RedirectDisabled,
 }
@@ -44,6 +46,7 @@ impl fmt::Display for HttpTransportError {
             HttpTransportErrorKind::ClientBuild => "failed to build upstream HTTP client",
             HttpTransportErrorKind::ConnectTimeout => "upstream connection timed out",
             HttpTransportErrorKind::ReadTimeout => "upstream read timed out",
+            HttpTransportErrorKind::ResponseTooLarge => "upstream response is too large",
             HttpTransportErrorKind::Network => "upstream network request failed",
             HttpTransportErrorKind::RedirectDisabled => "upstream redirects are disabled",
         })
@@ -63,6 +66,7 @@ pub struct HttpClientConfig {
     pub pool: ConnectionPoolPolicy,
     pub max_proxy_pools: usize,
     root_certificates: Vec<Certificate>,
+    dns_overrides: Vec<(String, SocketAddr)>,
 }
 
 impl fmt::Debug for HttpClientConfig {
@@ -75,6 +79,7 @@ impl fmt::Debug for HttpClientConfig {
                 "additional_root_certificates",
                 &self.root_certificates.len(),
             )
+            .field("dns_overrides", &self.dns_overrides.len())
             .finish()
     }
 }
@@ -85,6 +90,7 @@ impl Default for HttpClientConfig {
             pool: ConnectionPoolPolicy::default(),
             max_proxy_pools: DEFAULT_MAX_PROXY_POOLS,
             root_certificates: Vec::new(),
+            dns_overrides: Vec::new(),
         }
     }
 }
@@ -97,6 +103,23 @@ impl HttpClientConfig {
         let certificate = Certificate::from_der(certificate)
             .map_err(|_| HttpTransportError::new(HttpTransportErrorKind::ClientBuild))?;
         self.root_certificates.push(certificate);
+        Ok(())
+    }
+
+    pub fn add_dns_override(
+        &mut self,
+        host: impl Into<String>,
+        address: SocketAddr,
+    ) -> Result<(), HttpTransportError> {
+        let host = host.into();
+        if host.is_empty()
+            || !host
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        {
+            return Err(HttpTransportError::new(HttpTransportErrorKind::ClientBuild));
+        }
+        self.dns_overrides.push((host, address));
         Ok(())
     }
 
@@ -208,6 +231,9 @@ impl HttpClient {
             .pool_max_idle_per_host(self.config.pool.max_idle_per_route);
         for certificate in &self.config.root_certificates {
             builder = builder.add_root_certificate(certificate.clone());
+        }
+        for (host, address) in &self.config.dns_overrides {
+            builder = builder.resolve(host, *address);
         }
         if let Some(proxy_url) = self.policy.transport_proxy_for(&plan.route)? {
             let proxy = Proxy::all(proxy_url)
@@ -335,20 +361,52 @@ impl HttpResponse {
         Ok(chunk.map(|chunk| chunk.to_vec()))
     }
 
-    pub async fn read_all(mut self) -> Result<Vec<u8>, HttpTransportError> {
+    pub async fn read_all(self) -> Result<Vec<u8>, HttpTransportError> {
+        self.read_limited(usize::MAX).await
+    }
+
+    pub async fn read_limited(mut self, limit: usize) -> Result<Vec<u8>, HttpTransportError> {
+        if self
+            .header("content-length")
+            .and_then(|value| value.parse::<usize>().ok())
+            .is_some_and(|length| length > limit)
+        {
+            return Err(HttpTransportError::new(
+                HttpTransportErrorKind::ResponseTooLarge,
+            ));
+        }
         let remaining = self
             .non_stream_deadline
             .checked_duration_since(Instant::now())
             .ok_or_else(|| HttpTransportError::new(HttpTransportErrorKind::ReadTimeout))?;
-        let response = self
+        let mut response = self
             .response
             .take()
             .ok_or_else(|| HttpTransportError::new(HttpTransportErrorKind::InvalidRequest))?;
-        tokio::time::timeout(remaining, response.bytes())
-            .await
-            .map_err(|_| HttpTransportError::new(HttpTransportErrorKind::ReadTimeout))?
-            .map(|bytes| bytes.to_vec())
-            .map_err(map_read_error)
+        let deadline = Instant::now() + remaining;
+        let mut result = Vec::new();
+        loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| HttpTransportError::new(HttpTransportErrorKind::ReadTimeout))?;
+            let chunk = tokio::time::timeout(remaining, response.chunk())
+                .await
+                .map_err(|_| HttpTransportError::new(HttpTransportErrorKind::ReadTimeout))?
+                .map_err(map_read_error)?;
+            let Some(chunk) = chunk else {
+                return Ok(result);
+            };
+            let next_length = result
+                .len()
+                .checked_add(chunk.len())
+                .ok_or_else(|| HttpTransportError::new(HttpTransportErrorKind::ResponseTooLarge))?;
+            if next_length > limit {
+                return Err(HttpTransportError::new(
+                    HttpTransportErrorKind::ResponseTooLarge,
+                ));
+            }
+            result.extend_from_slice(&chunk);
+        }
     }
 
     pub async fn finish(mut self) {

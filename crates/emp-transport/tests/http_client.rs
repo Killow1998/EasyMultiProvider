@@ -509,6 +509,27 @@ async fn first_event_timeout_is_reported_as_a_read_timeout() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_stream_body_limit_rejects_before_buffering_the_declared_body() {
+    let server = TestServer::start();
+    let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
+    let response = client
+        .open(
+            HttpMethod::Get,
+            &server.url("/complete"),
+            BTreeMap::new(),
+            None,
+            false,
+        )
+        .await
+        .expect("complete response");
+    let error = response
+        .read_limited(1)
+        .await
+        .expect_err("declared body exceeds limit");
+    assert_eq!(error.kind(), HttpTransportErrorKind::ResponseTooLarge);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn proxy_credentials_stay_separate_from_origin_authorization() {
     let proxy = TestServer::start();
     let policy = HttpClientPolicy::new(
@@ -545,7 +566,12 @@ async fn proxy_credentials_stay_separate_from_origin_authorization() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
     let server = TlsTestServer::start();
-    let untrusted = HttpClient::new(HttpClientPolicy::default()).expect("untrusted client");
+    let mut untrusted_config = HttpClientConfig::default();
+    untrusted_config
+        .add_dns_override("localhost", server.address)
+        .expect("untrusted test DNS override");
+    let untrusted = HttpClient::with_config(HttpClientPolicy::default(), untrusted_config)
+        .expect("untrusted client");
     let error = untrusted
         .open(
             HttpMethod::Get,
@@ -562,6 +588,9 @@ async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
     config
         .add_root_certificate_der(&server.certificate_der)
         .expect("test root certificate");
+    config
+        .add_dns_override("localhost", server.address)
+        .expect("test DNS override");
     let trusted = Arc::new(
         HttpClient::with_config(HttpClientPolicy::default(), config).expect("trusted client"),
     );

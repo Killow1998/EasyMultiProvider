@@ -1,0 +1,15 @@
+[package]
+name = "emp-router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Behavior-compatible request orchestration for EMP."
+
+[dependencies]
+emp-core = { path = "../emp-core" }
+emp-protocol = { path = "../emp-protocol" }
+emp-transport = { path = "../emp-transport" }
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
