@@ -7,44 +7,6 @@ use crate::services::runtime::RuntimeState;
 use emp_integration::{IntegrationResult, IntegrationStatus};
 use serde_json::Value;
 
-fn codex_compatibility(state: &ServerState) -> Value {
-    let installed = std::process::Command::new(&state.backend.accounts.codex_binary)
-        .arg("--version")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| {
-            let text = String::from_utf8_lossy(&output.stdout);
-            text.split_whitespace()
-                .find(|part| {
-                    part.trim_start_matches('v')
-                        .split('.')
-                        .take(3)
-                        .all(|value| value.chars().all(|character| character.is_ascii_digit()))
-                        && part.matches('.').count() >= 2
-                })
-                .map(|value| value.trim_start_matches('v').to_owned())
-        });
-    let status = installed.as_deref().map_or("unavailable", |version| {
-        let mut parts = version
-            .split(['.', '-', '+'])
-            .take(3)
-            .filter_map(|value| value.parse::<u64>().ok());
-        match (parts.next(), parts.next(), parts.next()) {
-            (Some(0), Some(155), Some(_)) if !version.contains('-') => "recommended",
-            (Some(0), Some(149..=154), Some(_)) if !version.contains('-') => "supported",
-            (Some(major), Some(minor), Some(_)) if (major, minor) < (0, 149) => "unsupported",
-            _ => "unverified",
-        }
-    });
-    serde_json::json!({
-        "installed":installed,
-        "status":status,
-        "supported_range":"0.149.x–0.155.x",
-        "recommended":"0.155.0"
-    })
-}
-
 pub(crate) fn integration_summary_with_result(
     state: &ServerState,
     result: Option<&IntegrationResult>,
@@ -96,7 +58,7 @@ fn integration_summary_from_status(state: &ServerState, status: &IntegrationStat
         },
     };
     serde_json::json!({
-        "codex_compatibility":codex_compatibility(state),
+        "codex_compatibility":crate::services::runtime::compatibility_snapshot(state, false),
         "configuration":{
             "state":configuration_state,
             "relation":status.relation,
@@ -114,15 +76,24 @@ pub(crate) struct IntegrationState {
     pub(crate) manager: IntegrationManager,
     pub(crate) owned: AtomicBool,
     pub(crate) runtime: RuntimeState,
+    pub(crate) inventory: emp_codex::runtime_inventory::RuntimeInventory,
 }
 
 impl IntegrationState {
-    pub(crate) fn new(manager: IntegrationManager) -> Self {
+    pub(crate) fn new(
+        manager: IntegrationManager,
+        codex_home: std::path::PathBuf,
+        codex_binary: &str,
+    ) -> Self {
         let runtime = RuntimeState::new(manager.lease_path().with_file_name("runtime.json"));
         Self {
             manager,
             owned: AtomicBool::new(false),
             runtime,
+            inventory: emp_codex::runtime_inventory::RuntimeInventory::new(
+                codex_home,
+                (codex_binary != "codex").then(|| codex_binary.into()),
+            ),
         }
     }
 

@@ -127,7 +127,7 @@ impl BackendState {
             },
             accounts: AccountState {
                 native_auth_path,
-                codex_home,
+                codex_home: codex_home.clone(),
                 codex_binary: codex_binary.to_owned(),
                 native_quota: Mutex::new(None),
                 quota_refresh_errors: Mutex::new(BTreeMap::new()),
@@ -139,7 +139,7 @@ impl BackendState {
                 quota_sampler_wait: Mutex::new(()),
                 quota_sampler_condition: Condvar::new(),
             },
-            integration: IntegrationState::new(integration),
+            integration: IntegrationState::new(integration, codex_home, codex_binary),
         })
     }
 }

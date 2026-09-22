@@ -260,6 +260,70 @@ class RustEndToEnd(unittest.TestCase):
                 restored = next(item for item in result["output"] if item["type"] == "function_call")
                 self.assertEqual((restored["name"], restored["namespace"]), ("search", "two"))
 
+    @unittest.skipUnless(os.name == "posix", "executable fixture scripts require POSIX")
+    def test_runtime_scan_selection_and_restart(self):
+        # Installed layout fixtures are shared byte-for-byte by both backends.
+        with tempfile.TemporaryDirectory(prefix="emp-runtimes-") as temporary:
+            root = Path(temporary)
+            home = root / "codex"
+            home.mkdir()
+            user_home = root / "user"
+            paths = {
+                home / "plugins/.plugin-appserver/codex": "0.154.0",
+                home / "packages/standalone/current/bin/codex": "0.155.0",
+                user_home / ".cursor/extensions/openai.chatgpt-fixture/bin/codex": "0.155.0-alpha.1",
+                root / "bin/codex": "0.100.0",
+            }
+            for path, version in paths.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("#!" + sys.executable + "\nprint('codex-cli " + version + "')\n")
+                path.chmod(0o700)
+            (root / "native.json").write_text('{"models":[]}')
+            config_path = root / "config.json"
+            environment = {"HOME": str(user_home), "PATH": str(root / "bin")}
+            results = []
+            for command in ([sys.executable, "-m", "easy_multi_provider"],
+                            [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]):
+                config_path.write_text(json.dumps({"native_catalog_path": str(root / "native.json")}))
+                backend = EmpProcess.from_config(command, config_path, home, environment_overrides=environment)
+                try:
+                    # Python serve --port 0 is a test-only listener setting;
+                    # restore its assigned port before any persisted config edit.
+                    status, _, raw = backend.request("GET", "/api/config")
+                    self.assertEqual(status, 200, raw)
+                    config = json.loads(raw)
+                    config["port"] = backend.port
+                    status, _, raw = backend.request("POST", "/api/config", config)
+                    self.assertEqual(status, 200, raw)
+                    status, _, raw = backend.request("POST", "/api/runtime/scan", {})
+                    self.assertEqual(status, 200, raw)
+                    scanned = json.loads(raw)
+                    self.assertEqual(scanned["helper_source"], "managed")
+                    status, _, raw = backend.request("POST", "/api/runtime/select", {"sources": [" cursor ", "cursor"]})
+                    self.assertEqual(status, 200, raw)
+                    selected = json.loads(raw)
+                    self.assertEqual(selected["preferences"], ["cursor"])
+                    self.assertEqual(selected["helper_source"], "managed")
+                    self.assertEqual([item["source"] for item in selected["runtimes"] if item["targeted"]], ["cursor"])
+                    failures = []
+                    for sources in ([], ["auto", "cursor"], ["path_cli"], [False]):
+                        status, _, raw = backend.request("POST", "/api/runtime/select", {"sources": sources})
+                        self.assertEqual(status, 400, raw)
+                        failures.append(json.loads(raw))
+                    self.assertEqual(json.loads(config_path.read_text())["codex_runtime_sources"], ["cursor"])
+                finally:
+                    backend.close()
+                backend = EmpProcess.from_config(command, config_path, home, environment_overrides=environment)
+                try:
+                    status, _, raw = backend.request("GET", "/api/integration")
+                    self.assertEqual(status, 200, raw)
+                    restarted = json.loads(raw)["codex_compatibility"]
+                    self.assertEqual(restarted, selected)
+                    results.append((scanned, selected, failures, restarted))
+                finally:
+                    backend.close()
+            self.assertEqual(results[0], results[1])
+
     def test_management_image_and_request_limits_match_python(self):
         for path in ("/api/models/vision-test-image", "/api/request-limits"):
             results = []

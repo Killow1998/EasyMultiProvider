@@ -64,6 +64,21 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     let mut stop_after_write = false;
     let response = match parse_request(&raw.head) {
         Some(request)
+            if request.method == RequestMethod::Post
+                && matches!(
+                    request.raw_path(),
+                    "/api/runtime/scan" | "/api/runtime/select"
+                ) =>
+        {
+            Some(crate::api::runtime::management_request(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                system_now(),
+            ))
+        }
+        Some(request)
             if request.method == RequestMethod::Post && request.raw_path() == "/api/quit" =>
         {
             let (response, stop) =

@@ -117,21 +117,22 @@ class EmpProcess:
         self.start(command, self.config_path, home)
 
     @classmethod
-    def from_config(cls, command, config_path, home):
+    def from_config(cls, command, config_path, home, *, environment_overrides=None):
         """Use an existing consumer fixture without replacing its configuration."""
         instance = cls.__new__(cls)
         instance.config_path = config_path
         instance.codex_config = home / "config.toml"
-        instance.start(command, config_path, home)
+        instance.start(command, config_path, home, environment_overrides=environment_overrides)
         return instance
 
-    def start(self, command, config_path, home):
+    def start(self, command, config_path, home, *, environment_overrides=None):
         environment = dict(os.environ)
         for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
                     "all_proxy", "EASY_MULTI_PROVIDER_MASTER_KEY_FILE"):
             environment.pop(key, None)
         environment.update(CODEX_HOME=str(home), PYTHONUNBUFFERED="1",
                            NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
+        environment.update(environment_overrides or {})
         self.environment = environment
         self.process = subprocess.Popen(
             command + ["serve", "--config", str(config_path),

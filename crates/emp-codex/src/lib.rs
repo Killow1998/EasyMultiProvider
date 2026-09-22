@@ -341,3 +341,5 @@ fn verified_owner_hint(authorization: &str) -> String {
         .unwrap_or_default()
         .to_owned()
 }
+
+pub mod runtime_inventory;

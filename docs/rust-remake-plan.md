@@ -447,6 +447,18 @@ is the isolated consumer entry point; tests use the lowest advertised effort.
 Runtime discovery/selection and the remaining management/lifecycle operations
 are next. These results do not establish full migration or performance parity.
 
+Codex installation scanning and source selection now use bounded version
+probes and a 60-second inventory cache. Known app/plugin, managed-package,
+editor and PATH layouts are separate from shared-runtime observation. Target
+preferences persist through restart while quota helpers independently choose
+a compatible installation. A real-process Python/Rust fixture compares scan,
+multiple installation priorities, target selection, invalid selections and
+restart output using the same executable files. Focused E2E, formatting,
+warnings-denied clippy and the full workspace with live Python oracles passed.
+The platform layouts are implemented but Windows/macOS execution still awaits
+cross-platform acceptance. Next: connect context capability status and the
+remaining management observability, preserving existing frontend assets.
+
 ## Historical verification evidence
 
 These dated records describe their recorded revisions only. Statements such
