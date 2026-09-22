@@ -30,11 +30,12 @@ pub use accounts::{
 };
 pub use config::{
     CONFIG_PATH_ENV, ConfigError, ConfigResult, canonical_catalog_json, canonicalize_account_paths,
-    canonicalize_private_paths, catalog_etag, config_path, load_configuration, merge_web_update,
-    merge_web_update_with_time, normalize_catalog_presentations, normalize_codex_runtime_sources,
-    normalize_configuration, normalize_context_calibrations, normalize_model,
-    normalize_model_capability_sources, normalize_provider, normalize_provider_base_url,
-    normalize_provider_id, normalize_subscription_search, observed_at_now, provider_api_key,
+    canonicalize_private_paths, catalog_etag, config_path, generated_catalog_path,
+    load_configuration, merge_web_update, merge_web_update_with_time,
+    normalize_catalog_presentations, normalize_codex_runtime_sources, normalize_configuration,
+    normalize_context_calibrations, normalize_model, normalize_model_capability_sources,
+    normalize_provider, normalize_provider_base_url, normalize_provider_id,
+    normalize_subscription_search, observed_at_now, provider_api_key,
     public_configuration_with_file_status, remember_resolved_protocol,
     remember_resolved_protocol_at, save_configuration, save_configuration_in_transaction,
 };

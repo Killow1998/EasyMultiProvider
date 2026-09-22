@@ -41,6 +41,8 @@ use emp_transport::{
 use serde_json::Value;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
+mod catalog_api;
+
 pub const VERSION: &str = "0.11.6";
 
 /// Embedded directly from the existing Python package so Web UI bytes cannot
@@ -1764,6 +1766,21 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     };
     let response = match parse_request(&raw.head) {
         Some(request)
+            if request.method == RequestMethod::Post
+                && matches!(
+                    request.raw_path(),
+                    "/api/providers/discover" | "/api/catalog/refresh"
+                ) =>
+        {
+            Some(catalog_api::management_request(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                system_now(),
+            ))
+        }
+        Some(request)
             if request.method == RequestMethod::Post && request.raw_path() == "/v1/responses" =>
         {
             match responses_request(&mut stream, request, raw.body_prefix, state, system_now()) {
@@ -2355,6 +2372,11 @@ fn route_request(request: Request<'_>, state: &ServerState) -> Vec<u8> {
 
 fn route_request_at(request: Request<'_>, state: &ServerState, now: f64) -> Vec<u8> {
     let path = request.raw_path();
+    if request.method == RequestMethod::Get
+        && (path == "/v1/models" || path.starts_with("/v1/models/"))
+    {
+        return catalog_api::models_request(request, state);
+    }
     if path == "/healthz" {
         return health_response();
     }
@@ -2457,6 +2479,7 @@ struct ServerState {
 
 struct BackendState {
     config: Mutex<Value>,
+    discovery_lock: Mutex<()>,
     config_path: PathBuf,
     vault: VaultStore,
     client: HttpClient,
@@ -2621,6 +2644,7 @@ impl ServerHandle {
         )?;
         let backend = BackendState {
             config: Mutex::new(config),
+            discovery_lock: Mutex::new(()),
             config_path: config_path.to_path_buf(),
             vault,
             client,
@@ -2829,6 +2853,7 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(test)]
 mod tests {
+    mod catalog_api_contract;
     use super::*;
     use std::io::{BufRead, BufReader};
     use std::net::TcpStream;
@@ -3039,9 +3064,10 @@ mod tests {
             .filter_map(|line| line.split_once(':'))
             .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
             .collect::<BTreeMap<_, _>>();
-        let length = headers["content-length"]
-            .parse::<usize>()
-            .expect("upstream Content-Length");
+        let length = headers
+            .get("content-length")
+            .map(|value| value.parse::<usize>().expect("upstream Content-Length"))
+            .unwrap_or(0);
         let mut body = raw.body_prefix;
         while body.len() < length {
             let mut chunk = [0_u8; 4096];
@@ -3050,7 +3076,11 @@ mod tests {
             body.extend_from_slice(&chunk[..count]);
         }
         body.truncate(length);
-        let body = serde_json::from_slice(&body).expect("upstream request JSON");
+        let body = if body.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&body).expect("upstream request JSON")
+        };
         (path, headers, body)
     }
 

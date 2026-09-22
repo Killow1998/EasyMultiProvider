@@ -416,6 +416,14 @@ pub(crate) fn atomic_write_config(path: &Path, data: &[u8]) -> Result<(), Filesy
     atomic_write(path, data, CONFIG_FILE_MODE, false)
 }
 
+/// Write a generated catalog with the same atomic replacement and private-file
+/// policy used by configuration. The caller owns any enclosing transaction.
+pub fn write_catalog_json(path: &Path, value: &Value) -> Result<(), FilesystemError> {
+    let mut bytes = serde_json::to_vec_pretty(value).map_err(|_| FilesystemError::InvalidJson)?;
+    bytes.push(b'\n');
+    atomic_write_config(path, &bytes)
+}
+
 fn atomic_write(
     path: &Path,
     data: &[u8],

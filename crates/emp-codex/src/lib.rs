@@ -31,6 +31,28 @@ pub fn load_native_catalog(config: &Value) -> Value {
     load_native_catalog_from_map(config)
 }
 
+/// Preserve the native source before Codex caches EMP's merged models response.
+pub fn preserve_native_catalog(config: &Value) -> Result<(), emp_state::FilesystemError> {
+    let native = load_native_catalog(config);
+    if native
+        .get("models")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty)
+    {
+        return Ok(());
+    }
+    let Some(config) = config.as_object() else {
+        return Ok(());
+    };
+    let path = native_catalog_path(config);
+    let destination = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("easy-multi-provider")
+        .join("native-catalog.json");
+    emp_state::filesystem::write_catalog_json(&destination, &native)
+}
+
 fn load_native_catalog_from_map(config: &Map<String, Value>) -> Value {
     let path = native_catalog_path(config);
     let Some(value) = read_catalog(&path) else {

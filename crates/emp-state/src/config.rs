@@ -1969,6 +1969,25 @@ fn account_error(error: impl fmt::Display) -> ConfigError {
     ConfigError::python("AccountError", error.to_string())
 }
 
+/// Stable generated catalog location, matching Python's expanded, resolved Codex home.
+pub fn generated_catalog_path(codex_home: Option<&Path>) -> PathBuf {
+    let home = codex_home.map(Path::to_path_buf).unwrap_or_else(|| {
+        env::var("CODEX_HOME")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| PathBuf::from(value.trim()))
+            .unwrap_or_else(|| expand_user(Path::new("~/.codex")))
+    });
+    let home = if home.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        &home
+    };
+    path_python_resolve(&expand_user(home))
+        .join("easy-multi-provider")
+        .join("catalog.json")
+}
+
 pub(crate) fn path_python_resolve(path: &Path) -> PathBuf {
     fn recurse(path: &Path, followed_links: usize) -> PathBuf {
         let absolute = absolute(path).unwrap_or_else(|_| path.to_path_buf());
