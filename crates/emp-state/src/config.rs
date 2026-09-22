@@ -2678,6 +2678,39 @@ pub fn load_configuration(path: Option<&Path>) -> ConfigResult<Value> {
     Ok(config)
 }
 
+/// Resolve one request-local provider credential from normalized state.
+///
+/// Inline values take precedence. Managed encrypted files fail closed to an
+/// empty value, matching Python's `config.api_key` boundary without exposing a
+/// decryption or filesystem diagnostic to callers.
+pub fn provider_api_key(provider: &Value, vault: &VaultStore) -> String {
+    let Some(provider) = provider.as_object() else {
+        return String::new();
+    };
+    if let Some(value) = provider
+        .get("api_key")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        return value.to_owned();
+    }
+    let Some(path) = provider
+        .get("api_key_file")
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .map(Path::new)
+    else {
+        return String::new();
+    };
+    if path.is_symlink() {
+        return String::new();
+    }
+    vault
+        .read_encrypted_text(path)
+        .map(|value| value.trim().to_owned())
+        .unwrap_or_default()
+}
+
 /// Apply a Web update while preserving secrets and managed discovery metadata.
 ///
 /// This is Python `merge_web_update` with its optional filesystem path omitted;

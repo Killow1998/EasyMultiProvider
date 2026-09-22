@@ -1,6 +1,6 @@
 use emp_state::{
     CONFIG_PATH_ENV, ConfigError, FilesystemError, VaultStore, config_path, load_configuration,
-    save_configuration, save_configuration_in_transaction, with_file_transaction,
+    provider_api_key, save_configuration, save_configuration_in_transaction, with_file_transaction,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -100,6 +100,42 @@ fn config_save_round_trips_and_manages_derived_secrets() {
             .as_str(),
         "ünicode credential"
     );
+}
+
+#[test]
+fn provider_credentials_are_hydrated_request_locally_and_fail_closed() {
+    let directory = tempdir().expect("temporary directory");
+    let root = root(&directory);
+    let vault =
+        VaultStore::from_sources(Some(TEST_KEY), &root.join("unused.key")).expect("vault store");
+    let secret_path = root.join("provider.key.enc");
+    vault
+        .write_encrypted_text(&secret_path, "  encrypted-secret  ")
+        .expect("write provider secret");
+
+    assert_eq!(
+        provider_api_key(
+            &json!({"api_key": "inline-secret", "api_key_file": secret_path}),
+            &vault,
+        ),
+        "inline-secret"
+    );
+    assert_eq!(
+        provider_api_key(&json!({"api_key_file": secret_path}), &vault),
+        "encrypted-secret"
+    );
+    assert_eq!(
+        provider_api_key(&json!({"api_key_file": root.join("missing.enc")}), &vault),
+        ""
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let link = root.join("provider-link.enc");
+        symlink(&secret_path, &link).expect("secret symlink");
+        assert_eq!(provider_api_key(&json!({"api_key_file": link}), &vault), "");
+    }
 }
 
 #[test]
