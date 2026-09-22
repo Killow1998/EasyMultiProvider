@@ -1,4 +1,6 @@
-use emp_codex::quota::{parse_app_server_output_at, quota_rpc_error, reset_outcome};
+use emp_codex::quota::{
+    parse_app_server_output_at, quota_rpc_error, reset_outcome, validated_reset_idempotency_key,
+};
 use serde_json::{Value, json};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -67,6 +69,13 @@ fn fixture() -> Value {
             "{\"id\":3,\"result\":{\"outcome\":\"alreadyRedeemed\"}}\n",
             "{\"id\":3,\"result\":{\"outcome\":\"private\"}}\n",
             "[]\n"
+        ],
+        "idempotency_keys": [
+            "123e4567-e89b-12d3-a456-426614174000",
+            "123E4567-E89B-12D3-A456-426614174000",
+            "123e4567e89b12d3a456426614174000",
+            "{123e4567-e89b-12d3-a456-426614174000}",
+            "retry-me"
         ]
     })
 }
@@ -128,11 +137,23 @@ fn rust_result(fixture: &Value) -> Value {
             },
         )
         .collect::<Vec<_>>();
+    let idempotency_keys = fixture["idempotency_keys"]
+        .as_array()
+        .expect("idempotency keys")
+        .iter()
+        .map(|value| {
+            match validated_reset_idempotency_key(value.as_str().expect("idempotency key")) {
+                Ok(value) => json!({"ok": true, "value": value}),
+                Err(failure) => json!({"ok": false, "error": error(&failure)}),
+            }
+        })
+        .collect::<Vec<_>>();
     json!({
         "parsed": parsed,
         "parse_failures": parse_failures,
         "rpc_errors": rpc_errors,
         "reset": reset,
+        "idempotency_keys": idempotency_keys,
     })
 }
 
@@ -154,7 +175,7 @@ fn quota_projection_matches_live_python_oracle_when_configured() {
     let script = r#"
 import json, sys
 from unittest.mock import patch
-from easy_multi_provider.quota import QuotaError, _quota_rpc_error, _reset_outcome, parse_app_server_output
+from easy_multi_provider.quota import QuotaError, _quota_rpc_error, _reset_outcome, _validated_reset_idempotency_key, parse_app_server_output
 
 fixture = json.load(sys.stdin)
 transcript = "\n".join(line if isinstance(line, str) else json.dumps(line, ensure_ascii=False, separators=(",", ":")) for line in fixture["transcript"])
@@ -181,11 +202,19 @@ for transcript in fixture["reset_transcripts"]:
     except QuotaError as exc:
         reset.append({"ok": False, "error": error(exc)})
 
+idempotency_keys = []
+for value in fixture["idempotency_keys"]:
+    try:
+        idempotency_keys.append({"ok": True, "value": _validated_reset_idempotency_key(value)})
+    except QuotaError as exc:
+        idempotency_keys.append({"ok": False, "error": error(exc)})
+
 json.dump({
     "parsed": parsed,
     "parse_failures": parse_failures,
     "rpc_errors": rpc_errors,
     "reset": reset,
+    "idempotency_keys": idempotency_keys,
 }, sys.stdout, ensure_ascii=False, separators=(",", ":"))
 "#;
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

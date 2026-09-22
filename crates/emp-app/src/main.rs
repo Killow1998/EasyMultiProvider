@@ -15,7 +15,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use emp_codex::quota::{QuotaError, read_native_login_quota, run_quota_query_persisting};
+use emp_codex::quota::{
+    QuotaError, consume_native_quota_reset, read_native_login_quota, run_quota_query_persisting,
+    run_quota_reset_persisting,
+};
 use emp_codex::{account_auth_headers, subscription_route_model};
 use emp_core::{ResolvedRoute, RouteResolutionError, resolve_route};
 use emp_router::{
@@ -1674,7 +1677,8 @@ fn handle_connection(mut stream: TcpStream, state: &ServerState) {
         Some(request)
             if request.method == RequestMethod::Post
                 && request.raw_path().starts_with("/api/accounts/")
-                && request.raw_path().ends_with("/quota") =>
+                && (request.raw_path().ends_with("/quota")
+                    || request.raw_path().ends_with("/quota-reset")) =>
         {
             Some(management_quota_request(
                 &mut stream,
@@ -1904,6 +1908,107 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
     save_account_quota_state(state, account_id, &auth_file, "valid", Some(&quota))
 }
 
+fn refresh_account_by_id(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
+    if account_id != "@native" {
+        return refresh_imported_account(state, account_id);
+    }
+    let quota = read_native_login_quota(
+        &state.backend.native_auth_path,
+        &state.backend.codex_binary,
+        Duration::from_secs(45),
+    )?;
+    if let Ok(mut current) = state.backend.native_quota.lock() {
+        *current = Some(quota);
+    } else {
+        return Err(QuotaError::new(
+            "Codex account quota check failed",
+            "quota_error",
+        ));
+    }
+    let config = state
+        .backend
+        .config
+        .lock()
+        .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?
+        .clone();
+    Ok(native_account_snapshot(state, &config))
+}
+
+fn consume_quota_reset_for_account(
+    state: &ServerState,
+    account_id: &str,
+    idempotency_key: &str,
+) -> Result<String, QuotaError> {
+    if account_id == "@native" {
+        return consume_native_quota_reset(
+            &state.backend.native_auth_path,
+            &state.backend.codex_binary,
+            Duration::from_secs(45),
+            idempotency_key,
+        );
+    }
+    let target = state
+        .backend
+        .config
+        .lock()
+        .ok()
+        .and_then(|config| {
+            config
+                .get("accounts")?
+                .as_array()?
+                .iter()
+                .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
+                .cloned()
+        })
+        .ok_or_else(|| QuotaError::new(format!("unknown account: {account_id}"), "quota_error"))?;
+    let auth_file = target
+        .get("auth_file")
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| QuotaError::new("account credentials are not configured", "quota_error"))?
+        .to_owned();
+    let auth_path = Path::new(&auth_file);
+    let read_auth = || {
+        state
+            .backend
+            .vault
+            .read_encrypted_json(auth_path)
+            .map_err(|_| QuotaError::new("stored encrypted auth.json is invalid", "quota_error"))
+    };
+    let auth = read_auth()?;
+    if native_auth_document(&state.backend.native_auth_path)
+        .is_some_and(|native| same_account_auth(&auth, &native))
+    {
+        return consume_native_quota_reset(
+            &state.backend.native_auth_path,
+            &state.backend.codex_binary,
+            Duration::from_secs(45),
+            idempotency_key,
+        );
+    }
+    let query = |auth: &Value, allow_refresh: bool| {
+        run_quota_reset_persisting(
+            auth,
+            &state.backend.codex_binary,
+            Duration::from_secs(45),
+            allow_refresh,
+            idempotency_key,
+            |refreshed| {
+                state
+                    .backend
+                    .vault
+                    .write_encrypted_json(auth_path, refreshed)
+                    .map_err(|_| ())
+            },
+        )
+    };
+    match query(&auth, false) {
+        Ok(outcome) => Ok(outcome),
+        Err(error) if error.code() == "quota_auth_required" => query(&read_auth()?, true),
+        Err(error) => Err(error),
+    }
+}
+
 fn management_quota_request(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -1918,11 +2023,14 @@ fn management_quota_request(
     if !state.sessions.contains(supplied_cookie.as_deref(), now) {
         return unauthorized_response();
     }
-    if let Err(error) = read_json_body(stream, request, body_prefix, state) {
-        return body_error_response(error);
-    }
+    let body = match read_json_body(stream, request, body_prefix, state) {
+        Ok(body) => body,
+        Err(error) => return body_error_response(error),
+    };
     let path = request.raw_path();
-    let raw_account = &path["/api/accounts/".len()..path.len() - "/quota".len()];
+    let reset = path.ends_with("/quota-reset");
+    let suffix = if reset { "/quota-reset" } else { "/quota" };
+    let raw_account = &path["/api/accounts/".len()..path.len() - suffix.len()];
     let account = percent_decode(raw_account.trim_end_matches('/'), false);
     let known_account = account == "@native"
         || state.backend.config.lock().is_ok_and(|config| {
@@ -1960,35 +2068,57 @@ fn management_quota_request(
             return json_error_response(500, status_text(500), "internal server error", None, &[]);
         }
     };
-    let refreshed = if account == "@native" {
-        read_native_login_quota(
-            &state.backend.native_auth_path,
-            &state.backend.codex_binary,
-            Duration::from_secs(45),
-        )
-        .and_then(|quota| {
-            if let Ok(mut current) = state.backend.native_quota.lock() {
-                *current = Some(quota);
-            } else {
-                return Err(QuotaError::new(
-                    "Codex account quota check failed",
-                    "quota_error",
-                ));
+    if reset {
+        let key = body
+            .get("idempotency_key")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let outcome = match consume_quota_reset_for_account(state, &account, key) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let status = if error.code() == "quota_reset_invalid_request" {
+                    400
+                } else {
+                    503
+                };
+                return json_error_response(
+                    status,
+                    status_text(status),
+                    &error.to_string(),
+                    Some(error.code()),
+                    &[],
+                );
             }
-            let config = match state.backend.config.lock() {
-                Ok(config) => config.clone(),
-                Err(_) => {
-                    return Err(QuotaError::new(
-                        "Codex account quota check failed",
-                        "quota_error",
-                    ));
+        };
+        let (account_snapshot, refresh_error) = match refresh_account_by_id(state, &account) {
+            Ok(snapshot) => {
+                if let Ok(mut errors) = state.backend.quota_refresh_errors.lock() {
+                    errors.remove(&account);
                 }
-            };
-            Ok(native_account_snapshot(state, &config))
-        })
-    } else {
-        refresh_imported_account(state, &account)
-    };
+                (snapshot, Value::Null)
+            }
+            Err(error) => {
+                if let Ok(mut errors) = state.backend.quota_refresh_errors.lock() {
+                    errors.insert(account.clone(), error.code().to_owned());
+                }
+                (
+                    Value::Null,
+                    serde_json::json!({
+                        "code": error.code(),
+                        "message": error.to_string(),
+                    }),
+                )
+            }
+        };
+        let response_body = serde_json::to_vec(&serde_json::json!({
+            "outcome": outcome,
+            "account": account_snapshot,
+            "refresh_error": refresh_error,
+        }))
+        .expect("quota reset result is serializable");
+        return response("HTTP/1.1 200 OK", "application/json", &response_body, &[]);
+    }
+    let refreshed = refresh_account_by_id(state, &account);
     match refreshed {
         Ok(account_snapshot) => {
             if let Ok(mut errors) = state.backend.quota_refresh_errors.lock() {
@@ -2783,6 +2913,9 @@ for line in sys.stdin:
                 auth["tokens"]["access_token"] = "isolated-rotation"
                 (home / "auth.json").write_text(json.dumps(auth))
             print(json.dumps({"id": request["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": used, "windowDurationMins": 300}}}}), flush=True)
+    elif method == "account/rateLimitResetCredit/consume":
+        assert request["params"] == {"idempotencyKey": "12345678-1234-4123-8123-123456789abc"}
+        print(json.dumps({"id": request["id"], "result": {"outcome": "reset"}}), flush=True)
 "#,
         )
         .expect("write fake Codex");
@@ -2853,6 +2986,36 @@ for line in sys.stdin:
             original_auth,
             "native quota refresh must never persist isolated token rotation"
         );
+
+        let reset_body = serde_json::to_vec(&json!({
+            "idempotency_key": "12345678-1234-4123-8123-123456789ABC"
+        }))
+        .expect("reset request");
+        let reset = post(
+            &server,
+            "/api/accounts/%40native/quota-reset",
+            &reset_body,
+            &[&cookie],
+        );
+        assert!(reset.starts_with("HTTP/1.1 200 OK\r\n"), "{reset}");
+        let reset: Value =
+            serde_json::from_str(reset.split_once("\r\n\r\n").expect("response separator").1)
+                .expect("reset response");
+        assert_eq!(reset["outcome"], "reset");
+        assert_eq!(reset["account"]["quota"]["plan_type"], "pro");
+        assert_eq!(reset["refresh_error"], Value::Null);
+
+        let invalid_reset = post(
+            &server,
+            "/api/accounts/%40native/quota-reset",
+            br#"{"idempotency_key":"retry-me"}"#,
+            &[&cookie],
+        );
+        assert!(
+            invalid_reset.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "{invalid_reset}"
+        );
+        assert!(invalid_reset.contains("quota_reset_invalid_request"));
 
         let imported = post(&server, "/api/accounts/egg/quota", b"{}", &[&cookie]);
         assert!(imported.starts_with("HTTP/1.1 200 OK\r\n"), "{imported}");

@@ -152,9 +152,11 @@ Progress evidence on 2026-09-21:
   Codex app-server home, safe JSON-RPC projection, trusted executable checks,
   and the authenticated management endpoint. Native auth is never modified;
   an imported token rotated before an authentication failure is encrypted back
-  to the vault and reused for the one refresh-token retry. Reset execution,
-  quota history/events, native HTTP/WebSocket generation, and pinned-Codex tool
-  round trips remain.
+  to the vault and reused for the one refresh-token retry. Quota reset now
+  validates and preserves the client UUID through the consume RPC, accepts only
+  Python's allowlisted outcomes, and refreshes the quota snapshot separately so
+  a refresh failure cannot invite another redemption. Quota history/events,
+  native HTTP/WebSocket generation, and pinned-Codex tool round trips remain.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
