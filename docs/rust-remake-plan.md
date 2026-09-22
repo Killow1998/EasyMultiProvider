@@ -130,11 +130,16 @@ Progress evidence on 2026-09-21:
   cover all three external protocols, incremental delivery before upstream EOF,
   pre/post-output failure boundaries and disconnect cancellation. SSE framing
   and activity classification are also compared with the live Python oracle.
-  With one local build job and low process priority, the 22-test `emp-app`
-  binary suite and warnings-denied crate clippy pass. No CI was dispatched for
-  this local slice. Native catalog filesystem ownership, automatic protocol
-  negotiation, bounded pre-output compatibility retry and pinned-Codex tool
-  round trips remain in Stage 3.
+  Automatic external protocol selection now follows Python's candidate order,
+  consumes only observations whose endpoint/deployment/model identities still
+  match, and falls back for complete or streamed requests only after an
+  explicit pre-output 404/405/415/501 rejection. Candidate order has a live
+  Python oracle and real loopback tests prove Chat-to-Responses fallback. With
+  one local build job and low process priority, the 23-test `emp-app` binary
+  suite, focused Router oracle and warnings-denied crate clippy pass. No CI was
+  dispatched for these local slices. Persisting new successful protocol
+  observations with the native catalog, bounded pre-output compatibility retry
+  and pinned-Codex tool round trips remain in Stage 3.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

@@ -185,6 +185,82 @@ pub struct ExternalRouter<'a> {
     client: &'a HttpClient,
 }
 
+/// Return Python-compatible concrete candidates for one frozen route.
+///
+/// A saved observation is trusted only when the endpoint, deployment and raw
+/// upstream model identities still match. This function never mutates saved
+/// configuration; persistence remains owned by the application state layer.
+pub fn protocol_candidates(route: &ResolvedRoute) -> Vec<Protocol> {
+    if route.protocol != Protocol::Auto {
+        return vec![route.protocol];
+    }
+    let provider = route.provider.value();
+    let normal = if provider.get("auth_mode").and_then(Value::as_str) == Some("anthropic_api_key") {
+        vec![Protocol::AnthropicMessages]
+    } else if provider
+        .get("base_url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .ends_with("/responses")
+    {
+        vec![Protocol::Responses, Protocol::ChatCompletions]
+    } else {
+        vec![Protocol::ChatCompletions, Protocol::Responses]
+    };
+    let Some(observed) = observed_protocol(route) else {
+        return normal;
+    };
+    if !normal.contains(&observed) || normal.first() == Some(&observed) {
+        return normal;
+    }
+    std::iter::once(observed)
+        .chain(
+            normal
+                .into_iter()
+                .filter(|candidate| *candidate != observed),
+        )
+        .collect()
+}
+
+fn observed_protocol(route: &ResolvedRoute) -> Option<Protocol> {
+    let upstream = route
+        .model
+        .value()
+        .get("upstream_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|upstream| !upstream.is_empty())?;
+    for source in [route.model.value(), route.provider.value()] {
+        let protocol = match source.get("resolved_protocol").and_then(Value::as_str) {
+            Some("responses") => Protocol::Responses,
+            Some("chat_completions") => Protocol::ChatCompletions,
+            Some("anthropic_messages") => Protocol::AnthropicMessages,
+            _ => continue,
+        };
+        let Some(observation) = source
+            .get("protocol_observation")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        if observation
+            .get("endpoint_fingerprint")
+            .and_then(Value::as_str)
+            != Some(route.endpoint_fingerprint.as_str())
+            || observation
+                .get("deployment_identity")
+                .and_then(Value::as_str)
+                != Some(route.deployment_identity.as_str())
+            || observation.get("upstream_model").and_then(Value::as_str) != Some(upstream)
+        {
+            continue;
+        }
+        return Some(protocol);
+    }
+    None
+}
+
 impl<'a> ExternalRouter<'a> {
     pub const fn new(client: &'a HttpClient) -> Self {
         Self { client }

@@ -18,7 +18,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use emp_core::{ResolvedRoute, RouteResolutionError, resolve_route_without_catalog};
 use emp_router::{
     ExternalRouter, ExternalStream, ProjectionIds, RouterError, RouterErrorKind,
-    StreamResponseEvent,
+    StreamResponseEvent, protocol_candidates,
 };
 use emp_state::{
     ConfigError, FilesystemError, VaultStore, WEB_SESSION_TOKEN_BYTES, WebSession, WebSessionError,
@@ -28,7 +28,8 @@ use emp_state::{
 use emp_transport::{
     ContentDecodeError, FailureClass, HttpClient, HttpClientPolicy, ProxyEnvironment, ProxyPolicy,
     RequestCapacityError, RequestLimits, RequestLimitsConfig, RequestLimitsError, TimeoutPolicy,
-    TransportKind, decode_content, normalize_error_class, public_failure_message,
+    TransportKind, decode_content, normalize_error_class, protocol_fallback_allowed,
+    public_failure_message,
 };
 use serde_json::Value;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
@@ -1268,11 +1269,42 @@ fn serve_external_stream(
     ids: &ProjectionIds,
 ) -> Result<(), Vec<u8>> {
     let router = ExternalRouter::new(&state.backend.client);
-    let mut upstream = state
-        .backend
-        .runtime
-        .block_on(router.open_stream(route, body, incoming, ids))
-        .map_err(|error| pre_output_router_error_response(&error))?;
+    let candidates = protocol_candidates(route);
+    for (index, protocol) in candidates.iter().copied().enumerate() {
+        let candidate = route
+            .with_protocol(protocol)
+            .map_err(route_resolution_response)?;
+        match state
+            .backend
+            .runtime
+            .block_on(router.open_stream(&candidate, body, incoming, ids))
+        {
+            Ok(upstream) => {
+                return relay_external_stream(downstream, state, upstream);
+            }
+            Err(error)
+                if index + 1 < candidates.len()
+                    && protocol_fallback_allowed(error.status(), false, false) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(pre_output_router_error_response(&error)),
+        }
+    }
+    Err(json_error_response(
+        503,
+        status_text(503),
+        "provider protocol is unsupported",
+        Some("router_error"),
+        &[],
+    ))
+}
+
+fn relay_external_stream(
+    downstream: &mut TcpStream,
+    state: &ServerState,
+    mut upstream: ExternalStream,
+) -> Result<(), Vec<u8>> {
     let mut monitor = DisconnectMonitor::start(downstream).ok();
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;
@@ -1448,33 +1480,57 @@ fn responses_request(
         };
     }
     let router = ExternalRouter::new(&state.backend.client);
-    match state
-        .backend
-        .runtime
-        .block_on(router.execute_complete(&route, &body, &incoming, &ids))
-    {
-        Ok(result) => {
-            let body = match serde_json::to_vec(&result.body) {
-                Ok(body) => body,
-                Err(_) => {
-                    return ResponsesRequestResult::Buffered(json_error_response(
-                        500,
-                        status_text(500),
-                        "internal server error",
-                        None,
-                        &[],
-                    ));
-                }
-            };
-            ResponsesRequestResult::Buffered(response(
-                &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
-                &result.content_type,
-                &body,
-                &[],
-            ))
+    let candidates = protocol_candidates(&route);
+    for (index, protocol) in candidates.iter().copied().enumerate() {
+        let candidate = match route.with_protocol(protocol) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                return ResponsesRequestResult::Buffered(route_resolution_response(error));
+            }
+        };
+        match state
+            .backend
+            .runtime
+            .block_on(router.execute_complete(&candidate, &body, &incoming, &ids))
+        {
+            Ok(result) => {
+                let body = match serde_json::to_vec(&result.body) {
+                    Ok(body) => body,
+                    Err(_) => {
+                        return ResponsesRequestResult::Buffered(json_error_response(
+                            500,
+                            status_text(500),
+                            "internal server error",
+                            None,
+                            &[],
+                        ));
+                    }
+                };
+                return ResponsesRequestResult::Buffered(response(
+                    &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
+                    &result.content_type,
+                    &body,
+                    &[],
+                ));
+            }
+            Err(error)
+                if index + 1 < candidates.len()
+                    && protocol_fallback_allowed(error.status(), false, false) =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return ResponsesRequestResult::Buffered(router_error_response(error));
+            }
         }
-        Err(error) => ResponsesRequestResult::Buffered(router_error_response(error)),
     }
+    ResponsesRequestResult::Buffered(json_error_response(
+        503,
+        status_text(503),
+        "provider protocol is unsupported",
+        Some("router_error"),
+        &[],
+    ))
 }
 
 fn handle_connection(mut stream: TcpStream, state: &ServerState) {
@@ -2036,6 +2092,43 @@ mod tests {
                 worker.join().expect("join upstream");
             }
         }
+    }
+
+    fn fallback_upstream(
+        content_type: &'static str,
+        success_body: Vec<u8>,
+    ) -> (String, mpsc::Receiver<String>, JoinHandle<()>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind fallback upstream");
+        let address = listener.local_addr().expect("fallback upstream address");
+        let (path_sender, paths) = mpsc::sync_channel(2);
+        let worker = thread::spawn(move || {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept fallback upstream");
+                let (path, _, _) = receive_upstream_request(&mut stream);
+                path_sender.send(path).expect("record fallback path");
+                let (status, response_type, body) = if attempt == 0 {
+                    (
+                        404,
+                        "application/json",
+                        br#"{"error":{"message":"unsupported endpoint"}}"#.to_vec(),
+                    )
+                } else {
+                    (200, content_type, success_body.clone())
+                };
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status} {}\r\nContent-Type: {response_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            status_text(status),
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .expect("write fallback response head");
+                stream.write_all(&body).expect("write fallback body");
+            }
+        });
+        (format!("http://{address}/v1"), paths, worker)
     }
 
     fn configured_server(base_url: &str) -> (TempDir, ServerHandle) {
@@ -2769,6 +2862,80 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
         assert!(response.contains("\"status\": 502"));
         assert!(!response.contains("event: response.completed\n"));
         server.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn auto_protocol_falls_back_only_after_explicit_endpoint_rejection() {
+        let complete_body = serde_json::to_vec(&json!({
+            "id":"responses_upstream", "object":"response", "status":"completed",
+            "model":"upstream-model",
+            "output":[{"id":"msg_visible","type":"message","status":"completed",
+                "role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}],
+            "usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
+        }))
+        .expect("complete upstream body");
+        let (base_url, paths, worker) = fallback_upstream("application/json", complete_body);
+        let (_directory, server) = configured_protocol_server(&base_url, "auto", "api_key");
+        let complete_request = serde_json::to_vec(&json!({
+            "model":"demo/model", "stream":false,
+            "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+        }))
+        .expect("complete request JSON");
+        let response = post(
+            &server,
+            "/v1/responses",
+            &complete_request,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(response.contains("\"text\":\"answer\""));
+        assert_eq!(
+            [
+                paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+                paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+            ],
+            ["/v1/chat/completions", "/v1/responses"]
+        );
+        server.shutdown().expect("shutdown");
+        worker.join().expect("join complete fallback upstream");
+
+        let terminal = json!({
+            "id":"responses_upstream", "object":"response", "status":"completed",
+            "model":"upstream-model",
+            "output":[{"id":"msg_visible","type":"message","status":"completed",
+                "role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}],
+            "usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
+        });
+        let stream_body = upstream_sse(&[
+            json!({"type":"response.created","response":{"id":"responses_upstream","object":"response","status":"in_progress","model":"upstream-model","output":[]}}),
+            json!({"type":"response.output_text.delta","item_id":"msg_visible","output_index":0,"content_index":0,"delta":"answer"}),
+            json!({"type":"response.completed","response":terminal}),
+        ]);
+        let (base_url, paths, worker) = fallback_upstream("text/event-stream", stream_body);
+        let (_directory, server) = configured_protocol_server(&base_url, "auto", "api_key");
+        let stream_request = serde_json::to_vec(&json!({
+            "model":"demo/model", "stream":true,
+            "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+        }))
+        .expect("stream request JSON");
+        let response = post_stream(
+            &server,
+            "/v1/responses",
+            &stream_request,
+            &[&session_cookie_header(&server)],
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(response.contains("event: response.output_text.delta\n"));
+        assert!(response.contains("event: response.completed\n"));
+        assert_eq!(
+            [
+                paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+                paths.recv_timeout(Duration::from_secs(2)).unwrap(),
+            ],
+            ["/v1/chat/completions", "/v1/responses"]
+        );
+        server.shutdown().expect("shutdown");
+        worker.join().expect("join stream fallback upstream");
     }
 
     #[test]
