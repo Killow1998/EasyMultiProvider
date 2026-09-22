@@ -39,6 +39,7 @@ class Upstream:
     def __init__(self):
         self.requests = queue.Queue()
         self.reply = (200, "application/json", b"{}", {})
+        self.reply_gate = None
 
         owner = self
 
@@ -48,7 +49,19 @@ class Upstream:
                 if self.headers.get("Content-Encoding") == "zstd":
                     raw = zstandard.ZstdDecompressor().decompress(raw)
                 owner.requests.put((self.path, dict(self.headers), json.loads(raw)))
+                self.send_fixture_reply()
+
+            def do_GET(self):
+                if not urlsplit(self.path).path.endswith("/models"):
+                    self.send_error(501, "unsupported fixture request")
+                    return
+                owner.requests.put((self.path, dict(self.headers), None))
+                self.send_fixture_reply()
+
+            def send_fixture_reply(self):
                 status, content_type, body, headers = owner.reply
+                if owner.reply_gate is not None:
+                    owner.reply_gate.wait(timeout=8)
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(body)))

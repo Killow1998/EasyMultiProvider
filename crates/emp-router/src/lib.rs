@@ -30,6 +30,7 @@ pub mod native_http;
 pub mod native_metadata;
 pub mod native_request;
 pub mod official_registry;
+pub mod subscription_catalog;
 
 pub const MAX_UPSTREAM_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_UPSTREAM_ERROR_BYTES: usize = 4096;

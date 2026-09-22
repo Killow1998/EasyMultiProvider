@@ -538,6 +538,16 @@ serde_json now enables float_roundtrip instead of weakening that comparison.
 Further detailed transport timing/retry annotations, failure-before-dispatch
 observations and cancellation/lifecycle coverage remain part of final parity.
 
+The subscription model refresh control now fetches with the selected native
+or imported account, writes only that owner's cache, and checks the backend,
+cache location and credential identity again before accepting an in-flight
+result. It refreshes the merged picker afterward. Failed HTTP/JSON responses
+leave the old catalog untouched and never retry credentials. Real-process
+Python comparisons exercise native/imported owners, refresh followed by reads,
+malformed catalogs, upstream 401, session enforcement and login replacement
+during a blocked upstream response. All 34 process differential scenarios,
+formatting, warnings-denied clippy and workspace tests pass locally.
+
 ## Historical verification evidence
 
 These dated records describe their recorded revisions only. Statements such

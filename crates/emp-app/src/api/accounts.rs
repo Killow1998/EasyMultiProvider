@@ -13,7 +13,7 @@ use crate::http::response::unauthorized_response;
 use crate::services::accounts::import_account_state;
 use std::net::TcpStream;
 
-pub(crate) fn management_account_import_request(
+pub(crate) fn management_account_request(
     stream: &mut TcpStream,
     request: Request<'_>,
     body_prefix: Vec<u8>,
@@ -33,6 +33,22 @@ pub(crate) fn management_account_import_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
+    if let Some(id) = request
+        .raw_path()
+        .strip_prefix("/api/accounts/")
+        .and_then(|path| path.strip_suffix("/models/refresh"))
+    {
+        let id = crate::http::request::percent_decode(id, false);
+        return match crate::services::account_catalog::refresh(state, &id) {
+            Ok(payload) => response(
+                "HTTP/1.1 200 OK",
+                "application/json",
+                &serde_json::to_vec(&payload).expect("subscription models"),
+                &[],
+            ),
+            Err(response) => response,
+        };
+    }
     match import_account_state(state, &body) {
         Ok(account) => {
             let body = serde_json::to_vec(&serde_json::json!({"account":account})).unwrap();

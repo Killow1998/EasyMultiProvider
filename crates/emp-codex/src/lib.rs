@@ -218,7 +218,7 @@ where
     }
 }
 
-fn native_catalog_path(config: &Map<String, Value>) -> PathBuf {
+pub fn native_catalog_path(config: &Map<String, Value>) -> PathBuf {
     let configured = config
         .get("native_catalog_path")
         .and_then(Value::as_str)

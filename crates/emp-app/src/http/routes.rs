@@ -1,6 +1,6 @@
 //! HTTP method/path dispatch. Domain logic lives in services.
 
-use crate::api::accounts::management_account_import_request;
+use crate::api::accounts::management_account_request;
 use crate::api::catalog;
 use crate::api::compact::compact_request;
 use crate::api::inspection;
@@ -63,6 +63,19 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     };
     let mut stop_after_write = false;
     let response = match parse_request(&raw.head) {
+        Some(request)
+            if request.method == RequestMethod::Post
+                && request.raw_path().starts_with("/api/accounts/")
+                && request.raw_path().ends_with("/models/refresh") =>
+        {
+            Some(management_account_request(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                system_now(),
+            ))
+        }
         Some(request)
             if request.method == RequestMethod::Post
                 && request.raw_path() == "/api/client-events" =>
@@ -154,7 +167,7 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
             if request.method == RequestMethod::Post
                 && request.raw_path() == "/api/accounts/import" =>
         {
-            Some(management_account_import_request(
+            Some(management_account_request(
                 &mut stream,
                 request,
                 raw.body_prefix,

@@ -18,4 +18,5 @@ pub(crate) mod startup;
 
 pub(crate) mod usage;
 
+pub(crate) mod account_catalog;
 pub(crate) mod observation;
