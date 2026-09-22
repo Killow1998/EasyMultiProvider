@@ -121,11 +121,11 @@ pub fn request_history_anchor(
         None => header(incoming, "x-codex-turn-metadata"),
     };
     let metadata = match raw_metadata {
-        Some(value) => serde_json::from_str::<Value>(value)
+        Some(value) if !value.trim().is_empty() => serde_json::from_str::<Value>(value)
             .ok()
             .and_then(|value| value.as_object().cloned())
             .ok_or_else(|| HistoryError::new("invalid_turn_metadata"))?,
-        None => Map::new(),
+        _ => Map::new(),
     };
     let header_thread = header(incoming, "thread-id").map(str::to_owned);
     let metadata_thread = string_alias(&metadata, "thread_id", "threadId")?;
@@ -134,12 +134,12 @@ pub fn request_history_anchor(
     {
         return Err(HistoryError::new("conflicting_thread_identity"));
     }
-    let header_window = if body_metadata.is_some() {
+    let metadata_window = string_alias(&metadata, "window_id", "windowId")?;
+    let header_window = if body_metadata.is_some() && metadata_window.is_some() {
         None
     } else {
         header(incoming, "x-codex-window-id").map(str::to_owned)
     };
-    let metadata_window = string_alias(&metadata, "window_id", "windowId")?;
     if let (Some(left), Some(right)) = (&header_window, &metadata_window)
         && left != right
     {
@@ -151,7 +151,15 @@ pub fn request_history_anchor(
         .map(str::to_owned);
     Ok(HistoryAnchor {
         thread_id: header_thread.or(metadata_thread).or(legacy_session),
-        turn_id: string_alias(&metadata, "turn_id", "turnId")?,
+        turn_id: if metadata
+            .get("turn_id")
+            .or_else(|| metadata.get("turnId"))
+            .is_some_and(|v| v == "")
+        {
+            None
+        } else {
+            string_alias(&metadata, "turn_id", "turnId")?
+        },
         window_id: header_window.or(metadata_window),
         forked_from_thread_id: optional_string(&metadata, "forked_from_thread_id")?,
     })

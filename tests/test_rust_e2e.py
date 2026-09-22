@@ -20,6 +20,8 @@ from contextlib import ExitStack
 import zstandard
 
 from tests import test_chat_projection_regressions as chat_cases
+from tests.test_tool_bridge import function, namespace
+from easy_multi_provider.tool_bridge import ExternalTools
 from tests.test_server import _masked_text_frame, _read_text_frame
 from tests.test_shared_app_server_runtime import _UnixModelListServer
 from tests.rust_e2e_support import ROOT, EmpProcess, Upstream, normalized_ids
@@ -230,6 +232,33 @@ class RustEndToEnd(unittest.TestCase):
                         finally:
                             backend.close()
             self.assertEqual(results[0], results[1])
+
+    def test_tool_namespace_choice_and_history_round_trip(self):
+        # Reuse the Python tool-bridge scenario through actual HTTP endpoints.
+        body = {"input": [{"type": "function_call", "namespace": "one", "name": "search",
+                            "call_id": "call", "arguments": '{"name":"do not rewrite"}'},
+                           {"type": "function_call_output", "call_id": "call", "output": "result"}],
+                "tools": [namespace("one"), namespace("two"), function()],
+                "tool_choice": {"type": "function", "namespace": "two", "name": "search"}}
+        prepared = ExternalTools().prepare(body)
+        alias = prepared["tools"][1]["name"]
+        call = {"type": "function_call", "id": "fixture-item", "name": alias,
+                "call_id": "fixture-call", "arguments": "{}", "status": "completed"}
+        replies = {
+            "test": {"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant",
+                       "tool_calls": [{"id": "fixture-call", "type": "function",
+                                       "function": {"name": alias, "arguments": "{}"}}]}}],
+                     "usage": {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13}},
+            "anthropic": {"id": "fixture", "type": "message", "role": "assistant",
+                          "content": [{"type": "tool_use", "id": "fixture-call", "name": alias, "input": {}}],
+                          "stop_reason": "tool_use", "usage": {"input_tokens": 10, "output_tokens": 3}},
+            "responses": {"id": "fixture", "object": "response", "status": "completed", "output": [call]},
+        }
+        for name, reply in replies.items():
+            with self.subTest(protocol=name):
+                result = self.compare_exchange(dict(body, model=name + "/model"), reply)
+                restored = next(item for item in result["output"] if item["type"] == "function_call")
+                self.assertEqual((restored["name"], restored["namespace"]), ("search", "two"))
 
     def test_management_image_and_request_limits_match_python(self):
         for path in ("/api/models/vision-test-image", "/api/request-limits"):

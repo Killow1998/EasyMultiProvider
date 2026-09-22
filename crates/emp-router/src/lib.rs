@@ -12,6 +12,7 @@ use emp_protocol::portable_responses::{
     custom_tool_names as portable_custom_tool_names, project_request as project_portable_request,
     project_response as project_portable_response, validate_responses_body,
 };
+use emp_protocol::tool_bridge::ExternalTools;
 use emp_protocol::{
     ChatFrame, ChatIds, ChatStream, ProtocolError, StreamEvent, response_from_chat,
     responses_to_chat,
@@ -177,6 +178,7 @@ pub struct ExternalStream {
     response: Option<HttpResponse>,
     parser: Option<SseJsonParser>,
     projection: StreamProjection,
+    tools: ExternalTools,
     pending: VecDeque<StreamResponseEvent>,
     raw_body: Vec<u8>,
     stream_bytes: usize,
@@ -280,10 +282,13 @@ impl<'a> ExternalRouter<'a> {
         ids: &ProjectionIds,
     ) -> Result<CompleteResponse, RouterError> {
         validate_complete_request(route, body)?;
+        let mut tools = ExternalTools::default();
+        let prepared = tools.prepare(body).map_err(tool_request_error)?;
+        let body = &prepared;
         let provider = route.provider.value();
         let endpoint = endpoint(provider, route.protocol)?;
         let headers = upstream_headers(provider, route.protocol, incoming)?;
-        let payload = project_external_payload(route, body)?;
+        let payload = project_prepared_external_payload(route, body)?;
         let encoded = serde_json::to_vec(&payload).map_err(|_| {
             RouterError::new(
                 RouterErrorKind::InvalidRequest,
@@ -388,7 +393,9 @@ impl<'a> ExternalRouter<'a> {
         Ok(CompleteResponse {
             status,
             content_type,
-            body: projected,
+            body: tools
+                .restore_response(projected)
+                .map_err(tool_response_error)?,
         })
     }
 
@@ -400,6 +407,9 @@ impl<'a> ExternalRouter<'a> {
         ids: &ProjectionIds,
     ) -> Result<ExternalStream, RouterError> {
         validate_stream_request(route, body)?;
+        let mut tools = ExternalTools::default();
+        let prepared = tools.prepare(body).map_err(tool_request_error)?;
+        let body = &prepared;
         let provider = route.provider.value();
         let endpoint = endpoint(provider, route.protocol)?;
         let mut headers = upstream_headers(provider, route.protocol, incoming)?;
@@ -523,6 +533,7 @@ impl<'a> ExternalRouter<'a> {
             response: Some(response),
             parser: Some(SseJsonParser::new()),
             projection,
+            tools,
             pending: VecDeque::new(),
             raw_body: Vec::new(),
             stream_bytes: 0,
@@ -551,6 +562,16 @@ impl<'a> ExternalRouter<'a> {
 
 /// Project the exact upstream request judged by EMP's destination context guard.
 pub fn project_external_payload(route: &ResolvedRoute, body: &Value) -> Result<Value, RouterError> {
+    let prepared = ExternalTools::default()
+        .prepare(body)
+        .map_err(tool_request_error)?;
+    project_prepared_external_payload(route, &prepared)
+}
+
+fn project_prepared_external_payload(
+    route: &ResolvedRoute,
+    body: &Value,
+) -> Result<Value, RouterError> {
     let provider = route.provider.value();
     let portable_body = body_with_supported_effort(route, body);
     match route.protocol {
@@ -578,6 +599,22 @@ pub fn project_external_payload(route: &ResolvedRoute, body: &Value) -> Result<V
 
 impl ExternalStream {
     pub async fn next_event(&mut self) -> Result<Option<StreamResponseEvent>, RouterError> {
+        while let Some(event) = self.next_projected_event().await? {
+            if let Some(body) = self
+                .tools
+                .restore_event(event.body)
+                .map_err(tool_response_error)?
+            {
+                return Ok(Some(StreamResponseEvent {
+                    event: event.event,
+                    body,
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn next_projected_event(&mut self) -> Result<Option<StreamResponseEvent>, RouterError> {
         if let Some(event) = self.pending.pop_front() {
             return Ok(Some(event));
         }
@@ -1340,5 +1377,26 @@ fn transport_error(error: HttpTransportError) -> RouterError {
         Some(reason.to_owned()),
         None,
         "upstream transport failed",
+    )
+}
+
+fn tool_request_error(message: &'static str) -> RouterError {
+    RouterError::new(
+        RouterErrorKind::InvalidRequest,
+        422,
+        FailureClass::RouterError,
+        None,
+        None,
+        message,
+    )
+}
+fn tool_response_error(message: &'static str) -> RouterError {
+    RouterError::new(
+        RouterErrorKind::Protocol,
+        502,
+        FailureClass::ProtocolError,
+        None,
+        None,
+        message,
     )
 }

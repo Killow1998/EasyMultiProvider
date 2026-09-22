@@ -345,7 +345,7 @@ fn python_number(number: &serde_json::Number) -> String {
 
 // JSON schema IDs depend on Python's default spaces and ensure_ascii=True,
 // including surrogate pairs. Do not replace this with compact serde JSON.
-fn python_json(value: &Value) -> String {
+pub(crate) fn python_json(value: &Value) -> String {
     match value {
         Value::Number(number) => python_number(number),
         Value::String(text) => {

@@ -1457,3 +1457,5 @@ impl ChatStream {
         Ok(())
     }
 }
+
+pub mod tool_bridge;

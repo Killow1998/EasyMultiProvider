@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from tests.support import ensure_test_master_key
+from tests.rust_e2e_support import EmpProcess
 from easy_multi_provider.catalog import write_catalog
 from easy_multi_provider.config import normalize, save
 from easy_multi_provider.server import AppState, make_handler
@@ -296,6 +297,7 @@ class CodexCliDemoTests(unittest.TestCase):
         fake_thread = threading.Thread(target=fake_server.serve_forever, daemon=True)
         fake_thread.start()
         router_server = None
+        rust_process = None
         router_thread = None
         try:
             with tempfile.TemporaryDirectory(prefix="easy-mp-codex-demo-") as directory:
@@ -333,7 +335,7 @@ class CodexCliDemoTests(unittest.TestCase):
                                 "provider": "demo",
                                 "upstream_id": "fixed-model",
                                 "display_name": "Fixed Demo Model",
-                                "reasoning_levels": ["medium"],
+                                "reasoning_levels": ["low"],
                             }
                         ],
                     }
@@ -341,29 +343,36 @@ class CodexCliDemoTests(unittest.TestCase):
                 save(config, config_path)
                 write_catalog(config, catalog_path)
 
-                state = AppState(config_path)
-                base_handler = make_handler(state)
+                if os.environ.get("EMP_RUST_BINARY"):
+                    rust_process = EmpProcess.from_config(
+                        [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())], config_path, isolated_home)
+                    router_url = "http://127.0.0.1:%d/v1" % rust_process.port
+                    session_cookie = rust_process.cookie
+                else:
+                    state = AppState(config_path)
+                    base_handler = make_handler(state)
 
-                class TrackingHandler(base_handler):
-                    def _serve_responses_websocket(self):
-                        self.server.websocket_upgrades += 1
-                        return super()._serve_responses_websocket()
+                    class TrackingHandler(base_handler):
+                        def _serve_responses_websocket(self):
+                            self.server.websocket_upgrades += 1
+                            return super()._serve_responses_websocket()
 
-                    def _websocket_events(self, metadata, result):
-                        self.server.websocket_requests += 1
-                        yield from super()._websocket_events(metadata, result)
+                        def _websocket_events(self, metadata, result):
+                            self.server.websocket_requests += 1
+                            yield from super()._websocket_events(metadata, result)
 
-                router_server = ThreadingHTTPServer(("127.0.0.1", 0), TrackingHandler)
-                router_server.websocket_upgrades = 0
-                router_server.websocket_requests = 0
-                router_thread = threading.Thread(target=router_server.serve_forever, daemon=True)
-                router_thread.start()
-                router_url = "http://127.0.0.1:%d/v1" % router_server.server_address[1]
+                    router_server = ThreadingHTTPServer(("127.0.0.1", 0), TrackingHandler)
+                    router_server.websocket_upgrades = 0
+                    router_server.websocket_requests = 0
+                    router_thread = threading.Thread(target=router_server.serve_forever, daemon=True)
+                    router_thread.start()
+                    router_url = "http://127.0.0.1:%d/v1" % router_server.server_address[1]
+                    session_cookie = "emp_session=" + state.session_token
                 fixture_provider = (
                     '{name="OpenAI", base_url=%s, wire_api="responses", '
                     'env_key="OPENAI_API_KEY", supports_websockets=true, '
                     'http_headers={Cookie=%s}}'
-                ) % (json.dumps(router_url), json.dumps("emp_session=" + state.session_token))
+                ) % (json.dumps(router_url), json.dumps(session_cookie))
 
                 command = [
                     codex,
@@ -384,7 +393,7 @@ class CodexCliDemoTests(unittest.TestCase):
                     "-c",
                     'model_providers.fixture=' + fixture_provider,
                     "-c",
-                    'model_reasoning_effort="medium"',
+                    'model_reasoning_effort="low"',
                     "-c",
                     'approval_policy="never"',
                     "-c",
@@ -424,9 +433,12 @@ class CodexCliDemoTests(unittest.TestCase):
                     self.assertTrue(fake_server.saw_exec_tool)
                 self.assertTrue(fake_server.saw_tool_output)
                 self.assertTrue(fake_server.saw_successful_tool, execution_details)
-                self.assertGreater(router_server.websocket_upgrades, 0)
-                self.assertGreater(router_server.websocket_requests, 0)
+                if router_server is not None:
+                    self.assertGreater(router_server.websocket_upgrades, 0)
+                    self.assertGreater(router_server.websocket_requests, 0)
         finally:
+            if rust_process is not None:
+                rust_process.close()
             if router_server is not None:
                 router_server.shutdown()
                 router_server.server_close()

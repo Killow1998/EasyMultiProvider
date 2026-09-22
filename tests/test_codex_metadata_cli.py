@@ -15,9 +15,9 @@ from unittest.mock import patch
 from easy_multi_provider.catalog import write_catalog
 from easy_multi_provider.config import normalize, save
 from easy_multi_provider.integration import IntegrationManager
-from easy_multi_provider.native_websocket import NativeWebSocketError
 from easy_multi_provider.server import AppState, make_handler
 from tests.support import ensure_test_master_key
+from tests.rust_e2e_support import EmpProcess
 from tests.test_codex_cli_demo import FIXED_REPLY, _fixed_response_stream, _tool_response_stream
 
 
@@ -151,6 +151,10 @@ def _fixture_payload(upstream, body, headers):
     return payload
 
 class _NativeMetadataUpstream(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.server.websocket_attempts += 1
+        self.send_error(404, "fixture WS unsupported")
+
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *args):
@@ -269,6 +273,7 @@ class CodexMetadataCliTests(unittest.TestCase):
             upstream.daemon_threads = True
             self.addCleanup(upstream.server_close)
         upstream.requests, upstream.tool_outputs, upstream.fixture_error = [], [], None
+        upstream.websocket_attempts = 0
         upstream.failure_code = failure_code
         upstream.reported_model = reported_model
         upstream.malformed_events = malformed_events
@@ -297,18 +302,26 @@ class CodexMetadataCliTests(unittest.TestCase):
                 save(config, root / "emp.json")
                 catalog = root / "catalog.json"
                 write_catalog(config, catalog)
-                manager = IntegrationManager(home / "config.toml", home / ".integration/lease.json")
-                state = AppState(root / "emp.json", integration_manager=manager, catalog_path=catalog)
-                server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
-                server.daemon_threads = True
-                threading.Thread(target=server.serve_forever, daemon=True).start()
-                target_port = upstream.server_port if direct_upstream else server.server_port
+                rust_process = None
+                if os.environ.get("EMP_RUST_BINARY") and not direct_upstream:
+                    rust_process = EmpProcess.from_config(
+                        [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())], root / "emp.json", home)
+                    target_port = rust_process.port
+                    session_cookie = rust_process.cookie
+                else:
+                    manager = IntegrationManager(home / "config.toml", home / ".integration/lease.json")
+                    state = AppState(root / "emp.json", integration_manager=manager, catalog_path=catalog)
+                    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+                    server.daemon_threads = True
+                    threading.Thread(target=server.serve_forever, daemon=True).start()
+                    target_port = upstream.server_port if direct_upstream else server.server_port
+                    session_cookie = "emp_session=" + state.session_token
                 supports_ws = "true" if native_ws or not direct_upstream else "false"
                 provider = ('{name="OpenAI", base_url="http://127.0.0.1:%d/v1", '
                             'wire_api="responses", env_key="EMP_METADATA_TEST_KEY", supports_websockets=%s, '
                             'request_max_retries=0, stream_max_retries=1, '
                             'http_headers={"chatgpt-account-id"="fixture-account", Cookie=%s}}') % (
-                                target_port, supports_ws, json.dumps("emp_session=" + state.session_token))
+                                target_port, supports_ws, json.dumps(session_cookie))
                 command = [str(Path(os.environ["EMP_CODEX_TEST_BINARY"]).resolve()),
                            "exec", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check",
                            "--color", "never", "-m", model_id,
@@ -318,7 +331,7 @@ class CodexMetadataCliTests(unittest.TestCase):
                            "-c", 'approval_policy="never"', "-c", 'sandbox_mode="read-only"',
                            "--output-last-message", str(root / "reply.txt"), "Say hello."]
                 try:
-                    if direct_upstream:
+                    if direct_upstream or rust_process is not None:
                         transport_guard = nullcontext(None)
                     elif native_ws:
                         transport_guard = patch(
@@ -326,21 +339,18 @@ class CodexMetadataCliTests(unittest.TestCase):
                             side_effect=AssertionError("unexpected HTTP fallback from healthy native WS"),
                         )
                     else:
-                        transport_guard = patch(
-                            "easy_multi_provider.native_websocket._default_connector",
-                            side_effect=NativeWebSocketError("fixture WS unsupported", 404),
-                        )
+                        transport_guard = nullcontext(None)
                     with transport_guard as connector:
                         result = subprocess.run(command, env=environment, cwd=root, stdin=subprocess.DEVNULL,
                                                 capture_output=True, text=True, encoding="utf-8",
                                                 errors="replace", timeout=60)
                     if native_ws:
                         self.assertIsNone(upstream.fixture_error)
-                        if not direct_upstream:
+                        if not direct_upstream and rust_process is None:
                             self.assertFalse(connector.called, "healthy native WS fell back to HTTP")
                         self.assertEqual(upstream.fixture_connections, 1, "native tool followup opened another upstream socket")
                     elif not direct_upstream:
-                        self.assertTrue(connector.called, "fixture did not exercise native WS upgrade fallback")
+                        self.assertEqual(upstream.websocket_attempts, 1, "native WS fallback probe count")
                     if failure_code:
                         self.assertNotEqual(result.returncode, 0, result.stderr[-4000:])
                         requests = [body for body, _ in upstream.requests
@@ -374,5 +384,8 @@ class CodexMetadataCliTests(unittest.TestCase):
                     self.assertEqual(state_token, TURN_STATE)
                     self.assertIn("EMP_RUNTIME_TOOL_OK", json.dumps(upstream.tool_outputs))
                 finally:
-                    server.shutdown()
-                    server.server_close()
+                    if rust_process is not None:
+                        rust_process.close()
+                    else:
+                        server.shutdown()
+                        server.server_close()

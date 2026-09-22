@@ -25,10 +25,14 @@ def main():
         catalog.write_bytes(output)
         env.update(EMP_CODEX_TEST_BINARY=binary, EMP_CODEX_TEST_CATALOG=str(catalog),
                    EMP_TEST_CODEX_BIN=binary, EASY_MP_RUN_CODEX_CLI="1")
-        return subprocess.call([
-            sys.executable, "-m", "unittest", "-v", "tests.test_codex_live_catalog",
-            "tests.test_codex_retry_cli", "tests.test_codex_cli_demo", "tests.test_codex_metadata_cli",
-        ], cwd=root, env=env)
+        suites = ["tests.test_codex_cli_demo", "tests.test_codex_metadata_cli"]
+        if env.get("EMP_RUST_BINARY"):
+            # Rust uses real processes/sockets, never Python implementation mocks.
+            env["EMP_RUST_BINARY"] = str(Path(env["EMP_RUST_BINARY"]).resolve(strict=True))
+            suites.append("tests.test_rust_e2e")
+        else:
+            suites.extend(["tests.test_codex_live_catalog", "tests.test_codex_retry_cli"])
+        return subprocess.call([sys.executable, "-m", "unittest", "-v", *suites], cwd=root, env=env)
 
 
 if __name__ == "__main__":

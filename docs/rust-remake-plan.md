@@ -426,6 +426,27 @@ discovery/selection remains separate outstanding work. Next, reuse the actual
 Codex 0.155.0 consumer scripts against the Rust process before completing the
 remaining backend operations. No production service was switched or CI run.
 
+The existing official Codex consumer scripts now accept EMP_RUST_BINARY and
+launch the Rust process while keeping their upstream fixtures and observable
+tool/output assertions. Actual Codex 0.155.0 exposed missing external tool
+namespace/discovery adaptation, rejected empty startup turn IDs, repeated
+failed WebSocket upgrades, and omitted model metadata on reused connections.
+These paths now preserve request-local aliases and restore client tool-search
+items, relay native prewarm, retain native incremental sockets, and use a
+bounded shared fallback cooldown. Native malformed JSON events follow the
+same skip behavior as Python; invalid UTF-8 remains an error. Reused handshake
+metadata repeats only model headers, never stale turn state.
+
+The two external CLI/tool-discovery scenarios and all fifteen native CLI
+metadata scenarios pass, including real HTTP upgrade rejection, server search,
+policy failures without generation replay, and actual upstream model reroutes.
+Nineteen Python/Rust process scenarios pass, including a three-protocol tool
+namespace/history/choice round trip. Workspace all-target tests with live
+Python oracles and warnings-denied clippy pass locally. tools/test_codex_runtime.py
+is the isolated consumer entry point; tests use the lowest advertised effort.
+Runtime discovery/selection and the remaining management/lifecycle operations
+are next. These results do not establish full migration or performance parity.
+
 ## Historical verification evidence
 
 These dated records describe their recorded revisions only. Statements such

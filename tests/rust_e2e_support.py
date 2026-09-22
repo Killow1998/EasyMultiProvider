@@ -114,6 +114,18 @@ class EmpProcess:
         self.codex_config.write_text('# user settings\n[features]\nweb_search = true\n')
         self.config_path = root / "config.json"
         self.config_path.write_text(json.dumps(config))
+        self.start(command, self.config_path, home)
+
+    @classmethod
+    def from_config(cls, command, config_path, home):
+        """Use an existing consumer fixture without replacing its configuration."""
+        instance = cls.__new__(cls)
+        instance.config_path = config_path
+        instance.codex_config = home / "config.toml"
+        instance.start(command, config_path, home)
+        return instance
+
+    def start(self, command, config_path, home):
         environment = dict(os.environ)
         for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
                     "all_proxy", "EASY_MULTI_PROVIDER_MASTER_KEY_FILE"):
@@ -122,7 +134,7 @@ class EmpProcess:
                            NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
         self.environment = environment
         self.process = subprocess.Popen(
-            command + ["serve", "--config", str(self.config_path),
+            command + ["serve", "--config", str(config_path),
                        "--host", "127.0.0.1", "--port", "0"],
             cwd=ROOT, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True,

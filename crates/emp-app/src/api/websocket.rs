@@ -158,6 +158,8 @@ pub(crate) fn serve_responses_websocket(
     let mut websocket = WebSocketConnection::new(stream);
     let mut native_upstream: Option<NativeUpstreamConnection> = None;
     let mut last_native_response_id: Option<String> = None;
+    let mut last_native_scope = (None, None);
+    let mut http_only_routes = std::collections::BTreeSet::new();
     loop {
         let text = match websocket.receive_text() {
             Ok(Some(value)) => value,
@@ -232,25 +234,25 @@ pub(crate) fn serve_responses_websocket(
                 continue;
             }
         };
-        let generate = request_body
-            .remove("generate")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(true);
-        if !generate {
-            let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
-            let usage = serde_json::json!({"input_tokens":0,"input_tokens_details":Value::Null,"output_tokens":0,"output_tokens_details":Value::Null,"total_tokens":0});
-            if websocket
-                .send_json(&serde_json::json!({"type":"response.created","response":{"id":id}}))
-                .is_err()
-            {
-                return;
-            }
-            if websocket.send_json(&serde_json::json!({"type":"response.completed","response":{"id":id,"object":"response","status":"completed","output":[],"usage":usage}})).is_err(){return;}
-            continue;
-        }
         let mut request_headers = incoming.clone();
         if let Ok(id) = random_hex(8) {
             request_headers.insert("X-EMP-Request-ID".to_owned(), id);
+        }
+        let request_scope =
+            match emp_history::request_history_anchor(&request_body, &request_headers) {
+                Ok(anchor) => (anchor.thread_id, anchor.window_id),
+                Err(error) => {
+                    let _ = websocket.send_json(&history_stream_error(&error));
+                    continue;
+                }
+            };
+        if request_body.contains_key("previous_response_id")
+            && (route.dialect != emp_core::Dialect::CodexNative
+                || request_scope != last_native_scope)
+        {
+            last_native_response_id = None;
+            let _ = websocket.send_json(&serde_json::json!({"type":"error","error":{"code":"previous_response_not_found","message":"Previous response was not found. Retrying the full request."}}));
+            continue;
         }
         request_body = match prepare_history(
             state,
@@ -358,27 +360,53 @@ pub(crate) fn serve_responses_websocket(
                 native_upstream = None;
                 last_native_response_id = None;
             }
+            let route_key = (
+                plan.url.clone(),
+                proxy.as_ref().ok().cloned().flatten(),
+                plan_identity.clone(),
+            );
             let mut connected_now = false;
             if native_upstream.is_none()
+                && !http_only_routes.contains(&route_key)
+                && state
+                    .backend
+                    .transport
+                    .native_connections
+                    .allowed(&route_key)
                 && let Ok(selected_proxy) = &proxy
-                && let Ok(client) = ClientWebSocket::connect_with_proxy(
+            {
+                match ClientWebSocket::connect_with_proxy(
                     &plan.url,
                     &plan.headers,
                     Duration::from_secs(15),
                     selected_proxy.as_deref(),
-                )
-            {
-                native_upstream = Some(NativeUpstreamConnection {
-                    url: plan.url.clone(),
-                    proxy: selected_proxy.clone(),
-                    identity: plan_identity.clone(),
-                    client,
-                });
-                connected_now = true;
+                ) {
+                    Ok(client) => {
+                        native_upstream = Some(NativeUpstreamConnection {
+                            url: plan.url.clone(),
+                            proxy: selected_proxy.clone(),
+                            identity: plan_identity.clone(),
+                            client,
+                        });
+                        connected_now = true;
+                    }
+                    Err(error) => {
+                        // No response.create frame has been sent. Match Python's
+                        // HTTP fallback and avoid repeating failed handshakes.
+                        if matches!(error.status(), 400 | 404 | 405 | 415 | 426 | 501) {
+                            http_only_routes.insert(route_key.clone());
+                        }
+                        state
+                            .backend
+                            .transport
+                            .native_connections
+                            .defer(route_key.clone());
+                    }
+                }
             }
             if let Some(upstream) = native_upstream.as_mut() {
                 let client = &mut upstream.client;
-                if connected_now {
+                {
                     let selected = native_response_headers(
                         &serde_json::json!({"headers":client.response_headers()}),
                         &plan.requested_model,
@@ -386,7 +414,12 @@ pub(crate) fn serve_responses_websocket(
                     );
                     let state_headers = selected
                         .into_iter()
-                        .filter(|(name, _)| !name.eq_ignore_ascii_case("x-models-etag"))
+                        .filter(|(name, _)| {
+                            !name.eq_ignore_ascii_case("x-models-etag")
+                                && (connected_now
+                                    || name.eq_ignore_ascii_case("openai-model")
+                                    || name.eq_ignore_ascii_case("x-openai-model"))
+                        })
                         .collect::<serde_json::Map<_, _>>();
                     if !state_headers.is_empty()
                         && websocket
@@ -437,7 +470,13 @@ pub(crate) fn serve_responses_websocket(
                     }
                 }
                 if terminal {
+                    state
+                        .backend
+                        .transport
+                        .native_connections
+                        .available(&route_key);
                     last_native_response_id = completed_id;
+                    last_native_scope = request_scope;
                     continue;
                 }
                 native_upstream = None;
@@ -464,6 +503,24 @@ pub(crate) fn serve_responses_websocket(
                 continue;
             }
         }
+        request_body.remove("previous_response_id");
+        let generate = request_body
+            .get("generate")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+        if !generate {
+            let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
+            let usage = serde_json::json!({"input_tokens":0,"input_tokens_details":Value::Null,"output_tokens":0,"output_tokens_details":Value::Null,"total_tokens":0});
+            if websocket
+                .send_json(&serde_json::json!({"type":"response.created","response":{"id":id}}))
+                .is_err()
+            {
+                return;
+            }
+            if websocket.send_json(&serde_json::json!({"type":"response.completed","response":{"id":id,"object":"response","status":"completed","output":[],"usage":usage}})).is_err(){return;}
+            continue;
+        }
+        request_body.remove("generate");
         request_body.insert("stream".to_owned(), Value::Bool(true));
         let mut sent_output = false;
         if route.dialect == emp_core::Dialect::CodexNative {

@@ -953,14 +953,12 @@ impl ClientWebSocket {
         }
     }
     pub fn receive_json(&mut self) -> Result<Option<Value>, ClientWebSocketError> {
-        let value = self.receive_value()?;
-        if value.as_ref().is_some_and(|value| !value.is_object()) {
-            return Err(ClientWebSocketError::new(
-                502,
-                "native upstream websocket event is not an object",
-            ));
+        loop {
+            match self.receive_value()? {
+                Some(value) if !value.is_object() => continue,
+                value => return Ok(value),
+            }
         }
-        Ok(value)
     }
 
     /// Control RPC skips unrelated JSON values; native Responses requires objects.
@@ -1015,7 +1013,7 @@ impl ClientWebSocket {
             }
             let payload = self.read_exact(length)?;
             match opcode {
-                1 | 2 if opcode == 1 || self.local_control => {
+                1 | 2 => {
                     if started {
                         return Err(ClientWebSocketError::new(
                             502,
@@ -1064,13 +1062,23 @@ impl ClientWebSocket {
                         .expect("RSV1 requires negotiated compression")
                         .decompress(&message)?;
                 }
-                let value: Value = serde_json::from_slice(&message).map_err(|_| {
-                    ClientWebSocketError::new(
-                        502,
-                        "native upstream websocket event is invalid JSON",
-                    )
+                let text = std::str::from_utf8(&message).map_err(|_| {
+                    ClientWebSocketError::new(502, "native upstream websocket event is not UTF-8")
                 })?;
-                return Ok(Some(value));
+                match serde_json::from_str(text) {
+                    Ok(value) => return Ok(Some(value)),
+                    Err(_) if !self.local_control => {
+                        message.clear();
+                        started = false;
+                        compressed = false;
+                    }
+                    Err(_) => {
+                        return Err(ClientWebSocketError::new(
+                            502,
+                            "local control websocket event is invalid JSON",
+                        ));
+                    }
+                }
             }
         }
     }

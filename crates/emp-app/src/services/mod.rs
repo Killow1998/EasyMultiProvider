@@ -9,3 +9,5 @@ pub(crate) mod native;
 pub(crate) mod providers;
 pub(crate) mod quota;
 pub(crate) mod runtime;
+
+pub(crate) mod native_connections;
