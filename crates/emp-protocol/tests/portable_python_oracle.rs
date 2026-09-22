@@ -1,4 +1,6 @@
-use emp_protocol::portable_responses::{custom_tool_names, project_request, project_response};
+use emp_protocol::portable_responses::{
+    custom_tool_names, project_request, project_response, terminal_observation,
+};
 use serde_json::{Map, Value, json};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -185,11 +187,44 @@ fn response_fixtures() -> Value {
     ])
 }
 
+fn validation_fixtures() -> Value {
+    json!([
+        {"status": "completed", "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "ok", "annotations": []}]}]},
+        {"status": "completed", "output": [
+            {"type": "function_call", "call_id": "call_1", "name": "search", "arguments": "{\"q\":\"EMP\"}"},
+            {"type": "custom_tool_call", "call_id": "call_2", "name": "exec", "input": "pwd"},
+            {"type": "tool_search_call", "call_id": "call_3", "execution": "client", "arguments": {}},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "summary"}], "encrypted_content": "opaque"},
+            {"type": "compaction", "encrypted_content": "opaque"}
+        ]},
+        {"status": "incomplete", "output": [], "incomplete_details": {"reason": "max_output_tokens"}},
+        {"status": "incomplete", "output": [], "incomplete_details": {"reason": "content_filter"}},
+        {"status": "incomplete", "output": [], "incomplete_details": {"reason": "unknown"}},
+        {"status": "failed", "output": [], "error": {"message": "safe fixture"}},
+        {"output": []},
+        {"status": "cancelled", "output": []},
+        {"status": "completed", "output": null},
+        {"status": "completed", "output": ["bad"]},
+        {"status": "completed", "output": [{"type": "unknown"}]},
+        {"status": "completed", "output": [{"type": "message", "role": "user", "content": []}]},
+        {"status": "completed", "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_image", "image_url": "private"}]}]},
+        {"status": "completed", "output": [{"type": "function_call", "call_id": "call", "name": "tool", "arguments": "[]"}]},
+        {"status": "completed", "output": [{"type": "reasoning", "summary": [{"type": "reasoning_text", "text": "private"}]}]},
+        {"status": "failed", "output": [], "error": {}},
+        {"status": "completed", "output": [], "error": {"message": "contradictory"}},
+        {"status": "incomplete", "output": [], "incomplete_details": "bad"},
+        {"status": "completed", "output": [], "incomplete_details": {"reason": "contradictory"}},
+        {"status": "completed", "output": [], "output_text": []}
+    ])
+}
+
 fn python_oracle(fixtures: &Value, mode: &str) -> Option<Value> {
     let python = std::env::var("EMP_PYTHON_INTEROP").ok()?;
     let script = r#"
 import json, sys
 from easy_multi_provider.dialects import ProjectionError, custom_tool_names, project_request, project_response
+from easy_multi_provider.protocol_projection import responses_terminal_observation
+from easy_multi_provider.router_errors import RouterError
 
 payload = json.load(sys.stdin)
 results = []
@@ -197,7 +232,7 @@ for case in payload["cases"]:
     try:
         if payload["mode"] == "request":
             value = project_request(case["provider"], case["body"], preserve_reasoning_state=case["preserve_state"])
-        else:
+        elif payload["mode"] == "response":
             value = project_response(
                 {"protocol": "responses", "auth_mode": "api_key"},
                 case["response"],
@@ -205,6 +240,8 @@ for case in payload["cases"]:
                 preserve_reasoning_summary=case["preserve_summary"],
                 preserve_reasoning_state=case["preserve_state"],
             )
+        else:
+            value = responses_terminal_observation(case)
         results.append({"ok": True, "value": value})
     except ProjectionError as exc:
         results.append({
@@ -216,6 +253,8 @@ for case in payload["cases"]:
                 "failure_class": exc.failure_class,
             },
         })
+    except RouterError as exc:
+        results.append({"ok": False, "error": {"message": str(exc)}})
 json.dump(results, sys.stdout, ensure_ascii=False, separators=(",", ":"))
 "#;
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -307,6 +346,31 @@ fn portable_response_projection_matches_live_python_oracle_when_configured() {
                 Ok(value) => json!({"ok": true, "value": value}),
                 Err(error) => error_value(&error),
             }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(Value::Array(rust), oracle);
+}
+
+#[test]
+fn responses_validation_and_terminal_match_live_python_oracle_when_configured() {
+    let fixtures = validation_fixtures();
+    let Some(oracle) = python_oracle(&fixtures, "validation") else {
+        return;
+    };
+    let rust = fixtures
+        .as_array()
+        .expect("validation cases")
+        .iter()
+        .map(|case| match terminal_observation(case, true) {
+            Ok(terminal) => json!({
+                "ok": true,
+                "value": {
+                    "status": terminal.status,
+                    "success": terminal.success,
+                    "error_class": terminal.error_class,
+                }
+            }),
+            Err(error) => json!({"ok": false, "error": {"message": error.to_string()}}),
         })
         .collect::<Vec<_>>();
     assert_eq!(Value::Array(rust), oracle);

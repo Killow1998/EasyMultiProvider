@@ -8,6 +8,11 @@ use emp_core::{Dialect, Protocol, ResolvedRoute};
 use emp_protocol::anthropic_projection::{
     AnthropicError, AnthropicIds, response_from_anthropic, responses_to_anthropic,
 };
+use emp_protocol::portable_responses::{
+    PortableProjectionError, ResponsesValidationError,
+    custom_tool_names as portable_custom_tool_names, project_request as project_portable_request,
+    project_response as project_portable_response, validate_responses_body,
+};
 use emp_protocol::{ChatIds, ProtocolError, response_from_chat, responses_to_chat};
 use emp_transport::{
     FailureClass, HttpClient, HttpFailureInput, HttpMethod, HttpTransportError,
@@ -154,22 +159,27 @@ impl<'a> ExternalRouter<'a> {
         let provider = route.provider.value();
         let endpoint = endpoint(provider, route.protocol)?;
         let headers = upstream_headers(provider, route.protocol, incoming)?;
+        let portable_body = body_with_supported_effort(route, body);
         let payload = match route.protocol {
             Protocol::ChatCompletions => {
-                responses_to_chat(body, &route.upstream_model).map_err(protocol_error)?
+                responses_to_chat(&portable_body, &route.upstream_model).map_err(protocol_error)?
             }
             Protocol::AnthropicMessages => {
-                responses_to_anthropic(body, &route.upstream_model).map_err(anthropic_error)?
+                responses_to_anthropic(&portable_body, &route.upstream_model)
+                    .map_err(anthropic_error)?
             }
             Protocol::Responses => {
-                return Err(RouterError::new(
-                    RouterErrorKind::UnsupportedProtocol,
-                    501,
-                    FailureClass::ProtocolRejection,
-                    Some("portable_responses_pending".to_owned()),
-                    None,
-                    "portable Responses routing is not implemented",
-                ));
+                let preserve_state = route
+                    .model
+                    .value()
+                    .get("_emp_preserve_reasoning_state")
+                    .and_then(Value::as_bool)
+                    == Some(true);
+                let mut payload =
+                    project_portable_request(provider, &portable_body, preserve_state)
+                        .map_err(portable_request_error)?;
+                payload["model"] = Value::String(route.upstream_model.clone());
+                payload
             }
         };
         let encoded = serde_json::to_vec(&payload).map_err(|_| {
@@ -188,6 +198,10 @@ impl<'a> ExternalRouter<'a> {
             .await
             .map_err(transport_error)?;
         let status = response.status();
+        let content_type = response
+            .header("content-type")
+            .unwrap_or("application/json")
+            .to_owned();
         let retry_after_seconds = response
             .header("retry-after")
             .and_then(|value| value.trim().parse::<u64>().ok());
@@ -226,13 +240,16 @@ impl<'a> ExternalRouter<'a> {
                 "upstream response is not valid JSON",
             )
         })?;
-        let custom_names = custom_tool_names(body);
-        let custom_names = custom_names.iter().map(String::as_str).collect::<Vec<_>>();
+        let canonical_custom_names = custom_tool_names(body);
+        let custom_name_refs = canonical_custom_names
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
         let projected = match route.protocol {
             Protocol::ChatCompletions => response_from_chat(
                 &upstream,
                 &route.requested_model,
-                &custom_names,
+                &custom_name_refs,
                 &ids.chat()?,
             )
             .map(|projection| projection.response)
@@ -240,15 +257,34 @@ impl<'a> ExternalRouter<'a> {
             Protocol::AnthropicMessages => response_from_anthropic(
                 &upstream,
                 &route.requested_model,
-                &custom_names,
+                &custom_name_refs,
                 &mut ids.anthropic(),
             )
             .map_err(anthropic_error)?,
-            Protocol::Responses => unreachable!("Responses returned before transport"),
+            Protocol::Responses => {
+                validate_responses_body(&upstream, true).map_err(responses_validation_error)?;
+                let names = portable_custom_tool_names(body).map_err(portable_request_error)?;
+                let model = route.model.value();
+                let projected = project_portable_response(
+                    &upstream,
+                    &names,
+                    model
+                        .get("_emp_preserve_reasoning_summary")
+                        .and_then(Value::as_bool)
+                        == Some(true),
+                    model
+                        .get("_emp_preserve_reasoning_state")
+                        .and_then(Value::as_bool)
+                        == Some(true),
+                )
+                .map_err(portable_response_error)?;
+                validate_responses_body(&projected, true).map_err(responses_validation_error)?;
+                projected
+            }
         };
         Ok(CompleteResponse {
-            status: 200,
-            content_type: "application/json".to_owned(),
+            status,
+            content_type,
             body: projected,
         })
     }
@@ -274,8 +310,10 @@ fn validate_complete_request(route: &ResolvedRoute, body: &Value) -> Result<(), 
         ));
     }
     if !matches!(
-        route.dialect,
-        Dialect::ChatCompletions | Dialect::AnthropicMessages
+        (route.dialect, route.protocol),
+        (Dialect::PortableResponses, Protocol::Responses)
+            | (Dialect::ChatCompletions, Protocol::ChatCompletions)
+            | (Dialect::AnthropicMessages, Protocol::AnthropicMessages)
     ) {
         return Err(RouterError::new(
             RouterErrorKind::UnsupportedProtocol,
@@ -287,6 +325,50 @@ fn validate_complete_request(route: &ResolvedRoute, body: &Value) -> Result<(), 
         ));
     }
     Ok(())
+}
+
+fn body_with_supported_effort(route: &ResolvedRoute, body: &Value) -> Value {
+    let Some(source) = body.as_object() else {
+        return body.clone();
+    };
+    let provider = route.provider.value();
+    if matches!(
+        provider.get("auth_mode").and_then(Value::as_str),
+        Some("account" | "forward")
+    ) {
+        return body.clone();
+    }
+    let Some(reasoning) = source.get("reasoning").and_then(Value::as_object) else {
+        return body.clone();
+    };
+    let Some(effort) = reasoning.get("effort") else {
+        return body.clone();
+    };
+    let model = route.model.value();
+    let levels = model.get("reasoning_levels").and_then(Value::as_array);
+    let persistent_alias = route.protocol == Protocol::Responses
+        && effort.as_str() == Some("disabled")
+        && levels.is_some_and(|levels| {
+            levels
+                .iter()
+                .any(|level| level.as_str() == Some("persistent"))
+        });
+    let unsupported = model.get("supports_reasoning").and_then(Value::as_bool) == Some(false)
+        || levels.is_some_and(|levels| {
+            !levels.is_empty() && !levels.contains(effort) && !persistent_alias
+        });
+    if !unsupported {
+        return body.clone();
+    }
+    let mut projected = source.clone();
+    let mut reasoning = reasoning.clone();
+    reasoning.remove("effort");
+    if reasoning.is_empty() {
+        projected.remove("reasoning");
+    } else {
+        projected.insert("reasoning".to_owned(), Value::Object(reasoning));
+    }
+    Value::Object(projected)
 }
 
 fn endpoint(provider: &Map<String, Value>, protocol: Protocol) -> Result<String, RouterError> {
@@ -444,6 +526,39 @@ fn anthropic_error(error: AnthropicError) -> RouterError {
         Some(error.error_class().to_owned()),
         None,
         "Anthropic protocol projection failed",
+    )
+}
+
+fn portable_request_error(error: PortableProjectionError) -> RouterError {
+    RouterError::new(
+        RouterErrorKind::InvalidRequest,
+        422,
+        FailureClass::RouterError,
+        Some(error.failure_class().to_owned()),
+        None,
+        "portable Responses request projection failed",
+    )
+}
+
+fn portable_response_error(_error: PortableProjectionError) -> RouterError {
+    RouterError::new(
+        RouterErrorKind::Protocol,
+        502,
+        FailureClass::ProtocolError,
+        None,
+        None,
+        "external Responses response projection failed",
+    )
+}
+
+fn responses_validation_error(error: ResponsesValidationError) -> RouterError {
+    RouterError::new(
+        RouterErrorKind::Protocol,
+        502,
+        FailureClass::ProtocolError,
+        None,
+        None,
+        error.message(),
     )
 }
 

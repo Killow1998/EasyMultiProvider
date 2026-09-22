@@ -1,4 +1,5 @@
 use emp_core::{Dialect, Protocol, ResolvedRoute, RouteSource};
+use emp_protocol::portable_responses::terminal_observation;
 use emp_router::{ExternalRouter, ProjectionIds};
 use emp_transport::{FailureClass, HttpClient, HttpClientPolicy};
 use serde_json::{Map, Value, json};
@@ -134,6 +135,8 @@ fn serve(mut stream: TcpStream, requests: Arc<Mutex<Vec<RecordedRequest>>>) {
             "503 Service Unavailable",
             json!({"error": {"message": "service unavailable"}}),
         )
+    } else if body.get("model").and_then(Value::as_str) == Some("invalid") {
+        ("200 OK", json!({"status": "cancelled", "output": []}))
     } else if path.ends_with("/chat/completions") {
         (
             "200 OK",
@@ -154,7 +157,7 @@ fn serve(mut stream: TcpStream, requests: Arc<Mutex<Vec<RecordedRequest>>>) {
                 "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
             }),
         )
-    } else {
+    } else if path.ends_with("/messages") {
         (
             "200 OK",
             json!({
@@ -165,6 +168,20 @@ fn serve(mut stream: TcpStream, requests: Arc<Mutex<Vec<RecordedRequest>>>) {
                 ],
                 "stop_reason": "tool_use",
                 "usage": {"input_tokens": 3, "output_tokens": 2}
+            }),
+        )
+    } else {
+        (
+            "200 OK",
+            json!({
+                "id": "responses_upstream", "object": "response", "model": "upstream",
+                "status": "completed", "output_text": "answer",
+                "output": [
+                    {"id": "rs_upstream", "type": "reasoning", "content": [{"type": "reasoning_text", "text": "private chain"}]},
+                    {"id": "item_upstream", "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "answer", "annotations": []}]},
+                    {"id": "fc_upstream", "type": "function_call", "call_id": "call_responses", "name": "lookup", "arguments": "{\"q\":\"x\"}"}
+                ],
+                "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
             }),
         )
     };
@@ -250,7 +267,8 @@ fn projection_ids() -> ProjectionIds {
 fn python_oracle(python: &str, base_url: &str) -> Value {
     let script = r#"
 import json, sys
-from easy_multi_provider.router import anthropic_completion, chat_completion
+from easy_multi_provider.router import anthropic_completion, chat_completion, forward_responses
+from easy_multi_provider.protocol_projection import responses_terminal_observation
 from easy_multi_provider.transport_failures import failure_from_exception
 
 base = sys.argv[1]
@@ -283,15 +301,18 @@ def normalize(value):
     return walk(value)
 
 results = {}
-for protocol, function, auth in (
-    ("chat", chat_completion, "api_key"),
-    ("anthropic", anthropic_completion, "anthropic_api_key"),
+for protocol, function, auth, wire_protocol in (
+    ("chat", chat_completion, "api_key", "chat_completions"),
+    ("anthropic", anthropic_completion, "anthropic_api_key", "anthropic_messages"),
+    ("responses", forward_responses, "api_key", "responses"),
 ):
-    provider = {"id": "demo", "base_url": base, "protocol": "chat_completions" if protocol == "chat" else "anthropic_messages",
+    provider = {"id": "demo", "base_url": base, "protocol": wire_protocol,
                 "auth_mode": auth, "api_key": "test-key", "anthropic_version": "2023-06-01"}
     status, content_type, raw = function(provider, body, {}, incoming, upstream_model="upstream")
     payload = normalize(json.loads(raw))
-    results[protocol] = {"status": status, "content_type": content_type, "terminal": payload.get("status"), "body": payload}
+    results[protocol] = {"status": status, "content_type": content_type,
+                         "terminal_status": payload.get("status"),
+                         "terminal": responses_terminal_observation(payload), "body": payload}
 
 provider = {"id": "demo", "base_url": base, "protocol": "chat_completions", "auth_mode": "api_key", "api_key": "test-key"}
 try:
@@ -307,6 +328,21 @@ except Exception as exc:
     }
 else:
     raise AssertionError("503 unexpectedly succeeded")
+
+provider = {"id": "demo", "base_url": base, "protocol": "responses", "auth_mode": "api_key", "api_key": "test-key"}
+try:
+    forward_responses(provider, body, {}, incoming, upstream_model="invalid")
+except Exception as exc:
+    failure = failure_from_exception(exc)
+    results["invalid_response"] = {
+        "native_type": type(exc).__name__, "status": failure.status,
+        "error_class": failure.error_class,
+        "failure_reason": failure.failure_reason,
+        "retry_after_seconds": failure.retry_after_seconds,
+        "terminal": "error", "retry": False,
+    }
+else:
+    raise AssertionError("invalid Responses body unexpectedly succeeded")
 json.dump(results, sys.stdout, ensure_ascii=False, separators=(",", ":"))
 "#;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -353,6 +389,15 @@ async fn external_complete_routes_match_live_python_and_socket_contract() {
         )
         .await
         .expect("Anthropic complete route");
+    let responses = router
+        .execute_complete(
+            &route(&server.base_url(), Protocol::Responses, "upstream"),
+            &body(),
+            &incoming,
+            &projection_ids(),
+        )
+        .await
+        .expect("Responses complete route");
     let failure = router
         .execute_complete(
             &route(&server.base_url(), Protocol::ChatCompletions, "fail"),
@@ -362,20 +407,53 @@ async fn external_complete_routes_match_live_python_and_socket_contract() {
         )
         .await
         .expect_err("503 route must fail");
+    let invalid_response = router
+        .execute_complete(
+            &route(&server.base_url(), Protocol::Responses, "invalid"),
+            &body(),
+            &incoming,
+            &projection_ids(),
+        )
+        .await
+        .expect_err("invalid Responses body must fail");
+    let terminal = |value: &Value| {
+        let observed = terminal_observation(value, true).expect("projected terminal");
+        json!({
+            "status": observed.status,
+            "success": observed.success,
+            "error_class": observed.error_class,
+        })
+    };
     let rust = json!({
-        "chat": {"status": chat.status, "content_type": chat.content_type, "terminal": chat.body["status"], "body": chat.body},
-        "anthropic": {"status": anthropic.status, "content_type": anthropic.content_type, "terminal": anthropic.body["status"], "body": anthropic.body},
+        "chat": {"status": chat.status, "content_type": chat.content_type, "terminal_status": chat.body["status"], "terminal": terminal(&chat.body), "body": chat.body},
+        "anthropic": {"status": anthropic.status, "content_type": anthropic.content_type, "terminal_status": anthropic.body["status"], "terminal": terminal(&anthropic.body), "body": anthropic.body},
+        "responses": {"status": responses.status, "content_type": responses.content_type, "terminal_status": responses.body["status"], "terminal": terminal(&responses.body), "body": responses.body},
         "failure": {
             "status": failure.status(), "error_class": failure.error_class().as_str(),
             "failure_reason": failure.failure_reason(),
             "retry_after_seconds": failure.retry_after_seconds(),
+            "terminal": "error", "retry": false,
+        },
+        "invalid_response": {
+            "status": invalid_response.status(), "error_class": invalid_response.error_class().as_str(),
+            "failure_reason": invalid_response.failure_reason(),
+            "retry_after_seconds": invalid_response.retry_after_seconds(),
             "terminal": "error", "retry": false,
         }
     });
     assert_eq!(rust["chat"]["status"], 200);
     assert_eq!(rust["chat"]["body"]["output_text"], "answer");
     assert_eq!(rust["anthropic"]["body"]["output_text"], "answer");
+    assert_eq!(rust["responses"]["body"]["output_text"], "answer");
+    assert_eq!(
+        rust["responses"]["body"]["output"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(failure.error_class(), FailureClass::Upstream5xx);
+    assert_eq!(invalid_response.error_class(), FailureClass::ProtocolError);
 
     if let Some(mut oracle) = oracle {
         assert_eq!(oracle["failure"]["native_type"], "UpstreamHTTPError");
@@ -383,11 +461,19 @@ async fn external_complete_routes_match_live_python_and_socket_contract() {
             .as_object_mut()
             .expect("failure object")
             .remove("native_type");
+        assert_eq!(
+            oracle["invalid_response"]["native_type"],
+            "ExternalProtocolError"
+        );
+        oracle["invalid_response"]
+            .as_object_mut()
+            .expect("invalid response object")
+            .remove("native_type");
         assert_eq!(rust, oracle);
     }
 
     let requests = server.requests();
-    let rust_requests = &requests[requests.len() - 3..];
+    let rust_requests = &requests[requests.len() - 5..];
     assert_eq!(
         rust_requests
             .iter()
@@ -396,7 +482,9 @@ async fn external_complete_routes_match_live_python_and_socket_contract() {
         [
             "/v1/chat/completions",
             "/v1/messages",
-            "/v1/chat/completions"
+            "/v1/responses",
+            "/v1/chat/completions",
+            "/v1/responses"
         ]
     );
     assert_eq!(
@@ -426,10 +514,10 @@ async fn external_complete_routes_match_live_python_and_socket_contract() {
             .get("x-emp-request-id")
             .is_some_and(|value| value == "0123456789abcdef")
     }));
-    if requests.len() == 6 {
-        for index in 0..3 {
-            assert_eq!(requests[index].path, requests[index + 3].path);
-            assert_eq!(requests[index].body, requests[index + 3].body);
+    if requests.len() == 10 {
+        for index in 0..5 {
+            assert_eq!(requests[index].path, requests[index + 5].path);
+            assert_eq!(requests[index].body, requests[index + 5].body);
         }
     }
 }

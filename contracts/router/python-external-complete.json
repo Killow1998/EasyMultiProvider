@@ -1,10 +1,12 @@
 {
-  "status": "chat_and_anthropic_complete_implemented",
+  "status": "all_external_complete_protocols_implemented",
   "source": [
     "easy_multi_provider/router.py:_endpoint",
     "easy_multi_provider/router.py:_headers",
+    "easy_multi_provider/router.py:forward_responses",
     "easy_multi_provider/router.py:chat_completion",
-    "easy_multi_provider/router.py:anthropic_completion"
+    "easy_multi_provider/router.py:anthropic_completion",
+    "easy_multi_provider/protocol_projection.py:responses_terminal_observation"
   ],
   "rust_evidence": [
     "crates/emp-router/tests/python_oracle.rs:external_complete_routes_match_live_python_and_socket_contract"
@@ -19,14 +21,14 @@
     "max_output_tokens": 64
   },
   "compared_observations": [
-    "exact projected upstream JSON for Chat Completions and Anthropic Messages",
+    "exact projected upstream JSON for Responses, Chat Completions, and Anthropic Messages",
     "endpoint suffix, authentication headers, Anthropic version, and bounded EMP request ID",
     "successful HTTP status, normalized response JSON, usage, tools, reasoning separation, and completed terminal state",
     "503 status, error class, failure reason, error terminal state, Retry-After value, and no-retry decision",
+    "invalid Responses terminal status maps to the same protocol error without exposing upstream content",
     "one upstream request per non-retryable operation"
   ],
   "remaining": [
-    "portable Responses request and response projection",
     "stream orchestration for all three upstream protocols",
     "account, forward, and native authentication ownership",
     "bounded external 504 and short-429 pre-output retry"
