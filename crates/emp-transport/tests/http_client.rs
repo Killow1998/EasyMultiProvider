@@ -625,6 +625,9 @@ async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
         .add_root_certificate_der(&server.certificate_der)
         .expect("test root certificate");
     config
+        .use_only_configured_root_certificates()
+        .expect("hermetic test trust store");
+    config
         .add_dns_override("localhost", server.address)
         .expect("test DNS override");
     let trusted =

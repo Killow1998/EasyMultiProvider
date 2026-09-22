@@ -66,6 +66,7 @@ pub struct HttpClientConfig {
     pub pool: ConnectionPoolPolicy,
     pub max_proxy_pools: usize,
     root_certificates: Vec<Certificate>,
+    only_configured_root_certificates: bool,
     dns_overrides: Vec<(String, SocketAddr)>,
 }
 
@@ -90,6 +91,7 @@ impl Default for HttpClientConfig {
             pool: ConnectionPoolPolicy::default(),
             max_proxy_pools: DEFAULT_MAX_PROXY_POOLS,
             root_certificates: Vec::new(),
+            only_configured_root_certificates: false,
             dns_overrides: Vec::new(),
         }
     }
@@ -103,6 +105,19 @@ impl HttpClientConfig {
         let certificate = Certificate::from_der(certificate)
             .map_err(|_| HttpTransportError::new(HttpTransportErrorKind::ClientBuild))?;
         self.root_certificates.push(certificate);
+        Ok(())
+    }
+
+    /// Trust only roots supplied through [`Self::add_root_certificate_der`].
+    ///
+    /// The default merges configured roots with the platform trust store. This
+    /// opt-in mode is useful for hermetic deployments and deterministic TLS
+    /// tests where the platform verifier must not participate.
+    pub fn use_only_configured_root_certificates(&mut self) -> Result<(), HttpTransportError> {
+        if self.root_certificates.is_empty() {
+            return Err(HttpTransportError::new(HttpTransportErrorKind::ClientBuild));
+        }
+        self.only_configured_root_certificates = true;
         Ok(())
     }
 
@@ -229,8 +244,10 @@ impl HttpClient {
             .connect_timeout(plan.timeout_policy.connect)
             .pool_idle_timeout(self.config.pool.idle_timeout)
             .pool_max_idle_per_host(self.config.pool.max_idle_per_route);
-        for certificate in &self.config.root_certificates {
-            builder = builder.add_root_certificate(certificate.clone());
+        if self.config.only_configured_root_certificates {
+            builder = builder.tls_certs_only(self.config.root_certificates.clone());
+        } else if !self.config.root_certificates.is_empty() {
+            builder = builder.tls_certs_merge(self.config.root_certificates.clone());
         }
         for (host, address) in &self.config.dns_overrides {
             builder = builder.resolve(host, *address);
