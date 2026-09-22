@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "router.external-stream.python-rust",
+  "python_oracle": [
+    "easy_multi_provider.stream_adapters.stream_chat_completion",
+    "easy_multi_provider.stream_adapters.stream_anthropic_completion",
+    "easy_multi_provider.router.forward_responses_stream"
+  ],
+  "rust_test": "crates/emp-router/tests/streaming_python_oracle.rs",
+  "same_stream_cases": [
+    "Chat reasoning and answer separation through a fragmented SSE body",
+    "Anthropic usage, text-block lifecycle, stop reason, and message_stop",
+    "portable Responses reasoning suppression and completed terminal projection",
+    "ordinary Chat Completions JSON returned despite stream=true",
+    "Chat SSE ending without [DONE]"
+  ],
+  "comparison": {
+    "events": "exact projected JSON sequence after generated-ID normalization",
+    "errors": ["HTTP status", "error class", "terminal boundary"],
+    "requests": [
+      "endpoint path",
+      "upstream model",
+      "stream flag",
+      "Chat usage option",
+      "SSE Accept header"
+    ]
+  },
+  "bounds": [
+    "one MiB per SSE data event",
+    "64 MiB total upstream stream",
+    "transport first-event and idle timeouts",
+    "drop cancels an unfinished response"
+  ],
+  "side_effects": ["ephemeral loopback HTTP socket only"]
+}

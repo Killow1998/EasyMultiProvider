@@ -151,6 +151,19 @@
       "fixture": "router/python-external-complete.json"
     },
     {
+      "id": "router.external-stream.python-rust",
+      "level": "events",
+      "source": "easy_multi_provider/stream_adapters.py and easy_multi_provider/router.py:forward_responses_stream",
+      "transport": "sse",
+      "dialect": "portable_responses,chat_completions,anthropic_messages",
+      "normalization": [
+        "generated response, message, and reasoning UUIDs retain prefix and referential role",
+        "network chunk boundaries are deliberately varied and ignored"
+      ],
+      "side_effects": ["loopback-only synthetic upstream; no production credentials or state"],
+      "fixture": "router/python-external-stream.json"
+    },
+    {
       "id": "state.vault.python-rust",
       "level": "state",
       "source": "tests/test_vault.py and easy_multi_provider/vault.py",

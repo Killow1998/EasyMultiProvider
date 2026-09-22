@@ -95,6 +95,18 @@ Progress evidence on 2026-09-21:
 - Runtime compatibility run `35667534902` passed all seven jobs with the Rust
   management bootstrap and persistent Web-session boundary, including live
   Python interoperability and the unchanged browser asset bytes.
+- Stage 3 now has complete-request and incremental-stream routing for external
+  Responses, Chat Completions, and Anthropic Messages through the native Rust
+  HTTP client. Live Python differential tests compare projected requests,
+  ordered response events, usage, terminal boundaries, ordinary JSON fallback,
+  malformed/incomplete streams, and network-chunk independence. The transport
+  enforces one-MiB SSE events, a 64-MiB total stream bound, first-event/idle
+  timeouts, cancellation by drop, route-scoped pools, proxy isolation, TLS and
+  no transport replay. On 2026-09-21 the full local Rust workspace passed fmt,
+  clippy with warnings denied, every test target, and all configured live Python
+  oracles. Cross-platform CI is the next gate for this completed external-stream
+  slice; native/account ownership, bounded pre-output compatibility retry, the
+  downstream server boundary and pinned-Codex tool round trips remain in Stage 3.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

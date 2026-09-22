@@ -35,6 +35,12 @@ pub use http_policy::{
 
 pub const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum SseFrame {
+    Json(Map<String, Value>),
+    Done,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportErrorReason {
     SseEventTooLarge,
@@ -117,6 +123,17 @@ impl SseJsonParser {
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<Map<String, Value>>, TransportError> {
+        Ok(self
+            .push_frames(chunk)?
+            .into_iter()
+            .filter_map(|frame| match frame {
+                SseFrame::Json(value) => Some(value),
+                SseFrame::Done => None,
+            })
+            .collect())
+    }
+
+    pub fn push_frames(&mut self, chunk: &[u8]) -> Result<Vec<SseFrame>, TransportError> {
         self.pending.extend_from_slice(chunk);
         let mut output = Vec::new();
         let mut consumed = 0;
@@ -141,7 +158,18 @@ impl SseJsonParser {
         Ok(output)
     }
 
-    pub fn finish(mut self) -> Result<Vec<Map<String, Value>>, TransportError> {
+    pub fn finish(self) -> Result<Vec<Map<String, Value>>, TransportError> {
+        Ok(self
+            .finish_frames()?
+            .into_iter()
+            .filter_map(|frame| match frame {
+                SseFrame::Json(value) => Some(value),
+                SseFrame::Done => None,
+            })
+            .collect())
+    }
+
+    pub fn finish_frames(mut self) -> Result<Vec<SseFrame>, TransportError> {
         let mut output = Vec::new();
         if !self.pending.is_empty() {
             if self.pending.len() > self.limit {
@@ -159,7 +187,7 @@ impl SseJsonParser {
     fn consume_line(
         &mut self,
         raw: &[u8],
-        output: &mut Vec<Map<String, Value>>,
+        output: &mut Vec<SseFrame>,
     ) -> Result<(), TransportError> {
         let line = raw.strip_suffix(b"\r").unwrap_or(raw);
         if line.is_empty() {
@@ -187,7 +215,7 @@ impl SseJsonParser {
         Ok(())
     }
 
-    fn finish_event(&mut self) -> Result<Option<Map<String, Value>>, TransportError> {
+    fn finish_event(&mut self) -> Result<Option<SseFrame>, TransportError> {
         if self.data_lines.is_empty() {
             return Ok(None);
         }
@@ -200,7 +228,7 @@ impl SseJsonParser {
         }
         self.data_bytes = 0;
         if raw == b"[DONE]" {
-            return Ok(None);
+            return Ok(Some(SseFrame::Done));
         }
         let value: Value = serde_json::from_slice(&raw).map_err(|_| {
             Self::error(
@@ -208,12 +236,17 @@ impl SseJsonParser {
                 "upstream SSE event is not valid JSON",
             )
         })?;
-        value.as_object().cloned().map(Some).ok_or_else(|| {
-            Self::error(
-                TransportErrorReason::SseNonObject,
-                "upstream SSE event must be a JSON object",
-            )
-        })
+        value
+            .as_object()
+            .cloned()
+            .map(SseFrame::Json)
+            .map(Some)
+            .ok_or_else(|| {
+                Self::error(
+                    TransportErrorReason::SseNonObject,
+                    "upstream SSE event must be a JSON object",
+                )
+            })
     }
 
     fn error(reason: TransportErrorReason, message: &'static str) -> TransportError {

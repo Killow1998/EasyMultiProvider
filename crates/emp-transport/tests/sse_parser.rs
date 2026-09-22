@@ -1,4 +1,4 @@
-use emp_transport::{SseJsonParser, TransportErrorReason, sse_json_events};
+use emp_transport::{SseFrame, SseJsonParser, TransportErrorReason, sse_json_events};
 use serde_json::json;
 
 #[test]
@@ -29,6 +29,21 @@ fn trailing_event_without_blank_line_is_flushed() {
     assert_eq!(
         parser.finish().expect("flush event"),
         vec![json!({"type": "tail"}).as_object().unwrap().clone()]
+    );
+}
+
+#[test]
+fn ordered_frames_expose_done_without_changing_json_compatibility() {
+    let wire = b"data: {\"type\":\"before\"}\n\ndata: [DONE]\n\ndata: {\"type\":\"after\"}\n\n";
+    let mut parser = SseJsonParser::new();
+    let frames = parser.push_frames(wire).expect("ordered SSE frames");
+    assert_eq!(
+        frames,
+        vec![
+            SseFrame::Json(json!({"type": "before"}).as_object().unwrap().clone()),
+            SseFrame::Done,
+            SseFrame::Json(json!({"type": "after"}).as_object().unwrap().clone()),
+        ]
     );
 }
 

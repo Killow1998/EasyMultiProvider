@@ -29,7 +29,6 @@
     "one upstream request per non-retryable operation"
   ],
   "remaining": [
-    "stream orchestration for all three upstream protocols",
     "account, forward, and native authentication ownership",
     "bounded external 504 and short-429 pre-output retry"
   ],
