@@ -354,6 +354,17 @@ impl HttpResponse {
         self.headers.get(name).and_then(|value| value.to_str().ok())
     }
 
+    /// Iterate string-valued response headers without copying them.
+    ///
+    /// Duplicate names are preserved; non-visible-ASCII values are omitted. This
+    /// accessor never logs header values.
+    pub fn headers(&self) -> impl Iterator<Item = (&str, &str)> + '_ {
+        self.headers.iter().filter_map(|(name, value)| {
+            let value = value.to_str().ok()?;
+            Some((name.as_str(), value))
+        })
+    }
+
     pub fn is_stream(&self) -> bool {
         self.stream
     }

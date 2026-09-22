@@ -18,7 +18,7 @@ pub use admission::{
     RequestCapacityError, RequestCapacityReason, RequestLimitNotice, RequestLimits,
     RequestLimitsConfig, RequestLimitsError, RequestLimitsSnapshot, TransportKind,
 };
-pub use content_encoding::{ContentDecodeError, decode_content};
+pub use content_encoding::{ContentDecodeError, decode_content, zstd_encode};
 pub use failure::{
     FailureClass, FailurePhase, HttpFailureInput, NetworkFailureKind, UpstreamFailure,
     external_http_retry_allowed, http_failure, network_failure, normalize_error_class,

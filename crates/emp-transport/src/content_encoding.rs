@@ -107,6 +107,13 @@ fn decode_layer(
     }
 }
 
+/// Encode one request body as a zstd frame using the Python binding's
+/// default compression settings. The frame is self-contained and can be
+/// decoded by any standard zstd decoder.
+pub fn zstd_encode(value: &[u8]) -> std::io::Result<Vec<u8>> {
+    zstd::bulk::compress(value, zstd::DEFAULT_COMPRESSION_LEVEL)
+}
+
 /// Decode HTTP content encodings in reverse application order under one
 /// request budget. Every intermediate representation is bounded.
 pub fn decode_content(

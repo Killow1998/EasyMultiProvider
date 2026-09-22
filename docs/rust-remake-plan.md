@@ -199,7 +199,18 @@ Progress evidence on 2026-09-21:
   model aliases, and compare 60 credential/context header cases. Local format,
   warnings-denied clippy and workspace tests pass with the Python oracle enabled.
   These are pure boundaries, not an enabled native generation endpoint.
-  Next: port the collaboration adapter, connect native HTTP with Python's
+  Collaboration preparation/restoration now matches the existing Python
+  regression suite and additional malformed-container fixtures. Only marked
+  plaintext calls change transport namespace; encrypted tasks stay unchanged,
+  and ciphertext under EMP's plaintext namespace retains Python's ValueError
+  boundary. Additional-tools schema IDs use the exact UUID5 hash input,
+  including Python's JSON spacing, Unicode escaping and number formatting;
+  these deterministic IDs are compared without normalization. Native zstd
+  request encoding also passes both-direction Python/Rust decoding for empty,
+  Unicode and 256 KiB fixtures. The HTTP response exposes header iteration for
+  the native metadata filter. These additions pass local workspace checks;
+  no new CI run has been requested.
+  Next: connect native HTTP with Python's request/response projection,
   compression/auth-refresh/retry behavior, then preserve native stream and
   WebSocket fidelity. Runtime/integration lifecycle effects of configuration
   writes also remain outstanding.
