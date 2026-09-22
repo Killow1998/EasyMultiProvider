@@ -140,9 +140,12 @@ Progress evidence on 2026-09-21:
   complete and streamed requests now also make Python's single route-local
   pre-output retry for HTTP 504 or an unclassified HTTP 429 whose retry delay is
   at most five seconds; explicit quota/capacity failures, free-route 429s and
-  longer cooldowns remain visible to Codex. No CI was dispatched for these
-  local slices. Persisting new successful protocol observations with the native
-  catalog and pinned-Codex tool round trips remain in Stage 3.
+  longer cooldowns remain visible to Codex. Successful complete and streamed
+  auto-protocol turns now atomically persist the selected protocol and its
+  endpoint/deployment/model identity on both the provider and explicit model,
+  reload the normalized configuration, and preserve access to the encrypted
+  provider credential. No CI was dispatched for these local slices. Native
+  catalog ownership and pinned-Codex tool round trips remain in Stage 3.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

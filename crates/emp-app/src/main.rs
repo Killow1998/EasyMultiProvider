@@ -23,7 +23,7 @@ use emp_router::{
 use emp_state::{
     ConfigError, FilesystemError, VaultStore, WEB_SESSION_TOKEN_BYTES, WebSession, WebSessionError,
     config_path, load_configuration, load_or_create_web_session, provider_api_key,
-    web_session_path,
+    remember_resolved_protocol, save_configuration, web_session_path,
 };
 use emp_transport::{
     ContentDecodeError, FailureClass, FailurePhase, HttpClient, HttpClientPolicy, ProxyEnvironment,
@@ -1282,6 +1282,32 @@ fn write_stream_frames(stream: &mut TcpStream, frames: &[Vec<u8>]) -> std::io::R
     stream.flush()
 }
 
+fn persist_protocol_observation(state: &ServerState, route: &ResolvedRoute) {
+    let Ok(mut config) = state.backend.config.lock() else {
+        return;
+    };
+    let Ok(Some(updated)) = remember_resolved_protocol(
+        &config,
+        &route.provider_id,
+        &route.requested_model,
+        route.protocol.as_config_str(),
+    ) else {
+        return;
+    };
+    if save_configuration(
+        &updated,
+        Some(&state.backend.config_path),
+        &state.backend.vault,
+    )
+    .is_err()
+    {
+        return;
+    }
+    if let Ok(reloaded) = load_configuration(Some(&state.backend.config_path)) {
+        *config = reloaded;
+    }
+}
+
 fn serve_external_stream(
     downstream: &mut TcpStream,
     state: &ServerState,
@@ -1303,7 +1329,11 @@ fn serve_external_stream(
                 .block_on(router.open_stream(&candidate, body, incoming, ids))
             {
                 Ok(upstream) => {
-                    return relay_external_stream(downstream, state, upstream);
+                    let completed = relay_external_stream(downstream, state, upstream)?;
+                    if completed {
+                        persist_protocol_observation(state, &candidate);
+                    }
+                    return Ok(());
                 }
                 Err(error) => {
                     if let Some(delay) = external_retry_delay(&error, attempt, &candidate) {
@@ -1333,7 +1363,7 @@ fn relay_external_stream(
     downstream: &mut TcpStream,
     state: &ServerState,
     mut upstream: ExternalStream,
-) -> Result<(), Vec<u8>> {
+) -> Result<bool, Vec<u8>> {
     let mut monitor = DisconnectMonitor::start(downstream).ok();
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;
@@ -1347,25 +1377,27 @@ fn relay_external_stream(
             None => StreamPoll::Event(state.backend.runtime.block_on(upstream.next_event())),
         };
         let event = match polled {
-            StreamPoll::Disconnected => return Ok(()),
+            StreamPoll::Disconnected => return Ok(false),
             StreamPoll::Event(Ok(Some(event))) => event,
-            StreamPoll::Event(Ok(None)) => return Ok(()),
+            StreamPoll::Event(Ok(None)) => return Ok(false),
             StreamPoll::Event(Err(error)) if !started => {
                 return Err(pre_output_router_error_response(&error));
             }
             StreamPoll::Event(Err(error)) => {
                 let response_id = match random_hex(16) {
                     Ok(value) => format!("resp_{value}"),
-                    Err(_) => return Ok(()),
+                    Err(_) => return Ok(false),
                 };
                 let failure = stream_failure_value(&error, &response_id);
                 if let Ok(frame) = sse_frame("response.failed", &failure) {
                     let _ = write_stream_frames(downstream, &[frame]);
                 }
-                return Ok(());
+                return Ok(false);
             }
         };
         let terminal = terminal_stream_event(&event.body);
+        let completed =
+            event.body.get("type").and_then(Value::as_str) == Some("response.completed");
         let failed = matches!(
             event.body.get("type").and_then(Value::as_str),
             Some("response.failed" | "error")
@@ -1381,11 +1413,14 @@ fn relay_external_stream(
                     &[],
                 ));
             }
-            Err(_) => return Ok(()),
+            Err(_) => return Ok(false),
         };
         if started {
-            if write_stream_frames(downstream, &[frame]).is_err() || terminal {
-                return Ok(());
+            if write_stream_frames(downstream, &[frame]).is_err() {
+                return Ok(false);
+            }
+            if terminal {
+                return Ok(completed);
             }
             continue;
         }
@@ -1396,9 +1431,9 @@ fn relay_external_stream(
             if write_stream_head(downstream).is_err()
                 || write_stream_frames(downstream, &[frame]).is_err()
             {
-                return Ok(());
+                return Ok(false);
             }
-            return Ok(());
+            return Ok(false);
         }
         let (output_emitted, tool_activity) = stream_event_activity(&event.body);
         pending_bytes = pending_bytes.saturating_add(frame.len());
@@ -1418,12 +1453,12 @@ fn relay_external_stream(
             if write_stream_head(downstream).is_err()
                 || write_stream_frames(downstream, &pending).is_err()
             {
-                return Ok(());
+                return Ok(false);
             }
             started = true;
             pending.clear();
             if terminal {
-                return Ok(());
+                return Ok(completed);
             }
         }
     }
@@ -1469,7 +1504,18 @@ fn responses_request(
             "request.model is required",
         ));
     };
-    let mut config = state.backend.config.clone();
+    let mut config = match state.backend.config.lock() {
+        Ok(config) => config.clone(),
+        Err(_) => {
+            return ResponsesRequestResult::Buffered(json_error_response(
+                500,
+                status_text(500),
+                "internal server error",
+                None,
+                &[],
+            ));
+        }
+    };
     hydrate_provider_keys(&mut config, &state.backend.vault);
     let route = match resolve_route_without_catalog(&config, model) {
         Ok(route) => route,
@@ -1536,6 +1582,7 @@ fn responses_request(
                             ));
                         }
                     };
+                    persist_protocol_observation(state, &candidate);
                     return ResponsesRequestResult::Buffered(response(
                         &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
                         &result.content_type,
@@ -1670,7 +1717,8 @@ struct ServerState {
 }
 
 struct BackendState {
-    config: Value,
+    config: Mutex<Value>,
+    config_path: PathBuf,
     vault: VaultStore,
     client: HttpClient,
     runtime: Runtime,
@@ -1716,7 +1764,8 @@ impl ServerHandle {
             random_hex(8)?,
         )?;
         let backend = BackendState {
-            config,
+            config: Mutex::new(config),
+            config_path: config_path.to_path_buf(),
             vault,
             client,
             runtime,
@@ -2209,6 +2258,31 @@ mod tests {
         let server = ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config)
             .expect("start configured server");
         (directory, server)
+    }
+
+    fn assert_saved_protocol_observation(
+        directory: &TempDir,
+        server: &ServerHandle,
+        expected: &str,
+    ) {
+        let saved = load_configuration(Some(&canonical_root(directory).join("config.json")))
+            .expect("reload observed config");
+        assert_eq!(saved["providers"][0]["resolved_protocol"], expected);
+        assert_eq!(saved["models"][0]["resolved_protocol"], expected);
+        assert_eq!(
+            saved["providers"][0]["protocol_observation"],
+            saved["models"][0]["protocol_observation"]
+        );
+        assert_eq!(
+            saved["providers"][0]["protocol_observation"]["upstream_model"],
+            "upstream-model"
+        );
+        let config = server.state.backend.config.lock().expect("config lock");
+        assert_eq!(config["providers"][0]["resolved_protocol"], expected);
+        assert_eq!(
+            provider_api_key(&config["providers"][0], &server.state.backend.vault),
+            "upstream-secret"
+        );
     }
 
     fn session_cookie_header(server: &ServerHandle) -> String {
@@ -2923,7 +2997,7 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
         }))
         .expect("complete upstream body");
         let (base_url, paths, worker) = fallback_upstream("application/json", complete_body);
-        let (_directory, server) = configured_protocol_server(&base_url, "auto", "api_key");
+        let (directory, server) = configured_protocol_server(&base_url, "auto", "api_key");
         let complete_request = serde_json::to_vec(&json!({
             "model":"demo/model", "stream":false,
             "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
@@ -2944,6 +3018,7 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
             ],
             ["/v1/chat/completions", "/v1/responses"]
         );
+        assert_saved_protocol_observation(&directory, &server, "responses");
         server.shutdown().expect("shutdown");
         worker.join().expect("join complete fallback upstream");
 
@@ -2960,7 +3035,7 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
             json!({"type":"response.completed","response":terminal}),
         ]);
         let (base_url, paths, worker) = fallback_upstream("text/event-stream", stream_body);
-        let (_directory, server) = configured_protocol_server(&base_url, "auto", "api_key");
+        let (directory, server) = configured_protocol_server(&base_url, "auto", "api_key");
         let stream_request = serde_json::to_vec(&json!({
             "model":"demo/model", "stream":true,
             "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
@@ -2982,6 +3057,7 @@ print(json.dumps([valid_caller_authorization(value) for value in values]))
             ],
             ["/v1/chat/completions", "/v1/responses"]
         );
+        assert_saved_protocol_observation(&directory, &server, "responses");
         server.shutdown().expect("shutdown");
         worker.join().expect("join stream fallback upstream");
     }
