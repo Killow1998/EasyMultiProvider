@@ -68,6 +68,16 @@
       "fixture": "transport/python-content-decoding.json"
     },
     {
+      "id": "transport.failure-policy.python-rust",
+      "level": "api",
+      "source": "easy_multi_provider/transport_failures.py and easy_multi_provider/router.py:_request",
+      "transport": "http",
+      "dialect": "responses",
+      "normalization": ["exception objects become explicit typed failure inputs before classification"],
+      "side_effects": ["none; failure classification and retry decisions are pure"],
+      "fixture": "transport/python-failure-policy.json"
+    },
+    {
       "id": "state.vault.python-rust",
       "level": "state",
       "source": "tests/test_vault.py and easy_multi_provider/vault.py",

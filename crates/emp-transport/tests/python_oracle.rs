@@ -1,6 +1,8 @@
 use emp_transport::{
-    MemoryStatus, RequestLimits, RequestLimitsConfig, SseJsonParser, TransportKind, decode_content,
-    sse_json_events,
+    FailureClass, FailurePhase, HttpFailureInput, MemoryStatus, RequestLimits, RequestLimitsConfig,
+    SseJsonParser, TransportKind, UpstreamFailure, decode_content, http_failure,
+    normalize_error_class, protocol_fallback_allowed, public_failure_message, retry_allowed,
+    sse_json_events, status_error_class,
 };
 use flate2::Compression;
 use flate2::write::{GzEncoder, ZlibEncoder};
@@ -270,4 +272,165 @@ json.dump([
         })
         .collect::<Vec<_>>();
     assert_eq!(Value::Array(rust), oracle);
+}
+
+#[test]
+fn failure_policy_matches_live_python_oracle_when_configured() {
+    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+        return;
+    };
+    let script = r#"
+import json
+from easy_multi_provider.transport_failures import (
+    UpstreamFailure, _http_failure_reason, normalize_error_class,
+    protocol_fallback_allowed, public_failure_message, retry_allowed,
+    status_error_class,
+)
+statuses = [None, 200, 401, 403, 402, 404, 405, 415, 501, 408, 429, 500, 502, 503, 504]
+http_cases = [
+    [401, "secret"], [402, "secret"], [413, "secret"],
+    [400, "context window exceeded"], [429, "quota exhausted"],
+    [429, "provider capacity overloaded"], [429, "busy"],
+    [500, "secret"], [502, "secret"], [503, "secret"], [504, "secret"],
+]
+public_cases = [
+    ["proxy_unavailable", "private", 503], ["dns_failure", None, 503],
+    ["tls_failure", None, 502], ["network", None, 503],
+    ["connect_timeout", None, 504], ["rate_limit", None, 429],
+    ["auth", None, 401], ["stream_incomplete", None, 502],
+    ["upstream_5xx", "private", 502],
+    ["malformed_terminal", "sse_invalid_json", 502],
+]
+classes = ["connect_timeout", "first_event_timeout", "network", "proxy_reset",
+           "rate_limit", "upstream_504", "stream_incomplete"]
+result = {
+    "status": [status_error_class(status) for status in statuses],
+    "http_reason": [_http_failure_reason(status, detail) for status, detail in http_cases],
+    "protocol": [
+        protocol_fallback_allowed(status, output, terminal)
+        for status, output, terminal in ([404, False, False], [404, True, False],
+                                         [404, False, True], [502, False, False])
+    ],
+    "retry": [
+        retry_allowed(UpstreamFailure(name), attempt, replayable, output)
+        for name, attempt, replayable, output in
+        [(name, attempt, replayable, output) for name in classes
+         for attempt in (0, 1) for replayable in (False, True) for output in (False, True)]
+    ],
+    "public": [public_failure_message(*case) for case in public_cases],
+    "normalize": [
+        normalize_error_class(" Rate Limit "),
+        normalize_error_class("private secret", "router_error"),
+    ],
+}
+print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+"#;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new(python)
+        .arg("-c")
+        .arg(script)
+        .current_dir(root)
+        .output()
+        .expect("spawn Python failure-policy oracle");
+    assert!(
+        output.status.success(),
+        "Python failure-policy oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let oracle: Value = serde_json::from_slice(&output.stdout).expect("failure-policy oracle JSON");
+
+    let statuses = [
+        None,
+        Some(200),
+        Some(401),
+        Some(403),
+        Some(402),
+        Some(404),
+        Some(405),
+        Some(415),
+        Some(501),
+        Some(408),
+        Some(429),
+        Some(500),
+        Some(502),
+        Some(503),
+        Some(504),
+    ];
+    let http_cases = [
+        (401, "secret"),
+        (402, "secret"),
+        (413, "secret"),
+        (400, "context window exceeded"),
+        (429, "quota exhausted"),
+        (429, "provider capacity overloaded"),
+        (429, "busy"),
+        (500, "secret"),
+        (502, "secret"),
+        (503, "secret"),
+        (504, "secret"),
+    ];
+    let public_cases = [
+        (FailureClass::ProxyUnavailable, Some("private"), 503),
+        (FailureClass::DnsFailure, None, 503),
+        (FailureClass::TlsFailure, None, 502),
+        (FailureClass::Network, None, 503),
+        (FailureClass::ConnectTimeout, None, 504),
+        (FailureClass::RateLimit, None, 429),
+        (FailureClass::Auth, None, 401),
+        (FailureClass::StreamIncomplete, None, 502),
+        (FailureClass::Upstream5xx, Some("private"), 502),
+        (
+            FailureClass::MalformedTerminal,
+            Some("sse_invalid_json"),
+            502,
+        ),
+    ];
+    let classes = [
+        FailureClass::ConnectTimeout,
+        FailureClass::FirstEventTimeout,
+        FailureClass::Network,
+        FailureClass::ProxyReset,
+        FailureClass::RateLimit,
+        FailureClass::Upstream504,
+        FailureClass::StreamIncomplete,
+    ];
+    let mut retries = Vec::new();
+    for class in classes {
+        for attempt in [0, 1] {
+            for replayable in [false, true] {
+                for output in [false, true] {
+                    retries.push(retry_allowed(
+                        &UpstreamFailure::new(class, 502, FailurePhase::TerminalValidation),
+                        attempt,
+                        replayable,
+                        output,
+                        false,
+                    ));
+                }
+            }
+        }
+    }
+    let rust = json!({
+        "status": statuses.map(status_error_class).map(FailureClass::as_str),
+        "http_reason": http_cases.map(|(status, detail)| {
+            http_failure(HttpFailureInput {
+                status, detail, proxy_evidence: false, retry_after_seconds: None,
+            }).failure_reason.unwrap()
+        }),
+        "protocol": [
+            protocol_fallback_allowed(404, false, false),
+            protocol_fallback_allowed(404, true, false),
+            protocol_fallback_allowed(404, false, true),
+            protocol_fallback_allowed(502, false, false),
+        ],
+        "retry": retries,
+        "public": public_cases.map(|(class, reason, status)| {
+            public_failure_message(class, reason, status)
+        }),
+        "normalize": [
+            normalize_error_class(Some(" Rate Limit "), FailureClass::StreamError).as_str(),
+            normalize_error_class(Some("private secret"), FailureClass::RouterError).as_str(),
+        ],
+    });
+    assert_eq!(rust, oracle);
 }

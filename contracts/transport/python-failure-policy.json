@@ -1,0 +1,23 @@
+{
+  "status": "differentially_implemented",
+  "source": [
+    "easy_multi_provider/transport_failures.py",
+    "easy_multi_provider/router.py:_request",
+    "tests/test_transport_failures.py",
+    "tests/test_stream_adapters.py"
+  ],
+  "rust_evidence": [
+    "crates/emp-transport/tests/failure_policy.rs",
+    "crates/emp-transport/tests/python_oracle.rs:failure_policy_matches_live_python_oracle_when_configured"
+  ],
+  "covered_cases": [
+    "origin HTTP 502 remains upstream_5xx while proxy evidence maps gateway 502 to proxy_unavailable 503",
+    "DNS, TLS, timeout, refused proxy and reset proxy failures keep distinct content-free classes",
+    "auto protocol fallback occurs only on 404, 405, 415 or 501 before output and terminal evidence",
+    "transport replay is limited to one pre-output attempt and is forbidden after tool activity",
+    "external HTTP retry is limited to 504 or short generic 429 before output",
+    "free-route, explicit quota, capacity and Retry-After values above five seconds are not replayed",
+    "public messages never include arbitrary upstream detail"
+  ],
+  "side_effects": ["none; callers own delay, I/O and retry execution"]
+}
