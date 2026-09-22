@@ -9,4 +9,5 @@ description = "Bounded transport primitives for EMP."
 flate2 = "1.1"
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10.9"
 zstd = "0.13"

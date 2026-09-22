@@ -1,0 +1,28 @@
+{
+  "status": "policy_implemented_socket_client_pending",
+  "source": [
+    "easy_multi_provider/http_pool.py",
+    "easy_multi_provider/network_proxy.py",
+    "tests/test_http_pool.py",
+    "tests/test_router.py:test_stream_request_uses_idle_timeout_without_total_deadline"
+  ],
+  "rust_evidence": [
+    "crates/emp-transport/tests/http_client_policy.rs",
+    "crates/emp-transport/tests/python_oracle.rs:http_proxy_selection_matches_live_python_oracle_when_configured"
+  ],
+  "covered_cases": [
+    "loopback and NO_PROXY destinations bypass proxies",
+    "wss, socks, https, http and all proxy precedence matches Python",
+    "HTTP-form SOCKS settings become socks5h",
+    "proxy credentials affect pool identity without entering origin URLs, headers or Debug output",
+    "origin credentials and non-HTTP schemes fail before I/O",
+    "redirect and library retry policy are disabled and Accept-Encoding defaults to identity",
+    "paths and queries share an origin pool while proxy identities remain isolated",
+    "stream idle and non-stream wall-clock timeout defaults match Python"
+  ],
+  "remaining": [
+    "bind the policy to the native socket/TLS client",
+    "prove connection reuse, cancellation discard, redirect rejection and certificate validation with local endpoints"
+  ],
+  "side_effects": ["none; this is a pure planning and ownership slice"]
+}

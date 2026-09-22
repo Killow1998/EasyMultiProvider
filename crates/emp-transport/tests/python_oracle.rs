@@ -1,6 +1,7 @@
 use emp_transport::{
-    FailureClass, FailurePhase, HttpFailureInput, MemoryStatus, RequestLimits, RequestLimitsConfig,
-    SseJsonParser, TransportKind, UpstreamFailure, decode_content, http_failure,
+    FailureClass, FailurePhase, HttpClientPolicy, HttpFailureInput, HttpMethod, MemoryStatus,
+    ProxyEnvironment, ProxyPolicy, RequestLimits, RequestLimitsConfig, SseJsonParser,
+    TimeoutPolicy, TransportKind, UpstreamFailure, decode_content, http_failure,
     normalize_error_class, protocol_fallback_allowed, public_failure_message, retry_allowed,
     sse_json_events, status_error_class,
 };
@@ -433,4 +434,99 @@ print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         ],
     });
     assert_eq!(rust, oracle);
+}
+
+#[test]
+fn http_proxy_selection_matches_live_python_oracle_when_configured() {
+    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+        return;
+    };
+    let cases = json!([
+        {"url": "http://127.0.0.1:8080/v1", "settings": {"https": "http://proxy.example:8080"}},
+        {"url": "https://upstream.example/v1", "settings": {"wss": "http://wss-proxy.example:8081", "https": "http://https-proxy.example:8082"}},
+        {"url": "https://upstream.example/v1", "settings": {"socks": "http://socks.example:1080", "https": "http://https-proxy.example:8082"}},
+        {"url": "http://upstream.example/v1", "settings": {"https": "http://shared.example:8080", "http": "http://http-only.example:8081"}},
+        {"url": "https://internal.example/v1", "settings": {"https": "http://proxy.example:8080", "no": "internal.example"}},
+        {"url": "https://api.example.test/v1", "settings": {"all": "http://fallback.example:3128", "no": ".example.test"}},
+        {"url": "https://upstream.example/v1", "settings": {"all": "http://user:pass@fallback.example:3128"}}
+    ]);
+    let script = r#"
+import json, sys
+from unittest.mock import patch
+from easy_multi_provider.network_proxy import proxy_for_url, proxy_identity
+result = []
+for case in json.load(sys.stdin):
+    with patch("easy_multi_provider.network_proxy.current_proxies", return_value=case["settings"]):
+        selected = proxy_for_url(case["url"])
+        result.append({"proxy": selected is not None, "identity": proxy_identity(case["url"])})
+json.dump(result, sys.stdout, separators=(",", ":"))
+"#;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut child = Command::new(python)
+        .arg("-c")
+        .arg(script)
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn Python proxy oracle");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(serde_json::to_string(&cases).unwrap().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "Python proxy oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected: Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    let actual = Value::Array(
+        cases
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|case| {
+                let settings = case["settings"].as_object().unwrap();
+                let value = |name: &str| {
+                    settings
+                        .get(name)
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                };
+                let no_proxy = value("no")
+                    .map(|value| value.split(',').map(str::to_owned).collect())
+                    .unwrap_or_default();
+                let environment = ProxyEnvironment {
+                    http: value("http"),
+                    https: value("https"),
+                    ws: value("ws"),
+                    wss: value("wss"),
+                    socks: value("socks"),
+                    all: value("all"),
+                    no_proxy,
+                };
+                let plan = HttpClientPolicy::new(
+                    ProxyPolicy::from_environment(environment),
+                    TimeoutPolicy::default(),
+                )
+                .plan(
+                    HttpMethod::Post,
+                    case["url"].as_str().unwrap(),
+                    Default::default(),
+                    true,
+                )
+                .unwrap();
+                json!({
+                    "proxy": plan.route.proxy_origin.is_proxy(),
+                    "identity": plan.route.proxy_origin.pool_token(),
+                })
+            })
+            .collect(),
+    );
+    assert_eq!(actual, expected);
 }

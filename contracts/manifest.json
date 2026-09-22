@@ -98,6 +98,16 @@
       "fixture": "transport/python-failure-policy.json"
     },
     {
+      "id": "transport.http-client-policy.python-rust",
+      "level": "api",
+      "source": "easy_multi_provider/http_pool.py and easy_multi_provider/network_proxy.py",
+      "transport": "http",
+      "dialect": "none",
+      "normalization": ["proxy credentials are represented only by the same SHA-256 pool identity"],
+      "side_effects": ["none; this slice plans requests and idle-pool ownership without opening sockets"],
+      "fixture": "transport/python-http-client-policy.json"
+    },
+    {
       "id": "state.vault.python-rust",
       "level": "state",
       "source": "tests/test_vault.py and easy_multi_provider/vault.py",

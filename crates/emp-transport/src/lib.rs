@@ -10,6 +10,7 @@ use std::fmt;
 mod admission;
 mod content_encoding;
 mod failure;
+mod http_policy;
 pub use admission::{
     MAX_EXPANDED_REQUEST_BYTES, MAX_PROXY_REQUEST_BYTES, MEMORY_RESERVATION_FACTOR,
     MIN_MEMORY_HEADROOM_BYTES, MemoryStatus, REQUEST_GROWTH_QUANTUM, RequestBudget,
@@ -21,6 +22,11 @@ pub use failure::{
     FailureClass, FailurePhase, HttpFailureInput, NetworkFailureKind, UpstreamFailure,
     external_http_retry_allowed, http_failure, network_failure, normalize_error_class,
     protocol_fallback_allowed, public_failure_message, retry_allowed, status_error_class,
+};
+pub use http_policy::{
+    ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod, IdleConnectionPool,
+    ProxyEnvironment, ProxyOrigin, ProxyPolicy, RedirectPolicy, RequestPlan, RetryPolicy,
+    StreamTimeoutError, StreamingReadState, TimeoutPolicy,
 };
 
 pub const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;
