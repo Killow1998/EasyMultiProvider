@@ -1,4 +1,4 @@
-use emp_protocol::{ChatFrame, ChatIds, ChatStream, response_from_chat};
+use emp_protocol::{ChatFrame, ChatIds, ChatStream, response_from_chat, responses_to_chat};
 use serde_json::{Value, json};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -107,6 +107,69 @@ fn stream_fixtures() -> Value {
             {"choices": [{"delta": {"refusal": "assist."}, "finish_reason": "stop"}]},
             {"choices": [], "usage": {"completion_tokens": 2}}
         ]
+    ])
+}
+
+fn request_fixtures() -> Value {
+    json!([
+        {
+            "model": "upstream-chat",
+            "body": {
+                "instructions": "Be concise.",
+                "input": "Hello",
+                "stream": true,
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "stop": ["END"],
+                "max_output_tokens": 42,
+                "reasoning": {"effort": "low"}
+            }
+        },
+        {
+            "model": "vision-chat",
+            "body": {
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Describe "},
+                        {"type": "input_image", "image_url": {"url": "data:image/png;base64,AA=="}, "detail": "original"},
+                        {"type": "refusal", "refusal": "boundary"}
+                    ]
+                }],
+                "text": {"format": {
+                    "type": "json_schema",
+                    "name": "answer_schema",
+                    "strict": true,
+                    "schema": {"type": "object", "properties": {"answer": {"type": "string"}}}
+                }}
+            }
+        },
+        {
+            "model": "tool-chat",
+            "body": {
+                "input": [
+                    {"type": "function_call", "call_id": "call_1", "name": "search", "arguments": "{\"q\":\"EMP\"}", "extra_content": {"vendor": true}},
+                    {"type": "reasoning", "encrypted_content": "opaque-not-forwarded"},
+                    {"type": "function_call_output", "call_id": "call_1", "output": [{"type": "output_text", "text": "result"}]},
+                    {"type": "agent_message", "author": "/root", "recipient": "/root/worker", "content": [
+                        {"type": "input_text", "text": "Message Type: NEW_TASK"},
+                        {"type": "input_text", "text": "Implement it."}
+                    ]},
+                    {"type": "function_call_output", "name": "diagnostic", "namespace": "tools", "output": "standalone"},
+                    {"type": "additional_tools", "tools": [{"type": "custom", "name": "shell", "description": "Run code"}]}
+                ],
+                "tools": [{"type": "function", "name": "search", "description": "Search", "parameters": {"type": "object"}}],
+                "tool_choice": {"type": "custom", "name": "shell"},
+                "parallel_tool_calls": false
+            }
+        },
+        {
+            "model": "history-chat",
+            "body": {
+                "input": [{"type": "compaction", "encrypted_content": "emp1:U3VtbWFyeSB0ZXh0Lg=="}]
+            }
+        }
     ])
 }
 
@@ -310,6 +373,62 @@ json.dump([project(chunks) for chunks in json.load(sys.stdin)], sys.stdout,
             let mut value = Value::Array(events);
             normalize_generated_ids(&mut value);
             value
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(Value::Array(rust), oracle);
+}
+
+#[test]
+fn responses_request_projection_matches_live_python_oracle_when_configured() {
+    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+        return;
+    };
+    let fixture = request_fixtures();
+    let script = r#"
+import json, sys
+from easy_multi_provider.protocol_projection import responses_to_chat
+cases = json.load(sys.stdin)
+json.dump([
+    responses_to_chat(case["body"], case["model"]) for case in cases
+], sys.stdout, ensure_ascii=False, separators=(",", ":"))
+"#;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut child = Command::new(python)
+        .arg("-c")
+        .arg(script)
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn Python Chat request oracle");
+    child
+        .stdin
+        .take()
+        .expect("Python stdin")
+        .write_all(
+            serde_json::to_string(&fixture)
+                .expect("request fixture JSON")
+                .as_bytes(),
+        )
+        .expect("write request fixtures");
+    let output = child.wait_with_output().expect("wait for request oracle");
+    assert!(
+        output.status.success(),
+        "Python Chat request oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let oracle: Value = serde_json::from_slice(&output.stdout).expect("request oracle JSON");
+    let rust = fixture
+        .as_array()
+        .expect("request cases")
+        .iter()
+        .map(|case| {
+            responses_to_chat(
+                &case["body"],
+                case["model"].as_str().expect("upstream model"),
+            )
+            .expect("Rust request projection")
         })
         .collect::<Vec<_>>();
     assert_eq!(Value::Array(rust), oracle);

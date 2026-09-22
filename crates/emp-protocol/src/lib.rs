@@ -13,6 +13,7 @@ pub const MAX_STREAM_TEXT_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolErrorKind {
+    InvalidRequest,
     UpstreamRejected,
     ProtocolError,
     RequestTooLarge,
@@ -39,11 +40,15 @@ impl ProtocolError {
     }
 
     pub fn status(&self) -> u16 {
-        502
+        match self.kind {
+            ProtocolErrorKind::InvalidRequest => 422,
+            _ => 502,
+        }
     }
 
     pub fn error_class(&self) -> &'static str {
         match self.kind {
+            ProtocolErrorKind::InvalidRequest => "invalid_request",
             ProtocolErrorKind::UpstreamRejected => "upstream_error",
             ProtocolErrorKind::ProtocolError => "protocol_error",
             ProtocolErrorKind::RequestTooLarge | ProtocolErrorKind::StreamIncomplete => {
@@ -64,6 +69,13 @@ impl std::error::Error for ProtocolError {}
 fn protocol_error(message: &'static str) -> ProtocolError {
     ProtocolError::new(ProtocolErrorKind::ProtocolError, message)
 }
+
+fn request_error(message: &'static str) -> ProtocolError {
+    ProtocolError::new(ProtocolErrorKind::InvalidRequest, message)
+}
+
+mod chat_request;
+pub use chat_request::responses_to_chat;
 
 fn upstream_error(message: &'static str) -> ProtocolError {
     ProtocolError::new(ProtocolErrorKind::UpstreamRejected, message)

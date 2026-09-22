@@ -2,6 +2,7 @@
   "status": "differentially_implemented",
   "source": [
     "tests/test_chat_projection_regressions.py",
+    "easy_multi_provider/protocol_projection.py:responses_to_chat",
     "easy_multi_provider/protocol_projection.py:_response_from_chat",
     "easy_multi_provider/stream_adapters.py:stream_chat_completion"
   ],
@@ -14,6 +15,11 @@
     "sequence numbers, output indices, content indices, event bodies and terminal response remain exact"
   ],
   "covered_cases": [
+    "Responses instructions and text, image and refusal message parts project to Chat messages without mutating the request",
+    "function and custom tool definitions, namespace tools, tool choice and structured output retain their supported semantics",
+    "historical tool calls and outputs remain paired and collaboration messages retain turn boundaries",
+    "portable emp1 compaction summaries recover into explicit continuation messages",
+    "unsupported or lossy request shapes fail closed as sanitized 422 invalid_request errors",
     "reasoning aliases use reasoning_content then reasoning then reasoning_text precedence",
     "leading reasoning closes before the visible assistant message starts",
     "reasoning reported after answer text becomes a distinct later reasoning item",
@@ -25,5 +31,5 @@
     "missing DONE, missing finish reason, duplicate tool IDs and invalid payload shapes fail closed",
     "exactly one completed or incomplete terminal event follows all deltas"
   ],
-  "side_effects": ["none; complete response and stream projection are pure"]
+  "side_effects": ["none; request, complete response and stream projection are pure"]
 }
