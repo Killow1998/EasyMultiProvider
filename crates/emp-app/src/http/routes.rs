@@ -64,6 +64,18 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     let mut stop_after_write = false;
     let response = match parse_request(&raw.head) {
         Some(request)
+            if request.method == RequestMethod::Post
+                && request.raw_path() == "/api/client-events" =>
+        {
+            Some(crate::api::diagnostics::client_event(
+                &mut stream,
+                request,
+                raw.body_prefix,
+                state,
+                system_now(),
+            ))
+        }
+        Some(request)
             if request.method == RequestMethod::Post && request.raw_path() == "/api/usage/scan" =>
         {
             Some(crate::api::usage::scan(
@@ -256,9 +268,6 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         }
         let supplied_cookie = request.session_cookie();
         if state.sessions.contains(supplied_cookie.as_deref(), now) {
-            if request.method == RequestMethod::Get && path == "/api/usage" {
-                return crate::api::usage::read(request, state);
-            }
             let Some(cookie) = state.sessions.refresh_header(now) else {
                 return login_response();
             };
@@ -285,6 +294,9 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         }
         let supplied_cookie = request.session_cookie();
         if state.sessions.contains(supplied_cookie.as_deref(), now) {
+            if request.method == RequestMethod::Get && path == "/api/diagnostics" {
+                return crate::api::diagnostics::read(state);
+            }
             if request.method == RequestMethod::Get && path == "/api/usage" {
                 return crate::api::usage::read(request, state);
             }

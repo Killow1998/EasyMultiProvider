@@ -2,12 +2,9 @@
 use crate::app::ServerState;
 use crate::util::system_now;
 use emp_codex::usage_history::UsageHistoryScanner;
-use emp_core::ResolvedRoute;
 use emp_state::usage::{
-    account_owner,
     ledger::UsageLedger,
     pricing::{PRICE_INTERVAL, PRICE_URL, PriceCatalog, normalize_prices},
-    reported_usage,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -140,76 +137,4 @@ fn refresh_prices(state: &ServerState) -> bool {
     }
     catalog.replace(prices, now);
     true
-}
-
-pub(crate) struct Observation {
-    ledger: Arc<UsageLedger>,
-    event: Value,
-    finalized: bool,
-}
-impl Observation {
-    pub(crate) fn new(
-        state: &ServerState,
-        route: &ResolvedRoute,
-        body: &Value,
-        incoming: &BTreeMap<String, String>,
-        owner: Option<&str>,
-        operation: &str,
-    ) -> Self {
-        let category = match route
-            .provider
-            .value()
-            .get("auth_mode")
-            .and_then(Value::as_str)
-        {
-            Some("account") => "subscription",
-            Some("forward" | "native") => "native",
-            _ => "external",
-        };
-        let owner = if category == "external" {
-            route.provider_id.clone()
-        } else {
-            owner
-                .map(str::to_owned)
-                .unwrap_or_else(|| account_owner(incoming))
-        };
-        let owner = if owner.is_empty() {
-            format!("unconfirmed:{}", route.provider_id)
-        } else {
-            owner
-        };
-        let turn = body
-            .as_object()
-            .and_then(|body| emp_history::request_history_anchor(body, incoming).ok())
-            .and_then(|anchor| anchor.turn_id)
-            .unwrap_or_default();
-        Self {
-            finalized: false,
-            ledger: Arc::clone(&state.backend.usage.ledger),
-            event: json!({"route":operation,"usage_category":category,"usage_owner":owner,"upstream_model":route.upstream_model,"route_model":route.requested_model,"usage_turn":turn,"service_tier":body["service_tier"].as_str().filter(|s|!s.is_empty()).unwrap_or("default")}),
-        }
-    }
-    pub(crate) fn observe(&mut self, event: &Value) {
-        self.event
-            .as_object_mut()
-            .unwrap()
-            .extend(reported_usage(event));
-        if matches!(
-            event["type"].as_str(),
-            Some("response.completed" | "response.incomplete" | "response.failed" | "error")
-        ) {
-            self.finish();
-        }
-    }
-    pub(crate) fn finish(&mut self) {
-        if !self.finalized {
-            self.ledger.record(&self.event, system_now());
-            self.finalized = true;
-        }
-    }
-}
-impl Drop for Observation {
-    fn drop(&mut self) {
-        self.finish();
-    }
 }

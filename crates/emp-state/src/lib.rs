@@ -66,4 +66,5 @@ pub use web_session::{
     WebSessionError, load_or_create_web_session, web_session_path,
 };
 
+pub mod diagnostics;
 pub mod usage;

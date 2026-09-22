@@ -146,6 +146,7 @@ pub(crate) fn open_stream_result(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<NativeStream, NativeHttpError> {
+    let started = std::time::Instant::now();
     let router = NativeRouter::new(&state.backend.transport.client);
     let mut usage_owner = String::new();
     let result = state.backend.transport.runtime.block_on(router.open_stream(
@@ -166,14 +167,16 @@ pub(crate) fn open_stream_result(
             Ok(stream)
         }
         Err(error) => {
-            let _observation = crate::services::usage::Observation::new(
+            let mut observation = crate::services::observation::Observation::new(
                 state,
                 route,
                 &Value::Object(body.clone()),
                 incoming,
                 Some(&usage_owner),
                 "responses",
-            );
+            )
+            .started_at(started);
+            observation.native_error(&error);
             Err(error)
         }
     }
@@ -186,6 +189,7 @@ pub(crate) fn complete(
     body: &Map<String, Value>,
     incoming: &BTreeMap<String, String>,
 ) -> Vec<u8> {
+    let started = std::time::Instant::now();
     let router = NativeRouter::new(&state.backend.transport.client);
     let mut usage_owner = String::new();
     let result = state
@@ -203,16 +207,18 @@ pub(crate) fn complete(
                 Ok(headers)
             },
         ));
-    let mut usage = crate::services::usage::Observation::new(
+    let mut usage = crate::services::observation::Observation::new(
         state,
         route,
         &Value::Object(body.clone()),
         incoming,
         Some(&usage_owner),
         "responses",
-    );
+    )
+    .started_at(started);
     match result {
         Ok(mut result) => {
+            usage.http_status(result.status);
             if let Ok(value) = serde_json::from_slice::<Value>(&result.body) {
                 usage.observe(&value);
                 crate::services::context::record_event(
@@ -237,6 +243,7 @@ pub(crate) fn complete(
             )
         }
         Err(error) => {
+            usage.native_error(&error);
             crate::services::context::record_event(
                 state,
                 route,
@@ -255,6 +262,7 @@ pub(crate) fn compact(
     body: &Map<String, Value>,
     incoming: &BTreeMap<String, String>,
 ) -> Vec<u8> {
+    let started = std::time::Instant::now();
     let router = NativeRouter::new(&state.backend.transport.client);
     let mut usage_owner = String::new();
     let result = state
@@ -271,16 +279,18 @@ pub(crate) fn compact(
                 Ok(headers)
             },
         ));
-    let mut usage = crate::services::usage::Observation::new(
+    let mut usage = crate::services::observation::Observation::new(
         state,
         route,
         &Value::Object(body.clone()),
         incoming,
         Some(&usage_owner),
         "compact",
-    );
+    )
+    .started_at(started);
     match result {
         Ok(mut result) => {
+            usage.http_status(result.status);
             if let Ok(value) = serde_json::from_slice::<Value>(&result.body) {
                 usage.observe(&value);
             }
@@ -297,7 +307,10 @@ pub(crate) fn compact(
                 &headers,
             )
         }
-        Err(error) => error_response(error),
+        Err(error) => {
+            usage.native_error(&error);
+            error_response(error)
+        }
     }
 }
 

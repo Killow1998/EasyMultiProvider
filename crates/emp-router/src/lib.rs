@@ -175,6 +175,7 @@ enum StreamProjection {
 
 #[derive(Debug)]
 pub struct ExternalStream {
+    pub request_started: std::time::Instant,
     response: Option<HttpResponse>,
     parser: Option<SseJsonParser>,
     projection: StreamProjection,
@@ -406,6 +407,7 @@ impl<'a> ExternalRouter<'a> {
         incoming: &BTreeMap<String, String>,
         ids: &ProjectionIds,
     ) -> Result<ExternalStream, RouterError> {
+        let request_started = std::time::Instant::now();
         validate_stream_request(route, body)?;
         let mut tools = ExternalTools::default();
         let prepared = tools.prepare(body).map_err(tool_request_error)?;
@@ -530,6 +532,7 @@ impl<'a> ExternalRouter<'a> {
             }
         }
         let mut stream = ExternalStream {
+            request_started,
             response: Some(response),
             parser: Some(SseJsonParser::new()),
             projection,

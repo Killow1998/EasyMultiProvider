@@ -209,14 +209,15 @@ fn relay_native_stream(
     incoming: &BTreeMap<String, String>,
     mut upstream: NativeStream,
 ) -> Result<bool, Vec<u8>> {
-    let mut usage = crate::services::usage::Observation::new(
+    let mut usage = crate::services::observation::Observation::new(
         state,
         route,
         body,
         incoming,
         upstream.usage_owner.as_deref(),
         "responses",
-    );
+    )
+    .started_at(upstream.request_started);
     let response_headers = upstream.headers.clone();
     let mut monitor = DisconnectMonitor::start(downstream).ok();
     let mut pending = Vec::<Vec<u8>>::new();
@@ -238,13 +239,21 @@ fn relay_native_stream(
             ),
         };
         let event = match polled {
-            NativeStreamPoll::Disconnected => return Ok(false),
+            NativeStreamPoll::Disconnected => {
+                usage.disconnected();
+                return Ok(false);
+            }
             NativeStreamPoll::Event(Ok(Some(event))) => event,
-            NativeStreamPoll::Event(Ok(None)) => return Ok(false),
+            NativeStreamPoll::Event(Ok(None)) => {
+                usage.status(502, "stream_incomplete");
+                return Ok(false);
+            }
             NativeStreamPoll::Event(Err(error)) if !started => {
+                usage.router_error(&error);
                 return Err(pre_output_router_error_response(&error));
             }
             NativeStreamPoll::Event(Err(error)) => {
+                usage.router_error(&error);
                 let response_id = match random_hex(16) {
                     Ok(value) => format!("resp_{value}"),
                     Err(_) => return Ok(false),
@@ -321,8 +330,15 @@ fn relay_external_stream(
     incoming: &BTreeMap<String, String>,
     mut upstream: ExternalStream,
 ) -> Result<bool, Vec<u8>> {
-    let mut usage =
-        crate::services::usage::Observation::new(state, route, body, incoming, None, "responses");
+    let mut usage = crate::services::observation::Observation::new(
+        state,
+        route,
+        body,
+        incoming,
+        None,
+        "responses",
+    )
+    .started_at(upstream.request_started);
     let mut monitor = DisconnectMonitor::start(downstream).ok();
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;
@@ -343,13 +359,21 @@ fn relay_external_stream(
             ),
         };
         let event = match polled {
-            StreamPoll::Disconnected => return Ok(false),
+            StreamPoll::Disconnected => {
+                usage.disconnected();
+                return Ok(false);
+            }
             StreamPoll::Event(Ok(Some(event))) => event,
-            StreamPoll::Event(Ok(None)) => return Ok(false),
+            StreamPoll::Event(Ok(None)) => {
+                usage.status(502, "stream_incomplete");
+                return Ok(false);
+            }
             StreamPoll::Event(Err(error)) if !started => {
+                usage.router_error(&error);
                 return Err(pre_output_router_error_response(&error));
             }
             StreamPoll::Event(Err(error)) => {
+                usage.router_error(&error);
                 let response_id = match random_hex(16) {
                     Ok(value) => format!("resp_{value}"),
                     Err(_) => return Ok(false),

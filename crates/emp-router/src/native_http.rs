@@ -58,6 +58,7 @@ pub struct NativeStreamEvent {
 }
 
 pub struct NativeStream {
+    pub request_started: std::time::Instant,
     /// Opaque hash of the credential owner selected by the application.
     pub usage_owner: Option<String>,
     response: Option<HttpResponse>,
@@ -997,6 +998,7 @@ impl<'a> NativeRouter<'a> {
     where
         F: FnMut(bool) -> Result<BTreeMap<String, String>, NativeHttpError>,
     {
+        let request_started = std::time::Instant::now();
         if route.dialect != Dialect::CodexNative || route.protocol != Protocol::Responses {
             return Err(NativeHttpError::router(
                 503,
@@ -1079,6 +1081,7 @@ impl<'a> NativeRouter<'a> {
             .to_ascii_lowercase()
             .contains("text/event-stream");
         Ok(NativeStream {
+            request_started,
             usage_owner: None,
             response: Some(response),
             requested_model: route.requested_model.clone(),

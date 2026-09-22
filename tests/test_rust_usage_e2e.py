@@ -26,7 +26,9 @@ class RustUsageEndToEnd(unittest.TestCase):
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="emp-usage-e2e-")))
         self.upstream = Upstream()
         self.stack.callback(self.upstream.close)
-        self.fetched = time.time() - 1
+        # Shared persisted value: default serde_json float parsing previously
+        # changed the final bit instead of preserving Python's parsed number.
+        self.fetched = float(str(int(time.time()) - 1) + ".5514197")
 
     def fixture(self, name, *, seed=None, rollout=None):
         root = self.root / name

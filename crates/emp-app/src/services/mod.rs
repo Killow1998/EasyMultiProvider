@@ -17,3 +17,5 @@ pub(crate) mod context;
 pub(crate) mod startup;
 
 pub(crate) mod usage;
+
+pub(crate) mod observation;

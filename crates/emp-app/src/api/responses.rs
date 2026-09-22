@@ -190,7 +190,7 @@ pub(crate) fn responses_request(
         }
     };
     if route.dialect != emp_core::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
-        let mut usage = crate::services::usage::Observation::new(
+        let mut usage = crate::services::observation::Observation::new(
             state,
             &route,
             &body,
@@ -259,6 +259,7 @@ pub(crate) fn responses_request(
             Err(response) => ResponsesRequestResult::Buffered(response),
         };
     }
+    let started = std::time::Instant::now();
     let router = ExternalRouter::new(&state.backend.transport.client);
     let candidates = protocol_candidates(&route);
     'candidate: for (index, protocol) in candidates.iter().copied().enumerate() {
@@ -276,14 +277,16 @@ pub(crate) fn responses_request(
                 .block_on(router.execute_complete(&candidate, &body, &incoming, &ids))
             {
                 Ok(result) => {
-                    let mut usage = crate::services::usage::Observation::new(
+                    let mut usage = crate::services::observation::Observation::new(
                         state,
                         &candidate,
                         &body,
                         &incoming,
                         None,
                         "responses",
-                    );
+                    )
+                    .started_at(started);
+                    usage.http_status(result.status);
                     usage.observe(&result.body);
                     if result.body["status"] == "completed" {
                         crate::services::context::record(state, &candidate, &body, true);
@@ -321,14 +324,16 @@ pub(crate) fn responses_request(
                     {
                         continue 'candidate;
                     }
-                    let _usage = crate::services::usage::Observation::new(
+                    let mut usage = crate::services::observation::Observation::new(
                         state,
                         &candidate,
                         &body,
                         &incoming,
                         None,
                         "responses",
-                    );
+                    )
+                    .started_at(started);
+                    usage.router_error(&error);
                     return ResponsesRequestResult::Buffered(router_error_response(error));
                 }
             }

@@ -45,6 +45,7 @@ pub(crate) struct BackendState {
     pub(crate) accounts: AccountState,
     pub(crate) integration: IntegrationState,
     pub(crate) usage: crate::services::usage::UsageState,
+    pub(crate) diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
 }
 
 pub(crate) struct TransportState {
@@ -116,6 +117,7 @@ impl BackendState {
         .with_lock_path(codex_home.join("easy-multi-provider/integration/lease.lock"));
         Ok(Self {
             usage: crate::services::usage::UsageState::new(&state_root),
+            diagnostics: Arc::new(emp_state::diagnostics::Diagnostics::new(&state_root)),
             configuration: ConfigurationState {
                 config: Mutex::new(config),
                 discovery_lock: Mutex::new(()),

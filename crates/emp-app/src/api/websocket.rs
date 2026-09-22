@@ -429,14 +429,15 @@ pub(crate) fn serve_responses_websocket(
                     }
                 }
                 let owner = emp_state::usage::account_owner(&plan.headers);
-                let mut usage = crate::services::usage::Observation::new(
+                let mut usage = crate::services::observation::Observation::new(
                     state,
                     &route,
                     &Value::Object(request_body.clone()),
                     &request_headers,
                     Some(&owner),
                     "responses",
-                );
+                )
+                .transport("websocket");
                 if client.send_json(&plan.payload).is_err() {
                     native_upstream = None;
                     last_native_response_id = None;
@@ -572,14 +573,16 @@ pub(crate) fn serve_responses_websocket(
             {
                 return;
             }
-            let mut usage = crate::services::usage::Observation::new(
+            let mut usage = crate::services::observation::Observation::new(
                 state,
                 &route,
                 &Value::Object(request_body.clone()),
                 &request_headers,
                 upstream.usage_owner.as_deref(),
                 "responses",
-            );
+            )
+            .started_at(upstream.request_started)
+            .transport("websocket");
             loop {
                 match state
                     .backend
@@ -644,14 +647,16 @@ pub(crate) fn serve_responses_websocket(
                     continue;
                 }
             };
-            let mut usage = crate::services::usage::Observation::new(
+            let mut usage = crate::services::observation::Observation::new(
                 state,
                 &candidate,
                 &Value::Object(request_body.clone()),
                 &request_headers,
                 None,
                 "responses",
-            );
+            )
+            .started_at(upstream.request_started)
+            .transport("websocket");
             loop {
                 match state
                     .backend

@@ -135,7 +135,7 @@ WS share request/history preparation where Python behavior agrees, while
 keeping transport state explicit. Only composition/lifecycle starts background
 jobs. Preserve unknown native JSON fields.
 
-Diagnostic persistence and update mechanics still need backend work.
+Update mechanics and final observation coverage still need backend work.
 Start with cohesive modules; introduce emp-observability or emp-update only
 when actual dependency boundaries justify a crate. Additional architecture
 must not block working product behavior.
@@ -389,7 +389,7 @@ performance gains.
   This measures local build storage, not release size or runtime memory.
 
 Remaining product acceptance work includes complete management operations,
-diagnostic persistence, request draining, update/rollback packaging and full consumer/performance
+request draining, update/rollback packaging and full consumer/performance
 verification. The full rewrite is not complete.
 
 Integration configuration now uses toml_edit, preserving quoted keys, multiline instructions, comments and nested
@@ -522,6 +522,21 @@ All 29 process scenarios, formatting, warnings-denied clippy and workspace tests
 pass with the live Python oracle. Windows checkpoint identity interoperability
 still needs platform verification; source files and production state are not
 modified by the scanner. This does not establish full rewrite acceptance.
+
+Diagnostics now has separate journal, typed-record and analytics modules. The
+existing UI reads cross-run health, recent median speed and weighted cache
+charts; browser events validate fixed fields before private journal writes.
+Real native/external request outcomes feed both diagnostics and usage through
+one observation owner. Journal storage remains bounded, excludes credentials
+and content, rejects symlink paths, and preserves Python's managed file names.
+Three real-process differential scenarios cover retained charts, restart,
+browser errors/redaction and live success/429 request accounting. The 42
+official-Codex/process scenarios, seven usage/diagnostic scenarios, formatting,
+warnings-denied clippy and workspace tests passed locally. Differential output
+also exposed a one-bit JSON floating-point parse change in cached timestamps;
+serde_json now enables float_roundtrip instead of weakening that comparison.
+Further detailed transport timing/retry annotations, failure-before-dispatch
+observations and cancellation/lifecycle coverage remain part of final parity.
 
 ## Historical verification evidence
 
