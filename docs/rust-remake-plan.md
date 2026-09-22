@@ -164,6 +164,26 @@ Progress evidence on 2026-09-21:
   SSE endpoint sends revision events, keep-alives, refresh error changes, and
   prompt shutdown. Native HTTP/WebSocket generation and pinned-Codex tool round
   trips remain.
+- On 2026-09-22, external discovery now covers generic OpenAI-compatible,
+  Gemini, and Anthropic catalogs plus official metadata enrichment. Selected
+  model merging preserves Python's capability-source precedence, manual
+  fields, hidden/disabled state and validation errors under a live AppState
+  oracle. Catalog composition replays the existing Python catalog suite for
+  native, subscription and external ordering, visibility and presentations.
+  The Rust server now exposes discovery preview/selection, catalog refresh,
+  conventional and Codex-rich model lists, model lookup, management config
+  reads and subscription model options. Live Python HTTP-handler comparisons
+  cover JSON/status/ETag output; isolated loopback tests cover encrypted-key
+  persistence across restart, native-cache preservation and rollback on a
+  failed catalog write. Model/family management projections and subscription
+  limits also replay existing Python UI/context tests. Local formatting,
+  warnings-denied clippy and workspace tests pass with the Python oracle enabled.
+  These additions have not yet received a new cross-platform CI run.
+  Next: wire configuration writes with subscription-limit validation and
+  runtime/integration state, then continue the native transport and history
+  slices. The management UI is not yet fully functional; native generation,
+  history/model-switch/compaction/subagent consumer tests, complete packaging
+  and comparative performance gates remain required before cutover.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual

@@ -1,17 +1,22 @@
 //! Authenticated model discovery, selected-model persistence, and Codex catalogs.
 use super::{
     Request, ServerState, account_catalog_headers, body_error_response, cross_origin_response,
-    json_error_response, native_auth_document, percent_decode, query_values, read_json_body,
-    response, router_error_response, same_origin, status_text, unauthorized_response,
+    json_error_response, native_account_snapshot, native_auth_document, percent_decode,
+    query_values, read_json_body, regular_file, response, router_error_response, same_origin,
+    status_text, unauthorized_response,
 };
 use emp_codex::{
-    account_catalog, load_native_catalog, merged_catalog::build_catalog, preserve_native_catalog,
+    account_catalog, load_native_catalog,
+    management_views::{model_views, subscription_model_options},
+    merged_catalog::build_catalog,
+    preserve_native_catalog,
 };
 use emp_router::discovery::discover_models;
 use emp_state::{
     ConfigError, discovery_merge::merge_selected_models, filesystem::write_catalog_json,
-    load_configuration, observed_at_now, provider_api_key, same_account_auth,
-    save_configuration_in_transaction, validate_auth_json, with_file_transaction,
+    load_configuration, observed_at_now, provider_api_key, public_configuration_with_file_status,
+    same_account_auth, save_configuration_in_transaction, validate_auth_json,
+    with_file_transaction,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -183,6 +188,65 @@ pub(super) fn models_request(request: Request<'_>, state: &ServerState) -> Vec<u
     json_response(&json!({"object":"list","data":models}))
 }
 
+/// Caller has already checked the browser session and same-origin boundary.
+pub(super) fn read_management_request(request: Request<'_>, state: &ServerState) -> Vec<u8> {
+    let config = match state.backend.config.lock() {
+        Ok(config) => config.clone(),
+        Err(_) => return internal_error(),
+    };
+    if request.raw_path() == "/api/config" {
+        let sources = catalog_sources(state, &config);
+        let mut public =
+            match public_configuration_with_file_status(&config, &sources.duplicates, regular_file)
+            {
+                Ok(public) => public,
+                Err(_) => return internal_error(),
+            };
+        public["emp_version"] = json!(super::VERSION);
+        public["native_account"] = native_account_snapshot(state, &config);
+        let views = model_views(
+            &config,
+            &sources.native,
+            &sources.accounts,
+            &sources.duplicates,
+        );
+        public
+            .as_object_mut()
+            .expect("public config")
+            .extend(views.as_object().expect("model views").clone());
+        return json_response(&public);
+    }
+    let id = percent_decode(
+        request
+            .raw_path()
+            .strip_prefix("/api/accounts/")
+            .and_then(|path| path.strip_suffix("/models"))
+            .unwrap_or_default(),
+        false,
+    );
+    let catalog = if id == "@native" {
+        load_native_catalog(&config)
+    } else {
+        let Some(account) = config["accounts"]
+            .as_array()
+            .and_then(|accounts| accounts.iter().find(|account| account["id"] == id))
+            .filter(|account| {
+                account["auth_file"]
+                    .as_str()
+                    .is_some_and(|path| !path.is_empty())
+            })
+        else {
+            return config_error("Subscription account is unavailable");
+        };
+        account_catalog(
+            config.as_object().expect("config"),
+            account.as_object().expect("account"),
+            &mut |account| account_catalog_headers(account, &state.backend.vault),
+        )
+    };
+    json_response(&json!({"models":subscription_model_options(&catalog)}))
+}
+
 fn generated_catalog_path(state: &ServerState) -> PathBuf {
     let home = state
         .backend
@@ -192,7 +256,23 @@ fn generated_catalog_path(state: &ServerState) -> PathBuf {
     emp_state::generated_catalog_path(Some(home))
 }
 
+struct CatalogSources {
+    native: Value,
+    accounts: BTreeMap<String, Value>,
+    duplicates: BTreeMap<String, String>,
+}
+
 fn server_catalog(state: &ServerState, config: &Value) -> Value {
+    let sources = catalog_sources(state, config);
+    build_catalog(
+        config,
+        &sources.native,
+        &sources.accounts,
+        &sources.duplicates,
+    )
+}
+
+fn catalog_sources(state: &ServerState, config: &Value) -> CatalogSources {
     let native = load_native_catalog(config);
     let mut account_catalogs = BTreeMap::new();
     let mut duplicates = BTreeMap::new();
@@ -243,7 +323,11 @@ fn server_catalog(state: &ServerState, config: &Value) -> Value {
         );
         account_catalogs.insert(id.to_owned(), catalog);
     }
-    build_catalog(config, &native, &account_catalogs, &duplicates)
+    CatalogSources {
+        native,
+        accounts: account_catalogs,
+        duplicates,
+    }
 }
 fn json_response(value: &Value) -> Vec<u8> {
     response(

@@ -214,7 +214,7 @@ fn management_bootstrap_contract_is_python_compatible() {
     let api_unauthorized = request(port, "/api/config", &[]);
     assert!(api_unauthorized.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));
     let api_authorized = request(port, "/api/config", &[&format!("Cookie: {cookie_pair}")]);
-    assert!(api_authorized.starts_with(b"HTTP/1.1 404 Not Found\r\n"));
+    assert!(api_authorized.starts_with(b"HTTP/1.1 200 OK\r\n"));
 
     child.kill().expect("stop test EMP");
     child.wait().expect("reap test EMP");

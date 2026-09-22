@@ -217,7 +217,7 @@ fn metadata(
     entry["_emp_source_order"] = json!(source);
     entry["_emp_order"] = json!(order);
 }
-fn family_identity(model: &Value, fallback: &str) -> String {
+pub(crate) fn family_identity(model: &Value, fallback: &str) -> String {
     ["family_id", "upstream_id"]
         .iter()
         .map(|field| text(model, field).trim())
@@ -442,14 +442,7 @@ fn description_with_context(model: &Value, presentation: &Value) -> String {
     }
 }
 fn strip_context(name: &str) -> String {
-    let mut name = name;
-    if let Some(rest) = name.strip_prefix('[')
-        && let Some((token, tail)) = rest.split_once(']')
-        && context_number(token.trim_start())
-        && tail.starts_with(char::is_whitespace)
-    {
-        name = tail.trim_start();
-    }
+    let mut name = strip_context_prefix(name);
     if let Some(before) = name.strip_suffix(']')
         && let Some((head, token)) = before.rsplit_once('[')
         && context_number(token.trim_start())
@@ -458,6 +451,16 @@ fn strip_context(name: &str) -> String {
         name = head.trim_end();
     }
     name.to_owned()
+}
+pub(crate) fn strip_context_prefix(mut name: &str) -> &str {
+    if let Some(rest) = name.strip_prefix('[')
+        && let Some((token, tail)) = rest.split_once(']')
+        && context_number(token.trim_start())
+        && tail.starts_with(char::is_whitespace)
+    {
+        name = tail.trim_start();
+    }
+    name
 }
 fn context_number(token: &str) -> bool {
     if token == "?" {
@@ -479,7 +482,7 @@ fn context_number(token: &str) -> bool {
     }
     parts.next().is_none()
 }
-fn usable_context(model: &Value) -> i64 {
+pub(crate) fn usable_context(model: &Value) -> i64 {
     let context = integer(model.get("context_window"));
     if context <= 0 {
         return 0;

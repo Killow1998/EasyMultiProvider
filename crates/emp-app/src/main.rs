@@ -2414,6 +2414,12 @@ fn route_request_at(request: Request<'_>, state: &ServerState, now: f64) -> Vec<
         }
         let supplied_cookie = request.session_cookie();
         if state.sessions.contains(supplied_cookie.as_deref(), now) {
+            if request.method == RequestMethod::Get
+                && (path == "/api/config"
+                    || (path.starts_with("/api/accounts/") && path.ends_with("/models")))
+            {
+                return catalog_api::read_management_request(request, state);
+            }
             if request.method == RequestMethod::Get && path == "/api/accounts" {
                 let Some(snapshot) = accounts_snapshot(state) else {
                     return json_error_response(
@@ -3899,7 +3905,7 @@ for line in sys.stdin:
             .expect("cookie header");
         let value = cookie.split(';').next().expect("cookie value");
         let api = request(&server, "/api/config", &[&format!("Cookie: {value}")]);
-        assert!(api.starts_with("HTTP/1.1 404 Not Found\r\n"));
+        assert!(api.starts_with("HTTP/1.1 200 OK\r\n"));
         server.shutdown().expect("shutdown");
     }
 

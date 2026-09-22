@@ -123,7 +123,12 @@ fn catalog_http_contract_matches_live_python_handler() {
         {"path":"/api/providers/discover", "body":{"provider":"absent"}},
         {"path":"/api/providers/discover", "body":{"provider":"demo", "selected":false}},
         {"path":"/api/providers/discover", "body":{"provider":"demo", "selected":["missing"]}},
-        {"path":"/api/catalog/refresh", "body":{}}
+        {"path":"/api/catalog/refresh", "body":{}},
+        {"path":"/api/config"},
+        {"path":"/api/accounts/%40native/models"},
+        {"path":"/api/accounts/absent/models"},
+        {"path":"/api/accounts/models"},
+        {"path":"/api/accounts//models"}
     ]);
     let actual = cases
         .as_array()
@@ -138,6 +143,8 @@ fn catalog_http_contract_matches_live_python_handler() {
                     &serde_json::to_vec(body).expect("request JSON"),
                     &[&cookie],
                 )
+            } else if path.starts_with("/api/") {
+                request(&server, path, &[&cookie])
             } else {
                 request(&server, path, &[])
             };
@@ -162,7 +169,7 @@ fn catalog_http_contract_matches_live_python_handler() {
         "discovered":actual[5]["payload"]["models"], "cases":cases,
     });
     let script = r#"
-import json, sys, threading
+import json, os, sys, threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -175,6 +182,8 @@ state.lock = threading.RLock()
 state.discovery_lock = threading.Lock()
 state._catalog_cache = None
 state._catalog_cache_revision = None
+state.codex_home = Path(os.environ['CODEX_HOME'])
+state._native_quota = None
 state.integration_catalog_path = Path(fixture['catalog_path'])
 state.integration_status = lambda: SimpleNamespace(state='inactive')
 results = []
