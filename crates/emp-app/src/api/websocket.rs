@@ -464,7 +464,9 @@ pub(crate) fn serve_responses_websocket(
                 let mut terminal_success = false;
                 let mut completed_id = None;
                 let mut projected_error = false;
+                let mut received_upstream_event = false;
                 while let Ok(Some(event)) = client.receive_json() {
+                    received_upstream_event = true;
                     let event = match plan.project_event(&event) {
                         Ok(event) => event,
                         Err(error) => {
@@ -517,24 +519,39 @@ pub(crate) fn serve_responses_websocket(
                     }
                     continue;
                 }
-                native_upstream = None;
-                last_native_response_id = None;
-                if projected_error {
+                if !projected_error
+                    && !received_upstream_event
+                    && client.peer_close_code() == Some(1009)
+                    && previous.is_none()
+                {
+                    // Python retries this proven pre-event message-size
+                    // rejection through the full HTTP/zstd path. Restrict
+                    // replay to a full request; incremental turns remain
+                    // owned by the existing previous-response recovery path.
+                    http_only_routes.insert(route_key.clone());
+                    native_upstream = None;
+                    last_native_response_id = None;
+                } else {
+                    native_upstream = None;
+                    last_native_response_id = None;
+                    if projected_error {
+                        continue;
+                    }
+                    if previous.is_some() {
+                        let _=websocket.send_json(&serde_json::json!({"type":"error","error":{"code":"previous_response_not_found","message":"Previous response was not found. Retrying the full request."}}));
+                    } else {
+                        let id =
+                            format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
+                        let error = native_stream_error_value(
+                            502,
+                            FailureClass::StreamIncomplete,
+                            Some("stream_incomplete"),
+                            &id,
+                        );
+                        let _ = websocket.send_json(&error);
+                    }
                     continue;
                 }
-                if previous.is_some() {
-                    let _=websocket.send_json(&serde_json::json!({"type":"error","error":{"code":"previous_response_not_found","message":"Previous response was not found. Retrying the full request."}}));
-                } else {
-                    let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
-                    let error = native_stream_error_value(
-                        502,
-                        FailureClass::StreamIncomplete,
-                        Some("stream_incomplete"),
-                        &id,
-                    );
-                    let _ = websocket.send_json(&error);
-                }
-                continue;
             }
             if previous.is_some() {
                 let _=websocket.send_json(&serde_json::json!({"type":"error","error":{"code":"previous_response_not_found","message":"Previous response was not found. Retrying the full request."}}));

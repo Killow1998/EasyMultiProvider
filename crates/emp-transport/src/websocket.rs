@@ -653,6 +653,7 @@ impl std::error::Error for ClientWebSocketError {}
 pub struct ClientWebSocket {
     stream: Box<dyn ReadWrite>,
     closed: bool,
+    peer_close_code: Option<u16>,
     response_headers: std::collections::BTreeMap<String, String>,
     compression: Option<PerMessageDeflate>,
     max_message_bytes: usize,
@@ -881,6 +882,7 @@ impl ClientWebSocket {
         Ok(Self {
             stream,
             closed: false,
+            peer_close_code: None,
             response_headers,
             compression,
             max_message_bytes: MAX_PROXY_REQUEST_BYTES,
@@ -889,6 +891,9 @@ impl ClientWebSocket {
     }
     pub fn response_headers(&self) -> &std::collections::BTreeMap<String, String> {
         &self.response_headers
+    }
+    pub const fn peer_close_code(&self) -> Option<u16> {
+        self.peer_close_code
     }
     fn read_exact(&mut self, length: usize) -> Result<Vec<u8>, ClientWebSocketError> {
         let mut value = vec![0u8; length];
@@ -1040,6 +1045,9 @@ impl ClientWebSocket {
                     message.extend_from_slice(&payload);
                 }
                 8 => {
+                    self.peer_close_code = payload
+                        .get(..2)
+                        .map(|code| u16::from_be_bytes([code[0], code[1]]));
                     self.closed = true;
                     return Ok(None);
                 }
