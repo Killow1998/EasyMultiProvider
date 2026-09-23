@@ -97,6 +97,49 @@ impl ServerHandle {
         open_browser: bool,
         markers: UpdateStartupMarkers,
     ) -> Result<Self, AppError> {
+        Self::start_with_config_options_inner(
+            host,
+            port,
+            config_path,
+            codex_binary,
+            native_auth_path,
+            open_browser,
+            markers,
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_with_config_options_and_http_client(
+        host: IpAddr,
+        port: u16,
+        config_path: &Path,
+        codex_binary: &str,
+        native_auth_path: PathBuf,
+        client: emp_transport::HttpClient,
+    ) -> Result<Self, AppError> {
+        Self::start_with_config_options_inner(
+            host,
+            port,
+            config_path,
+            codex_binary,
+            native_auth_path,
+            false,
+            UpdateStartupMarkers::default(),
+            Some(client),
+        )
+    }
+
+    fn start_with_config_options_inner(
+        host: IpAddr,
+        port: u16,
+        config_path: &Path,
+        codex_binary: &str,
+        native_auth_path: PathBuf,
+        open_browser: bool,
+        markers: UpdateStartupMarkers,
+        test_client: Option<emp_transport::HttpClient>,
+    ) -> Result<Self, AppError> {
         if !is_loopback(host) {
             return Err(AppError::HostNotLoopback);
         }
@@ -115,7 +158,15 @@ impl ServerHandle {
         let session_path = web_session_path(config_path)?;
         let session =
             load_or_create_web_session(&session_path, now).map_err(AppError::WebSession)?;
-        let backend = BackendState::new(config_path, codex_binary, native_auth_path)?;
+        let backend = match test_client {
+            Some(client) => BackendState::new_with_http_client(
+                config_path,
+                codex_binary,
+                native_auth_path,
+                client,
+            )?,
+            None => BackendState::new(config_path, codex_binary, native_auth_path)?,
+        };
         Self::start_with_session(
             host,
             port,

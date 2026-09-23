@@ -217,8 +217,37 @@ impl HttpClient {
         body: Option<Vec<u8>>,
         stream: bool,
     ) -> Result<HttpResponse, HttpTransportError> {
+        self.open_with_redirects(method, url, headers, body, stream, false)
+            .await
+    }
+
+    /// Open a request using the standard bounded HTTP redirect policy.
+    ///
+    /// Redirects remain disabled for the default [`Self::open`] path. Callers
+    /// should opt in only when their source behavior follows redirects.
+    pub async fn open_following_redirects(
+        &self,
+        method: HttpMethod,
+        url: &str,
+        headers: BTreeMap<String, String>,
+        body: Option<Vec<u8>>,
+        stream: bool,
+    ) -> Result<HttpResponse, HttpTransportError> {
+        self.open_with_redirects(method, url, headers, body, stream, true)
+            .await
+    }
+
+    async fn open_with_redirects(
+        &self,
+        method: HttpMethod,
+        url: &str,
+        headers: BTreeMap<String, String>,
+        body: Option<Vec<u8>>,
+        stream: bool,
+        follow_redirects: bool,
+    ) -> Result<HttpResponse, HttpTransportError> {
         let plan = self.policy.plan(method, url, headers, stream)?;
-        let client = self.client_for(&plan)?;
+        let client = self.client_for(&plan, follow_redirects)?;
         let started_at = Instant::now();
         let mut request = client.request(to_reqwest_method(method), plan.route.route_url());
         let headers = to_header_map(&plan.headers)?;
@@ -235,7 +264,7 @@ impl HttpClient {
             .await
             .map_err(|_| HttpTransportError::new(HttpTransportErrorKind::ConnectTimeout))?
             .map_err(map_send_error)?;
-        if response.status().is_redirection() {
+        if !follow_redirects && response.status().is_redirection() {
             drop(response);
             return Err(HttpTransportError::new(
                 HttpTransportErrorKind::RedirectDisabled,
@@ -244,8 +273,15 @@ impl HttpClient {
         Ok(HttpResponse::new(response, plan, started_at))
     }
 
-    fn client_for(&self, plan: &RequestPlan) -> Result<Client, HttpTransportError> {
-        let identity = plan.route.proxy_origin.pool_token();
+    fn client_for(
+        &self,
+        plan: &RequestPlan,
+        follow_redirects: bool,
+    ) -> Result<Client, HttpTransportError> {
+        let identity = format!(
+            "{}|follow_redirects={follow_redirects}",
+            plan.route.proxy_origin.pool_token()
+        );
         let mut clients = self
             .clients
             .lock()
@@ -258,7 +294,11 @@ impl HttpClient {
         }
         let mut builder = Client::builder()
             .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(if follow_redirects {
+                reqwest::redirect::Policy::limited(10)
+            } else {
+                reqwest::redirect::Policy::none()
+            })
             .retry(reqwest::retry::never())
             .connect_timeout(plan.timeout_policy.connect)
             .pool_idle_timeout(self.config.pool.idle_timeout)

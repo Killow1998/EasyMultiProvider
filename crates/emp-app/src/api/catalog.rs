@@ -73,6 +73,60 @@ pub(crate) fn management_request(
             &json!({"status":"ok","catalog_path":path,"model_count":model_count}),
         );
     }
+    if request.raw_path() == "/api/models/metadata" {
+        let Some(provider_id) = body.get("provider").and_then(Value::as_str) else {
+            return config_error("provider and model are required");
+        };
+        let Some(mut model) = body.get("model").and_then(Value::as_str).map(str::to_owned) else {
+            return config_error("provider and model are required");
+        };
+        let mut provider = {
+            let config = match state.backend.configuration.config.lock() {
+                Ok(config) => config,
+                Err(_) => return internal_error(),
+            };
+            let Some(provider) = config
+                .get("providers")
+                .and_then(Value::as_array)
+                .and_then(|providers| {
+                    providers.iter().find(|provider| {
+                        provider.get("id").and_then(Value::as_str) == Some(provider_id)
+                    })
+                })
+                .filter(|provider| provider.get("enabled") != Some(&Value::Bool(false)))
+            else {
+                return config_error(&format!("provider is missing or disabled: {provider_id}"));
+            };
+            provider.clone()
+        };
+        if let Some(upstream) = model.strip_prefix(&format!("{provider_id}/")) {
+            model = upstream.to_owned();
+        }
+        provider["api_key"] = json!(provider_api_key(
+            &provider,
+            &state.backend.configuration.vault
+        ));
+        let Some(provider) = provider.as_object() else {
+            return internal_error();
+        };
+        let result =
+            state
+                .backend
+                .transport
+                .runtime
+                .block_on(emp_router::discovery::model_metadata(
+                    &state.backend.transport.client,
+                    provider,
+                    &model,
+                ));
+        return match result {
+            Ok(value) => json_response(&value),
+            Err(error) if error.status() == 500 && error.to_string() == "internal server error" => {
+                internal_error()
+            }
+            Err(error) => metadata_error_response(error),
+        };
+    }
     let Some(provider_id) = body
         .get("provider")
         .and_then(Value::as_str)
@@ -318,6 +372,42 @@ fn json_response(value: &Value) -> Vec<u8> {
 }
 fn config_error(message: &str) -> Vec<u8> {
     json_error_response(400, status_text(400), message, None, &[])
+}
+
+fn metadata_error_response(error: emp_router::RouterError) -> Vec<u8> {
+    let error_class = error.error_class().as_str();
+    let code = if error.error_class() == emp_transport::FailureClass::RateLimit {
+        "rate_limit_exceeded"
+    } else {
+        error.failure_reason().unwrap_or(error_class)
+    };
+    let mut detail = json!({
+        "code":code,
+        "type":error_class,
+        "message":error.to_string(),
+    });
+    if let Some(reason) = error.failure_reason() {
+        detail["failure_reason"] = Value::String(reason.to_owned());
+    }
+    if let Some(delay) = error.retry_after_seconds() {
+        detail["retry_after_seconds"] = Value::from(delay);
+    }
+    let body = serde_json::to_vec(&json!({"error":detail})).expect("JSON error response");
+    let retry = error.retry_after_seconds().map(|delay| delay.to_string());
+    let headers = retry
+        .as_deref()
+        .map(|value| vec![("Retry-After", value)])
+        .unwrap_or_default();
+    response(
+        &format!(
+            "HTTP/1.1 {} {}",
+            error.status(),
+            status_text(error.status())
+        ),
+        "application/json",
+        &body,
+        &headers,
+    )
 }
 pub(crate) fn internal_error() -> Vec<u8> {
     json_error_response(500, status_text(500), "internal server error", None, &[])

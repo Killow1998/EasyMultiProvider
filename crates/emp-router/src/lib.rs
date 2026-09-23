@@ -53,7 +53,7 @@ pub struct RouterError {
     error_class: FailureClass,
     failure_reason: Option<String>,
     retry_after_seconds: Option<u64>,
-    message: &'static str,
+    message: String,
 }
 
 impl RouterError {
@@ -63,7 +63,7 @@ impl RouterError {
         error_class: FailureClass,
         failure_reason: Option<String>,
         retry_after_seconds: Option<u64>,
-        message: &'static str,
+        message: impl Into<String>,
     ) -> Self {
         Self {
             kind,
@@ -71,7 +71,7 @@ impl RouterError {
             error_class,
             failure_reason,
             retry_after_seconds,
-            message,
+            message: message.into(),
         }
     }
 
@@ -98,7 +98,7 @@ impl RouterError {
 
 impl fmt::Display for RouterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.message)
+        formatter.write_str(&self.message)
     }
 }
 

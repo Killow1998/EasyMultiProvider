@@ -62,6 +62,24 @@ impl BackendState {
         codex_binary: &str,
         native_auth_path: PathBuf,
     ) -> Result<Self, AppError> {
+        Self::new_inner(config_path, codex_binary, native_auth_path, None)
+    }
+
+    pub(crate) fn new_with_http_client(
+        config_path: &Path,
+        codex_binary: &str,
+        native_auth_path: PathBuf,
+        client: HttpClient,
+    ) -> Result<Self, AppError> {
+        Self::new_inner(config_path, codex_binary, native_auth_path, Some(client))
+    }
+
+    fn new_inner(
+        config_path: &Path,
+        codex_binary: &str,
+        native_auth_path: PathBuf,
+        test_client: Option<HttpClient>,
+    ) -> Result<Self, AppError> {
         let mut config = load_configuration(Some(config_path))?;
         let state_root = config_path
             .parent()
@@ -88,10 +106,13 @@ impl BackendState {
             save_configuration(&config, Some(config_path), &vault)?;
             config = load_configuration(Some(config_path))?;
         }
-        let client = HttpClient::new(HttpClientPolicy::new(
-            ProxyPolicy::from_environment(ProxyEnvironment::capture()),
-            TimeoutPolicy::default(),
-        ))?;
+        let client = match test_client {
+            Some(client) => client,
+            None => HttpClient::new(HttpClientPolicy::new(
+                ProxyPolicy::from_environment(ProxyEnvironment::capture()),
+                TimeoutPolicy::default(),
+            ))?,
+        };
         let runtime = RuntimeBuilder::new_multi_thread()
             .enable_all()
             .thread_name("emp-upstream")

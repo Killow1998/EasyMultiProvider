@@ -232,7 +232,10 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
                 if request.method == RequestMethod::Post
                     && matches!(
                         request.raw_path(),
-                        "/api/providers/discover" | "/api/catalog/refresh" | "/api/config"
+                        "/api/providers/discover"
+                            | "/api/catalog/refresh"
+                            | "/api/models/metadata"
+                            | "/api/config"
                     ) =>
             {
                 Some(catalog::management_request(

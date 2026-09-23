@@ -4,7 +4,7 @@ use emp_transport::{HttpClient, HttpMethod, HttpTransportErrorKind, status_error
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::Duration;
-pub const CLIENT_VERSION: &str = "0.155.0";
+pub const CLIENT_VERSION: &str = "0.156.1";
 fn error(status: u16, message: &'static str) -> RouterError {
     RouterError::new(
         RouterErrorKind::InvalidRequest,

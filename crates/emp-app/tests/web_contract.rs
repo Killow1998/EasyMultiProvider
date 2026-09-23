@@ -152,13 +152,24 @@ fn embedded_index_matches_repository_bytes_exactly() {
 }
 
 #[test]
+fn embedded_index_matches_python_0119_release_bytes() {
+    let python = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../EasyMultiProvider/easy_multi_provider/web/index.html");
+    // CI checkouts may not include the adjacent oracle worktree; local
+    // differential runs assert exact release bytes when it is available.
+    if let Ok(expected) = std::fs::read(python) {
+        assert_eq!(emp_app::WEB_INDEX_BYTES, expected.as_slice());
+    }
+}
+
+#[test]
 fn version_output_matches_the_existing_cli() {
     let output = Command::new(env!("CARGO_BIN_EXE_EMP"))
         .arg("--version")
         .output()
         .expect("run EMP --version");
     assert!(output.status.success());
-    assert_eq!(output.stdout, b"EMP 0.11.6\n");
+    assert_eq!(output.stdout, b"EMP 0.11.9\n");
     assert!(output.stderr.is_empty());
 }
 

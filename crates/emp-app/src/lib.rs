@@ -9,7 +9,7 @@ mod services;
 mod util;
 mod web;
 
-pub const VERSION: &str = "0.11.6";
+pub const VERSION: &str = "0.11.9";
 pub use web::WEB_INDEX_BYTES;
 
 pub fn run() -> Result<std::process::ExitCode, String> {

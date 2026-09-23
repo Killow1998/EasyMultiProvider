@@ -1,4 +1,5 @@
 use super::*;
+use emp_transport::{HttpClient, HttpClientConfig, HttpClientPolicy, ProxyPolicy, TimeoutPolicy};
 
 pub(super) struct CatalogUpstream {
     address: SocketAddr,
@@ -8,6 +9,56 @@ pub(super) struct CatalogUpstream {
 }
 impl CatalogUpstream {
     pub(super) fn start(status: u16) -> Self {
+        Self::start_with_payload(
+            status,
+            json!({"data":[
+                {"id":"new", "name":"New model", "context_length":128000, "supported_parameters":["tools","reasoning_effort"], "reasoning_levels":["low","high"]},
+                {"id":"old", "context_length":64000}
+            ]}),
+        )
+    }
+
+    fn start_with_payload(status: u16, payload: Value) -> Self {
+        Self::start_with_response(
+            status,
+            serde_json::to_vec(&payload).expect("payload JSON"),
+            "application/json",
+            None,
+            None,
+        )
+    }
+
+    fn start_with_redirect(payload: Value, from: &str, to: &str) -> Self {
+        Self::start_with_response(
+            200,
+            serde_json::to_vec(&payload).expect("payload JSON"),
+            "application/json",
+            Some((from.to_owned(), to.to_owned())),
+            None,
+        )
+    }
+
+    fn start_with_raw_response(status: u16, payload: Vec<u8>) -> Self {
+        Self::start_with_response(status, payload, "application/json", None, None)
+    }
+
+    fn start_with_delay(payload: Value, delay: Duration) -> Self {
+        Self::start_with_response(
+            200,
+            serde_json::to_vec(&payload).expect("payload JSON"),
+            "application/json",
+            None,
+            Some(delay),
+        )
+    }
+
+    fn start_with_response(
+        status: u16,
+        payload: Vec<u8>,
+        content_type: &'static str,
+        redirect: Option<(String, String)>,
+        delay: Option<Duration>,
+    ) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("discovery listener");
         listener
             .set_nonblocking(true)
@@ -20,20 +71,21 @@ impl CatalogUpstream {
             while !stopped.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        let (path, headers, body) = receive_upstream_request(&mut stream);
                         sender
-                            .send(receive_upstream_request(&mut stream))
+                            .send((path.clone(), headers, body))
                             .expect("record request");
-                        let payload = if status == 200 {
-                            json!({"data":[
-                                {"id":"new", "name":"New model", "context_length":128000, "supported_parameters":["tools","reasoning_effort"], "reasoning_levels":["low","high"]},
-                                {"id":"old", "context_length":64000}
-                            ]})
-                        } else {
-                            json!({"error":{"message":"synthetic private upstream diagnostic"}})
-                        };
-                        let body = serde_json::to_vec(&payload).expect("body");
-                        write!(stream,"HTTP/1.1 {status} {}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",status_text(status),body.len()).expect("head");
-                        stream.write_all(&body).expect("body");
+                        if let Some((from, to)) = &redirect
+                            && &path == from
+                        {
+                            write!(stream,"HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").expect("redirect head");
+                            continue;
+                        }
+                        write!(stream,"HTTP/1.1 {status} {}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",status_text(status),payload.len()).expect("head");
+                        if let Some(delay) = delay {
+                            thread::sleep(delay);
+                        }
+                        let _ = stream.write_all(&payload);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(2))
@@ -60,6 +112,23 @@ impl CatalogUpstream {
         assert_eq!(path, "/v1/models");
         assert_eq!(headers["authorization"], "Bearer synthetic-test-key");
         assert_eq!(body, Value::Null);
+    }
+
+    fn observed_metadata(&self, expected_paths: &[&str]) -> Vec<BTreeMap<String, String>> {
+        expected_paths
+            .iter()
+            .map(|expected_path| {
+                let (path, headers, body) = self
+                    .requests
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("metadata request");
+                assert_eq!(&path, expected_path);
+                assert_eq!(headers["x-goog-api-key"], "synthetic-test-key");
+                assert!(!headers.contains_key("authorization"));
+                assert_eq!(body, Value::Null);
+                headers
+            })
+            .collect()
     }
 }
 impl Drop for CatalogUpstream {
@@ -100,6 +169,174 @@ pub(super) fn catalog_server(upstream: &CatalogUpstream) -> (TempDir, ServerHand
     .expect("server");
     (directory, server)
 }
+
+fn metadata_server(upstream: &CatalogUpstream) -> (TempDir, ServerHandle) {
+    metadata_server_with_policy(upstream, HttpClientPolicy::default())
+}
+
+fn metadata_server_with_policy(
+    upstream: &CatalogUpstream,
+    policy: HttpClientPolicy,
+) -> (TempDir, ServerHandle) {
+    let mut transport_config = HttpClientConfig::default();
+    transport_config
+        .add_dns_override("generativelanguage.googleapis.com", upstream.address)
+        .expect("Gemini DNS override");
+    let client = HttpClient::with_config(policy, transport_config).expect("metadata HTTP client");
+    metadata_server_with_http_client(upstream, client)
+}
+
+fn metadata_server_with_http_client(
+    upstream: &CatalogUpstream,
+    client: HttpClient,
+) -> (TempDir, ServerHandle) {
+    let directory = tempfile::tempdir().expect("metadata temp dir");
+    let root = canonical_root(&directory);
+    let config_path = root.join("config.json");
+    let native_path = root.join("codex").join("models_cache.json");
+    std::fs::create_dir_all(native_path.parent().expect("parent")).expect("native dir");
+    std::fs::write(&native_path, br#"{"models":[]}"#).expect("native catalog");
+    let base_url = format!("http://{}/v1beta/openai", upstream.address);
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({
+            "native_catalog_path":native_path,
+            "providers":[{
+                "id":"gemini", "base_url":base_url, "protocol":"chat_completions",
+                "auth_mode":"api_key", "api_key":"synthetic-test-key"
+            }],
+            "models":[]
+        }))
+        .expect("metadata config JSON"),
+    )
+    .expect("write metadata config");
+    let server = ServerHandle::start_with_config_options_and_http_client(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "codex",
+        root.join("codex").join("auth.json"),
+        client,
+    )
+    .expect("metadata server");
+    // The persisted config validator correctly rejects insecure non-loopback
+    // URLs. After startup, point this test-only in-memory provider at the
+    // Gemini host so model_metadata's host gate and DNS override both run.
+    server
+        .state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .expect("metadata config lock")
+        .get_mut("providers")
+        .and_then(Value::as_array_mut)
+        .and_then(|providers| providers.first_mut())
+        .expect("metadata provider")
+        .as_object_mut()
+        .expect("metadata provider object")["base_url"] = json!(format!(
+        "http://generativelanguage.googleapis.com:{}/v1beta/openai",
+        upstream.address.port()
+    ));
+    (directory, server)
+}
+
+fn python_metadata_route_oracle(
+    python: &str,
+    provider: &Value,
+    body: &Value,
+    upstream_address: SocketAddr,
+    simulate_timeout: bool,
+) -> Value {
+    let fixture = json!({
+        "provider":provider,
+        "body":body,
+        "upstream_address":upstream_address.to_string(),
+        "simulate_timeout":simulate_timeout,
+    });
+    let script = r#"
+import json, sys, threading
+from email.message import Message
+from types import SimpleNamespace
+from urllib.parse import urlsplit, urlunsplit
+from urllib.request import ProxyHandler, Request, build_opener
+from unittest.mock import patch
+from easy_multi_provider import server
+from easy_multi_provider import __version__
+assert __version__ == '0.11.9', __version__
+from easy_multi_provider import router
+
+fixture = json.load(sys.stdin)
+provider = fixture['provider']
+state = server.AppState.__new__(server.AppState)
+state.config = {'providers': [provider]}
+state.snapshot = lambda: state.config
+state.journal = SimpleNamespace(event=lambda *args, **kwargs: None)
+opener = build_opener(ProxyHandler({}))
+requests = []
+def open_url(request, timeout=0):
+    original = urlsplit(request.full_url)
+    requests.append({'url':request.full_url, 'timeout':timeout,
+                     'headers':{key.lower():value for key,value in request.header_items()}})
+    if fixture['simulate_timeout']:
+        raise TimeoutError('timed out')
+    local = urlunsplit(('http', fixture['upstream_address'], original.path, original.query, ''))
+    forwarded = Request(local, headers=dict(request.header_items()), method=request.get_method())
+    return opener.open(forwarded, timeout=timeout)
+handler = object.__new__(server.make_handler(state))
+handler.path = '/api/models/metadata'
+handler.headers = Message()
+handler._request_id = 'fixture-request'
+handler._unexpected_exception_logged = False
+handler._record_http_request_start_once = lambda: None
+handler._record_unexpected_exception = lambda _error: None
+handler._record_management_event = lambda *args, **kwargs: None
+handler._management_allowed = lambda: True
+handler._body = lambda _limit: fixture['body']
+captured = {}
+def send(status, data, *args, **kwargs): captured.update(status=status, payload=json.loads(data))
+handler._send = send
+with patch.object(router, 'urlopen', side_effect=open_url):
+    handler._do_POST()
+captured['upstream_requests'] = requests
+json.dump(captured, sys.stdout, ensure_ascii=False)
+"#;
+    let oracle_dir = python_oracle_dir();
+    let mut child = Command::new(python)
+        .args(["-c", script])
+        .current_dir(&oracle_dir)
+        .env("PYTHONPATH", &oracle_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Python metadata route oracle");
+    serde_json::to_writer(child.stdin.take().expect("oracle stdin"), &fixture)
+        .expect("write metadata oracle input");
+    let output = child.wait_with_output().expect("metadata oracle result");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("metadata oracle JSON")
+}
+
+fn python_oracle_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("EMP_PYTHON_ORACLE_ROOT").map(PathBuf::from) {
+        assert!(
+            path.join("easy_multi_provider/server.py").is_file(),
+            "EMP_PYTHON_ORACLE_ROOT must contain easy_multi_provider/server.py"
+        );
+        return path;
+    }
+    let sibling = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../EasyMultiProvider");
+    assert!(
+        sibling.join("easy_multi_provider/server.py").is_file(),
+        "set EMP_PYTHON_ORACLE_ROOT to the Python 0.11.9 checkout"
+    );
+    sibling
+}
 pub(super) fn parsed_body(wire: &str) -> Value {
     serde_json::from_str(wire.split_once("\r\n\r\n").expect("response head").1).expect("JSON")
 }
@@ -111,11 +348,23 @@ fn catalog_http_contract_matches_live_python_handler() {
     };
     let upstream = CatalogUpstream::start(200);
     let (directory, server) = catalog_server(&upstream);
+    server
+        .state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .expect("config lock")
+        .as_object_mut()
+        .expect("config object")["providers"]
+        .as_array_mut()
+        .expect("providers")
+        .push(json!({"id":"disabled","base_url":"https://example.invalid/v1","enabled":false}));
     let cookie = session_cookie_header(&server);
     let cases = json!([
         {"path":"/v1/models"},
         {"path":"/v1/models?client_version="},
-        {"path":"/v1/models?client_version=0.155.0"},
+        {"path":"/v1/models?client_version=0.156.1"},
         {"path":"/v1/models/demo%2Fold"},
         {"path":"/v1/models/missing"},
         {"path":"/api/providers/discover", "body":{"provider":"demo"}},
@@ -123,6 +372,12 @@ fn catalog_http_contract_matches_live_python_handler() {
         {"path":"/api/providers/discover", "body":{"provider":"absent"}},
         {"path":"/api/providers/discover", "body":{"provider":"demo", "selected":false}},
         {"path":"/api/providers/discover", "body":{"provider":"demo", "selected":["missing"]}},
+        {"path":"/api/models/metadata", "body":{}},
+        {"path":"/api/models/metadata", "body":{"provider":42,"model":"model"}},
+        {"path":"/api/models/metadata", "body":{"provider":"demo"}},
+        {"path":"/api/models/metadata", "body":{"provider":"absent","model":"model"}},
+        {"path":"/api/models/metadata", "body":{"provider":"disabled","model":"model"}},
+        {"path":"/api/models/metadata", "body":{"provider":"demo","model":"demo/model"}},
         {"path":"/api/catalog/refresh", "body":{}},
         {"path":"/api/config"},
         {"path":"/api/accounts/%40native/models"},
@@ -174,6 +429,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from easy_multi_provider import server
+from easy_multi_provider import __version__
+assert __version__ == '0.11.9', __version__
 
 fixture = json.load(sys.stdin)
 state = server.AppState.__new__(server.AppState)
@@ -186,13 +443,18 @@ state.codex_home = Path(os.environ['CODEX_HOME'])
 state._native_quota = None
 state.integration_catalog_path = Path(fixture['catalog_path'])
 state.integration_status = lambda: SimpleNamespace(state='inactive')
+state.snapshot = lambda: state.config
+state.journal = SimpleNamespace(event=lambda *args, **kwargs: None)
 results = []
 with patch.object(server, 'discover_models', return_value=fixture['discovered']):
     for case in fixture['cases']:
         handler = object.__new__(server.make_handler(state))
         handler.path = case['path']
         handler.headers = {}
+        handler._request_id = 'fixture-request'
+        handler._unexpected_exception_logged = False
         handler._record_http_request_start_once = lambda: None
+        handler._record_unexpected_exception = lambda _error: None
         handler._record_management_event = lambda *args, **kwargs: None
         handler._management_allowed = lambda: True
         captured = {}
@@ -207,9 +469,11 @@ with patch.object(server, 'discover_models', return_value=fixture['discovered'])
         results.append(captured)
 json.dump(results, sys.stdout, ensure_ascii=False)
 "#;
+    let oracle_dir = python_oracle_dir();
     let mut child = Command::new(python)
         .args(["-c", script])
-        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .current_dir(&oracle_dir)
+        .env("PYTHONPATH", &oracle_dir)
         .env("CODEX_HOME", canonical_root(&directory).join("codex"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -226,6 +490,231 @@ json.dump(results, sys.stdout, ensure_ascii=False)
     let expected: Value = serde_json::from_slice(&output.stdout).expect("oracle JSON");
     assert_eq!(json!(actual), expected);
     server.shutdown().expect("shutdown server");
+}
+
+#[test]
+fn model_metadata_http_response_matches_python_route_and_upstream_request() {
+    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+        return;
+    };
+    let upstream_payload = json!({
+        "inputTokenLimit":1_048_576,
+        "outputTokenLimit":65_536,
+        "thinking":true,
+        "reasoning_levels":["low","high"],
+        "supports_reasoning_summaries":true
+    });
+    let initial_path = "/v1beta/models/alpha%20beta%2Fpreview";
+    let redirect_path = "/v1beta/models/redirect-target";
+    let upstream =
+        CatalogUpstream::start_with_redirect(upstream_payload.clone(), initial_path, redirect_path);
+    let (directory, server) = metadata_server(&upstream);
+    let provider = json!({
+        "id":"gemini",
+        "base_url":format!("http://generativelanguage.googleapis.com:{}/v1beta/openai", upstream.address.port()),
+        "protocol":"chat_completions",
+        "auth_mode":"api_key",
+        "api_key":"synthetic-test-key"
+    });
+    let body = json!({"provider":"gemini","model":"gemini/alpha beta/preview"});
+    let expected = python_metadata_route_oracle(&python, &provider, &body, upstream.address, false);
+    let wire = post(
+        &server,
+        "/api/models/metadata",
+        &serde_json::to_vec(&body).expect("metadata request JSON"),
+        &[&session_cookie_header(&server)],
+    );
+    let status: u16 = wire
+        .split_whitespace()
+        .nth(1)
+        .expect("response status")
+        .parse()
+        .expect("numeric status");
+    let actual = json!({"status":status,"payload":parsed_body(&wire)});
+    assert_eq!(
+        actual,
+        json!({"status":expected["status"],"payload":expected["payload"]})
+    );
+    let expected_request = &expected["upstream_requests"][0];
+    assert_eq!(expected_request["timeout"], 30);
+    assert_eq!(
+        expected_request["url"],
+        format!(
+            "http://generativelanguage.googleapis.com:{}/v1beta/models/alpha%20beta%2Fpreview",
+            upstream.address.port()
+        )
+    );
+    assert_eq!(
+        expected_request["headers"]["x-goog-api-key"],
+        "synthetic-test-key"
+    );
+    let wire_headers =
+        upstream.observed_metadata(&[initial_path, redirect_path, initial_path, redirect_path]);
+    let python_headers = &wire_headers[0];
+    let rust_headers = &wire_headers[2];
+    assert!(python_headers["user-agent"].starts_with("Python-urllib/"));
+    assert_eq!(python_headers["x-goog-api-key"], "synthetic-test-key");
+    assert!(!python_headers.contains_key("authorization"));
+    // These are transport-library defaults: urllib adds its runtime UA and
+    // closes sockets; reqwest adds Accept and keeps its pooled connection.
+    // The route-level application header contract is the API key only.
+    assert_eq!(rust_headers["x-goog-api-key"], "synthetic-test-key");
+    assert_eq!(rust_headers["accept"], "*/*");
+    assert!(!rust_headers.contains_key("user-agent"));
+    assert_eq!(wire_headers[1]["x-goog-api-key"], "synthetic-test-key");
+    assert_eq!(wire_headers[3]["x-goog-api-key"], "synthetic-test-key");
+    assert!(!rust_headers.contains_key("authorization"));
+    assert!(
+        !std::fs::read_to_string(canonical_root(&directory).join("config.json"))
+            .expect("saved configuration")
+            .contains("synthetic-test-key"),
+        "the metadata operation must not persist provider credentials"
+    );
+    server.shutdown().expect("shutdown metadata server");
+}
+
+#[test]
+fn model_metadata_upstream_errors_match_python_route_over_http() {
+    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+        return;
+    };
+    let body = json!({"provider":"gemini","model":"gemini/error-model"});
+    let cases = [
+        (
+            "upstream 429",
+            429,
+            br#"{"error":{"message":"synthetic quota detail"}}"#.to_vec(),
+        ),
+        ("malformed JSON", 200, b"not-json".to_vec()),
+        ("non-object JSON", 200, b"[]".to_vec()),
+        (
+            "missing token limits",
+            200,
+            br#"{"inputTokenLimit":1024}"#.to_vec(),
+        ),
+        ("oversized body", 200, vec![b'x'; 4 * 1024 * 1024 + 1]),
+    ];
+    for (label, status, response_body) in cases {
+        let upstream = CatalogUpstream::start_with_raw_response(status, response_body);
+        let (_directory, server) = metadata_server(&upstream);
+        let provider = json!({
+            "id":"gemini",
+            "base_url":format!("http://generativelanguage.googleapis.com:{}/v1beta/openai", upstream.address.port()),
+            "protocol":"chat_completions",
+            "auth_mode":"api_key",
+            "api_key":"synthetic-test-key"
+        });
+        let expected =
+            python_metadata_route_oracle(&python, &provider, &body, upstream.address, false);
+        let wire = post(
+            &server,
+            "/api/models/metadata",
+            &serde_json::to_vec(&body).expect("metadata request JSON"),
+            &[&session_cookie_header(&server)],
+        );
+        let status: u16 = wire
+            .split_whitespace()
+            .nth(1)
+            .expect("response status")
+            .parse()
+            .expect("numeric status");
+        let actual = json!({"status":status,"payload":parsed_body(&wire)});
+        assert_eq!(
+            actual,
+            json!({"status":expected["status"],"payload":expected["payload"]}),
+            "{label}"
+        );
+        let _headers = upstream
+            .observed_metadata(&["/v1beta/models/error-model", "/v1beta/models/error-model"]);
+        server.shutdown().expect("shutdown metadata server");
+    }
+}
+
+#[test]
+fn model_metadata_timeout_matches_python_status_and_message() {
+    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+        return;
+    };
+    let body = json!({"provider":"gemini","model":"gemini/slow-model"});
+    let payload = json!({"inputTokenLimit":1024,"outputTokenLimit":128});
+    let upstream = CatalogUpstream::start_with_delay(payload, Duration::from_millis(300));
+    let policy = HttpClientPolicy::new(
+        ProxyPolicy::default(),
+        TimeoutPolicy {
+            non_stream_wall_clock: Duration::from_millis(40),
+            ..TimeoutPolicy::default()
+        },
+    );
+    let (_directory, server) = metadata_server_with_policy(&upstream, policy);
+    let provider = json!({
+        "id":"gemini",
+        "base_url":format!("http://generativelanguage.googleapis.com:{}/v1beta/openai", upstream.address.port()),
+        "protocol":"chat_completions",
+        "auth_mode":"api_key",
+        "api_key":"synthetic-test-key"
+    });
+    let expected = python_metadata_route_oracle(&python, &provider, &body, upstream.address, true);
+    assert_eq!(expected["upstream_requests"][0]["timeout"], 30);
+    let wire = post(
+        &server,
+        "/api/models/metadata",
+        &serde_json::to_vec(&body).expect("metadata request JSON"),
+        &[&session_cookie_header(&server)],
+    );
+    let status: u16 = wire
+        .split_whitespace()
+        .nth(1)
+        .expect("response status")
+        .parse()
+        .expect("numeric status");
+    let actual = json!({"status":status,"payload":parsed_body(&wire)});
+    assert_eq!(
+        actual,
+        json!({"status":expected["status"],"payload":expected["payload"]})
+    );
+    let _headers = upstream.observed_metadata(&["/v1beta/models/slow-model"]);
+    server.shutdown().expect("shutdown metadata server");
+}
+
+#[test]
+fn model_metadata_http_authentication_and_body_errors_are_enforced() {
+    let upstream = CatalogUpstream::start(200);
+    let (_directory, server) = metadata_server(&upstream);
+    let unauthenticated = post(&server, "/api/models/metadata", b"not json", &[]);
+    assert!(
+        unauthenticated.starts_with("HTTP/1.1 401"),
+        "{unauthenticated}"
+    );
+    let cookie = session_cookie_header(&server);
+    let cross_origin = post(
+        &server,
+        "/api/models/metadata",
+        b"not json",
+        &[&cookie, "Origin: https://example.invalid"],
+    );
+    assert!(cross_origin.starts_with("HTTP/1.1 403"), "{cross_origin}");
+    let non_object = post(&server, "/api/models/metadata", b"[]", &[&cookie]);
+    assert!(non_object.starts_with("HTTP/1.1 400"), "{non_object}");
+    assert_eq!(
+        parsed_body(&non_object)["error"]["message"],
+        "request body must be a JSON object"
+    );
+    let bad_content_type = post(
+        &server,
+        "/api/models/metadata",
+        b"{}",
+        &[&cookie, "Content-Type: text/plain"],
+    );
+    assert!(
+        bad_content_type.starts_with("HTTP/1.1 400"),
+        "{bad_content_type}"
+    );
+    assert_eq!(
+        parsed_body(&bad_content_type)["error"]["message"],
+        "Content-Type must be application/json"
+    );
+    assert!(upstream.requests.try_recv().is_err());
+    server.shutdown().expect("shutdown metadata server");
 }
 
 #[test]
@@ -259,9 +748,11 @@ for data, size, encoding in [(b'',len(payload),''), (gzip.compress(payload), Non
     cases.append({'data':base64.b64encode(data).decode(), 'length':handler.headers['Content-Length'], 'encoding':encoding, 'expected':captured})
 json.dump(cases, sys.stdout)
 "#;
+    let oracle_dir = python_oracle_dir();
     let output = Command::new(python)
         .args(["-c", script])
-        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .current_dir(&oracle_dir)
+        .env("PYTHONPATH", &oracle_dir)
         .output()
         .expect("Python body oracle");
     assert!(
@@ -364,7 +855,7 @@ fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
         "synthetic-test-key"
     );
 
-    let rich = request(&server, "/v1/models?client_version=0.155.0", &[]);
+    let rich = request(&server, "/v1/models?client_version=0.156.1", &[]);
     assert!(rich.starts_with("HTTP/1.1 200"), "{rich}");
     assert!(rich.contains("ETag: \"emp-"), "{rich}");
     assert_eq!(parsed_body(&rich), catalog);
@@ -397,7 +888,7 @@ fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
     assert_eq!(
         parsed_body(&request(
             &restarted,
-            "/v1/models?client_version=0.155.0",
+            "/v1/models?client_version=0.156.1",
             &[]
         )),
         catalog

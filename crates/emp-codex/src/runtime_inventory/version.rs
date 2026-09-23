@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub(super) fn public(installed: Option<String>, status: &str) -> Value {
-    json!({"installed":installed,"status":status,"supported_range":"0.149.x–0.155.x","recommended":"0.155.0"})
+    json!({"installed":installed,"status":status,"supported_range":"0.149.x–0.156.x","recommended":"0.156.1"})
 }
 
 fn word(byte: u8) -> bool {
@@ -62,9 +62,9 @@ fn parse(bytes: &[u8], start: usize) -> Option<(String, &'static str)> {
     }
     let status = if (major, minor) < (0, 149) {
         "unsupported"
-    } else if !prerelease.is_empty() || (major, minor) > (0, 155) {
+    } else if !prerelease.is_empty() || (major, minor) > (0, 156) {
         "unverified"
-    } else if (major, minor) == (0, 155) {
+    } else if (major, minor) == (0, 156) && patch >= 1 {
         "recommended"
     } else {
         "supported"
@@ -145,4 +145,31 @@ fn observe_inner(path: &Path) -> std::io::Result<Value> {
     } else {
         public(None, "unknown")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify;
+    use serde_json::json;
+
+    #[test]
+    fn codex_0156_and_0157_boundaries_match_python_0119() {
+        for (output, installed, status) in [
+            ("codex-cli 0.156.0", "0.156.0", "supported"),
+            ("codex-cli 0.156.1", "0.156.1", "recommended"),
+            ("codex-cli 0.157.0", "0.157.0", "unverified"),
+            ("codex-cli 0.157.9", "0.157.9", "unverified"),
+        ] {
+            assert_eq!(
+                classify(output),
+                json!({
+                    "installed":installed,
+                    "status":status,
+                    "supported_range":"0.149.x–0.156.x",
+                    "recommended":"0.156.1",
+                }),
+                "classification for {output}"
+            );
+        }
+    }
 }
