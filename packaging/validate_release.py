@@ -13,7 +13,6 @@ from typing import Iterable, Optional, Sequence, Set
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_NAME = "EMP"
-VERSION_PATTERN = re.compile(r'^__version__\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -22,26 +21,13 @@ class ReleaseValidationError(RuntimeError):
 
 
 def source_version(project_root: Path = PROJECT_ROOT) -> str:
-    pyproject = tomllib.loads(
-        (project_root / "pyproject.toml").read_text(encoding="utf-8")
+    workspace = tomllib.loads(
+        (project_root / "Cargo.toml").read_text(encoding="utf-8")
     )
-    project_value = pyproject.get("project", {}).get("version")
-    if not isinstance(project_value, str) or not project_value:
-        raise ReleaseValidationError("pyproject.toml project version is unavailable")
-
-    package_source = (
-        project_root / "easy_multi_provider" / "__init__.py"
-    ).read_text(encoding="utf-8")
-    package_match = VERSION_PATTERN.search(package_source)
-    if package_match is None:
-        raise ReleaseValidationError("package __version__ is unavailable")
-    package_value = package_match.group(1)
-    if project_value != package_value:
-        raise ReleaseValidationError(
-            "source versions disagree: pyproject=%s package=%s"
-            % (project_value, package_value)
-        )
-    return project_value
+    version = workspace.get("workspace", {}).get("package", {}).get("version")
+    if not isinstance(version, str) or not version:
+        raise ReleaseValidationError("Cargo workspace package version is unavailable")
+    return version
 
 
 def primary_artifact_names(version: str) -> Set[str]:
@@ -50,7 +36,7 @@ def primary_artifact_names(version: str) -> Set[str]:
         "EMP.zip",
         "EMP-linux-x86_64",
         "EMP-linux-x86_64.tar.gz",
-        "EMP-linux-x86_64.deb",
+        "EMP-linux-x86_64-install.sh",
         "EMP-macos-x86_64",
         "EMP-macos-x86_64.tar.gz",
         "EMP-macos-x86_64.dmg",
@@ -69,7 +55,7 @@ def public_artifact_names(version: str) -> Set[str]:
     return {
         "EMP.exe",
         "EMP-linux-x86_64.tar.gz",
-        "EMP-linux-x86_64.deb",
+        "EMP-linux-x86_64-install.sh",
         "EMP-macos-x86_64.dmg",
         "EMP-macos-arm64.dmg",
     }

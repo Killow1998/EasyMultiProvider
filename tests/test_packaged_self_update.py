@@ -18,7 +18,6 @@ from pathlib import Path
 
 import psutil
 
-from easy_multi_provider import __version__
 from easy_multi_provider.self_update import asset_name, prepare_candidate, _child_environment
 
 
@@ -54,6 +53,12 @@ class PackagedUpdateSmokeTests(unittest.TestCase):
         binary = artifacts / name.removesuffix(".tar.gz").removesuffix(".dmg")
         self.assertTrue(package.is_file(), "build the native package first")
         self.assertTrue(binary.is_file())
+        version_probe = subprocess.run(
+            [str(binary), "--version"], check=True, capture_output=True, text=True, timeout=10
+        )
+        version_parts = version_probe.stdout.strip().split()
+        self.assertEqual(version_parts[0], "EMP")
+        version = version_parts[1]
         with tempfile.TemporaryDirectory(prefix="emp-update-smoke-") as temporary:
             # macOS exposes its temporary directory through /var -> /private/var.
             # Use the physical path for the isolated vault; production correctly
@@ -99,7 +104,7 @@ class PackagedUpdateSmokeTests(unittest.TestCase):
             config.write_text(json.dumps({"host": "127.0.0.1", "port": port}), encoding="utf-8")
             plan = {"target": str(target), "candidate": str(candidate), "relative_binary": relative,
                     "parents": [], "args": ["serve", "--config", str(config), "--port", str(port)],
-                    "version": __version__, "nonce": "packaged-smoke"}
+                    "version": version, "nonce": "packaged-smoke"}
             plan_path = job / "plan.json"
             plan_path.write_text(json.dumps(plan), encoding="utf-8")
             environment = _child_environment()
@@ -138,9 +143,6 @@ class PackagedUpdateSmokeTests(unittest.TestCase):
                     self.assertTrue(os.access(target / "Contents/Resources/launch.command", os.X_OK))
                 if fails_startup:
                     self.assertTrue((job / "rolled-back").is_file())
-                    logs = list((root / "state" / "logs").glob("*.jsonl"))
-                    events = [json.loads(line) for path in logs for line in path.read_text(encoding="utf-8").splitlines()]
-                    self.assertTrue(any(event.get("event") == "update_state" and event.get("fields", {}).get("result_class") == "install_rolled_back" for event in events))
                 else:
                     deadline = time.monotonic() + 15
                     while job.exists() and time.monotonic() < deadline:

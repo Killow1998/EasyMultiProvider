@@ -382,7 +382,6 @@ package = [
     { name = "pillow", version = "10.4.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
     { name = "pillow", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "pyinstaller" },
 ]
 
 [package.metadata]
@@ -400,7 +399,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 package = [
     { name = "pillow", specifier = ">=10.4,<13" },
-    { name = "pyinstaller", specifier = "==6.21.0" },
 ]
 
 [[package]]

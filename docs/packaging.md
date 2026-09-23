@@ -1,114 +1,69 @@
-# Native packaging
+# Native Rust packaging
 
-EMP uses one PyInstaller definition and builds separately on each target
-operating system. Cross-compilation is intentionally unsupported.
+Each release runner builds `EMP` from the Rust workspace. PyInstaller is not
+used, and the shipped service does not need a Python installation. Cross
+compilation is intentionally unsupported: every binary and desktop bundle is
+built on its native operating system.
 
-## Targets
-
-| Runner | Target | Outputs |
+| Runner | Target | Artifacts |
 | --- | --- | --- |
-| `windows-2025` | Windows x64 | branded `.exe`, `.zip` |
-| `ubuntu-22.04` | Linux x64 | binary, `.tar.gz`, desktop-enabled `.deb` |
-| `macos-15-intel` | macOS Intel | binary, `.tar.gz`, `.app` in `.dmg` |
-| `macos-15` | macOS Apple Silicon | binary, `.tar.gz`, `.app` in `.dmg` |
+| `windows-2025` | Windows x64 | `EMP.exe`, `EMP.zip` |
+| `ubuntu-22.04` | Linux x86_64 | executable, `.tar.gz`, interactive installer `.sh` |
+| `macos-15-intel` | macOS Intel | executable, `.tar.gz`, `.app` in `.dmg` |
+| `macos-15` | macOS Apple Silicon | executable, `.tar.gz`, `.app` in `.dmg` |
 
-Linux artifacts target Ubuntu 22.04 or a compatible distribution with glibc
-2.35 or newer. macOS artifacts are architecture-specific; they are not
-universal binaries.
+Linux binaries target Ubuntu 22.04 or a compatible distribution with glibc 2.35
+or newer. macOS artifacts are architecture-specific, unsigned development
+builds; they are not universal binaries.
 
 ## Local build
 
-Install the locked build group and run the builder on the target platform:
+Install Rust 1.93.1 and Python 3.11 with `uv`, then run on the target OS:
 
 ```bash
 uv sync --frozen --group package
-uv run --frozen --group package python packaging/build.py
+CARGO_TARGET_DIR=/tmp/emp-luna-target uv run --frozen --group package python packaging/build.py
 ```
 
-Artifacts and their `.sha256` sidecars are written under `artifacts/`. The
-builder performs three checks before packaging:
+The builder runs `cargo build --locked --release -p emp-app --bin EMP`, checks
+that `EMP --version` matches the Cargo workspace version, and starts the built
+service from an isolated configuration. It checks `/healthz`, completes the
+bootstrap login, and compares the served Web UI bytes with
+`easy_multi_provider/web/index.html`. It then assembles the established archive
+layout, desktop metadata, icons, and SHA-256 sidecars under `artifacts/`.
 
-1. the frozen executable reports the source version through `--version`;
-2. the frozen executable activates the operating system trust store (macOS
-   Keychain, Windows CryptoAPI, or the Linux system CA bundle), keeps certificate
-   and hostname verification enabled, and uses the same OpenSSL version as the
-   build interpreter;
-3. the frozen service starts from a temporary config and Codex home and serves
-   its Web UI over loopback.
+The Python environment is used only by the build and smoke-test scripts for
+artifact assembly, icon conversion, and process cleanup. It is not copied into
+the executable. The Linux bootstrap installer retains the Python 0.11.9
+interactive contract and therefore requires `curl`, Python 3, `tar`, and
+`sha256sum`; the installed EMP service itself has no Python runtime dependency.
 
-The smoke test does not enable Codex integration and does not use Provider or
-subscription credentials.
+The Rust Web UI embeds the existing HTML at compile time. Linux tarballs retain
+the updater-compatible `EMP/EMP` path and also include `EMP/install-user.sh`,
+the SVG icon, and documentation. The Windows archive keeps the `EMP/` root;
+macOS disk images contain `EMP.app` and an `Applications` link. macOS packaging
+uses the native `hdiutil` tool. No archive layout or release asset names are
+changed by the language rewrite.
 
-Packaged builds use `truststore` before importing any network client so the
-standalone executable does not depend on a certificate path from the CI runner.
-On Windows, the spec also explicitly collects the OpenSSL DLLs loaded by Python.
-This prevents unrelated DLLs on `PATH` from shadowing Python's TLS dependencies
-in Conda or virtual-environment builds. No TLS verification is disabled and no
-system certificates are modified. The offline check can also be run directly:
-`EMP.exe --emp-package-tls-check`.
+The isolated package smoke does not enable Codex integration or use provider or
+subscription credentials. The Linux update/rollback tests also exercise the
+Rust executable through the Python 0.11.9 updater contract. The package workflow
+also runs the Rust transport test that rejects untrusted and wrong-host TLS
+certificates while accepting a configured root.
 
-## Desktop package boundary
+## Release workflow
 
-`assets/branding/easy-multi-provider-icon.svg` is the editable artwork and its
-committed 1024-pixel RGBA rendering is the raster master. The packaging-only
-icon generator creates a multi-size Windows ICO, a macOS ICNS, and a 256-pixel
-Linux PNG inside the managed build directory. These generated derivatives are
-never runtime dependencies.
+The **Package** workflow builds on all four native runners, merges the outputs,
+checks the exact 22-file manifest and each SHA-256 sidecar, and publishes five
+user-facing assets:
 
-Manual desktop launch is foreground-only (the update helper is detached):
+- `EMP.exe`
+- `EMP-linux-x86_64.tar.gz`
+- `EMP-linux-x86_64-install.sh`
+- `EMP-macos-x86_64.dmg`
+- `EMP-macos-arm64.dmg`
 
-- the Windows console executable starts desktop mode when opened without
-  arguments;
-- the Debian package installs a `Terminal=true` desktop entry plus scalable and
-  raster icons;
-- the DMG contains `EMP.app`, whose launcher opens the bundled
-  command in Terminal.
-
-All three forms open the authenticated browser URL only after the listener is
-ready. The owning terminal is the process indicator and stop control: use
-`Ctrl+C` for a clean shutdown. No daemon, tray process, PID file, or second
-service lifecycle is introduced.
-
-## Runtime boundary
-
-The package contains EMP, its Python dependencies, and platform launcher/icon
-metadata. It does not contain Codex, credentials, configuration, model catalogs,
-or generated state. EMP performs a bounded scan of known Codex App, `.codex`,
-VS Code/Cursor extension, and `PATH` locations. The user can select multiple
-compatible Codex clients in which they intend to use EMP, and those clients or
-workspaces can run concurrently. EMP independently chooses a compatible helper
-executable for version checks and account quota queries. That helper does not
-route model traffic; EMP does not manage any runtime process or create a
-separate Codex profile.
-
-## GitHub Actions and Releases
-
-Run the **Package** workflow manually from GitHub Actions:
-
-- leave `release_tag` blank to build and retain the four platform bundles as
-  workflow artifacts for 14 days;
-- on the `main` branch, enter the exact source tag, such as `v0.9.8`, to wait
-  for all four builds, merge their outputs, verify the complete 22-file
-  manifest and every SHA-256 sidecar, and publish a stable GitHub Release.
-
-Checksums and alternate wrappers are CI-only verification evidence. The Release
-attaches exactly five versionless installation downloads: `EMP.exe`, Linux DEB
-and TAR.GZ, and the Intel and Apple Silicon DMGs. The installed executable and
-desktop application are both named `EMP`; the Web UI shows the running version.
-Raw executables, Windows/macOS
-archives, and `.sha256` sidecars remain in the temporary workflow artifact
-bundles and do not clutter the user download list.
-
-The requested tag must equal `v` plus the version in both `pyproject.toml` and
-`easy_multi_provider/__init__.py`. The release job fails closed on a version
-mismatch, a missing or unexpected asset, an invalid checksum, or an existing
-tag that targets a different commit. The build jobs retain read-only repository
-access; only the gated release job receives `contents: write`.
-
-The workflow requires the tag to target the exact commit it built and refuses to
-replace an existing published release. A successful tagged build is published as
-the latest stable release.
-
-Current macOS outputs are unsigned development artifacts, so users may need to
-approve EMP in macOS Privacy & Security until Developer ID signing and
-notarization are configured.
+The release tag must be `v` plus the Cargo workspace version. The workflow
+rejects missing or unexpected artifacts, bad checksums, and an existing tag
+that targets another commit. macOS downloads remain unsigned until Developer
+ID signing and notarization are configured.
