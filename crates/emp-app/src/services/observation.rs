@@ -6,12 +6,14 @@ use emp_state::usage::{account_owner, ledger::UsageLedger, reported_usage};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Instant;
 mod shape;
 
 pub(crate) struct Observation {
     ledger: Arc<UsageLedger>,
     diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
+    auto_review_cooldowns: Arc<Mutex<std::collections::BTreeMap<String, std::time::Instant>>>,
     started: Instant,
     first_token: Option<Instant>,
     last_token: Option<Instant>,
@@ -63,6 +65,7 @@ impl Observation {
             .extend(shape::facts(body, incoming).as_object().unwrap().clone());
         Self {
             diagnostics: Arc::clone(&state.backend.diagnostics),
+            auto_review_cooldowns: Arc::clone(&state.auto_review_cooldowns),
             started: Instant::now(),
             first_token: None,
             last_token: None,
@@ -149,6 +152,7 @@ impl Observation {
     pub(crate) fn status(&mut self, status: u16, error: &str) {
         self.event["status"] = json!(status);
         self.event["error_class"] = json!(error);
+        self.event["success"] = json!((200..300).contains(&status) && error == "none");
     }
     pub(crate) fn http_status(&mut self, status: u16) {
         self.status(
@@ -176,6 +180,7 @@ impl Observation {
     pub(crate) fn disconnected(&mut self) {
         self.event["status"] = Value::Null;
         self.event["error_class"] = json!("client_disconnect");
+        self.event["success"] = json!(false);
     }
     pub(crate) fn finish(&mut self) {
         if !self.finalized {
@@ -202,9 +207,44 @@ impl Observation {
                     );
                 }
             }
+            self.observe_auto_review();
             self.ledger.record(&self.event, system_now());
             self.diagnostics.record(&self.event);
             self.finalized = true;
+        }
+    }
+
+    fn observe_auto_review(&self) {
+        let model = self.event["client_model"].as_str().unwrap_or_default();
+        if model != "codex-auto-review" && !model.ends_with("/codex-auto-review") {
+            return;
+        }
+        let account = if self.event["provider_id"] == "codex-native" {
+            "@native"
+        } else {
+            self.event["provider_id"].as_str().unwrap_or_default()
+        };
+        if account.is_empty() {
+            return;
+        }
+        let Ok(mut cooldowns) = self.auto_review_cooldowns.lock() else {
+            return;
+        };
+        if self.event["success"] == true {
+            cooldowns.remove(account);
+            return;
+        }
+        let reason = self.event["failure_reason"].as_str().unwrap_or_default();
+        let error = self.event["error_class"].as_str().unwrap_or_default();
+        if matches!(
+            reason,
+            "quota_exhausted" | "rate_limited" | "payment_required" | "auth_rejected"
+        ) || matches!(error, "rate_limit" | "auth")
+        {
+            cooldowns.insert(
+                account.to_owned(),
+                std::time::Instant::now() + std::time::Duration::from_secs(300),
+            );
         }
     }
 }

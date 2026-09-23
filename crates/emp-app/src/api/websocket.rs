@@ -8,6 +8,7 @@ use crate::http::request::Request;
 use crate::http::response::json_error_response;
 use crate::http::response::status_text;
 use crate::services::accounts::account_catalog_headers;
+use crate::services::auto_review::resolve_auto_review_route;
 use crate::services::catalog::response_catalog_etag;
 use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
@@ -223,11 +224,15 @@ pub(crate) fn serve_responses_websocket(
                 ),
             );
         }
-        let route = match resolve_route(&config, model, |config, slug, account| {
-            subscription_route_model(config, slug, account, |account| {
-                account_catalog_headers(account, &state.backend.configuration.vault)
-            })
-        }) {
+        let route = match resolve_auto_review_route(state, &mut config, model).unwrap_or_else(
+            || {
+                resolve_route(&config, model, |config, slug, account| {
+                    subscription_route_model(config, slug, account, |account| {
+                        account_catalog_headers(account, &state.backend.configuration.vault)
+                    })
+                })
+            },
+        ) {
             Ok(route) => route,
             Err(error) => {
                 let _=websocket.send_json(&serde_json::json!({"type":"error","status":error.status(),"error":{"code":"router_error","message":error.to_string()}}));

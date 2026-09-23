@@ -51,6 +51,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use tempfile::TempDir;
 
+mod auto_review_contract;
 mod catalog_api_contract;
 mod config_api_contract;
 mod native_api_contract;

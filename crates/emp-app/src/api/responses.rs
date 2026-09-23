@@ -14,6 +14,7 @@ use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::services::accounts::account_catalog_headers;
+use crate::services::auto_review::resolve_auto_review_route;
 use crate::services::compaction::external_compaction_response;
 use crate::services::compaction::has_trailing_compaction_trigger;
 use crate::services::events::generated_response_stream;
@@ -111,9 +112,11 @@ pub(crate) fn responses_request(
             ),
         );
     }
-    let route = match resolve_route(&config, model, |config, slug, account| {
-        subscription_route_model(config, slug, account, |account| {
-            account_catalog_headers(account, &state.backend.configuration.vault)
+    let route = match resolve_auto_review_route(state, &mut config, model).unwrap_or_else(|| {
+        resolve_route(&config, model, |config, slug, account| {
+            subscription_route_model(config, slug, account, |account| {
+                account_catalog_headers(account, &state.backend.configuration.vault)
+            })
         })
     }) {
         Ok(route) => route,

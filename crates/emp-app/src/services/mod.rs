@@ -1,4 +1,5 @@
 pub(crate) mod accounts;
+pub(crate) mod auto_review;
 pub(crate) mod catalog;
 pub(crate) mod compaction;
 pub(crate) mod events;

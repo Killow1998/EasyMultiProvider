@@ -452,6 +452,11 @@ pub(crate) fn quota_owner_key(state: &ServerState, account_id: &str) -> Result<S
 }
 
 pub(crate) fn notify_quota_update(state: &ServerState, account_id: &str, error: Option<&str>) {
+    if error.is_none_or(str::is_empty)
+        && let Ok(mut cooldowns) = state.auto_review_cooldowns.lock()
+    {
+        cooldowns.remove(account_id);
+    }
     if let Ok(mut errors) = state.backend.accounts.quota_refresh_errors.lock() {
         match error {
             Some(error) => {

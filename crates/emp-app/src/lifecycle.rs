@@ -221,6 +221,7 @@ impl ServerHandle {
             port: local_addr.port(),
             base_url: format!("http://{local_addr}/v1"),
             updates,
+            auto_review_cooldowns: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         });
         let workers = Arc::new(Mutex::new(Vec::new()));
         let handle = Self {
