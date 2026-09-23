@@ -1085,7 +1085,12 @@ fn responses_websocket_reuses_matching_native_upstream_for_incremental_turn() {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    write!(stream,"GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: native-ws-thread\r\n\r\n",server.local_addr().port()).unwrap();
+    write!(
+        stream,
+        "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: native-ws-thread\r\nx-openai-subagent: websocket-subagent\r\n\r\n",
+        server.local_addr().port()
+    )
+    .unwrap();
     stream.flush().unwrap();
     let mut head = Vec::new();
     while !head.windows(4).any(|part| part == b"\r\n\r\n") {
@@ -1148,6 +1153,8 @@ fn responses_websocket_reuses_matching_native_upstream_for_incremental_turn() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     assert_eq!(first_headers["authorization"], "Bearer caller");
+    assert_eq!(first_headers["thread-id"], "native-ws-thread");
+    assert_eq!(first_headers["x-openai-subagent"], "websocket-subagent");
     assert_eq!(first_body["type"], "response.create");
     assert_eq!(first_body["model"], "upstream");
     assert_eq!(second_body["previous_response_id"], "resp_one");
