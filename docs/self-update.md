@@ -44,9 +44,8 @@ that checksum checks outside the privileged boundary cannot close. A detected
    `apt remove` does not delete the per-user EMP configuration, so the new user
    installation reuses it without a copy step.
 
-2. Remain system-managed: download `EMP-linux-x86_64.deb` and run
-   `sudo apt install ./EMP-linux-x86_64.deb`. Future updates must also be applied
-   through the package manager.
+2. Remain system-managed: continue using the package manager that installed the
+   existing system package. The current release does not publish a `.deb` asset.
 
 The WebUI provides **Open latest Release** and **Copy migration commands** for a
 system installation. It never asks for a password and never starts a privileged

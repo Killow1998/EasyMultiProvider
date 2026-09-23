@@ -109,8 +109,8 @@ Subscription 的编辑窗口可以逐模型设置上下文 token 数。留空使
 
 | 平台 | 产物 |
 | --- | --- |
-| Windows x64 | 带图标的独立 `.exe` |
-| Ubuntu 22.04+ x64 | `.tar.gz` 和带桌面入口的 `.deb` |
+| Windows x64 | 独立 `.exe` |
+| Ubuntu 22.04+ x64 | `.tar.gz` 和用户安装脚本 |
 | macOS Intel | 包含 `.app` 的 `.dmg` |
 | macOS Apple Silicon | 包含 `.app` 的 `.dmg` |
 
@@ -125,8 +125,9 @@ Subscription 的编辑窗口可以逐模型设置上下文 token 数。留空使
   ./install-user.sh
   ```
 
-- **Linux `.deb`：**运行 `sudo apt install ./EMP-linux-x86_64.deb`，再从应用菜单打开 **EMP**。`.deb` 不包含 `install-user.sh`。
 - **macOS：**打开 DMG，把 **EMP** 拖入“应用程序”，然后双击。
+
+当前发行版不提供 Linux `.deb`。已经安装的系统管理版本仍由原有包管理器负责；用户安装脚本不会自动移除它。
 
 EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的终端窗口。看到
 `EMP listening on ...` 就表示启动成功。使用 EMP 时请保持该终端
@@ -142,7 +143,7 @@ EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的
 
 Linux 用户安装把程序放在 `$XDG_DATA_HOME/easy-multi-provider/EMP`，默认是
 `~/.local/share/easy-multi-provider/EMP`；启动入口是 `~/.local/bin/EMP`。
-Linux 用户安装与网页更新不需要 `sudo` 或管理员密码；安装系统级 `.deb` 需要。
+Linux 用户安装与网页更新不需要 `sudo` 或管理员密码。
 配置与账号数据保存在上述用户配置目录，更新程序不会替换它们。
 已有系统 `.deb` 安装不会被自动卸载；停止
 旧 EMP 后可安装用户版本，旧配置应先备份再迁入用户配置目录。
@@ -154,15 +155,14 @@ Linux 用户安装与网页更新不需要 `sudo` 或管理员密码；安装系
 .\EMP.exe serve --config config.json
 ```
 
-解压 Linux `.tar.gz` 或安装 `.deb` 后运行：
+解压 Linux `.tar.gz` 后运行：
 
 ```bash
 ./EMP --version
 ./EMP serve --config config.json
 ```
 
-`.deb` 会把同一命令安装到 `PATH` 中，安装后不需要输入前面的 `./`。Windows
-可执行文件和 Linux 压缩包中的程序在无参数运行时，也会进入自动打开浏览器的
+Windows 可执行文件和 Linux 压缩包中的程序在无参数运行时，也会进入自动打开浏览器的
 桌面模式。
 
 当前 macOS workflow 产物属于未签名的开发构建。公开分发仍需要 Apple Developer

@@ -50,7 +50,6 @@ Download the latest reviewed build from [GitHub Releases](https://github.com/Kil
 | --- | --- | --- |
 | Windows x64 | `EMP.exe` | Double-click `EMP.exe` |
 | Ubuntu 22.04+ x64 | `EMP-linux-x86_64.tar.gz` | Use the user-install commands below, then open **EMP** from the application menu |
-| Ubuntu 22.04+ x64 | `EMP-linux-x86_64.deb` | Run `sudo apt install ./EMP-linux-x86_64.deb`, then open **EMP** |
 | macOS Apple Silicon | `.dmg` | Drag **EMP** to Applications |
 | macOS Intel | `.dmg` | Drag **EMP** to Applications |
 
@@ -62,7 +61,9 @@ cd EMP
 ./install-user.sh
 ~~~
 
-The `.deb` is a separate system-managed installation; it does not contain `install-user.sh`.
+The current release does not publish a Linux `.deb`. Existing system-managed
+installations remain owned by their package manager; the user installer does not
+remove them automatically.
 
 The [package workflow](https://github.com/Killow1998/EasyMultiProvider/actions/workflows/package.yml) builds and smoke-tests the native artifacts before a release is published.
 
@@ -234,8 +235,6 @@ Linux archive, from its extracted directory:
 ./EMP serve --config config.json
 ~~~
 
-With the `.deb`, use `EMP` instead of `./EMP` after installation.
-
 EMP listens on `http://127.0.0.1:4200` by default. Use `--port` only when that port is already occupied.
 
 ## Install from source
@@ -263,7 +262,7 @@ Desktop launch stores configuration in the normal per-user location:
 
 The Linux user installer places the binary at `$XDG_DATA_HOME/easy-multi-provider/EMP` (default `~/.local/share/easy-multi-provider/EMP`) and the launcher at `~/.local/bin/EMP`.
 
-The Linux user installer and Web UI updates do not require sudo or an administrator password. Installing the system `.deb` does. Configuration and account data stay in the user configuration directory and are not replaced by binary updates.
+The Linux user installer and Web UI updates do not require sudo or an administrator password. Configuration and account data stay in the user configuration directory and are not replaced by binary updates. Existing system `.deb` installations remain managed by their package manager.
 
 ## Docs
 
