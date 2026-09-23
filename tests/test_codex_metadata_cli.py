@@ -1,12 +1,15 @@
 """Opt-in official CLI acceptance of native control metadata and tool followups."""
+import copy
 import gzip
 from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
+import queue
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -108,6 +111,147 @@ def _server_search_stream(payload):
                 for kind in ("response.output_item.added", "response.output_item.done"):
                     events.append({"type": kind, "output_index": index, "item": item})
     return "".join("data: " + json.dumps(event) + "\n\n" for event in events).encode()
+
+
+class _CodexAppServerStdio:
+    """Small JSON-RPC client for the official app-server stdio transport."""
+
+    def __init__(self, command, environment, cwd):
+        self.process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        self.lines = queue.Queue()
+        self.stderr_lines = []
+        self.messages = []
+        self.request_id = 0
+        self.stdout_reader = threading.Thread(target=self._read_stdout, daemon=True)
+        self.stderr_reader = threading.Thread(target=self._read_stderr, daemon=True)
+        self.stdout_reader.start()
+        self.stderr_reader.start()
+
+    def _read_stdout(self):
+        for line in self.process.stdout:
+            self.lines.put(line)
+        self.lines.put(None)
+
+    def _read_stderr(self):
+        self.stderr_lines.extend(self.process.stderr)
+
+    def _receive(self, timeout):
+        try:
+            line = self.lines.get(timeout=timeout)
+        except queue.Empty:
+            raise AssertionError("Codex app-server response timed out: " + "".join(self.stderr_lines[-40:])) from None
+        if line is None:
+            raise AssertionError(
+                "Codex app-server exited early: " + "".join(self.stderr_lines[-40:])
+            )
+        try:
+            return json.loads(line)
+        except ValueError:
+            raise AssertionError(
+                "Codex app-server emitted a non-JSON stdout line: " + line[:1000]
+            ) from None
+
+    def notify(self, method, params=None):
+        message = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            message["params"] = params
+        self.process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
+        self.process.stdin.flush()
+
+    def request(self, method, params):
+        self.request_id += 1
+        request_id = self.request_id
+        self.process.stdin.write(
+            json.dumps(
+                {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        self.process.stdin.flush()
+        deadline = time.monotonic() + 60
+        while True:
+            message = self._receive(max(0.01, deadline - time.monotonic()))
+            if message.get("id") == request_id:
+                if "error" in message:
+                    raise AssertionError(
+                        f"Codex app-server {method} failed: {message['error']}"
+                    )
+                return message.get("result", {})
+            self.messages.append(message)
+
+    @staticmethod
+    def _terminal(message, thread_id, turn_id):
+        if message.get("method") not in {"turn/completed", "turn/failed"}:
+            return False
+        params = message.get("params", {})
+        turn = params.get("turn", {})
+        return params.get("threadId") == thread_id and turn.get("id") == turn_id
+
+    def wait_for_turn(self, thread_id, turn_id):
+        deadline = time.monotonic() + 90
+        for index, message in enumerate(self.messages):
+            if self._terminal(message, thread_id, turn_id):
+                return self.messages.pop(index)["params"]["turn"]
+        while True:
+            message = self._receive(max(0.01, deadline - time.monotonic()))
+            if self._terminal(message, thread_id, turn_id):
+                return message["params"]["turn"]
+            self.messages.append(message)
+
+    def close(self):
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5)
+        self.stdout_reader.join(timeout=2)
+        self.stderr_reader.join(timeout=2)
+        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+            if stream is not None:
+                stream.close()
+
+
+class _AppServerSwitchUpstream(BaseHTTPRequestHandler):
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers["Content-Length"]))
+        body = _decode_request(raw, self.headers.get("Content-Encoding", "identity"))
+        headers = {name.lower(): value for name, value in self.headers.items()}
+        self.server.observations.append({"path": self.path, "body": body, "headers": headers})
+        authorization = headers.get("authorization")
+        if authorization == "Bearer app-server-caller-secret":
+            reply_text = "NATIVE_TURN_HISTORY_MARKER"
+        elif authorization == "Bearer destination-secret":
+            reply_text = "EXTERNAL_TURN_COMPLETED"
+        else:
+            self.server.fixture_error = "unexpected upstream authorization: " + repr(authorization)
+            self.send_error(401, "unexpected fixture credential")
+            return
+        payload = _fixed_response_stream(body.get("model", "fixture-model")).replace(
+            FIXED_REPLY.encode(), reply_text.encode()
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *_args):
+        pass
 
 
 def _fixture_payload(upstream, body, headers):
@@ -225,6 +369,257 @@ class CodexMetadataCliTests(unittest.TestCase):
 
     def test_native_bio_policy_is_reported_without_generation_replay(self):
         self._run_fixture("bio_policy")
+
+    @unittest.skipUnless(
+        os.environ.get("EMP_RUST_BINARY"),
+        "set EMP_RUST_BINARY for the official app-server/Rust EMP switch fixture",
+    )
+    def test_app_server_switches_native_to_external_on_one_thread(self):
+        ensure_test_master_key()
+        rust_binary = str(Path(os.environ["EMP_RUST_BINARY"]).resolve(strict=True))
+        version = subprocess.run(
+            [rust_binary, "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(version, "EMP 0.11.10")
+        print("Rust EMP consumer binary:", version, rust_binary)
+
+        upstream = ThreadingHTTPServer(("127.0.0.1", 0), _AppServerSwitchUpstream)
+        upstream.observations = []
+        upstream.fixture_error = None
+        upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+        upstream_thread.start()
+        rust_process = None
+        app_server = None
+        try:
+            with tempfile.TemporaryDirectory(prefix="emp-app-server-switch-") as directory:
+                root = Path(directory)
+                emp_home = root / "emp-home"
+                emp_home.mkdir()
+                (emp_home / "auth.json").write_text(
+                    json.dumps({"tokens": {
+                        "access_token": "fixture-native-token",
+                        "account_id": "fixture-native-account",
+                    }}),
+                    encoding="utf-8",
+                )
+                codex_home = root / "consumer-codex-home"
+                codex_home.mkdir()
+                project = root / "project"
+                project.mkdir()
+                subprocess.run(
+                    ["git", "init", "--quiet", str(project)],
+                    check=True,
+                    capture_output=True,
+                    timeout=10,
+                )
+                native_catalog = root / "native.json"
+                native_catalog.write_text('{"models":[]}', encoding="utf-8")
+                config_path = root / "emp.json"
+                upstream_url = "http://127.0.0.1:%d/v1" % upstream.server_port
+                config = normalize({
+                    "native_catalog_path": str(native_catalog),
+                    "providers": [
+                        {
+                            "id": "native",
+                            "name": "Native fixture",
+                            "base_url": upstream_url,
+                            "protocol": "responses",
+                            "auth_mode": "forward",
+                        },
+                        {
+                            "id": "responses",
+                            "name": "External fixture",
+                            "base_url": upstream_url,
+                            "protocol": "responses",
+                            "auth_mode": "api_key",
+                            "api_key": "destination-secret",
+                        },
+                    ],
+                    "models": [
+                        {
+                            "id": "native/model",
+                            "provider": "native",
+                            "upstream_id": "native-upstream",
+                            "enabled": True,
+                            "reasoning_levels": ["low"],
+                            "context_window": 100000,
+                            "output_limit": 4096,
+                        },
+                        {
+                            "id": "responses/model",
+                            "provider": "responses",
+                            "upstream_id": "external-upstream",
+                            "enabled": True,
+                            "reasoning_levels": ["low"],
+                            "context_window": 100000,
+                            "output_limit": 4096,
+                        },
+                    ],
+                })
+                save(config, config_path)
+                official_catalog = json.loads(
+                    Path(os.environ["EMP_CODEX_TEST_CATALOG"]).read_text(encoding="utf-8")
+                )
+                official_models = {
+                    model.get("slug"): model
+                    for model in official_catalog.get("models", [])
+                    if isinstance(model, dict)
+                }
+                catalog_models = []
+                for source_slug, slug, display_name in (
+                    ("gpt-6-astra", "native/model", "Native fixture"),
+                    ("gpt-6-sol", "responses/model", "External fixture"),
+                ):
+                    model = official_models.get(source_slug)
+                    self.assertIsNotNone(model, f"Codex catalog is missing {source_slug}")
+                    model = copy.deepcopy(model)
+                    model["slug"] = slug
+                    model["display_name"] = display_name
+                    catalog_models.append(model)
+                catalog_path = root / "codex-models.json"
+                catalog_path.write_text(
+                    json.dumps({"models": catalog_models}), encoding="utf-8"
+                )
+                rust_process = EmpProcess.from_config(
+                    [rust_binary], config_path, emp_home
+                )
+
+                provider = (
+                    '{name="EMP fixture", base_url=%s, wire_api="responses", '
+                    'env_key="EMP_APP_SERVER_TEST_KEY", supports_websockets=false, '
+                    'request_max_retries=0, stream_max_retries=0, '
+                    'http_headers={Cookie=%s}}'
+                ) % (
+                    json.dumps("http://127.0.0.1:%d/v1" % rust_process.port),
+                    json.dumps(rust_process.cookie),
+                )
+                app_environment = dict(
+                    os.environ,
+                    CODEX_HOME=str(codex_home),
+                    EMP_APP_SERVER_TEST_KEY="app-server-caller-secret",
+                    OPENAI_API_KEY="fixture-only",
+                    CODEX_API_KEY="fixture-only",
+                    HTTP_PROXY="http://127.0.0.1:1",
+                    HTTPS_PROXY="http://127.0.0.1:1",
+                    ALL_PROXY="http://127.0.0.1:1",
+                    NO_PROXY="127.0.0.1,localhost,::1",
+                )
+                command = [
+                    str(Path(os.environ["EMP_CODEX_TEST_BINARY"]).resolve(strict=True)),
+                    "app-server",
+                    "--stdio",
+                    "-c",
+                    'model_provider="fixture"',
+                    "-c",
+                    "model_providers.fixture=" + provider,
+                    "-c",
+                    "model_catalog_json=" + json.dumps(str(catalog_path)),
+                    "-c",
+                    'model_reasoning_effort="low"',
+                    "-c",
+                    'sandbox_mode="read-only"',
+                    "-c",
+                    'approval_policy="never"',
+                    "-c",
+                    'web_search="disabled"',
+                ]
+                app_server = _CodexAppServerStdio(command, app_environment, project)
+                app_server.request(
+                    "initialize",
+                    {"clientInfo": {"name": "EMP app-server acceptance", "version": "1.0"}},
+                )
+                app_server.notify("initialized", {})
+                started = app_server.request(
+                    "thread/start",
+                    {
+                        "cwd": str(project),
+                        "model": "native/model",
+                        "modelProvider": "fixture",
+                        "ephemeral": True,
+                    },
+                )
+                thread_id = started["thread"]["id"]
+                first_started = app_server.request(
+                    "turn/start",
+                    {
+                        "threadId": thread_id,
+                        "model": "native/model",
+                        "input": [{"type": "text", "text": "FIRST_APP_SERVER_TURN"}],
+                    },
+                )
+                first_terminal = app_server.wait_for_turn(
+                    thread_id, first_started["turn"]["id"]
+                )
+                self.assertEqual(first_terminal["status"], "completed", first_terminal)
+                second_started = app_server.request(
+                    "turn/start",
+                    {
+                        "threadId": thread_id,
+                        "model": "responses/model",
+                        "input": [{"type": "text", "text": "SECOND_APP_SERVER_TURN"}],
+                    },
+                )
+                second_terminal = app_server.wait_for_turn(
+                    thread_id, second_started["turn"]["id"]
+                )
+                self.assertEqual(second_terminal["status"], "completed", second_terminal)
+
+            self.assertIsNone(upstream.fixture_error)
+            requests = [
+                record
+                for record in upstream.observations
+                if record["body"].get("generate") is not False
+            ]
+            self.assertEqual(len(requests), 2, upstream.observations)
+            native_request, external_request = requests
+            self.assertEqual(native_request["body"]["model"], "native-upstream")
+            self.assertEqual(
+                native_request["headers"].get("authorization"),
+                "Bearer app-server-caller-secret",
+            )
+            self.assertEqual(external_request["body"]["model"], "external-upstream")
+            self.assertEqual(
+                external_request["headers"].get("authorization"),
+                "Bearer destination-secret",
+            )
+            external_headers = external_request["headers"]
+            for internal_header in (
+                "cookie",
+                "thread-id",
+                "session-id",
+                "x-codex-turn-metadata",
+                "chatgpt-account-id",
+            ):
+                self.assertNotIn(
+                    internal_header,
+                    external_headers,
+                    f"external destination received {internal_header}: {external_headers}",
+                )
+            self.assertNotIn(
+                "app-server-caller-secret",
+                json.dumps(external_headers) + json.dumps(external_request["body"]),
+            )
+            rendered_input = json.dumps(external_request["body"].get("input"))
+            for marker in (
+                "FIRST_APP_SERVER_TURN",
+                "NATIVE_TURN_HISTORY_MARKER",
+                "SECOND_APP_SERVER_TURN",
+            ):
+                self.assertIn(marker, rendered_input, rendered_input)
+        finally:
+            if app_server is not None:
+                app_server.close()
+            if rust_process is not None:
+                rust_process.close()
+            upstream.shutdown()
+            upstream.server_close()
+            upstream_thread.join(timeout=3)
 
     def _run_fixture(self, failure_code=None, *, native_builtin=False, reported_model=None,
                      native_ws=False, direct_upstream=False, malformed_events=False,
