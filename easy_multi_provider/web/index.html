@@ -1417,6 +1417,7 @@ function quotaErrorText(error, id) {
     quota_auth_required: id === state.native_account?.id ? tr('当前 Codex 登录已失效，请在 Codex 中重新登录。','The current Codex login is no longer valid. Sign in again in Codex.') : tr('导入的登录凭据已失效，请重新登录该账号，再用相同账户 ID 导入最新 auth.json。','The imported credentials are no longer valid. Sign in again, then import the latest auth.json with the same account ID.'),
     quota_access_denied: tr('额度服务拒绝访问（403）；请检查账号权限或网络。','Quota access denied (403). Check account permissions or network.'),
     quota_rate_limited: tr('额度查询过于频繁（429），请稍后再试。','Quota queries are rate limited (429). Try again later.'),
+    quota_transport_error: tr('Codex 无法连接 ChatGPT 工作区路由服务；请检查 DNS、VPN/TUN、系统代理和网络连通性。','Codex could not reach ChatGPT workspace routing. Check DNS, VPN/TUN, the system proxy, and network connectivity.'),
     quota_fetch_failed: tr('额度服务查询失败，请检查网络后重试。','Quota service query failed. Check network connectivity and retry.'),
     quota_account_read_failed: tr('Codex 无法读取账号登录状态。','Codex could not read the account login state.'),
     quota_initialize_failed: tr('无法读取额度，请重新扫描 Codex 后重试。','Could not read quota. Rescan Codex and try again.'),

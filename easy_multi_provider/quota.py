@@ -25,6 +25,14 @@ from .accounts import NATIVE_ACCOUNT_ID, AccountError, load_auth, load_native_au
 from .vault import VaultError, write_encrypted_json
 
 
+_WORKSPACE_ROUTING_CONNECTIVITY_ERRORS = frozenset(
+    {
+        "workspace routing discovery timed out",
+        "workspace routing discovery failed",
+    }
+)
+
+
 class QuotaError(ValueError):
     """Raised when Codex cannot provide a safe quota snapshot."""
 
@@ -53,6 +61,15 @@ def _quota_rpc_error(method: str, error: Any) -> QuotaError:
         return QuotaError("Codex quota access was denied (403); check account access and network", "quota_access_denied")
     if status_code == 429:
         return QuotaError("Codex quota queries are rate limited (429); try again later", "quota_rate_limited")
+    if (
+        method == "account/read"
+        and message.strip().lower() in _WORKSPACE_ROUTING_CONNECTIVITY_ERRORS
+    ):
+        return QuotaError(
+            "Codex could not reach ChatGPT workspace routing; check DNS, "
+            "VPN/TUN, proxy, and network connectivity",
+            "quota_transport_error",
+        )
     if method == "account/rateLimits/read" and "error sending request" in message.lower():
         return QuotaError("Codex could not connect to the quota service; check the proxy and network connection", "quota_transport_error")
     if method == "account/rateLimits/read":

@@ -998,6 +998,10 @@ async function quotaErrorBehavior() {
   assert.strictEqual(await run("refreshAccount('ship', false)"), false);
   assert.match(getElement("accounts").innerHTML, /相同账户 ID 导入最新 auth.json/);
   assert.doesNotMatch(getElement("accounts").innerHTML, /safe fallback/);
+  context.__quotaError = Object.assign(new Error("unsafe backend detail"), {payload:{error:{code:'quota_transport_error'}}});
+  assert.strictEqual(await run("refreshAccount('ship', false)"), false);
+  assert.match(getElement("accounts").innerHTML, /DNS、VPN\/TUN、系统代理和网络连通性/);
+  assert.doesNotMatch(getElement("accounts").innerHTML, /unsafe backend detail/);
   run("api = __realQuotaApi");
 }
 

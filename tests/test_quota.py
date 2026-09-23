@@ -586,6 +586,46 @@ class NativeLoginQuotaTests(unittest.TestCase):
                 self.assertNotIn("example.invalid", str(raised.exception))
                 self.assertTrue(process.stdin.closed)
 
+    def test_workspace_routing_failures_are_connectivity_errors(self):
+        requests = [
+            {"id": 1, "method": "initialize"},
+            {"method": "initialized"},
+            {"id": 2, "method": "account/read"},
+            {"id": 3, "method": "account/rateLimits/read"},
+        ]
+        for message in (
+            "workspace routing discovery timed out",
+            "workspace routing discovery failed",
+        ):
+            with self.subTest(message=message):
+                process, _ = self._fake_process_factory(True)
+                process.stdout = io.StringIO(
+                    "\n".join(
+                        json.dumps(value)
+                        for value in (
+                            {"id": 1, "result": {}},
+                            {"id": 2, "error": {"code": -32603, "message": message}},
+                        )
+                    )
+                    + "\n"
+                )
+                with self.assertRaises(quota_module.QuotaError) as raised:
+                    _query_app_server(process, requests, 2)
+                self.assertEqual(raised.exception.code, "quota_transport_error")
+                self.assertIn("DNS", str(raised.exception))
+                self.assertNotIn(message, str(raised.exception))
+                self.assertNotIn("account/rateLimits/read", process.stdin.body)
+
+        generic, _ = self._fake_process_factory(True)
+        generic.stdout = io.StringIO(
+            '{"id":1,"result":{}}\n'
+            '{"id":2,"error":{"code":-32603,"message":"private backend detail"}}\n'
+        )
+        with self.assertRaises(quota_module.QuotaError) as raised:
+            _query_app_server(generic, requests, 2)
+        self.assertEqual(raised.exception.code, "quota_account_read_failed")
+        self.assertNotIn("private backend detail", str(raised.exception))
+
     def test_missing_account_stops_before_quota_request(self):
         process, _ = self._fake_process_factory(True)
         process.stdout = io.StringIO(
