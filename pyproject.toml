@@ -31,4 +31,5 @@ easy_multi_provider = ["web/index.html", "web/vision-test-icon.png", "data/*.jso
 [dependency-groups]
 package = [
     "pillow>=10.4,<13",
+    "pefile==2024.8.26 ; sys_platform == 'win32'",
 ]

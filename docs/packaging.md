@@ -30,11 +30,15 @@ that `EMP --version` matches the Cargo workspace version, and starts the built
 service from an isolated configuration. It checks `/healthz`, completes the
 bootstrap login, and compares the served Web UI bytes with
 `easy_multi_provider/web/index.html`. It then assembles the established archive
-layout, desktop metadata, icons, and SHA-256 sidecars under `artifacts/`.
+layout, desktop metadata, platform icons, and SHA-256 sidecars under `artifacts/`.
+On Windows, `rc.exe` compiles the generated icon and Cargo-derived file/product
+versions into the executable; the package build and Windows-only test inspect
+the final PE resources with `pefile`. That Windows path is defined here but has
+not been validated on a local Windows runner.
 
 The Python environment is used only by the build and smoke-test scripts for
 artifact assembly, icon conversion, and process cleanup. It is not copied into
-the executable. The Linux bootstrap installer retains the Python 0.11.9
+the executable. The Linux bootstrap installer retains the Python 0.11.10
 interactive contract and therefore requires `curl`, Python 3, `tar`, and
 `sha256sum`; the installed EMP service itself has no Python runtime dependency.
 
@@ -47,7 +51,7 @@ changed by the language rewrite.
 
 The isolated package smoke does not enable Codex integration or use provider or
 subscription credentials. The Linux update/rollback tests also exercise the
-Rust executable through the Python 0.11.9 updater contract. The package workflow
+Rust executable through the Python 0.11.10 updater contract. The package workflow
 also runs the Rust transport test that rejects untrusted and wrong-host TLS
 certificates while accepting a configured root.
 

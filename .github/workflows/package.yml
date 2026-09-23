@@ -105,6 +105,10 @@ jobs:
       - name: Build and smoke-test native package
         run: uv run --frozen --group package python packaging/build.py
 
+      - name: Verify Windows executable resources
+        if: runner.os == 'Windows'
+        run: uv run --frozen --group package python -m unittest tests.test_windows_package -v
+
       - name: Verify native TLS validation and trusted roots
         run: >-
           cargo +1.93.1 test --locked --release -p emp-transport --test http_client

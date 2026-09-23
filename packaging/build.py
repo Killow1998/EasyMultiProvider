@@ -114,7 +114,9 @@ def _build_icons(build_root: Path) -> PackageIcons:
     return icons
 
 
-def _build_binary(target: Target) -> Path:
+def _build_binary(
+    target: Target, windows_resource_file: Optional[Path] = None
+) -> Path:
     cargo = os.environ.get("CARGO") or shutil.which("cargo")
     if not cargo:
         raise RuntimeError("Rust Cargo is required to build EMP")
@@ -132,7 +134,13 @@ def _build_binary(target: Target) -> Path:
             EXECUTABLE_NAME,
         ]
     )
-    _run(cargo_command)
+    environment = os.environ.copy()
+    if target.system == "Windows":
+        if windows_resource_file is None or not windows_resource_file.is_file():
+            raise RuntimeError("Windows packaging requires compiled icon/version resources")
+        environment["EMP_PACKAGE_RESOURCE"] = str(windows_resource_file.resolve())
+        environment["EMP_REQUIRE_WINDOWS_RESOURCES"] = "1"
+    _run(cargo_command, environment)
     target_root = Path(os.environ.get("CARGO_TARGET_DIR", PROJECT_ROOT / "target"))
     if not target_root.is_absolute():
         target_root = PROJECT_ROOT / target_root
@@ -142,6 +150,210 @@ def _build_binary(target: Target) -> Path:
     if target.system != "Windows":
         executable.chmod(0o755)
     return executable
+
+
+def _write_windows_resource_script(
+    destination: Path, icon: Path, version: str
+) -> Path:
+    if not icon.is_file():
+        raise RuntimeError("Windows application icon is missing")
+    match = re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version)
+    if match is None:
+        raise RuntimeError("Windows file resources require a stable three-part version")
+    components = tuple(int(component) for component in match.groups())
+    if any(component > 65535 for component in components):
+        raise RuntimeError("Windows file version components must fit 16 bits")
+
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(icon, destination / "easy-multi-provider.ico")
+    file_version = ".".join(str(component) for component in components)
+    numeric_version = ",".join(str(component) for component in components) + ",0"
+    source = "\n".join(
+        (
+            "#define VS_VERSION_INFO 1",
+            '1 ICON "easy-multi-provider.ico"',
+            "",
+            "VS_VERSION_INFO VERSIONINFO",
+            " FILEVERSION %s" % numeric_version,
+            " PRODUCTVERSION %s" % numeric_version,
+            " FILEFLAGSMASK 0x3fL",
+            " FILEFLAGS 0x0L",
+            " FILEOS 0x00040004L",
+            " FILETYPE 0x00000001L",
+            " FILESUBTYPE 0x00000000L",
+            "BEGIN",
+            ' BLOCK "StringFileInfo"',
+            " BEGIN",
+            '  BLOCK "040904b0"',
+            "  BEGIN",
+            '   VALUE "CompanyName", "Killow1998"',
+            '   VALUE "FileDescription", "EMP local multi-provider control plane"',
+            '   VALUE "FileVersion", "%s"' % file_version,
+            '   VALUE "InternalName", "EMP"',
+            '   VALUE "OriginalFilename", "EMP.exe"',
+            '   VALUE "ProductName", "EasyMultiProvider"',
+            '   VALUE "ProductVersion", "%s"' % file_version,
+            "  END",
+            " END",
+            ' BLOCK "VarFileInfo"',
+            " BEGIN",
+            '  VALUE "Translation", 0x0409, 1200',
+            " END",
+            "END",
+        )
+    ) + "\n"
+    resource_script = destination / "EMP.rc"
+    resource_script.write_text(source, encoding="ascii", newline="\n")
+    return resource_script
+
+
+def _find_windows_resource_compiler() -> Path:
+    configured = os.environ.get("EMP_RC")
+    if configured:
+        compiler = Path(configured)
+        if compiler.is_file():
+            return compiler.resolve()
+        raise RuntimeError("EMP_RC does not point to an existing rc.exe")
+
+    candidates = []
+    sdk_bin = os.environ.get("WindowsSdkBinPath")
+    if sdk_bin:
+        base = Path(sdk_bin)
+        candidates.extend(base / architecture / "rc.exe" for architecture in ("x64", "x86"))
+
+    sdk_dir = os.environ.get("WindowsSdkDir")
+    sdk_version = os.environ.get("WindowsSDKVersion", "").rstrip("\\/")
+    if sdk_dir:
+        bin_dir = Path(sdk_dir) / "bin"
+        if sdk_version:
+            candidates.extend(
+                bin_dir / sdk_version / architecture / "rc.exe"
+                for architecture in ("x64", "x86")
+            )
+        candidates.extend(_versioned_resource_compilers(bin_dir))
+
+    program_files = os.environ.get("ProgramFiles(x86)")
+    if program_files:
+        candidates.extend(
+            _versioned_resource_compilers(Path(program_files) / "Windows Kits" / "10" / "bin")
+        )
+
+    path_compiler = shutil.which("rc.exe")
+    if path_compiler:
+        candidates.append(Path(path_compiler))
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise RuntimeError("Windows SDK rc.exe was not found")
+
+
+def _versioned_resource_compilers(bin_directory: Path) -> List[Path]:
+    try:
+        versions = [path for path in bin_directory.iterdir() if path.is_dir()]
+    except OSError:
+        return []
+
+    def version_key(path: Path) -> tuple:
+        values = re.findall(r"\d+", path.name)
+        return tuple(int(value) for value in values)
+
+    candidates = []
+    for version in sorted(versions, key=version_key, reverse=True):
+        candidates.extend(
+            version / architecture / "rc.exe" for architecture in ("x64", "x86")
+        )
+    return candidates
+
+
+def _compile_windows_resource(resource_script: Path) -> Path:
+    if not resource_script.is_file():
+        raise RuntimeError("Windows resource script is missing")
+    if not (resource_script.parent / "easy-multi-provider.ico").is_file():
+        raise RuntimeError("Windows application icon is missing beside its resource script")
+    compiler = _find_windows_resource_compiler()
+    resource_file = resource_script.with_suffix(".res")
+    try:
+        result = subprocess.run(
+            [str(compiler), "/nologo", "/fo", str(resource_file), resource_script.name],
+            cwd=str(resource_script.parent),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("Windows resource compiler could not run") from exc
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout).strip()
+        raise RuntimeError("Windows resource compilation failed: %s" % details)
+    if not resource_file.is_file() or resource_file.stat().st_size == 0:
+        raise RuntimeError("Windows resource compiler did not create a nonempty .res file")
+    return resource_file
+
+
+def _validate_windows_resources(executable: Path, version: str) -> None:
+    try:
+        import pefile
+    except ImportError as exc:
+        raise RuntimeError("pefile is required to verify Windows package resources") from exc
+
+    match = re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version)
+    if match is None:
+        raise RuntimeError("Windows package version is not a stable three-part version")
+    major, minor, patch = (int(component) for component in match.groups())
+    try:
+        pe = pefile.PE(str(executable))
+    except (OSError, pefile.PEFormatError) as exc:
+        raise RuntimeError("Windows package is not a readable PE executable") from exc
+
+    try:
+        if pe.FILE_HEADER.Machine != 0x8664:
+            raise RuntimeError("Windows package is not an x86_64 executable")
+        resource_directory = getattr(pe, "DIRECTORY_ENTRY_RESOURCE", None)
+        resource_types = {
+            entry.id for entry in getattr(resource_directory, "entries", [])
+        }
+        required_types = {3, 14, 16}  # RT_ICON, RT_GROUP_ICON, RT_VERSION
+        if not required_types.issubset(resource_types):
+            raise RuntimeError("Windows package is missing icon or version resources")
+
+        expected_ms = (major << 16) | minor
+        expected_ls = patch << 16
+        fixed_versions = getattr(pe, "VS_FIXEDFILEINFO", [])
+        if not fixed_versions:
+            raise RuntimeError("Windows package has no fixed version resource")
+        fixed = fixed_versions[0]
+        actual_versions = (
+            fixed.FileVersionMS,
+            fixed.FileVersionLS,
+            fixed.ProductVersionMS,
+            fixed.ProductVersionLS,
+        )
+        if actual_versions != (expected_ms, expected_ls, expected_ms, expected_ls):
+            raise RuntimeError("Windows package fixed version does not match source")
+
+        strings = {}
+        for file_info in getattr(pe, "FileInfo", []) or []:
+            for block in file_info if isinstance(file_info, (list, tuple)) else [file_info]:
+                for table in getattr(block, "StringTable", []) or []:
+                    for key, value in table.entries.items():
+                        if isinstance(key, bytes):
+                            key = key.decode("ascii", errors="replace")
+                        if isinstance(value, bytes):
+                            encoding = (
+                                "utf-16le"
+                                if len(value) % 2 == 0 and not any(value[1::2])
+                                else "utf-8"
+                            )
+                            value = value.decode(encoding, errors="replace")
+                        strings[key] = value.rstrip("\x00")
+        expected_string = "%s.%s.%s" % (major, minor, patch)
+        if strings.get("FileVersion") != expected_string:
+            raise RuntimeError("Windows package FileVersion string does not match source")
+        if strings.get("ProductVersion") != expected_string:
+            raise RuntimeError("Windows package ProductVersion string does not match source")
+    finally:
+        pe.close()
 
 
 def _reserve_loopback_port() -> int:
@@ -509,7 +721,15 @@ def build(skip_service_smoke: bool = False) -> List[Path]:
                 stale.unlink()
 
     icons = _build_icons(build_root)
-    executable = _build_binary(target)
+    windows_resource_file = None
+    if target.system == "Windows":
+        windows_resource_script = _write_windows_resource_script(
+            build_root / "windows-resources", icons.windows, version
+        )
+        windows_resource_file = _compile_windows_resource(windows_resource_script)
+    executable = _build_binary(target, windows_resource_file)
+    if target.system == "Windows":
+        _validate_windows_resources(executable, version)
     if skip_service_smoke:
         version_result = subprocess.run(
             (str(executable), "--version"),
