@@ -10,6 +10,17 @@ use std::sync::Mutex;
 use std::time::Instant;
 mod shape;
 
+pub(crate) fn request_tokens_per_second(output_tokens: &Value, duration_ms: &Value) -> Option<f64> {
+    let tokens = output_tokens
+        .as_u64()
+        .filter(|tokens| (1..=10_000_000).contains(tokens))?;
+    let duration = duration_ms
+        .as_f64()
+        .filter(|duration| duration.is_finite() && (100.0..=86_400_000.0).contains(duration))?;
+    let rate = tokens as f64 * 1000.0 / duration;
+    (rate > 0.0 && rate <= 1_000_000.0).then(|| (rate * 100.0).round_ties_even() / 100.0)
+}
+
 pub(crate) struct Observation {
     ledger: Arc<UsageLedger>,
     diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
@@ -58,7 +69,7 @@ impl Observation {
             .unwrap_or_default();
         let mut event = json!({"route":operation,"usage_category":category,"usage_owner":owner,"upstream_model":route.upstream_model,"route_model":route.requested_model,"usage_turn":turn,"service_tier":body["service_tier"].as_str().filter(|s|!s.is_empty()).unwrap_or("default"),
             "provider_id":route.provider_id,"model_id":route.requested_model,"client_model":body["model"],"resolved_protocol":route.protocol,"dialect":route.dialect,"route_source":route.source,"endpoint_fingerprint":route.endpoint_fingerprint,"deployment_identity":route.deployment_identity,
-            "transport":if body["stream"]==true{"sse"}else{"http"},"protocol_decision":"explicit","fallback_reason":"none","model_trace_source":"emp_dispatch","request_bytes":shape::request_bytes(body),"performance_schema":2,"speed_mode":if matches!(body["service_tier"].as_str(),Some("fast"|"priority"|"ultrafast")){"fast"}else{"standard"}});
+            "transport":if body["stream"]==true{"sse"}else{"http"},"protocol_decision":"explicit","fallback_reason":"none","model_trace_source":"emp_dispatch","request_bytes":shape::request_bytes(body),"performance_schema":3,"speed_mode":if matches!(body["service_tier"].as_str(),Some("fast"|"priority"|"ultrafast")){"fast"}else{"standard"}});
         event
             .as_object_mut()
             .unwrap()
@@ -184,7 +195,8 @@ impl Observation {
     }
     pub(crate) fn finish(&mut self) {
         if !self.finalized {
-            self.event["duration_ms"] = json!(self.started.elapsed().as_millis() as u64);
+            let duration_ms = self.started.elapsed().as_millis() as u64;
+            self.event["duration_ms"] = json!(duration_ms);
             if let Some(first) = self.first_token {
                 self.event["ttft_ms"] =
                     json!(first.duration_since(self.started).as_millis() as u64);
@@ -194,18 +206,16 @@ impl Observation {
                     .duration_since(first)
                     .as_millis() as u64;
                 self.event["generation_ms"] = json!(generation);
-                if generation >= 500
-                    && self.event["error_class"] == "none"
-                    && let (Some(output), Some(reasoning)) = (
-                        self.event["output_tokens"].as_u64(),
-                        self.event["reasoning_tokens"].as_u64(),
-                    )
-                    && let Some(measured) = output.checked_sub(reasoning + 1).filter(|v| *v > 0)
-                {
-                    self.event["tokens_per_second"] = json!(
-                        (measured as f64 * 100_000.0 / generation as f64).round_ties_even() / 100.0
-                    );
-                }
+            }
+            self.event
+                .as_object_mut()
+                .expect("route observation is an object")
+                .remove("tokens_per_second");
+            if self.event["success"] == true
+                && let Some(rate) =
+                    request_tokens_per_second(&self.event["output_tokens"], &json!(duration_ms))
+            {
+                self.event["tokens_per_second"] = json!(rate);
             }
             self.observe_auto_review();
             self.ledger.record(&self.event, system_now());

@@ -218,10 +218,12 @@ pub fn summarize(records: &[Value], now: OffsetDateTime) -> Value {
         .iter()
         .copied()
         .filter(|event| {
-            event["performance_schema"] == 2
+            let schema = event["performance_schema"].as_u64();
+            matches!(schema, Some(2 | 3))
                 && success(event)
                 && (number(&event["ttft_ms"]).unwrap_or(0.0) > 0.0
-                    || number(&event["tokens_per_second"]).unwrap_or(0.0) > 0.0)
+                    || (schema == Some(3)
+                        && number(&event["tokens_per_second"]).unwrap_or(0.0) > 0.0))
                 && observed(&event["observed_at"]).unwrap_or(now)
                     >= now - time::Duration::days(DAYS)
         })
@@ -255,13 +257,65 @@ pub fn summarize(records: &[Value], now: OffsetDateTime) -> Value {
         let calls = &history[last..];
         let previous = &history[history.len().saturating_sub(CALLS * 2)..last];
         let (ttft, ttft_n) = metric(calls, "ttft_ms");
-        let (tps, tps_n) = metric(calls, "tokens_per_second");
+        let current_tps = calls
+            .iter()
+            .copied()
+            .filter(|event| event["performance_schema"] == 3)
+            .collect::<Vec<_>>();
+        let (tps, tps_n) = metric(&current_tps, "tokens_per_second");
         let (old_ttft, old_ttft_n) = metric(previous, "ttft_ms");
-        let (old_tps, old_tps_n) = metric(previous, "tokens_per_second");
+        let previous_tps = previous
+            .iter()
+            .copied()
+            .filter(|event| event["performance_schema"] == 3)
+            .collect::<Vec<_>>();
+        let (old_tps, old_tps_n) = metric(&previous_tps, "tokens_per_second");
         if ttft_n == 0 && tps_n == 0 {
             continue;
         }
         models.push(json!({"model_id":model,"speed_mode":speed,"call_count":calls.len(),"retained_call_count":history.len(),"ttft_ms":ttft,"ttft_samples":ttft_n,"previous_ttft_ms":old_ttft,"previous_ttft_samples":old_ttft_n,"ttft_change_percent":if ttft_n.min(old_ttft_n)>=3{change(ttft,old_ttft,true)}else{None},"tokens_per_second":tps,"tps_samples":tps_n,"previous_tokens_per_second":old_tps,"previous_tps_samples":old_tps_n,"tps_change_percent":if tps_n.min(old_tps_n)>=3{change(tps,old_tps,false)}else{None},"last_seen":calls.last().map(|event|&event["observed_at"])}));
     }
     json!({"health":summary,"performance_window":{"calls":CALLS,"days":DAYS},"models":models,"cache":cache(&relevant,now)})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize;
+    use serde_json::{Value, json};
+    use time::OffsetDateTime;
+    use time::format_description::well_known::Rfc3339;
+
+    fn record(schema: u64, observed_at: &str, ttft_ms: Value, tokens_per_second: Value) -> Value {
+        json!({
+            "route":"responses",
+            "model_id":"gpt-6-luna",
+            "speed_mode":"standard",
+            "status":200,
+            "error_class":"none",
+            "performance_schema":schema,
+            "observed_at":observed_at,
+            "ttft_ms":ttft_ms,
+            "tokens_per_second":tokens_per_second,
+        })
+    }
+
+    #[test]
+    fn schema_two_keeps_ttft_without_mixing_legacy_tps() {
+        let now = OffsetDateTime::parse("2026-09-23T12:00:00Z", &Rfc3339).unwrap();
+        let stamp = now.format(&Rfc3339).unwrap();
+        let result = summarize(
+            &[
+                record(2, &stamp, json!(100), json!(999.0)),
+                record(2, &stamp, Value::Null, json!(888.0)),
+                record(3, &stamp, json!(200), json!(60.0)),
+            ],
+            now,
+        );
+        let model = &result["models"][0];
+        assert_eq!(model["call_count"], 2);
+        assert_eq!(model["ttft_ms"], 150.0);
+        assert_eq!(model["ttft_samples"], 2);
+        assert_eq!(model["tokens_per_second"], 60.0);
+        assert_eq!(model["tps_samples"], 1);
+    }
 }
