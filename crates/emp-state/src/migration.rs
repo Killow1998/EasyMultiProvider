@@ -41,6 +41,14 @@ pub const SCRYPT_R: u64 = 8;
 pub const SCRYPT_P: u64 = 1;
 const MAX_NATIVE_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 const MAX_NATIVE_AUTH_BYTES: usize = 1024 * 1024;
+const MODEL_CAPABILITY_MIGRATION_FIELDS: [&str; 6] = [
+    "input_modalities",
+    "output_modalities",
+    "supported_protocols",
+    "supports_image_detail_original",
+    "capabilities",
+    "capability_sources",
+];
 
 /// Fixed KDF parameters (attacker input cannot select cost).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +93,8 @@ pub enum MigrationError {
     NativeCredentialsUnavailable,
     SaltGenerationFailed,
     StateUpdateFailed,
+    ModelLost,
+    ModelCapabilityChanged(&'static str),
 }
 
 impl fmt::Display for MigrationError {
@@ -126,6 +136,10 @@ impl fmt::Display for MigrationError {
             }
             Self::SaltGenerationFailed => f.write_str("migration salt could not be generated"),
             Self::StateUpdateFailed => f.write_str("migration state could not be updated"),
+            Self::ModelLost => f.write_str("migration lost an imported model"),
+            Self::ModelCapabilityChanged(field) => {
+                write!(f, "migration changed model capability data: {field}")
+            }
         }
     }
 }
@@ -427,6 +441,81 @@ fn replace_or_push(values: &mut Vec<Value>, value: Value) {
     }
 }
 
+fn verify_model_capability_migration(source: &Value, target: &Value) -> MigrationResult<()> {
+    let imported = target
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            model
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(|id| (id, model))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for model in source
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let id = model
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or(MigrationError::ModelLost)?;
+        let destination = imported.get(id).ok_or(MigrationError::ModelLost)?;
+        for field in MODEL_CAPABILITY_MIGRATION_FIELDS {
+            let source_value = model.get(field).filter(|value| !value.is_null());
+            let destination_value = destination.get(field).filter(|value| !value.is_null());
+            if source_value != destination_value {
+                return Err(MigrationError::ModelCapabilityChanged(field));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod model_capability_migration_tests {
+    use super::{
+        MODEL_CAPABILITY_MIGRATION_FIELDS, MigrationError, verify_model_capability_migration,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn verifier_rejects_missing_models_and_each_changed_capability_field() {
+        let source = json!({"models": [{"id": "demo/model"}]});
+        assert_eq!(
+            verify_model_capability_migration(&source, &json!({"models": []})),
+            Err(MigrationError::ModelLost)
+        );
+
+        for field in MODEL_CAPABILITY_MIGRATION_FIELDS {
+            let mut source_model = json!({"id": "demo/model"});
+            let mut target_model = json!({"id": "demo/model"});
+            source_model
+                .as_object_mut()
+                .expect("model object")
+                .insert(field.to_owned(), json!({"observed": "source"}));
+            target_model
+                .as_object_mut()
+                .expect("model object")
+                .insert(field.to_owned(), json!({"observed": "target"}));
+            let source = json!({"models": [source_model]});
+            let target = json!({"models": [target_model]});
+            assert_eq!(
+                verify_model_capability_migration(&source, &target),
+                Err(MigrationError::ModelCapabilityChanged(field)),
+                "capability field {field} must be protected"
+            );
+        }
+    }
+}
+
 fn unique_segment(value: &str, reserved: &mut BTreeSet<String>) -> String {
     for suffix in 2_u64.. {
         let ending = format!("-{suffix}");
@@ -689,6 +778,7 @@ fn merge_import(
     }
     target =
         normalize_configuration(Some(&target)).map_err(|_| MigrationError::StateUpdateFailed)?;
+    verify_model_capability_migration(&source, &target)?;
 
     let summary = MigrationImportSummary {
         accounts: imported_auth.len(),

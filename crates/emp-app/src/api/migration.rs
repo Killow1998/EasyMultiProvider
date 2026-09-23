@@ -164,13 +164,28 @@ pub(crate) fn management_migration_request(
             return json_error_response(500, status_text(500), "internal server error", None, &[]);
         }
     }
-    let body = serde_json::to_vec(&serde_json::json!({
+    let (catalog_path, _) = match crate::services::catalog::refresh_catalog(state) {
+        Ok(result) => result,
+        Err(()) => {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        }
+    };
+    let catalog_path = catalog_path.to_string_lossy().into_owned();
+    let mut body = serde_json::json!({
         "status":"ok",
         "accounts":summary.accounts,
         "providers":summary.providers,
         "models":summary.models,
-        "renamed_accounts":summary.renamed_accounts,
-    }))
-    .expect("migration response is serializable");
+        "catalog_path":catalog_path,
+    });
+    if summary.renamed_accounts > 0 {
+        body.as_object_mut()
+            .expect("migration response is an object")
+            .insert(
+                "renamed_accounts".to_owned(),
+                Value::from(summary.renamed_accounts),
+            );
+    }
+    let body = serde_json::to_vec(&body).expect("migration response is serializable");
     response("HTTP/1.1 200 OK", "application/json", &body, &[])
 }

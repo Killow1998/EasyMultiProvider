@@ -6,6 +6,7 @@ Chat stream scenarios reuse the existing regression inputs and assertions,
 replacing only their in-process transport fixture with a real HTTP upstream.
 """
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -500,6 +501,159 @@ class RustEndToEnd(unittest.TestCase):
                 "http://127.0.0.1:%d/?bootstrap=" % rust_backend.port
             )
         )
+
+    @unittest.skipUnless(
+        "EMP_PYTHON_ORACLE_ROOT" in os.environ,
+        "set EMP_PYTHON_ORACLE_ROOT for official migration capability differential",
+    )
+    def test_migration_import_preserves_model_capability_evidence(self):
+        from easy_multi_provider.config import normalize
+        from easy_multi_provider.migration import export_bundle
+
+        fields = (
+            "input_modalities",
+            "output_modalities",
+            "supported_protocols",
+            "supports_image_detail_original",
+            "capabilities",
+            "capability_sources",
+        )
+        source = normalize(
+            {
+                "providers": [
+                    {
+                        "id": "imported",
+                        "base_url": "https://migration.example.test/v1",
+                        "api_key": "migration-fixture-key",
+                    }
+                ],
+                "models": [
+                    {
+                        "id": "imported/vision",
+                        "provider": "imported",
+                        "upstream_id": "vision-model",
+                        "enabled": True,
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                        "supported_protocols": ["responses"],
+                        "supports_image_detail_original": True,
+                        "capabilities": {"structured_tools": True},
+                        "capability_sources": {
+                            "input_modalities": {"source": "manual"},
+                            "output_modalities": {"source": "advertised"},
+                            "supported_protocols": {"source": "observed"},
+                            "supports_image_detail_original": {"source": "manual"},
+                            "structured_tools": {"source": "advertised"},
+                        },
+                    }
+                ],
+            }
+        )
+        expected = {field: source["models"][0].get(field) for field in fields}
+        with tempfile.TemporaryDirectory(prefix="emp-migration-capabilities-") as temporary:
+            bundle = export_bundle(
+                source,
+                Path(temporary) / "source.json",
+                "migration-capability-pass",
+                ["external"],
+            )
+            body = {
+                "password": "migration-capability-pass",
+                "bundle": base64.b64encode(bundle).decode("ascii"),
+            }
+            results = []
+            migration_upstream = Upstream()
+            self.addCleanup(migration_upstream.close)
+            for name, command in (
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
+                ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+            ):
+                backend_root = Path(temporary) / name
+                backend = EmpProcess(
+                    command,
+                    migration_upstream,
+                    backend_root,
+                )
+                try:
+                    status, _, raw = backend.request("POST", "/api/migration/import", body)
+                    self.assertEqual(status, 200, raw)
+                    summary = json.loads(raw)
+                    catalog_file = (
+                        backend_root / "codex" / "easy-multi-provider" / "catalog.json"
+                    ).resolve()
+                    self.assertEqual(Path(summary["catalog_path"]).resolve(), catalog_file)
+                    self.assertTrue(catalog_file.is_file())
+                    catalog = json.loads(catalog_file.read_text())
+                    self.assertIn(
+                        "imported/vision",
+                        {model["slug"] for model in catalog["models"]},
+                    )
+                    summary["catalog_path"] = "<CODEX_HOME>/easy-multi-provider/catalog.json"
+                    self.assertEqual(
+                        summary,
+                        {
+                            "status": "ok",
+                            "accounts": 0,
+                            "providers": 1,
+                            "models": 1,
+                            "catalog_path": "<CODEX_HOME>/easy-multi-provider/catalog.json",
+                        },
+                    )
+                    status, _, raw = backend.request("GET", "/api/config")
+                    self.assertEqual(status, 200, raw)
+                    config = json.loads(raw)
+                    imported = next(
+                        model for model in config["models"] if model["id"] == "imported/vision"
+                    )
+                    observed = {field: imported.get(field) for field in fields}
+                    self.assertEqual(observed, expected)
+                    remaining_ids = {
+                        model["id"] for model in config["models"]
+                    } - {"imported/vision"}
+                    self.assertEqual(
+                        remaining_ids,
+                        {"test/model", "anthropic/model", "responses/model", "native/model"},
+                    )
+                    config_path = backend.config_path
+                    secrets_root = backend_root / "state" / "secrets"
+
+                    def persisted_files():
+                        secrets = {}
+                        if secrets_root.exists():
+                            for secret in sorted(secrets_root.rglob("*")):
+                                if secret.is_file():
+                                    secrets[secret.relative_to(secrets_root).as_posix()] = (
+                                        secret.read_bytes()
+                                    )
+                        return config_path.read_bytes(), secrets, catalog_file.read_bytes()
+
+                    before_rejected_import = persisted_files()
+                    rejected_body = {
+                        "password": "wrong-migration-capability-pass",
+                        "bundle": body["bundle"],
+                    }
+                    rejected_status, _, rejected_raw = backend.request(
+                        "POST", "/api/migration/import", rejected_body
+                    )
+                    self.assertEqual(rejected_status, 400, rejected_raw)
+                    rejected_error = json.loads(rejected_raw)
+                    self.assertEqual(
+                        rejected_error,
+                        {
+                            "error": {
+                                "message": "migration password is incorrect or file is invalid"
+                            }
+                        },
+                    )
+                    after_rejected_import = persisted_files()
+                    self.assertEqual(after_rejected_import, before_rejected_import)
+                    self.assertTrue(after_rejected_import[1], "provider secret must be persisted")
+                    results.append(
+                        (summary, observed, remaining_ids, rejected_error)
+                    )
+                finally:
+                    backend.close()
+            self.assertEqual(results[0], results[1])
 
     def test_offline_doctor_and_restore_match_python_commands(self):
         # Exercise test_integration_cli's native/active/restore/repeated-restore
