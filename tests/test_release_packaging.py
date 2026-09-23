@@ -39,7 +39,7 @@ class ReleasePackagingTests(unittest.TestCase):
         expected = {
             "EMP.exe",
             "EMP-linux-x86_64.tar.gz",
-            "EMP-linux-x86_64.deb",
+            "EMP-linux-x86_64-install.sh",
             "EMP-macos-x86_64.dmg",
             "EMP-macos-arm64.dmg",
         }

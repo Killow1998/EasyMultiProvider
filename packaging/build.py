@@ -28,7 +28,6 @@ import psutil
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_NAME = "easy-multi-provider"
 PRODUCT_NAME = "EMP"
 EXECUTABLE_NAME = "EMP"
 ARTIFACT_NAME = "EMP"
@@ -41,7 +40,6 @@ class Target:
     os_id: str
     arch: str
     executable_suffix: str
-    deb_arch: Optional[str] = None
 
     @property
     def identity(self) -> str:
@@ -52,7 +50,6 @@ class Target:
 class PackageIcons:
     windows: Path
     macos: Path
-    linux: Path
 
 
 def current_target() -> Target:
@@ -68,7 +65,7 @@ def current_target() -> Target:
     if system == "Windows" and arch == "x86_64":
         return Target(system, "windows", arch, ".exe")
     if system == "Linux" and arch == "x86_64":
-        return Target(system, "linux", arch, "", deb_arch="amd64")
+        return Target(system, "linux", arch, "")
     if system == "Darwin" and arch in ("x86_64", "arm64"):
         return Target(system, "macos", arch, "")
     raise RuntimeError("unsupported packaging target: %s/%s" % (system, arch))
@@ -115,9 +112,8 @@ def _build_icons(build_root: Path) -> PackageIcons:
     icons = PackageIcons(
         windows=output / "easy-multi-provider.ico",
         macos=output / "easy-multi-provider.icns",
-        linux=output / "easy-multi-provider-256.png",
     )
-    if not all(path.is_file() for path in (icons.windows, icons.macos, icons.linux)):
+    if not all(path.is_file() for path in (icons.windows, icons.macos)):
         raise RuntimeError("native icon generation did not produce every format")
     return icons
 
@@ -392,111 +388,6 @@ def _write_tar(
             archive.add(str(content), arcname=archive_root)
 
 
-def _write_deb(
-    output: Path,
-    executable: Path,
-    target: Target,
-    version: str,
-    build_root: Path,
-    icons: PackageIcons,
-) -> None:
-    dpkg_deb = shutil.which("dpkg-deb")
-    if dpkg_deb is None or target.deb_arch is None:
-        raise RuntimeError("dpkg-deb is required for the Linux package")
-    stage = build_root / "deb-root"
-    _remove_managed_tree(stage, build_root)
-    binary_dir = stage / "usr" / "bin"
-    docs_dir = stage / "usr" / "share" / "doc" / PACKAGE_NAME
-    control_dir = stage / "DEBIAN"
-    applications_dir = stage / "usr" / "share" / "applications"
-    scalable_icon_dir = (
-        stage / "usr" / "share" / "icons" / "hicolor" / "scalable" / "apps"
-    )
-    raster_icon_dir = (
-        stage / "usr" / "share" / "icons" / "hicolor" / "256x256" / "apps"
-    )
-    metadata_dir = stage / "usr" / "share" / "metainfo"
-    binary_dir.mkdir(parents=True)
-    docs_dir.mkdir(parents=True)
-    control_dir.mkdir(parents=True)
-    applications_dir.mkdir(parents=True)
-    scalable_icon_dir.mkdir(parents=True)
-    raster_icon_dir.mkdir(parents=True)
-    metadata_dir.mkdir(parents=True)
-    binary = binary_dir / EXECUTABLE_NAME
-    shutil.copy2(str(executable), str(binary))
-    binary.chmod(0o755)
-    shutil.copy2(str(PROJECT_ROOT / "README.md"), str(docs_dir / "README.md"))
-    shutil.copy2(
-        str(PROJECT_ROOT / "README.zh-CN.md"), str(docs_dir / "README.zh-CN.md")
-    )
-    shutil.copy2(str(PROJECT_ROOT / "LICENSE"), str(docs_dir / "copyright"))
-    shutil.copy2(
-        str(PROJECT_ROOT / "THIRD_PARTY_NOTICES.md"),
-        str(docs_dir / "THIRD_PARTY_NOTICES.md"),
-    )
-    shutil.copy2(
-        str(PROJECT_ROOT / "assets" / "branding" / "easy-multi-provider-icon.svg"),
-        str(scalable_icon_dir / "easy-multi-provider.svg"),
-    )
-    shutil.copy2(
-        str(icons.linux),
-        str(raster_icon_dir / "easy-multi-provider.png"),
-    )
-    (applications_dir / "easy-multi-provider.desktop").write_text(
-        "[Desktop Entry]\n"
-        "Type=Application\n"
-        "Name=EMP\n"
-        "Comment=Local multi-provider control plane for Codex\n"
-        "Exec=EMP\n"
-        "TryExec=EMP\n"
-        "Icon=easy-multi-provider\n"
-        "Terminal=true\n"
-        "Categories=Development;\n"
-        "Keywords=Codex;AI;Model;Router;\n"
-        "StartupNotify=true\n",
-        encoding="utf-8",
-    )
-    (metadata_dir / "io.github.Killow1998.EasyMultiProvider.metainfo.xml").write_text(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-        "<component type=\"desktop-application\">\n"
-        "  <id>io.github.Killow1998.EasyMultiProvider</id>\n"
-        "  <name>EMP</name>\n"
-        "  <summary>Local multi-provider control plane for Codex</summary>\n"
-        "  <description>\n"
-        "    <p>Configure Codex subscriptions, API providers, and model routing "
-        "from a local browser interface.</p>\n"
-        "  </description>\n"
-        "  <metadata_license>CC0-1.0</metadata_license>\n"
-        "  <project_license>MIT</project_license>\n"
-        "  <url type=\"homepage\">"
-        "https://github.com/Killow1998/EasyMultiProvider</url>\n"
-        "  <launchable type=\"desktop-id\">easy-multi-provider.desktop</launchable>\n"
-        "</component>\n",
-        encoding="utf-8",
-    )
-    installed_kib = max(
-        1,
-        sum(path.stat().st_size for path in stage.rglob("*") if path.is_file())
-        // 1024,
-    )
-    control = (
-        "Package: easy-multi-provider\n"
-        "Version: %s\n"
-        "Section: utils\n"
-        "Priority: optional\n"
-        "Architecture: %s\n"
-        "Maintainer: Killow1998 <Killow1998@users.noreply.github.com>\n"
-        "Depends: libc6 (>= 2.35)\n"
-        "Installed-Size: %s\n"
-        "Description: Local multi-provider control plane for Codex\n"
-        " EMP adds subscriptions and external model providers to\n"
-        " the native Codex model picker while Codex keeps task ownership.\n"
-    ) % (version, target.deb_arch, installed_kib)
-    (control_dir / "control").write_text(control, encoding="utf-8")
-    _run((dpkg_deb, "--build", "--root-owner-group", str(stage), str(output)))
-
-
 def _write_macos_app(
     destination: Path,
     executable: Path,
@@ -621,7 +512,7 @@ def build(skip_service_smoke: bool = False) -> List[Path]:
     else:
         expected_suffixes.append(".tar.gz")
     if target.system == "Linux":
-        expected_suffixes.append(".deb")
+        expected_suffixes.append("-install.sh")
     if target.system == "Darwin":
         expected_suffixes.append(".dmg")
     for suffix in expected_suffixes:
@@ -662,9 +553,13 @@ def build(skip_service_smoke: bool = False) -> List[Path]:
         _write_tar(archive, executable, target, PRODUCT_NAME)
         artifacts.append(archive)
     if target.system == "Linux":
-        deb = artifacts_root / (artifact_base + ".deb")
-        _write_deb(deb, executable, target, version, build_root, icons)
-        artifacts.append(deb)
+        installer = artifacts_root / (artifact_base + "-install.sh")
+        shutil.copy2(
+            str(PROJECT_ROOT / "packaging" / "install-linux.sh"),
+            str(installer),
+        )
+        installer.chmod(0o755)
+        artifacts.append(installer)
     if target.system == "Darwin":
         dmg = artifacts_root / (artifact_base + ".dmg")
         _write_dmg(dmg, executable, target, version, build_root, icons)

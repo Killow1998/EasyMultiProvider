@@ -777,7 +777,9 @@ function quotaMeterBehavior() {
   assert.match(rendered, /is-low/);
   assert.match(rendered, /class="quota-meter is-unreported" title="7d 未回传限制"/);
   assert.match(rendered, /role="img" aria-label="7d 未回传限制"/);
-  assert.match(html, /\.quota-meter\.is-unreported \.quota-battery::before\{[^}]*inset:-5px 3px;[^}]*repeating-linear-gradient\(45deg/, "an unlimited window must use repeated slashes that extend beyond the battery");
+  assert.match(rendered, /class="quota-value">233%<\/strong>/);
+  assert.match(html, /\.quota-meter\.is-unreported \.quota-battery::before\{[^}]*linear-gradient\(90deg,[^}]*animation:quota-rainbow-flow/, "an unreported window must show a moving rainbow");
+  assert.match(html, /\.quota-meter\.is-unreported \.quota-battery-fill::after\{[^}]*animation:quota-charge/, "an unreported window must retain the moving light sweep");
 
   context.__quotaMeterState.accounts[0].quota = {plan_type:'plus',rate_limits:{primary:{usedPercent:12,windowDurationMins:43200},secondary:{usedPercent:50,windowDurationMins:300}}};
   run("renderAccounts()");

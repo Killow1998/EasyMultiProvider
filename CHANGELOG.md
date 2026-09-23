@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.11.8 (2026-09-23)
+
+- Replace Linux DEB downloads with a verified bilingual user installer that
+  offers explicit legacy-package removal and source-config migration choices.
+- Show 233% and a continuously moving rainbow fill with a refresh-style light
+  sweep for quota windows with no reported limit; retain the explanatory label.
 - Give Usage & estimates its own pie-style action icon so it is visually
   consistent with the neighboring EMP actions without reusing the quota-trend
   chart symbol.

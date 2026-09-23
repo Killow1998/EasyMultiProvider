@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the extracted Linux archive without changing system files or accounts.
+# Install or update the extracted Linux build in the current user's directories.
 set -eu
 
 if [ "$(uname -s)" != Linux ] || [ "$(id -u)" = 0 ]; then
@@ -16,37 +16,74 @@ for root in "$data_root" "$config_root" "$HOME"; do
         *) echo 'HOME and XDG directories must be absolute paths.' >&2; exit 1 ;;
     esac
 done
+
 install_dir=$data_root/easy-multi-provider
 config_dir=$config_root/easy-multi-provider
+binary=$install_dir/EMP
 launcher=$HOME/.local/bin/EMP
 desktop=$data_root/applications/easy-multi-provider-user.desktop
+quoted_binary=$(printf '%s' "$binary" | sed "s/'/'\\\\''/g")
+desktop_exec=$(printf '%s' "$launcher" | sed 's/\\/\\\\/g; s/"/\\"/g; s/`/\\`/g; s/\$/\\$/g; s/%/%%/g')
+expected_launcher=$(printf "#!/bin/sh\nexec '%s' \"\$@\"\n" "$quoted_binary")
 
-# Reinstallation must not replace a running EMP or a different launcher.
-for target in "$install_dir/EMP" "$launcher" "$desktop"; do
-    if [ -e "$target" ] || [ -L "$target" ]; then
-        echo "Already exists: $target. Use EMP's Check updates for an existing user installation." >&2
+test -f "$source_dir/EMP" && test ! -L "$source_dir/EMP"
+test -f "$source_dir/easy-multi-provider.svg"
+
+if [ -e "$install_dir" ] && [ ! -d "$install_dir" ]; then
+    echo "Install path is not a directory: $install_dir" >&2
+    exit 1
+fi
+if [ -L "$install_dir" ] || [ -L "$binary" ] || [ -L "$launcher" ] || [ -L "$desktop" ]; then
+    echo 'A managed install path is a symbolic link; refusing to replace it.' >&2
+    exit 1
+fi
+
+if [ -e "$binary" ]; then
+    if ! "$binary" --version 2>/dev/null | grep -q '^EMP [0-9]'; then
+        echo "Existing file is not a recognized EMP install: $binary" >&2
         exit 1
     fi
-done
-test -f "$source_dir/EMP"
-test -f "$source_dir/easy-multi-provider.svg"
+    if [ -e "$launcher" ] && [ "$(cat "$launcher")" != "$expected_launcher" ]; then
+        echo "The existing launcher does not point to this EMP install: $launcher" >&2
+        exit 1
+    fi
+    if [ -e "$desktop" ] && ! grep -Fxq "Exec=\"$desktop_exec\"" "$desktop"; then
+        echo "The existing desktop entry does not point to this EMP install: $desktop" >&2
+        exit 1
+    fi
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x EMP >/dev/null 2>&1; then
+        echo 'EMP is running. Close it, then run the installer again.' >&2
+        exit 1
+    fi
+    install_action=updated
+else
+    for target in "$launcher" "$desktop"; do
+        if [ -e "$target" ]; then
+            echo "Already exists: $target. Please inspect it before installing." >&2
+            exit 1
+        fi
+    done
+    install_action=installed
+fi
+
 mkdir -p -- "$install_dir" "$config_dir" "$HOME/.local/bin" "$data_root/applications"
-cp -- "$source_dir/EMP" "$install_dir/EMP"
-chmod 755 "$install_dir/EMP"
+staged_binary=$install_dir/.EMP.new.$$
+trap 'rm -f -- "$staged_binary"' 0 HUP INT TERM
+cp -- "$source_dir/EMP" "$staged_binary"
+chmod 755 "$staged_binary"
+mv -f -- "$staged_binary" "$binary"
 cp -- "$source_dir/easy-multi-provider.svg" "$install_dir/easy-multi-provider.svg"
 
-# The shell launcher executes the real binary path, so the updater does not
-# attempt to replace a symlink. Configuration stays in the normal user location.
-quoted_binary=$(printf '%s' "$install_dir/EMP" | sed "s/'/'\\\\''/g")
-printf "#!/bin/sh\nexec '%s' \"\$@\"\n" "$quoted_binary" > "$launcher"
-chmod 755 "$launcher"
+if [ ! -e "$launcher" ]; then
+    printf "#!/bin/sh\nexec '%s' \"\$@\"\n" "$quoted_binary" > "$launcher"
+    chmod 755 "$launcher"
+fi
 
-# Desktop Exec has its own escaping rules, including percent field codes.
-desktop_exec=$(printf '%s' "$launcher" | sed 's/\\/\\\\/g; s/"/\\"/g; s/`/\\`/g; s/\$/\\$/g; s/%/%%/g')
-cat > "$desktop" <<EOF
+if [ ! -e "$desktop" ]; then
+    cat > "$desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=EMP
+Name=EMP (User)
 Comment=Local multi-provider control plane for Codex
 Exec="$desktop_exec"
 Icon=$install_dir/easy-multi-provider.svg
@@ -54,4 +91,7 @@ Terminal=true
 Categories=Development;
 StartupNotify=true
 EOF
-printf 'Installed: %s\nConfiguration: %s/config.json\nStart from the application menu or run: %s\n' "$install_dir/EMP" "$config_dir" "$launcher"
+fi
+
+printf 'EMP %s: %s\nConfiguration: %s/config.json\nStart from the application menu or run: %s\n' \
+    "$install_action" "$binary" "$config_dir" "$launcher"

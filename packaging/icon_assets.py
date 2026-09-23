@@ -33,11 +33,6 @@ def generate_icons(output: Path, master_path: Path = MASTER_ICON) -> None:
         sizes=[(size, size) for size in ICO_SIZES],
     )
     master.save(output / "easy-multi-provider.icns", format="ICNS")
-    master.resize((256, 256), Image.Resampling.LANCZOS).save(
-        output / "easy-multi-provider-256.png",
-        format="PNG",
-        optimize=True,
-    )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

@@ -44,7 +44,7 @@ class IconPackagingTests(unittest.TestCase):
         self.assertEqual(master.getpixel((0, 0))[3], 0)
         self.assertEqual(master.getpixel((100, 512))[3], 0)
 
-    def test_master_generates_windows_macos_and_linux_icons(self):
+    def test_master_generates_windows_and_macos_icons(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
             icon_assets.generate_icons(output)
@@ -52,7 +52,6 @@ class IconPackagingTests(unittest.TestCase):
             expected = {
                 "easy-multi-provider.ico": ("ICO", (256, 256)),
                 "easy-multi-provider.icns": ("ICNS", (1024, 1024)),
-                "easy-multi-provider-256.png": ("PNG", (256, 256)),
             }
             for name, (image_format, size) in expected.items():
                 with Image.open(output / name) as image:
@@ -73,7 +72,6 @@ class IconPackagingTests(unittest.TestCase):
             icons = package_builder.PackageIcons(
                 windows=root / "icons" / "easy-multi-provider.ico",
                 macos=root / "icons" / "easy-multi-provider.icns",
-                linux=root / "icons" / "easy-multi-provider-256.png",
             )
             app = root / "EMP.app"
 

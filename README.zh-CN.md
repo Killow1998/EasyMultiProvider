@@ -110,23 +110,23 @@ Subscription 的编辑窗口可以逐模型设置上下文 token 数。留空使
 | 平台 | 产物 |
 | --- | --- |
 | Windows x64 | 带图标的独立 `.exe` |
-| Ubuntu 22.04+ x64 | `.tar.gz` 和带桌面入口的 `.deb` |
+| Ubuntu 22.04+ x64 | 双语用户级安装脚本 `EMP-linux-x86_64-install.sh` |
 | macOS Intel | 包含 `.app` 的 `.dmg` |
 | macOS Apple Silicon | 包含 `.app` 的 `.dmg` |
 
 最简单的桌面启动方式是：
 
 - **Windows：**双击 `EMP.exe`。
-- **Linux `.tar.gz`：**在下载目录运行以下命令，再从应用菜单打开 **EMP**：
+- **Linux：**在终端下载并运行双语安装脚本，再从应用菜单打开 **EMP (User)**：
 
   ```bash
-  tar -xzf EMP-linux-x86_64.tar.gz
-  cd EMP
-  ./install-user.sh
+  curl -fL -o EMP-linux-x86_64-install.sh https://github.com/Killow1998/EasyMultiProvider/releases/latest/download/EMP-linux-x86_64-install.sh
+  sh EMP-linux-x86_64-install.sh
   ```
 
-- **Linux `.deb`：**运行 `sudo apt install ./EMP-linux-x86_64.deb`，再从应用菜单打开 **EMP**。`.deb` 不包含 `install-user.sh`。
 - **macOS：**打开 DMG，把 **EMP** 拖入“应用程序”，然后双击。
+
+安装脚本会先校验发行包，再安装到当前用户目录。检测到旧 `.deb` 时会询问是否移除；找到源码目录中的旧配置时，也会询问是否连同本机 state 一起复制。原始配置与 state 会保留；若用户目录已有配置，迁移前会先备份。以后可在 EMP 网页中更新。
 
 EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的终端窗口。看到
 `EMP listening on ...` 就表示启动成功。使用 EMP 时请保持该终端
@@ -142,10 +142,7 @@ EMP 会自动打开已认证的 Web UI，并保留一个显示状态和日志的
 
 Linux 用户安装把程序放在 `$XDG_DATA_HOME/easy-multi-provider/EMP`，默认是
 `~/.local/share/easy-multi-provider/EMP`；启动入口是 `~/.local/bin/EMP`。
-Linux 用户安装与网页更新不需要 `sudo` 或管理员密码；安装系统级 `.deb` 需要。
-配置与账号数据保存在上述用户配置目录，更新程序不会替换它们。
-已有系统 `.deb` 安装不会被自动卸载；停止
-旧 EMP 后可安装用户版本，旧配置应先备份再迁入用户配置目录。
+Linux 用户安装与网页更新不需要 `sudo` 或管理员密码。安装器只有在你选择移除旧系统 `.deb` 时才会请求管理员权限。配置与账号数据保存在上述用户配置目录，更新程序不会替换它们；旧系统安装的用户配置会继续沿用。
 
 需要命令行控制时仍可显式启动服务。下载 Windows 可执行文件后，在 PowerShell 中运行：
 
@@ -154,16 +151,14 @@ Linux 用户安装与网页更新不需要 `sudo` 或管理员密码；安装系
 .\EMP.exe serve --config config.json
 ```
 
-解压 Linux `.tar.gz` 或安装 `.deb` 后运行：
+解压 Linux `.tar.gz` 后运行：
 
 ```bash
 ./EMP --version
 ./EMP serve --config config.json
 ```
 
-`.deb` 会把同一命令安装到 `PATH` 中，安装后不需要输入前面的 `./`。Windows
-可执行文件和 Linux 压缩包中的程序在无参数运行时，也会进入自动打开浏览器的
-桌面模式。
+用户级安装会创建 `~/.local/bin/EMP`。Windows 可执行文件和 Linux 压缩包中的程序在无参数运行时，也会进入自动打开浏览器的桌面模式。
 
 当前 macOS workflow 产物属于未签名的开发构建。公开分发仍需要 Apple Developer
 ID 签名和公证。

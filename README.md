@@ -49,20 +49,22 @@ Download the latest reviewed build from [GitHub Releases](https://github.com/Kil
 | Platform | Package | Install and launch |
 | --- | --- | --- |
 | Windows x64 | `EMP.exe` | Double-click `EMP.exe` |
-| Ubuntu 22.04+ x64 | `EMP-linux-x86_64.tar.gz` | Use the user-install commands below, then open **EMP** from the application menu |
-| Ubuntu 22.04+ x64 | `EMP-linux-x86_64.deb` | Run `sudo apt install ./EMP-linux-x86_64.deb`, then open **EMP** |
+| Ubuntu 22.04+ x64 | `EMP-linux-x86_64-install.sh` | Run the bilingual installer below, then open **EMP (User)** from the application menu |
 | macOS Apple Silicon | `.dmg` | Drag **EMP** to Applications |
 | macOS Intel | `.dmg` | Drag **EMP** to Applications |
 
-For the Linux `.tar.gz`, run these commands in the download directory:
+For Linux, download and run the bilingual installer in a terminal:
 
 ~~~bash
-tar -xzf EMP-linux-x86_64.tar.gz
-cd EMP
-./install-user.sh
+curl -fL -o EMP-linux-x86_64-install.sh https://github.com/Killow1998/EasyMultiProvider/releases/latest/download/EMP-linux-x86_64-install.sh
+sh EMP-linux-x86_64-install.sh
 ~~~
 
-The `.deb` is a separate system-managed installation; it does not contain `install-user.sh`.
+The installer verifies the release archive before installing EMP in your user
+directories. It can update an existing user install through the EMP Web UI,
+asks whether to remove an existing system `.deb`, and offers to copy a detected
+source configuration and its local state. Source data is kept in place; an
+existing user configuration is backed up before migration.
 
 The [package workflow](https://github.com/Killow1998/EasyMultiProvider/actions/workflows/package.yml) builds and smoke-tests the native artifacts before a release is published.
 
@@ -234,7 +236,8 @@ Linux archive, from its extracted directory:
 ./EMP serve --config config.json
 ~~~
 
-With the `.deb`, use `EMP` instead of `./EMP` after installation.
+The user installer creates `~/.local/bin/EMP`; use that command after
+installation.
 
 EMP listens on `http://127.0.0.1:4200` by default. Use `--port` only when that port is already occupied.
 
@@ -263,7 +266,10 @@ Desktop launch stores configuration in the normal per-user location:
 
 The Linux user installer places the binary at `$XDG_DATA_HOME/easy-multi-provider/EMP` (default `~/.local/share/easy-multi-provider/EMP`) and the launcher at `~/.local/bin/EMP`.
 
-The Linux user installer and Web UI updates do not require sudo or an administrator password. Installing the system `.deb` does. Configuration and account data stay in the user configuration directory and are not replaced by binary updates.
+The Linux user installer and Web UI updates do not require sudo or an
+administrator password. The installer only requests privilege if you choose to
+remove an existing system `.deb`. Configuration and account data stay in the
+user configuration directory and are not replaced by binary updates.
 
 ## Docs
 
@@ -285,7 +291,7 @@ Useful technical references:
 - Existing tasks may need a catalog refresh after context-window or model-display changes; verify the effective window in a new task when it matters.
 - Restart Codex once after upgrading from an older EMP static catalog or after changing Codex's Base URL.
 - Restore Native Codex before rolling back to EMP 0.9.91 or earlier.
-- Existing system `.deb` installations are not removed automatically when moving to the user installer; stop the old EMP and back up its configuration first.
+- Existing system `.deb` installations remain in place unless you choose to remove them in the Linux installer. The installer keeps their per-user configuration.
 
 ## License
 
