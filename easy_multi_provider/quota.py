@@ -36,9 +36,17 @@ _WORKSPACE_ROUTING_CONNECTIVITY_ERRORS = frozenset(
 class QuotaError(ValueError):
     """Raised when Codex cannot provide a safe quota snapshot."""
 
-    def __init__(self, message: str, code: str = "quota_error"):
+    def __init__(
+        self,
+        message: str,
+        code: str = "quota_error",
+        *,
+        retry_imported_refresh: bool = False,
+    ):
         super().__init__(message)
         self.code = code
+        # Internal recovery hint. Public API responses expose only code/message.
+        self.retry_imported_refresh = bool(retry_imported_refresh)
 
 
 def _quota_rpc_error(method: str, error: Any) -> QuotaError:
@@ -69,6 +77,7 @@ def _quota_rpc_error(method: str, error: Any) -> QuotaError:
             "Codex could not reach ChatGPT workspace routing; check DNS, "
             "VPN/TUN, proxy, and network connectivity",
             "quota_transport_error",
+            retry_imported_refresh=True,
         )
     if method == "account/rateLimits/read" and "error sending request" in message.lower():
         return QuotaError("Codex could not connect to the quota service; check the proxy and network connection", "quota_transport_error")
@@ -663,7 +672,8 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
 
     Read with the existing login first. Codex can reject a forced refresh
     even while its current access token is valid. Retry with rotation only
-    after an actual authentication failure, and persist changed credentials.
+    after an authentication failure or a workspace-routing failure that may
+    wrap an account-specific 401, and persist changed credentials.
     """
     auth_file = account.get("auth_file", "")
     if not auth_file:
@@ -679,7 +689,10 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
             allow_refresh=False, persist_path=persist_path,
         )
     except QuotaError as exc:
-        if exc.code != "quota_auth_required":
+        if (
+            exc.code != "quota_auth_required"
+            and not exc.retry_imported_refresh
+        ):
             raise
     # The first process may have rotated an expired credential before its
     # quota call failed. Retry from the saved copy, not the stale input.
