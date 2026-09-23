@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "tools" / "benchmark_emp_runtime.py"
@@ -33,6 +33,19 @@ class BenchmarkEmpRuntimeTests(unittest.TestCase):
             "p99_ms": 4.96,
         })
         self.assertFalse({"request", "body", "headers", "authorization"} & set(summary))
+
+    def test_sampler_case_peak_reset_preserves_overall_peak(self):
+        sampler = benchmark.ResourceSampler(42)
+        sampler.reset_peak(100)
+        with patch.object(benchmark, "_tree_metrics", return_value={"rss_bytes": 150}):
+            self.assertEqual(sampler.case_peak(), 150)
+            self.assertEqual(sampler.overall_peak(), 150)
+        with patch.object(benchmark, "_tree_metrics", return_value={"rss_bytes": 260}):
+            self.assertEqual(sampler.case_peak(), 260)
+        sampler.reset_peak(120)
+        with patch.object(benchmark, "_tree_metrics", return_value={"rss_bytes": 140}):
+            self.assertEqual(sampler.case_peak(), 140)
+            self.assertEqual(sampler.overall_peak(), 260)
 
     def test_semantic_diff_reports_paths_without_values_or_secrets(self):
         left = {"status": 200, "authorization": benchmark.FIXTURE_CALLER_KEY}
@@ -129,6 +142,7 @@ class BenchmarkEmpRuntimeTests(unittest.TestCase):
             port=4200,
             cookie="fixture-cookie",
             process=SimpleNamespace(pid=42),
+            sampler=SimpleNamespace(reset_peak=Mock(), case_peak=lambda: 120),
         )
         upstream = SimpleNamespace(request_count=0)
 
@@ -143,10 +157,14 @@ class BenchmarkEmpRuntimeTests(unittest.TestCase):
 
         with patch.object(benchmark, "_workload_request", side_effect=response), patch.object(
             benchmark, "_tree_metrics",
-            side_effect=[{"cpu_seconds": 1.0}, {"cpu_seconds": 1.25}],
+            side_effect=[
+                {"cpu_seconds": 1.0, "rss_bytes": 100},
+                {"cpu_seconds": 1.25, "rss_bytes": 110},
+            ],
         ):
             result = benchmark._measure_case(
-                service, upstream, "responses_sse", b"fixture payload", 3, 0, 1
+                service, upstream, "responses_sse", b"fixture payload", 3, 0, 1,
+                logical_history_bytes=7,
             )
         self.assertEqual(result["count"], 3)
         self.assertEqual(result["errors"], 0)
@@ -154,6 +172,13 @@ class BenchmarkEmpRuntimeTests(unittest.TestCase):
         self.assertEqual(result["upstream_requests"], 3)
         self.assertTrue(result["upstream_count_matches"])
         self.assertEqual(result["first_event_p50_ms"], 0.5)
+        self.assertEqual(service.sampler.reset_peak.call_args.args, (100,))
+        self.assertEqual(result["case_start_rss_bytes"], 100)
+        self.assertEqual(result["case_peak_rss_bytes"], 120)
+        self.assertEqual(result["logical_history_bytes"], 7)
+        self.assertEqual(result["content_encoding"], "identity")
+        self.assertEqual(result["request_payload_bytes"], len(b"fixture payload"))
+        self.assertNotIn("fixture payload", json.dumps(result))
 
     def test_cli_accepts_benchmark_paths_iterations_and_concurrency(self):
         args = benchmark._parse_args([
@@ -170,6 +195,26 @@ class BenchmarkEmpRuntimeTests(unittest.TestCase):
         self.assertEqual(args.output, Path("/tmp/result.json"))
         self.assertEqual(args.iterations, 7)
         self.assertEqual(args.concurrency, [1, 16])
+        self.assertEqual(args.large_history_sizes, [])
+        self.assertEqual(args.large_iterations, 1)
+
+    def test_large_history_cli_validation_is_opt_in_and_bounded(self):
+        args = benchmark._parse_args([
+            "--rust-binary", "/rust/EMP",
+            "--iterations", "60",
+            "--concurrency", "1", "16",
+            "--large-history-sizes", "16", "64", "128",
+            "--large-iterations", "2",
+        ])
+        benchmark._validate_parameters(
+            args.iterations, args.warmup, args.concurrency, args.payload_sizes,
+            args.large_history_sizes, args.large_iterations,
+        )
+        self.assertEqual(args.large_history_sizes, [16, 64, 128])
+        self.assertEqual(args.large_iterations, 2)
+        for sizes, count in (([15], 1), ([129], 1), ([16], 4)):
+            with self.assertRaises(benchmark.BenchmarkError):
+                benchmark._validate_parameters(1, 0, [1], [1024], sizes, count)
 
     def test_python_launcher_preserves_venv_symlink_path(self):
         with tempfile.TemporaryDirectory(prefix="benchmark-python-launcher-") as directory:

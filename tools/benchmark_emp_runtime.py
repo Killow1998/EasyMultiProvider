@@ -468,15 +468,41 @@ class ResourceSampler:
         self.pid = pid
         self.interval = interval
         self.stop_event = threading.Event()
-        self.peak_rss_bytes = 0
+        self._peak_lock = threading.Lock()
+        self._overall_peak_rss_bytes = 0
+        self._case_peak_rss_bytes = 0
         self.thread = threading.Thread(target=self._run, daemon=True)
 
     def _run(self):
         while not self.stop_event.is_set():
             values = _tree_metrics(self.pid)
-            if values["rss_bytes"] is not None:
-                self.peak_rss_bytes = max(self.peak_rss_bytes, values["rss_bytes"])
+            self._record_rss(values["rss_bytes"])
             self.stop_event.wait(self.interval)
+
+    def _record_rss(self, rss_bytes: int | None):
+        if rss_bytes is None:
+            return
+        with self._peak_lock:
+            self._overall_peak_rss_bytes = max(self._overall_peak_rss_bytes, rss_bytes)
+            self._case_peak_rss_bytes = max(self._case_peak_rss_bytes, rss_bytes)
+
+    def reset_peak(self, baseline_rss_bytes: int | None = None):
+        if baseline_rss_bytes is None:
+            baseline_rss_bytes = _tree_metrics(self.pid)["rss_bytes"] or 0
+        with self._peak_lock:
+            self._case_peak_rss_bytes = baseline_rss_bytes
+
+    def case_peak(self) -> int:
+        current_rss = _tree_metrics(self.pid)["rss_bytes"]
+        self._record_rss(current_rss)
+        with self._peak_lock:
+            return self._case_peak_rss_bytes
+
+    def overall_peak(self) -> int:
+        current_rss = _tree_metrics(self.pid)["rss_bytes"]
+        self._record_rss(current_rss)
+        with self._peak_lock:
+            return self._overall_peak_rss_bytes
 
     def start(self):
         self.thread.start()
@@ -718,7 +744,8 @@ def _workload_request(service: EmpService, kind: str, body: bytes | None = None)
 
 def _measure_case(service: EmpService, upstream: FakeResponsesUpstream, kind: str,
                   payload: bytes | None, iterations: int, warmup: int,
-                  concurrency: int) -> dict:
+                  concurrency: int, *, logical_history_bytes: int | None = None,
+                  content_encoding: str = "identity") -> dict:
     def perform(_index):
         try:
             return _workload_request(service, kind, payload), None
@@ -740,8 +767,12 @@ def _measure_case(service: EmpService, upstream: FakeResponsesUpstream, kind: st
                 if error_kind or result is None or result["status"] != 200:
                     warmup_errors += 1
 
+    case_start_resources = _tree_metrics(service.process.pid)
+    sampler = getattr(service, "sampler", None)
+    if sampler is not None:
+        sampler.reset_peak(case_start_resources["rss_bytes"])
     upstream_before = upstream.request_count
-    cpu_before = _tree_metrics(service.process.pid)["cpu_seconds"]
+    cpu_before = case_start_resources["cpu_seconds"]
     started = time.perf_counter()
     results = []
     error_kinds = {}
@@ -754,7 +785,8 @@ def _measure_case(service: EmpService, upstream: FakeResponsesUpstream, kind: st
             for future in as_completed(futures):
                 results.append(future.result())
     elapsed = time.perf_counter() - started
-    cpu_after = _tree_metrics(service.process.pid)["cpu_seconds"]
+    case_end_resources = _tree_metrics(service.process.pid)
+    cpu_after = case_end_resources["cpu_seconds"]
     upstream_delta = upstream.request_count - upstream_before
     complete = []
     first_events = []
@@ -792,12 +824,18 @@ def _measure_case(service: EmpService, upstream: FakeResponsesUpstream, kind: st
         "error_kinds": error_kinds,
         "warmup_errors": warmup_errors,
         "request_payload_bytes": len(payload) if payload is not None else 0,
+        "logical_history_bytes": logical_history_bytes,
+        "content_encoding": content_encoding,
+        "case_start_rss_bytes": case_start_resources["rss_bytes"],
+        "case_peak_rss_bytes": sampler.case_peak() if sampler is not None else None,
     }
 
 
 def _run_measurements(service: EmpService, upstream: FakeResponsesUpstream,
                      idle_metrics: dict, iterations: int, warmup: int,
-                     concurrencies: list[int], payload_sizes: list[int]) -> dict:
+                     concurrencies: list[int], payload_sizes: list[int],
+                     large_history_sizes_mib: list[int],
+                     large_iterations: int) -> dict:
     results = {}
     for kind in ("healthz", "config", "models"):
         results[kind] = _measure_case(
@@ -818,11 +856,30 @@ def _run_measurements(service: EmpService, upstream: FakeResponsesUpstream,
                 }, separators=(",", ":")).encode()
                 case = f"{kind}_history_{size}_bytes_concurrency_{concurrency}"
                 results[case] = _measure_case(
-                    service, upstream, kind, payload, iterations, warmup, concurrency
+                    service, upstream, kind, payload, iterations, warmup, concurrency,
+                    logical_history_bytes=size,
                 )
+    for size_mib in large_history_sizes_mib:
+        logical_size = size_mib * 1024 * 1024
+        history = [
+            {"role": "user", "content": [{"type": "input_text", "text": "h" * logical_size}]},
+            {"role": "assistant", "content": [{"type": "output_text", "text": "prior assistant turn"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "latest turn"}]},
+        ]
+        for stream in (False, True):
+            kind = "responses_sse" if stream else "responses_nonstream"
+            payload = json.dumps({
+                "model": "benchmark/model", "input": history, "stream": stream,
+            }, separators=(",", ":")).encode()
+            case = f"{kind}_large_history_{size_mib}mib_identity_concurrency_1"
+            results[case] = _measure_case(
+                service, upstream, kind, payload, large_iterations, warmup, 1,
+                logical_history_bytes=logical_size,
+                content_encoding="identity",
+            )
     return {
         "idle_resources": idle_metrics,
-        "peak_rss_bytes": service.sampler.peak_rss_bytes,
+        "peak_rss_bytes": service.sampler.overall_peak(),
         "final_resources": _tree_metrics(service.process.pid),
         "cases": results,
     }
@@ -854,7 +911,9 @@ def _serve_once(name: str, command: list[str], cwd: Path, config_bytes: bytes,
                 work_root: Path, key_file: Path, base_env: dict,
                 python_root: Path, upstream: FakeResponsesUpstream,
                 iterations: int, warmup: int, concurrencies: list[int],
-                payload_sizes: list[int], measure: bool) -> tuple[dict, list[str]]:
+                payload_sizes: list[int], large_history_sizes_mib: list[int],
+                large_iterations: int,
+                measure: bool) -> tuple[dict, list[str]]:
     config_path = work_root / (name + ".json")
     config_path.write_bytes(config_bytes)
     service_env = _service_environment(base_env, work_root / (name + "-home"), key_file, python_root)
@@ -908,12 +967,13 @@ def _serve_once(name: str, command: list[str], cwd: Path, config_bytes: bytes,
         else:
             result = _run_measurements(
                 service, upstream, idle, iterations, warmup,
-                concurrencies, payload_sizes,
+                concurrencies, payload_sizes, large_history_sizes_mib,
+                large_iterations,
             )
         service.sampler.stop()
         if measure:
             result["idle_resources"] = idle
-            result["peak_rss_bytes"] = service.sampler.peak_rss_bytes
+            result["peak_rss_bytes"] = service.sampler.overall_peak()
     return result, errors
 
 
@@ -927,6 +987,8 @@ def _parse_args(argv=None):
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--concurrency", type=int, nargs="+", default=[1, 16])
     parser.add_argument("--payload-sizes", type=int, nargs="+", default=[1024, 1024 * 1024])
+    parser.add_argument("--large-history-sizes", type=int, nargs="+", default=[], metavar="MIB")
+    parser.add_argument("--large-iterations", type=int, default=1)
     parser.add_argument("--expected-version", default="0.11.10")
     parser.add_argument("--order", choices=("python-first", "rust-first"), default="python-first")
     return parser.parse_args(argv)
@@ -951,18 +1013,33 @@ def _clean_version(label: str, value: str) -> str:
     return value
 
 
+def _validate_parameters(iterations: int, warmup: int, concurrencies: list[int],
+                         payload_sizes: list[int], large_history_sizes_mib: list[int],
+                         large_iterations: int):
+    if iterations < 1 or warmup < 0:
+        raise BenchmarkError("invalid_iteration_count")
+    if not concurrencies or any(value < 1 for value in concurrencies):
+        raise BenchmarkError("invalid_concurrency")
+    if not payload_sizes or any(value < 1 or value > 1024 * 1024 for value in payload_sizes):
+        raise BenchmarkError("payload_sizes_must_be_1_to_1048576")
+    if any(value < 16 or value > 128 for value in large_history_sizes_mib):
+        raise BenchmarkError("large_history_sizes_mib_must_be_16_to_128")
+    if len(set(large_history_sizes_mib)) != len(large_history_sizes_mib):
+        raise BenchmarkError("large_history_sizes_mib_must_be_unique")
+    if not 1 <= large_iterations <= 3:
+        raise BenchmarkError("large_iterations_must_be_1_to_3")
+
+
 def run(args) -> tuple[dict, int]:
     if psutil is None:
         raise BenchmarkError("psutil_required")
     python_root = args.python_root.resolve(strict=True)
     python = _python_launcher(args.python, python_root)
     rust_binary = args.rust_binary.resolve(strict=True)
-    if args.iterations < 1 or args.warmup < 0:
-        raise BenchmarkError("invalid_iteration_count")
-    if not args.concurrency or any(value < 1 for value in args.concurrency):
-        raise BenchmarkError("invalid_concurrency")
-    if not args.payload_sizes or any(value < 1 or value > 1024 * 1024 for value in args.payload_sizes):
-        raise BenchmarkError("payload_sizes_must_be_1_to_1048576")
+    _validate_parameters(
+        args.iterations, args.warmup, args.concurrency, args.payload_sizes,
+        args.large_history_sizes, args.large_iterations,
+    )
 
     python_env = dict(os.environ)
     python_env["PYTHONPATH"] = str(python_root)
@@ -992,6 +1069,8 @@ def run(args) -> tuple[dict, int]:
             "warmup": args.warmup,
             "concurrency": args.concurrency,
             "payload_sizes_bytes": args.payload_sizes,
+            "large_history_sizes_mib": args.large_history_sizes,
+            "large_iterations": args.large_iterations,
             "upstream_delay_ms": 0,
             "measurement_order": args.order,
         },
@@ -1018,14 +1097,16 @@ def run(args) -> tuple[dict, int]:
                 "python", [str(python), "-m", "easy_multi_provider"],
                 python_root, config_bytes, work_root, key_file, base_env,
                 python_root, fake, args.iterations, args.warmup,
-                args.concurrency, args.payload_sizes, measure=False,
+                args.concurrency, args.payload_sizes, args.large_history_sizes,
+                args.large_iterations, measure=False,
             )
             report["preflight"]["python"] = py_result
             rust_result, rust_errors = _serve_once(
                 "rust", [str(rust_binary)], Path.cwd(), config_bytes,
                 work_root, key_file, base_env, python_root, fake,
                 args.iterations, args.warmup, args.concurrency,
-                args.payload_sizes, measure=False,
+                args.payload_sizes, args.large_history_sizes, args.large_iterations,
+                measure=False,
             )
             report["preflight"]["rust"] = rust_result
             differences = semantic_diff(
@@ -1055,7 +1136,8 @@ def run(args) -> tuple[dict, int]:
                 result, errors = _serve_once(
                     name, command, cwd, config_bytes, work_root, key_file,
                     base_env, python_root, fake, args.iterations, args.warmup,
-                    args.concurrency, args.payload_sizes, measure=True,
+                    args.concurrency, args.payload_sizes, args.large_history_sizes,
+                    args.large_iterations, measure=True,
                 )
                 measurements[name] = result
                 if errors:
