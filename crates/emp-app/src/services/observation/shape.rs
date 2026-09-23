@@ -1,6 +1,7 @@
 //! Content-free request facts. Names, arguments, text and attachments are omitted.
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{self, Write};
 fn kind(value: &Value, default: &str) -> String {
     let value = emp_state::diagnostics::schema::id(value);
     if value.is_empty() {
@@ -109,24 +110,111 @@ pub(super) fn facts(body: &Value, headers: &BTreeMap<String, String>) -> Value {
     result
 }
 pub(super) fn request_bytes(body: &Value) -> usize {
-    let compact = body.to_string();
-    let mut quoted = false;
-    let mut escaped = false;
-    let mut separators = 0;
-    for byte in compact.bytes() {
-        if quoted {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                quoted = false;
+    let mut counter = RequestJsonCounter::default();
+    serde_json::to_writer(&mut counter, body).expect("JSON Value serialization is infallible");
+    counter.serialized_bytes.saturating_add(counter.separators)
+}
+
+#[derive(Default)]
+struct RequestJsonCounter {
+    serialized_bytes: usize,
+    separators: usize,
+    quoted: bool,
+    escaped: bool,
+}
+
+impl Write for RequestJsonCounter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.serialized_bytes = self.serialized_bytes.saturating_add(bytes.len());
+        for byte in bytes {
+            if self.quoted {
+                if self.escaped {
+                    self.escaped = false;
+                } else if *byte == b'\\' {
+                    self.escaped = true;
+                } else if *byte == b'"' {
+                    self.quoted = false;
+                }
+            } else if *byte == b'"' {
+                self.quoted = true;
+            } else if *byte == b',' || *byte == b':' {
+                self.separators = self.separators.saturating_add(1);
             }
-        } else if byte == b'"' {
-            quoted = true;
-        } else if byte == b',' || byte == b':' {
-            separators += 1;
         }
+        Ok(bytes.len())
     }
-    compact.len() + separators
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RequestJsonCounter, request_bytes};
+    use serde_json::{Value, json};
+    use std::io::Write;
+
+    fn materialized_reference(body: &Value) -> usize {
+        let compact = body.to_string();
+        let mut quoted = false;
+        let mut escaped = false;
+        let mut separators = 0;
+        for byte in compact.bytes() {
+            if quoted {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    quoted = false;
+                }
+            } else if byte == b'"' {
+                quoted = true;
+            } else if byte == b',' || byte == b':' {
+                separators += 1;
+            }
+        }
+        compact.len() + separators
+    }
+
+    #[test]
+    fn request_byte_count_matches_materialized_json_with_unicode_and_escapes() {
+        let body = json!({
+            "model": "external/model",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "comma, colon: quote \\\" slash \\\\ newline\\n snow 雪"
+                }]
+            }],
+            "metadata": {"nested": [null, true, 1.25, {"text": "\\\\\\\" , :"}]},
+        });
+        assert_eq!(request_bytes(&body), materialized_reference(&body));
+    }
+
+    #[test]
+    fn request_byte_count_matches_materialized_json_for_large_text() {
+        let mut text = "x".repeat(256 * 1024);
+        text.insert_str(65_534, "\\\" , : 雪");
+        let body =
+            json!({"input":[{"type":"message","content":[{"type":"input_text","text":text}]}]});
+        assert_eq!(request_bytes(&body), materialized_reference(&body));
+    }
+
+    #[test]
+    fn request_byte_counter_keeps_escape_state_across_write_chunks() {
+        let encoded = br#"{"text":"comma, colon: quote \" still quoted","nested":{"x":1}}"#;
+        let body: Value = serde_json::from_slice(encoded).unwrap();
+        let mut counter = RequestJsonCounter::default();
+        for chunk in encoded.chunks(3) {
+            counter.write_all(chunk).unwrap();
+        }
+        assert_eq!(
+            counter.serialized_bytes.saturating_add(counter.separators),
+            materialized_reference(&body)
+        );
+    }
 }
