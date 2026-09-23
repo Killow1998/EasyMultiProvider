@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import base64
+import gzip
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -33,6 +34,7 @@ REPLY_TEXT = "EMP_BENCHMARK_RESPONSE_OK"
 FIXTURE_CALLER_KEY = "benchmark-fixture-caller-key"
 FIXTURE_PROVIDER_KEY = "benchmark-fixture-provider-key"
 UPSTREAM_MODEL = "benchmark-upstream-model"
+BENCHMARK_CONTEXT_WINDOW = 100_000_000
 DEFAULT_PYTHON_ROOT = Path(__file__).resolve().parents[2] / "EasyMultiProvider"
 EXTERNAL_CREDENTIAL_ENV = (
     "EASY_MULTI_PROVIDER_MASTER_KEY",
@@ -130,6 +132,48 @@ def _response_value(model: str) -> dict:
             "total_tokens": 10,
         },
     }
+
+
+def _encode_request_payload(payload: bytes, content_encoding: str) -> bytes:
+    if content_encoding == "identity":
+        return payload
+    if content_encoding == "gzip":
+        return gzip.compress(payload, mtime=0)
+    if content_encoding == "zstd":
+        try:
+            import zstandard
+        except ImportError:
+            raise BenchmarkError("zstandard_compressor_required") from None
+        return zstandard.ZstdCompressor(level=3).compress(payload)
+    raise BenchmarkError("unsupported_benchmark_content_encoding")
+
+
+def _request_headers(*, cookie: str = "", payload_present: bool,
+                     content_encoding: str = "identity") -> dict[str, str]:
+    headers = {"Connection": "close"}
+    if cookie:
+        headers["Cookie"] = cookie
+    if payload_present:
+        headers["Content-Type"] = "application/json"
+        headers["Authorization"] = "Bearer " + FIXTURE_CALLER_KEY
+        if content_encoding != "identity":
+            if content_encoding not in {"gzip", "zstd"}:
+                raise BenchmarkError("unsupported_benchmark_content_encoding")
+            headers["Content-Encoding"] = content_encoding
+    elif content_encoding != "identity":
+        raise BenchmarkError("content_encoding_requires_payload")
+    return headers
+
+
+def _large_history_payload(logical_size: int, stream: bool) -> bytes:
+    history = [
+        {"role": "user", "content": [{"type": "input_text", "text": "h" * logical_size}]},
+        {"role": "assistant", "content": [{"type": "output_text", "text": "prior assistant turn"}]},
+        {"role": "user", "content": [{"type": "input_text", "text": "latest turn"}]},
+    ]
+    return json.dumps({
+        "model": "benchmark/model", "input": history, "stream": stream,
+    }, separators=(",", ":")).encode()
 
 
 def _sse_payload(model: str) -> bytes:
@@ -264,13 +308,12 @@ class FakeResponsesUpstream(ThreadingHTTPServer):
 
 
 def _request(port: int, method: str, path: str, *, cookie: str = "", payload: bytes | None = None,
-             timeout: float = 10.0, operation: str = "http_request") -> dict:
-    headers = {"Connection": "close"}
-    if cookie:
-        headers["Cookie"] = cookie
-    if payload is not None:
-        headers["Content-Type"] = "application/json"
-        headers["Authorization"] = "Bearer " + FIXTURE_CALLER_KEY
+             timeout: float = 10.0, operation: str = "http_request",
+             content_encoding: str = "identity") -> dict:
+    headers = _request_headers(
+        cookie=cookie, payload_present=payload is not None,
+        content_encoding=content_encoding,
+    )
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     started = time.perf_counter()
     try:
@@ -377,6 +420,47 @@ def _responses_semantic(result: dict, stream: bool) -> dict:
             "total_tokens": value.get("usage", {}).get("total_tokens"),
         })
     return semantic
+
+
+EXPECTED_SSE_EVENT_TYPES = [
+    "response.created",
+    "response.output_item.added",
+    "response.content_part.added",
+    "response.output_text.delta",
+    "response.output_text.done",
+    "response.content_part.done",
+    "response.output_item.done",
+    "response.completed",
+]
+
+
+def _valid_workload_result(kind: str, result: dict) -> bool:
+    if result["status"] != 200:
+        return False
+    if not kind.startswith("responses_"):
+        return True
+    if kind == "responses_sse":
+        try:
+            return (
+                result["event_types"] == EXPECTED_SSE_EVENT_TYPES
+                and result["terminal"] == "response.completed"
+                and result["text"] == REPLY_TEXT
+            )
+        except (KeyError, TypeError):
+            return False
+    try:
+        semantic = _responses_semantic(result, stream=False)
+    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return False
+    return semantic == {
+        "status": 200,
+        "object": "response",
+        "status_value": "completed",
+        "model": UPSTREAM_MODEL,
+        "output_types": ["message"],
+        "text": REPLY_TEXT,
+        "total_tokens": 10,
+    }
 
 
 def _bootstrap_target(runtime_kind: str, startup_url: str) -> str:
@@ -655,7 +739,7 @@ def _normalized_config(python: Path, python_root: Path, env: dict, upstream_url:
             "upstream_id": UPSTREAM_MODEL,
             "enabled": True,
             "reasoning_levels": ["low"],
-            "context_window": 100000,
+            "context_window": BENCHMARK_CONTEXT_WINDOW,
             "output_limit": 4096,
         }],
         "accounts": [],
@@ -705,8 +789,8 @@ def _preflight(service: EmpService, upstream: FakeResponsesUpstream) -> tuple[di
             operation="preflight_" + kind,
         )
         outcomes[kind] = _management_semantic(result, kind)
-        if result["status"] != 200:
-            errors.append(kind + "_status")
+        if not _valid_workload_result(kind, result):
+            errors.append(kind + "_semantic")
     small = b"semantic-preflight-1024"
     for kind, stream in (("responses_nonstream", False), ("responses_sse", True)):
         payload = json.dumps({
@@ -717,8 +801,8 @@ def _preflight(service: EmpService, upstream: FakeResponsesUpstream) -> tuple[di
             operation="preflight_" + kind,
         )
         outcomes[kind] = _responses_semantic(result, stream)
-        if result["status"] != 200:
-            errors.append(kind + "_status")
+        if not _valid_workload_result(kind, result):
+            errors.append(kind + "_semantic")
     count = upstream.request_count
     if count != 2:
         errors.append("preflight_upstream_request_count")
@@ -727,7 +811,8 @@ def _preflight(service: EmpService, upstream: FakeResponsesUpstream) -> tuple[di
     return outcomes, errors
 
 
-def _workload_request(service: EmpService, kind: str, body: bytes | None = None) -> dict:
+def _workload_request(service: EmpService, kind: str, body: bytes | None = None, *,
+                      content_encoding: str = "identity", timeout: float = 10.0) -> dict:
     if kind == "healthz":
         return _request(service.port, "GET", "/healthz", operation="healthz")
     if kind == "config":
@@ -738,17 +823,27 @@ def _workload_request(service: EmpService, kind: str, body: bytes | None = None)
     if kind == "models":
         return _request(service.port, "GET", "/v1/models", operation="models")
     return _request(
-        service.port, "POST", "/v1/responses", payload=body, operation=kind
+        service.port, "POST", "/v1/responses", payload=body, operation=kind,
+        content_encoding=content_encoding, timeout=timeout,
     )
 
 
 def _measure_case(service: EmpService, upstream: FakeResponsesUpstream, kind: str,
                   payload: bytes | None, iterations: int, warmup: int,
                   concurrency: int, *, logical_history_bytes: int | None = None,
+                  logical_payload_bytes: int | None = None,
                   content_encoding: str = "identity") -> dict:
     def perform(_index):
         try:
-            return _workload_request(service, kind, payload), None
+            is_large_history = (
+                logical_history_bytes is not None
+                and logical_history_bytes >= 16 * 1024 * 1024
+            )
+            timeout = 180.0 if is_large_history else 10.0
+            return _workload_request(
+                service, kind, payload, content_encoding=content_encoding,
+                timeout=timeout,
+            ), None
         except (BenchmarkError, OSError, http.client.HTTPException, ValueError) as exc:
             if isinstance(exc, BenchmarkError):
                 return None, exc.code
@@ -756,16 +851,23 @@ def _measure_case(service: EmpService, upstream: FakeResponsesUpstream, kind: st
 
     warmup_count = min(warmup, max(1, iterations))
     warmup_errors = 0
+    warmup_content_mismatches = 0
     if concurrency == 1:
         for index in range(warmup_count):
             result, error_kind = perform(index)
             if error_kind or result is None or result["status"] != 200:
                 warmup_errors += 1
+            elif not _valid_workload_result(kind, result):
+                warmup_errors += 1
+                warmup_content_mismatches += 1
     else:
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             for result, error_kind in pool.map(perform, range(warmup_count)):
                 if error_kind or result is None or result["status"] != 200:
                     warmup_errors += 1
+                elif not _valid_workload_result(kind, result):
+                    warmup_errors += 1
+                    warmup_content_mismatches += 1
 
     case_start_resources = _tree_metrics(service.process.pid)
     sampler = getattr(service, "sampler", None)
@@ -776,6 +878,8 @@ def _measure_case(service: EmpService, upstream: FakeResponsesUpstream, kind: st
     started = time.perf_counter()
     results = []
     error_kinds = {}
+    if warmup_content_mismatches:
+        error_kinds["content_mismatch"] = warmup_content_mismatches
     if concurrency == 1:
         for index in range(iterations):
             results.append(perform(index))
@@ -804,11 +908,10 @@ def _measure_case(service: EmpService, upstream: FakeResponsesUpstream, kind: st
         complete.append(result["elapsed_ms"])
         if result["first_event_ms"] is not None:
             first_events.append(result["first_event_ms"])
-        if kind == "responses_sse" and result["terminal"] != "response.completed":
+        if (result["status"] == 200 and kind.startswith("responses_")
+                and not _valid_workload_result(kind, result)):
             errors += 1
-            error_kinds["missing_completed_terminal"] = error_kinds.get(
-                "missing_completed_terminal", 0
-            ) + 1
+            error_kinds["content_mismatch"] = error_kinds.get("content_mismatch", 0) + 1
     expected_upstream = iterations if kind.startswith("responses_") else 0
     return {
         **latency_summary(complete, elapsed, errors),
@@ -824,6 +927,10 @@ def _measure_case(service: EmpService, upstream: FakeResponsesUpstream, kind: st
         "error_kinds": error_kinds,
         "warmup_errors": warmup_errors,
         "request_payload_bytes": len(payload) if payload is not None else 0,
+        "wire_payload_bytes": len(payload) if payload is not None else 0,
+        "logical_payload_bytes": logical_payload_bytes if logical_payload_bytes is not None else (
+            len(payload) if payload is not None and content_encoding == "identity" else None
+        ),
         "logical_history_bytes": logical_history_bytes,
         "content_encoding": content_encoding,
         "case_start_rss_bytes": case_start_resources["rss_bytes"],
@@ -861,22 +968,21 @@ def _run_measurements(service: EmpService, upstream: FakeResponsesUpstream,
                 )
     for size_mib in large_history_sizes_mib:
         logical_size = size_mib * 1024 * 1024
-        history = [
-            {"role": "user", "content": [{"type": "input_text", "text": "h" * logical_size}]},
-            {"role": "assistant", "content": [{"type": "output_text", "text": "prior assistant turn"}]},
-            {"role": "user", "content": [{"type": "input_text", "text": "latest turn"}]},
-        ]
         for stream in (False, True):
             kind = "responses_sse" if stream else "responses_nonstream"
-            payload = json.dumps({
-                "model": "benchmark/model", "input": history, "stream": stream,
-            }, separators=(",", ":")).encode()
-            case = f"{kind}_large_history_{size_mib}mib_identity_concurrency_1"
-            results[case] = _measure_case(
-                service, upstream, kind, payload, large_iterations, warmup, 1,
-                logical_history_bytes=logical_size,
-                content_encoding="identity",
-            )
+            logical_payload = _large_history_payload(logical_size, stream)
+            for content_encoding in ("identity", "gzip", "zstd"):
+                # Encoding is deliberately outside _measure_case's timed region.
+                wire_payload = _encode_request_payload(logical_payload, content_encoding)
+                case = (
+                    f"{kind}_large_history_{size_mib}mib_{content_encoding}_concurrency_1"
+                )
+                results[case] = _measure_case(
+                    service, upstream, kind, wire_payload, large_iterations, warmup, 1,
+                    logical_history_bytes=logical_size,
+                    logical_payload_bytes=len(logical_payload),
+                    content_encoding=content_encoding,
+                )
     return {
         "idle_resources": idle_metrics,
         "peak_rss_bytes": service.sampler.overall_peak(),
@@ -950,9 +1056,7 @@ def _serve_once(name: str, command: list[str], cwd: Path, config_bytes: bytes,
                     "stream": stream,
                 }, separators=(",", ":")).encode()
                 warmed = _workload_request(service, kind, payload)
-                if warmed["status"] != 200 or (
-                    stream and warmed["terminal"] != "response.completed"
-                ):
+                if not _valid_workload_result(kind, warmed):
                     errors.append(name + "_idle_warmup_" + kind)
         time.sleep(0.15)
         idle = _tree_metrics(service.process.pid)

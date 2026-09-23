@@ -1,4 +1,5 @@
 import importlib.util
+import gzip
 import json
 from pathlib import Path
 import tempfile
@@ -137,6 +138,147 @@ class BenchmarkEmpRuntimeTests(unittest.TestCase):
             benchmark.REPLY_TEXT,
         )
 
+    def test_request_payload_encodings_roundtrip(self):
+        payload = b'{"input":"compressible fixture"}' * 100
+        self.assertEqual(benchmark._encode_request_payload(payload, "identity"), payload)
+        gzip_payload = benchmark._encode_request_payload(payload, "gzip")
+        self.assertEqual(gzip.decompress(gzip_payload), payload)
+        try:
+            import zstandard
+        except ImportError:
+            self.skipTest("zstandard is required for the zstd encoding roundtrip")
+        zstd_payload = benchmark._encode_request_payload(payload, "zstd")
+        self.assertEqual(zstandard.ZstdDecompressor().decompress(zstd_payload), payload)
+
+    def test_request_headers_only_add_nonidentity_content_encoding_for_payloads(self):
+        identity = benchmark._request_headers(payload_present=True)
+        self.assertNotIn("Content-Encoding", identity)
+        self.assertEqual(identity["Authorization"], "Bearer " + benchmark.FIXTURE_CALLER_KEY)
+        for encoding in ("gzip", "zstd"):
+            headers = benchmark._request_headers(
+                payload_present=True, content_encoding=encoding
+            )
+            self.assertEqual(headers["Content-Encoding"], encoding)
+            self.assertEqual(headers["Authorization"], "Bearer " + benchmark.FIXTURE_CALLER_KEY)
+        with self.assertRaises(benchmark.BenchmarkError):
+            benchmark._request_headers(payload_present=False, content_encoding="gzip")
+
+    def test_workload_request_forwards_encoding_and_timeout(self):
+        service = SimpleNamespace(port=4200)
+        with patch.object(benchmark, "_request", return_value={}) as request:
+            benchmark._workload_request(
+                service, "responses_nonstream", b"wire fixture",
+                content_encoding="zstd", timeout=45.0,
+            )
+        request.assert_called_once_with(
+            4200, "POST", "/v1/responses", payload=b"wire fixture",
+            operation="responses_nonstream", content_encoding="zstd", timeout=45.0,
+        )
+
+    def test_large_history_cases_report_encoding_and_wire_logical_sizes(self):
+        service = SimpleNamespace(
+            process=SimpleNamespace(pid=42),
+            sampler=SimpleNamespace(
+                reset_peak=Mock(), case_peak=lambda: 120, overall_peak=lambda: 120
+            ),
+        )
+        upstream = SimpleNamespace(request_count=0)
+        observed_encodings = []
+
+        def fake_workload(_service, kind, _payload, *, content_encoding, timeout):
+            if kind.startswith("responses_"):
+                upstream.request_count += 1
+                observed_encodings.append((kind, content_encoding))
+            if kind == "responses_sse":
+                return {
+                    "status": 200, "elapsed_ms": 1.0, "first_event_ms": 0.5,
+                    "event_types": benchmark.EXPECTED_SSE_EVENT_TYPES,
+                    "terminal": "response.completed", "text": benchmark.REPLY_TEXT,
+                }
+            return {
+                "status": 200, "elapsed_ms": 1.0, "first_event_ms": None,
+                "body": json.dumps(benchmark._response_value(benchmark.UPSTREAM_MODEL)).encode(),
+                "content_encoding": content_encoding, "timeout": timeout,
+            }
+
+        with patch.object(
+            benchmark, "_tree_metrics",
+            return_value={"cpu_seconds": 1.0, "rss_bytes": 100},
+        ), patch.object(benchmark, "_workload_request", side_effect=fake_workload):
+            result = benchmark._run_measurements(
+                service, upstream, {}, iterations=1, warmup=0,
+                concurrencies=[], payload_sizes=[], large_history_sizes_mib=[1],
+                large_iterations=1,
+            )
+
+        cases = result["cases"]
+        for kind in ("responses_nonstream", "responses_sse"):
+            encoded = {
+                name.split("_")[-3]: metrics
+                for name, metrics in cases.items()
+                if name.startswith(kind + "_large_history_")
+            }
+            self.assertEqual(set(encoded), {"identity", "gzip", "zstd"})
+            for encoding, metrics in encoded.items():
+                self.assertEqual(metrics["content_encoding"], encoding)
+                self.assertGreater(metrics["logical_payload_bytes"], 0)
+                self.assertEqual(metrics["wire_payload_bytes"], metrics["request_payload_bytes"])
+                if encoding != "identity":
+                    self.assertLess(metrics["wire_payload_bytes"], metrics["logical_payload_bytes"])
+        self.assertEqual(upstream.request_count, 6)
+        self.assertCountEqual(
+            observed_encodings,
+            [
+                (kind, encoding)
+                for kind in ("responses_nonstream", "responses_sse")
+                for encoding in ("identity", "gzip", "zstd")
+            ],
+        )
+        serialized_cases = json.dumps(cases)
+        for sensitive_value in (
+            benchmark.FIXTURE_CALLER_KEY,
+            benchmark.FIXTURE_PROVIDER_KEY,
+            benchmark.REPLY_TEXT,
+            "input_text",
+        ):
+            self.assertNotIn(sensitive_value, serialized_cases)
+        self.assertEqual(benchmark.BENCHMARK_CONTEXT_WINDOW, 100_000_000)
+
+    def test_measure_case_marks_wrong_response_content_invalid(self):
+        service = SimpleNamespace(
+            port=4200,
+            cookie="fixture-cookie",
+            process=SimpleNamespace(pid=42),
+            sampler=SimpleNamespace(reset_peak=Mock(), case_peak=lambda: 120),
+        )
+        upstream = SimpleNamespace(request_count=0)
+        bad_value = benchmark._response_value(benchmark.UPSTREAM_MODEL)
+        bad_value["output"][0]["content"][0]["text"] = "wrong fixture text"
+
+        def wrong_content(*_args, **_kwargs):
+            upstream.request_count += 1
+            return {
+                "status": 200, "elapsed_ms": 1.0, "first_event_ms": None,
+                "body": json.dumps(bad_value).encode(),
+            }
+
+        with patch.object(benchmark, "_workload_request", side_effect=wrong_content), patch.object(
+            benchmark, "_tree_metrics",
+            side_effect=[
+                {"cpu_seconds": 1.0, "rss_bytes": 100},
+                {"cpu_seconds": 1.25, "rss_bytes": 110},
+            ],
+        ):
+            result = benchmark._measure_case(
+                service, upstream, "responses_nonstream", b"wire", 1, 0, 1,
+                logical_history_bytes=16 * 1024 * 1024,
+                logical_payload_bytes=100,
+                content_encoding="gzip",
+            )
+        self.assertEqual(result["errors"], 1)
+        self.assertEqual(result["error_kinds"], {"content_mismatch": 1})
+        self.assertTrue(result["upstream_count_matches"])
+
     def test_measure_case_reports_cpu_latency_and_upstream_count(self):
         service = SimpleNamespace(
             port=4200,
@@ -146,12 +288,14 @@ class BenchmarkEmpRuntimeTests(unittest.TestCase):
         )
         upstream = SimpleNamespace(request_count=0)
 
-        def response(*_args):
+        def response(*_args, **_kwargs):
             upstream.request_count += 1
             return {
                 "status": 200,
                 "elapsed_ms": 2.0,
                 "first_event_ms": 0.5,
+                "event_types": benchmark.EXPECTED_SSE_EVENT_TYPES,
+                "text": benchmark.REPLY_TEXT,
                 "terminal": "response.completed",
             }
 
