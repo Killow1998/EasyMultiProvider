@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.11.10 (2026-09-23)
+
+- Calculate model TPS from all reported output tokens over the complete request
+  duration, matching OMP's stable throughput metric for buffered and reasoning
+  models while retaining TTFT as a separate measurement.
+- Classify Codex workspace-routing discovery failures with actionable DNS,
+  VPN/TUN, proxy, and connectivity guidance without exposing backend details.
+- For imported subscriptions only, retry a wrapped workspace-routing failure
+  once with credential refresh enabled, preserving rotated credentials and
+  distinguishing expired login state from a true transport failure. Native
+  credential reads remain read-only.
+
 ## 0.11.9 (2026-09-23)
 
 - Route Codex automatic approval reviews through an available subscription at
