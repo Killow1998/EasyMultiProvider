@@ -35,6 +35,8 @@ FIXTURE_CALLER_KEY = "benchmark-fixture-caller-key"
 FIXTURE_PROVIDER_KEY = "benchmark-fixture-provider-key"
 UPSTREAM_MODEL = "benchmark-upstream-model"
 BENCHMARK_CONTEXT_WINDOW = 100_000_000
+LARGE_ENCODINGS = ("identity", "gzip", "zstd")
+LARGE_MODES = ("nonstream", "sse")
 DEFAULT_PYTHON_ROOT = Path(__file__).resolve().parents[2] / "EasyMultiProvider"
 EXTERNAL_CREDENTIAL_ENV = (
     "EASY_MULTI_PROVIDER_MASTER_KEY",
@@ -942,7 +944,11 @@ def _run_measurements(service: EmpService, upstream: FakeResponsesUpstream,
                      idle_metrics: dict, iterations: int, warmup: int,
                      concurrencies: list[int], payload_sizes: list[int],
                      large_history_sizes_mib: list[int],
-                     large_iterations: int) -> dict:
+                     large_iterations: int,
+                     large_modes: list[str] | None = None,
+                     large_encodings: list[str] | None = None) -> dict:
+    large_modes = large_modes if large_modes is not None else list(LARGE_MODES)
+    large_encodings = large_encodings if large_encodings is not None else list(LARGE_ENCODINGS)
     results = {}
     for kind in ("healthz", "config", "models"):
         results[kind] = _measure_case(
@@ -968,10 +974,11 @@ def _run_measurements(service: EmpService, upstream: FakeResponsesUpstream,
                 )
     for size_mib in large_history_sizes_mib:
         logical_size = size_mib * 1024 * 1024
-        for stream in (False, True):
+        for mode in large_modes:
+            stream = mode == "sse"
             kind = "responses_sse" if stream else "responses_nonstream"
             logical_payload = _large_history_payload(logical_size, stream)
-            for content_encoding in ("identity", "gzip", "zstd"):
+            for content_encoding in large_encodings:
                 # Encoding is deliberately outside _measure_case's timed region.
                 wire_payload = _encode_request_payload(logical_payload, content_encoding)
                 case = (
@@ -1019,7 +1026,8 @@ def _serve_once(name: str, command: list[str], cwd: Path, config_bytes: bytes,
                 iterations: int, warmup: int, concurrencies: list[int],
                 payload_sizes: list[int], large_history_sizes_mib: list[int],
                 large_iterations: int,
-                measure: bool) -> tuple[dict, list[str]]:
+                measure: bool, large_modes: list[str] | None = None,
+                large_encodings: list[str] | None = None) -> tuple[dict, list[str]]:
     config_path = work_root / (name + ".json")
     config_path.write_bytes(config_bytes)
     service_env = _service_environment(base_env, work_root / (name + "-home"), key_file, python_root)
@@ -1072,7 +1080,7 @@ def _serve_once(name: str, command: list[str], cwd: Path, config_bytes: bytes,
             result = _run_measurements(
                 service, upstream, idle, iterations, warmup,
                 concurrencies, payload_sizes, large_history_sizes_mib,
-                large_iterations,
+                large_iterations, large_modes, large_encodings,
             )
         service.sampler.stop()
         if measure:
@@ -1093,6 +1101,13 @@ def _parse_args(argv=None):
     parser.add_argument("--payload-sizes", type=int, nargs="+", default=[1024, 1024 * 1024])
     parser.add_argument("--large-history-sizes", type=int, nargs="+", default=[], metavar="MIB")
     parser.add_argument("--large-iterations", type=int, default=1)
+    parser.add_argument(
+        "--large-encodings", choices=LARGE_ENCODINGS, nargs="+",
+        default=list(LARGE_ENCODINGS),
+    )
+    parser.add_argument(
+        "--large-modes", choices=LARGE_MODES, nargs="+", default=list(LARGE_MODES)
+    )
     parser.add_argument("--expected-version", default="0.11.10")
     parser.add_argument("--order", choices=("python-first", "rust-first"), default="python-first")
     return parser.parse_args(argv)
@@ -1119,7 +1134,11 @@ def _clean_version(label: str, value: str) -> str:
 
 def _validate_parameters(iterations: int, warmup: int, concurrencies: list[int],
                          payload_sizes: list[int], large_history_sizes_mib: list[int],
-                         large_iterations: int):
+                         large_iterations: int,
+                         large_encodings: list[str] | None = None,
+                         large_modes: list[str] | None = None):
+    large_encodings = large_encodings if large_encodings is not None else list(LARGE_ENCODINGS)
+    large_modes = large_modes if large_modes is not None else list(LARGE_MODES)
     if iterations < 1 or warmup < 0:
         raise BenchmarkError("invalid_iteration_count")
     if not concurrencies or any(value < 1 for value in concurrencies):
@@ -1132,6 +1151,14 @@ def _validate_parameters(iterations: int, warmup: int, concurrencies: list[int],
         raise BenchmarkError("large_history_sizes_mib_must_be_unique")
     if not 1 <= large_iterations <= 3:
         raise BenchmarkError("large_iterations_must_be_1_to_3")
+    if not large_encodings or any(value not in LARGE_ENCODINGS for value in large_encodings):
+        raise BenchmarkError("invalid_large_encodings")
+    if len(set(large_encodings)) != len(large_encodings):
+        raise BenchmarkError("large_encodings_must_be_unique")
+    if not large_modes or any(value not in LARGE_MODES for value in large_modes):
+        raise BenchmarkError("invalid_large_modes")
+    if len(set(large_modes)) != len(large_modes):
+        raise BenchmarkError("large_modes_must_be_unique")
 
 
 def run(args) -> tuple[dict, int]:
@@ -1143,6 +1170,7 @@ def run(args) -> tuple[dict, int]:
     _validate_parameters(
         args.iterations, args.warmup, args.concurrency, args.payload_sizes,
         args.large_history_sizes, args.large_iterations,
+        args.large_encodings, args.large_modes,
     )
 
     python_env = dict(os.environ)
@@ -1175,6 +1203,8 @@ def run(args) -> tuple[dict, int]:
             "payload_sizes_bytes": args.payload_sizes,
             "large_history_sizes_mib": args.large_history_sizes,
             "large_iterations": args.large_iterations,
+            "large_encodings": args.large_encodings,
+            "large_modes": args.large_modes,
             "upstream_delay_ms": 0,
             "measurement_order": args.order,
         },
@@ -1203,6 +1233,7 @@ def run(args) -> tuple[dict, int]:
                 python_root, fake, args.iterations, args.warmup,
                 args.concurrency, args.payload_sizes, args.large_history_sizes,
                 args.large_iterations, measure=False,
+                large_modes=args.large_modes, large_encodings=args.large_encodings,
             )
             report["preflight"]["python"] = py_result
             rust_result, rust_errors = _serve_once(
@@ -1210,7 +1241,8 @@ def run(args) -> tuple[dict, int]:
                 work_root, key_file, base_env, python_root, fake,
                 args.iterations, args.warmup, args.concurrency,
                 args.payload_sizes, args.large_history_sizes, args.large_iterations,
-                measure=False,
+                measure=False, large_modes=args.large_modes,
+                large_encodings=args.large_encodings,
             )
             report["preflight"]["rust"] = rust_result
             differences = semantic_diff(
@@ -1242,6 +1274,7 @@ def run(args) -> tuple[dict, int]:
                     base_env, python_root, fake, args.iterations, args.warmup,
                     args.concurrency, args.payload_sizes, args.large_history_sizes,
                     args.large_iterations, measure=True,
+                    large_modes=args.large_modes, large_encodings=args.large_encodings,
                 )
                 measurements[name] = result
                 if errors:

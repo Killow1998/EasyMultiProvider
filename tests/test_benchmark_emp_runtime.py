@@ -341,6 +341,8 @@ class BenchmarkEmpRuntimeTests(unittest.TestCase):
         self.assertEqual(args.concurrency, [1, 16])
         self.assertEqual(args.large_history_sizes, [])
         self.assertEqual(args.large_iterations, 1)
+        self.assertEqual(args.large_encodings, list(benchmark.LARGE_ENCODINGS))
+        self.assertEqual(args.large_modes, list(benchmark.LARGE_MODES))
 
     def test_large_history_cli_validation_is_opt_in_and_bounded(self):
         args = benchmark._parse_args([
@@ -349,16 +351,67 @@ class BenchmarkEmpRuntimeTests(unittest.TestCase):
             "--concurrency", "1", "16",
             "--large-history-sizes", "16", "64", "128",
             "--large-iterations", "2",
+            "--large-encodings", "zstd", "gzip",
+            "--large-modes", "sse",
         ])
         benchmark._validate_parameters(
             args.iterations, args.warmup, args.concurrency, args.payload_sizes,
             args.large_history_sizes, args.large_iterations,
+            args.large_encodings, args.large_modes,
         )
         self.assertEqual(args.large_history_sizes, [16, 64, 128])
         self.assertEqual(args.large_iterations, 2)
+        self.assertEqual(args.large_encodings, ["zstd", "gzip"])
+        self.assertEqual(args.large_modes, ["sse"])
         for sizes, count in (([15], 1), ([129], 1), ([16], 4)):
             with self.assertRaises(benchmark.BenchmarkError):
                 benchmark._validate_parameters(1, 0, [1], [1024], sizes, count)
+        for encodings, modes in ((["gzip", "gzip"], ["sse"]), (["identity"], ["sse", "sse"])):
+            with self.assertRaises(benchmark.BenchmarkError):
+                benchmark._validate_parameters(
+                    1, 0, [1], [1024], [], 1, encodings, modes
+                )
+
+    def test_large_selectors_leave_small_matrix_unchanged(self):
+        service = SimpleNamespace(
+            process=SimpleNamespace(pid=42),
+            sampler=SimpleNamespace(overall_peak=lambda: 120),
+        )
+        upstream = SimpleNamespace(request_count=0)
+        observed = []
+
+        def capture(_service, _upstream, kind, payload, _iterations, _warmup,
+                    concurrency, **kwargs):
+            observed.append((
+                kind, payload, concurrency, kwargs.get("content_encoding", "identity"),
+                kwargs.get("logical_history_bytes"),
+            ))
+            return {"errors": 0, "upstream_count_matches": True}
+
+        with patch.object(benchmark, "_measure_case", side_effect=capture), patch.object(
+            benchmark, "_tree_metrics", return_value={"rss_bytes": 120}
+        ):
+            result = benchmark._run_measurements(
+                service, upstream, {}, iterations=1, warmup=0,
+                concurrencies=[1], payload_sizes=[2],
+                large_history_sizes_mib=[1], large_iterations=1,
+                large_modes=["nonstream"], large_encodings=["gzip"],
+            )
+
+        self.assertIn("responses_nonstream_history_2_bytes_concurrency_1", result["cases"])
+        self.assertIn("responses_sse_history_2_bytes_concurrency_1", result["cases"])
+        self.assertIn(
+            "responses_nonstream_large_history_1mib_gzip_concurrency_1", result["cases"]
+        )
+        self.assertFalse(any("large_history" in name and "sse" in name for name in result["cases"]))
+        small_calls = [
+            item for item in observed
+            if item[1] is not None and item[4] == 2
+        ]
+        self.assertEqual(
+            {(kind, encoding) for kind, _payload, _concurrency, encoding, _size in small_calls},
+            {("responses_nonstream", "identity"), ("responses_sse", "identity")},
+        )
 
     def test_python_launcher_preserves_venv_symlink_path(self):
         with tempfile.TemporaryDirectory(prefix="benchmark-python-launcher-") as directory:
