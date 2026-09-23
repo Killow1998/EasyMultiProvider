@@ -1282,7 +1282,7 @@ class ServerAccountTests(unittest.TestCase):
         self.assertNotIn("TTFT 慢于参考", html)
         self.assertNotIn("TPS 低于参考", html)
         self.assertIn("到收到首段正文或工具参数的时间", html)
-        self.assertIn("输出期间每秒接收的 token 数估计", html)
+        self.assertIn("全部输出 token 除以完整请求耗时", html)
         self.assertIn("本地排队超限", html)
         self.assertNotIn("不保存消息内容、响应内容或凭据", html)
         self.assertIn("diagnosticsContextLabel", html)
@@ -2171,7 +2171,8 @@ class ServerAccountTests(unittest.TestCase):
             self.assertIsNotNone(records[0]["ttft_ms"])
             self.assertEqual(records[0]["output_tokens"], 1)
             self.assertEqual(records[0]["generation_ms"], 0)
-            self.assertIsNone(records[0]["tokens_per_second"])
+            self.assertIsNotNone(records[0]["tokens_per_second"])
+            self.assertGreater(records[0]["tokens_per_second"], 0)
             self.assertEqual(records[1]["error_class"], "stream_error")
             self.assertEqual(records[1]["status"], 502)
             self.assertEqual(records[2]["error_class"], "client_disconnect")
@@ -2203,6 +2204,45 @@ class ServerAccountTests(unittest.TestCase):
                 [record["speed_mode"] for record in records],
                 ["fast", "standard"],
             )
+
+    def test_route_diagnostics_use_full_request_duration_for_tps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+
+            state._record_route_event(
+                {
+                    "model_id": "gpt-6-luna",
+                    "status": 200,
+                    "success": True,
+                    "error_class": "none",
+                    "output_tokens": 120,
+                    "tokens_per_second": 999999,
+                },
+                {"model": "gpt-6-luna"},
+                time.monotonic() - 2,
+                "websocket",
+                "responses",
+            )
+            state._record_route_event(
+                {
+                    "model_id": "gpt-6-luna",
+                    "status": 502,
+                    "success": False,
+                    "error_class": "stream_error",
+                    "output_tokens": 120,
+                    "tokens_per_second": 999999,
+                },
+                {"model": "gpt-6-luna"},
+                time.monotonic() - 2,
+                "websocket",
+                "responses",
+            )
+
+            records = state.diagnostics.snapshot()["records"]
+            self.assertAlmostEqual(records[0]["tokens_per_second"], 60, delta=0.1)
+            self.assertIsNone(records[1]["tokens_per_second"])
 
     def test_route_replays_provider_signature_without_persisting_history(self):
         with tempfile.TemporaryDirectory() as directory:

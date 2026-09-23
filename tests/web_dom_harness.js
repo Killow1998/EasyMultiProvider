@@ -692,7 +692,7 @@ function performanceDiagnosticsBehavior() {
   run('openDiagnostics()');
   assert.match(getElement('modal_title').textContent, /性能与健康/);
   assert.match(getElement('modal_body').innerHTML, /到收到首段正文或工具参数的时间/);
-  assert.match(getElement('modal_body').innerHTML, /输出期间每秒接收的 token 数估计/);
+  assert.match(getElement('modal_body').innerHTML, /全部输出 token 除以完整请求耗时/);
   assert.doesNotMatch(getElement('modal_body').innerHTML, /SOL 原生参考|原生 A\/B/);
   assert.doesNotMatch(getElement('modal_body').innerHTML, /最近请求|失败原因/);
   run('closeModal()');

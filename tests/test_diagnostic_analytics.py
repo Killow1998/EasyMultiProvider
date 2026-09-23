@@ -39,6 +39,17 @@ class DiagnosticAnalyticsTest(unittest.TestCase):
         self.assertEqual(result["models"], [])
         self.assertEqual(result["health"]["success_count"], 1)
 
+    def test_previous_schema_keeps_ttft_without_mixing_old_tps(self):
+        old = self.record("gpt-5.6-sol", "standard", 200, 5000, 9999)
+        old["performance_schema"] = 2
+
+        model = summarize_route_observations([old], now=self.NOW)["models"][0]
+
+        self.assertEqual(model["ttft_ms"], 5000)
+        self.assertEqual(model["ttft_samples"], 1)
+        self.assertIsNone(model["tokens_per_second"])
+        self.assertEqual(model["tps_samples"], 0)
+
     def test_health_and_model_medians_keep_fast_separate(self):
         records = [
             self.record("gpt-5.6-sol", "standard", 200, 5000, 50),
@@ -165,7 +176,7 @@ class DiagnosticAnalyticsTest(unittest.TestCase):
         observed_at="2026-09-02T12:00:00+00:00",
     ):
         return {
-            "performance_schema": 2,
+            "performance_schema": 3,
             "route": "responses",
             "model_id": model_id,
             "speed_mode": speed_mode,

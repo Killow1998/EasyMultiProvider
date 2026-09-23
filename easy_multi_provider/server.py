@@ -144,7 +144,11 @@ from .quota_history import (
     quota_history_path,
 )
 from .provider_replay import ProviderReplayCache
-from .performance import ResponsesPerformanceTracker, token_count
+from .performance import (
+    ResponsesPerformanceTracker,
+    request_tokens_per_second,
+    token_count,
+)
 from .usage_ledger import UsageLedger, usage_account_owner, usage_identity, usage_context
 from .usage_history import UsageHistoryScanner
 from .usage_pricing import PriceCatalog
@@ -2174,6 +2178,19 @@ class AppState:
         )
         safe_event["duration_ms"] = max(0, int(round((time.monotonic() - started) * 1000)))
         safe_event.setdefault("service_tier", requested_tier or "default")
+        success = safe_event.get("success")
+        successful = success is True or (
+            success is None
+            and safe_event.get("status") == 200
+            and safe_event.get("error_class") in (None, "none")
+        )
+        rate = request_tokens_per_second(
+            safe_event.get("output_tokens"), safe_event["duration_ms"]
+        ) if successful else None
+        if rate is None:
+            safe_event.pop("tokens_per_second", None)
+        else:
+            safe_event["tokens_per_second"] = rate
         self._observe_auto_review_route(safe_event)
         self.usage.record(safe_event)
         context = safe_event.get("context_observation")

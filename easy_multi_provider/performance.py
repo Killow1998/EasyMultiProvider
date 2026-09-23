@@ -8,14 +8,32 @@ import time
 from typing import Any, Dict, Iterable, Iterator, Mapping, Optional
 
 _MAX_EVENT_BYTES = 1024 * 1024
-_MIN_TPS_WINDOW_MS = 500
-PERFORMANCE_SCHEMA = 2
+_MIN_TPS_DURATION_MS = 100
+PERFORMANCE_SCHEMA = 3
 _MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+~-]{0,255}$")
 
 
 def token_count(value: Any) -> Optional[int]:
     """Accept reported counts, not estimates, clamped values or missing fields."""
     return value if type(value) is int and 0 <= value <= 10_000_000 else None
+
+
+def request_tokens_per_second(
+    output_tokens: Any, duration_ms: Any
+) -> Optional[float]:
+    """Return OMP-style throughput over the complete model request."""
+
+    tokens = token_count(output_tokens)
+    if tokens is None or tokens <= 0:
+        return None
+    if (
+        not isinstance(duration_ms, (int, float))
+        or isinstance(duration_ms, bool)
+        or not _MIN_TPS_DURATION_MS <= float(duration_ms) <= 86_400_000
+    ):
+        return None
+    rate = tokens * 1000.0 / float(duration_ms)
+    return round(rate, 2) if 0 < rate <= 1_000_000 else None
 
 
 def declared_response_model(event: Mapping[str, Any]) -> Optional[str]:
@@ -151,7 +169,10 @@ class ResponsesPerformanceTracker:
             "response.failed",
         }:
             self._terminal_at = now
-            self._completed = event_type == "response.completed"
+            self._completed = event_type in {
+                "response.completed",
+                "response.incomplete",
+            }
             self._input_usage = reported_usage(event)
             value = _output_tokens(event)
             if value is not None:
@@ -214,6 +235,8 @@ class ResponsesPerformanceTracker:
             count = _output_tokens(payload)
             if count is not None:
                 self._output_tokens = count
+                self._terminal_at = self._clock()
+                self._completed = True
             reasoning = _reasoning_tokens(payload)
             if reasoning is not None:
                 self._reasoning_tokens = reasoning
@@ -259,21 +282,14 @@ class ResponsesPerformanceTracker:
                 0, int(round((self._last_token_at - self._first_token_at) * 1000))
             )
             result["generation_ms"] = generation_ms
-            measured_tokens = None
-            if (
-                self._output_tokens is not None
-                and self._reasoning_tokens is not None
-            ):
-                measured_tokens = self._output_tokens - self._reasoning_tokens - 1
-            # A short answer can arrive in one buffered burst immediately before
-            # the terminal event. Dividing by that sub-second delivery gap
-            # reports transport batching as model generation speed. Keep TTFT,
-            # but only publish TPS when the observed output window is long
-            # enough to form a useful rate.
-            if (self._valid_stream and self._completed
-                    and generation_ms >= _MIN_TPS_WINDOW_MS
-                    and measured_tokens is not None and measured_tokens > 0):
-                result["tokens_per_second"] = round(
-                    measured_tokens * 1000.0 / generation_ms, 2
-                )
+        if self._valid_stream and self._completed and self._terminal_at is not None:
+            duration_ms = max(
+                0, int(round((self._terminal_at - self._started) * 1000))
+            )
+            rate = request_tokens_per_second(self._output_tokens, duration_ms)
+            if rate is not None:
+                # OMP deliberately includes TTFT and hidden reasoning in both
+                # the token count and duration. This stays meaningful when a
+                # provider buffers visible output into one late burst.
+                result["tokens_per_second"] = rate
         return result

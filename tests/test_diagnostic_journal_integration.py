@@ -351,7 +351,7 @@ class DiagnosticJournalIntegrationTest(unittest.TestCase):
                     "error_class": "none",
                     "ttft_ms": 6000 if index < 20 else 4000,
                     "tokens_per_second": 50 if index < 20 else 80,
-                    "performance_schema": 2,
+                    "performance_schema": 3,
                 })
             journal.close()
 
