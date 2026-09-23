@@ -116,6 +116,117 @@ fn validate_archive_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::super::release::MAX_PACKAGE_BYTES;
+    use super::extract_tarball;
+    use flate2::Compression;
+    use flate2::read::GzDecoder;
+    use flate2::write::GzEncoder;
+    use std::fs::File;
+    use std::io::Write;
+    use std::path::Path;
+    use tar::{Builder, EntryType, Header};
+    use tempfile::TempDir;
+
+    fn archive_path(root: &Path, name: &str) -> std::path::PathBuf {
+        root.join(name)
+    }
+
+    fn append_file(builder: &mut Builder<GzEncoder<File>>, path: &str, bytes: &[u8]) {
+        let mut header = Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder.append_data(&mut header, path, bytes).unwrap();
+    }
+
+    #[test]
+    fn rejects_traversal_archive_entries() {
+        let temp = TempDir::new().unwrap();
+        let archive = archive_path(temp.path(), "traversal.tar.gz");
+        let mut encoder = GzEncoder::new(File::create(&archive).unwrap(), Compression::default());
+        let mut header = Header::new_gnu();
+        header.set_path("EMP/EMP").unwrap();
+        header.set_entry_type(EntryType::Regular);
+        header.set_size(7);
+        header.set_mode(0o755);
+        let traversal = b"EMP/../escape";
+        let raw_path = &mut header.as_mut_bytes()[..100];
+        raw_path.fill(0);
+        raw_path[..traversal.len()].copy_from_slice(traversal);
+        header.set_cksum();
+        encoder.write_all(header.as_bytes()).unwrap();
+        encoder.write_all(b"outside").unwrap();
+        encoder.write_all(&[0; 505]).unwrap();
+        encoder.write_all(&[0; 1024]).unwrap();
+        encoder.finish().unwrap();
+        let mut parsed = tar::Archive::new(GzDecoder::new(File::open(&archive).unwrap()));
+        let mut entries = parsed.entries().unwrap();
+        let entry = entries.next().unwrap().unwrap();
+        assert_eq!(entry.path().unwrap(), Path::new("EMP/../escape"));
+        assert_eq!(
+            extract_tarball(&archive, temp.path()).unwrap_err(),
+            super::super::UpdateError("invalid_package")
+        );
+    }
+
+    #[test]
+    fn rejects_symlink_archive_entries() {
+        let temp = TempDir::new().unwrap();
+        let archive = archive_path(temp.path(), "symlink.tar.gz");
+        let encoder = GzEncoder::new(File::create(&archive).unwrap(), Compression::default());
+        let mut builder = Builder::new(encoder);
+        let mut header = Header::new_gnu();
+        header.set_entry_type(EntryType::Symlink);
+        header.set_size(0);
+        header.set_cksum();
+        builder
+            .append_link(&mut header, "EMP/EMP", "/bin/sh")
+            .unwrap();
+        builder.finish().unwrap();
+        assert_eq!(
+            extract_tarball(&archive, temp.path()).unwrap_err(),
+            super::super::UpdateError("invalid_package")
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_archive_paths() {
+        let temp = TempDir::new().unwrap();
+        let archive = archive_path(temp.path(), "duplicate.tar.gz");
+        let encoder = GzEncoder::new(File::create(&archive).unwrap(), Compression::default());
+        let mut builder = Builder::new(encoder);
+        append_file(&mut builder, "EMP/EMP", b"first");
+        append_file(&mut builder, "EMP/EMP", b"second");
+        builder.finish().unwrap();
+        assert_eq!(
+            extract_tarball(&archive, temp.path()).unwrap_err(),
+            super::super::UpdateError("invalid_package")
+        );
+    }
+
+    #[test]
+    fn rejects_declared_archive_size_over_limit_before_reading_content() {
+        let temp = TempDir::new().unwrap();
+        let archive = archive_path(temp.path(), "oversized.tar.gz");
+        let mut encoder = GzEncoder::new(File::create(&archive).unwrap(), Compression::default());
+        let mut header = Header::new_gnu();
+        header.set_path("EMP/EMP").unwrap();
+        header.set_entry_type(EntryType::Regular);
+        header.set_size(MAX_PACKAGE_BYTES + 1);
+        header.set_mode(0o755);
+        header.set_cksum();
+        encoder.write_all(header.as_bytes()).unwrap();
+        encoder.write_all(&[0; 1024]).unwrap();
+        encoder.finish().unwrap();
+        assert_eq!(
+            extract_tarball(&archive, temp.path()).unwrap_err(),
+            super::super::UpdateError("invalid_package")
+        );
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn extract_dmg(package: &Path, job: &Path) -> Result<PathBuf> {
     let mount = job.join("mount");

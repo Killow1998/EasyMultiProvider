@@ -116,8 +116,10 @@ pub(crate) fn latest_asset(
     current_version: &str,
     endpoints: &UpdateEndpoints,
 ) -> Result<Option<Asset>> {
+    let decoded: serde_json::Value =
+        serde_json::from_slice(raw).map_err(|_| UpdateError("update_failed"))?;
     let release: Release =
-        serde_json::from_slice(raw).map_err(|_| UpdateError("invalid_release"))?;
+        serde_json::from_value(decoded).map_err(|_| UpdateError("invalid_release"))?;
     if release.draft || release.prerelease {
         return Err(UpdateError("invalid_release"));
     }

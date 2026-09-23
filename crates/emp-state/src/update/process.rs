@@ -19,7 +19,7 @@ pub fn created(pid: u32) -> Option<f64> {
             })?;
         // sysconf has no side effects; the kernel defines the process clock tick.
         let frequency = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-        return (frequency > 0).then_some(boot + ticks / frequency as f64);
+        (frequency > 0).then_some(boot + ticks / frequency as f64)
     }
     #[cfg(target_os = "macos")]
     {
@@ -91,9 +91,18 @@ pub fn spawn(
     command
         .args(args)
         .env("PYINSTALLER_RESET_ENVIRONMENT", "1")
-        .env_remove("EMP_UPDATE_READY");
+        .env_remove("EMP_UPDATE_READY")
+        .env_remove("EMP_UPDATE_RESULT");
     for (key, value) in environment {
-        command.env(key, value);
+        match (*key, value.as_str()) {
+            ("EMP_UPDATE_READY", value) if !value.is_empty() => {
+                command.env("EMP_UPDATE_READY", value);
+            }
+            ("EMP_UPDATE_RESULT", "rolled_back") => {
+                command.env("EMP_UPDATE_RESULT", "rolled_back");
+            }
+            _ => return Err(UpdateError("worker_failed")),
+        }
     }
     if !cfg!(windows) || !visible {
         command
@@ -115,10 +124,21 @@ pub fn spawn(
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+        use windows_sys::Win32::{
+            Foundation::CloseHandle,
+            System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW},
+        };
         let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if !job.is_null() {
-            unsafe { AssignProcessToJobObject(job, child.as_raw_handle()) };
+        if job.is_null() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(UpdateError("worker_failed"));
+        }
+        if unsafe { AssignProcessToJobObject(job, child.as_raw_handle()) } == 0 {
+            unsafe { CloseHandle(job) };
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(UpdateError("worker_failed"));
         }
         return Ok(OwnedChild { child, job });
     }
@@ -163,6 +183,20 @@ impl OwnedChild {
             }
             std::thread::sleep(Duration::from_millis(25));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spawn;
+
+    #[test]
+    fn updater_children_reject_environment_outside_the_marker_allowlist() {
+        let executable = std::env::current_exe().unwrap();
+        assert!(matches!(
+            spawn(&executable, &[], &[("RUST_LOG", "trace".to_owned())], false),
+            Err(super::super::UpdateError("worker_failed"))
+        ));
     }
 }
 #[cfg(windows)]

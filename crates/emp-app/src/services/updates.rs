@@ -1,5 +1,5 @@
 //! Update request admission and orderly application handoff.
-use emp_state::update::manager::{Snapshot, UpdateManager};
+use emp_state::update::manager::{Snapshot, UpdateHooks, UpdateManager};
 use emp_state::update::release::UpdateEndpoints;
 use emp_state::update::{Result as UpdateResult, UpdateError};
 use std::path::Path;
@@ -39,10 +39,19 @@ impl UpdateState {
         version: &str,
         address: std::net::SocketAddr,
         open_browser: bool,
+        installation_rolled_back: bool,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         let endpoints = test_endpoints().unwrap_or_default();
-        Self::with_endpoints(config, version, address, open_browser, shutdown, endpoints)
+        Self::with_endpoints(
+            config,
+            version,
+            address,
+            open_browser,
+            shutdown,
+            endpoints,
+            installation_rolled_back,
+        )
     }
 
     pub(crate) fn with_endpoints(
@@ -52,6 +61,7 @@ impl UpdateState {
         open_browser: bool,
         shutdown: Arc<AtomicBool>,
         endpoints: UpdateEndpoints,
+        installation_rolled_back: bool,
     ) -> Self {
         let gate = Arc::new(Gate {
             state: Mutex::new(GateState {
@@ -60,12 +70,23 @@ impl UpdateState {
             }),
             wake: Condvar::new(),
         });
-        let handoff_gate = Arc::clone(&gate);
+        let begin_gate = Arc::clone(&gate);
+        let begin_handoff = move || {
+            if drain(&begin_gate, Duration::from_secs(300)) {
+                Ok(())
+            } else {
+                Err(UpdateError("requests_busy"))
+            }
+        };
+        let reopen_gate = Arc::clone(&gate);
+        let reopen_handoff = move || {
+            if let Ok(mut state) = reopen_gate.state.lock() {
+                state.draining = false;
+                reopen_gate.wake.notify_all();
+            }
+        };
         let handoff_shutdown = Arc::clone(&shutdown);
         let handoff = move || -> UpdateResult<()> {
-            if !drain(&handoff_gate, Duration::from_secs(300)) {
-                return Err(UpdateError("requests_busy"));
-            }
             handoff_shutdown.store(true, Ordering::Release);
             Ok(())
         };
@@ -82,9 +103,15 @@ impl UpdateState {
             restart_args.push("--open-browser".to_owned());
         }
         let executable = std::env::current_exe().unwrap_or_default();
-        let manager =
-            UpdateManager::with_endpoints(executable, restart_args, version, endpoints, handoff)
-                .expect("release update client configuration is valid");
+        let manager = UpdateManager::with_startup_hooks(
+            executable,
+            restart_args,
+            version,
+            endpoints,
+            installation_rolled_back,
+            UpdateHooks::new(begin_handoff, reopen_handoff, handoff),
+        )
+        .expect("release update client configuration is valid");
         Self { manager, gate }
     }
 

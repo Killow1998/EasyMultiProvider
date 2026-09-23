@@ -45,6 +45,13 @@ pub(crate) struct ServerHandle {
 struct UpdateStartupOptions {
     config_path: PathBuf,
     open_browser: bool,
+    markers: UpdateStartupMarkers,
+}
+
+#[derive(Clone, Default)]
+struct UpdateStartupMarkers {
+    ready_path: Option<PathBuf>,
+    rolled_back: bool,
 }
 
 impl ServerHandle {
@@ -77,6 +84,7 @@ impl ServerHandle {
             codex_binary,
             native_auth_path,
             false,
+            UpdateStartupMarkers::default(),
         )
     }
 
@@ -87,6 +95,7 @@ impl ServerHandle {
         codex_binary: &str,
         native_auth_path: PathBuf,
         open_browser: bool,
+        markers: UpdateStartupMarkers,
     ) -> Result<Self, AppError> {
         if !is_loopback(host) {
             return Err(AppError::HostNotLoopback);
@@ -117,6 +126,7 @@ impl ServerHandle {
             UpdateStartupOptions {
                 config_path: config_path.to_path_buf(),
                 open_browser,
+                markers,
             },
         )
     }
@@ -145,6 +155,7 @@ impl ServerHandle {
             crate::VERSION,
             local_addr,
             update_startup.open_browser,
+            update_startup.markers.rolled_back,
             Arc::clone(&shutdown),
         );
         let state = Arc::new(ServerState {
@@ -307,6 +318,7 @@ pub(crate) fn run_server(
     port: u16,
     open_browser: bool,
 ) -> Result<(), AppError> {
+    let markers = consume_startup_markers();
     let config_path = config
         .map(Path::to_path_buf)
         .unwrap_or_else(emp_state::config_path);
@@ -317,6 +329,7 @@ pub(crate) fn run_server(
         "codex",
         codex_auth_path(),
         open_browser,
+        markers.clone(),
     )?;
     {
         let mut config = server
@@ -356,7 +369,8 @@ pub(crate) fn run_server(
         if open_browser && !crate::cli::desktop::open_browser(&bootstrap_url) {
             println!("Browser did not open automatically; use the URL above.");
         }
-        emp_state::update::worker::mark_ready(crate::VERSION).map_err(std::io::Error::other)?;
+        emp_state::update::worker::mark_ready(crate::VERSION, markers.ready_path.clone())
+            .map_err(std::io::Error::other)?;
         let requested = async {
             while !server.state.shutdown.load(Ordering::Acquire) {
                 tokio::time::sleep(Duration::from_millis(25)).await;
@@ -372,4 +386,20 @@ pub(crate) fn run_server(
     let cleanup = server.shutdown();
     result?;
     cleanup
+}
+
+fn consume_startup_markers() -> UpdateStartupMarkers {
+    let ready_path = std::env::var_os("EMP_UPDATE_READY").map(PathBuf::from);
+    let rolled_back =
+        std::env::var_os("EMP_UPDATE_RESULT").is_some_and(|value| value == "rolled_back");
+    // SAFETY: run_server is entered synchronously before it creates BackendState, runtimes,
+    // or any application threads that could concurrently access the process environment.
+    unsafe {
+        std::env::remove_var("EMP_UPDATE_READY");
+        std::env::remove_var("EMP_UPDATE_RESULT");
+    }
+    UpdateStartupMarkers {
+        ready_path,
+        rolled_back,
+    }
 }

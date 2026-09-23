@@ -92,6 +92,10 @@ pub fn run(plan_path: &Path) -> Result<u8> {
         return Err(UpdateError("invalid_update_plan"));
     }
     phase(job, "waiting_for_exit");
+    #[cfg(debug_assertions)]
+    if std::env::var_os("EMP_UPDATE_TEST_WORKER_FAIL_READY").is_some() {
+        return Err(UpdateError("worker_failed"));
+    }
     touch(&job.join("worker-ready"))?;
     let deadline = Instant::now() + Duration::from_secs(90);
     while plan
@@ -174,12 +178,11 @@ pub fn run(plan_path: &Path) -> Result<u8> {
     }
     Ok(1)
 }
-pub fn mark_ready(version: &str) -> Result<()> {
-    let Some(marker) = std::env::var_os("EMP_UPDATE_READY").filter(|value| !value.is_empty())
-    else {
+pub fn mark_ready(version: &str, marker: Option<PathBuf>) -> Result<()> {
+    let Some(marker) = marker.filter(|value| !value.as_os_str().is_empty()) else {
         return Ok(());
     };
-    let ready = PathBuf::from(marker);
+    let ready = marker;
     let job = ready
         .parent()
         .ok_or(UpdateError("invalid_update_plan"))?
@@ -210,4 +213,45 @@ pub fn mark_ready(version: &str) -> Result<()> {
             }
         })?;
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::run;
+    use crate::update::process::created;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::TempDir;
+
+    #[test]
+    fn stale_birth_time_for_a_live_pid_does_not_block_replacement() {
+        let root = TempDir::new().unwrap();
+        let target = root.path().join("EMP");
+        std::fs::write(&target, b"old executable").unwrap();
+        let job = root.path().join(".emp-update-pid-reuse-test");
+        std::fs::create_dir(&job).unwrap();
+        let candidate = job.join("candidate");
+        std::fs::write(
+            &candidate,
+            "#!/bin/sh\nprintf '{\"version\":\"0.12.0\",\"nonce\":\"test-nonce\"}\\n' > \"$EMP_UPDATE_READY\"\n",
+        )
+        .unwrap();
+        let candidate_bytes = std::fs::read(&candidate).unwrap();
+        std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let actual_birth = created(std::process::id()).expect("test process birth time");
+        let plan = serde_json::json!({
+            "target": target,
+            "candidate": candidate,
+            "relative_binary": "",
+            "parents": [{"pid": std::process::id(), "created": actual_birth + 3600.0}],
+            "args": [],
+            "version": "0.12.0",
+            "nonce": "test-nonce",
+        });
+        let plan_path = job.join("plan.json");
+        std::fs::write(&plan_path, serde_json::to_vec(&plan).unwrap()).unwrap();
+
+        assert_eq!(run(&plan_path).unwrap(), 0);
+        assert_eq!(std::fs::read(&target).unwrap(), candidate_bytes);
+        assert!(job.join("success").is_file());
+    }
 }

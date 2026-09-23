@@ -22,7 +22,7 @@ where
     }
     let mut response = manager.open_package(&asset.url)?;
     if !response.status().is_success() {
-        return Err(UpdateError("check_failed"));
+        return Err(UpdateError("update_failed"));
     }
     let mut file = OpenOptions::new()
         .write(true)
@@ -35,7 +35,7 @@ where
     loop {
         let read = response
             .read(&mut buffer)
-            .map_err(|_| UpdateError("check_failed"))?;
+            .map_err(|_| UpdateError("update_failed"))?;
         if read == 0 {
             break;
         }
