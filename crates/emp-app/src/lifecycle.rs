@@ -48,6 +48,17 @@ struct UpdateStartupOptions {
     markers: UpdateStartupMarkers,
 }
 
+struct StartupContext<'a> {
+    host: IpAddr,
+    port: u16,
+    config_path: &'a Path,
+    codex_binary: &'a str,
+    native_auth_path: PathBuf,
+    open_browser: bool,
+    markers: UpdateStartupMarkers,
+    http_client_override: Option<emp_transport::HttpClient>,
+}
+
 #[derive(Clone, Default)]
 struct UpdateStartupMarkers {
     ready_path: Option<PathBuf>,
@@ -97,7 +108,7 @@ impl ServerHandle {
         open_browser: bool,
         markers: UpdateStartupMarkers,
     ) -> Result<Self, AppError> {
-        Self::start_with_config_options_inner(
+        Self::start_with_config_options_inner(StartupContext {
             host,
             port,
             config_path,
@@ -105,8 +116,8 @@ impl ServerHandle {
             native_auth_path,
             open_browser,
             markers,
-            None,
-        )
+            http_client_override: None,
+        })
     }
 
     #[cfg(test)]
@@ -118,28 +129,29 @@ impl ServerHandle {
         native_auth_path: PathBuf,
         client: emp_transport::HttpClient,
     ) -> Result<Self, AppError> {
-        Self::start_with_config_options_inner(
+        Self::start_with_config_options_inner(StartupContext {
             host,
             port,
             config_path,
             codex_binary,
             native_auth_path,
-            false,
-            UpdateStartupMarkers::default(),
-            Some(client),
-        )
+            open_browser: false,
+            markers: UpdateStartupMarkers::default(),
+            http_client_override: Some(client),
+        })
     }
 
-    fn start_with_config_options_inner(
-        host: IpAddr,
-        port: u16,
-        config_path: &Path,
-        codex_binary: &str,
-        native_auth_path: PathBuf,
-        open_browser: bool,
-        markers: UpdateStartupMarkers,
-        test_client: Option<emp_transport::HttpClient>,
-    ) -> Result<Self, AppError> {
+    fn start_with_config_options_inner(context: StartupContext<'_>) -> Result<Self, AppError> {
+        let StartupContext {
+            host,
+            port,
+            config_path,
+            codex_binary,
+            native_auth_path,
+            open_browser,
+            markers,
+            http_client_override,
+        } = context;
         if !is_loopback(host) {
             return Err(AppError::HostNotLoopback);
         }
@@ -158,7 +170,7 @@ impl ServerHandle {
         let session_path = web_session_path(config_path)?;
         let session =
             load_or_create_web_session(&session_path, now).map_err(AppError::WebSession)?;
-        let backend = match test_client {
+        let backend = match http_client_override {
             Some(client) => BackendState::new_with_http_client(
                 config_path,
                 codex_binary,

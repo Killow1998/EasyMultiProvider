@@ -79,7 +79,7 @@ impl BackendState {
         config_path: &Path,
         codex_binary: &str,
         native_auth_path: PathBuf,
-        test_client: Option<HttpClient>,
+        http_client_override: Option<HttpClient>,
     ) -> Result<Self, AppError> {
         let mut config = load_configuration(Some(config_path))?;
         let state_root = config_path
@@ -107,7 +107,7 @@ impl BackendState {
             save_configuration(&config, Some(config_path), &vault)?;
             config = load_configuration(Some(config_path))?;
         }
-        let client = match test_client {
+        let client = match http_client_override {
             Some(client) => client,
             None => HttpClient::new(HttpClientPolicy::new(
                 ProxyPolicy::from_environment(ProxyEnvironment::capture()),
