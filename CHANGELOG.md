@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Give Usage & estimates its own pie-style action icon so it is visually
+  consistent with the neighboring EMP actions without reusing the quota-trend
+  chart symbol.
+
 ## 0.11.7 (2026-09-22)
 
 - Track Codex CLI 0.156.x and recommend 0.156.1 so subscription catalog

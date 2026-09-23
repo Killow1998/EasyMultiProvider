@@ -168,6 +168,7 @@ assert.doesNotMatch(html, /实际调用时自动使用其中兼容性最可靠�
 assert.match(html, /class="workspace-layout"/);
 assert.match(html, /<aside class="workspace-side">/);
 assert.match(html, /onclick="openUpdate\(\)"/);
+assert.match(html, /data-icon="usage" onclick="openUsage\(\)"/, "usage action must have its own icon");
 assert.doesNotMatch(html, /<details class="(?:header-menu|action-menu)">/, "primary actions must stay visible");
 for (const visibleControl of [
   /onclick="selectMigrationFile\(\)"/,
@@ -200,7 +201,7 @@ assert.doesNotMatch(html, /不会自动补|not added automatically/, "users must
 assert.match(html, /Icon paths derived from Lucide \(ISC\)/);
 assert.strictEqual(
   Array.from(html.matchAll(/button\[data-icon="[^"]+"\](?:,\.quota-reset)?\{--button-icon:url\("data:image\/svg\+xml,%3Csvg%20/g)).length,
-  14,
+  15,
   "all action icons must come from the embedded Lucide set",
 );
 for (const unwantedDefaultTip of [
