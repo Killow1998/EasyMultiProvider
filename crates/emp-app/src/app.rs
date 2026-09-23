@@ -33,6 +33,7 @@ pub(crate) struct ServerState {
     pub(crate) shutdown: Arc<AtomicBool>,
     pub(crate) _service_owner: emp_state::IntegrationFileLock,
     pub(crate) sessions: Arc<SessionStore>,
+    pub(crate) connection_admission: crate::services::connection_admission::ConnectionAdmission,
     pub(crate) bootstrap: BootstrapToken,
     pub(crate) backend: BackendState,
     pub(crate) port: u16,

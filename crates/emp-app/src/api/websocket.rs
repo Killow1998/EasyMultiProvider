@@ -156,6 +156,10 @@ pub(crate) fn serve_responses_websocket(
     }
     let _ = stream.set_read_timeout(None);
     let mut websocket = WebSocketConnection::new(stream);
+    let Some(_websocket_permit) = state.connection_admission.acquire_websocket() else {
+        websocket.close(1013, "too many websocket connections");
+        return;
+    };
     let mut native_upstream: Option<NativeUpstreamConnection> = None;
     let mut last_native_response_id: Option<String> = None;
     let mut last_native_scope = (None, None);

@@ -2,6 +2,7 @@ pub(crate) mod accounts;
 pub(crate) mod auto_review;
 pub(crate) mod catalog;
 pub(crate) mod compaction;
+pub(crate) mod connection_admission;
 pub(crate) mod events;
 pub(crate) mod failures;
 pub(crate) mod history;

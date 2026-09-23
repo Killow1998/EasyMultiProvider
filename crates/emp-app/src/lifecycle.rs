@@ -10,6 +10,7 @@ use crate::http::auth::codex_auth_path;
 #[cfg(test)]
 use crate::http::auth::session_cookie;
 use crate::http::routes::handle_connection;
+use crate::services::connection_admission::{ConnectionAdmission, ConnectionAdmissionConfig};
 use crate::services::quota::sample_quotas_once;
 use crate::util::system_now;
 use base64::Engine as _;
@@ -55,6 +56,7 @@ struct StartupContext<'a> {
     open_browser: bool,
     markers: UpdateStartupMarkers,
     http_client_override: Option<emp_transport::HttpClient>,
+    admission: ConnectionAdmissionConfig,
 }
 
 #[derive(Clone, Default)]
@@ -110,6 +112,7 @@ impl ServerHandle {
             open_browser,
             markers,
             http_client_override: None,
+            admission: ConnectionAdmissionConfig::default(),
         })
     }
 
@@ -131,6 +134,31 @@ impl ServerHandle {
             open_browser: false,
             markers: UpdateStartupMarkers::default(),
             http_client_override: Some(client),
+            admission: ConnectionAdmissionConfig::default(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_with_connection_admission_for_test(
+        host: IpAddr,
+        port: u16,
+        config_path: &Path,
+        admission: ConnectionAdmissionConfig,
+    ) -> Result<Self, AppError> {
+        let native_auth_path = config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("codex/auth.json");
+        Self::start_with_config_options_inner(StartupContext {
+            host,
+            port,
+            config_path,
+            codex_binary: "missing-test-codex",
+            native_auth_path,
+            open_browser: false,
+            markers: UpdateStartupMarkers::default(),
+            http_client_override: None,
+            admission,
         })
     }
 
@@ -144,6 +172,7 @@ impl ServerHandle {
             open_browser,
             markers,
             http_client_override,
+            admission,
         } = context;
         if !is_loopback(host) {
             return Err(AppError::HostNotLoopback);
@@ -184,6 +213,7 @@ impl ServerHandle {
                 open_browser,
                 markers,
             },
+            admission,
         )
     }
 
@@ -195,6 +225,7 @@ impl ServerHandle {
         backend: BackendState,
         service_owner: emp_state::IntegrationFileLock,
         update_startup: UpdateStartupOptions,
+        admission: ConnectionAdmissionConfig,
     ) -> Result<Self, AppError> {
         let listener = TcpListener::bind((host, port))?;
         listener.set_nonblocking(true)?;
@@ -218,6 +249,7 @@ impl ServerHandle {
             shutdown,
             _service_owner: service_owner,
             sessions,
+            connection_admission: ConnectionAdmission::new(admission),
             bootstrap: BootstrapToken {
                 token: URL_SAFE_NO_PAD.encode(random),
                 used: AtomicBool::new(false),
@@ -251,9 +283,18 @@ impl ServerHandle {
                     match listener.accept() {
                         Ok((stream, _)) => {
                             let request_state = Arc::clone(&state);
+                            let Some(request_permit) =
+                                request_state.connection_admission.acquire_request()
+                            else {
+                                drop(stream);
+                                continue;
+                            };
                             let _ = thread::Builder::new()
                                 .name("emp-request".to_string())
-                                .spawn(move || handle_connection(stream, &request_state));
+                                .spawn(move || {
+                                    let _request_permit = request_permit;
+                                    handle_connection(stream, &request_state);
+                                });
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             thread::sleep(Duration::from_millis(10));
