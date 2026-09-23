@@ -7,15 +7,97 @@ import re
 import subprocess
 import sys
 import threading
+from dataclasses import dataclass
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 import zstandard
-from tests.test_server import _integration_test_config
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED_ID = re.compile(r"^(resp|msg|rs|fc)_[0-9a-f]{32}$")
+
+
+@dataclass(frozen=True)
+class PythonRuntime:
+    """One explicit Python implementation, environment, and working root."""
+
+    root: Path
+    formal_oracle: bool
+
+    @classmethod
+    def from_environment(cls):
+        if "EMP_PYTHON_ORACLE_ROOT" not in os.environ:
+            root = ROOT.resolve()
+            runtime = cls(root, False)
+        else:
+            try:
+                root = Path(os.environ["EMP_PYTHON_ORACLE_ROOT"]).expanduser().resolve(strict=True)
+            except OSError as exc:
+                raise AssertionError("EMP_PYTHON_ORACLE_ROOT is not a valid directory") from exc
+            if not root.is_dir():
+                raise AssertionError("EMP_PYTHON_ORACLE_ROOT is not a directory")
+            runtime = cls(root, True)
+            environment = runtime.environment()
+            probe = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import easy_multi_provider; "
+                    "print(easy_multi_provider.__version__); "
+                    "print(easy_multi_provider.__file__)",
+                ],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if probe.returncode != 0:
+                raise AssertionError(
+                    "EMP_PYTHON_ORACLE_ROOT could not import easy_multi_provider: "
+                    + probe.stderr
+                )
+            output = probe.stdout.splitlines()
+            if len(output) != 2 or output[0] != "0.11.10":
+                version = output[0] if output else "unavailable"
+                raise AssertionError(
+                    "EMP_PYTHON_ORACLE_ROOT must be Python EMP 0.11.10; got "
+                    + version
+                )
+            package_init = (root / "easy_multi_provider" / "__init__.py").resolve()
+            if Path(output[1]).resolve() != package_init:
+                raise AssertionError("EMP_PYTHON_ORACLE_ROOT imported a different package")
+
+        root_text = str(runtime.root)
+        while root_text in sys.path:
+            sys.path.remove(root_text)
+        sys.path.insert(0, root_text)
+        return runtime
+
+    def command(self, *arguments):
+        return [sys.executable, *arguments]
+
+    def environment(self, base=None):
+        environment = dict(os.environ if base is None else base)
+        environment["PYTHONPATH"] = str(self.root)
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        return environment
+
+    def cwd(self, override=None):
+        return self.root if override is None else Path(override)
+
+
+PYTHON_RUNTIME = PythonRuntime.from_environment()
+
+
+def rust_environment(base=None):
+    environment = dict(os.environ if base is None else base)
+    environment.pop("PYTHONPATH", None)
+    return environment
+
+
+from tests.test_server import _integration_test_config
 
 
 def normalized_ids(value):
@@ -144,21 +226,12 @@ class EmpProcess:
         command_binary = Path(command[0]).resolve()
         if configured_rust_binary and command_binary == Path(configured_rust_binary).resolve():
             self.runtime_kind = "rust"
-            python_oracle_root = None
+            process_cwd = ROOT
         elif command_binary == Path(sys.executable).resolve():
-            if "EMP_PYTHON_ORACLE_ROOT" in os.environ:
-                try:
-                    python_oracle_root = Path(
-                        os.environ["EMP_PYTHON_ORACLE_ROOT"]
-                    ).expanduser().resolve(strict=True)
-                except OSError as exc:
-                    raise AssertionError("EMP_PYTHON_ORACLE_ROOT is not a valid directory") from exc
-                if not python_oracle_root.is_dir():
-                    raise AssertionError("EMP_PYTHON_ORACLE_ROOT is not a directory")
-                self.runtime_kind = "python_oracle"
-            else:
-                self.runtime_kind = "python_snapshot"
-                python_oracle_root = None
+            self.runtime_kind = (
+                "python_oracle" if PYTHON_RUNTIME.formal_oracle else "python_snapshot"
+            )
+            process_cwd = PYTHON_RUNTIME.cwd()
         else:
             raise AssertionError("EmpProcess requires an explicit Python or EMP launcher")
         environment = dict(os.environ)
@@ -169,38 +242,10 @@ class EmpProcess:
         environment.update(CODEX_HOME=str(home), PYTHONUNBUFFERED="1",
                            NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
         environment.update(environment_overrides or {})
-        process_cwd = ROOT
-        if self.runtime_kind == "python_oracle":
-            environment["PYTHONDONTWRITEBYTECODE"] = "1"
-            environment["PYTHONPATH"] = str(python_oracle_root)
-            probe = subprocess.run(
-                [
-                    command[0],
-                    "-c",
-                    "import easy_multi_provider; "
-                    "print(easy_multi_provider.__version__); "
-                    "print(easy_multi_provider.__file__)",
-                ],
-                cwd=python_oracle_root,
-                env=environment,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if probe.returncode != 0:
-                raise AssertionError(
-                    "EMP_PYTHON_ORACLE_ROOT could not import easy_multi_provider: "
-                    + probe.stderr
-                )
-            version, module_path = probe.stdout.splitlines()
-            if version != "0.11.10":
-                raise AssertionError(
-                    "EMP_PYTHON_ORACLE_ROOT must be Python EMP 0.11.10; got "
-                    + version
-                )
-            if Path(module_path).resolve() != (python_oracle_root / "easy_multi_provider" / "__init__.py").resolve():
-                raise AssertionError("EMP_PYTHON_ORACLE_ROOT imported a different package")
-            process_cwd = python_oracle_root
+        if self.runtime_kind == "rust":
+            environment.pop("PYTHONPATH", None)
+        else:
+            environment = PYTHON_RUNTIME.environment(environment)
         self.environment = environment
         self.cwd = process_cwd
         if arguments is None:

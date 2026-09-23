@@ -21,13 +21,20 @@ from contextlib import ExitStack
 
 import zstandard
 
+from tests.rust_e2e_support import (
+    PYTHON_RUNTIME,
+    ROOT,
+    EmpProcess,
+    Upstream,
+    normalized_ids,
+    rust_environment,
+)
 from tests import test_chat_projection_regressions as chat_cases
 from tests import test_context_guard as context_cases
 from tests.test_tool_bridge import function, namespace
 from easy_multi_provider.tool_bridge import ExternalTools
 from tests.test_server import _masked_text_frame, _read_text_frame
 from tests.test_shared_app_server_runtime import _UnixModelListServer
-from tests.rust_e2e_support import ROOT, EmpProcess, Upstream, normalized_ids
 from easy_multi_provider.integration import IntegrationManager
 
 
@@ -61,7 +68,7 @@ class RustEndToEnd(unittest.TestCase):
         cls.stack.callback(cls.upstream.close)
         cls.backends = []
         for name, command in [
-            ("python", [sys.executable, "-m", "easy_multi_provider"]),
+            ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
             ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
         ]:
             backend = EmpProcess(command, cls.upstream, root / name)
@@ -136,13 +143,22 @@ class RustEndToEnd(unittest.TestCase):
     def test_existing_service_rejects_a_second_python_or_rust_owner(self):
         for owner in self.backends:
             before = owner.config_path.read_bytes()
-            for command in ([sys.executable, "-m", "easy_multi_provider"],
-                            [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]):
+            for name, command in (
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
+                ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+            ):
                 with self.subTest(owner=owner.port, contender=command[-1]):
+                    if name == "python":
+                        contender_environment = PYTHON_RUNTIME.environment(owner.environment)
+                        contender_cwd = PYTHON_RUNTIME.cwd()
+                    else:
+                        contender_environment = rust_environment(owner.environment)
+                        contender_cwd = ROOT
                     result = subprocess.run(
                         command + ["serve", "--config", str(owner.config_path),
                                    "--host", "127.0.0.1", "--port", "0"],
-                        env=owner.environment, cwd=ROOT, capture_output=True, timeout=8,
+                        env=contender_environment, cwd=contender_cwd,
+                        capture_output=True, timeout=8,
                     )
                     self.assertEqual(result.returncode, 1)
                     self.assertIn(b"another EMP service owns this configuration", result.stderr)
@@ -156,7 +172,7 @@ class RustEndToEnd(unittest.TestCase):
             with tempfile.TemporaryDirectory(prefix="emp-recovery-") as temporary:
                 root = Path(temporary)
                 for name, command in [
-                    ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                    ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                     ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
                 ]:
                     home = root / name
@@ -207,7 +223,7 @@ class RustEndToEnd(unittest.TestCase):
             results = []
             with tempfile.TemporaryDirectory(prefix="emp-search-") as temporary:
                 for name, command in [
-                    ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                    ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                     ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
                 ]:
                     backend = EmpProcess(command, self.upstream, Path(temporary) / name)
@@ -256,7 +272,7 @@ class RustEndToEnd(unittest.TestCase):
         results = []
         with tempfile.TemporaryDirectory(prefix="emp-search-reload-") as temporary:
             for name, command in [
-                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
             ]:
                 backend = EmpProcess(command, self.upstream, Path(temporary) / name)
@@ -375,8 +391,26 @@ class RustEndToEnd(unittest.TestCase):
         source = "import sys; sys.argv[0]='EMP'; from easy_multi_provider.main import main; raise SystemExit(main())"
         for arguments in (["--help"], ["serve", "--help"], ["doctor", "--help"], ["restore", "--help"], ["--version"]):
             results = []
-            for command in ([sys.executable, "-c", source], [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]):
-                result = subprocess.run(command + arguments, cwd=ROOT, capture_output=True, timeout=8)
+            runners = [
+                (
+                    PYTHON_RUNTIME.command("-c", source),
+                    PYTHON_RUNTIME.environment(),
+                    PYTHON_RUNTIME.cwd(),
+                ),
+                (
+                    [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())],
+                    rust_environment(),
+                    ROOT,
+                ),
+            ]
+            for command, environment, cwd in runners:
+                result = subprocess.run(
+                    command + arguments,
+                    cwd=cwd,
+                    env=environment,
+                    capture_output=True,
+                    timeout=8,
+                )
                 results.append((result.returncode, result.stdout, result.stderr))
             self.assertEqual(results[0], results[1])
 
@@ -386,7 +420,12 @@ class RustEndToEnd(unittest.TestCase):
         frozen_entry = "import sys; sys.frozen=True; from easy_multi_provider.main import main; raise SystemExit(main())"
         for desktop in (False, True):
             for name, command in [
-                ("python", [sys.executable, "-c", frozen_entry] if desktop else [sys.executable, "-m", "easy_multi_provider"]),
+                (
+                    "python",
+                    PYTHON_RUNTIME.command("-c", frozen_entry)
+                    if desktop
+                    else PYTHON_RUNTIME.command("-m", "easy_multi_provider"),
+                ),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
             ]:
                 with self.subTest(backend=name, desktop=desktop), tempfile.TemporaryDirectory(prefix="emp-desktop-") as temporary:
@@ -468,7 +507,7 @@ class RustEndToEnd(unittest.TestCase):
         all_outputs = []
         with tempfile.TemporaryDirectory(prefix="emp-offline-e2e-") as temporary:
             for name, command in [
-                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
             ]:
                 root = Path(temporary) / name
@@ -476,12 +515,16 @@ class RustEndToEnd(unittest.TestCase):
                 home = root / "codex"
                 home.mkdir()
                 state = root / "offline-state"
-                environment = {**os.environ, "CODEX_HOME": str(home), "PYTHONPATH": str(ROOT)}
+                base_environment = {**os.environ, "CODEX_HOME": str(home)}
                 config = home / "config.toml"
                 config.write_text('# offline preferences\nopenai_base_url = "native"\n')
                 outputs = []
 
                 def invoke(operation, as_json=False):
+                    if name == "python":
+                        environment = PYTHON_RUNTIME.environment(base_environment)
+                    else:
+                        environment = rust_environment(base_environment)
                     result = subprocess.run(
                         command + [operation, "--state-dir", "offline-state"]
                         + (["--json"] if as_json else []),
@@ -526,7 +569,7 @@ class RustEndToEnd(unittest.TestCase):
             results = []
             with tempfile.TemporaryDirectory(prefix="e-", dir="/tmp") as temporary:
                 for name, command in [
-                    ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                    ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                     ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
                 ]:
                     with self.subTest(backend=name, stale_name=stale_name):
@@ -613,8 +656,10 @@ class RustEndToEnd(unittest.TestCase):
             config_path = root / "config.json"
             environment = {"HOME": str(user_home), "PATH": str(root / "bin")}
             results = []
-            for command in ([sys.executable, "-m", "easy_multi_provider"],
-                            [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]):
+            for command in (
+                PYTHON_RUNTIME.command("-m", "easy_multi_provider"),
+                [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())],
+            ):
                 config_path.write_text(json.dumps({"native_catalog_path": str(root / "native.json")}))
                 backend = EmpProcess.from_config(command, config_path, home, environment_overrides=environment)
                 try:
@@ -669,7 +714,7 @@ class RustEndToEnd(unittest.TestCase):
             root = Path(temporary)
             (root / "native.json").write_text('{"models":[]}')
             for name, command in [
-                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
             ]:
                 home = root / name
@@ -775,7 +820,7 @@ class RustEndToEnd(unittest.TestCase):
     def test_quit_stops_the_actual_process(self):
         with tempfile.TemporaryDirectory(prefix="emp-quit-e2e-") as temporary:
             for name, command in [
-                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
             ]:
                 with self.subTest(backend=name):
@@ -791,7 +836,7 @@ class RustEndToEnd(unittest.TestCase):
     def test_empty_picker_cannot_enable_integration(self):
         with tempfile.TemporaryDirectory(prefix="emp-empty-e2e-") as temporary:
             for name, command in [
-                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
             ]:
                 with self.subTest(backend=name):
@@ -818,7 +863,7 @@ class RustEndToEnd(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="emp-stop-e2e-") as temporary:
             restored = []
             for name, command in [
-                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
             ]:
                 with self.subTest(backend=name):
@@ -899,7 +944,7 @@ class RustEndToEnd(unittest.TestCase):
         restored = []
         with tempfile.TemporaryDirectory(prefix="emp-preferences-e2e-") as temporary:
             for name, command in [
-                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
             ]:
                 with self.subTest(backend=name):
