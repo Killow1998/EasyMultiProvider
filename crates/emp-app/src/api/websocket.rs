@@ -168,6 +168,14 @@ pub(crate) fn serve_responses_websocket(
                 return;
             }
         };
+        let Some(_permit) = state.updates.enter() else {
+            let _ = websocket.send_json(&serde_json::json!({
+                "type":"error",
+                "status":503,
+                "error":{"code":"updating","message":"EMP is installing an update. Please retry shortly."}
+            }));
+            continue;
+        };
         let mut request_body = match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(value)) => value,
             _ => {

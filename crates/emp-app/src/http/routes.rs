@@ -62,192 +62,233 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
         }
     };
     let mut stop_after_write = false;
-    let response = match parse_request(&raw.head) {
-        Some(request)
-            if request.method == RequestMethod::Post
-                && request.raw_path().starts_with("/api/accounts/")
-                && request.raw_path().ends_with("/models/refresh") =>
-        {
-            Some(management_account_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                system_now(),
-            ))
-        }
-        Some(request)
-            if request.method == RequestMethod::Post
-                && request.raw_path() == "/api/client-events" =>
-        {
-            Some(crate::api::diagnostics::client_event(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                system_now(),
-            ))
-        }
-        Some(request)
-            if request.method == RequestMethod::Post && request.raw_path() == "/api/usage/scan" =>
-        {
-            Some(crate::api::usage::scan(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                system_now(),
-            ))
-        }
-        Some(request)
-            if request.method == RequestMethod::Post
-                && matches!(
-                    request.raw_path(),
-                    "/api/runtime/scan" | "/api/runtime/select"
-                ) =>
-        {
-            Some(crate::api::runtime::management_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                system_now(),
-            ))
-        }
-        Some(request)
-            if request.method == RequestMethod::Post && request.raw_path() == "/api/quit" =>
-        {
-            let (response, stop) =
-                quit_request(&mut stream, request, raw.body_prefix, state, system_now());
-            stop_after_write = stop;
-            Some(response)
-        }
-
-        Some(request)
-            if request.method == RequestMethod::Get
-                && request.raw_path() == "/v1/responses"
-                && request
-                    .header("Upgrade")
-                    .is_some_and(|value| value.eq_ignore_ascii_case("websocket")) =>
-        {
-            serve_responses_websocket(&mut stream, request, state, system_now());
-            None
-        }
-        Some(request)
-            if request.method == RequestMethod::Post
-                && matches!(
-                    request.raw_path(),
-                    "/api/integration/enable"
-                        | "/api/integration/restore"
-                        | "/api/integration/reload"
-                        | "/api/integration/verify"
-                ) =>
-        {
-            Some(management_integration_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                system_now(),
-            ))
-        }
-        Some(request)
-            if request.method == RequestMethod::Post
-                && request.raw_path() == "/v1/alpha/search" =>
-        {
-            Some(native_search_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                system_now(),
-            ))
-        }
-        Some(request)
-            if request.method == RequestMethod::Post
-                && request.raw_path() == "/api/accounts/import" =>
-        {
-            Some(management_account_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                system_now(),
-            ))
-        }
-        Some(request)
-            if request.method == RequestMethod::Post
-                && matches!(
-                    request.raw_path(),
-                    "/api/migration/export" | "/api/migration/import"
-                ) =>
-        {
-            Some(management_migration_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                system_now(),
-            ))
-        }
-        Some(request)
-            if request.method == RequestMethod::Post
-                && matches!(
-                    request.raw_path(),
-                    "/api/providers/discover" | "/api/catalog/refresh" | "/api/config"
-                ) =>
-        {
-            Some(catalog::management_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                system_now(),
-            ))
-        }
-        Some(request)
-            if request.method == RequestMethod::Post
-                && request.raw_path() == "/v1/responses/compact" =>
-        {
-            Some(compact_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                system_now(),
-            ))
-        }
-        Some(request)
-            if request.method == RequestMethod::Post && request.raw_path() == "/v1/responses" =>
-        {
-            match responses_request(&mut stream, request, raw.body_prefix, state, system_now()) {
-                ResponsesRequestResult::Buffered(response) => Some(response),
-                ResponsesRequestResult::Streamed => None,
+    let Some(request) = parse_request(&raw.head) else {
+        let _ = stream.write_all(&bad_request_response());
+        let _ = stream.flush();
+        let _ = stream.shutdown(Shutdown::Write);
+        return;
+    };
+    let path = request.raw_path();
+    let update_request = path.starts_with("/api/updates/");
+    let permit = if request.method == RequestMethod::Post && !update_request {
+        state.updates.enter()
+    } else {
+        None
+    };
+    let response = if request.method == RequestMethod::Post && !update_request && permit.is_none() {
+        Some(json_error_response(
+            503,
+            status_text(503),
+            "EMP is installing an update. Please retry shortly.",
+            Some("updating"),
+            &[("Retry-After", "2")],
+        ))
+    } else {
+        match Some(request) {
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && matches!(
+                        request.raw_path(),
+                        "/api/updates/check" | "/api/updates/install"
+                    ) =>
+            {
+                Some(crate::api::updates::start(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
             }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && request.raw_path().starts_with("/api/accounts/")
+                    && request.raw_path().ends_with("/models/refresh") =>
+            {
+                Some(management_account_request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && request.raw_path() == "/api/client-events" =>
+            {
+                Some(crate::api::diagnostics::client_event(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && request.raw_path() == "/api/usage/scan" =>
+            {
+                Some(crate::api::usage::scan(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && matches!(
+                        request.raw_path(),
+                        "/api/runtime/scan" | "/api/runtime/select"
+                    ) =>
+            {
+                Some(crate::api::runtime::management_request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post && request.raw_path() == "/api/quit" =>
+            {
+                let (response, stop) =
+                    quit_request(&mut stream, request, raw.body_prefix, state, system_now());
+                stop_after_write = stop;
+                Some(response)
+            }
+
+            Some(request)
+                if request.method == RequestMethod::Get
+                    && request.raw_path() == "/v1/responses"
+                    && request
+                        .header("Upgrade")
+                        .is_some_and(|value| value.eq_ignore_ascii_case("websocket")) =>
+            {
+                serve_responses_websocket(&mut stream, request, state, system_now());
+                None
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && matches!(
+                        request.raw_path(),
+                        "/api/integration/enable"
+                            | "/api/integration/restore"
+                            | "/api/integration/reload"
+                            | "/api/integration/verify"
+                    ) =>
+            {
+                Some(management_integration_request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && request.raw_path() == "/v1/alpha/search" =>
+            {
+                Some(native_search_request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && request.raw_path() == "/api/accounts/import" =>
+            {
+                Some(management_account_request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && matches!(
+                        request.raw_path(),
+                        "/api/migration/export" | "/api/migration/import"
+                    ) =>
+            {
+                Some(management_migration_request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && matches!(
+                        request.raw_path(),
+                        "/api/providers/discover" | "/api/catalog/refresh" | "/api/config"
+                    ) =>
+            {
+                Some(catalog::management_request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && request.raw_path() == "/v1/responses/compact" =>
+            {
+                Some(compact_request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && request.raw_path() == "/v1/responses" =>
+            {
+                match responses_request(&mut stream, request, raw.body_prefix, state, system_now())
+                {
+                    ResponsesRequestResult::Buffered(response) => Some(response),
+                    ResponsesRequestResult::Streamed => None,
+                }
+            }
+            Some(request)
+                if request.method == RequestMethod::Get
+                    && request.raw_path() == "/api/accounts/events" =>
+            {
+                serve_quota_events(&mut stream, request, state, system_now());
+                None
+            }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && request.raw_path().starts_with("/api/accounts/")
+                    && (request.raw_path().ends_with("/quota")
+                        || request.raw_path().ends_with("/quota-reset")) =>
+            {
+                Some(management_quota_request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
+            Some(request) => Some(route_request(request, state)),
+            None => Some(bad_request_response()),
         }
-        Some(request)
-            if request.method == RequestMethod::Get
-                && request.raw_path() == "/api/accounts/events" =>
-        {
-            serve_quota_events(&mut stream, request, state, system_now());
-            None
-        }
-        Some(request)
-            if request.method == RequestMethod::Post
-                && request.raw_path().starts_with("/api/accounts/")
-                && (request.raw_path().ends_with("/quota")
-                    || request.raw_path().ends_with("/quota-reset")) =>
-        {
-            Some(management_quota_request(
-                &mut stream,
-                request,
-                raw.body_prefix,
-                state,
-                system_now(),
-            ))
-        }
-        Some(request) => Some(route_request(request, state)),
-        None => Some(bad_request_response()),
     };
     if let Some(response) = response {
         let _ = stream.write_all(&response);
@@ -272,6 +313,9 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
     }
     if path == "/healthz" {
         return health_response();
+    }
+    if request.method == RequestMethod::Get && path == "/api/updates" {
+        return crate::api::updates::read(request, state, now);
     }
 
     let same_origin = same_origin(request, state.port);

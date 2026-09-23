@@ -37,6 +37,7 @@ pub(crate) struct ServerState {
     pub(crate) backend: BackendState,
     pub(crate) port: u16,
     pub(crate) base_url: String,
+    pub(crate) updates: crate::services::updates::UpdateState,
 }
 
 pub(crate) struct BackendState {

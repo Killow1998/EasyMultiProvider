@@ -16,6 +16,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use emp_state::WEB_SESSION_TOKEN_BYTES;
 use emp_state::WebSession;
+#[cfg(test)]
 use emp_state::config_path;
 use emp_state::load_or_create_web_session;
 use emp_state::web_session_path;
@@ -41,11 +42,18 @@ pub(crate) struct ServerHandle {
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
+struct UpdateStartupOptions {
+    config_path: PathBuf,
+    open_browser: bool,
+}
+
 impl ServerHandle {
+    #[cfg(test)]
     pub fn start(host: IpAddr, port: u16) -> Result<Self, AppError> {
         Self::start_with_config(host, port, &config_path())
     }
 
+    #[cfg(test)]
     pub fn start_with_config(
         host: IpAddr,
         port: u16,
@@ -54,12 +62,31 @@ impl ServerHandle {
         Self::start_with_config_options(host, port, config_path, "codex", codex_auth_path())
     }
 
+    #[cfg(test)]
     pub(crate) fn start_with_config_options(
         host: IpAddr,
         port: u16,
         config_path: &Path,
         codex_binary: &str,
         native_auth_path: PathBuf,
+    ) -> Result<Self, AppError> {
+        Self::start_with_config_options_and_browser(
+            host,
+            port,
+            config_path,
+            codex_binary,
+            native_auth_path,
+            false,
+        )
+    }
+
+    fn start_with_config_options_and_browser(
+        host: IpAddr,
+        port: u16,
+        config_path: &Path,
+        codex_binary: &str,
+        native_auth_path: PathBuf,
+        open_browser: bool,
     ) -> Result<Self, AppError> {
         if !is_loopback(host) {
             return Err(AppError::HostNotLoopback);
@@ -80,7 +107,18 @@ impl ServerHandle {
         let session =
             load_or_create_web_session(&session_path, now).map_err(AppError::WebSession)?;
         let backend = BackendState::new(config_path, codex_binary, native_auth_path)?;
-        Self::start_with_session(host, port, session_path, session, backend, service_owner)
+        Self::start_with_session(
+            host,
+            port,
+            session_path,
+            session,
+            backend,
+            service_owner,
+            UpdateStartupOptions {
+                config_path: config_path.to_path_buf(),
+                open_browser,
+            },
+        )
     }
 
     fn start_with_session(
@@ -90,6 +128,7 @@ impl ServerHandle {
         session: WebSession,
         backend: BackendState,
         service_owner: emp_state::IntegrationFileLock,
+        update_startup: UpdateStartupOptions,
     ) -> Result<Self, AppError> {
         let listener = TcpListener::bind((host, port))?;
         listener.set_nonblocking(true)?;
@@ -101,6 +140,13 @@ impl ServerHandle {
         });
         let mut random = [0_u8; WEB_SESSION_TOKEN_BYTES];
         getrandom::getrandom(&mut random).map_err(|_| AppError::RandomUnavailable)?;
+        let updates = crate::services::updates::UpdateState::new(
+            &update_startup.config_path,
+            crate::VERSION,
+            local_addr,
+            update_startup.open_browser,
+            Arc::clone(&shutdown),
+        );
         let state = Arc::new(ServerState {
             shutdown,
             _service_owner: service_owner,
@@ -112,6 +158,7 @@ impl ServerHandle {
             backend,
             port: local_addr.port(),
             base_url: format!("http://{local_addr}/v1"),
+            updates,
         });
         let workers = Arc::new(Mutex::new(Vec::new()));
         let handle = Self {
@@ -227,7 +274,12 @@ impl ServerHandle {
     }
 
     pub fn shutdown(self) -> Result<(), AppError> {
-        let restoration = self.state.backend.integration.restore_owned();
+        let installing = self.state.updates.snapshot().state == "installing";
+        let restoration = if installing {
+            Ok(())
+        } else {
+            self.state.backend.integration.restore_owned()
+        };
         self.state.shutdown.store(true, Ordering::Release);
         self.state.backend.usage.stop();
         self.state.backend.accounts.quota_condition.notify_all();
@@ -255,10 +307,17 @@ pub(crate) fn run_server(
     port: u16,
     open_browser: bool,
 ) -> Result<(), AppError> {
-    let server = match config {
-        Some(config) => ServerHandle::start_with_config(host, port, config)?,
-        None => ServerHandle::start(host, port)?,
-    };
+    let config_path = config
+        .map(Path::to_path_buf)
+        .unwrap_or_else(emp_state::config_path);
+    let server = ServerHandle::start_with_config_options_and_browser(
+        host,
+        port,
+        &config_path,
+        "codex",
+        codex_auth_path(),
+        open_browser,
+    )?;
     {
         let mut config = server
             .state
@@ -297,6 +356,7 @@ pub(crate) fn run_server(
         if open_browser && !crate::cli::desktop::open_browser(&bootstrap_url) {
             println!("Browser did not open automatically; use the URL above.");
         }
+        emp_state::update::worker::mark_ready(crate::VERSION).map_err(std::io::Error::other)?;
         let requested = async {
             while !server.state.shutdown.load(Ordering::Acquire) {
                 tokio::time::sleep(Duration::from_millis(25)).await;

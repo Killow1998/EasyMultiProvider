@@ -30,6 +30,21 @@ pub(crate) fn quit_request(
     if let Err(error) = read_json_body(stream, request, body_prefix, state) {
         return (body_error_response(error), false);
     }
+    if matches!(
+        state.updates.snapshot().state.as_str(),
+        "downloading" | "verifying" | "waiting" | "installing"
+    ) {
+        return (
+            json_error_response(
+                409,
+                status_text(409),
+                "Wait for the update to finish before exiting EMP",
+                None,
+                &[],
+            ),
+            false,
+        );
+    }
     if state.backend.integration.restore_owned().is_err() {
         return (
             json_error_response(

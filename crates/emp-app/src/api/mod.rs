@@ -14,4 +14,5 @@ pub(crate) mod websocket;
 pub(crate) mod runtime;
 
 pub(crate) mod diagnostics;
+pub(crate) mod updates;
 pub(crate) mod usage;

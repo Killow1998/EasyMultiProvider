@@ -1,0 +1,175 @@
+//! Process birth identity and update-owned child process groups.
+use super::{Result, UpdateError};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+pub fn created(pid: u32) -> Option<f64> {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let suffix = stat.rsplit_once(')')?.1;
+        let ticks = suffix.split_whitespace().nth(19)?.parse::<f64>().ok()?;
+        let boot = std::fs::read_to_string("/proc/stat")
+            .ok()?
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("btime ")
+                    .and_then(|value| value.parse::<f64>().ok())
+            })?;
+        // sysconf has no side effects; the kernel defines the process clock tick.
+        let frequency = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        return (frequency > 0).then_some(boot + ticks / frequency as f64);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+        let size = std::mem::size_of::<libc::proc_bsdinfo>();
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid as i32,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size as i32,
+            )
+        };
+        if read != size as i32 {
+            return None;
+        }
+        let info = unsafe { info.assume_init() };
+        return Some(info.pbi_start_tvsec as f64 + info.pbi_start_tvusec as f64 / 1e6);
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, FILETIME},
+            System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+        };
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if process.is_null() {
+            return None;
+        }
+        let mut times = [FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        }; 4];
+        let result = unsafe {
+            GetProcessTimes(
+                process,
+                &mut times[0],
+                &mut times[1],
+                &mut times[2],
+                &mut times[3],
+            )
+        };
+        unsafe { CloseHandle(process) };
+        if result == 0 {
+            return None;
+        }
+        let ticks = ((times[0].dwHighDateTime as u64) << 32) | times[0].dwLowDateTime as u64;
+        return Some(ticks as f64 / 1e7 - 11644473600.0);
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let _ = pid;
+        None
+    }
+}
+pub struct OwnedChild {
+    pub child: Child,
+    #[cfg(windows)]
+    job: windows_sys::Win32::Foundation::HANDLE,
+}
+pub fn spawn(
+    executable: &Path,
+    args: &[String],
+    environment: &[(&str, String)],
+    visible: bool,
+) -> Result<OwnedChild> {
+    let mut command = Command::new(executable);
+    command
+        .args(args)
+        .env("PYINSTALLER_RESET_ENVIRONMENT", "1")
+        .env_remove("EMP_UPDATE_READY");
+    for (key, value) in environment {
+        command.env(key, value);
+    }
+    if !cfg!(windows) || !visible {
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x00000200 | if visible { 0x00000010 } else { 0x08000000 });
+    }
+    let child = command.spawn()?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if !job.is_null() {
+            unsafe { AssignProcessToJobObject(job, child.as_raw_handle()) };
+        }
+        return Ok(OwnedChild { child, job });
+    }
+    #[cfg(not(windows))]
+    Ok(OwnedChild { child })
+}
+impl OwnedChild {
+    pub fn stop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(-(self.child.id() as i32), libc::SIGTERM);
+        }
+        #[cfg(windows)]
+        if !self.job.is_null() {
+            unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 1) };
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if self.child.try_wait().ok().flatten().is_none() {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(-(self.child.id() as i32), libc::SIGKILL);
+            }
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+    }
+    pub fn wait_for_exit(&mut self, timeout: Duration) -> Result<std::process::ExitStatus> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.child.try_wait()? {
+                return Ok(status);
+            }
+            if Instant::now() >= deadline {
+                self.stop();
+                return Err(UpdateError("worker_failed"));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+#[cfg(windows)]
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        if !self.job.is_null() {
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(self.job) };
+        }
+    }
+}

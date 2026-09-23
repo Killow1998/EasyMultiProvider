@@ -14,6 +14,7 @@ pub(crate) enum Cli {
     Version,
     Help(Option<String>),
     Control(control::Control),
+    ApplyUpdate(PathBuf),
     Serve {
         config: Option<PathBuf>,
         host: Option<String>,
@@ -37,6 +38,15 @@ where
     };
     if command == "--version" {
         return Ok(Cli::Version);
+    }
+    if command == "--emp-apply-update" {
+        let path = arguments
+            .next()
+            .ok_or("--emp-apply-update requires a plan")?;
+        if arguments.next().is_some() {
+            return Err("--emp-apply-update requires one plan".into());
+        }
+        return Ok(Cli::ApplyUpdate(PathBuf::from(path)));
     }
     if matches!(command.as_str(), "--help" | "-h") {
         return Ok(Cli::Help(None));
@@ -144,6 +154,11 @@ pub(crate) fn run() -> Result<ExitCode, String> {
         Cli::Version => println!("EMP {VERSION}"),
         Cli::Help(command) => print!("{}", help::text(command.as_deref())),
         Cli::Control(command) => return command.run(),
+        Cli::ApplyUpdate(path) => {
+            return emp_state::update::worker::run(&path)
+                .map(ExitCode::from)
+                .map_err(|error| error.to_string());
+        }
         Cli::Serve {
             config,
             host,

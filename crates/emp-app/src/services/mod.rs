@@ -16,6 +16,7 @@ pub(crate) mod context;
 
 pub(crate) mod startup;
 
+pub(crate) mod updates;
 pub(crate) mod usage;
 
 pub(crate) mod account_catalog;
