@@ -828,12 +828,10 @@ class RustEndToEnd(unittest.TestCase):
                     status, _, raw = backend.request("POST", "/api/runtime/scan", {})
                     self.assertEqual(status, 200, raw)
                     scanned = json.loads(raw)
-                    self.assertEqual(scanned["helper_source"], "managed")
                     status, _, raw = backend.request("POST", "/api/runtime/select", {"sources": [" cursor ", "cursor"]})
                     self.assertEqual(status, 200, raw)
                     selected = json.loads(raw)
                     self.assertEqual(selected["preferences"], ["cursor"])
-                    self.assertEqual(selected["helper_source"], "managed")
                     self.assertEqual([item["source"] for item in selected["runtimes"] if item["targeted"]], ["cursor"])
                     failures = []
                     for sources in ([], ["auto", "cursor"], ["path_cli"], [False]):
@@ -852,6 +850,16 @@ class RustEndToEnd(unittest.TestCase):
                     results.append((scanned, selected, failures, restarted))
                 finally:
                     backend.close()
+            self.assertEqual(len(results), 2)
+            for scanned, selected, _failures, _restarted in results:
+                for snapshot in (scanned, selected):
+                    helper_sources = [
+                        item["source"]
+                        for item in snapshot["runtimes"]
+                        if item["helper"]
+                    ]
+                    self.assertEqual(snapshot["helper_source"], "codex_app")
+                    self.assertEqual(helper_sources, [snapshot["helper_source"]])
             self.assertEqual(results[0], results[1])
 
     def test_calibrated_context_budget_is_an_input_boundary(self):
