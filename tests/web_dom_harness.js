@@ -455,6 +455,16 @@ function quotaHistoryBehavior() {
   assert.match(html, /--plan-color:#f2b705/);
   assert.doesNotMatch(html, /每 5 分钟|自动采样|保留 15 天/);
 
+  context.__recentQuotaPayload = {end_at:200000,series:[
+    {limit_id:'codex',window_kind:'primary',window_minutes:300,points:[{observed_at:1000,remaining_percent:50}]},
+    {limit_id:'codex',window_kind:'secondary',window_minutes:10080,points:[{observed_at:2000,remaining_percent:60}]},
+    {limit_id:'codex',window_kind:'primary',window_minutes:43200,points:[{observed_at:199900,remaining_percent:88}]},
+  ]};
+  run("activeQuotaWindow=''; renderQuotaHistory(__recentQuotaPayload,'1d')");
+  assert.strictEqual(run('activeQuotaWindow'), '43200', 'the default window must have records in the selected range');
+  assert.match(quotaHistoryHtml(), /data-label="30d"/);
+  assert.doesNotMatch(quotaHistoryHtml(), /data-label="5h"|data-label="7d"/);
+
   for (const [seriesValues, expectedMin, expectedMax] of [
     [[[72,74],[80]], 71, 81],
     [[[74.1,74.2]], 73, 76],
@@ -767,6 +777,15 @@ function quotaMeterBehavior() {
   assert.match(rendered, /class="quota-meter is-unreported" title="7d 未回传限制"/);
   assert.match(rendered, /role="img" aria-label="7d 未回传限制"/);
   assert.match(html, /\.quota-meter\.is-unreported \.quota-battery::before\{[^}]*inset:-5px 3px;[^}]*repeating-linear-gradient\(45deg/, "an unlimited window must use repeated slashes that extend beyond the battery");
+
+  context.__quotaMeterState.accounts[0].quota = {plan_type:'plus',rate_limits:{primary:{usedPercent:12,windowDurationMins:43200},secondary:{usedPercent:50,windowDurationMins:300}}};
+  run("renderAccounts()");
+  rendered = getElement("accounts").innerHTML;
+  assert.match(rendered, /class="subscription-plan plan-free">Free</);
+  assert.match(rendered, />30d</);
+  assert.match(rendered, /aria-valuenow="88"/);
+  assert.doesNotMatch(rendered, />5h|>7d|is-unreported/, "a 30-day Free quota must be the only displayed window");
+  assert.strictEqual(run("quotaText(__quotaMeterState.accounts[0])").split('\n').length, 1);
 
   run("refreshingAccounts.add('meter'); renderAccounts()");
   assert.match(getElement("accounts").innerHTML, /is-refreshing/);

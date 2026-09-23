@@ -98,11 +98,20 @@ class SubscriptionContextTests(unittest.TestCase):
             path, config, catalog = self.fixture(Path(temporary))
             state = AppState(path)
             refreshed = copy.deepcopy(catalog); refreshed["models"][0]["max_context_window"] = 800000
+            refreshed["models"].extend([
+                {"slug": "gpt-6-sol", "display_name": "GPT-6-Sol", "visibility": "list", "supported_in_api": True},
+                {"slug": "gpt-6-luna", "display_name": "GPT-6-Luna", "visibility": "list", "supported_in_api": True},
+            ])
             with patch("easy_multi_provider.server.fetch_subscription_catalog", return_value=refreshed) as fetch:
                 result = state.subscription_models("a", refresh=True)
             self.assertEqual(fetch.call_args.args[1]["Authorization"], "Bearer a-token")
             self.assertEqual(fetch.call_args.args[1]["chatgpt-account-id"], "a")
+            self.assertEqual(fetch.call_args.args[2], "0.156.1")
             self.assertEqual(result["models"][0]["max_context_window"], 800000)
+            self.assertEqual(
+                {model["id"] for model in result["models"]},
+                {"gpt-current", "gpt-6-sol", "gpt-6-luna"},
+            )
             self.assertEqual(state.subscription_models("b")["models"][0]["max_context_window"], 1000000)
             cached = Path(config["accounts"][0]["auth_file"]).parent / "models_cache.json"
             self.assertNotIn("a-token", cached.read_text())

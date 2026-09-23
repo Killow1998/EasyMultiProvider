@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Track Codex CLI 0.156.x and recommend 0.156.1 so subscription catalog
+  refreshes expose the native GPT-6 Sol and GPT-6 Luna model choices.
+- Treat a reported 30-day quota window as a Free subscription and show only
+  that window instead of unavailable 5-hour and 7-day placeholders.
+- Default quota trends to a window that has observations in the selected time
+  range instead of opening an empty historical window.
+
 ## 0.11.6 (2026-09-21)
 
 - Normalize pasted external-provider URLs from a bare origin, `/v1`, or a

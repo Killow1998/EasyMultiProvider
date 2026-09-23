@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/Killow1998/EasyMultiProvider/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/Killow1998/EasyMultiProvider"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/Killow1998/EasyMultiProvider"></a>
-  <img alt="Codex CLI 0.149.x–0.155.x" src="https://img.shields.io/badge/Codex%20CLI-0.149.x--0.155.x-blue">
+  <img alt="Codex CLI 0.149.x–0.156.x" src="https://img.shields.io/badge/Codex%20CLI-0.149.x--0.156.x-blue">
   <img alt="Windows Linux macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey">
 </p>
 
@@ -34,11 +34,11 @@ For example, one model picker can show:
 
 | Model shown in Codex | Where the request goes |
 | --- | --- |
-| `gpt-5.6-luna` | Your current Codex login |
-| `team/gpt-5.6-luna` | An imported ChatGPT subscription |
+| `gpt-6-luna` | Your current Codex login |
+| `team/gpt-6-luna` | An imported ChatGPT subscription |
 | `deepseek/deepseek-v4-pro` | A model you imported from the DeepSeek API |
 
-The prefixed names are examples; you choose the account, provider, and models. Selecting `team/gpt-5.6-luna` uses the imported account, while `deepseek/deepseek-v4-pro` uses the DeepSeek API key. Codex still owns the coding session, permissions, and tools.
+The prefixed names are examples; you choose the account, provider, and models. Selecting `team/gpt-6-luna` uses the imported account, while `deepseek/deepseek-v4-pro` uses the DeepSeek API key. Codex still owns the coding session, permissions, and tools.
 
 ## Quick Start
 
@@ -101,11 +101,11 @@ Open Codex and choose a model from `/model` or the App model menu.
 Readable route prefixes make the source explicit, for example:
 
 ~~~text
-team/gpt-5.6-luna
+team/gpt-6-luna
 provider/model
 ~~~
 
-With a ChatGPT login, catalog changes can refresh while Codex is running. Codex 0.155.0 also refreshes periodically; reopen the model picker if a newly added model is not visible immediately.
+With a ChatGPT login, catalog changes can refresh while Codex is running. Codex 0.156.1 includes GPT-6 Sol and GPT-6 Luna in its native model picker; reopen the picker if a newly added model is not visible immediately.
 
 ## What EMP does
 
@@ -155,7 +155,7 @@ The catalog display and EMP request checks use the same effective window.
 
 The current source version is **v0.11.6**.
 
-EMP supports Codex CLI **0.149.x through 0.155.x**; **0.155.0 is recommended**.
+EMP supports Codex CLI **0.149.x through 0.156.x**; **0.156.1 is recommended**.
 
 On the first integration-status load, EMP performs a bounded scan of known locations for:
 

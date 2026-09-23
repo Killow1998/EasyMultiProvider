@@ -475,15 +475,28 @@ def parse_app_server_output(output: str) -> Dict[str, Any]:
             read_limits(message.get("params"))
     if rate_limits is None:
         raise QuotaError("Codex did not return account rate limits")
+    plan_type = (
+        account.get("planType")
+        if isinstance(account.get("planType"), str)
+        else rate_limits.get("planType")
+        if isinstance(rate_limits.get("planType"), str)
+        else None
+    )
+    if any(
+        window.get(
+            "windowDurationMins",
+            window.get("window_duration_mins", window.get("window_minutes")),
+        )
+        == 43_200
+        for bucket in buckets.values()
+        if isinstance(bucket, dict)
+        for window in (bucket.get("primary"), bucket.get("secondary"))
+        if isinstance(window, dict)
+    ):
+        plan_type = "free"
     return {
         "account_label": _mask_email(account.get("email")),
-        "plan_type": (
-            account.get("planType")
-            if isinstance(account.get("planType"), str)
-            else rate_limits.get("planType")
-            if isinstance(rate_limits.get("planType"), str)
-            else None
-        ),
+        "plan_type": plan_type,
         "rate_limits": rate_limits,
         "rate_limits_by_limit_id": buckets,
         "credits": _safe_credit_snapshot(rate_limits, rate_limits_result),

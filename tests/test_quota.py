@@ -181,6 +181,22 @@ class QuotaTests(unittest.TestCase):
         self.assertEqual(value["account_label"], "u***@example.com")
         self.assertNotIn("user@example.com", json.dumps(value))
 
+    def test_parser_identifies_free_plan_from_thirty_day_window(self):
+        output = json.dumps({
+            "id": 3,
+            "result": {
+                "account": {"planType": "plus"},
+                "rateLimits": {
+                    "primary": {"usedPercent": 12, "windowDurationMins": 43_200},
+                    "secondary": None,
+                },
+            },
+        })
+
+        value = parse_app_server_output(output)
+
+        self.assertEqual(value["plan_type"], "free")
+
     def test_parser_exposes_codex_credits_without_reset_ids(self):
         output = json.dumps({
             "id": 3,

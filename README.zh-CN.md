@@ -22,11 +22,11 @@ EMP 在本机运行，主要解决两件事：
 
 | Codex 中显示的模型 | 请求发送到哪里 |
 | --- | --- |
-| `gpt-5.6-luna` | 当前 Codex 登录账号 |
-| `team/gpt-5.6-luna` | 导入的 ChatGPT 订阅账号 |
+| `gpt-6-luna` | 当前 Codex 登录账号 |
+| `team/gpt-6-luna` | 导入的 ChatGPT 订阅账号 |
 | `deepseek/deepseek-v4-pro` | 从 DeepSeek 官方 API 导入的模型 |
 
-带前缀的名称只是示例；账号、Provider 和模型由你选择。选中 `team/gpt-5.6-luna`
+带前缀的名称只是示例；账号、Provider 和模型由你选择。选中 `team/gpt-6-luna`
 时使用导入的账号，选中 `deepseek/deepseek-v4-pro` 时使用 DeepSeek API Key。编码任务、
 权限和工具仍由 Codex 管理。EMP 在本机统一管理模型列表、加密凭据和账号额度。
 
@@ -39,7 +39,7 @@ EMP 在本机运行，主要解决两件事：
 
 - 在同一个 Codex 模型选择器中使用原生模型、其他 ChatGPT Subscription 和
   外部 API 模型。
-- 使用 `team/gpt-5.6-luna`、`provider/model` 等清晰前缀路由模型。
+- 使用 `team/gpt-6-luna`、`provider/model` 等清晰前缀路由模型。
 - 导入多个 Codex Subscription 账户并刷新可用额度信息。
 - 通过 Web UI 添加官方或自建 Provider。
 - 拉取 Provider 模型，自由选择导入模型，修改上下文窗口，执行测试并隐藏
@@ -86,7 +86,7 @@ EMP 把持久运行的 Codex App Server 视为外部所有者管理的共享后�
 已经热加载。Linux 同时支持扫描当前 `CODEX_HOME/plugins/.plugin-appserver/codex`，
 其他 AppImage 或发行版的安装布局仍需单独验证。
 
-EMP 支持 Codex CLI `0.149.x` 至 `0.155.x`，推荐使用 `0.155.0`。Web UI 会显示
+EMP 支持 Codex CLI `0.149.x` 至 `0.156.x`，推荐使用 `0.156.1`。Web UI 会显示
 当前安装版本；更高版本会标记为“尚未验证”，更旧版本会标记为“不再支持”。
 
 已在 runtime `0.153.4` 上验证 Gemini 3.7 Flash、3.8 Flash 的子任务委派、
@@ -220,8 +220,8 @@ Codex”。至少保留一个可见模型，显示名称不会改变模型 ID。
 
 使用 ChatGPT 登录时，名称、隐藏状态和新增模型可在 Codex 运行期间自动更新。
 EMP 会通过 Responses HTTP 和 WebSocket 通知模型目录版本变化，Codex 可在后续
-请求时拉取更新。Codex 0.155.0 也会约每 4.5 分钟定期刷新；空闲 App 菜单不保证
-保存后立即更新，刷新后可重新打开模型菜单查看。
+请求时拉取更新。Codex 0.156.1 的原生模型菜单包含 GPT-6 Sol 和 GPT-6 Luna；
+新增模型未立即出现时，可在目录刷新后重新打开模型菜单查看。
 从旧版静态目录升级，或修改 Codex 的 Base URL 后，需要重启 Codex 一次。
 没有 ChatGPT 模型发现能力的客户端继续使用静态目录。
 回退至 EMP 0.9.91 或更早版本前，请先恢复原生 Codex。
