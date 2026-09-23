@@ -215,6 +215,33 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("shown", slugs)
         self.assertNotIn("hidden-by-user", slugs)
         self.assertIn("codex-auto-review", slugs)
+
+    def test_selected_subscription_supplies_hidden_auto_review_model(self):
+        from easy_multi_provider.route_plan import SUBSCRIPTION_ACCOUNT, resolve_route
+
+        with tempfile.TemporaryDirectory() as directory:
+            native_path = Path(directory) / "native.json"
+            native_path.write_text(json.dumps({"models": [
+                {"slug": "gpt-main", "visibility": "list"},
+                {"slug": "codex-auto-review", "visibility": "hide"},
+            ]}), encoding="utf-8")
+            config = normalize({
+                "native_catalog_path": str(native_path),
+                "accounts": [{"id": "backup", "prefix": "reserve", "auth_file": str(Path(directory) / "backup.enc")}],
+                "auto_review_account_id": "backup",
+                "providers": [{"id": "external", "base_url": "https://example.test/v1"}],
+                "models": [{"id": "external/model", "provider": "external", "upstream_id": "model"}],
+            })
+            models = {item["slug"]: item for item in build_catalog(config)["models"]}
+            self.assertEqual(models["gpt-main"]["auto_review_model_override"], "reserve/codex-auto-review")
+            self.assertEqual(models["reserve/gpt-main"]["auto_review_model_override"], "reserve/codex-auto-review")
+            self.assertEqual(models["external/model"]["auto_review_model_override"], "reserve/codex-auto-review")
+            self.assertEqual(models["reserve/codex-auto-review"]["visibility"], "hide")
+            self.assertNotIn("codex-auto-review", [item["id"] for item in subscription_model_options(config, config["accounts"][0])])
+            self.assertEqual(resolve_route(config, "reserve/codex-auto-review").source, SUBSCRIPTION_ACCOUNT)
+            self.assertEqual(resolve_route(config, "reserve/codex-auto-review").upstream_model, "codex-auto-review")
+            disabled = normalize({**config, "accounts": [{**config["accounts"][0], "enabled": False}]})
+            self.assertNotIn("reserve/codex-auto-review", {item["slug"] for item in build_catalog(disabled)["models"]})
     def test_reasoning_summary_policy_never_fabricates_support(self):
         config = normalize(
             {

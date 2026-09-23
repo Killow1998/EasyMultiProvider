@@ -553,6 +553,26 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
                 alias["_emp_source_order"] = account_index
                 account_aliases.append(alias)
                 existing.add(alias["slug"])
+    review_account = next(
+        (
+            account for account in config.get("accounts", [])
+            if account.get("id") == config.get("auto_review_account_id")
+            and account.get("enabled", True)
+            and account.get("auth_file")
+            and account.get("credential_status") != "invalid"
+            and account.get("id") not in duplicate_accounts
+        ),
+        None,
+    )
+    review_route = ""
+    if review_account is not None:
+        review_model = subscription_route_model(config, "codex-auto-review", review_account)
+        if review_model is not None:
+            review_alias = _account_entry(review_account, review_model)
+            review_route = review_alias["slug"]
+            if review_route not in existing:
+                account_aliases.append(review_alias)
+                existing.add(review_route)
     providers_by_id = {
         str(provider.get("id")): provider
         for provider in config.get("providers", [])
@@ -603,6 +623,10 @@ def build_catalog(config: Dict[str, Any]) -> Dict[str, Any]:
         for entry in entries:
             external.append(entry)
     result = native_models + account_aliases + external
+    if review_route:
+        for entry in result:
+            if entry.get("slug") != review_route:
+                entry["auto_review_model_override"] = review_route
     family_release: Dict[str, int] = {}
     family_order: Dict[str, int] = {}
     family_verified: Dict[str, bool] = {}

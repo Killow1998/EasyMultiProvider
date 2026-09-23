@@ -1207,10 +1207,12 @@ class ServerAccountTests(unittest.TestCase):
             )
             auth_path = Path(account["auth_file"])
             self.assertTrue(auth_path.exists())
+            state.update({**state.management_snapshot(), "auto_review_account_id": "primary"})
             state.delete_account("primary")
             self.assertFalse(auth_path.exists())
             self.assertFalse(auth_path.parent.exists())
             self.assertEqual(state.config["accounts"], [])
+            self.assertEqual(state.config["auto_review_account_id"], "")
             self.assertTrue(config_path.exists())
 
     def test_web_config_update_keeps_api_key_out_of_config(self):

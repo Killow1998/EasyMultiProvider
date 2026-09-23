@@ -1339,6 +1339,20 @@ async function runtimeSettingsIsolationBehavior() {
   assert.strictEqual(getElement('codex_runtime_dirty').hidden, true);
 }
 
+async function autoReviewAccountBehavior() {
+  context.__savedReview = null;
+  run("state = {auto_review_account_id:'',subscription_search:{enabled:true,account_id:''},accounts:[{id:'backup',name:'Backup',prefix:'reserve',credential_set:true},{id:'disabled',name:'Disabled',enabled:false,credential_set:true}],providers:[],models:[]}; renderAutoReviewAccount()");
+  const select = getElement('auto_review_account');
+  assert.match(select.innerHTML, /value="backup">Backup/);
+  assert.doesNotMatch(select.innerHTML, /value="disabled"/);
+  assert.match(select.innerHTML, /Use Codex default account|使用 Codex 默认账号/);
+  run('persistState = async (message, candidate) => { __savedReview = candidate; state = candidate; }');
+  select.value = 'backup';
+  await run('saveAutoReviewAccount()');
+  assert.strictEqual(run('__savedReview.auto_review_account_id'), 'backup');
+  assert.strictEqual(run('__savedReview.subscription_search.enabled'), true);
+}
+
 async function initialRenderIsolationBehavior() {
   const calls = [];
   context.__initialLoadApi = async path => {
@@ -1403,6 +1417,7 @@ function updateBehavior() {
   await atomicStateBehavior();
   await accountSaveDoesNotWaitForCatalog();
   await runtimeSettingsIsolationBehavior();
+  await autoReviewAccountBehavior();
   await initialRenderIsolationBehavior();
   process.stdout.write("web DOM behavior: ok\n");
 })().catch(error => {

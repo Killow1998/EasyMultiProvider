@@ -2840,6 +2840,8 @@ class AppState:
 
             updated = dict(self.config)
             updated["accounts"] = [item for item in accounts if item.get("id") != account_id]
+            if updated.get("auto_review_account_id") == account_id:
+                updated["auto_review_account_id"] = ""
             search = dict(updated.get("subscription_search") or {})
             if search.get("account_id") == account_id:
                 search.update({"enabled": False, "account_id": ""})

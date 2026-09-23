@@ -134,6 +134,8 @@ def select_export_config(config: Dict[str, Any], groups: Any = None) -> Dict[str
         return "native" if "/" not in route or route in native_slugs else None
 
     result["accounts"] = result.get("accounts", []) if "subscriptions" in selected else []
+    if "subscriptions" not in selected:
+        result["auto_review_account_id"] = ""
     result["providers"] = [item for item in result.get("providers", []) if provider_groups[item["id"]] in selected]
     result["models"] = [item for item in result.get("models", []) if route_group(item["id"]) in selected]
     result["catalog_presentations"] = {route: value for route, value in result.get("catalog_presentations", {}).items()

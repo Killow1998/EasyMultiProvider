@@ -45,6 +45,23 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(missing["subscription_search"]["account_id"], "")
 
+    def test_auto_review_account_is_explicit_and_cannot_become_a_dangling_route(self):
+        account = {"id": "backup", "prefix": "reserve"}
+        value = normalize({"accounts": [account], "auto_review_account_id": "backup"})
+        self.assertEqual(value["auto_review_account_id"], "backup")
+        stale = public_config(value)
+        stale.pop("auto_review_account_id")
+        self.assertEqual(merge_web_update(value, stale)["auto_review_account_id"], "backup")
+        with self.assertRaisesRegex(ConfigError, "unknown account"):
+            normalize({"auto_review_account_id": "missing"})
+        with self.assertRaisesRegex(ConfigError, "explicit model route"):
+            normalize({
+                "accounts": [account],
+                "auto_review_account_id": "backup",
+                "providers": [self.provider],
+                "models": [{"id": "reserve/codex-auto-review", "provider": "deepseek"}],
+            })
+
     def setUp(self):
         self.provider = {
             "id": "deepseek",
