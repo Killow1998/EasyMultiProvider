@@ -151,7 +151,9 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
     }
     let quota = match query(&auth, false) {
         Ok(quota) => quota,
-        Err(error) if error.code() == "quota_auth_required" => {
+        Err(error)
+            if error.code() == "quota_auth_required" || error.should_retry_imported_refresh() =>
+        {
             let refreshed = read_auth()?;
             match query(&refreshed, true) {
                 Ok(quota) => quota,

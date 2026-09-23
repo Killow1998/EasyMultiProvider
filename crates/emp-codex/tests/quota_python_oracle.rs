@@ -254,6 +254,70 @@ json.dump({
     assert_eq!(rust, python);
 }
 
+#[test]
+fn workspace_routing_retry_hint_matches_live_python_01110() {
+    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
+        eprintln!("skipping live Python 0.11.10 quota error oracle: EMP_PYTHON_INTEROP is unset");
+        return;
+    };
+    let oracle_dir = python_oracle_dir();
+    let cases = vec![
+        json!({"method":"account/read","error":{"message":"workspace routing discovery timed out"}}),
+        json!({"method":"account/read","error":{"message":"  WORKSPACE ROUTING DISCOVERY FAILED  "}}),
+        json!({"method":"account/read","error":{"message":"private backend detail"}}),
+        json!({"method":"account/rateLimits/read","error":{"message":"workspace routing discovery failed"}}),
+    ];
+    let rust = cases
+        .iter()
+        .map(|case| {
+            let error = quota_rpc_error(case["method"].as_str().unwrap(), &case["error"]);
+            json!({
+                "message":error.to_string(),
+                "code":error.code(),
+                "retry_imported_refresh":error.should_retry_imported_refresh(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let script = r#"
+import json, sys
+from easy_multi_provider import __version__
+assert __version__ == "0.11.10", __version__
+from easy_multi_provider.quota import _quota_rpc_error
+cases = json.load(sys.stdin)
+json.dump([
+    {"message":str(error), "code":error.code,
+     "retry_imported_refresh":error.retry_imported_refresh}
+    for error in (_quota_rpc_error(case["method"], case["error"]) for case in cases)
+], sys.stdout, separators=(",", ":"))
+"#;
+    let mut child = Command::new(python)
+        .arg("-c")
+        .arg(script)
+        .current_dir(&oracle_dir)
+        .env("PYTHONPATH", &oracle_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn current Python quota oracle");
+    child
+        .stdin
+        .take()
+        .expect("Python stdin")
+        .write_all(&serde_json::to_vec(&cases).expect("encode quota error cases"))
+        .expect("write quota error cases");
+    let output = child
+        .wait_with_output()
+        .expect("wait for current Python quota oracle");
+    assert!(
+        output.status.success(),
+        "Python quota error oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected: Value = serde_json::from_slice(&output.stdout).expect("Python error JSON");
+    assert_eq!(serde_json::to_value(rust).unwrap(), expected);
+}
+
 fn python_oracle_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("EMP_PYTHON_ORACLE_ROOT").map(PathBuf::from) {
         assert!(

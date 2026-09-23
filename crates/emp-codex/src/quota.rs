@@ -41,6 +41,7 @@ type PersistRotation<'a> = &'a mut dyn FnMut(&Value) -> Result<(), QuotaError>;
 pub struct QuotaError {
     message: String,
     code: &'static str,
+    retry_imported_refresh: bool,
 }
 
 impl QuotaError {
@@ -48,11 +49,21 @@ impl QuotaError {
         Self {
             message: message.into(),
             code,
+            retry_imported_refresh: false,
         }
+    }
+
+    fn with_imported_refresh_retry(mut self) -> Self {
+        self.retry_imported_refresh = true;
+        self
     }
 
     pub const fn code(&self) -> &'static str {
         self.code
+    }
+
+    pub const fn should_retry_imported_refresh(&self) -> bool {
+        self.retry_imported_refresh
     }
 }
 
@@ -279,6 +290,20 @@ pub fn quota_rpc_error(method: &str, error: &Value) -> QuotaError {
             "Codex quota queries are rate limited (429); try again later",
             "quota_rate_limited",
         );
+    }
+    if method == "account/read"
+        && [
+            "workspace routing discovery timed out",
+            "workspace routing discovery failed",
+        ]
+        .iter()
+        .any(|expected| message.trim().eq_ignore_ascii_case(expected))
+    {
+        return QuotaError::new(
+            "Codex could not reach ChatGPT workspace routing; check DNS, VPN/TUN, proxy, and network connectivity",
+            "quota_transport_error",
+        )
+        .with_imported_refresh_retry();
     }
     match method {
         "account/rateLimits/read"

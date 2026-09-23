@@ -152,7 +152,7 @@ fn embedded_index_matches_repository_bytes_exactly() {
 }
 
 #[test]
-fn embedded_index_matches_python_0119_release_bytes() {
+fn embedded_index_matches_current_python_release_bytes() {
     let python = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../EasyMultiProvider/easy_multi_provider/web/index.html");
     // CI checkouts may not include the adjacent oracle worktree; local

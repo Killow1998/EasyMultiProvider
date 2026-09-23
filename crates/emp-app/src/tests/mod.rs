@@ -57,6 +57,7 @@ mod config_api_contract;
 mod conversation_switch_contract;
 mod native_api_contract;
 mod performance_contract;
+mod quota_workspace_contract;
 
 fn canonical_root(directory: &TempDir) -> PathBuf {
     directory
