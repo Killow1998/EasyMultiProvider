@@ -16,8 +16,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use emp_state::WEB_SESSION_TOKEN_BYTES;
 use emp_state::WebSession;
-#[cfg(test)]
-use emp_state::config_path;
 use emp_state::load_or_create_web_session;
 use emp_state::web_session_path;
 use std::net::IpAddr;
@@ -66,11 +64,6 @@ struct UpdateStartupMarkers {
 }
 
 impl ServerHandle {
-    #[cfg(test)]
-    pub fn start(host: IpAddr, port: u16) -> Result<Self, AppError> {
-        Self::start_with_config(host, port, &config_path())
-    }
-
     #[cfg(test)]
     pub fn start_with_config(
         host: IpAddr,
