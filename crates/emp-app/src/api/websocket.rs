@@ -461,6 +461,7 @@ pub(crate) fn serve_responses_websocket(
                     continue;
                 }
                 let mut terminal = false;
+                let mut terminal_success = false;
                 let mut completed_id = None;
                 let mut projected_error = false;
                 while let Ok(Some(event)) = client.receive_json() {
@@ -495,6 +496,8 @@ pub(crate) fn serve_responses_websocket(
                         );
                     }
                     terminal = terminal_stream_event(&event);
+                    terminal_success =
+                        terminal && crate::services::context::outcome(&event) == Some(true);
                     if websocket.send_json(&event).is_err() {
                         return;
                     }
@@ -508,8 +511,10 @@ pub(crate) fn serve_responses_websocket(
                         .transport
                         .native_connections
                         .available(&route_key);
-                    last_native_response_id = completed_id;
-                    last_native_scope = request_scope;
+                    if terminal_success {
+                        last_native_response_id = completed_id;
+                        last_native_scope = request_scope;
+                    }
                     continue;
                 }
                 native_upstream = None;
