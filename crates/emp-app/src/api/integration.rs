@@ -57,7 +57,13 @@ pub(crate) fn management_integration_request(
         Err(_) => return unavailable(409),
     };
     if matches!(operation, "reload" | "verify") {
-        let result = match sync_runtime(state, None, confirmed, operation == "verify") {
+        let result = match sync_runtime(
+            state,
+            None,
+            confirmed,
+            operation == "verify",
+            operation == "reload",
+        ) {
             Ok(result) => result,
             Err(_) => return unavailable(409),
         };
@@ -171,6 +177,7 @@ pub(crate) fn management_integration_request(
             state,
             Some(if active { "emp" } else { "native" }),
             confirmed,
+            false,
             false,
         )
         .is_err()

@@ -250,6 +250,127 @@ class RustEndToEnd(unittest.TestCase):
                         backend.close()
                 self.assertEqual(results[0], results[1])
 
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "existing Codex Unix socket fixture")
+    def test_integration_reload_syncs_search_before_probe_and_verify_is_passive(self):
+        original = '# user preferences\nmodel = "native"\n[features]\nunified_exec = true\n'
+        results = []
+        with tempfile.TemporaryDirectory(prefix="emp-search-reload-") as temporary:
+            for name, command in [
+                ("python", [sys.executable, "-m", "easy_multi_provider"]),
+                ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+            ]:
+                backend = EmpProcess(command, self.upstream, Path(temporary) / name)
+                try:
+                    backend.codex_config.write_text(original)
+                    status, _, raw = backend.request("GET", "/api/config")
+                    self.assertEqual(status, 200, raw)
+                    config = json.loads(raw)
+                    config["port"] = backend.port
+                    config["subscription_search"] = {"enabled": True}
+                    status, _, raw = backend.request("POST", "/api/config", config)
+                    self.assertEqual(status, 200, raw)
+                    status, _, raw = backend.request(
+                        "POST", "/api/integration/enable", {"confirm_reload": True}
+                    )
+                    self.assertEqual(status, 200, raw)
+
+                    config = json.loads(backend.request("GET", "/api/config")[2])
+                    config["subscription_search"]["enabled"] = False
+                    status, _, raw = backend.request("POST", "/api/config", config)
+                    self.assertEqual(status, 200, raw)
+                    before_reload = tomlkit.parse(backend.codex_config.read_text())
+                    self.assertEqual(before_reload["web_search"], "live")
+                    self.assertTrue(before_reload["features"]["standalone_web_search"])
+
+                    status, _, raw = backend.request(
+                        "GET", "/v1/models?client_version=0.156.1"
+                    )
+                    self.assertEqual(status, 200, raw)
+                    models = [
+                        {
+                            "id": row["slug"],
+                            "displayName": row["display_name"],
+                            "description": row.get("description") or "",
+                        }
+                        for row in json.loads(raw)["models"]
+                    ]
+                    observations = []
+
+                    class ObservedPages(dict):
+                        def __getitem__(self, key):
+                            current = tomlkit.parse(backend.codex_config.read_text())
+                            observations.append(
+                                (
+                                    current.get("web_search"),
+                                    current.get("features", {}).get(
+                                        "standalone_web_search"
+                                    ),
+                                )
+                            )
+                            return super().__getitem__(key)
+
+                    pages = ObservedPages(
+                        {
+                            "": {"data": models[:1], "nextCursor": "next"},
+                            "next": {"data": models[1:]},
+                        }
+                    )
+                    with _UnixModelListServer(backend.codex_config.parent, pages) as control:
+                        status, _, raw = backend.request(
+                            "POST", "/api/integration/reload", {"confirm_reload": True}
+                        )
+                        self.assertEqual(status, 200, raw)
+                        reloaded = json.loads(raw)
+                    self.assertEqual(
+                        [row["method"] for row in control.requests],
+                        ["initialize", "initialized", "model/list", "model/list"],
+                    )
+                    self.assertTrue(observations)
+                    self.assertTrue(
+                        all(fields == (None, None) for fields in observations),
+                        "reload must reconcile search settings before probing Codex",
+                    )
+                    restored = tomlkit.parse(backend.codex_config.read_text())
+                    self.assertNotIn("web_search", restored)
+                    self.assertNotIn(
+                        "standalone_web_search", restored["features"]
+                    )
+                    self.assertTrue(restored["features"]["unified_exec"])
+
+                    restored["web_search"] = "external-edit"
+                    backend.codex_config.write_text(tomlkit.dumps(restored))
+                    before_verify = backend.codex_config.read_bytes()
+                    control_socket = (
+                        backend.codex_config.parent
+                        / "app-server-control"
+                        / "app-server-control.sock"
+                    )
+                    control_socket.unlink(missing_ok=True)
+                    control_socket.parent.rmdir()
+                    with _UnixModelListServer(backend.codex_config.parent, pages):
+                        status, _, raw = backend.request(
+                            "POST", "/api/integration/verify", {}
+                        )
+                        self.assertEqual(status, 200, raw)
+                    self.assertEqual(
+                        backend.codex_config.read_bytes(),
+                        before_verify,
+                        "verify is passive and must not repair external Codex edits",
+                    )
+                    verified_config = tomlkit.parse(backend.codex_config.read_text())
+                    results.append(
+                        (
+                            reloaded["configuration"]["state"],
+                            tuple(observations),
+                            restored.get("web_search"),
+                            restored["features"].get("standalone_web_search"),
+                            verified_config.get("web_search"),
+                        )
+                    )
+                finally:
+                    backend.close()
+            self.assertEqual(results[0], results[1])
+
     def test_command_help_matches_python(self):
         source = "import sys; sys.argv[0]='EMP'; from easy_multi_provider.main import main; raise SystemExit(main())"
         for arguments in (["--help"], ["serve", "--help"], ["doctor", "--help"], ["restore", "--help"], ["--version"]):

@@ -77,6 +77,7 @@ pub(crate) fn sync_runtime(
     intent: Option<&str>,
     confirmed: bool,
     verify: bool,
+    reconcile_search: bool,
 ) -> Result<RuntimeSyncResult, String> {
     let integration = &state.backend.integration;
     let status = integration
@@ -136,6 +137,15 @@ pub(crate) fn sync_runtime(
         }
         (data.intent.clone(), data.expected.clone())
     };
+    if reconcile_search {
+        let search_result = if target == "emp" {
+            let enabled = config["subscription_search"]["enabled"] == true;
+            integration.search.apply(enabled)
+        } else {
+            integration.search.restore()
+        };
+        search_result.map_err(|_| "integration state is unavailable".to_owned())?;
+    }
     let result = if !verify && !confirmed {
         RuntimeSyncResult::new(
             "reload_required",

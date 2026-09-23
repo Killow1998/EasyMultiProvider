@@ -68,7 +68,7 @@ pub(crate) fn reconcile(state: &ServerState) -> Result<(), ()> {
                 return Err(());
             }
             mark_pending(state, "emp", "EMP configuration applied")?;
-            crate::services::runtime::sync_runtime(state, Some("emp"), false, false)
+            crate::services::runtime::sync_runtime(state, Some("emp"), false, false, false)
                 .map_err(|_| ())?;
         }
     }
