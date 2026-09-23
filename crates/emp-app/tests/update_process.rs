@@ -1,5 +1,6 @@
 #![cfg(target_os = "linux")]
 
+use emp_state::VaultStore;
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -286,6 +287,9 @@ fn start_emp(
     ChildGuard,
     BufReader<std::process::ChildStdout>,
 ) {
+    let reservation = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = reservation.local_addr().unwrap().port().to_string();
+    drop(reservation);
     let mut command = Command::new(executable);
     command
         .args([
@@ -295,7 +299,7 @@ fn start_emp(
             "--host",
             "127.0.0.1",
             "--port",
-            "0",
+            &port,
         ])
         .env("EMP_UPDATE_TEST_REPOSITORY_URL", repository)
         .env("EMP_UPDATE_TEST_API_URL", api)
@@ -425,6 +429,8 @@ struct RunningEmp {
     original_executable: Vec<u8>,
     config: std::path::PathBuf,
     original_config: Vec<u8>,
+    account_auth: std::path::PathBuf,
+    original_account_auth: Vec<u8>,
     _stdout: BufReader<std::process::ChildStdout>,
 }
 
@@ -461,8 +467,30 @@ fn start_authenticated_emp_with_api(
         .unwrap();
     std::fs::rename(&staged_executable, &executable).unwrap();
     let config = root.join("config.json");
-    let original_config = br#"{"native_catalog_path":"/synthetic/codex/models_cache.json","providers":[],"preserved":"through update"}"#.to_vec();
+    let account_store = root.join("state/accounts");
+    let account_auth = account_store.join("update-fixture/auth.json.enc");
+    let original_config = serde_json::to_vec(&serde_json::json!({
+        "native_catalog_path":"/synthetic/codex/models_cache.json",
+        "providers":[],
+        "preserved":"through update",
+        "account_store_path":account_store,
+        "accounts":[{
+            "id":"update-fixture",
+            "name":"Update fixture",
+            "prefix":"fixture",
+            "auth_file":account_auth,
+        }],
+    }))
+    .unwrap();
     std::fs::write(&config, &original_config).unwrap();
+    let vault = VaultStore::from_sources(None, &root.join("state/master.key")).unwrap();
+    vault
+        .write_encrypted_json(
+            &account_auth,
+            &serde_json::json!({"tokens":{"access_token":"update-fixture-token"}}),
+        )
+        .unwrap();
+    let original_account_auth = std::fs::read(&account_auth).unwrap();
     let pid_file = root.join("candidate.pid");
     let (port, bootstrap, process, stdout) = start_emp(
         &config,
@@ -488,6 +516,8 @@ fn start_authenticated_emp_with_api(
         original_executable,
         config,
         original_config,
+        account_auth,
+        original_account_auth,
         _stdout: stdout,
     }
 }
@@ -533,6 +563,9 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
 
     let gate_deadline = Instant::now() + Duration::from_secs(10);
     let mut observed_closed_gate = false;
+    let mut delete_during_update = None;
+    let mut config_during_update = None;
+    let mut auth_during_update = None;
     while Instant::now() < gate_deadline && emp.process.0.try_wait().unwrap().is_none() {
         let snapshot = body_json(&request(
             emp.port,
@@ -552,6 +585,31 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
             match status(&quit) {
                 503 => {
                     observed_closed_gate = true;
+                    let update_request = request(
+                        emp.port,
+                        "POST",
+                        "/api/updates/check",
+                        Some(&emp.cookie),
+                        Some(b"{}"),
+                    );
+                    assert_eq!(
+                        status(&update_request),
+                        202,
+                        "updater endpoints remain available while ordinary mutations drain"
+                    );
+                    assert!(matches!(
+                        body_json(&update_request)["state"].as_str(),
+                        Some("waiting" | "installing")
+                    ));
+                    delete_during_update = Some(request(
+                        emp.port,
+                        "DELETE",
+                        "/api/accounts/update-fixture",
+                        Some(&emp.cookie),
+                        None,
+                    ));
+                    config_during_update = Some(std::fs::read(&emp.config).unwrap());
+                    auth_during_update = Some(std::fs::read(&emp.account_auth).unwrap());
                     break;
                 }
                 409 => {}
@@ -589,11 +647,6 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         assert!(Instant::now() < deadline, "candidate did not start");
         thread::sleep(Duration::from_millis(25));
     };
-    assert_eq!(std::fs::read(&emp.config).unwrap(), emp.original_config);
-    assert_eq!(
-        std::fs::read(&emp.executable).unwrap(),
-        std::fs::read(temp.path().join("stage/EMP/EMP")).unwrap()
-    );
     assert!(
         Command::new("kill")
             .args(["-TERM", &candidate_pid.to_string()])
@@ -612,6 +665,31 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
     release_server
         .join()
         .expect("fake release server completed");
+    let delete = delete_during_update.expect("DELETE was attempted with the gate closed");
+    assert_eq!(
+        status(&delete),
+        503,
+        "account DELETE is rejected while installation drains requests"
+    );
+    assert_eq!(
+        config_during_update.expect("capture config during drain"),
+        emp.original_config,
+        "a rejected DELETE leaves configuration bytes unchanged"
+    );
+    assert_eq!(
+        auth_during_update.expect("capture encrypted auth during drain"),
+        emp.original_account_auth,
+        "a rejected DELETE leaves encrypted credentials unchanged"
+    );
+    assert_eq!(std::fs::read(&emp.config).unwrap(), emp.original_config);
+    assert_eq!(
+        std::fs::read(&emp.account_auth).unwrap(),
+        emp.original_account_auth
+    );
+    assert_eq!(
+        std::fs::read(&emp.executable).unwrap(),
+        std::fs::read(temp.path().join("stage/EMP/EMP")).unwrap()
+    );
 }
 
 #[test]
@@ -816,6 +894,24 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
         "worker_failed",
         Duration::from_secs(10),
     );
+    let delete = request(
+        emp.port,
+        "DELETE",
+        "/api/accounts/update-fixture",
+        Some(&emp.cookie),
+        None,
+    );
+    assert_eq!(
+        status(&delete),
+        200,
+        "DELETE resumes after worker failure: {}",
+        String::from_utf8_lossy(&delete)
+    );
+    assert_eq!(body_json(&delete)["status"], "ok");
+    assert!(!emp.account_auth.exists(), "successful DELETE removes auth");
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&emp.config).unwrap()).unwrap();
+    assert_eq!(config["accounts"], serde_json::json!([]));
     let quit = request(
         emp.port,
         "POST",

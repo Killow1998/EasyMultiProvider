@@ -70,12 +70,14 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     };
     let path = request.raw_path();
     let update_request = path.starts_with("/api/updates/");
-    let permit = if request.method == RequestMethod::Post && !update_request {
+    let gated_mutation = (request.method == RequestMethod::Post && !update_request)
+        || request.method == RequestMethod::Delete;
+    let permit = if gated_mutation {
         state.updates.enter()
     } else {
         None
     };
-    let response = if request.method == RequestMethod::Post && !update_request && permit.is_none() {
+    let response = if gated_mutation && permit.is_none() {
         Some(json_error_response(
             503,
             status_text(503),
