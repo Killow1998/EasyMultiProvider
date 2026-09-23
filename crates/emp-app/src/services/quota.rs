@@ -5,7 +5,7 @@ use crate::services::accounts::account_public_snapshot;
 use crate::services::accounts::native_account_snapshot;
 use crate::services::accounts::native_auth_document;
 use crate::services::accounts::regular_file;
-use crate::services::accounts::{notify_quota_update, quota_owner_key};
+use crate::services::accounts::{notify_quota_update, quota_owner_key, quota_refresh_lock};
 use crate::util::system_now;
 use emp_codex::quota::QuotaError;
 use emp_codex::quota::consume_native_quota_reset;
@@ -355,15 +355,8 @@ pub(crate) fn refresh_account_serialized(
     state: &ServerState,
     account_id: &str,
 ) -> Result<Value, QuotaError> {
-    let refresh_lock = state
-        .backend
-        .accounts
-        .quota_refresh_locks
-        .lock()
-        .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?
-        .entry(account_id.to_owned())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone();
+    let refresh_lock = quota_refresh_lock(state, account_id)
+        .ok_or_else(|| QuotaError::new("Codex account quota check failed", "quota_error"))?;
     let _guard = refresh_lock
         .lock()
         .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?;

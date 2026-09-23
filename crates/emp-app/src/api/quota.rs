@@ -11,14 +11,13 @@ use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::http::response::unauthorized_response;
+use crate::services::accounts::quota_refresh_lock;
 use crate::services::quota::consume_quota_reset_for_account;
 use crate::services::quota::refresh_account_by_id;
 use crate::util::system_now;
 use serde_json::Value;
 use std::io::Write;
 use std::net::TcpStream;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -173,13 +172,9 @@ pub(crate) fn management_quota_request(
             &[],
         );
     }
-    let refresh_lock = match state.backend.accounts.quota_refresh_locks.lock() {
-        Ok(mut locks) => Arc::clone(
-            locks
-                .entry(account.clone())
-                .or_insert_with(|| Arc::new(Mutex::new(()))),
-        ),
-        Err(_) => {
+    let refresh_lock = match quota_refresh_lock(state, &account) {
+        Some(lock) => lock,
+        None => {
             return json_error_response(500, status_text(500), "internal server error", None, &[]);
         }
     };

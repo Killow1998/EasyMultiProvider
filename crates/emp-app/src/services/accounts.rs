@@ -241,6 +241,11 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
 }
 
 pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Result<(), String> {
+    let refresh_lock =
+        quota_refresh_lock(state, account_id).ok_or_else(|| "internal server error".to_owned())?;
+    let _refresh_guard = refresh_lock
+        .lock()
+        .map_err(|_| "internal server error".to_owned())?;
     let current = state
         .backend
         .configuration
@@ -472,3 +477,16 @@ pub(crate) fn notify_quota_update(state: &ServerState, account_id: &str, error: 
         state.backend.accounts.quota_condition.notify_all();
     }
 }
+
+pub(crate) fn quota_refresh_lock(state: &ServerState, account_id: &str) -> Option<Arc<Mutex<()>>> {
+    let mut locks = state.backend.accounts.quota_refresh_locks.lock().ok()?;
+    Some(Arc::clone(
+        locks
+            .entry(account_id.to_owned())
+            .or_insert_with(|| Arc::new(Mutex::new(()))),
+    ))
+}
+
+#[cfg(test)]
+#[path = "accounts_delete_quota_race.rs"]
+mod delete_quota_race;
