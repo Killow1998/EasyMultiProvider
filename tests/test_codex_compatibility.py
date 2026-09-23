@@ -61,15 +61,17 @@ class CodexCompatibilityTests(unittest.TestCase):
             ("codex-cli 0.153.4", "0.153.4", "supported"),
             ("codex-cli 0.153.4+vendor.1", "0.153.4+vendor.1", "supported"),
             ("codex-cli 0.154.0", "0.154.0", "supported"),
-            ("codex-cli 0.155.0", "0.155.0", "recommended"),
+            ("codex-cli 0.155.0", "0.155.0", "supported"),
+            ("codex-cli 0.156.0", "0.156.0", "supported"),
+            ("codex-cli 0.156.1", "0.156.1", "recommended"),
         )
         for output, installed, status in cases:
             with self.subTest(output=output):
                 public = classify_codex_version(output).public()
                 self.assertEqual(public["installed"], installed)
                 self.assertEqual(public["status"], status)
-                self.assertEqual(public["supported_range"], "0.149.x–0.155.x")
-                self.assertEqual(public["recommended"], "0.155.0")
+                self.assertEqual(public["supported_range"], "0.149.x–0.156.x")
+                self.assertEqual(public["recommended"], "0.156.1")
                 self.assertEqual(
                     set(public),
                     {"installed", "status", "supported_range", "recommended"},
@@ -79,7 +81,7 @@ class CodexCompatibilityTests(unittest.TestCase):
         cases = (
             ("codex-cli 0.148.9", "unsupported"),
             ("codex-cli 0.131.0-alpha.9", "unsupported"),
-            ("codex-cli 0.156.0", "unverified"),
+            ("codex-cli 0.157.0", "unverified"),
             ("codex-cli 1.0.0", "unverified"),
             ("codex-cli 0.152.0-rc.1", "unverified"),
             ("not a version", "unknown"),

@@ -169,7 +169,7 @@ fn version_output_matches_the_existing_cli() {
         .output()
         .expect("run EMP --version");
     assert!(output.status.success());
-    assert_eq!(output.stdout, b"EMP 0.11.9\n");
+    assert_eq!(output.stdout, b"EMP 0.11.10\n");
     assert!(output.stderr.is_empty());
 }
 

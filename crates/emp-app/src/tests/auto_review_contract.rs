@@ -20,7 +20,7 @@ import json, os, sys
 root = os.environ["EMP_PYTHON_ORACLE_ROOT"]
 sys.path.insert(0, root)
 import easy_multi_provider
-assert easy_multi_provider.__version__ == "0.11.9", easy_multi_provider.__version__
+assert easy_multi_provider.__version__ == "0.11.10", easy_multi_provider.__version__
 from easy_multi_provider.auto_review import automatic_review_candidates
 from easy_multi_provider.route_plan import resolve_route
 payload = json.load(sys.stdin)
@@ -52,7 +52,7 @@ json.dump({"version": easy_multi_provider.__version__, "results": results}, sys.
 
 fn run_python_oracle(cases: &[Value]) -> Value {
     let python = std::env::var("EMP_PYTHON_INTEROP")
-        .expect("EMP_PYTHON_INTEROP must point at the official 0.11.9 venv");
+        .expect("EMP_PYTHON_INTEROP must point at the official 0.11.10 venv");
     let root = std::env::var("EMP_PYTHON_ORACLE_ROOT")
         .expect("EMP_PYTHON_ORACLE_ROOT must point at the official oracle");
     assert!(
@@ -259,7 +259,7 @@ fn set_cooldowns(server: &ServerHandle, cooldowns: &Value) {
 }
 
 #[test]
-fn selector_and_route_match_live_python_0119() {
+fn selector_and_route_match_live_python_01110() {
     let base_url = "http://127.0.0.1:9/v1";
     let accounts = vec![
         json!({"id":"high","name":"High","prefix":"current","enabled":true,"quota":{"rate_limits":{"primary":{"usedPercent":10}}}}),
@@ -296,7 +296,7 @@ fn selector_and_route_match_live_python_0119() {
         json!({"config":{"native_catalog_path":base_config["native_catalog_path"],"providers":base_config["providers"],"models":[{"id":"codex-auto-review","provider":"fallback","upstream_id":"ordinary-review","enabled":true}],"accounts":[]},"native_available":false,"cooldowns":{},"requested_model":"codex-auto-review"}),
     ];
     let oracle = run_python_oracle(&cases);
-    assert_eq!(oracle["version"], "0.11.9");
+    assert_eq!(oracle["version"], "0.11.10");
 
     for (index, case) in cases.iter().enumerate() {
         let case_config = case["config"].clone();

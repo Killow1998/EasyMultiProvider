@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/Killow1998/EasyMultiProvider/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/Killow1998/EasyMultiProvider"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/Killow1998/EasyMultiProvider"></a>
-  <img alt="Codex CLI 0.149.x–0.155.x" src="https://img.shields.io/badge/Codex%20CLI-0.149.x--0.155.x-blue">
+  <img alt="Codex CLI 0.149.x–0.156.x" src="https://img.shields.io/badge/Codex%20CLI-0.149.x--0.156.x-blue">
   <img alt="Windows Linux macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey">
 </p>
 
@@ -153,9 +153,9 @@ The catalog display and EMP request checks use the same effective window.
 
 ## Codex compatibility
 
-The current source version is **v0.11.6**.
+The current source version is **v0.11.10**.
 
-EMP supports Codex CLI **0.149.x through 0.155.x**; **0.155.0 is recommended**.
+EMP supports Codex CLI **0.149.x through 0.156.x**; **0.156.1 is recommended**.
 
 On the first integration-status load, EMP performs a bounded scan of known locations for:
 

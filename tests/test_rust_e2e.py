@@ -131,7 +131,7 @@ class RustEndToEnd(unittest.TestCase):
                 self.assertNotIn(b"e2e-native-token", raw)
                 config = json.loads(raw)
                 self.assertEqual(len(config["models"]), 4)
-                self.assertEqual(config["emp_version"], "0.11.6")
+                self.assertEqual(config["emp_version"], "0.11.10")
 
     def test_existing_service_rejects_a_second_python_or_rust_owner(self):
         for owner in self.backends:

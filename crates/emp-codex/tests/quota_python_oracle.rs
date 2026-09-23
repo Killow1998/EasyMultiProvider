@@ -178,7 +178,7 @@ fn quota_projection_matches_live_python_oracle_when_configured() {
 import json, sys
 from unittest.mock import patch
 from easy_multi_provider import __version__
-assert __version__ == '0.11.9', __version__
+assert __version__ == '0.11.10', __version__
 from easy_multi_provider.quota import QuotaError, _quota_rpc_error, _reset_outcome, _validated_reset_idempotency_key, parse_app_server_output
 
 fixture = json.load(sys.stdin)
@@ -329,7 +329,7 @@ fn python_oracle_dir() -> PathBuf {
     let sibling = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../EasyMultiProvider");
     assert!(
         sibling.join("easy_multi_provider/quota.py").is_file(),
-        "set EMP_PYTHON_ORACLE_ROOT to the Python 0.11.9 checkout"
+        "set EMP_PYTHON_ORACLE_ROOT to the Python 0.11.10 checkout"
     );
     sibling
 }

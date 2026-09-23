@@ -263,7 +263,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from unittest.mock import patch
 from easy_multi_provider import server
 from easy_multi_provider import __version__
-assert __version__ == '0.11.9', __version__
+assert __version__ == '0.11.10', __version__
 from easy_multi_provider import router
 
 fixture = json.load(sys.stdin)
@@ -333,7 +333,7 @@ fn python_oracle_dir() -> PathBuf {
     let sibling = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../EasyMultiProvider");
     assert!(
         sibling.join("easy_multi_provider/server.py").is_file(),
-        "set EMP_PYTHON_ORACLE_ROOT to the Python 0.11.9 checkout"
+        "set EMP_PYTHON_ORACLE_ROOT to the Python 0.11.10 checkout"
     );
     sibling
 }
@@ -430,7 +430,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from easy_multi_provider import server
 from easy_multi_provider import __version__
-assert __version__ == '0.11.9', __version__
+assert __version__ == '0.11.10', __version__
 
 fixture = json.load(sys.stdin)
 state = server.AppState.__new__(server.AppState)

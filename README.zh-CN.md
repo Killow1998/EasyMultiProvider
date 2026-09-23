@@ -30,7 +30,7 @@ EMP 在本机运行，主要解决两件事：
 时使用导入的账号，选中 `deepseek/deepseek-v4-pro` 时使用 DeepSeek API Key。编码任务、
 权限和工具仍由 Codex 管理。EMP 在本机统一管理模型列表、加密凭据和账号额度。
 
-当前源码版本为 `v0.11.6`。
+当前源码版本为 `v0.11.10`。
 
 ## 功能
 
@@ -86,7 +86,7 @@ EMP 把持久运行的 Codex App Server 视为外部所有者管理的共享后�
 已经热加载。Linux 同时支持扫描当前 `CODEX_HOME/plugins/.plugin-appserver/codex`，
 其他 AppImage 或发行版的安装布局仍需单独验证。
 
-EMP 支持 Codex CLI `0.149.x` 至 `0.155.x`，推荐使用 `0.155.0`。Web UI 会显示
+EMP 支持 Codex CLI `0.149.x` 至 `0.156.x`，推荐使用 `0.156.1`。Web UI 会显示
 当前安装版本；更高版本会标记为“尚未验证”，更旧版本会标记为“不再支持”。
 
 已在 runtime `0.153.4` 上验证 Gemini 3.7 Flash、3.8 Flash 的子任务委派、

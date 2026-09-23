@@ -153,7 +153,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn codex_0156_and_0157_boundaries_match_python_0119() {
+    fn codex_0156_and_0157_boundaries_match_python_01110() {
         for (output, installed, status) in [
             ("codex-cli 0.156.0", "0.156.0", "supported"),
             ("codex-cli 0.156.1", "0.156.1", "recommended"),
