@@ -366,6 +366,11 @@ pub fn parse_app_server_output_at(output: &str, observed_at: u64) -> Result<Valu
         .and_then(Value::as_str)
         .or_else(|| rate_limits.get("planType").and_then(Value::as_str))
         .map_or(Value::Null, |value| Value::String(value.to_owned()));
+    let plan_type = if has_thirty_day_quota_window(&buckets) {
+        Value::String("free".to_owned())
+    } else {
+        plan_type
+    };
     Ok(json!({
         "account_label": mask_email(account.get("email")),
         "plan_type": plan_type,
@@ -374,6 +379,28 @@ pub fn parse_app_server_output_at(output: &str, observed_at: u64) -> Result<Valu
         "credits": safe_credit_snapshot(&rate_limits, &rate_limits_result),
         "updated_at": observed_at,
     }))
+}
+
+fn has_thirty_day_quota_window(buckets: &Map<String, Value>) -> bool {
+    buckets.values().any(|bucket| {
+        let Some(bucket) = bucket.as_object() else {
+            return false;
+        };
+        ["primary", "secondary"].into_iter().any(|name| {
+            let Some(window) = bucket.get(name).and_then(Value::as_object) else {
+                return false;
+            };
+            let duration = window
+                .get("windowDurationMins")
+                .or_else(|| window.get("window_duration_mins"))
+                .or_else(|| window.get("window_minutes"));
+            duration.is_some_and(|duration| {
+                duration.as_i64() == Some(43_200)
+                    || duration.as_u64() == Some(43_200)
+                    || duration.as_f64() == Some(43_200.0)
+            })
+        })
+    })
 }
 
 /// Return the allowlisted reset outcome for one idempotent reset request.

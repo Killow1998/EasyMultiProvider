@@ -626,13 +626,9 @@ fn native_and_imported_quota_refresh_cross_the_management_boundary() {
     )
     .expect("write config");
 
-    let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("target");
-    std::fs::create_dir_all(&target).expect("create target directory");
     let executable_root = tempfile::Builder::new()
         .prefix("emp-fake-codex-")
-        .tempdir_in(target)
+        .tempdir_in(env!("CARGO_MANIFEST_DIR"))
         .expect("fake Codex directory");
     let executable = executable_root.path().join("codex");
     std::fs::write(
@@ -665,7 +661,18 @@ for line in sys.stdin:
                 auth = json.loads((home / "auth.json").read_text())
                 auth["tokens"]["access_token"] = "isolated-rotation"
                 (home / "auth.json").write_text(json.dumps(auth))
-            print(json.dumps({"id": request["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": used, "windowDurationMins": 300}}}}), flush=True)
+            buckets = {"codex": {
+                "limitId": "codex",
+                "primary": {"usedPercent": used, "windowDurationMins": 300, "resetsAt": 123},
+                "secondary": {"usedPercent": 40, "windowDurationMins": 10080, "resetsAt": 456},
+            }}
+            if started == "imported-rotated":
+                buckets["free"] = {"primary": {"usedPercent": 12, "windowDurationMins": 43200, "resetsAt": 789}}
+            result = {
+                "rateLimitsByLimitId": buckets,
+                "rateLimitResetCredits": {"availableCount": 2, "credits": [{"id": "opaque-reset-id", "status": "available", "expiresAt": 1000, "title": "Full reset"}]},
+            }
+            print(json.dumps({"id": request["id"], "result": result}), flush=True)
     elif method == "account/rateLimitResetCredit/consume":
         assert request["params"] == {"idempotencyKey": "12345678-1234-4123-8123-123456789abc"}
         print(json.dumps({"id": request["id"], "result": {"outcome": "reset"}}), flush=True)
@@ -722,6 +729,28 @@ for line in sys.stdin:
     assert_eq!(before["native_account"]["credential_set"], true);
     assert_eq!(before["native_account"]["quota"], Value::Null);
 
+    let unauthorized = post(&server, "/api/accounts/%40native/quota", b"{}", &[]);
+    assert!(
+        unauthorized.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
+        "{unauthorized}"
+    );
+    let unknown = post(&server, "/api/accounts/missing/quota", b"{}", &[&cookie]);
+    assert!(
+        unknown.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+        "{unknown}"
+    );
+    let unknown: Value = serde_json::from_str(
+        unknown
+            .split_once("\r\n\r\n")
+            .expect("response separator")
+            .1,
+    )
+    .expect("unknown account error");
+    assert_eq!(
+        unknown,
+        json!({"error":{"code":"quota_error","message":"unknown account: missing"}})
+    );
+
     let refreshed = post(&server, "/api/accounts/%40native/quota", b"{}", &[&cookie]);
     assert!(refreshed.starts_with("HTTP/1.1 200 OK\r\n"), "{refreshed}");
     let refreshed: Value = serde_json::from_str(
@@ -736,6 +765,19 @@ for line in sys.stdin:
         refreshed["account"]["quota"]["rate_limits"]["primary"]["usedPercent"],
         7
     );
+    assert_eq!(
+        refreshed["account"]["quota"]["rate_limits"]["primary"]["windowDurationMins"],
+        300
+    );
+    assert_eq!(
+        refreshed["account"]["quota"]["rate_limits"]["secondary"]["windowDurationMins"],
+        10080
+    );
+    assert_eq!(
+        refreshed["account"]["quota"]["credits"]["reset_credits"]["available_count"],
+        2
+    );
+    assert!(!refreshed.to_string().contains("opaque-reset-id"));
     assert_eq!(
         std::fs::read(&auth_path).expect("native auth after refresh"),
         original_auth,
@@ -759,6 +801,11 @@ for line in sys.stdin:
     assert_eq!(reset["outcome"], "reset");
     assert_eq!(reset["account"]["quota"]["plan_type"], "pro");
     assert_eq!(reset["refresh_error"], Value::Null);
+    assert_eq!(
+        reset["account"]["quota"]["credits"]["reset_credits"]["credits"][0]["title"],
+        "Full reset"
+    );
+    assert!(!reset.to_string().contains("opaque-reset-id"));
 
     let invalid_reset = post(
         &server,
@@ -786,6 +833,15 @@ for line in sys.stdin:
         imported["account"]["quota"]["rate_limits"]["primary"]["usedPercent"],
         11
     );
+    assert_eq!(imported["account"]["quota"]["plan_type"], "free");
+    assert_eq!(
+        imported["account"]["quota"]["rate_limits"]["secondary"]["windowDurationMins"],
+        10080
+    );
+    assert_eq!(
+        imported["account"]["quota"]["rate_limits_by_limit_id"]["free"]["primary"]["windowDurationMins"],
+        43200
+    );
     let persisted_auth = server
         .state
         .backend
@@ -796,6 +852,31 @@ for line in sys.stdin:
     assert_eq!(
         persisted_auth["tokens"]["access_token"], "imported-rotated",
         "a rotation completed before the first 401 must be reused by the retry"
+    );
+
+    let imported_reset = post(
+        &server,
+        "/api/accounts/egg/quota-reset",
+        &reset_body,
+        &[&cookie],
+    );
+    assert!(
+        imported_reset.starts_with("HTTP/1.1 200 OK\r\n"),
+        "{imported_reset}"
+    );
+    let imported_reset: Value = serde_json::from_str(
+        imported_reset
+            .split_once("\r\n\r\n")
+            .expect("response separator")
+            .1,
+    )
+    .expect("imported reset response");
+    assert_eq!(imported_reset["outcome"], "reset");
+    assert_eq!(imported_reset["refresh_error"], Value::Null);
+    assert_eq!(imported_reset["account"]["quota"]["plan_type"], "free");
+    assert_eq!(
+        imported_reset["account"]["quota"]["rate_limits"]["secondary"]["windowDurationMins"],
+        10080
     );
 
     let duplicate = post(
@@ -909,6 +990,108 @@ for line in sys.stdin:
         },
         "the sampler must refresh native and the unique imported account while skipping the duplicate"
     );
+    server.shutdown().expect("shutdown");
+}
+
+#[cfg(unix)]
+#[test]
+fn quota_rate_limit_http_error_is_safe() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let root = canonical_root(&directory);
+    let account_root = root.join("state").join("accounts");
+    let auth_file = account_root.join("rate-limited").join("auth.json.enc");
+    let config = root.join("config.json");
+    std::fs::write(
+        &config,
+        serde_json::to_vec_pretty(&json!({
+            "account_store_path": account_root,
+            "accounts": [{
+                "id": "rate-limited",
+                "name": "Rate limited",
+                "prefix": "rate-limited",
+                "auth_file": auth_file,
+            }]
+        }))
+        .expect("encode config"),
+    )
+    .expect("write config");
+
+    let executable_root = tempfile::Builder::new()
+        .prefix("emp-fake-codex-")
+        .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+        .expect("fake Codex directory");
+    let executable = executable_root.path().join("codex");
+    std::fs::write(
+        &executable,
+        r#"#!/usr/bin/env python3
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "initialize":
+        print(json.dumps({"id": request["id"], "result": {}}), flush=True)
+    elif method == "account/read":
+        print(json.dumps({"id": request["id"], "result": {"account": {"email": "xian@example.com", "planType": "pro"}}}), flush=True)
+    elif method == "account/rateLimits/read":
+        print(json.dumps({"id": request["id"], "error": {"message": "failed to fetch codex rate limits: GET https://example.invalid failed: 429 Too Many Requests; content-type=text/plain; body=private-token"}}), flush=True)
+"#,
+    )
+    .expect("write fake Codex");
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+        .expect("make fake Codex executable");
+
+    let native_auth = root.join("auth.json");
+    std::fs::write(&native_auth, b"{}").expect("write native auth");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config,
+        executable.to_str().expect("UTF-8 executable path"),
+        native_auth,
+    )
+    .expect("start quota server");
+    server
+        .state
+        .backend
+        .configuration
+        .vault
+        .write_encrypted_json(
+            &auth_file,
+            &json!({
+                "tokens": {
+                    "access_token": "rate-limited",
+                    "account_id": "workspace-rate-limited"
+                }
+            }),
+        )
+        .expect("write rate-limited auth");
+
+    let cookie = session_cookie_header(&server);
+    let response = post(
+        &server,
+        "/api/accounts/rate-limited/quota",
+        b"{}",
+        &[&cookie],
+    );
+    assert!(
+        response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+        "{response}"
+    );
+    let body: Value = serde_json::from_str(
+        response
+            .split_once("\r\n\r\n")
+            .expect("response separator")
+            .1,
+    )
+    .expect("rate-limit error response");
+    assert_eq!(
+        body,
+        json!({"error":{"code":"quota_rate_limited","message":"Codex quota queries are rate limited (429); try again later"}})
+    );
+    assert!(!response.contains("private-token"));
+    assert!(!response.contains("example.invalid"));
     server.shutdown().expect("shutdown");
 }
 
