@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.7 (2026-09-22)
+
 - Track Codex CLI 0.156.x and recommend 0.156.1 so subscription catalog
   refreshes expose the native GPT-6 Sol and GPT-6 Luna model choices.
 - Treat a reported 30-day quota window as a Free subscription and show only
