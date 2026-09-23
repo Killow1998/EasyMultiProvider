@@ -375,6 +375,26 @@ class CodexMetadataCliTests(unittest.TestCase):
         "set EMP_RUST_BINARY for the official app-server/Rust EMP switch fixture",
     )
     def test_app_server_switches_native_to_external_on_one_thread(self):
+        self._run_app_server_model_switch(
+            first_model="native/model",
+            second_model="responses/model",
+            expected_second_marker="NATIVE_TURN_HISTORY_MARKER",
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("EMP_RUST_BINARY"),
+        "set EMP_RUST_BINARY for the official app-server/Rust EMP switch fixture",
+    )
+    def test_app_server_switches_external_to_native_on_one_thread(self):
+        self._run_app_server_model_switch(
+            first_model="responses/model",
+            second_model="native/model",
+            expected_second_marker="EXTERNAL_TURN_COMPLETED",
+        )
+
+    def _run_app_server_model_switch(
+        self, *, first_model, second_model, expected_second_marker
+    ):
         ensure_test_master_key()
         rust_binary = str(Path(os.environ["EMP_RUST_BINARY"]).resolve(strict=True))
         version = subprocess.run(
@@ -549,7 +569,7 @@ class CodexMetadataCliTests(unittest.TestCase):
                     "turn/start",
                     {
                         "threadId": thread_id,
-                        "model": "native/model",
+                        "model": first_model,
                         "input": [{"type": "text", "text": "FIRST_APP_SERVER_TURN"}],
                     },
                 )
@@ -561,7 +581,7 @@ class CodexMetadataCliTests(unittest.TestCase):
                     "turn/start",
                     {
                         "threadId": thread_id,
-                        "model": "responses/model",
+                        "model": second_model,
                         "input": [{"type": "text", "text": "SECOND_APP_SERVER_TURN"}],
                     },
                 )
@@ -571,19 +591,57 @@ class CodexMetadataCliTests(unittest.TestCase):
                 self.assertEqual(second_terminal["status"], "completed", second_terminal)
 
             self.assertIsNone(upstream.fixture_error)
+            self.assertEqual(len(upstream.observations), 2, upstream.observations)
             requests = [
                 record
                 for record in upstream.observations
                 if record["body"].get("generate") is not False
             ]
             self.assertEqual(len(requests), 2, upstream.observations)
-            native_request, external_request = requests
-            self.assertEqual(native_request["body"]["model"], "native-upstream")
+            first_request, second_request = requests
+            native_request = next(
+                record for record in requests
+                if record["body"]["model"] == "native-upstream"
+            )
+            external_request = next(
+                record for record in requests
+                if record["body"]["model"] == "external-upstream"
+            )
+            expected_upstream_by_model = {
+                "native/model": "native-upstream",
+                "responses/model": "external-upstream",
+            }
+            expected_auth_by_model = {
+                "native/model": "Bearer app-server-caller-secret",
+                "responses/model": "Bearer destination-secret",
+            }
+            self.assertEqual(
+                first_request["body"]["model"], expected_upstream_by_model[first_model]
+            )
+            self.assertEqual(
+                second_request["body"]["model"], expected_upstream_by_model[second_model]
+            )
+            self.assertEqual(
+                first_request["headers"].get("authorization"),
+                expected_auth_by_model[first_model],
+            )
+            self.assertEqual(
+                second_request["headers"].get("authorization"),
+                expected_auth_by_model[second_model],
+            )
             self.assertEqual(
                 native_request["headers"].get("authorization"),
                 "Bearer app-server-caller-secret",
             )
-            self.assertEqual(external_request["body"]["model"], "external-upstream")
+            native_headers = native_request["headers"]
+            self.assertEqual(native_headers.get("thread-id"), thread_id)
+            self.assertEqual(native_headers.get("session-id"), thread_id)
+            turn_metadata = json.loads(native_headers["x-codex-turn-metadata"])
+            self.assertEqual(turn_metadata.get("thread_id"), thread_id)
+            self.assertNotIn(
+                "destination-secret",
+                json.dumps(native_headers) + json.dumps(native_request["body"]),
+            )
             self.assertEqual(
                 external_request["headers"].get("authorization"),
                 "Bearer destination-secret",
@@ -605,10 +663,10 @@ class CodexMetadataCliTests(unittest.TestCase):
                 "app-server-caller-secret",
                 json.dumps(external_headers) + json.dumps(external_request["body"]),
             )
-            rendered_input = json.dumps(external_request["body"].get("input"))
+            rendered_input = json.dumps(second_request["body"].get("input"))
             for marker in (
                 "FIRST_APP_SERVER_TURN",
-                "NATIVE_TURN_HISTORY_MARKER",
+                expected_second_marker,
                 "SECOND_APP_SERVER_TURN",
             ):
                 self.assertIn(marker, rendered_input, rendered_input)
