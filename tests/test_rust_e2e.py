@@ -426,11 +426,41 @@ class RustEndToEnd(unittest.TestCase):
                             while not browser_log.exists() and time.monotonic() < deadline:
                                 time.sleep(0.01)
                             self.assertTrue(browser_log.exists(), "desktop did not launch configured browser")
-                            self.assertTrue(browser_log.read_text().startswith("http://127.0.0.1:%d/?bootstrap=" % port))
+                            opened_url = browser_log.read_text()
+                            if backend.runtime_kind == "python_oracle":
+                                self.assertEqual(opened_url, "http://127.0.0.1:%d" % port)
+                                self.assertEqual(backend.login_mode, "bare-root-cookie")
+                            else:
+                                self.assertTrue(
+                                    opened_url.startswith(
+                                        "http://127.0.0.1:%d/?bootstrap=" % port
+                                    )
+                                )
+                                self.assertEqual(backend.login_mode, "bootstrap-token")
                         else:
                             self.assertFalse(browser_log.exists())
                     finally:
                         backend.close()
+
+    @unittest.skipUnless(
+        "EMP_PYTHON_ORACLE_ROOT" in os.environ,
+        "set EMP_PYTHON_ORACLE_ROOT to compare with official Python v0.11.10",
+    )
+    def test_official_python_root_cookie_and_rust_one_time_bootstrap(self):
+        python_backend, rust_backend = self.backends
+        self.assertEqual(python_backend.runtime_kind, "python_oracle")
+        self.assertEqual(python_backend.login_mode, "bare-root-cookie")
+        self.assertEqual(rust_backend.runtime_kind, "rust")
+        self.assertEqual(rust_backend.login_mode, "bootstrap-token")
+        self.assertEqual(
+            python_backend.opened_url,
+            "http://127.0.0.1:%d" % python_backend.port,
+        )
+        self.assertTrue(
+            rust_backend.opened_url.startswith(
+                "http://127.0.0.1:%d/?bootstrap=" % rust_backend.port
+            )
+        )
 
     def test_offline_doctor_and_restore_match_python_commands(self):
         # Exercise test_integration_cli's native/active/restore/repeated-restore

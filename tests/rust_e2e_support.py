@@ -5,6 +5,7 @@ from pathlib import Path
 import queue
 import re
 import subprocess
+import sys
 import threading
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -139,6 +140,27 @@ class EmpProcess:
         return instance
 
     def start(self, command, config_path, home, *, environment_overrides=None, port=0, arguments=None):
+        configured_rust_binary = os.environ.get("EMP_RUST_BINARY")
+        command_binary = Path(command[0]).resolve()
+        if configured_rust_binary and command_binary == Path(configured_rust_binary).resolve():
+            self.runtime_kind = "rust"
+            python_oracle_root = None
+        elif command_binary == Path(sys.executable).resolve():
+            if "EMP_PYTHON_ORACLE_ROOT" in os.environ:
+                try:
+                    python_oracle_root = Path(
+                        os.environ["EMP_PYTHON_ORACLE_ROOT"]
+                    ).expanduser().resolve(strict=True)
+                except OSError as exc:
+                    raise AssertionError("EMP_PYTHON_ORACLE_ROOT is not a valid directory") from exc
+                if not python_oracle_root.is_dir():
+                    raise AssertionError("EMP_PYTHON_ORACLE_ROOT is not a directory")
+                self.runtime_kind = "python_oracle"
+            else:
+                self.runtime_kind = "python_snapshot"
+                python_oracle_root = None
+        else:
+            raise AssertionError("EmpProcess requires an explicit Python or EMP launcher")
         environment = dict(os.environ)
         for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
                     "all_proxy", "EASY_MULTI_PROVIDER_MASTER_KEY_FILE"):
@@ -147,12 +169,45 @@ class EmpProcess:
         environment.update(CODEX_HOME=str(home), PYTHONUNBUFFERED="1",
                            NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
         environment.update(environment_overrides or {})
+        process_cwd = ROOT
+        if self.runtime_kind == "python_oracle":
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            environment["PYTHONPATH"] = str(python_oracle_root)
+            probe = subprocess.run(
+                [
+                    command[0],
+                    "-c",
+                    "import easy_multi_provider; "
+                    "print(easy_multi_provider.__version__); "
+                    "print(easy_multi_provider.__file__)",
+                ],
+                cwd=python_oracle_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if probe.returncode != 0:
+                raise AssertionError(
+                    "EMP_PYTHON_ORACLE_ROOT could not import easy_multi_provider: "
+                    + probe.stderr
+                )
+            version, module_path = probe.stdout.splitlines()
+            if version != "0.11.10":
+                raise AssertionError(
+                    "EMP_PYTHON_ORACLE_ROOT must be Python EMP 0.11.10; got "
+                    + version
+                )
+            if Path(module_path).resolve() != (python_oracle_root / "easy_multi_provider" / "__init__.py").resolve():
+                raise AssertionError("EMP_PYTHON_ORACLE_ROOT imported a different package")
+            process_cwd = python_oracle_root
         self.environment = environment
+        self.cwd = process_cwd
         if arguments is None:
             arguments = ["serve", "--config", str(config_path), "--host", "127.0.0.1", "--port", str(port)]
         self.process = subprocess.Popen(
             command + arguments,
-            cwd=ROOT, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            cwd=process_cwd, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True,
         )
         lines = queue.Queue()
@@ -172,11 +227,35 @@ class EmpProcess:
                     raise AssertionError("EMP exited before readiness: " + "".join(startup[-12:]))
                 startup.append(line)
                 if line.startswith("Open in browser: "):
-                    url = urlsplit(line.split(": ", 1)[1].strip())
+                    self.opened_url = line.split(": ", 1)[1].strip()
+                    url = urlsplit(self.opened_url)
                     self.port = url.port
-                    status, headers, _ = self.request("GET", url.path + "?" + url.query)
-                    assert status == 303, status
-                    self.cookie = headers["set-cookie"].split(";", 1)[0]
+                    if self.runtime_kind == "python_oracle":
+                        assert url.path in ("", "/") and not url.query, self.opened_url
+                        status, headers, _ = self.request("GET", "/", auth=False)
+                        assert status == 200, status
+                        cookie = headers.get("set-cookie", "")
+                        assert cookie.startswith("emp_session="), cookie
+                        self.cookie = cookie.split(";", 1)[0]
+                    else:
+                        self.login_mode = "bootstrap-token"
+                        assert url.path == "/" and url.query.startswith("bootstrap="), self.opened_url
+                        bare_status, bare_headers, _ = self.request("GET", "/", auth=False)
+                        assert bare_status == 401, bare_status
+                        assert "set-cookie" not in bare_headers, bare_headers
+                        target = url.path + "?" + url.query
+                        status, headers, _ = self.request("GET", target, auth=False)
+                        assert status == 303, status
+                        cookie = headers.get("set-cookie", "")
+                        assert cookie.startswith("emp_session="), cookie
+                        self.cookie = cookie.split(";", 1)[0]
+                        replay_status, replay_headers, _ = self.request("GET", target, auth=False)
+                        assert replay_status == 401, replay_status
+                        assert "set-cookie" not in replay_headers, replay_headers
+                    if self.runtime_kind == "python_oracle":
+                        self.login_mode = "bare-root-cookie"
+                    status, _, raw = self.request("GET", "/api/config")
+                    assert status == 200, raw
                     # The fixture asks the OS for a port; persisted production
                     # configuration needs the assigned nonzero port in Python.
                     # Apply this through the same UI API in both implementations.
