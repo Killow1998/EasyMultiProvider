@@ -306,4 +306,25 @@ jobs:
           if len(binaries) != 1:
               raise RuntimeError("expected one native Codex test binary")
           subprocess.run(["uv", "run", "--frozen", "python", "tools/test_codex_runtime.py",
-                          str(binaries[0])], check=True)
+                          str(binaries[0]), "--require-version", "0.155.0"], check=True)
+      - name: Install recommended official runtime
+        run: npm install --prefix runtime-fixture-1561 --no-audit --no-fund --ignore-scripts @openai/codex@0.156.1
+      - name: Strict contracts for recommended runtime
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+
+          names = {"codex.exe"} if os.name == "nt" else {"codex"}
+          binaries = [
+              path for path in Path("runtime-fixture-1561/node_modules/@openai").rglob("*")
+              if path.is_file() and path.name in names and "vendor" in path.parts
+          ]
+          if len(binaries) != 1:
+              raise RuntimeError("expected one native recommended Codex test binary")
+          subprocess.run(
+              ["uv", "run", "--frozen", "python", "tools/test_codex_runtime.py",
+               str(binaries[0]), "--require-version", "0.156.1"],
+              check=True,
+          )

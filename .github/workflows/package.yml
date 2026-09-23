@@ -77,6 +77,13 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7.0.1
 
+      - name: Check out formal Python oracle
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: Killow1998/EasyMultiProvider
+          ref: v0.11.10
+          path: python-oracle
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.93.1
 
@@ -104,6 +111,41 @@ jobs:
 
       - name: Build and smoke-test native package
         run: uv run --frozen --group package python packaging/build.py
+
+      - name: Run formal Python and native Rust process E2E
+        shell: python
+        env:
+          EMP_PYTHON_ORACLE_ROOT: ${{ github.workspace }}/python-oracle
+        run: |
+          import os
+          import platform
+          import subprocess
+          from pathlib import Path
+
+          artifacts = Path("artifacts")
+          runner_os = os.environ.get("RUNNER_OS", platform.system())
+          if runner_os == "Windows":
+              candidates = [artifacts / "EMP.exe"]
+          else:
+              candidates = [
+                  path for path in artifacts.iterdir()
+                  if path.is_file()
+                  and path.name.startswith("EMP-")
+                  and not path.name.endswith((".sha256", ".tar.gz", ".dmg", ".zip", ".sh"))
+                  and os.access(path, os.X_OK)
+              ]
+          candidates = [path for path in candidates if path.is_file()]
+          if len(candidates) != 1:
+              raise RuntimeError(f"expected one native EMP executable, found {len(candidates)}")
+
+          environment = dict(os.environ)
+          environment["EMP_RUST_BINARY"] = str(candidates[0].resolve())
+          subprocess.run(
+              ["uv", "run", "--frozen", "--group", "package", "python", "-m",
+               "unittest", "tests.test_rust_e2e", "-v"],
+              check=True,
+              env=environment,
+          )
 
       - name: Verify Windows executable resources
         if: runner.os == 'Windows'
