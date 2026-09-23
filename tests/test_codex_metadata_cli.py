@@ -226,23 +226,111 @@ class _CodexAppServerStdio:
 
 
 class _AppServerSwitchUpstream(BaseHTTPRequestHandler):
+    @staticmethod
+    def _tool_call_id(payload):
+        completed = next(
+            json.loads(line[6:])
+            for line in payload.decode().splitlines()
+            if line.startswith("data: ")
+            and json.loads(line[6:]).get("type") == "response.completed"
+        )
+        return completed["response"]["output"][0]["call_id"]
+
     def do_POST(self):
         raw = self.rfile.read(int(self.headers["Content-Length"]))
         body = _decode_request(raw, self.headers.get("Content-Encoding", "identity"))
         headers = {name.lower(): value for name, value in self.headers.items()}
         self.server.observations.append({"path": self.path, "body": body, "headers": headers})
         authorization = headers.get("authorization")
-        if authorization == "Bearer app-server-caller-secret":
+        if getattr(self.server, "subagent_tree", False) and body.get("generate") is not False:
+            if headers.get("x-openai-subagent"):
+                if authorization != "Bearer app-server-caller-secret":
+                    self.server.fixture_error = "subagent used unexpected authorization: " + repr(authorization)
+                    self.send_error(401, "unexpected subagent fixture credential")
+                    return
+                reply_text = "SAFE_SUBAGENT_CHILD_RESULT"
+                self.server.child_response_sent = True
+                payload = _fixed_response_stream(body.get("model", "fixture-model")).replace(
+                    FIXED_REPLY.encode(), reply_text.encode()
+                )
+            elif authorization == "Bearer destination-secret":
+                if not self.server.spawn_call_sent:
+                    spawn_tool = next(
+                        (
+                            tool for tool in body.get("tools", [])
+                            if isinstance(tool, dict)
+                            and tool.get("description", "").splitlines()[:1]
+                            == ["collaboration.spawn_agent"]
+                        ),
+                        None,
+                    )
+                    if spawn_tool is None:
+                        self.server.fixture_error = "parent request did not advertise collaboration.spawn_agent"
+                        payload = _fixed_response_stream(body.get("model", "fixture-model"))
+                    else:
+                        payload = _tool_response_stream(
+                            body.get("model", "fixture-model"),
+                            tool_name="spawn_agent",
+                            wire_name=spawn_tool["name"],
+                            tool_arguments={
+                                "task_name": "emp_fixture_child",
+                                "message": (
+                                    "Return exactly SAFE_SUBAGENT_CHILD_RESULT. "
+                                    "Do not use tools or read or write files."
+                                ),
+                                "model": "native/model",
+                                "reasoning_effort": "low",
+                                "fork_turns": "none",
+                            },
+                        )
+                        self.server.spawn_call_id = self._tool_call_id(payload)
+                        self.server.spawn_tool_name = spawn_tool["name"]
+                        self.server.spawn_call_sent = True
+                elif not self.server.wait_call_sent:
+                    wait_tool = next(
+                        (
+                            tool for tool in body.get("tools", [])
+                            if isinstance(tool, dict)
+                            and tool.get("description", "").splitlines()[:1]
+                            == ["collaboration.wait_agent"]
+                        ),
+                        None,
+                    )
+                    if wait_tool is None:
+                        self.server.fixture_error = "parent request did not advertise collaboration.wait_agent"
+                        payload = _fixed_response_stream(body.get("model", "fixture-model"))
+                    else:
+                        payload = _tool_response_stream(
+                            body.get("model", "fixture-model"),
+                            tool_name="wait_agent",
+                            wire_name=wait_tool["name"],
+                            tool_arguments={"timeout_ms": 10000},
+                        )
+                        self.server.wait_call_id = self._tool_call_id(payload)
+                        self.server.wait_tool_name = wait_tool["name"]
+                        self.server.wait_call_sent = True
+                else:
+                    reply_text = "PARENT_SUBAGENT_TREE_COMPLETED"
+                    payload = _fixed_response_stream(body.get("model", "fixture-model")).replace(
+                        FIXED_REPLY.encode(), reply_text.encode()
+                    )
+            else:
+                self.server.fixture_error = "parent used unexpected authorization: " + repr(authorization)
+                self.send_error(401, "unexpected parent fixture credential")
+                return
+        elif authorization == "Bearer app-server-caller-secret":
             reply_text = "NATIVE_TURN_HISTORY_MARKER"
-        elif authorization == "Bearer destination-secret":
-            reply_text = "EXTERNAL_TURN_COMPLETED"
         else:
-            self.server.fixture_error = "unexpected upstream authorization: " + repr(authorization)
-            self.send_error(401, "unexpected fixture credential")
-            return
-        payload = _fixed_response_stream(body.get("model", "fixture-model")).replace(
-            FIXED_REPLY.encode(), reply_text.encode()
-        )
+            if authorization == "Bearer destination-secret":
+                reply_text = "EXTERNAL_TURN_COMPLETED"
+            else:
+                self.server.fixture_error = "unexpected upstream authorization: " + repr(authorization)
+                self.send_error(401, "unexpected fixture credential")
+                return
+        if not (getattr(self.server, "subagent_tree", False) and body.get("generate") is not False):
+            payload = _fixed_response_stream(body.get("model", "fixture-model")).replace(
+                FIXED_REPLY.encode(), reply_text.encode()
+            )
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(payload)))
@@ -392,8 +480,20 @@ class CodexMetadataCliTests(unittest.TestCase):
             expected_second_marker="EXTERNAL_TURN_COMPLETED",
         )
 
+    @unittest.skipUnless(
+        os.environ.get("EMP_RUST_BINARY"),
+        "set EMP_RUST_BINARY for the official app-server/Rust EMP switch fixture",
+    )
+    def test_app_server_subagent_tree_uses_native_child_route(self):
+        self._run_app_server_model_switch(
+            first_model="responses/model",
+            second_model=None,
+            expected_second_marker=None,
+            subagent_tree=True,
+        )
+
     def _run_app_server_model_switch(
-        self, *, first_model, second_model, expected_second_marker
+        self, *, first_model, second_model, expected_second_marker, subagent_tree=False
     ):
         ensure_test_master_key()
         rust_binary = str(Path(os.environ["EMP_RUST_BINARY"]).resolve(strict=True))
@@ -412,6 +512,14 @@ class CodexMetadataCliTests(unittest.TestCase):
         upstream = ThreadingHTTPServer(("127.0.0.1", 0), _AppServerSwitchUpstream)
         upstream.observations = []
         upstream.fixture_error = None
+        upstream.subagent_tree = subagent_tree
+        upstream.child_response_sent = False
+        upstream.spawn_call_sent = False
+        upstream.spawn_call_id = None
+        upstream.spawn_tool_name = None
+        upstream.wait_call_sent = False
+        upstream.wait_call_id = None
+        upstream.wait_tool_name = None
         upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
         upstream_thread.start()
         rust_process = None
@@ -570,27 +678,44 @@ class CodexMetadataCliTests(unittest.TestCase):
                     {
                         "threadId": thread_id,
                         "model": first_model,
-                        "input": [{"type": "text", "text": "FIRST_APP_SERVER_TURN"}],
+                        "input": [{
+                            "type": "text",
+                            "text": "PARENT_SUBAGENT_REQUEST" if subagent_tree
+                            else "FIRST_APP_SERVER_TURN",
+                        }],
                     },
                 )
                 first_terminal = app_server.wait_for_turn(
                     thread_id, first_started["turn"]["id"]
                 )
                 self.assertEqual(first_terminal["status"], "completed", first_terminal)
-                second_started = app_server.request(
-                    "turn/start",
-                    {
-                        "threadId": thread_id,
-                        "model": second_model,
-                        "input": [{"type": "text", "text": "SECOND_APP_SERVER_TURN"}],
-                    },
-                )
-                second_terminal = app_server.wait_for_turn(
-                    thread_id, second_started["turn"]["id"]
-                )
-                self.assertEqual(second_terminal["status"], "completed", second_terminal)
+                if second_model is not None:
+                    second_started = app_server.request(
+                        "turn/start",
+                        {
+                            "threadId": thread_id,
+                            "model": second_model,
+                            "input": [{"type": "text", "text": "SECOND_APP_SERVER_TURN"}],
+                        },
+                    )
+                    second_terminal = app_server.wait_for_turn(
+                        thread_id, second_started["turn"]["id"]
+                    )
+                    self.assertEqual(second_terminal["status"], "completed", second_terminal)
 
             self.assertIsNone(upstream.fixture_error)
+            if subagent_tree:
+                self._assert_app_server_subagent_tree(
+                    upstream.observations,
+                    parent_thread_id=thread_id,
+                    spawn_call_id=upstream.spawn_call_id,
+                    spawn_tool_name=upstream.spawn_tool_name,
+                    wait_call_id=upstream.wait_call_id,
+                    wait_tool_name=upstream.wait_tool_name,
+                    child_response_sent=upstream.child_response_sent,
+                )
+                return
+
             self.assertEqual(len(upstream.observations), 2, upstream.observations)
             requests = [
                 record
@@ -678,6 +803,139 @@ class CodexMetadataCliTests(unittest.TestCase):
             upstream.shutdown()
             upstream.server_close()
             upstream_thread.join(timeout=3)
+
+    def _assert_app_server_subagent_tree(
+        self, observations, *, parent_thread_id, spawn_call_id, spawn_tool_name,
+        wait_call_id, wait_tool_name, child_response_sent,
+    ):
+        summary = [
+            {
+                "model": record["body"].get("model"),
+                "generate": record["body"].get("generate"),
+                "authorization": record["headers"].get("authorization"),
+                "subagent": record["headers"].get("x-openai-subagent"),
+                "thread_id": record["headers"].get("thread-id"),
+                "parent_thread_id": record["headers"].get("x-codex-parent-thread-id"),
+                "input_types": [
+                    item.get("type") for item in record["body"].get("input", [])
+                    if isinstance(item, dict)
+                ],
+            }
+            for record in observations
+        ]
+        if summary:
+            summary[-1].update({"wait_call": wait_call_id, "wait_tool": wait_tool_name})
+        self.assertIsNotNone(spawn_call_id, summary)
+        self.assertIsNotNone(spawn_tool_name, summary)
+        self.assertIsNotNone(wait_call_id, summary)
+        self.assertIsNotNone(wait_tool_name, summary)
+        self.assertTrue(child_response_sent, summary)
+        self.assertEqual(len(observations), 4, summary)
+        requests = [
+            record for record in observations
+            if record["body"].get("generate") is not False
+        ]
+        self.assertEqual(len(requests), 4, summary)
+        parent_start, child, parent_after_spawn, parent_after_wait = requests
+        self.assertEqual(
+            [record["body"].get("model") for record in requests],
+            ["external-upstream", "native-upstream", "external-upstream", "external-upstream"],
+            summary,
+        )
+        self.assertEqual(
+            [record["headers"].get("authorization") for record in requests],
+            [
+                "Bearer destination-secret",
+                "Bearer app-server-caller-secret",
+                "Bearer destination-secret",
+                "Bearer destination-secret",
+            ],
+            summary,
+        )
+
+        child_headers = child["headers"]
+        self.assertTrue(child_headers.get("x-openai-subagent"), summary)
+        child_thread_id = child_headers.get("thread-id")
+        self.assertTrue(child_thread_id, summary)
+        self.assertNotEqual(child_thread_id, parent_thread_id, summary)
+        self.assertEqual(
+            child_headers.get("x-codex-parent-thread-id"), parent_thread_id,
+            summary,
+        )
+        child_turn_metadata = json.loads(child_headers["x-codex-turn-metadata"])
+        self.assertEqual(child_turn_metadata.get("thread_id"), child_thread_id, summary)
+        self.assertIn(
+            "Return exactly SAFE_SUBAGENT_CHILD_RESULT",
+            json.dumps(child["body"].get("input")),
+            summary,
+        )
+        self.assertNotIn(
+            "destination-secret",
+            json.dumps(child_headers) + json.dumps(child["body"]),
+        )
+
+        for parent_request in (parent_start, parent_after_spawn, parent_after_wait):
+            headers = parent_request["headers"]
+            self.assertEqual(
+                headers.get("authorization"), "Bearer destination-secret", summary
+            )
+            for internal_header in (
+                "cookie",
+                "thread-id",
+                "session-id",
+                "x-codex-turn-metadata",
+                "x-codex-parent-thread-id",
+                "x-openai-subagent",
+                "chatgpt-account-id",
+            ):
+                self.assertNotIn(internal_header, headers, summary)
+            self.assertNotIn(
+                "app-server-caller-secret",
+                json.dumps(headers) + json.dumps(parent_request["body"]),
+            )
+
+        after_spawn_input = parent_after_spawn["body"].get("input", [])
+        self.assertIsInstance(after_spawn_input, list, summary)
+        spawn_calls = [
+            item for item in after_spawn_input
+            if isinstance(item, dict)
+            and item.get("type") == "function_call"
+            and item.get("call_id") == spawn_call_id
+        ]
+        spawn_outputs = [
+            item for item in after_spawn_input
+            if isinstance(item, dict)
+            and item.get("type") == "function_call_output"
+            and item.get("call_id") == spawn_call_id
+        ]
+        self.assertEqual(len(spawn_calls), 1, summary)
+        self.assertEqual(spawn_calls[0].get("name"), spawn_tool_name, summary)
+        self.assertEqual(len(spawn_outputs), 1, summary)
+        tool_result = json.loads(spawn_outputs[0]["output"])
+        self.assertEqual(tool_result.get("task_name", "").rsplit("/", 1)[-1], "emp_fixture_child", summary)
+
+        after_wait_input = parent_after_wait["body"].get("input", [])
+        self.assertIsInstance(after_wait_input, list, summary)
+        wait_calls = [
+            item for item in after_wait_input
+            if isinstance(item, dict)
+            and item.get("type") == "function_call"
+            and item.get("call_id") == wait_call_id
+        ]
+        wait_outputs = [
+            item for item in after_wait_input
+            if isinstance(item, dict)
+            and item.get("type") == "function_call_output"
+            and item.get("call_id") == wait_call_id
+        ]
+        self.assertEqual(len(wait_calls), 1, summary)
+        self.assertEqual(wait_calls[0].get("name"), wait_tool_name, summary)
+        self.assertEqual(len(wait_outputs), 1, summary)
+        self.assertIn(
+            "SAFE_SUBAGENT_CHILD_RESULT",
+            json.dumps([wait_outputs[0], after_wait_input]),
+            summary,
+        )
 
     def _run_fixture(self, failure_code=None, *, native_builtin=False, reported_model=None,
                      native_ws=False, direct_upstream=False, malformed_events=False,
