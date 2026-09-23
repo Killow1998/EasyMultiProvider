@@ -155,7 +155,7 @@ The catalog display and EMP request checks use the same effective window.
 
 ## Codex compatibility
 
-The current source version is **v0.11.8**.
+The current source version is **v0.11.9**.
 
 EMP supports Codex CLI **0.149.x through 0.156.x**; **0.156.1 is recommended**.
 

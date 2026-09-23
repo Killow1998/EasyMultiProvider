@@ -184,6 +184,7 @@ assert.match(html, /\.model-card \.entity-card-actions\{grid-column:3;grid-row:1
 assert.match(html, /\.model-card \.entity-card-meta\{grid-column:1\/-1;grid-row:2;[^}]*white-space:normal;/, "model metadata must remain fully readable across the card");
 assert.match(html, /\.credit-badge,.credit-monthly\{[^}]*border:1px solid var\(--border\)/, "credit values must use compact visual badges");
 assert.match(html, /\.account-card \.entity-card-quota\{[^}]*grid-column:1\/-1;grid-row:2/, "desktop quota must use a compact full-width row");
+assert.match(html, /\.account-card \.quota-stack\{[^}]*align-items:start/, "quota meters with and without reset text must keep their bars at the same height");
 assert.match(html, /\.account-card \.entity-card-actions\{grid-column:2;grid-row:1;[^}]*border:0/, "desktop account actions must stay at the upper right");
 assert.match(html, /\.account-identity\.has-plan \.account-identity-id\{border-radius:999px 0 0 999px\}/, "account ID and plan must form one segmented badge");
 assert.match(html, /\.subscription-plan\{[^}]*margin-left:-1px;[^}]*border-radius:0 999px 999px 0/, "the plan segment must join the account ID without a gap");

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.11.9 (2026-09-23)
+
+- Route Codex automatic approval reviews through an available subscription at
+  request time, preferring Native while it has quota and moving failed or
+  exhausted accounts aside without requiring a Codex restart.
+- Simplify Model display to model names, route slugs, and a compact editor for
+  display names and context labels.
+- Preserve external-model vision capability values and their provenance across
+  `.emp` export/import, rejecting an import before it can silently change them.
+- Keep unreported rainbow quota bars vertically aligned with reported quota
+  bars that also show a reset countdown.
+
 ## 0.11.8 (2026-09-23)
 
 - Replace Linux DEB downloads with a verified bilingual user installer that
