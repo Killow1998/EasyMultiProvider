@@ -6,10 +6,12 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+static EMP_STARTUP_FIXTURE: Mutex<()> = Mutex::new(());
 
 struct ChildGuard(Child);
 
@@ -305,9 +307,13 @@ fn start_emp(
     } else {
         command.env_remove("EMP_UPDATE_TEST_WORKER_FAIL_READY");
     }
-    let mut process = command
-        .spawn()
-        .unwrap_or_else(|error| panic!("start EMP process {}: {error}", executable.display()));
+    let mut process = command.spawn().unwrap_or_else(|error| {
+        panic!(
+            "start EMP process for test {} at {}: {error}",
+            std::thread::current().name().unwrap_or("unnamed"),
+            executable.display()
+        )
+    });
     let mut stdout = BufReader::new(process.stdout.take().unwrap());
     let child = ChildGuard(process);
     let mut line = String::new();
@@ -437,6 +443,9 @@ fn start_authenticated_emp_with_api(
     api: &str,
     fail_worker_ready: bool,
 ) -> RunningEmp {
+    let _startup = EMP_STARTUP_FIXTURE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let installation = root.join("install");
     std::fs::create_dir(&installation).unwrap();
     let executable = installation.join("EMP");
