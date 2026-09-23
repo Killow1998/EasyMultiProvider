@@ -22,6 +22,7 @@ use emp_state::web_session_path;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::net::TcpListener;
+use std::net::TcpStream;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -228,7 +229,6 @@ impl ServerHandle {
         startup_options: ServerStartupOptions,
     ) -> Result<Self, AppError> {
         let listener = TcpListener::bind((host, port))?;
-        listener.set_nonblocking(true)?;
         let local_addr = listener.local_addr()?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let sessions = Arc::new(SessionStore {
@@ -282,6 +282,10 @@ impl ServerHandle {
                     }
                     match listener.accept() {
                         Ok((stream, _)) => {
+                            if state.shutdown.load(Ordering::Acquire) {
+                                drop(stream);
+                                break;
+                            }
                             let request_state = Arc::clone(&state);
                             let Some(request_permit) =
                                 request_state.connection_admission.acquire_request()
@@ -295,9 +299,6 @@ impl ServerHandle {
                                     let _request_permit = request_permit;
                                     handle_connection(stream, &request_state);
                                 });
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(10));
                         }
                         Err(_) => break,
                     }
@@ -390,6 +391,7 @@ impl ServerHandle {
             self.state.backend.integration.restore_owned()
         };
         self.state.shutdown.store(true, Ordering::Release);
+        let _ = TcpStream::connect_timeout(&self.local_addr, Duration::from_millis(100));
         self.state.backend.usage.stop();
         self.state.backend.accounts.quota_condition.notify_all();
         self.state

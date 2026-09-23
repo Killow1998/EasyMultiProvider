@@ -49,6 +49,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
+use std::time::Instant;
 use tempfile::TempDir;
 
 mod auto_review_contract;
@@ -1174,6 +1175,21 @@ fn health_stays_unauthenticated() {
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(response.ends_with("{\"status\":\"ok\"}"));
     server.shutdown().expect("shutdown");
+}
+
+#[test]
+fn idle_accept_worker_wakes_for_shutdown_after_serving_a_request() {
+    let (_directory, server) = test_server();
+    let response = request(&server, "/healthz", &[]);
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+
+    thread::sleep(Duration::from_millis(25));
+    let started = Instant::now();
+    server.shutdown().expect("idle listener shutdown");
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "idle blocking accept did not wake promptly for shutdown"
+    );
 }
 
 #[test]
