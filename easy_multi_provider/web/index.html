@@ -17,7 +17,6 @@ h1{margin:0 0 2px;font-size:23px;letter-spacing:-.01em}h2{font-size:16px;margin:
 .header-group{display:flex;align-items:center;gap:6px;flex:none;padding-right:12px;border-right:1px solid var(--border)}
 .page-header-controls :is(button,select,a){height:34px;margin:0;white-space:nowrap;font-family:inherit;font-size:13px;line-height:1.3;font-weight:400}
 .page-header-controls select{width:auto;min-width:98px;padding:6px 28px 6px 8px}
-.auto-review-select{width:auto;min-width:200px;max-width:100%}
 .repo-link{display:inline-flex;align-items:center;padding:6px 10px;border:1px solid var(--border-strong);border-radius:4px;color:var(--text);text-decoration:none;font-size:13px}.repo-link:hover{background:var(--secondary-hover)}
 .update-progress{width:100%;height:8px;accent-color:var(--accent);margin-top:12px}
 section{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:16px;margin:12px 0}
@@ -199,16 +198,13 @@ button[data-icon]{display:inline-flex}
 .provider-model-group h3{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:13px;color:var(--text)}
 .provider-model-group .entity-list{gap:6px;margin-bottom:10px}
 .display-list{border:0;display:grid;gap:9px}
-.display-row{grid-template-columns:minmax(0,1fr) auto auto;gap:10px 8px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel-soft)}
+.display-row{grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel-soft)}
 .display-row:last-child{border-bottom:1px solid var(--border)}
 .display-row .route{grid-column:1;grid-row:1;min-width:0}
 .display-row .route strong{display:block;overflow-wrap:anywhere}
 .display-row .route code{margin-top:3px;font-size:11px;color:var(--muted)}
-.display-row>label:not(.inline-check){grid-column:1/-1;grid-row:2;min-width:0}
-.display-row>label:not(.inline-check) input{margin-top:5px}
-.display-row .inline-check{grid-column:2;grid-row:1;align-self:center}
-.display-row>button{grid-column:3;grid-row:1;align-self:center;justify-self:end}
-.section-tools{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}
+.display-row>button{grid-column:2;grid-row:1;align-self:center;justify-self:end;width:34px;height:34px;padding:0;justify-content:center;font-size:24px;line-height:1}
+.section-tools{display:grid;grid-template-columns:minmax(0,1fr);align-items:center}
 .section-tools input{grid-column:1/-1;max-width:none;min-width:0}
 .section-tools .spacer{display:none}
 .section-tools>button:last-child{justify-self:end}
@@ -257,7 +253,6 @@ button[data-icon]{display:inline-flex}
     <div class="action-group"><span class="action-group-label" data-i18n="client_scope">客户端</span><div class="runtime-controls"><button id="codex_runtime_save" class="secondary" data-icon="save" onclick="saveCodexRuntimeSelection()" data-i18n="save_runtimes">保存选择</button><button class="secondary" data-icon="check" onclick="useAutomaticCodexRuntimes()" data-i18n="automatic_runtimes">选择全部</button><button id="codex_runtime_scan" class="secondary" data-icon="refresh" onclick="scanCodexRuntimes()" data-i18n="rescan_runtimes">重新扫描</button></div></div>
     <div class="action-group"><span class="action-group-label" data-i18n="emp_scope">EMP</span><div class="toolbar"><button id="integration_toggle" data-icon="check" data-action="enable" onclick="confirmIntegrationAction(this.dataset.action)" data-i18n="enable_codex" disabled>启用 EMP</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">性能</button><button class="secondary" data-icon="usage" onclick="openUsage()" data-i18n="usage">用量与估算</button></div></div>
     <div class="action-group search-toggle"><span class="action-group-label" data-i18n="search_scope">工具</span><label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="saveSubscriptionSearch()"><span data-i18n="enable_subscription_search">联网搜索</span></label></div>
-    <div class="action-group"><span class="action-group-label" id="auto_review_label">自动审核</span><select id="auto_review_account" class="auto-review-select" onchange="saveAutoReviewAccount()" aria-label="Auto-review subscription"></select><small class="muted" id="auto_review_hint"></small></div>
   </div>
 </div>
 </section>
@@ -284,7 +279,7 @@ button[data-icon]{display:inline-flex}
 <aside class="workspace-side">
 <section>
 <h2 data-i18n="model_display">模型显示</h2>
-<div class="section-tools"><input id="catalog_display_search" type="search" placeholder="搜索模型" data-i18n-placeholder="search_models" oninput="renderCatalogDisplay()"><button id="catalog_display_toggle" type="button" class="secondary" onclick="toggleCatalogDisplayExpanded()" data-i18n="show_all">显示全部</button><span class="spacer"></span><button data-icon="save" onclick="saveCatalogDisplay()" data-i18n="save_display">保存</button></div>
+<div class="section-tools"><input id="catalog_display_search" type="search" placeholder="搜索模型" data-i18n-placeholder="search_models" oninput="renderCatalogDisplay()"></div>
 <div id="catalog_display_models" class="display-list"></div>
 </section>
 </aside>
@@ -328,7 +323,6 @@ let quotaUpdatePending = false;
 let quotaUpdateRunning = false;
 let diagnosticsTimer = null;
 let diagnosticsRequest = 0;
-let catalogDisplayExpanded = false;
 let runtimeSelectionDraft = null;
 const expandedModelGroups = new Set();
 const refreshErrors = {};
@@ -623,46 +617,27 @@ function renderCatalogDisplay() {
   const all = Array.isArray(state?.catalog_families) ? state.catalog_families : [];
   const query = String($('catalog_display_search')?.value || '').trim().toLowerCase();
   const matching = all.filter(model => !query || `${model.id} ${model.default_display_name} ${model.display_name} ${(model.routes || []).map(route => route.id).join(' ')}`.toLowerCase().includes(query));
-  const visible = query || catalogDisplayExpanded ? matching : matching.slice(0, 8);
-  if ($('catalog_display_toggle')) {
-    $('catalog_display_toggle').hidden = Boolean(query) || all.length <= 8;
-    $('catalog_display_toggle').textContent = catalogDisplayExpanded ? t('collapse') : t('show_all');
-  }
+  const visible = matching;
   if (!all.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_models'))}</p>`; return; }
   if (!visible.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_matches'))}</p>`; return; }
   $('catalog_display_models').innerHTML = visible.map(model => {
+    const routes = model.routes || []; const routeText = routes.map(route => route.id).join(' · ');
     const presentation = familyPresentationFor(model.id);
-    const routes = model.routes || []; const routeText = routes.map(route => route.id).join(' · '); const first = routes[0] || {id:model.id,source_type:'native',source_id:''};
-    const preview = presentationPreview(first.id, model.default_display_name || model.display_name || model.id, model.context_window, presentation.catalog_alias, presentation.show_context !== false);
-    return `<div class="display-row"><div class="route"><strong data-catalog-preview data-route="${esc(model.id)}">${esc(preview)}</strong><code>${esc(routeText || model.id)}</code></div><label>${esc(language === 'en' ? 'Display name' : '显示名称')}<input data-catalog-alias data-route="${esc(model.id)}" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(model.default_display_name || model.id)}" oninput="updateCatalogDisplayPreview('${esc(model.id)}')"></label><label class="inline-check"><input type="checkbox" data-catalog-context data-route="${esc(model.id)}" ${presentation.show_context === false ? '' : 'checked'} onchange="updateCatalogDisplayPreview('${esc(model.id)}')"> ${esc(t('context'))}</label><button type="button" class="secondary" data-icon="settings" onclick="openCatalogAdvanced('${esc(first.id)}','${esc(first.source_type)}','${esc(first.source_id)}')">${esc(t('advanced'))}</button></div>`;
+    const displayName = presentation.catalog_alias || model.default_display_name || model.display_name || model.id;
+    return `<div class="display-row"><div class="route"><strong>${esc(displayName)}</strong><code>${esc(routeText || model.id)}</code></div><button type="button" class="secondary" onclick="openCatalogDisplayEditor('${esc(model.id)}')" aria-label="${esc(tr('修改模型显示','Edit model display'))}">›</button></div>`;
   }).join('');
 }
-function updateCatalogDisplayPreview(family) {
+function openCatalogDisplayEditor(family) {
   const group = (state.catalog_families || []).find(item => item.id === family); if (!group) return;
-  const alias = [...document.querySelectorAll('[data-catalog-alias]')].find(item => item.dataset.route === family);
-  const context = [...document.querySelectorAll('[data-catalog-context]')].find(item => item.dataset.route === family);
-  const preview = [...document.querySelectorAll('[data-catalog-preview]')].find(item => item.dataset.route === family);
-  if (!preview) return;
-  const first = (group.routes || [])[0] || {id:group.id};
-  preview.textContent = presentationPreview(first.id, group.default_display_name || group.display_name || group.id, group.context_window, alias?.value.trim() || '', context?.checked !== false);
-}
-function toggleCatalogDisplayExpanded() { catalogDisplayExpanded = !catalogDisplayExpanded; renderCatalogDisplay(); }
-async function saveCatalogDisplay() {
-  const candidate = cloneState(); candidate.catalog_family_presentations ||= {}; candidate.catalog_presentations ||= {};
-  const contexts = [...document.querySelectorAll('[data-catalog-context]')];
-  document.querySelectorAll('[data-catalog-alias]').forEach(input => {
-    const family = input.dataset.route; const context = contexts.find(item => item.dataset.route === family); const current = candidate.catalog_family_presentations[family] || familyPresentationFor(family) || {};
-    candidate.catalog_family_presentations[family] = Object.assign({}, current, {catalog_alias:input.value.trim(), show_context:context ? context.checked : current.show_context !== false});
-    const group = (candidate.catalog_families || []).find(item => item.id === family); for (const route of group?.routes || []) delete candidate.catalog_presentations[route.id];
+  const presentation = familyPresentationFor(family);
+  const routes = (group.routes || []).map(route => route.id).join(' · ') || family;
+  openModal(tr('修改模型显示','Edit model display'), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr('显示名称','Display name'))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label><label class="inline-check"><input id="modal_catalog_context" type="checkbox" ${presentation.show_context === false ? '' : 'checked'}> ${esc(t('context'))}</label><p class="muted">${esc(tr('设置将在完成后立即生效。','Settings take effect immediately when done.'))}</p>`, tr('完成','Done'), async () => {
+    const candidate = cloneState(); candidate.catalog_family_presentations ||= {}; candidate.catalog_presentations ||= {};
+    const current = candidate.catalog_family_presentations[family] || familyPresentationFor(family) || {};
+    candidate.catalog_family_presentations[family] = Object.assign({}, current, {catalog_alias:$('modal_catalog_alias').value.trim(), show_context:$('modal_catalog_context').checked});
+    for (const route of group.routes || []) delete candidate.catalog_presentations[route.id];
+    await persistState(tr('模型显示已保存','Model display saved'), candidate); closeModal();
   });
-  await persistState(language === 'en' ? 'Display settings saved' : '模型显示设置已保存', candidate);
-}
-function openCatalogAdvanced(route, sourceType, sourceId) {
-  if (sourceType === 'provider') return openManualModelModal(route);
-  if (sourceType === 'account') return editAccount(sourceId);
-  if (state.native_account) return editAccount(state.native_account.id);
-  const target = $('accounts'); if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({behavior:'smooth', block:'start'});
-  notice(language === 'en' ? 'Native model visibility follows the current Codex catalog.' : '原生模型的可见性由当前 Codex catalog 控制。');
 }
 
 function renderSubscriptionSearch() {
@@ -670,20 +645,6 @@ function renderSubscriptionSearch() {
   const enabled = $('subscription_search_enabled');
   if (!enabled) return;
   enabled.checked = setting.enabled === true;
-}
-function renderAutoReviewAccount() {
-  const select = $('auto_review_account');
-  if (!select) return;
-  $('auto_review_label').textContent = tr('自动审核','Auto-review');
-  $('auto_review_hint').textContent = tr('「替我批准」使用此账号；更改后重启 Codex。','Approve for me uses this account; restart Codex after changing it.');
-  const selected = state.auto_review_account_id || '';
-  const accounts = (state.accounts || []).filter(account => account.id && account.enabled !== false && account.credential_set !== false && account.credential_status !== 'invalid' && !account.duplicate);
-  const selectedAccount = (state.accounts || []).find(account => account.id === selected);
-  let options = `<option value="">${esc(tr('使用 Codex 默认账号','Use Codex default account'))}</option>`;
-  for (const account of accounts) options += `<option value="${esc(account.id)}">${esc(account.name || account.prefix || account.id)}</option>`;
-  if (selected && !accounts.some(account => account.id === selected)) options += `<option value="${esc(selected)}" disabled>${esc((selectedAccount && (selectedAccount.name || selectedAccount.prefix)) || selected)} · ${esc(tr('不可用','Unavailable'))}</option>`;
-  select.innerHTML = options;
-  select.value = selected;
 }
 async function saveSubscriptionSearch() {
   const candidate = cloneState();
@@ -693,13 +654,8 @@ async function saveSubscriptionSearch() {
   };
   await persistState(tr('设置已保存，请重启 Codex。','Settings saved. Restart Codex.'), candidate);
 }
-async function saveAutoReviewAccount() {
-  const candidate = cloneState();
-  candidate.auto_review_account_id = $('auto_review_account').value;
-  await persistState(tr('自动审核账号已保存，请重启 Codex。','Auto-review account saved. Restart Codex.'), candidate);
-}
 function fill() {
-  applyTranslations(); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderSubscriptionSearch(); renderAutoReviewAccount(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
+  applyTranslations(); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
 }
 async function load() {
   applyPreferences();

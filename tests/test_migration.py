@@ -15,6 +15,60 @@ from easy_multi_provider.migration import MigrationError, export_bundle, export_
 
 
 class MigrationTests(unittest.TestCase):
+    def test_external_vision_capability_evidence_round_trips(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"EASY_MULTI_PROVIDER_MASTER_KEY": Fernet.generate_key().decode("ascii")},
+        ):
+            root = Path(directory)
+            source_path = root / "source" / "config.json"
+            target_path = root / "target" / "config.json"
+            source = normalize(
+                {
+                    "providers": [
+                        {"id": "external", "base_url": "https://example.test/v1"}
+                    ],
+                    "models": [
+                        {
+                            "id": "external/vision",
+                            "provider": "external",
+                            "input_modalities": ["text", "image"],
+                            "output_modalities": ["text"],
+                            "supported_protocols": ["responses"],
+                            "supports_image_detail_original": True,
+                            "capabilities": {"structured_tools": True},
+                            "capability_sources": {
+                                "input_modalities": {"source": "manual"},
+                                "output_modalities": {"source": "advertised"},
+                                "supported_protocols": {"source": "observed"},
+                                "supports_image_detail_original": {"source": "manual"},
+                                "structured_tools": {"source": "advertised"},
+                            },
+                        }
+                    ],
+                }
+            )
+            save(source, source_path)
+            bundle = export_bundle(
+                load(source_path), source_path, "migration-pass", ["external"]
+            )
+            save(normalize({}), target_path)
+            imported, _ = import_bundle(
+                load(target_path), bundle, "migration-pass", target_path
+            )
+            model = imported["models"][0]
+            self.assertEqual(model["input_modalities"], ["text", "image"])
+            self.assertEqual(
+                model["capability_sources"]["input_modalities"]["source"],
+                "manual",
+            )
+            self.assertEqual(
+                model["capability_sources"]["supported_protocols"]["source"],
+                "observed",
+            )
+            self.assertTrue(model["supports_image_detail_original"])
+            self.assertTrue(model["capabilities"]["structured_tools"])
+
     def test_native_imports_preserve_independent_accounts_and_update_reimports(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
             "EASY_MULTI_PROVIDER_MASTER_KEY": Fernet.generate_key().decode("ascii"),

@@ -159,7 +159,7 @@ for (const id of [
   "modal_submit", "integration", "integration_badge", "integration_title",
   "integration_summary", "integration_toggle", "codex_compatibility", "codex_runtime_save",
   "codex_runtime_scan", "codex_runtimes", "language_select", "theme_select",
-  "catalog_display_search", "catalog_display_toggle", "catalog_display_models",
+  "catalog_display_search", "catalog_display_models",
   "diagnostics_summary", "performance_records", "diagnostics_records", "accounts", "providers", "models",
 ]) getElement(id);
 
@@ -191,9 +191,10 @@ assert.match(html, /\.plan-prolite\{--plan-color:#d9c98f\}\.plan-pro\{--plan-col
 assert.match(html, /\.provider-card\{grid-template-columns:minmax\(220px,1fr\) auto;/, "provider cards must match the compact model-card layout");
 assert.match(html, /\.provider-card \.entity-card-actions\{grid-column:2;grid-row:1;flex-wrap:nowrap;/, "provider actions must stay visible on the title row");
 assert.match(html, /\.provider-card \.entity-card-meta\{grid-column:1\/-1;grid-row:2;/, "provider details must use one readable row across the card");
-assert.match(html, /\.display-row\{grid-template-columns:minmax\(0,1fr\) auto auto;/, "display cards must reserve one top row for the model and controls");
-assert.match(html, /\.display-row \.inline-check\{grid-column:2;grid-row:1;/, "context checkbox must stay at the upper right");
-assert.match(html, /\.display-row>button\{grid-column:3;grid-row:1;/, "advanced options must stay at the upper right");
+assert.match(html, /\.display-row\{grid-template-columns:minmax\(0,1fr\) auto;/, "display cards must show one compact model row and an editor arrow");
+assert.match(html, /\.display-row>button\{grid-column:2;grid-row:1;/, "the model display editor arrow must stay at the upper right");
+assert.doesNotMatch(html, /id="catalog_display_toggle"/, "model display must not collapse rows");
+assert.doesNotMatch(html, /onclick="saveCatalogDisplay\(\)"/, "model display must not expose a separate save action");
 assert.match(html, /href="https:\/\/github.com\/Killow1998\/EasyMultiProvider" target="_blank" rel="noopener noreferrer"/);
 assert.doesNotMatch(html, /id="subscription_search_account"/);
 assert.doesNotMatch(html, /data-catalog-summary/);
@@ -1076,19 +1077,16 @@ function capabilityMetadataBehavior() {
 async function presentationBehavior() {
   run("state = {catalog_presentations:{'provider-a/model':{catalog_alias:'Legacy',show_context:true,reasoning_summary:'auto'}},catalog_family_presentations:{model:{catalog_alias:'',show_context:true,reasoning_summary:'hide'}},catalog_families:[{id:'native-model',default_display_name:'Native Model',display_name:'Native Model',context_window:258000,supports_reasoning_summaries:true,routes:[{id:'native-model',source_type:'native',source_id:''}]},{id:'model',default_display_name:'Model',display_name:'Model',context_window:258000,supports_reasoning_summaries:true,routes:[{id:'provider-a/model',source_type:'provider',source_id:'provider-a'}]}],subscription_models:[{id:'native-model',display_name:'Native Model',context_window:258000}],providers:[{id:'provider-a',name:'Provider A'}],accounts:[],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',display_name:'Model',context_window:258000,enabled:true}]} ");
   run("renderCatalogDisplay()");
-  assert.match(getElement("catalog_display_models").innerHTML, /data-catalog-alias/);
+  assert.doesNotMatch(getElement("catalog_display_models").innerHTML, /data-catalog-alias/);
   assert.match(getElement("catalog_display_models").innerHTML, /provider-a\/model/);
-  const alias = catalogAliases.find(input => input.dataset.route === "model");
-  const contextInput = catalogContexts.find(input => input.dataset.route === "model");
-  const preview = catalogPreviews.find(input => input.dataset.route === "model");
-  assert(alias && contextInput && preview, "display controls must be rendered once per model family");
-  alias.value = "General";
-  contextInput.checked = false;
-  run("updateCatalogDisplayPreview('model')");
-  assert.strictEqual(preview.textContent, "General", "context visibility must update the preview before saving");
+  assert.doesNotMatch(getElement("catalog_display_models").innerHTML, /258k/, "the compact list must show only the name and slug");
+  assert.match(getElement("catalog_display_models").innerHTML, /openCatalogDisplayEditor\('model'\)/);
+  run("openCatalogDisplayEditor('model')");
+  getElement('modal_catalog_alias').value = 'General';
+  getElement('modal_catalog_context').checked = false;
   context.__persistStateStub = async (_message, candidate) => { context.__savedCandidate = candidate; context.state = candidate; };
   run("__realPersistState = persistState; persistState = __persistStateStub");
-  await run("saveCatalogDisplay()");
+  await getElement('modal_submit').onclick();
   run("persistState = __realPersistState");
   const saved = run("__savedCandidate.catalog_family_presentations['model']");
   assert.strictEqual(saved.catalog_alias, "General");
@@ -1339,20 +1337,6 @@ async function runtimeSettingsIsolationBehavior() {
   assert.strictEqual(getElement('codex_runtime_dirty').hidden, true);
 }
 
-async function autoReviewAccountBehavior() {
-  context.__savedReview = null;
-  run("state = {auto_review_account_id:'',subscription_search:{enabled:true,account_id:''},accounts:[{id:'backup',name:'Backup',prefix:'reserve',credential_set:true},{id:'disabled',name:'Disabled',enabled:false,credential_set:true}],providers:[],models:[]}; renderAutoReviewAccount()");
-  const select = getElement('auto_review_account');
-  assert.match(select.innerHTML, /value="backup">Backup/);
-  assert.doesNotMatch(select.innerHTML, /value="disabled"/);
-  assert.match(select.innerHTML, /Use Codex default account|使用 Codex 默认账号/);
-  run('persistState = async (message, candidate) => { __savedReview = candidate; state = candidate; }');
-  select.value = 'backup';
-  await run('saveAutoReviewAccount()');
-  assert.strictEqual(run('__savedReview.auto_review_account_id'), 'backup');
-  assert.strictEqual(run('__savedReview.subscription_search.enabled'), true);
-}
-
 async function initialRenderIsolationBehavior() {
   const calls = [];
   context.__initialLoadApi = async path => {
@@ -1417,7 +1401,6 @@ function updateBehavior() {
   await atomicStateBehavior();
   await accountSaveDoesNotWaitForCatalog();
   await runtimeSettingsIsolationBehavior();
-  await autoReviewAccountBehavior();
   await initialRenderIsolationBehavior();
   process.stdout.write("web DOM behavior: ok\n");
 })().catch(error => {

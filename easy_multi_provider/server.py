@@ -28,6 +28,7 @@ import urllib.request
 from .network_proxy import follow_system_proxy
 
 from . import __version__
+from .auto_review import automatic_review_candidates, is_auto_review_model
 from .self_update import UpdateError, UpdateManager, mark_update_ready
 from .accounts import (
     NATIVE_ACCOUNT_ID,
@@ -1363,6 +1364,7 @@ class AppState:
         )
         self.codex_home = Path(codex_home)
         self._native_quota: Optional[Dict[str, Any]] = None
+        self._auto_review_cooldowns: Dict[str, float] = {}
         self.quota_history = QuotaHistoryStore(quota_history_path(self.path))
         self._quota_sampler_stop = threading.Event()
         self._quota_sampler_thread: Optional[threading.Thread] = None
@@ -1491,6 +1493,9 @@ class AppState:
             return json.loads(json.dumps(self.config))
 
     def notify_quota_update(self, account_id: str, error: Optional[str] = None) -> None:
+        if not error:
+            with self.lock:
+                self._auto_review_cooldowns.pop(account_id, None)
         with self._quota_condition:
             if error:
                 self._quota_refresh_errors[account_id] = error
@@ -1544,10 +1549,25 @@ class AppState:
         with self.lock:
             snapshot = json.loads(json.dumps(self.config))
             manager = self.integration_manager
+            native_quota = json.loads(json.dumps(self._native_quota))
+            cooldowns = dict(self._auto_review_cooldowns)
         if manager is not None:
             snapshot["_native_auth_path"] = str(
                 manager.config_path.parent / "auth.json"
             )
+        native_auth = Path(
+            snapshot.get("_native_auth_path") or self.codex_home / "auth.json"
+        )
+        try:
+            native_available = native_auth.is_file() and not native_auth.is_symlink()
+        except OSError:
+            native_available = False
+        snapshot["_auto_review_candidates"] = automatic_review_candidates(
+            snapshot,
+            native_quota,
+            native_available,
+            cooldowns,
+        )
         return snapshot
 
     def ensure_integration_manager(self) -> IntegrationManager:
@@ -2154,6 +2174,7 @@ class AppState:
         )
         safe_event["duration_ms"] = max(0, int(round((time.monotonic() - started) * 1000)))
         safe_event.setdefault("service_tier", requested_tier or "default")
+        self._observe_auto_review_route(safe_event)
         self.usage.record(safe_event)
         context = safe_event.get("context_observation")
         if isinstance(context, Mapping):
@@ -2161,6 +2182,30 @@ class AppState:
             self._remember_context_calibration(safe_event, body)
         self._remember_resolved_protocol(safe_event, body.get("model"))
         self.diagnostics.record(safe_event)
+
+    def _observe_auto_review_route(self, event: Mapping[str, Any]) -> None:
+        model_id = event.get("client_model", event.get("model_id"))
+        if not is_auto_review_model(model_id):
+            return
+        provider_id = event.get("provider_id")
+        account_id = (
+            NATIVE_ACCOUNT_ID if provider_id == "codex-native" else provider_id
+        )
+        if not isinstance(account_id, str) or not account_id:
+            return
+        with self.lock:
+            if event.get("success") is True:
+                self._auto_review_cooldowns.pop(account_id, None)
+                return
+            reason = event.get("failure_reason")
+            error_class = event.get("error_class")
+            if reason in {
+                "quota_exhausted",
+                "rate_limited",
+                "payment_required",
+                "auth_rejected",
+            } or error_class in {"rate_limit", "auth"}:
+                self._auto_review_cooldowns[account_id] = time.monotonic() + 300
 
     def _remember_context_calibration(
         self, event: Mapping[str, Any], body: Mapping[str, Any]
@@ -2840,8 +2885,6 @@ class AppState:
 
             updated = dict(self.config)
             updated["accounts"] = [item for item in accounts if item.get("id") != account_id]
-            if updated.get("auto_review_account_id") == account_id:
-                updated["auto_review_account_id"] = ""
             search = dict(updated.get("subscription_search") or {})
             if search.get("account_id") == account_id:
                 search.update({"enabled": False, "account_id": ""})

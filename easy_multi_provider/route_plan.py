@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from .capabilities import deployment_identity, endpoint_fingerprint, make_provenance
+from .auto_review import AUTO_REVIEW_MODEL_ID, is_auto_review_model
 from .catalog import subscription_route_model
 from .dialects import classify_dialect
 from .router_errors import RouterError
@@ -180,8 +181,75 @@ def _implicit_native_route(
     return None
 
 
+def _automatic_review_route(
+    config: Dict[str, Any], requested_id: str
+) -> Optional[ResolvedRoute]:
+    order = config.get("_auto_review_candidates")
+    if not is_auto_review_model(requested_id) or not isinstance(order, list):
+        return None
+    accounts = {
+        str(account.get("id")): account
+        for account in config.get("accounts", [])
+        if isinstance(account, dict) and account.get("id")
+    }
+    for account_id in order:
+        if account_id == "@native":
+            model = _native_catalog_route_model(
+                config, requested_id, AUTO_REVIEW_MODEL_ID
+            )
+            if model is None:
+                continue
+            provider = {
+                "id": "codex-native",
+                "name": "Native Codex",
+                "base_url": config.get(
+                    "codex_base_url", "https://chatgpt.com/backend-api/codex"
+                ),
+                "protocol": "responses",
+                "auth_mode": "forward",
+                "implicit_native": True,
+            }
+            native_auth_path = config.get("_native_auth_path")
+            if isinstance(native_auth_path, str) and native_auth_path:
+                provider["_native_auth_path"] = native_auth_path
+            return ResolvedRoute.from_parts(
+                requested_id, provider, model, IMPLICIT_NATIVE
+            )
+        account = accounts.get(str(account_id))
+        if (
+            account is None
+            or account.get("enabled", True) is False
+            or not account.get("auth_file")
+            or account.get("credential_status") == "invalid"
+        ):
+            continue
+        model = _native_catalog_route_model(
+            config, requested_id, AUTO_REVIEW_MODEL_ID, account
+        )
+        if model is None:
+            continue
+        provider = {
+            "id": account["id"],
+            "name": account.get("name", account["id"]),
+            "base_url": config.get(
+                "codex_base_url", "https://chatgpt.com/backend-api/codex"
+            ),
+            "protocol": "responses",
+            "auth_mode": "account",
+            "account": account,
+        }
+        return ResolvedRoute.from_parts(
+            requested_id, provider, model, SUBSCRIPTION_ACCOUNT
+        )
+    return None
+
+
 def resolve_route(config: Dict[str, Any], model_id: str) -> ResolvedRoute:
     """Resolve an explicit model, Subscription prefix, or implicit Native model."""
+
+    automatic_review = _automatic_review_route(config, model_id)
+    if automatic_review is not None:
+        return automatic_review
 
     for model in config.get("models", []):
         if model.get("enabled", True) and model.get("id") == model_id:

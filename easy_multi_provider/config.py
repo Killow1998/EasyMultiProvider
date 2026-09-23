@@ -58,7 +58,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "enabled": False,
         "account_id": "",
     },
-    "auto_review_account_id": "",
     "codex_runtime_sources": ["auto"],
 }
 
@@ -677,17 +676,6 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     result["subscription_search"] = _normalize_subscription_search(
         raw.get("subscription_search"), account_ids
     )
-    review_account_id = raw.get("auto_review_account_id", "")
-    if not isinstance(review_account_id, str):
-        raise ConfigError("auto_review_account_id must be a string")
-    if review_account_id and review_account_id not in account_ids:
-        raise ConfigError("auto_review_account_id references an unknown account")
-    if review_account_id:
-        review_account = next(item for item in accounts if item["id"] == review_account_id)
-        review_route = review_account["prefix"] + "/codex-auto-review"
-        if review_route in model_ids:
-            raise ConfigError("auto_review_account_id conflicts with an explicit model route")
-    result["auto_review_account_id"] = review_account_id
     result["codex_runtime_sources"] = _normalize_codex_runtime_sources(
         raw.get("codex_runtime_sources", ["auto"])
     )
@@ -810,8 +798,6 @@ def merge_web_update(
     if not isinstance(incoming, dict):
         raise ConfigError("request body must be an object")
     merged = copy.deepcopy(incoming)
-    if "auto_review_account_id" not in merged:
-        merged["auto_review_account_id"] = current.get("auto_review_account_id", "")
     # Runtime selection has its own endpoint. A stale general settings form
     # must not overwrite a selection already saved by this or another tab.
     merged["codex_runtime_sources"] = copy.deepcopy(

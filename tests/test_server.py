@@ -496,16 +496,17 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("toggleProviderModels", html)
         self.assertIn("隐藏全部模型", html)
 
-    def test_web_exposes_route_presentation_controls_and_live_preview(self):
+    def test_web_exposes_compact_route_presentation_editor(self):
         html = WEB_FILE.read_text(encoding="utf-8")
         self.assertIn("模型显示", html)
-        self.assertIn("data-catalog-alias", html)
-        self.assertIn("data-catalog-context", html)
-        self.assertIn("data-catalog-preview", html)
+        self.assertIn("modal_catalog_alias", html)
+        self.assertIn("modal_catalog_context", html)
         self.assertNotIn("data-catalog-summary", html)
         self.assertIn("presentationPreview", html)
-        self.assertIn("updateCatalogDisplayPreview", html)
+        self.assertIn("openCatalogDisplayEditor", html)
         self.assertIn("renderCatalogDisplay", html)
+        self.assertNotIn('id="catalog_display_toggle"', html)
+        self.assertNotIn('onclick="saveCatalogDisplay()"', html)
         self.assertNotIn("openNativePresentationModal", html)
         self.assertNotIn("openRoutePresentationModal", html)
 
@@ -1207,12 +1208,10 @@ class ServerAccountTests(unittest.TestCase):
             )
             auth_path = Path(account["auth_file"])
             self.assertTrue(auth_path.exists())
-            state.update({**state.management_snapshot(), "auto_review_account_id": "primary"})
             state.delete_account("primary")
             self.assertFalse(auth_path.exists())
             self.assertFalse(auth_path.parent.exists())
             self.assertEqual(state.config["accounts"], [])
-            self.assertEqual(state.config["auto_review_account_id"], "")
             self.assertTrue(config_path.exists())
 
     def test_web_config_update_keeps_api_key_out_of_config(self):
