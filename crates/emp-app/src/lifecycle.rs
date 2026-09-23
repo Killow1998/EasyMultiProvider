@@ -41,10 +41,11 @@ pub(crate) struct ServerHandle {
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
-struct UpdateStartupOptions {
+struct ServerStartupOptions {
     config_path: PathBuf,
     open_browser: bool,
     markers: UpdateStartupMarkers,
+    admission: ConnectionAdmissionConfig,
 }
 
 struct StartupContext<'a> {
@@ -208,12 +209,12 @@ impl ServerHandle {
             session,
             backend,
             service_owner,
-            UpdateStartupOptions {
+            ServerStartupOptions {
                 config_path: config_path.to_path_buf(),
                 open_browser,
                 markers,
+                admission,
             },
-            admission,
         )
     }
 
@@ -224,8 +225,7 @@ impl ServerHandle {
         session: WebSession,
         backend: BackendState,
         service_owner: emp_state::IntegrationFileLock,
-        update_startup: UpdateStartupOptions,
-        admission: ConnectionAdmissionConfig,
+        startup_options: ServerStartupOptions,
     ) -> Result<Self, AppError> {
         let listener = TcpListener::bind((host, port))?;
         listener.set_nonblocking(true)?;
@@ -238,18 +238,18 @@ impl ServerHandle {
         let mut random = [0_u8; WEB_SESSION_TOKEN_BYTES];
         getrandom::getrandom(&mut random).map_err(|_| AppError::RandomUnavailable)?;
         let updates = crate::services::updates::UpdateState::new(
-            &update_startup.config_path,
+            &startup_options.config_path,
             crate::VERSION,
             local_addr,
-            update_startup.open_browser,
-            update_startup.markers.rolled_back,
+            startup_options.open_browser,
+            startup_options.markers.rolled_back,
             Arc::clone(&shutdown),
         );
         let state = Arc::new(ServerState {
             shutdown,
             _service_owner: service_owner,
             sessions,
-            connection_admission: ConnectionAdmission::new(admission),
+            connection_admission: ConnectionAdmission::new(startup_options.admission),
             bootstrap: BootstrapToken {
                 token: URL_SAFE_NO_PAD.encode(random),
                 used: AtomicBool::new(false),
