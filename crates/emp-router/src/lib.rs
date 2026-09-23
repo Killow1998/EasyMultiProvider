@@ -22,6 +22,7 @@ use emp_transport::{
     HttpTransportErrorKind, SseFrame, SseJsonParser, TransportError, http_failure,
 };
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
@@ -426,7 +427,7 @@ impl<'a> ExternalRouter<'a> {
         let (payload, projection) = match route.protocol {
             Protocol::Auto => return Err(unresolved_protocol()),
             Protocol::ChatCompletions => {
-                let mut payload = responses_to_chat(&portable_body, &route.upstream_model)
+                let mut payload = responses_to_chat(portable_body.as_ref(), &route.upstream_model)
                     .map_err(protocol_error)?;
                 payload["stream"] = Value::Bool(true);
                 payload["stream_options"] = serde_json::json!({"include_usage": true});
@@ -435,8 +436,9 @@ impl<'a> ExternalRouter<'a> {
                 (payload, StreamProjection::Chat(stream))
             }
             Protocol::AnthropicMessages => {
-                let mut payload = responses_to_anthropic(&portable_body, &route.upstream_model)
-                    .map_err(anthropic_error)?;
+                let mut payload =
+                    responses_to_anthropic(portable_body.as_ref(), &route.upstream_model)
+                        .map_err(anthropic_error)?;
                 payload["stream"] = Value::Bool(true);
                 let stream = AnthropicStream::new(
                     &route.requested_model,
@@ -456,7 +458,7 @@ impl<'a> ExternalRouter<'a> {
                     .and_then(Value::as_bool)
                     == Some(true);
                 let mut payload =
-                    project_portable_request(provider, &portable_body, preserve_state)
+                    project_portable_request(provider, portable_body.as_ref(), preserve_state)
                         .map_err(portable_request_error)?;
                 payload["model"] = Value::String(route.upstream_model.clone());
                 payload["stream"] = Value::Bool(true);
@@ -581,10 +583,11 @@ fn project_prepared_external_payload(
     match route.protocol {
         Protocol::Auto => Err(unresolved_protocol()),
         Protocol::ChatCompletions => {
-            responses_to_chat(&portable_body, &route.upstream_model).map_err(protocol_error)
+            responses_to_chat(portable_body.as_ref(), &route.upstream_model).map_err(protocol_error)
         }
         Protocol::AnthropicMessages => {
-            responses_to_anthropic(&portable_body, &route.upstream_model).map_err(anthropic_error)
+            responses_to_anthropic(portable_body.as_ref(), &route.upstream_model)
+                .map_err(anthropic_error)
         }
         Protocol::Responses => {
             let preserve_state = route
@@ -593,8 +596,9 @@ fn project_prepared_external_payload(
                 .get("_emp_preserve_reasoning_state")
                 .and_then(Value::as_bool)
                 == Some(true);
-            let mut payload = project_portable_request(provider, &portable_body, preserve_state)
-                .map_err(portable_request_error)?;
+            let mut payload =
+                project_portable_request(provider, portable_body.as_ref(), preserve_state)
+                    .map_err(portable_request_error)?;
             payload["model"] = Value::String(route.upstream_model.clone());
             Ok(payload)
         }
@@ -1109,22 +1113,22 @@ fn validate_stream_request(route: &ResolvedRoute, body: &Value) -> Result<(), Ro
     Ok(())
 }
 
-fn body_with_supported_effort(route: &ResolvedRoute, body: &Value) -> Value {
+fn body_with_supported_effort<'a>(route: &ResolvedRoute, body: &'a Value) -> Cow<'a, Value> {
     let Some(source) = body.as_object() else {
-        return body.clone();
+        return Cow::Borrowed(body);
     };
     let provider = route.provider.value();
     if matches!(
         provider.get("auth_mode").and_then(Value::as_str),
         Some("account" | "forward")
     ) {
-        return body.clone();
+        return Cow::Borrowed(body);
     }
     let Some(reasoning) = source.get("reasoning").and_then(Value::as_object) else {
-        return body.clone();
+        return Cow::Borrowed(body);
     };
     let Some(effort) = reasoning.get("effort") else {
-        return body.clone();
+        return Cow::Borrowed(body);
     };
     let model = route.model.value();
     let levels = model.get("reasoning_levels").and_then(Value::as_array);
@@ -1140,7 +1144,7 @@ fn body_with_supported_effort(route: &ResolvedRoute, body: &Value) -> Value {
             !levels.is_empty() && !levels.contains(effort) && !persistent_alias
         });
     if !unsupported {
-        return body.clone();
+        return Cow::Borrowed(body);
     }
     let mut projected = source.clone();
     let mut reasoning = reasoning.clone();
@@ -1150,7 +1154,7 @@ fn body_with_supported_effort(route: &ResolvedRoute, body: &Value) -> Value {
     } else {
         projected.insert("reasoning".to_owned(), Value::Object(reasoning));
     }
-    Value::Object(projected)
+    Cow::Owned(Value::Object(projected))
 }
 
 fn endpoint(provider: &Map<String, Value>, protocol: Protocol) -> Result<String, RouterError> {
@@ -1406,3 +1410,71 @@ fn tool_response_error(message: &'static str) -> RouterError {
 }
 
 pub use emp_protocol::context_error::is_explicit_context_error;
+
+#[cfg(test)]
+mod body_with_supported_effort_tests {
+    use super::{Dialect, Protocol, body_with_supported_effort};
+    use emp_core::{ResolvedRoute, RouteSource};
+    use serde_json::json;
+    use std::borrow::Cow;
+
+    fn route() -> ResolvedRoute {
+        ResolvedRoute::new(
+            "demo/model",
+            "upstream-model",
+            RouteSource::ExplicitModel,
+            json!({
+                "id":"demo-provider", "base_url":"https://example.test/v1",
+                "protocol":"responses", "auth_mode":"api_key", "api_key":"fixture"
+            })
+            .as_object()
+            .expect("provider object")
+            .clone(),
+            json!({
+                "id":"demo/model", "supports_reasoning":true,
+                "reasoning_levels":["low"]
+            })
+            .as_object()
+            .expect("model object")
+            .clone(),
+            Protocol::Responses,
+            Dialect::PortableResponses,
+            "demo-provider",
+            format!("sha256:{}", "1".repeat(64)),
+            "default",
+        )
+        .expect("resolved route")
+    }
+
+    #[test]
+    fn supported_effort_returns_borrowed_body() {
+        let route = route();
+        let body = json!({
+            "model":"demo/model", "input":"large request body",
+            "reasoning":{"effort":"low"}
+        });
+
+        assert!(matches!(
+            body_with_supported_effort(&route, &body),
+            Cow::Borrowed(value) if std::ptr::eq(value, &body)
+        ));
+    }
+
+    #[test]
+    fn unsupported_effort_returns_owned_projected_body() {
+        let route = route();
+        let body = json!({
+            "model":"demo/model", "input":"large request body",
+            "reasoning":{"effort":"high", "summary":"auto"}
+        });
+
+        let projected = body_with_supported_effort(&route, &body);
+        let Cow::Owned(projected) = projected else {
+            panic!("unsupported effort must own the changed body");
+        };
+        assert_eq!(projected["input"], body["input"]);
+        assert_eq!(projected["reasoning"]["summary"], "auto");
+        assert!(projected["reasoning"].get("effort").is_none());
+        assert_eq!(body["reasoning"]["effort"], "high");
+    }
+}
