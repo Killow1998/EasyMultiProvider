@@ -3671,17 +3671,18 @@ class ServerAccountTests(unittest.TestCase):
             ) as refresh, patch(
                 "easy_multi_provider.server.consume_native_login_quota_reset"
             ) as native_consume:
-                result = state.consume_quota_reset("primary", key)
+                result = state.consume_quota_reset("primary", key, credit_id="credit-123")
 
         self.assertEqual(result["outcome"], "reset")
         self.assertEqual(result["account"]["id"], "primary")
         self.assertIsNone(result["refresh_error"])
         consume.assert_called_once()
         self.assertEqual(consume.call_args.args[1], key)
+        self.assertEqual(consume.call_args.kwargs["credit_id"], "credit-123")
         refresh.assert_called_once_with("primary")
         native_consume.assert_not_called()
 
-    def test_quota_reset_endpoint_keeps_client_idempotency_key(self):
+    def test_quota_reset_endpoint_keeps_client_credit_and_idempotency_key(self):
         with tempfile.TemporaryDirectory() as directory:
             state = AppState(Path(directory) / "config.json")
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
@@ -3702,7 +3703,7 @@ class ServerAccountTests(unittest.TestCase):
                     connection.request(
                         "POST",
                         "/api/accounts/%40native/quota-reset",
-                        json.dumps({"idempotency_key": key}),
+                        json.dumps({"idempotency_key": key, "credit_id": "credit-123"}),
                         {
                             "Content-Type": "application/json",
                             "Cookie": "emp_session=" + state.session_token,
@@ -3718,7 +3719,7 @@ class ServerAccountTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["outcome"], "nothingToReset")
-        consume.assert_called_once_with("@native", key)
+        consume.assert_called_once_with("@native", key, credit_id="credit-123")
 
     def test_quota_refresh_uses_native_login_for_duplicate_current_login(self):
         with tempfile.TemporaryDirectory() as directory:

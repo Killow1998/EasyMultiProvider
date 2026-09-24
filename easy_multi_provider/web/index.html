@@ -162,6 +162,8 @@ button[data-icon]{display:inline-flex}
 .reset-credit-list{display:grid;gap:8px}
 .reset-credit-card{display:grid;gap:7px;padding:11px 12px;border:1px solid var(--border);border-radius:9px;background:var(--panel-soft)}
 .reset-credit-card header{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.reset-credit-choice{display:flex;align-items:center;gap:8px;cursor:pointer}
+.reset-credit-choice input{width:auto;margin:0}
 .reset-credit-card p{margin:0;color:var(--muted);font-size:12px}
 .reset-credit-time{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;font-size:12px}
 .reset-credit-time time{color:var(--muted);font-variant-numeric:tabular-nums}
@@ -1182,6 +1184,13 @@ function resetIdempotencyKey() {
   const hex = [...bytes].map(value => value.toString(16).padStart(2,'0')).join('');
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
+function resetAttemptKey(accountId, creditId) {
+  const prior = resetAttempts.get(accountId);
+  if (prior && prior.creditId === creditId) return prior.key;
+  const key = resetIdempotencyKey();
+  resetAttempts.set(accountId,{creditId,key});
+  return key;
+}
 function creditHtml(account) {
   const credit = account?.quota?.credits; if (!credit) return '';
   const items = [];
@@ -1197,22 +1206,47 @@ function openResetCredits(accountId) {
   const account = [...(state.native_account ? [state.native_account] : []),...(state.accounts || [])].find(item => item.id === accountId);
   if (!account || resetCreditCount(account) <= 0) { notice(tr('此账户没有可用的重置机会。','This account has no available reset opportunities.'),true); return; }
   const entries = resetCreditEntries(account);
-  const idempotencyKey = resetAttempts.get(accountId) || resetIdempotencyKey();
-  resetAttempts.set(accountId,idempotencyKey);
-  const cards = entries.map((item,index) => { const expires = utcDateTimeText(item.expires_at); const remaining = resetCountdownText(item.expires_at); const title = item.title || tr(`重置机会 ${index + 1}`,`Reset opportunity ${index + 1}`); const status = item.status ? `<span class="pill">${esc(item.status)}</span>` : ''; return `<article class="reset-credit-card"><header><strong>${esc(title)}</strong>${status}</header>${item.description ? `<p>${esc(item.description)}</p>` : ''}<div class="reset-credit-time"><time>${expires ? `${tr('到期','Expires')} · ${esc(expires)}` : tr('未提供到期时间','No expiry provided')}</time>${remaining ? `<strong data-reset-countdown="${esc(item.expires_at)}">${esc(remaining)}</strong>` : ''}</div></article>`; }).join('');
-  const body = `<div class="reset-credit-note"><p><strong>${tr('使用后会发生什么','What happens after use')}</strong><br>${tr('使用一次重置机会会重置符合资格的 Codex 额度周期；新的额度与下一次刷新时间由 OpenAI 返回，EMP 会在使用后重新读取。','Using one opportunity resets the eligible Codex quota windows. OpenAI returns the new quota and next refresh time, which EMP must read again after use.')}</p></div><div class="reset-credit-summary">${tr('可用机会','Available opportunities')} <strong>${esc(resetCreditCount(account))}</strong></div>${cards ? `<div class="reset-credit-list">${cards}</div>` : `<p class="muted">${tr('OpenAI 只返回了可用次数，未返回每次机会的到期明细。','OpenAI returned the available count without per-opportunity expiry details.')}</p>`}`;
-  openModal(tr('重置额度详情','Reset quota details'),body,tr('使用一次重置','Use one reset'),async () => {
-    if (!confirm(tr('使用一次重置机会？这会重置 OpenAI 判定为符合资格的额度周期，而且无法撤销。','Use one reset opportunity? This resets the quota windows OpenAI considers eligible and cannot be undone.'))) return;
-    const result = await api('/api/accounts/' + encodeURIComponent(accountId) + '/quota-reset',{method:'POST',body:JSON.stringify({idempotency_key:idempotencyKey})});
-    if (result.outcome === 'nothingToReset') { resetAttempts.delete(accountId); throw new Error(tr('OpenAI 表示目前没有符合资格的额度周期；重置机会没有被使用。','OpenAI reports no eligible quota window. No reset opportunity was used.')); }
-    if (result.outcome === 'noCredit') { resetAttempts.delete(accountId); throw new Error(tr('OpenAI 表示此账户已没有可用的重置机会。','OpenAI reports no available reset opportunity for this account.')); }
+  const selectable = entries.filter(item => item.status === 'available' && typeof item.id === 'string' && item.id.length > 0);
+  const prior = resetAttempts.get(accountId);
+  const selectedIndex = prior ? selectable.findIndex(item => item.id === prior.creditId) : 0;
+  const cards = entries.map((item,index) => {
+    const expires = utcDateTimeText(item.expires_at), remaining = resetCountdownText(item.expires_at);
+    const title = item.title || tr(`重置机会 ${index + 1}`,`Reset opportunity ${index + 1}`);
+    const status = item.status ? `<span class="pill">${esc(item.status)}</span>` : '';
+    const choiceIndex = selectable.indexOf(item);
+    const choice = choiceIndex >= 0 ? `<label class="reset-credit-choice"><input type="radio" name="reset_credit_choice" value="${choiceIndex}"${choiceIndex === selectedIndex ? ' checked' : ''}><strong>${esc(title)}</strong></label>` : `<strong>${esc(title)}</strong>`;
+    return `<article class="reset-credit-card"><header>${choice}${status}</header>${item.description ? `<p>${esc(item.description)}</p>` : ''}<div class="reset-credit-time"><time>${expires ? `${tr('到期','Expires')} · ${esc(expires)}` : tr('未提供到期时间','No expiry provided')}</time>${remaining ? `<strong data-reset-countdown="${esc(item.expires_at)}">${esc(remaining)}</strong>` : ''}</div></article>`;
+  }).join('');
+  const automatic = selectable.length ? `<article class="reset-credit-card"><label class="reset-credit-choice"><input type="radio" name="reset_credit_choice" value="auto"${prior && prior.creditId === null ? ' checked' : ''}><strong>${tr('由 OpenAI 选择下一个可用机会','Let OpenAI choose the next available opportunity')}</strong></label></article>` : '';
+  const fallback = !selectable.length ? `<p class="muted">${entries.length ? tr('没有可选择的机会明细；OpenAI 会选择下一个可用机会。','No selectable credit details were returned; OpenAI will choose the next available opportunity.') : tr('OpenAI 只返回了可用次数，未返回每次机会的到期明细；OpenAI 会选择下一个可用机会。','OpenAI returned only the available count; it will choose the next available opportunity.')}</p>` : '';
+  const body = `<div class="reset-credit-note"><p><strong>${tr('使用后会发生什么','What happens after use')}</strong><br>${tr('使用一次重置机会会重置符合资格的 Codex 额度周期；新的额度与下一次刷新时间由 OpenAI 返回，EMP 会在使用后重新读取。','Using one opportunity resets the eligible Codex quota windows. OpenAI returns the new quota and next refresh time, which EMP must read again after use.')}</p></div><div class="reset-credit-summary">${tr('可用机会','Available opportunities')} <strong>${esc(resetCreditCount(account))}</strong></div><div class="reset-credit-list">${cards}${automatic}</div>${fallback}`;
+  openModal(tr('重置额度详情','Reset quota details'),body,tr('继续确认','Continue to confirmation'),async () => {
+    const selected = document.querySelectorAll('input[name="reset_credit_choice"]:checked')[0];
+    if (selectable.length && !selected) throw new Error(tr('请选择要使用的重置机会。','Choose a reset opportunity to use.'));
+    const credit = selected?.value === 'auto' ? null : selectable[Number(selected?.value)] || null;
+    const creditId = credit?.id || null;
+    resetAttemptKey(accountId,creditId);
+    confirmResetCredit(account,credit);
+  });
+  refreshResetCountdowns();
+}
+function confirmResetCredit(account,credit) {
+  const title = credit?.title || (credit ? tr('所选重置机会','Selected reset opportunity') : tr('由 OpenAI 选择下一个可用机会','OpenAI chooses the next available opportunity'));
+  const expires = credit ? utcDateTimeText(credit.expires_at) : '';
+  const body = `<div class="reset-credit-note"><p><strong>${tr('请再次确认','Please confirm again')}</strong><br>${tr('账户','Account')}：${esc(account.name || account.id)}<br>${tr('使用机会','Opportunity')}：${esc(title)}${expires ? `<br>${tr('到期','Expires')}：${esc(expires)}` : ''}</p></div><p class="muted">${tr('确认后会消耗一次重置机会，重置 OpenAI 判定为符合资格的额度周期。此操作无法撤销。','Confirming spends one reset opportunity and resets the quota windows OpenAI considers eligible. This cannot be undone.')}</p><button type="button" class="secondary" id="reset_choice_back">${tr('返回选择','Change selection')}</button>`;
+  openModal(tr('确认重置额度','Confirm quota reset'),body,tr('确认并使用重置','Confirm and use reset'),async () => {
+    const payload = {idempotency_key:resetAttemptKey(account.id,credit?.id || null)};
+    if (credit) payload.credit_id = credit.id;
+    const result = await api('/api/accounts/' + encodeURIComponent(account.id) + '/quota-reset',{method:'POST',body:JSON.stringify(payload)});
+    if (result.outcome === 'nothingToReset') { resetAttempts.delete(account.id); throw new Error(tr('OpenAI 表示目前没有符合资格的额度周期；重置机会没有被使用。','OpenAI reports no eligible quota window. No reset opportunity was used.')); }
+    if (result.outcome === 'noCredit') { resetAttempts.delete(account.id); throw new Error(tr('OpenAI 表示此账户已没有可用的重置机会。','OpenAI reports no available reset opportunity for this account.')); }
     if (!['reset','alreadyRedeemed'].includes(result.outcome)) throw new Error(tr('OpenAI 没有返回可确认的重置结果。','OpenAI did not return a confirmed reset result.'));
-    resetAttempts.delete(accountId);
+    resetAttempts.delete(account.id);
     closeModal();
     await refreshQuotaState();
     notice(result.refresh_error ? tr('重置已完成，但新的额度与刷新时间暂时读取失败；请稍后刷新。','Reset completed, but the new quota and refresh time could not be read yet. Refresh again shortly.') : tr('重置已完成，额度与刷新时间已更新。','Reset completed. Quota and refresh time were updated.'));
   });
-  refreshResetCountdowns();
+  $('reset_choice_back').onclick = () => openResetCredits(account.id);
 }
 
 const quotaChartColors = ['#3b82f6','#f59e0b','#10b981','#a855f7','#ef4444','#06b6d4'];
@@ -1643,7 +1677,7 @@ async function testModelVision(id) {
 }
 
 function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryLoading = false; quotaHistoryRequest++; }
-function openModal(title, body, submitLabel, submit) { stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; button.onclick = submit ? async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { button.disabled = false; button.textContent = label; } } : null; $('modal_backdrop').classList.remove('hidden'); }
+function openModal(title, body, submitLabel, submit) { stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; const handler = async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { if (button.onclick === handler) { button.disabled = false; button.textContent = label; } else if (button.onclick === null) button.disabled = false; } }; button.onclick = submit ? handler : null; $('modal_backdrop').classList.remove('hidden'); }
 function closeModal() { subscriptionEditor = null; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 
 let updatePollTimer = null;

@@ -132,6 +132,7 @@ from .native_websocket import (
 )
 from .quota import (
     QuotaError,
+    _validated_reset_credit_id,
     account_refresh_lock,
     clear_account_quota_cache,
     consume_account_quota_reset,
@@ -2742,8 +2743,10 @@ class AppState:
         return self.native_account_snapshot()
 
     def consume_quota_reset(
-        self, account_id: str, idempotency_key: str
+        self, account_id: str, idempotency_key: str, credit_id: Optional[str] = None
     ) -> Dict[str, Any]:
+        credit_id = _validated_reset_credit_id(credit_id)
+        reset_kwargs = {"credit_id": credit_id} if credit_id is not None else {}
         with self.lock:
             target = next(
                 (
@@ -2769,12 +2772,14 @@ class AppState:
                     idempotency_key,
                     codex_binary=codex_binary,
                     auth_path=self.codex_home / "auth.json",
+                    **reset_kwargs,
                 )
             else:
                 outcome = consume_account_quota_reset(
                     target or {},
                     idempotency_key,
                     codex_binary=codex_binary,
+                    **reset_kwargs,
                 )
             clear_account_quota_cache(owner)
             clear_account_quota_cache(account_id)
@@ -4850,8 +4855,14 @@ def make_handler(state: AppState):
                     account_id = unquote(
                         path[len("/api/accounts/") : -len("/quota-reset")].rstrip("/")
                     )
+                    credit_id = body.get("credit_id")
+                    if "credit_id" in body and credit_id is None:
+                        raise QuotaError("reset credit id is invalid", "quota_reset_invalid_request")
+                    credit_id = _validated_reset_credit_id(credit_id)
                     result = state.consume_quota_reset(
-                        account_id, body.get("idempotency_key")
+                        account_id,
+                        body.get("idempotency_key"),
+                        **({"credit_id": credit_id} if credit_id is not None else {}),
                     )
                     emit_operation(
                         "account_operation",

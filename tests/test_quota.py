@@ -197,7 +197,7 @@ class QuotaTests(unittest.TestCase):
 
         self.assertEqual(value["plan_type"], "free")
 
-    def test_parser_exposes_codex_credits_without_reset_ids(self):
+    def test_parser_exposes_codex_credits_with_reset_ids(self):
         output = json.dumps({
             "id": 3,
             "result": {
@@ -229,7 +229,7 @@ class QuotaTests(unittest.TestCase):
         self.assertEqual(value["credits"]["balance"], "42")
         self.assertEqual(value["credits"]["individual_limit"]["remaining_percent"], 42)
         self.assertEqual(value["credits"]["reset_credits"]["available_count"], 2)
-        self.assertNotIn("opaque-reset-id", json.dumps(value))
+        self.assertEqual(value["credits"]["reset_credits"]["credits"][0]["id"], "opaque-reset-id")
 
     def test_parser_accepts_codex_multi_bucket_and_rolling_update_shapes(self):
         output = "\n".join(
@@ -416,28 +416,41 @@ class QuotaTests(unittest.TestCase):
                 def kill(self):
                     self.returncode = -9
 
-            process = FakeProcess()
             key = "12345678-1234-4123-8123-123456789abc"
-            with patch(
-                "easy_multi_provider.quota.subprocess.Popen", return_value=process
-            ):
-                outcome = quota_module.consume_account_quota_reset(
-                    {"id": "primary", "auth_file": str(auth_file)},
-                    key,
-                    codex_binary=str(codex_file),
-                )
+            for credit_id in (None, "credit-123"):
+                process = FakeProcess()
+                with patch(
+                    "easy_multi_provider.quota.subprocess.Popen", return_value=process
+                ):
+                    outcome = quota_module.consume_account_quota_reset(
+                        {"id": "primary", "auth_file": str(auth_file)},
+                        key,
+                        codex_binary=str(codex_file),
+                        credit_id=credit_id,
+                    )
 
-        requests = [json.loads(line) for line in process.stdin.body.splitlines()]
-        self.assertEqual(outcome, "reset")
-        self.assertEqual(requests[-1]["method"], "account/rateLimitResetCredit/consume")
-        self.assertEqual(requests[-1]["params"]["idempotencyKey"], key)
-        self.assertNotIn("account/rateLimits/read", process.stdin.body)
-        self.assertNotIn("secret", process.stdin.body)
+                requests = [json.loads(line) for line in process.stdin.body.splitlines()]
+                self.assertEqual(outcome, "reset")
+                self.assertEqual(requests[-1]["method"], "account/rateLimitResetCredit/consume")
+                self.assertEqual(requests[-1]["params"]["idempotencyKey"], key)
+                if credit_id is None:
+                    self.assertNotIn("creditId", requests[-1]["params"])
+                else:
+                    self.assertEqual(requests[-1]["params"]["creditId"], credit_id)
+                self.assertNotIn("account/rateLimits/read", process.stdin.body)
+                self.assertNotIn("secret", process.stdin.body)
 
     def test_reset_rejects_non_uuid_idempotency_key_before_loading_auth(self):
         with self.assertRaises(quota_module.QuotaError) as raised:
             quota_module.consume_account_quota_reset({}, "retry-me")
         self.assertEqual(raised.exception.code, "quota_reset_invalid_request")
+
+    def test_reset_rejects_invalid_credit_id_before_loading_auth(self):
+        key = "12345678-1234-4123-8123-123456789abc"
+        for credit_id in ("", "   ", 42, "x" * 257, "é" * 129):
+            with self.subTest(credit_id=credit_id), self.assertRaises(quota_module.QuotaError) as raised:
+                quota_module.consume_account_quota_reset({}, key, credit_id=credit_id)
+            self.assertEqual(raised.exception.code, "quota_reset_invalid_request")
 
 
 class QuotaOutputTests(unittest.TestCase):

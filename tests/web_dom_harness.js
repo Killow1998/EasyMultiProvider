@@ -21,6 +21,7 @@ let subscriptionModelInputs = [];
 let runtimeInputs = [];
 let quotaControls = [];
 let quotaRangeButtons = [];
+let resetCreditInputs = [];
 
 class Element {
   constructor(id = "") {
@@ -42,7 +43,7 @@ class Element {
   set innerHTML(value) {
     this._innerHTML = String(value);
     this.innerHTMLWrites++;
-    if (this.id === "modal_body") { parseDiscoveredOptions(this._innerHTML); parseSubscriptionOptions(this._innerHTML); quotaRangeButtons = parseQuotaButtons(this._innerHTML); }
+    if (this.id === "modal_body") { parseDiscoveredOptions(this._innerHTML); parseSubscriptionOptions(this._innerHTML); parseResetCreditOptions(this._innerHTML); quotaRangeButtons = parseQuotaButtons(this._innerHTML); }
     if (this.id === "subscription_model_list") parseSubscriptionOptions(this._innerHTML);
     if (this.id === "catalog_display_models") parseCatalogDisplay(this._innerHTML);
     if (this.id === "codex_runtimes") parseRuntimeInputs(this._innerHTML);
@@ -112,6 +113,13 @@ function parseSubscriptionOptions(html) {
   }
 }
 
+function parseResetCreditOptions(html) {
+  resetCreditInputs = [];
+  for (const match of html.matchAll(/<input type="radio" name="reset_credit_choice" value="([^"]*)"([^>]*)>/g)) {
+    const input = new Element(); input.value = unescapeHtml(match[1]); input.checked = /\schecked(?:\s|$)/.test(match[2]); resetCreditInputs.push(input);
+  }
+}
+
 function parseRuntimeInputs(html) {
   runtimeInputs = [];
   for (const match of html.matchAll(/<input type="checkbox" data-runtime-source value="([^"]*)"([^>]*)>/g)) {
@@ -141,6 +149,8 @@ const document = {
     }
     if (selector === 'input[name="subscription_model"]') return subscriptionModelInputs;
     if (selector === 'input[name="subscription_model"]:checked') return subscriptionModelInputs.filter(input => input.checked);
+    if (selector === 'input[name="reset_credit_choice"]:checked') return resetCreditInputs.filter(input => input.checked);
+    if (selector === 'input[name="reset_credit_choice"]') return resetCreditInputs;
     if (selector === "[data-catalog-alias]") return catalogAliases;
     if (selector === "[data-catalog-context]") return catalogContexts;
     if (selector === "[data-catalog-preview]") return catalogPreviews;
@@ -813,7 +823,7 @@ function quotaMeterBehavior() {
 async function creditLayoutBehavior() {
   context.__creditLayoutState = {
     native_account: null,
-    accounts: [{id:'credit-lines',name:'credit-lines',prefix:'credit-lines',credential_set:true,quota:{credits:{balance:1200,individual_limit:{remaining_percent:73},reset_credits:{available_count:2,credits:[{status:'available',title:'Rate-limit reset',description:'Reset an eligible Codex rate-limit window.',expires_at:1893553445},{status:'available',expires_at:1896321906}]}}}},{id:'no-resets',name:'no-resets',prefix:'no-resets',credential_set:true,quota:{credits:{balance:20,reset_credits:{available_count:0,credits:[]}}}}],
+    accounts: [{id:'credit-lines',name:'credit-lines',prefix:'credit-lines',credential_set:true,quota:{credits:{balance:1200,individual_limit:{remaining_percent:73},reset_credits:{available_count:2,credits:[{id:'reset-one',status:'available',title:'First reset',description:'Reset eligible Codex rate-limit windows.',expires_at:1893553445},{id:'reset-two',status:'available',title:'Second reset',expires_at:1896321906}]}}}},{id:'no-resets',name:'no-resets',prefix:'no-resets',credential_set:true,quota:{credits:{balance:20,reset_credits:{available_count:0,credits:[]}}}}],
   };
   run("state = __creditLayoutState; renderAccounts()");
   const rendered = getElement("accounts").innerHTML;
@@ -828,23 +838,56 @@ async function creditLayoutBehavior() {
   assert.doesNotMatch(modal, /10%|固定门槛|传闻|weekly quota below/, "unconfirmed reset rules must not appear in the UI");
   assert.strictEqual((modal.match(/ UTC/g) || []).length, 2, "each reset expiry must use an absolute UTC date and time");
   assert.strictEqual((modal.match(/data-reset-countdown=/g) || []).length, 2, "each reset expiry must also show remaining time");
-  assert.match(modal, /Rate-limit reset/);
-  assert.strictEqual(getElement('modal_submit').textContent, '使用一次重置');
+  assert.match(modal, /First reset/);
+  assert.strictEqual(resetCreditInputs.length, 3, 'two detailed credits and automatic selection must be available');
+  assert.strictEqual(getElement('modal_submit').textContent, '继续确认');
   const calls = [];
   context.__resetApi = async (path, options) => {
     calls.push({path, body:JSON.parse(options.body)});
-    return calls.length === 1 ? {outcome:'nothingToReset'} : {outcome:'reset',refresh_error:null};
+    if (calls.length === 1) throw new Error('temporary connection failure');
+    if (calls.length === 2) return {outcome:'nothingToReset'};
+    return {outcome:'reset',refresh_error:null};
   };
   run('__savedResetApi=api; __savedResetRefresh=refreshQuotaState; api=__resetApi; refreshQuotaState=async()=>false');
   try {
+    resetCreditInputs.forEach(input => { input.checked = input.value === '1'; });
+    await getElement('modal_submit').click();
+    assert.strictEqual(calls.length, 0, 'the selection step must never spend a credit');
+    assert.strictEqual(getElement('modal_submit').textContent, '确认并使用重置', 'the confirmation label must survive the first modal callback');
+    assert.match(getElement('modal_body').innerHTML, /Second reset/);
+    const secondCreditKey = run("resetAttempts.get('credit-lines').key");
+    await getElement('reset_choice_back').click();
+    assert.strictEqual(calls.length, 0, 'changing the selection must not spend a credit');
+    resetCreditInputs.forEach(input => { input.checked = input.value === '0'; });
+    await getElement('modal_submit').click();
+    assert.notStrictEqual(run("resetAttempts.get('credit-lines').key"), secondCreditKey, 'changing credits must create a new attempt key');
+    await getElement('reset_choice_back').click();
+    resetCreditInputs.forEach(input => { input.checked = input.value === '1'; });
+    await getElement('modal_submit').click();
+    assert.strictEqual(getElement('modal_submit').textContent, '确认并使用重置');
+    assert.strictEqual(calls.length, 0);
+    await getElement('modal_submit').click();
+    assert.match(getElement('modal_status').textContent, /temporary connection failure/);
     await getElement('modal_submit').click();
     assert.match(getElement('modal_status').textContent, /没有符合资格/);
     await getElement('modal_submit').click();
-    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(calls.length, 3);
     assert.strictEqual(calls[0].path, '/api/accounts/credit-lines/quota-reset');
-    assert.strictEqual(calls[0].body.idempotency_key, calls[1].body.idempotency_key, 'a retry must reuse the same reset attempt key');
+    assert.strictEqual(calls[0].body.credit_id, 'reset-two');
+    assert.strictEqual(calls[1].body.credit_id, 'reset-two');
+    assert.strictEqual(calls[2].body.credit_id, 'reset-two');
+    assert.strictEqual(calls[0].body.idempotency_key, calls[1].body.idempotency_key, 'an ambiguous failure must reuse the same attempt key');
+    assert.notStrictEqual(calls[1].body.idempotency_key, calls[2].body.idempotency_key, 'a known no-consumption result must start a new attempt');
     assert.match(calls[0].body.idempotency_key, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     assert.match(getElement('status').textContent, /重置已完成/);
+
+    run("state.accounts[0].quota.credits.reset_credits = {available_count:1,credits:null}; openResetCredits('credit-lines')");
+    assert.match(getElement('modal_body').innerHTML, /只返回了可用次数/);
+    await getElement('modal_submit').click();
+    assert.strictEqual(calls.length, 3, 'count-only fallback still requires the second confirmation');
+    await getElement('modal_submit').click();
+    assert.strictEqual(calls.length, 4);
+    assert.ok(!('credit_id' in calls[3].body), 'count-only fallback must let the backend choose');
   } finally { run('api=__savedResetApi; refreshQuotaState=__savedResetRefresh; closeModal()'); }
 }
 
