@@ -48,6 +48,7 @@ fn error_suffix(error: &emp_state::ConfigError) -> String {
 
 #[test]
 fn config_load_matches_frozen_python_fixture() {
+    let _lock = ENV_LOCK.lock().expect("environment lock");
     let fixture = fixture();
     for case in fixture["invalid_json_cases"]
         .as_array()
@@ -100,6 +101,7 @@ fn config_load_matches_frozen_python_fixture() {
 
 #[test]
 fn config_load_matches_live_python_oracle_when_configured() {
+    let _lock = ENV_LOCK.lock().expect("environment lock");
     let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
         return;
     };
@@ -165,6 +167,7 @@ json.dump(result, sys.stdout, ensure_ascii=False, separators=(",", ":"))
 
 #[test]
 fn valid_json_is_normalized_and_private_paths_are_canonicalized() {
+    let _lock = ENV_LOCK.lock().expect("environment lock");
     let directory = tempdir().expect("temporary directory");
     let root = temp_path(&directory);
     let path = root.join("configuration/config.json");
