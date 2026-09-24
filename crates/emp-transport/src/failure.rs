@@ -257,41 +257,25 @@ fn http_failure_reason(status: u16, detail: &str) -> &'static str {
     if text.ends_with(' ') {
         text.pop();
     }
-    if matches!(status, 401 | 403) {
-        "auth_rejected"
-    } else if status == 402 {
-        "payment_required"
-    } else if status == 413
-        || ["request too large", "payload too large", "input too large"]
-            .iter()
-            .any(|phrase| text.contains(phrase))
-    {
-        "request_too_large"
-    } else if ["context length", "context window", "maximum context"]
-        .iter()
-        .any(|phrase| text.contains(phrase))
-    {
-        "context_length_exceeded"
-    } else if status == 429 {
-        if ["quota", "credit", "balance", "insufficient"]
-            .iter()
-            .any(|word| text.contains(word))
-        {
-            "quota_exhausted"
-        } else if ["capacity", "overloaded", "saturated"]
-            .iter()
-            .any(|word| text.contains(word))
-        {
-            "upstream_capacity"
-        } else {
-            "rate_limited"
+    let contains_any = |words: &[&str]| words.iter().any(|word| text.contains(word));
+    match status {
+        401 | 403 => "auth_rejected",
+        402 => "payment_required",
+        413 => "request_too_large",
+        _ if contains_any(&["request too large", "payload too large", "input too large"]) => {
+            "request_too_large"
         }
-    } else if status == 504 {
-        "upstream_504"
-    } else if matches!(status, 500 | 502 | 503) {
-        "upstream_unavailable"
-    } else {
-        "upstream_rejected"
+        _ if contains_any(&["context length", "context window", "maximum context"]) => {
+            "context_length_exceeded"
+        }
+        429 if contains_any(&["quota", "credit", "balance", "insufficient"]) => {
+            "quota_exhausted"
+        }
+        429 if contains_any(&["capacity", "overloaded", "saturated"]) => "upstream_capacity",
+        429 => "rate_limited",
+        504 => "upstream_504",
+        500 | 502 | 503 => "upstream_unavailable",
+        _ => "upstream_rejected",
     }
 }
 

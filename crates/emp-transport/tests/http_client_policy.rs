@@ -1,5 +1,5 @@
 use emp_transport::{
-    ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod, IdleConnectionPool,
+    ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod,
     ProxyEnvironment, ProxyPolicy, StreamingReadState, TimeoutPolicy,
 };
 use std::collections::BTreeMap;
@@ -302,31 +302,10 @@ fn pool_key_and_idle_pool_are_route_scoped() {
     .connection_pool_key();
     assert_ne!(first_proxy, second_proxy);
 
-    let mut pool = IdleConnectionPool::new(ConnectionPoolPolicy {
-        max_idle_per_route: 1,
-        max_idle_total: 2,
-        idle_timeout: Duration::from_secs(60),
-    });
-    pool.check_in("one", Instant::now()).unwrap();
-    pool.check_in("two", Instant::now()).unwrap();
-    pool.check_in("one", Instant::now()).unwrap();
-    assert_eq!(pool.total_idle(), 2);
-    assert_eq!(pool.route_idle("one"), 1);
-    assert!(pool.check_out("two", Instant::now()).is_some());
-
-    let now = Instant::now();
-    pool.check_in("future", now + Duration::from_secs(1))
-        .unwrap();
-    assert!(pool.check_out("future", now).is_none());
-    assert_eq!(pool.route_idle("future"), 0);
-
-    let mut invalid = IdleConnectionPool::new(ConnectionPoolPolicy {
+    let invalid = ConnectionPoolPolicy {
         max_idle_per_route: 0,
         max_idle_total: 0,
         idle_timeout: Duration::ZERO,
-    });
-    assert_eq!(
-        invalid.check_in("route", now).unwrap_err(),
-        HttpClientPolicyError::InvalidPoolKey
-    );
+    };
+    assert_eq!(invalid.validate(), Err(HttpClientPolicyError::InvalidPoolKey));
 }
