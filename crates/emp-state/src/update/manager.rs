@@ -635,14 +635,13 @@ fn probe_candidate_version(
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
     #[cfg(windows)]
-    let mut child = super::process::spawn_quiet(&mut command)
-        .map_err(|error| {
-            if error == UpdateError("worker_failed") {
-                UpdateError("update_failed")
-            } else {
-                error
-            }
-        })?;
+    let mut child = super::process::spawn_quiet(&mut command).map_err(|error| {
+        if error == UpdateError("worker_failed") {
+            UpdateError("update_failed")
+        } else {
+            error
+        }
+    })?;
     #[cfg(not(windows))]
     let mut child = command.spawn()?;
     let deadline = Instant::now() + timeout;
@@ -715,11 +714,7 @@ mod tests {
             probe_candidate_version(&valid, "0.12.0", root.path(), Duration::from_secs(1)).is_ok()
         );
 
-        let nonzero = candidate_script(
-            root.path(),
-            "nonzero",
-            "printf 'EMP 0.12.0\\n'; exit 7",
-        );
+        let nonzero = candidate_script(root.path(), "nonzero", "printf 'EMP 0.12.0\\n'; exit 7");
         assert_eq!(
             probe_candidate_version(&nonzero, "0.12.0", root.path(), Duration::from_secs(1))
                 .unwrap_err(),
