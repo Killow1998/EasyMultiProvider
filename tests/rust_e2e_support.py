@@ -267,9 +267,21 @@ class EmpProcess:
         startup = []
         try:
             while True:
-                line = lines.get(timeout=30)
+                try:
+                    line = lines.get(timeout=30)
+                except queue.Empty as exc:
+                    control_socket = home / "app-server-control" / "app-server-control.sock"
+                    raise AssertionError(
+                        f"{self.runtime_kind} EMP gave no output for 30 seconds before readiness "
+                        f"(pid={self.process.pid}, exit_code={self.process.poll()}, "
+                        f"control_socket_bytes={len(os.fsencode(control_socket))}); "
+                        f"startup output: {''.join(startup[-12:]) or '<none>'}"
+                    ) from exc
                 if line is None:
-                    raise AssertionError("EMP exited before readiness: " + "".join(startup[-12:]))
+                    raise AssertionError(
+                        f"{self.runtime_kind} EMP exited before readiness: "
+                        + "".join(startup[-12:])
+                    )
                 startup.append(line)
                 if line.startswith("Open in browser: "):
                     self.opened_url = line.split(": ", 1)[1].strip()

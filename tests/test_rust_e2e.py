@@ -39,6 +39,9 @@ from tests.test_shared_app_server_runtime import _UnixModelListServer
 from easy_multi_provider.integration import IntegrationManager
 
 
+SHORT_SOCKET_TEMP_ROOT = "/tmp" if os.name != "nt" and Path("/tmp").is_dir() else None
+
+
 def normalize_observation_times(value):
     if isinstance(value, list):
         return [normalize_observation_times(item) for item in value]
@@ -73,7 +76,10 @@ class RustEndToEnd(unittest.TestCase):
     def setUpClass(cls):
         cls.stack = ExitStack()
         cls.addClassCleanup(cls.stack.close)
-        temporary = cls.stack.enter_context(tempfile.TemporaryDirectory(prefix="emp-e2e-"))
+        # CODEX_HOME contains a nested control socket with a short AF_UNIX path limit.
+        temporary = cls.stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="e-", dir=SHORT_SOCKET_TEMP_ROOT)
+        )
         root = Path(temporary)
         cls.upstream = Upstream()
         cls.stack.callback(cls.upstream.close)
@@ -173,7 +179,12 @@ class RustEndToEnd(unittest.TestCase):
             self.assertEqual(report["schema_version"], 1)
             self.assertEqual(report["emp_version"], "0.11.10")
             self.assertEqual(report["configuration"]["location"], "custom")
-            self.assertEqual(report["configuration"]["path"], "<custom>/config.json")
+            try:
+                backend.config_path.relative_to(Path.home())
+                custom_root = "~/<custom>"
+            except ValueError:
+                custom_root = "<custom>"
+            self.assertEqual(report["configuration"]["path"], f"{custom_root}/config.json")
             self.assertTrue(report["configuration"]["exists"])
             self.assertEqual(report["configuration"]["write_access_hint"], "allowed")
             self.assertLessEqual(len(report["codex"]["inventory"]), 16)
@@ -321,7 +332,8 @@ class RustEndToEnd(unittest.TestCase):
     def test_integration_reload_syncs_search_before_probe_and_verify_is_passive(self):
         original = '# user preferences\nmodel = "native"\n[features]\nunified_exec = true\n'
         results = []
-        with tempfile.TemporaryDirectory(prefix="emp-search-reload-") as temporary:
+        # Keep CODEX_HOME short enough for its nested AF_UNIX control socket.
+        with tempfile.TemporaryDirectory(prefix="e-", dir=SHORT_SOCKET_TEMP_ROOT) as temporary:
             for name, command in [
                 ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
@@ -888,7 +900,7 @@ class RustEndToEnd(unittest.TestCase):
         # messages, pagination, and no process-stop or model-generation command.
         for stale_name in (False, True):
             results = []
-            with tempfile.TemporaryDirectory(prefix="e-", dir="/tmp") as temporary:
+            with tempfile.TemporaryDirectory(prefix="e-", dir=SHORT_SOCKET_TEMP_ROOT) as temporary:
                 for name, command in [
                     ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                     ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
