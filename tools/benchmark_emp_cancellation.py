@@ -35,6 +35,7 @@ except ImportError:  # Running as `python tools/benchmark_emp_cancellation.py`.
 
 SCENARIOS = ("before_headers", "before_first_event", "after_delta")
 RELEASE_TIMEOUT_SECONDS = 5.0
+FAKE_UPSTREAM_IDLE_TIMEOUT_SECONDS = 60.0
 RETRY_QUIET_SECONDS = 0.10
 POLL_INTERVAL_SECONDS = 0.025
 RSS_SLACK_BYTES = 16 * 1024 * 1024
@@ -90,6 +91,44 @@ def classify_runtime_errors(runtime: str, prefix: str, values: list[str]) -> tup
         else:
             fatal.append(rendered)
     return fatal, reference_only
+
+
+def aggregate_plan_requests(plans: dict, existing_markers: set[str] | None = None) -> dict:
+    """Count attempts by preflight/warmup/measurement without serializing markers."""
+    existing_markers = existing_markers or set()
+    phases = {
+        "preflight": {"plan_count": 0, "request_attempts": 0, "extra_attempts": 0},
+        "warmup": {
+            "plan_count": 0, "request_attempts": 0, "extra_attempts": 0,
+            "by_scenario": {},
+        },
+        "measurement": {
+            "plan_count": 0, "request_attempts": 0, "extra_attempts": 0,
+            "by_scenario": {},
+        },
+    }
+    for marker, plan in plans.items():
+        if marker in existing_markers:
+            continue
+        prefix = marker.split("-", 1)[0]
+        phase = {"measure": "measurement"}.get(prefix, prefix)
+        if phase not in phases:
+            continue
+        requests = plan.snapshot()["requests"]
+        record = phases[phase]
+        record["plan_count"] += 1
+        record["request_attempts"] += requests
+        record["extra_attempts"] += max(0, requests - 1)
+        if phase != "preflight":
+            scenario = next((value for value in SCENARIOS if value in marker), "unknown")
+            by_scenario = record["by_scenario"].setdefault(
+                scenario,
+                {"plan_count": 0, "request_attempts": 0, "extra_attempts": 0},
+            )
+            by_scenario["plan_count"] += 1
+            by_scenario["request_attempts"] += requests
+            by_scenario["extra_attempts"] += max(0, requests - 1)
+    return phases
 
 
 def phase_observed(scenario: str, downstream: dict, upstream_headers_sent: bool) -> bool:
@@ -256,7 +295,10 @@ class _CancellationUpstreamHandler(BaseHTTPRequestHandler):
             self._mark_peer_closed(plan, "write_error")
 
     def _wait_for_disconnect(self, plan: UpstreamObservation):
-        self.connection.settimeout(RELEASE_TIMEOUT_SECONDS)
+        # Keep the fake peer open beyond the 5s observation gate. Timing out
+        # here would synthesize an upstream transport failure and may trigger
+        # the runtime's ordinary retry path during this cancellation test.
+        self.connection.settimeout(FAKE_UPSTREAM_IDLE_TIMEOUT_SECONDS)
         try:
             while True:
                 incoming = self.connection.recv(1)
@@ -653,6 +695,23 @@ def _run_runtime(name: str, command: list[str], cwd: Path, config: bytes,
         if final_limits["reserved_bytes"] != 0:
             errors.append("final_request_reservation_nonzero")
     counts_after = upstream.snapshot_counts()
+    phase_request_counts = aggregate_plan_requests(upstream.plans, existing_plans)
+    extra_attempts = sum(
+        phase["extra_attempts"] for phase in phase_request_counts.values()
+    )
+    if extra_attempts:
+        if name == "python":
+            reference_errors.append(f"python_late_upstream_retries_{extra_attempts}")
+        else:
+            errors.append(f"{name}_late_upstream_retries_{extra_attempts}")
+    expected_plan_counts = {
+        "preflight": 1,
+        "warmup": warmup * len(SCENARIOS),
+        "measurement": iterations * len(SCENARIOS),
+    }
+    for phase, expected in expected_plan_counts.items():
+        if phase_request_counts[phase]["plan_count"] != expected:
+            errors.append(f"{name}_{phase}_request_plan_count_mismatch")
     return {
         "preflight": preflight,
         "scenarios": measured,
@@ -668,6 +727,7 @@ def _run_runtime(name: str, command: list[str], cwd: Path, config: bytes,
                 if marker not in existing_plans
             ),
             "errors": counts_after["errors"] - counts_before["errors"],
+            "phase_request_counts": phase_request_counts,
         },
     }
 
@@ -705,6 +765,7 @@ def run(args) -> tuple[dict, int]:
         "parameters": {
             "scenarios": list(SCENARIOS), "iterations": args.iterations,
             "warmup": args.warmup, "release_timeout_seconds": args.release_timeout,
+            "fake_upstream_idle_timeout_seconds": FAKE_UPSTREAM_IDLE_TIMEOUT_SECONDS,
             "rust_release_p99_limit_ms": RUST_RELEASE_P99_LIMIT_MS,
             "resource_slack": {
                 "rss_bytes": RSS_SLACK_BYTES,

@@ -166,6 +166,10 @@ class BenchmarkCancellationTests(unittest.TestCase):
                 cancellation.benchmark.BenchmarkError
             ):
                 cancellation.validate_parameters(*values)
+        self.assertGreater(
+            cancellation.FAKE_UPSTREAM_IDLE_TIMEOUT_SECONDS,
+            cancellation.RELEASE_TIMEOUT_SECONDS,
+        )
 
     def test_python_cancellation_baseline_is_reference_only_but_other_failures_gate(self):
         fatal, reference = cancellation.classify_runtime_errors(
@@ -185,6 +189,29 @@ class BenchmarkCancellationTests(unittest.TestCase):
         )
         self.assertEqual(rust_fatal, ["before_headers_upstream_socket_not_closed"])
         self.assertEqual(rust_reference, [])
+
+    def test_phase_request_aggregate_surfaces_warmup_and_late_retries_without_markers(self):
+        plans = {}
+        for marker, scenario, requests in (
+            ("preflight-python", "complete", 1),
+            ("warmup-python-before_headers-0", "before_headers", 1),
+            ("warmup-python-before_first_event-0", "before_first_event", 2),
+            ("warmup-python-after_delta-0", "after_delta", 1),
+            ("measure-python-before_headers-0", "before_headers", 3),
+        ):
+            plan = cancellation.UpstreamObservation(scenario, marker)
+            plan.request_count = requests
+            plans[marker] = plan
+        counts = cancellation.aggregate_plan_requests(plans)
+        self.assertEqual(counts["preflight"]["request_attempts"], 1)
+        self.assertEqual(counts["warmup"]["plan_count"], 3)
+        self.assertEqual(counts["warmup"]["extra_attempts"], 1)
+        self.assertEqual(counts["warmup"]["by_scenario"]["before_first_event"]["extra_attempts"], 1)
+        self.assertEqual(counts["measurement"]["request_attempts"], 3)
+        self.assertEqual(counts["measurement"]["extra_attempts"], 2)
+        serialized = json.dumps(counts)
+        for marker in plans:
+            self.assertNotIn(marker, serialized)
 
     def test_report_summary_contains_counts_and_only_safe_outcomes(self):
         result = {
