@@ -36,6 +36,8 @@ struct Inner {
     start_transition: Mutex<()>,
     asset: Mutex<Option<Asset>>,
     executable: PathBuf,
+    #[cfg(target_os = "linux")]
+    dpkg_query: PathBuf,
     restart_args: Vec<String>,
     endpoints: UpdateEndpoints,
     client: Client,
@@ -184,6 +186,8 @@ impl UpdateManager {
             start_transition: Mutex::new(()),
             asset: Mutex::new(None),
             executable,
+            #[cfg(target_os = "linux")]
+            dpkg_query: super::linux::default_query().to_owned(),
             restart_args,
             endpoints,
             client,
@@ -222,6 +226,20 @@ impl UpdateManager {
         }
     }
 
+    fn set_checked(&self, state: &str, latest: Option<String>, migration: bool) {
+        if let Ok(mut snapshot) = self.0.snapshot.lock() {
+            snapshot.state = state.to_owned();
+            snapshot.error.clear();
+            snapshot.latest_version = latest;
+            snapshot.progress = 0;
+            snapshot.manual_update = if migration {
+                "linux_system_migration".to_owned()
+            } else {
+                String::new()
+            };
+        }
+    }
+
     pub fn start(&self, operation: &str) -> Result<Snapshot> {
         let _transition = self
             .0
@@ -243,10 +261,14 @@ impl UpdateManager {
                     .lock()
                     .map_err(|_| UpdateError("update_failed"))? = None;
                 self.set("checking", "", None, 0);
+                if let Ok(mut snapshot) = self.0.snapshot.lock() {
+                    snapshot.manual_update.clear();
+                }
                 true
             }
             "install"
                 if current.supported
+                    && current.manual_update.is_empty()
                     && self
                         .0
                         .asset
@@ -311,6 +333,14 @@ impl UpdateManager {
         }
         let snapshot = self.snapshot();
         let desired = current_asset_name()?;
+        #[cfg(target_os = "linux")]
+        let migration = snapshot.supported
+            && super::linux::system_install_manual(
+                &installation_target(&self.0.executable)?.0,
+                &self.0.dpkg_query,
+            )?;
+        #[cfg(not(target_os = "linux"))]
+        let migration = false;
         match latest_asset(&raw, &desired, &snapshot.current_version, &self.0.endpoints)? {
             Some(asset) => {
                 let latest = asset.version.clone();
@@ -319,7 +349,11 @@ impl UpdateManager {
                     .asset
                     .lock()
                     .map_err(|_| UpdateError("update_failed"))? = Some(asset);
-                self.set("available", "", Some(latest), 0);
+                self.set_checked(
+                    if migration { "migration_required" } else { "available" },
+                    Some(latest),
+                    migration,
+                );
             }
             None => {
                 *self
@@ -335,7 +369,11 @@ impl UpdateManager {
                             .as_str()
                             .map(|tag| tag.trim_start_matches('v').to_owned())
                     });
-                self.set("current", "", version, 0);
+                self.set_checked(
+                    if migration { "migration_required" } else { "current" },
+                    version,
+                    migration,
+                );
             }
         }
         Ok(())
@@ -350,6 +388,10 @@ impl UpdateManager {
             .clone()
             .ok_or(UpdateError("update_unavailable"))?;
         let (target, relative) = installation_target(&self.0.executable)?;
+        #[cfg(target_os = "linux")]
+        if super::linux::system_install_manual(&target, &self.0.dpkg_query)? {
+            return Err(UpdateError("system_install_manual"));
+        }
         let parent = target
             .parent()
             .ok_or(UpdateError("unsupported_installation"))?;
@@ -700,5 +742,73 @@ mod tests {
     fn nonce_random_source_failure_is_returned() {
         let error = nonce_with(|_| Err(getrandom::Error::UNSUPPORTED)).unwrap_err();
         assert_eq!(error, crate::update::UpdateError("update_failed"));
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn dpkg_owned_install_requires_manual_migration_before_any_download() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::path::PathBuf;
+
+        let directory = tempfile::tempdir().unwrap();
+        let query = directory.path().join("dpkg-query");
+        fs::write(
+            &query,
+            "#!/bin/sh\nif [ \"$1\" = --search ]; then printf 'easy-multi-provider: /usr/bin/EMP\\n'; else printf 'install ok installed\\t0.11.2'; fi\n",
+        )
+        .unwrap();
+        fs::set_permissions(&query, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let release = serde_json::json!({
+            "tag_name":"v9.0.0", "draft":false, "prerelease":false,
+            "assets":[{"name":"EMP-linux-x86_64.tar.gz", "digest":format!("sha256:{}", "a".repeat(64)),
+                "size":7, "browser_download_url":format!("{base}/releases/download/v9.0.0/EMP-linux-x86_64.tar.gz") }]
+        })
+        .to_string();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 512];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).unwrap();
+                assert_ne!(count, 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{release}",
+                release.len()
+            )
+            .unwrap();
+        });
+        let mut manager = UpdateManager::with_endpoints(
+            PathBuf::from("/usr/bin/EMP"),
+            Vec::new(),
+            "0.11.2",
+            UpdateEndpoints::for_source(&base, format!("{base}/latest")),
+            || Err(crate::update::UpdateError("worker_failed")),
+        )
+        .unwrap();
+        Arc::get_mut(&mut manager.0).unwrap().dpkg_query = query;
+        manager.check().unwrap();
+        server.join().unwrap();
+        let snapshot = manager.snapshot();
+        assert_eq!(snapshot.state, "migration_required");
+        assert_eq!(snapshot.manual_update, "linux_system_migration");
+        assert_eq!(
+            manager.start("install").unwrap_err(),
+            crate::update::UpdateError("update_unavailable")
+        );
+
+        // Ownership can change after a check: the installer must reject it before opening
+        // the package URL or creating a replacement job.
+        manager.0.snapshot.lock().unwrap().manual_update.clear();
+        assert_eq!(
+            manager.install(),
+            Err(crate::update::UpdateError("system_install_manual"))
+        );
     }
 }
