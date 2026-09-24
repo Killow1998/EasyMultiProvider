@@ -1,26 +1,30 @@
 //! Authentication, admission and upstream target selection for Voice sidebands.
 
 use super::call::{incoming_headers, native_headers, safe_forwarded_headers};
-use super::{RealtimeError, valid_call_id};
-use crate::VERSION;
+use super::{valid_call_id, RealtimeError};
 use crate::app::ServerState;
 use crate::http::auth::{proxy_allowed, same_origin};
 use crate::http::request::Request;
 use crate::http::response::{json_error_response, status_text};
-use emp_transport::websocket_accept;
+use crate::VERSION;
+use emp_transport::{
+    websocket_accept, ClientWebSocket, ClientWebSocketError, ClientWebSocketPump, PumpCommand,
+    PumpEvent, WebSocketConnection, WebSocketPoll, WebSocketPumpConfig,
+    DEFAULT_PUMP_CHANNEL_CAPACITY,
+};
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::TcpStream;
+use std::sync::mpsc::{RecvTimeoutError, TrySendError};
+use std::time::Duration;
 
 pub(crate) const MAX_REALTIME_SIDEBAND_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const NATIVE_SIDEBAND_BASE: &str = "wss://api.openai.com/v1/live/";
 
 /// All immutable state needed after the downstream WebSocket handshake has
 /// been validated. Ownership of the permit follows the eventual relay.
-#[allow(dead_code)] // The next slice hands these fields to the upstream owner-pump.
 pub(crate) struct PreparedSideband {
     pub(crate) accept: String,
-    pub(crate) call_id: String,
     pub(crate) url: String,
     pub(crate) headers: BTreeMap<String, String>,
     pub(crate) proxy: Option<String>,
@@ -107,7 +111,6 @@ pub(crate) fn prepare_sideband(
         })?;
     Ok(PreparedSideband {
         accept,
-        call_id: call_id.to_owned(),
         url,
         headers,
         proxy,
@@ -120,20 +123,306 @@ pub(crate) fn serve_realtime_sideband(
     stream: &mut TcpStream,
     request: Request<'_>,
     call_id: &str,
-    _body_prefix: Vec<u8>,
+    body_prefix: Vec<u8>,
     state: &ServerState,
     now: f64,
 ) {
-    let response = match prepare_sideband(request, call_id, state, now) {
-        Err(response) => response,
-        Ok(_prepared) => RealtimeError::new(
-            503,
-            "native_realtime_transport_error",
-            "Native realtime sideband connection failed",
-        )
-        .wire_response(),
+    serve_realtime_sideband_with_connector(
+        stream,
+        request,
+        call_id,
+        body_prefix,
+        state,
+        now,
+        |url, headers, timeout, proxy| {
+            ClientWebSocket::connect_with_proxy(url, headers, timeout, proxy)
+        },
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn serve_realtime_sideband_with_test_connector(
+    stream: &mut TcpStream,
+    request: Request<'_>,
+    call_id: &str,
+    body_prefix: Vec<u8>,
+    state: &ServerState,
+    now: f64,
+    connect: impl FnOnce(
+        &str,
+        &BTreeMap<String, String>,
+        Duration,
+        Option<&str>,
+    ) -> Result<ClientWebSocket, ClientWebSocketError>,
+) {
+    serve_realtime_sideband_with_connector(
+        stream,
+        request,
+        call_id,
+        body_prefix,
+        state,
+        now,
+        connect,
+    );
+}
+
+fn serve_realtime_sideband_with_connector(
+    stream: &mut TcpStream,
+    request: Request<'_>,
+    call_id: &str,
+    body_prefix: Vec<u8>,
+    state: &ServerState,
+    now: f64,
+    connect: impl FnOnce(
+        &str,
+        &BTreeMap<String, String>,
+        Duration,
+        Option<&str>,
+    ) -> Result<ClientWebSocket, ClientWebSocketError>,
+) {
+    let prepared = match prepare_sideband(request, call_id, state, now) {
+        Err(response) => {
+            write_http_response(stream, &response);
+            return;
+        }
+        Ok(prepared) => prepared,
     };
-    let _ = stream.write_all(&response);
+
+    let upstream = match connect(
+        &prepared.url,
+        &prepared.headers,
+        Duration::from_secs(15),
+        prepared.proxy.as_deref(),
+    ) {
+        Ok(client) => client,
+        Err(error) => {
+            let status = error.status();
+            let (code, message) = match status {
+                401 | 403 => ("native_subscription_auth_failed", error.to_string()),
+                404 | 405 | 426 | 501 => ("native_realtime_unsupported", error.to_string()),
+                _ => ("native_realtime_transport_error", error.to_string()),
+            };
+            let response = RealtimeError::new(status, code, message).wire_response();
+            write_http_response(stream, &response);
+            return;
+        }
+    };
+    let mut pump = match ClientWebSocketPump::spawn(
+        upstream,
+        WebSocketPumpConfig {
+            outbound_capacity: DEFAULT_PUMP_CHANNEL_CAPACITY,
+            inbound_capacity: DEFAULT_PUMP_CHANNEL_CAPACITY,
+            max_message_bytes: prepared.max_message_bytes,
+        },
+    ) {
+        Ok(pump) => pump,
+        Err(error) => {
+            let response =
+                RealtimeError::new(502, "native_realtime_transport_error", error.to_string())
+                    .wire_response();
+            write_http_response(stream, &response);
+            return;
+        }
+    };
+
+    if stream
+        .set_read_timeout(Some(Duration::from_millis(10)))
+        .is_err()
+    {
+        shutdown_pump(&mut pump, 1011, "websocket setup failed");
+        let response = RealtimeError::new(
+            500,
+            "realtime_websocket_unavailable",
+            "Realtime sideband socket setup failed",
+        )
+        .wire_response();
+        write_http_response(stream, &response);
+        return;
+    }
+    let head = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+        prepared.accept
+    );
+    if stream.write_all(head.as_bytes()).is_err() || stream.flush().is_err() {
+        shutdown_pump(&mut pump, 1001, "downstream disconnected");
+        return;
+    }
+
+    let mut downstream = match WebSocketConnection::new_with_prefix(stream, &body_prefix) {
+        Ok(connection) => connection,
+        Err(error) => {
+            shutdown_pump(&mut pump, 1009, "websocket message too large");
+            let _ = error;
+            return;
+        }
+    };
+    if downstream
+        .set_max_message_bytes(prepared.max_message_bytes)
+        .is_err()
+    {
+        shutdown_pump(&mut pump, 1011, "websocket setup failed");
+        downstream.close(1011, "websocket setup failed");
+        return;
+    }
+    if downstream
+        .set_poll_timeout(Duration::from_millis(10))
+        .is_err()
+    {
+        shutdown_pump(&mut pump, 1011, "websocket setup failed");
+        downstream.close(1011, "websocket setup failed");
+        return;
+    }
+
+    let mut pending_command = None;
+    let mut relay_finished = false;
+    while !relay_finished {
+        if let Some(command) = pending_command.take() {
+            match pump.try_send(command) {
+                Ok(()) => {}
+                Err(TrySendError::Full(command)) => pending_command = Some(command),
+                Err(TrySendError::Disconnected(_)) => {
+                    downstream.close(1011, "native sideband disconnected");
+                    break;
+                }
+            }
+        }
+
+        for _ in 0..DEFAULT_PUMP_CHANNEL_CAPACITY {
+            match pump.recv_timeout(Duration::ZERO) {
+                Ok(PumpEvent::Text(text)) => {
+                    if downstream.send_json_bytes(text.as_bytes()).is_err() {
+                        shutdown_pump(&mut pump, 1001, "downstream disconnected");
+                        relay_finished = true;
+                        break;
+                    }
+                }
+                Ok(PumpEvent::Closed { code }) => {
+                    downstream.close(valid_close_code(code.unwrap_or(1000)), "");
+                    relay_finished = true;
+                    break;
+                }
+                Ok(PumpEvent::Failure { .. }) => {
+                    downstream.close(1011, "native sideband failed");
+                    relay_finished = true;
+                    break;
+                }
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => {
+                    downstream.close(1011, "native sideband disconnected");
+                    relay_finished = true;
+                    break;
+                }
+            }
+        }
+        if relay_finished {
+            break;
+        }
+
+        if pending_command.is_some() {
+            match pump.recv_timeout(Duration::from_millis(10)) {
+                Ok(event) => relay_finished = !relay_event(event, &mut downstream, &mut pump),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    downstream.close(1011, "native sideband disconnected");
+                    relay_finished = true;
+                }
+            }
+            continue;
+        }
+
+        match downstream.poll_text() {
+            Ok(WebSocketPoll::Pending) => match pump.recv_timeout(Duration::from_millis(10)) {
+                Ok(event) => relay_finished = !relay_event(event, &mut downstream, &mut pump),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    downstream.close(1011, "native sideband disconnected");
+                    relay_finished = true;
+                }
+            },
+            Ok(WebSocketPoll::Text(text)) => {
+                pending_command = Some(PumpCommand::Text(text));
+            }
+            Ok(WebSocketPoll::Ping(payload)) => {
+                if downstream.send_pong(&payload).is_err() {
+                    shutdown_pump(&mut pump, 1011, "downstream websocket failed");
+                    relay_finished = true;
+                }
+            }
+            Ok(WebSocketPoll::Closed { code }) => {
+                shutdown_pump(&mut pump, valid_close_code(code.unwrap_or(1000)), "");
+                relay_finished = true;
+            }
+            Err(error) => {
+                let code = valid_close_code(error.close_code());
+                let reason = error.to_string();
+                downstream.close(code, &reason);
+                shutdown_pump(&mut pump, code, "downstream websocket failed");
+                relay_finished = true;
+            }
+        }
+    }
+    shutdown_pump(&mut pump, 1000, "");
+}
+
+fn relay_event(
+    event: PumpEvent,
+    downstream: &mut WebSocketConnection<'_, TcpStream>,
+    pump: &mut ClientWebSocketPump,
+) -> bool {
+    match event {
+        PumpEvent::Text(text) => {
+            if downstream.send_json_bytes(text.as_bytes()).is_ok() {
+                true
+            } else {
+                shutdown_pump(pump, 1001, "downstream disconnected");
+                false
+            }
+        }
+        PumpEvent::Closed { code } => {
+            downstream.close(valid_close_code(code.unwrap_or(1000)), "");
+            false
+        }
+        PumpEvent::Failure { .. } => {
+            downstream.close(1011, "native sideband failed");
+            false
+        }
+    }
+}
+
+fn shutdown_pump(pump: &mut ClientWebSocketPump, code: u16, reason: &str) {
+    let mut close = Some(PumpCommand::Close {
+        code,
+        reason: reason.to_owned(),
+    });
+    loop {
+        if let Some(command) = close.take() {
+            match pump.try_send(command) {
+                Ok(()) => {}
+                Err(TrySendError::Full(command)) => close = Some(command),
+                Err(TrySendError::Disconnected(_)) => break,
+            }
+        }
+        match pump.recv_timeout(Duration::from_millis(10)) {
+            Ok(_) => {}
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    pump.join();
+}
+
+fn valid_close_code(code: u16) -> u16 {
+    if (1000..=1014).contains(&code) && !(1004..=1006).contains(&code)
+        || (3000..=4999).contains(&code)
+    {
+        code
+    } else {
+        1011
+    }
+}
+
+fn write_http_response(stream: &mut TcpStream, response: &[u8]) {
+    let _ = stream.write_all(response);
     let _ = stream.flush();
 }
 
