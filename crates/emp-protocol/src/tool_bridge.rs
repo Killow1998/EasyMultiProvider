@@ -169,6 +169,11 @@ impl ExternalTools {
                         "parameters":raw.get("parameters").cloned().unwrap_or(json!({}))}));
                     continue;
                 }
+                Some("web_search") => {
+                    // Codex executes this server-side tool. An external
+                    // provider cannot execute it, so omit its schema.
+                    continue;
+                }
                 Some("function" | "custom") => {
                     let definition = if tool.get("function").is_some_and(Value::is_object) {
                         tool.get_mut("function").unwrap().as_object_mut().unwrap()
@@ -518,5 +523,24 @@ mod tests {
             tools.prepare_or_borrow(&json!({"tools":null,"input":"hello"})),
             Err("request projection failed: invalid tools")
         );
+    }
+
+    #[test]
+    fn codex_server_web_search_does_not_block_external_cli_tools() {
+        let body = json!({
+            "input":"hello",
+            "tools":[
+                {"type":"function","name":"exec","parameters":{"type":"object"}},
+                {"type":"tool_search","execution":"client","description":"Find tools","parameters":{"type":"object"}},
+                {"type":"web_search","external_web_access":true}
+            ]
+        });
+        let mut tools = ExternalTools::default();
+        let prepared = tools.prepare(&body).expect("Codex CLI tools");
+        assert_eq!(prepared["tools"].as_array().unwrap().len(), 2);
+        assert_eq!(prepared["tools"][0]["name"], "exec");
+        assert_eq!(prepared["tools"][1]["type"], "function");
+        assert_ne!(prepared["tools"][1]["name"], "tool_search");
+        assert_eq!(body["tools"].as_array().unwrap().len(), 3);
     }
 }
