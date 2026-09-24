@@ -38,6 +38,8 @@ jobs:
       matrix:
         os: [ubuntu-22.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
+    env:
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@1.93.1
@@ -48,6 +50,16 @@ jobs:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v10.0.1
       - run: uv sync --frozen
+      - name: Use a real temporary directory for Rust Python oracles
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]).resolve() / "emp-rust-contract"
+          path.mkdir(exist_ok=True)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              for name in ("TMPDIR", "TMP", "TEMP"):
+                  env.write(f"{name}={path}\n")
       - name: Set Python oracle for Rust differential tests
         shell: python
         run: |
