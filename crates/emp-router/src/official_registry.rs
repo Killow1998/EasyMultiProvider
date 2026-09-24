@@ -1,5 +1,9 @@
 //! Release-bundled official capability enrichment, equivalent to Python EMP.
 
+use std::borrow::Cow;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 use std::sync::OnceLock;
 
 use serde_json::{Map, Value, json};
@@ -24,8 +28,9 @@ const PROJECTED_FIELDS: [(&str, &str, bool); 6] = [
     ("streaming", "streaming", true),
     ("structured_output", "structured_output", true),
 ];
+const MAX_REGISTRY_BYTES: usize = 4 * 1024 * 1024;
 
-fn registry() -> &'static Map<String, Value> {
+fn bundled_registry() -> &'static Map<String, Value> {
     static REGISTRY: OnceLock<Map<String, Value>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         serde_json::from_str::<Value>(include_str!("../data/official_models.json"))
@@ -36,8 +41,44 @@ fn registry() -> &'static Map<String, Value> {
     })
 }
 
+fn registry_from_path(path: Option<&Path>) -> Cow<'static, Map<String, Value>> {
+    let override_data = path.and_then(|path| {
+        let mut bytes = Vec::new();
+        File::open(path)
+            .ok()?
+            .take((MAX_REGISTRY_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        if bytes.len() > MAX_REGISTRY_BYTES {
+            return None;
+        }
+        let value: Value = serde_json::from_slice(&bytes).ok()?;
+        let data = value.as_object()?;
+        (data.get("schema_version").and_then(Value::as_u64) == Some(1)
+            && data.get("providers").is_some_and(Value::is_array)
+            && data.get("models").is_some_and(Value::is_array)
+            && data.get("reviewed_at").is_some_and(Value::is_string))
+        .then(|| data.clone())
+    });
+    override_data
+        .map(Cow::Owned)
+        .unwrap_or_else(|| Cow::Borrowed(bundled_registry()))
+}
+
+fn registry() -> Cow<'static, Map<String, Value>> {
+    let path = std::env::var_os("EMP_OFFICIAL_MODELS_PATH").map(std::path::PathBuf::from);
+    registry_from_path(path.as_deref())
+}
+
 pub fn identify_provider(provider: &Map<String, Value>) -> Option<String> {
     let registry = registry();
+    identify_provider_in_registry(provider, &registry)
+}
+
+fn identify_provider_in_registry(
+    provider: &Map<String, Value>,
+    registry: &Map<String, Value>,
+) -> Option<String> {
     let providers = registry.get("providers")?.as_array()?;
     let normalized = normalize_url(provider.get("base_url")?.as_str()?);
     if normalized.is_empty() {
@@ -65,10 +106,10 @@ pub fn identify_provider(provider: &Map<String, Value>) -> Option<String> {
 }
 
 pub fn enrich_discovered_models(provider: &Map<String, Value>, models: Vec<Value>) -> Vec<Value> {
-    let Some(provider_key) = identify_provider(provider) else {
+    let registry = registry();
+    let Some(provider_key) = identify_provider_in_registry(provider, &registry) else {
         return models;
     };
-    let registry = registry();
     let observed_at = registry
         .get("reviewed_at")
         .and_then(Value::as_str)
@@ -245,5 +286,43 @@ fn python_truthy(value: &Value) -> bool {
         Value::String(value) => !value.is_empty(),
         Value::Array(value) => !value.is_empty(),
         Value::Object(value) => !value.is_empty(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_override_reloads_changes_and_rejects_invalid_files() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "emp-official-registry-{}-{nonce}.json",
+            std::process::id()
+        ));
+        let provider = json!({"base_url":"https://example.test/v1"});
+        let provider = provider.as_object().expect("provider object");
+        for reviewed_at in ["first", "second"] {
+            let data = json!({
+                "schema_version": 1,
+                "reviewed_at": reviewed_at,
+                "providers": [{"key":"example", "api_base_urls":["https://example.test/v1"]}],
+                "models": [],
+            });
+            std::fs::write(&path, serde_json::to_vec(&data).expect("registry JSON"))
+                .expect("write registry override");
+            let loaded = registry_from_path(Some(&path));
+            assert_eq!(loaded.get("reviewed_at").and_then(Value::as_str), Some(reviewed_at));
+            assert_eq!(
+                identify_provider_in_registry(provider, &loaded).as_deref(),
+                Some("example")
+            );
+        }
+        std::fs::write(&path, b"invalid JSON").expect("write invalid override");
+        assert_eq!(registry_from_path(Some(&path)).as_ref(), bundled_registry());
+        std::fs::remove_file(&path).expect("remove registry override");
     }
 }

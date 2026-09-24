@@ -86,6 +86,12 @@ uncertain facts become unknown instead of being carried forward by assumption.
 OpenRouter's full catalog is deliberately excluded because it is already a live
 aggregated data source.
 
+The Rust service can read a local registry override from
+`EMP_OFFICIAL_MODELS_PATH`. It reads that file on each model discovery, so an
+atomic file replacement takes effect without restarting EMP. If the file is
+missing, malformed, or larger than 4 MiB, the release-bundled registry remains
+in use. Normal installations need no override.
+
 ## Acceptance
 
 - Unknown/custom deployments remain conservative and receive no publisher-name
