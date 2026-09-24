@@ -13,6 +13,13 @@ use std::time::Instant;
 const DEFAULT_MAX_PROXY_POOLS: usize = 4;
 const CLEANUP_BYTE_LIMIT: usize = 64 * 1024;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RedirectMode {
+    Reject,
+    PreserveStatus,
+    Follow,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpTransportErrorKind {
     InvalidRequest,
@@ -217,8 +224,30 @@ impl HttpClient {
         body: Option<Vec<u8>>,
         stream: bool,
     ) -> Result<HttpResponse, HttpTransportError> {
-        self.open_with_redirects(method, url, headers, body, stream, false)
+        self.open_with_redirects(method, url, headers, body, stream, RedirectMode::Reject)
             .await
+    }
+
+    /// Open a request without following redirects and return redirect responses
+    /// as ordinary upstream statuses. This is for protocols that must preserve
+    /// a 3xx handshake rather than treating it as a transport failure.
+    pub async fn open_status(
+        &self,
+        method: HttpMethod,
+        url: &str,
+        headers: BTreeMap<String, String>,
+        body: Option<Vec<u8>>,
+        stream: bool,
+    ) -> Result<HttpResponse, HttpTransportError> {
+        self.open_with_redirects(
+            method,
+            url,
+            headers,
+            body,
+            stream,
+            RedirectMode::PreserveStatus,
+        )
+        .await
     }
 
     /// Open a request using the standard bounded HTTP redirect policy.
@@ -233,7 +262,7 @@ impl HttpClient {
         body: Option<Vec<u8>>,
         stream: bool,
     ) -> Result<HttpResponse, HttpTransportError> {
-        self.open_with_redirects(method, url, headers, body, stream, true)
+        self.open_with_redirects(method, url, headers, body, stream, RedirectMode::Follow)
             .await
     }
 
@@ -244,9 +273,10 @@ impl HttpClient {
         headers: BTreeMap<String, String>,
         body: Option<Vec<u8>>,
         stream: bool,
-        follow_redirects: bool,
+        redirect_mode: RedirectMode,
     ) -> Result<HttpResponse, HttpTransportError> {
         let plan = self.policy.plan(method, url, headers, stream)?;
+        let follow_redirects = redirect_mode == RedirectMode::Follow;
         let client = self.client_for(&plan, follow_redirects)?;
         let started_at = Instant::now();
         let mut request = client.request(to_reqwest_method(method), plan.route.route_url());
@@ -264,7 +294,7 @@ impl HttpClient {
             .await
             .map_err(|_| HttpTransportError::new(HttpTransportErrorKind::ConnectTimeout))?
             .map_err(map_send_error)?;
-        if !follow_redirects && response.status().is_redirection() {
+        if redirect_mode == RedirectMode::Reject && response.status().is_redirection() {
             drop(response);
             return Err(HttpTransportError::new(
                 HttpTransportErrorKind::RedirectDisabled,

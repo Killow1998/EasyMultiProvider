@@ -6,6 +6,7 @@ pub(crate) mod integration;
 pub(crate) mod lifecycle;
 pub(crate) mod migration;
 pub(crate) mod quota;
+pub(crate) mod realtime;
 pub(crate) mod responses;
 pub(crate) mod search;
 pub(crate) mod streaming;

@@ -334,6 +334,23 @@ fn serve_connection(
             }
             continue;
         }
+        if target.ends_with("/status-307") {
+            let body = b"retry elsewhere";
+            if stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 307 Temporary Redirect\r\nLocation: /voice-temporarily-unavailable\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .and_then(|_| stream.write_all(body))
+                .is_err()
+            {
+                return;
+            }
+            continue;
+        }
         if target.ends_with("/stream") || target.ends_with("/stall") {
             if stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n")
@@ -483,6 +500,32 @@ async fn redirects_and_dropped_posts_are_never_replayed() {
             .collect::<Vec<_>>(),
         ["/drop", "/redirect"]
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn open_status_preserves_redirect_response_without_following() {
+    let server = TestServer::start();
+    let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
+    let response = client
+        .open_status(
+            HttpMethod::Post,
+            &server.url("/status-307"),
+            BTreeMap::new(),
+            Some(b"offer".to_vec()),
+            false,
+        )
+        .await
+        .expect("307 is an upstream response, not a redirect instruction");
+    assert_eq!(response.status(), 307);
+    assert_eq!(
+        response.header("location"),
+        Some("/voice-temporarily-unavailable")
+    );
+    assert_eq!(response.header("content-type"), Some("text/plain"));
+    assert_eq!(response.read_all().await.unwrap(), b"retry elsewhere");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].target, "/status-307");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
