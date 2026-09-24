@@ -1,10 +1,10 @@
 # Rust backend remake plan
 
-Status: in progress on remake4rust; execution plan revised on 2026-09-22.
+Status: in progress on remake4rust; verified state updated on 2026-09-24.
 
-Reference: the current, clean Python EMP checkout is
-47a8a0a5e06f82e3fd488fe00c4704fcf0b06f78 (EMP 0.11.6).
-Codex consumer compatibility remains pinned to 0.155.0.
+Reference: formal Python EMP `main` at
+`b53ef16ebfe4bcade8ca9aaf6b504b1eacedc211` (EMP 0.11.10).
+Consumer fixtures cover Codex 0.155.0 and the installed 0.156.1 CLI.
 
 Target: replace the complete Python backend with a native EMP executable.
 Keep existing HTML, CSS, JavaScript, images, API contracts, state formats and
@@ -17,22 +17,22 @@ polishing isolated helpers or redesigning library internals. This replaces the
 previous seven-stage execution order. Historical evidence at the end does not
 define the current next action.
 
-## Verified starting point
+## Current verified state
 
-This inventory comes from source, Git state and disk inspection on 2026-09-22.
-No new compilation, runtime test or benchmark was performed for this plan.
+The 2026-09-22 inventory below this section remains historical. This snapshot
+records the working tree and local tests on 2026-09-24; it does not claim a
+cross-platform package or production cutover.
 
-| Area | Observed state | Action |
+| Area | Observed state | Next proof |
 | --- | --- | --- |
-| Workspace | Nine crates, including uncommitted emp-integration | Reuse the workspace; do not restart the rewrite |
-| Application entry | main.rs has 7,351 lines, including inline tests | Extract responsibilities and tests, not just rename it to one large server.rs |
-| Native forwarding | 10a479c connects complete Responses; 9229a6e adds SSE/WS and tests | Preserve implementations and regression fixtures |
-| History and switching | 442e959 adds history/context, compaction and endpoint tests | Finish consumer verification, not another helper rewrite |
-| Management | Config/catalog/discovery, account/quota/history/events, migration and search handlers exist | Complete every Python operation |
-| Integration draft | Manifests, catalog_api.rs, main.rs and emp-integration have uncommitted work | Preserve and review; reload/verify currently return a snapshot with runtime not_checked, so lifecycle parity is not established |
-| Frontend | HTML and vision image hashes match Python; web_contract tests compare served HTML bytes | Keep one asset source and run the same frontend against Rust |
-| Storage | About 37 GiB in target; about 14 GiB in debug/incremental and 23 GiB in debug/deps (rounded) | Build storage is not installed application size; clean and control artifacts |
-| Verification | Previous results are retained below; latest draft is not fully verified and has no new cross-platform run | Code or tests existing does not establish complete product parity |
+| Workspace | Nine Rust crates; `main.rs` is 9 lines and responsibilities live in modules | Keep the module boundary while fixing observed behavior |
+| Runtime | Release Rust EMP starts; native/external HTTP, SSE, WebSocket, history and model-switch fixtures have real-process coverage | Complete official CLI consumer and package acceptance |
+| Reset credits | Python and Rust preserve an opaque credit ID and pass optional `creditId`; the shared UI lets users choose and confirms again before spending | Verify packaged UI on every supported OS |
+| Python oracle | Its source and affected regressions are mirrored from formal Python `main`; 1,433 Python tests passed locally (71 conditional skips) | Keep the pinned formal commit stable for CI |
+| Rust workspace | `cargo test --workspace --all-targets` passed 404 tests in 74 suites; formatting and warnings-denied Clippy passed | Re-run after any Rust change |
+| Real processes | Release Python/Rust differential passed 30 tests; model refresh, usage and diagnostics passed 9 more; official Codex 0.156.1 consumer passed 20 tests including subagent routing | Keep these gates for package acceptance |
+| Performance | 50 cycles each runtime, 200 fake-upstream forwards, no errors or process residue; readiness p95 was 13.34 ms Rust and 236.33 ms Python on this host | Run package and longer-run gates before general performance claims |
+| Distribution | Python `main` Package and Runtime compatibility CI succeeded at the pinned commit; Rust branch CI has not run for this state | Push one validated Rust milestone and run four-OS package/compatibility workflows |
 
 Progress means a named Python workflow works through Rust with the same
 output, failures and persistent effects. Line counts and test counts do not
@@ -777,12 +777,9 @@ Progress evidence on 2026-09-21:
   request-side context preflight callback, non-boolean `stream` truthiness,
   legacy non-RFC2822 Retry-After date forms and exact malformed upstream JSON
   wording when plaintext collaboration response restoration is enabled.
-  Next: preserve native HTTP SSE streaming and cancellation, then native
-  WebSocket/incremental request fidelity. Runtime/integration lifecycle effects
-  of configuration writes also remain outstanding.
-  The management UI is not yet fully functional; native streaming/WebSocket generation,
-  history/model-switch/compaction/subagent consumer tests, complete packaging
-  and comparative performance gates remain required before cutover.
+  At this 2026-09-22 checkpoint, native HTTP SSE, WebSocket, lifecycle and
+  package acceptance remained. Their later evidence and current open work are
+  recorded in **Current verified state** above.
 
 Recorded Linux baseline on 2026-09-21: 1,265 tests ran in 62.022 seconds;
 all passed with 28 conditional skips. The run used the existing locked virtual
