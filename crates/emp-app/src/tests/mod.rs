@@ -1172,6 +1172,19 @@ fn cli_accepts_optional_config() {
 }
 
 #[test]
+fn desktop_launch_defers_config_selection_to_shared_state_resolver() {
+    assert_eq!(
+        parse_cli(std::iter::empty()).expect("parse desktop launch"),
+        Cli::Serve {
+            config: None,
+            host: None,
+            port: None,
+            open_browser: true,
+        }
+    );
+}
+
+#[test]
 fn health_stays_unauthenticated() {
     let (_directory, server) = test_server();
     let response = request(&server, "/healthz", &[]);

@@ -533,6 +533,123 @@ class RustEndToEnd(unittest.TestCase):
                         backend.close()
 
     @unittest.skipUnless(
+        os.name == "posix" and "EMP_PYTHON_ORACLE_ROOT" in os.environ,
+        "requires an isolated POSIX process fixture and official Python oracle",
+    )
+    def test_cli_config_path_selection_and_startup_output_match_python(self):
+        frozen_entry = (
+            "import sys; sys.frozen=True; from easy_multi_provider.main import main; "
+            "raise SystemExit(main())"
+        )
+        with tempfile.TemporaryDirectory(prefix="emp-config-path-cli-") as temporary:
+            fixture_root = Path(temporary)
+            browser = fixture_root / "browser"
+            browser.write_text("#!/bin/sh\nexit 0\n")
+            browser.chmod(0o700)
+
+            cases = (
+                ("desktop_override", "desktop", None, "override"),
+                ("serve_override", "serve", ["serve"], "override"),
+                ("serve_explicit", "serve", ["serve", "--config"], "explicit"),
+                ("desktop_default", "desktop", None, "default"),
+            )
+            for backend_name, python_command in (
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
+                ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+            ):
+                for case_name, launch_mode, fixed_arguments, expected_kind in cases:
+                    with self.subTest(backend=backend_name, case=case_name), tempfile.TemporaryDirectory(
+                        prefix="emp-config-path-runtime-"
+                    ) as runtime_temporary:
+                        root = Path(runtime_temporary)
+                        home = root / "home"
+                        home.mkdir()
+                        codex_home = root / "codex"
+                        codex_home.mkdir()
+                        (codex_home / "auth.json").write_text(json.dumps({
+                            "tokens": {"access_token": "config-path-token", "account_id": "config-path-owner"}
+                        }))
+                        (codex_home / "config.toml").write_text("# isolated fixture\n")
+                        native_catalog = root / "native.json"
+                        native_catalog.write_text('{"models":[]}')
+                        xdg_root = root / "xdg settings"
+                        override_path = root / "override settings" / "config.json"
+                        explicit_path = root / "explicit settings" / "config.json"
+                        if sys.platform == "win32":
+                            default_path = root / "local settings" / "EasyMultiProvider" / "config.json"
+                        elif sys.platform == "darwin":
+                            default_path = home / "Library" / "Application Support" / "EasyMultiProvider" / "config.json"
+                        else:
+                            default_path = xdg_root / "easy-multi-provider" / "config.json"
+                        ports = {}
+
+                        def reserve_port():
+                            with socket.socket() as reservation:
+                                reservation.bind(("127.0.0.1", 0))
+                                return reservation.getsockname()[1]
+
+                        def write_config(path):
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            port = reserve_port()
+                            ports[path] = port
+                            path.write_text(json.dumps({
+                                "host": "127.0.0.1",
+                                "port": port,
+                                "native_catalog_path": str(native_catalog),
+                            }))
+
+                        for path in {override_path, explicit_path, default_path}:
+                            write_config(path)
+                        expected_path = {
+                            "override": override_path,
+                            "explicit": explicit_path,
+                            "default": default_path,
+                        }[expected_kind]
+                        if launch_mode == "desktop":
+                            arguments = []
+                            command = (
+                                PYTHON_RUNTIME.command("-c", frozen_entry)
+                                if backend_name == "python"
+                                else [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]
+                            )
+                        else:
+                            command = python_command
+                            arguments = list(fixed_arguments or [])
+                            if expected_kind == "explicit":
+                                arguments.append(str(explicit_path))
+                        environment = {
+                            "HOME": str(home),
+                            "USERPROFILE": str(home),
+                            "XDG_CONFIG_HOME": str(xdg_root),
+                            "LOCALAPPDATA": str(root / "local settings"),
+                            "APPDATA": str(root / "roaming settings"),
+                            "EASY_MULTI_PROVIDER_CONFIG": (
+                                "" if expected_kind == "default" else str(override_path)
+                            ),
+                            "BROWSER": str(browser),
+                        }
+                        backend = EmpProcess.from_config(
+                            command,
+                            expected_path,
+                            codex_home,
+                            environment_overrides=environment,
+                            port=ports[expected_path],
+                            arguments=arguments,
+                        )
+                        try:
+                            self.assertEqual(backend.port, ports[expected_path])
+                            self.assertEqual(backend.request("GET", "/healthz")[0], 200)
+                            self.assertTrue(
+                                any(
+                                    line.strip() == "Configuration file: " + str(expected_path.resolve())
+                                    for line in backend.startup_output
+                                ),
+                                backend.startup_output,
+                            )
+                        finally:
+                            backend.close()
+
+    @unittest.skipUnless(
         "EMP_PYTHON_ORACLE_ROOT" in os.environ,
         "set EMP_PYTHON_ORACLE_ROOT to compare with official Python v0.11.10",
     )

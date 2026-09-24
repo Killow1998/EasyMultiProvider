@@ -463,6 +463,10 @@ pub(crate) fn run_server(
         let mut terminate = tokio::signal::windows::ctrl_break()?;
         let local_addr = server.local_addr();
         println!("EMP listening on http://{local_addr}");
+        println!(
+            "Configuration file: {}",
+            server.state.backend.configuration.config_path.display()
+        );
         println!("Shutdown: terminate the process (SIGINT/SIGTERM where supported)");
         let bootstrap_url = server.bootstrap_url();
         println!("Open in browser: {bootstrap_url}");

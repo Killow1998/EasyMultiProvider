@@ -30,7 +30,7 @@ where
     let mut arguments = arguments.into_iter();
     let Some(command) = arguments.next() else {
         return Ok(Cli::Serve {
-            config: Some(desktop::config_path()),
+            config: None,
             host: None,
             port: None,
             open_browser: true,

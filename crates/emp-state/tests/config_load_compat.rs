@@ -206,17 +206,52 @@ fn config_path_and_default_load_follow_python_environment() {
     let directory = tempdir().expect("temporary directory");
     let root = temp_path(&directory);
     let configured = root.join("custom/config.json");
+    let home = root.join("home");
+    let xdg = root.join("xdg");
+    let local = root.join("local");
+    let roaming = root.join("roaming");
     fs::create_dir_all(configured.parent().expect("configuration parent"))
         .expect("create configuration parent");
     fs::write(&configured, b"{\"port\":5100}").expect("write configured configuration");
-    let original = std::env::var_os(CONFIG_PATH_ENV);
+    fs::create_dir_all(&home).expect("create home");
+    let environment_names = [
+        CONFIG_PATH_ENV,
+        "HOME",
+        "USERPROFILE",
+        "XDG_CONFIG_HOME",
+        "LOCALAPPDATA",
+        "APPDATA",
+    ];
+    let original = environment_names
+        .map(|name| (name, std::env::var_os(name)))
+        .into_iter()
+        .collect::<Vec<_>>();
 
     // SAFETY: this test serializes environment mutation, restores the original
     // value on every exit path, and does not mutate configuration state.
     unsafe {
-        std::env::remove_var(CONFIG_PATH_ENV);
+        std::env::set_var("HOME", &home);
+        std::env::set_var("USERPROFILE", &home);
+        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+        std::env::set_var("LOCALAPPDATA", &local);
+        std::env::set_var("APPDATA", &roaming);
+        std::env::set_var(CONFIG_PATH_ENV, " ");
     }
-    assert_eq!(config_path(), PathBuf::from("config.json"));
+    let expected_default = if cfg!(windows) {
+        local.join("EasyMultiProvider/config.json")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/EasyMultiProvider/config.json")
+    } else {
+        xdg.join("easy-multi-provider/config.json")
+    };
+    assert_eq!(config_path(), expected_default);
+    fs::create_dir_all(expected_default.parent().expect("default config parent"))
+        .expect("create default config parent");
+    fs::write(&expected_default, b"{\"port\":5200}").expect("write default configuration");
+    assert_eq!(
+        load_configuration(None).expect("load default config")["port"],
+        5200
+    );
 
     // SAFETY: guarded and restored below.
     unsafe {
@@ -228,9 +263,11 @@ fn config_path_and_default_load_follow_python_environment() {
 
     // SAFETY: restore the caller environment.
     unsafe {
-        match original {
-            Some(value) => std::env::set_var(CONFIG_PATH_ENV, value),
-            None => std::env::remove_var(CONFIG_PATH_ENV),
+        for (name, value) in original {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
         }
     }
 }

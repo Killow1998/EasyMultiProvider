@@ -312,6 +312,7 @@ class EmpProcess:
                             config["port"] = self.port
                             status, _, raw = self.request("POST", "/api/config", config)
                             assert status == 200, raw
+                    self.startup_output = tuple(startup)
                     break
         except BaseException:
             self.close()

@@ -2638,20 +2638,107 @@ fn merge_web_update_at_time(
     normalize_configuration(Some(&merged))
 }
 
-/// Return the configured configuration path without environment side effects.
-///
-/// This mirrors Python's `config_path`: an absent environment variable selects
-/// `config.json`; an explicitly empty value keeps current-directory semantics.
-pub fn config_path() -> PathBuf {
-    config_path_from_env(std::env::var_os(CONFIG_PATH_ENV).as_deref())
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConfigPlatform {
+    Windows,
+    MacOs,
+    Unix,
 }
 
-/// Resolve the configuration path used by [`load_configuration`].
-fn config_path_from_env(value: Option<&std::ffi::OsStr>) -> PathBuf {
-    match value {
-        Some(value) => PathBuf::from(value),
-        None => PathBuf::from("config.json"),
+struct ConfigPathEnvironment<'a> {
+    configured: Option<&'a str>,
+    home: Option<&'a str>,
+    user_profile: Option<&'a str>,
+    xdg_config_home: Option<&'a str>,
+    local_app_data: Option<&'a str>,
+    app_data: Option<&'a str>,
+}
+
+fn nonblank(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn config_path_with_home(value: &str, home: Option<&str>) -> PathBuf {
+    let Some(home) = home else {
+        return PathBuf::from(value);
+    };
+    if value == "~" {
+        return PathBuf::from(home);
     }
+    if let Some(rest) = value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
+        return PathBuf::from(home).join(rest);
+    }
+    PathBuf::from(value)
+}
+
+fn config_path_from_environment(
+    environment: ConfigPathEnvironment<'_>,
+    platform: ConfigPlatform,
+) -> PathBuf {
+    let home = match platform {
+        ConfigPlatform::Windows => {
+            nonblank(environment.user_profile).or_else(|| nonblank(environment.home))
+        }
+        ConfigPlatform::MacOs | ConfigPlatform::Unix => {
+            nonblank(environment.home).or_else(|| nonblank(environment.user_profile))
+        }
+    };
+    if let Some(configured) = nonblank(environment.configured) {
+        return config_path_with_home(configured, home);
+    }
+
+    match platform {
+        ConfigPlatform::Windows => nonblank(environment.local_app_data)
+            .or_else(|| nonblank(environment.app_data))
+            .map(|root| config_path_with_home(root, home))
+            .unwrap_or_else(|| {
+                home.map_or_else(PathBuf::new, PathBuf::from)
+                    .join("AppData/Local")
+            })
+            .join("EasyMultiProvider/config.json"),
+        ConfigPlatform::MacOs => home
+            .map_or_else(PathBuf::new, PathBuf::from)
+            .join("Library/Application Support/EasyMultiProvider/config.json"),
+        ConfigPlatform::Unix => nonblank(environment.xdg_config_home)
+            .map(|root| config_path_with_home(root, home))
+            .unwrap_or_else(|| {
+                home.map_or_else(PathBuf::new, PathBuf::from)
+                    .join(".config")
+            })
+            .join("easy-multi-provider/config.json"),
+    }
+}
+
+/// Return the configuration path shared by desktop and CLI launches.
+///
+/// An explicit CLI path takes precedence at the call site, followed here by
+/// `EASY_MULTI_PROVIDER_CONFIG` and the platform's per-user default.
+pub fn config_path() -> PathBuf {
+    let configured = env::var(CONFIG_PATH_ENV).ok();
+    let home = env::var("HOME").ok();
+    let user_profile = env::var("USERPROFILE").ok();
+    let xdg_config_home = env::var("XDG_CONFIG_HOME").ok();
+    let local_app_data = env::var("LOCALAPPDATA").ok();
+    let app_data = env::var("APPDATA").ok();
+    let environment = ConfigPathEnvironment {
+        configured: configured.as_deref(),
+        home: home.as_deref(),
+        user_profile: user_profile.as_deref(),
+        xdg_config_home: xdg_config_home.as_deref(),
+        local_app_data: local_app_data.as_deref(),
+        app_data: app_data.as_deref(),
+    };
+    let platform = if cfg!(windows) {
+        ConfigPlatform::Windows
+    } else if cfg!(target_os = "macos") {
+        ConfigPlatform::MacOs
+    } else {
+        ConfigPlatform::Unix
+    };
+    config_path_from_environment(environment, platform)
 }
 
 /// Save a normalized configuration and its derived secret files atomically.
@@ -3016,4 +3103,366 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "subscription_search": subscription_search,
         "codex_runtime_sources": codex_runtime_sources,
     }))
+}
+
+#[cfg(test)]
+mod config_path_tests {
+    use super::{
+        CONFIG_PATH_ENV, ConfigPathEnvironment, ConfigPlatform, config_path_from_environment,
+    };
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    fn run_python_case(
+        python: &str,
+        python_root: &std::path::Path,
+        script: &str,
+        case: &serde_json::Value,
+    ) -> serde_json::Value {
+        let output = Command::new(python)
+            .arg("-c")
+            .arg(script)
+            .arg(case.to_string())
+            .current_dir(python_root)
+            .env("PYTHONPATH", python_root)
+            .output()
+            .expect("run live Python config path oracle");
+        assert!(
+            output.status.success(),
+            "Python config path oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("Python config path JSON");
+        assert_eq!(actual["version"], "0.11.10");
+        assert_eq!(
+            PathBuf::from(actual["module"].as_str().expect("Python module path")),
+            python_root.join("easy_multi_provider/__init__.py")
+        );
+        actual
+    }
+
+    fn oracle_environment(environment: &ConfigPathEnvironment<'_>) -> serde_json::Value {
+        let mut values = serde_json::Map::<String, serde_json::Value>::new();
+        for (key, value) in [
+            (CONFIG_PATH_ENV, environment.configured),
+            ("HOME", environment.home),
+            ("USERPROFILE", environment.user_profile),
+            ("XDG_CONFIG_HOME", environment.xdg_config_home),
+            ("LOCALAPPDATA", environment.local_app_data),
+            ("APPDATA", environment.app_data),
+        ] {
+            if let Some(value) = value {
+                values.insert(key.to_owned(), json!(value));
+            }
+        }
+        serde_json::Value::Object(values)
+    }
+
+    #[test]
+    fn explicit_config_precedes_environment_and_expands_home() {
+        let actual = config_path_from_environment(
+            ConfigPathEnvironment {
+                configured: Some("  ~/custom/config.json  "),
+                home: Some("/home/example"),
+                user_profile: None,
+                xdg_config_home: Some("/xdg"),
+                local_app_data: Some("C:/Local"),
+                app_data: Some("C:/Roaming"),
+            },
+            ConfigPlatform::Unix,
+        );
+        assert_eq!(actual, PathBuf::from("/home/example/custom/config.json"));
+    }
+
+    #[test]
+    fn linux_uses_nonempty_xdg_then_home_config() {
+        let configured = config_path_from_environment(
+            ConfigPathEnvironment {
+                configured: None,
+                home: Some("/home/example"),
+                user_profile: None,
+                xdg_config_home: Some(" /settings "),
+                local_app_data: None,
+                app_data: None,
+            },
+            ConfigPlatform::Unix,
+        );
+        assert_eq!(
+            configured,
+            PathBuf::from("/settings/easy-multi-provider/config.json")
+        );
+
+        let fallback = config_path_from_environment(
+            ConfigPathEnvironment {
+                configured: Some("  "),
+                home: Some("/home/example"),
+                user_profile: None,
+                xdg_config_home: Some(" "),
+                local_app_data: None,
+                app_data: None,
+            },
+            ConfigPlatform::Unix,
+        );
+        assert_eq!(
+            fallback,
+            PathBuf::from("/home/example/.config/easy-multi-provider/config.json")
+        );
+    }
+
+    #[test]
+    fn macos_uses_application_support_under_home() {
+        let actual = config_path_from_environment(
+            ConfigPathEnvironment {
+                configured: None,
+                home: Some("/Users/example"),
+                user_profile: None,
+                xdg_config_home: Some("/ignored"),
+                local_app_data: None,
+                app_data: None,
+            },
+            ConfigPlatform::MacOs,
+        );
+        assert_eq!(
+            actual,
+            PathBuf::from(
+                "/Users/example/Library/Application Support/EasyMultiProvider/config.json"
+            )
+        );
+    }
+
+    #[test]
+    fn windows_prefers_local_app_data_then_app_data_then_user_profile() {
+        let local = config_path_from_environment(
+            ConfigPathEnvironment {
+                configured: None,
+                home: Some("C:/Home"),
+                user_profile: Some("C:/Users/example"),
+                xdg_config_home: None,
+                local_app_data: Some("C:/Local"),
+                app_data: Some("C:/Roaming"),
+            },
+            ConfigPlatform::Windows,
+        );
+        assert_eq!(
+            local,
+            PathBuf::from("C:/Local/EasyMultiProvider/config.json")
+        );
+
+        let roaming = config_path_from_environment(
+            ConfigPathEnvironment {
+                configured: None,
+                home: None,
+                user_profile: Some("C:/Users/example"),
+                xdg_config_home: None,
+                local_app_data: Some(" "),
+                app_data: Some("C:/Roaming"),
+            },
+            ConfigPlatform::Windows,
+        );
+        assert_eq!(
+            roaming,
+            PathBuf::from("C:/Roaming/EasyMultiProvider/config.json")
+        );
+
+        let fallback = config_path_from_environment(
+            ConfigPathEnvironment {
+                configured: None,
+                home: None,
+                user_profile: Some("C:/Users/example"),
+                xdg_config_home: None,
+                local_app_data: None,
+                app_data: None,
+            },
+            ConfigPlatform::Windows,
+        );
+        assert_eq!(
+            fallback,
+            PathBuf::from("C:/Users/example/AppData/Local/EasyMultiProvider/config.json")
+        );
+    }
+
+    #[test]
+    fn desktop_config_path_matches_live_python_resolver_for_each_platform() {
+        let (Ok(python), Ok(python_root)) = (
+            std::env::var("EMP_PYTHON_INTEROP"),
+            std::env::var("EMP_PYTHON_ORACLE_ROOT"),
+        ) else {
+            return;
+        };
+        let script = r#"
+import json, sys
+from pathlib import Path
+import easy_multi_provider
+from easy_multi_provider.config import resolve_desktop_config_path
+case = json.loads(sys.argv[1])
+path = resolve_desktop_config_path(
+    environ=case["environment"],
+    user_home=Path(case["user_home"]),
+    platform_name=case["platform"],
+)
+result = {"path": str(path), "version": easy_multi_provider.__version__, "module": easy_multi_provider.__file__}
+print(json.dumps(result, separators=(",", ":")))
+"#;
+        let cases = [
+            (
+                ConfigPathEnvironment {
+                    configured: None,
+                    home: Some("home/example"),
+                    user_profile: Some("home/example"),
+                    xdg_config_home: Some("xdg"),
+                    local_app_data: Some("local"),
+                    app_data: Some("roaming"),
+                },
+                ConfigPlatform::Unix,
+                "linux",
+                "home/example",
+            ),
+            (
+                ConfigPathEnvironment {
+                    configured: Some(" "),
+                    home: Some("home/example"),
+                    user_profile: None,
+                    xdg_config_home: Some("xdg/custom"),
+                    local_app_data: None,
+                    app_data: None,
+                },
+                ConfigPlatform::Unix,
+                "linux",
+                "home/example",
+            ),
+            (
+                ConfigPathEnvironment {
+                    configured: None,
+                    home: Some("home/example"),
+                    user_profile: None,
+                    xdg_config_home: None,
+                    local_app_data: None,
+                    app_data: None,
+                },
+                ConfigPlatform::MacOs,
+                "darwin",
+                "home/example",
+            ),
+            (
+                ConfigPathEnvironment {
+                    configured: None,
+                    home: None,
+                    user_profile: Some("home/example"),
+                    xdg_config_home: None,
+                    local_app_data: Some("local/appdata"),
+                    app_data: Some("roaming/appdata"),
+                },
+                ConfigPlatform::Windows,
+                "win32",
+                "home/example",
+            ),
+            (
+                ConfigPathEnvironment {
+                    configured: None,
+                    home: None,
+                    user_profile: Some("home/example"),
+                    xdg_config_home: None,
+                    local_app_data: Some(" "),
+                    app_data: Some("roaming/appdata"),
+                },
+                ConfigPlatform::Windows,
+                "win32",
+                "home/example",
+            ),
+            (
+                ConfigPathEnvironment {
+                    configured: None,
+                    home: None,
+                    user_profile: Some("home/example"),
+                    xdg_config_home: None,
+                    local_app_data: None,
+                    app_data: None,
+                },
+                ConfigPlatform::Windows,
+                "win32",
+                "home/example",
+            ),
+        ];
+        let python_root = PathBuf::from(python_root);
+        for (environment, platform, python_platform, user_home) in cases {
+            let case = json!({
+                "platform": python_platform,
+                "environment": oracle_environment(&environment),
+                "user_home": user_home,
+            });
+            let actual = run_python_case(&python, &python_root, script, &case);
+            assert_eq!(
+                actual["path"],
+                config_path_from_environment(environment, platform)
+                    .to_string_lossy()
+                    .as_ref()
+            );
+        }
+    }
+
+    #[test]
+    fn config_path_matches_live_python_environment_precedence() {
+        let (Ok(python), Ok(python_root)) = (
+            std::env::var("EMP_PYTHON_INTEROP"),
+            std::env::var("EMP_PYTHON_ORACLE_ROOT"),
+        ) else {
+            return;
+        };
+        let platform = if cfg!(windows) {
+            ConfigPlatform::Windows
+        } else if cfg!(target_os = "macos") {
+            ConfigPlatform::MacOs
+        } else {
+            ConfigPlatform::Unix
+        };
+        let python_platform = match platform {
+            ConfigPlatform::Windows => "win32",
+            ConfigPlatform::MacOs => "darwin",
+            ConfigPlatform::Unix => "linux",
+        };
+        let script = r#"
+import json, os, sys
+from unittest.mock import patch
+import easy_multi_provider
+from easy_multi_provider.config import config_path
+case = json.loads(sys.argv[1])
+with patch.dict(os.environ, case["environment"], clear=True):
+    result = {"path": str(config_path()), "version": easy_multi_provider.__version__, "module": easy_multi_provider.__file__}
+print(json.dumps(result, separators=(",", ":")))
+"#;
+        let cases = [
+            ConfigPathEnvironment {
+                configured: Some(" ~/override/config.json "),
+                home: Some("home/example"),
+                user_profile: Some("home/example"),
+                xdg_config_home: Some("xdg/settings"),
+                local_app_data: Some("local/settings"),
+                app_data: Some("roaming/settings"),
+            },
+            ConfigPathEnvironment {
+                configured: Some("  "),
+                home: Some("home/example"),
+                user_profile: Some("home/example"),
+                xdg_config_home: Some("xdg/settings"),
+                local_app_data: Some("local/settings"),
+                app_data: Some("roaming/settings"),
+            },
+        ];
+        let python_root = PathBuf::from(python_root);
+        for environment in cases {
+            let case = json!({
+                "platform": python_platform,
+                "environment": oracle_environment(&environment),
+            });
+            let actual = run_python_case(&python, &python_root, script, &case);
+            assert_eq!(
+                actual["path"],
+                config_path_from_environment(environment, platform)
+                    .to_string_lossy()
+                    .as_ref()
+            );
+        }
+    }
 }

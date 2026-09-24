@@ -1,5 +1,4 @@
-//! Desktop configuration paths and a non-shell browser launcher.
-use std::path::PathBuf;
+//! Non-shell browser launcher for desktop starts.
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 fn variable(name: &str) -> Option<String> {
@@ -7,29 +6,6 @@ fn variable(name: &str) -> Option<String> {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .map(|value| value.trim().to_owned())
-}
-pub(super) fn config_path() -> PathBuf {
-    let home = if cfg!(windows) {
-        variable("USERPROFILE").or_else(|| variable("HOME"))
-    } else {
-        variable("HOME").or_else(|| variable("USERPROFILE"))
-    }
-    .map(PathBuf::from)
-    .unwrap_or_default();
-    if cfg!(windows) {
-        return variable("LOCALAPPDATA")
-            .or_else(|| variable("APPDATA"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join("AppData/Local"))
-            .join("EasyMultiProvider/config.json");
-    }
-    if cfg!(target_os = "macos") {
-        return home.join("Library/Application Support/EasyMultiProvider/config.json");
-    }
-    variable("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"))
-        .join("easy-multi-provider/config.json")
 }
 fn launch(arguments: &[String]) -> bool {
     let Some((program, arguments)) = arguments.split_first() else {
