@@ -18,7 +18,6 @@ pub(crate) const COMPACTION_SUMMARY_PREFIX: &str =
 const PORTABLE_TOP_LEVEL: &[&str] = &[
     "model",
     "instructions",
-    "input",
     "tools",
     "tool_choice",
     "parallel_tool_calls",
@@ -773,6 +772,39 @@ pub fn project_request(
         Some(_) => return Err(error(0, "stream", "invalid_stream")),
     }
     Ok(Value::Object(projected))
+}
+
+#[cfg(test)]
+mod request_projection_tests {
+    use super::{PORTABLE_TOP_LEVEL, project_request};
+    use serde_json::{Map, Value, json};
+
+    #[test]
+    fn large_string_input_is_only_added_by_portable_input_and_output_is_unchanged() {
+        assert!(!PORTABLE_TOP_LEVEL.contains(&"input"));
+        let input = "large request body ".repeat(64 * 1024);
+        let provider = Map::from_iter([
+            ("protocol".to_owned(), Value::String("responses".to_owned())),
+            ("auth_mode".to_owned(), Value::String("api_key".to_owned())),
+        ]);
+        let body = json!({
+            "model":"provider/model",
+            "instructions":"continue carefully",
+            "input":input,
+            "unknown":"not forwarded"
+        });
+
+        let projected = project_request(&provider, &body, false).expect("portable projection");
+        assert_eq!(
+            projected,
+            json!({
+                "model":"provider/model",
+                "instructions":"continue carefully",
+                "input":input,
+                "stream":false
+            })
+        );
+    }
 }
 
 fn custom_tool_ids(raw_id: Option<&Value>, call_id: Option<&Value>) -> (String, String) {
