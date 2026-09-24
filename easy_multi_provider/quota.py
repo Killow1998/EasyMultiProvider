@@ -358,6 +358,29 @@ def _safe_fields(source: Dict[str, Any], names: tuple) -> Dict[str, Any]:
     }
 
 
+def _safe_reset_credit(item: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = {
+        target: item[source]
+        for source, target in (
+            ("resetType", "reset_type"),
+            ("status", "status"),
+            ("grantedAt", "granted_at"),
+            ("expiresAt", "expires_at"),
+            ("title", "title"),
+            ("description", "description"),
+        )
+        if source in item
+        and (item[source] is None or isinstance(item[source], (str, int, float, bool)))
+    }
+    try:
+        credit_id = _validated_reset_credit_id(item.get("id"))
+    except QuotaError:
+        credit_id = None
+    if credit_id is not None:
+        snapshot["id"] = credit_id
+    return snapshot
+
+
 def _safe_reset_credits(value: Any) -> Any:
     if not isinstance(value, dict):
         return None
@@ -369,26 +392,7 @@ def _safe_reset_credits(value: Any) -> Any:
         if details is None:
             snapshot["credits"] = None
         elif isinstance(details, list):
-            snapshot["credits"] = [
-                {
-                    target: item[source]
-                    for source, target in (
-                        ("resetType", "reset_type"),
-                        ("status", "status"),
-                        ("grantedAt", "granted_at"),
-                        ("expiresAt", "expires_at"),
-                        ("title", "title"),
-                        ("description", "description"),
-                    )
-                    if source in item
-                    and (
-                        item[source] is None
-                        or isinstance(item[source], (str, int, float, bool))
-                    )
-                }
-                for item in details
-                if isinstance(item, dict)
-            ]
+            snapshot["credits"] = [_safe_reset_credit(item) for item in details if isinstance(item, dict)]
     return snapshot or None
 
 
@@ -498,6 +502,7 @@ def _run_quota_query(
     allow_refresh: bool,
     persist_path: Optional[Path],
     reset_idempotency_key: Optional[str] = None,
+    reset_credit_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run an isolated quota read or reset against a validated auth object.
 
@@ -527,7 +532,10 @@ def _run_quota_query(
             {
                 "id": 3,
                 "method": "account/rateLimitResetCredit/consume",
-                "params": {"idempotencyKey": reset_idempotency_key},
+                "params": {
+                    "idempotencyKey": reset_idempotency_key,
+                    **({"creditId": reset_credit_id} if reset_credit_id is not None else {}),
+                },
             }
             if reset_idempotency_key is not None
             else {"id": 3, "method": "account/rateLimits/read", "params": None}
@@ -696,14 +704,30 @@ def _validated_reset_idempotency_key(value: Any) -> str:
     return str(parsed)
 
 
+def _validated_reset_credit_id(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise QuotaError("reset credit id is invalid", "quota_reset_invalid_request")
+    try:
+        byte_count = len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise QuotaError("reset credit id is invalid", "quota_reset_invalid_request") from exc
+    if byte_count > 256:
+        raise QuotaError("reset credit id is invalid", "quota_reset_invalid_request")
+    return value
+
+
 def consume_account_quota_reset(
     account: Dict[str, Any],
     idempotency_key: str,
     codex_binary: str = "codex",
     timeout: int = 45,
+    credit_id: Optional[str] = None,
 ) -> str:
     """Consume one earned reset for an imported account without exposing credentials."""
     key = _validated_reset_idempotency_key(idempotency_key)
+    credit_id = _validated_reset_credit_id(credit_id)
     auth_file = account.get("auth_file", "")
     if not auth_file:
         raise QuotaError("account credentials are not configured")
@@ -721,6 +745,7 @@ def consume_account_quota_reset(
                 allow_refresh=False,
                 persist_path=persist_path,
                 reset_idempotency_key=key,
+                reset_credit_id=credit_id,
             )
         except QuotaError as exc:
             if exc.code != "quota_auth_required":
@@ -732,6 +757,7 @@ def consume_account_quota_reset(
                 allow_refresh=True,
                 persist_path=persist_path,
                 reset_idempotency_key=key,
+                reset_credit_id=credit_id,
             )
     return str(result["outcome"])
 
@@ -741,9 +767,11 @@ def consume_native_login_quota_reset(
     codex_binary: str = "codex",
     timeout: int = 45,
     auth_path: Optional[Path] = None,
+    credit_id: Optional[str] = None,
 ) -> str:
     """Consume one earned reset for the live native login without mutating auth.json."""
     key = _validated_reset_idempotency_key(idempotency_key)
+    credit_id = _validated_reset_credit_id(credit_id)
     try:
         auth = load_native_auth(auth_path)
     except AccountError as exc:
@@ -756,5 +784,6 @@ def consume_native_login_quota_reset(
             allow_refresh=False,
             persist_path=None,
             reset_idempotency_key=key,
+            reset_credit_id=credit_id,
         )
     return str(result["outcome"])
