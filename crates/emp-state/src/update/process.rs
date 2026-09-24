@@ -81,6 +81,36 @@ pub struct OwnedChild {
     #[cfg(windows)]
     job: windows_sys::Win32::Foundation::HANDLE,
 }
+#[cfg(windows)]
+struct QuietLaunch {
+    previous: u32,
+}
+#[cfg(windows)]
+impl QuietLaunch {
+    fn begin() -> Result<Self> {
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            GetThreadErrorMode, SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX,
+            SEM_NOOPENFILEERRORBOX, SetThreadErrorMode,
+        };
+        let mut previous = 0;
+        let quiet = SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX;
+        if unsafe { SetThreadErrorMode(GetThreadErrorMode() | quiet, &mut previous) } == 0 {
+            return Err(UpdateError("worker_failed"));
+        }
+        Ok(Self { previous })
+    }
+}
+#[cfg(windows)]
+impl Drop for QuietLaunch {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::System::Diagnostics::Debug::SetThreadErrorMode(
+                self.previous,
+                std::ptr::null_mut(),
+            );
+        }
+    }
+}
 pub fn spawn(
     executable: &Path,
     args: &[String],
@@ -120,7 +150,13 @@ pub fn spawn(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x00000200 | if visible { 0x00000010 } else { 0x08000000 });
     }
-    let child = command.spawn()?;
+    let child = {
+        // CreateProcess can show a bad-image dialog before it returns for a broken update.
+        // Limit suppression to this launch thread, then restore its original error mode.
+        #[cfg(windows)]
+        let _quiet_launch = QuietLaunch::begin()?;
+        command.spawn()?
+    };
     #[cfg(windows)]
     {
         let mut child = child;
@@ -209,5 +245,18 @@ mod tests {
             spawn(&executable, &[], &[("RUST_LOG", "trace".to_owned())], false),
             Err(super::super::UpdateError("worker_failed"))
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn invalid_update_executable_restores_thread_error_mode() {
+        use windows_sys::Win32::System::Diagnostics::Debug::GetThreadErrorMode;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let executable = root.path().join("candidate.exe");
+        std::fs::write(&executable, b"deliberately invalid executable").unwrap();
+        let previous = unsafe { GetThreadErrorMode() };
+        assert!(spawn(&executable, &[], &[], true).is_err());
+        assert_eq!(unsafe { GetThreadErrorMode() }, previous);
     }
 }
