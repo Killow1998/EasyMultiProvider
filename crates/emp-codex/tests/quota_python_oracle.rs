@@ -168,7 +168,10 @@ fn quota_projection_matches_live_python_oracle_when_configured() {
         rust["parsed"]["credits"]["reset_credits"]["available_count"],
         2
     );
-    assert!(!rust["parsed"].to_string().contains("opaque-reset-id"));
+    assert_eq!(
+        rust["parsed"]["credits"]["reset_credits"]["credits"][0]["id"],
+        "opaque-reset-id"
+    );
     assert!(!rust["rpc_errors"].to_string().contains("private-token"));
 
     let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {

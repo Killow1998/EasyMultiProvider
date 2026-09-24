@@ -189,7 +189,20 @@ pub(crate) fn management_quota_request(
             .get("idempotency_key")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let outcome = match consume_quota_reset_for_account(state, &account, key) {
+        let credit_id = match body.get("credit_id") {
+            None => None,
+            Some(Value::String(value)) => Some(value.as_str()),
+            _ => {
+                return json_error_response(
+                    400,
+                    status_text(400),
+                    "reset credit id is invalid",
+                    Some("quota_reset_invalid_request"),
+                    &[],
+                );
+            }
+        };
+        let outcome = match consume_quota_reset_for_account(state, &account, key, credit_id) {
             Ok(outcome) => outcome,
             Err(error) => {
                 let status = if error.code() == "quota_reset_invalid_request" {

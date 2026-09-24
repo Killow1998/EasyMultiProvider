@@ -684,7 +684,10 @@ for line in sys.stdin:
             }
             print(json.dumps({"id": request["id"], "result": result}), flush=True)
     elif method == "account/rateLimitResetCredit/consume":
-        assert request["params"] == {"idempotencyKey": "12345678-1234-4123-8123-123456789abc"}
+        expected = {"idempotencyKey": "12345678-1234-4123-8123-123456789abc"}
+        if started == "native-secret":
+            expected["creditId"] = "opaque-reset-id"
+        assert request["params"] == expected
         print(json.dumps({"id": request["id"], "result": {"outcome": "reset"}}), flush=True)
 "#,
         )
@@ -787,7 +790,10 @@ for line in sys.stdin:
         refreshed["account"]["quota"]["credits"]["reset_credits"]["available_count"],
         2
     );
-    assert!(!refreshed.to_string().contains("opaque-reset-id"));
+    assert_eq!(
+        refreshed["account"]["quota"]["credits"]["reset_credits"]["credits"][0]["id"],
+        "opaque-reset-id"
+    );
     assert_eq!(
         std::fs::read(&auth_path).expect("native auth after refresh"),
         original_auth,
@@ -795,7 +801,8 @@ for line in sys.stdin:
     );
 
     let reset_body = serde_json::to_vec(&json!({
-        "idempotency_key": "12345678-1234-4123-8123-123456789ABC"
+        "idempotency_key": "12345678-1234-4123-8123-123456789ABC",
+        "credit_id": "opaque-reset-id"
     }))
     .expect("reset request");
     let reset = post(
@@ -815,7 +822,10 @@ for line in sys.stdin:
         reset["account"]["quota"]["credits"]["reset_credits"]["credits"][0]["title"],
         "Full reset"
     );
-    assert!(!reset.to_string().contains("opaque-reset-id"));
+    assert_eq!(
+        reset["account"]["quota"]["credits"]["reset_credits"]["credits"][0]["id"],
+        "opaque-reset-id"
+    );
 
     let invalid_reset = post(
         &server,
@@ -828,6 +838,22 @@ for line in sys.stdin:
         "{invalid_reset}"
     );
     assert!(invalid_reset.contains("quota_reset_invalid_request"));
+
+    for invalid_credit_id in [json!(null), json!("   "), json!("x".repeat(257))] {
+        let invalid_body = serde_json::to_vec(&json!({
+            "idempotency_key": "12345678-1234-4123-8123-123456789ABC",
+            "credit_id": invalid_credit_id,
+        }))
+        .expect("invalid credit request");
+        let invalid = post(
+            &server,
+            "/api/accounts/%40native/quota-reset",
+            &invalid_body,
+            &[&cookie],
+        );
+        assert!(invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{invalid}");
+        assert!(invalid.contains("quota_reset_invalid_request"));
+    }
 
     let imported = post(&server, "/api/accounts/egg/quota", b"{}", &[&cookie]);
     assert!(imported.starts_with("HTTP/1.1 200 OK\r\n"), "{imported}");
@@ -867,7 +893,7 @@ for line in sys.stdin:
     let imported_reset = post(
         &server,
         "/api/accounts/egg/quota-reset",
-        &reset_body,
+        br#"{"idempotency_key":"12345678-1234-4123-8123-123456789ABC"}"#,
         &[&cookie],
     );
     assert!(

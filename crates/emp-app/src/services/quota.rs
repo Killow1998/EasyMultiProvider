@@ -240,6 +240,7 @@ pub(crate) fn consume_quota_reset_for_account(
     state: &ServerState,
     account_id: &str,
     idempotency_key: &str,
+    credit_id: Option<&str>,
 ) -> Result<String, QuotaError> {
     if account_id == "@native" {
         return consume_native_quota_reset(
@@ -247,6 +248,7 @@ pub(crate) fn consume_quota_reset_for_account(
             &crate::services::runtime::helper_binary(state),
             Duration::from_secs(45),
             idempotency_key,
+            credit_id,
         );
     }
     let target = state
@@ -288,6 +290,7 @@ pub(crate) fn consume_quota_reset_for_account(
             &crate::services::runtime::helper_binary(state),
             Duration::from_secs(45),
             idempotency_key,
+            credit_id,
         );
     }
     let query = |auth: &Value, allow_refresh: bool| {
@@ -297,6 +300,7 @@ pub(crate) fn consume_quota_reset_for_account(
             Duration::from_secs(45),
             allow_refresh,
             idempotency_key,
+            credit_id,
             |refreshed| {
                 state
                     .backend

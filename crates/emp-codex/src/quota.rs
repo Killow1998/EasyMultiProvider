@@ -109,7 +109,7 @@ pub fn run_quota_query(
         ));
     }
     let trusted = TrustedBinary::resolve(codex_binary)?;
-    run_isolated_quota_process(auth, &trusted, timeout, allow_refresh, None, None)
+    run_isolated_quota_process(auth, &trusted, timeout, allow_refresh, None, None, None)
 }
 
 /// Execute an imported-account quota read and save token rotation before a
@@ -145,6 +145,7 @@ where
         timeout,
         allow_refresh,
         None,
+        None,
         Some(&mut persist_rotation),
     )
     .map(|result| result.quota)
@@ -157,9 +158,10 @@ pub fn consume_native_quota_reset(
     codex_binary: &str,
     timeout: Duration,
     idempotency_key: &str,
+    credit_id: Option<&str>,
 ) -> Result<String, QuotaError> {
     let auth = read_native_auth(auth_path)?;
-    run_quota_reset(&auth, codex_binary, timeout, false, idempotency_key)
+    run_quota_reset(&auth, codex_binary, timeout, false, idempotency_key, credit_id)
 }
 
 /// Consume one reset opportunity for a validated auth document.
@@ -169,8 +171,10 @@ pub fn run_quota_reset(
     timeout: Duration,
     allow_refresh: bool,
     idempotency_key: &str,
+    credit_id: Option<&str>,
 ) -> Result<String, QuotaError> {
     let key = validated_reset_idempotency_key(idempotency_key)?;
+    let credit_id = validated_reset_credit_id(credit_id)?;
     if account_auth_headers(auth).is_none() {
         return Err(QuotaError::new(
             "auth_json does not contain a ChatGPT access token",
@@ -178,8 +182,8 @@ pub fn run_quota_reset(
         ));
     }
     let trusted = TrustedBinary::resolve(codex_binary)?;
-    run_isolated_quota_process(auth, &trusted, timeout, allow_refresh, Some(&key), None).and_then(
-        |result| {
+    run_isolated_quota_process(auth, &trusted, timeout, allow_refresh, Some(&key), credit_id, None)
+        .and_then(|result| {
             result
                 .quota
                 .get("outcome")
@@ -188,8 +192,7 @@ pub fn run_quota_reset(
                 .ok_or_else(|| {
                     QuotaError::new("Codex did not return a reset outcome", "quota_reset_failed")
                 })
-        },
-    )
+        })
 }
 
 /// Imported-account reset variant that persists token rotation even when the
@@ -200,12 +203,14 @@ pub fn run_quota_reset_persisting<F>(
     timeout: Duration,
     allow_refresh: bool,
     idempotency_key: &str,
+    credit_id: Option<&str>,
     mut persist: F,
 ) -> Result<String, QuotaError>
 where
     F: FnMut(&Value) -> Result<(), ()>,
 {
     let key = validated_reset_idempotency_key(idempotency_key)?;
+    let credit_id = validated_reset_credit_id(credit_id)?;
     if account_auth_headers(auth).is_none() {
         return Err(QuotaError::new(
             "auth_json does not contain a ChatGPT access token",
@@ -227,6 +232,7 @@ where
         timeout,
         allow_refresh,
         Some(&key),
+        credit_id,
         Some(&mut persist_rotation),
     )
     .and_then(|result| {
@@ -255,6 +261,16 @@ pub fn validated_reset_idempotency_key(value: &str) -> Result<String, QuotaError
         ));
     }
     Ok(value.to_ascii_lowercase())
+}
+
+pub fn validated_reset_credit_id(value: Option<&str>) -> Result<Option<&str>, QuotaError> {
+    match value {
+        Some(value) if value.trim().is_empty() || value.len() > 256 => Err(QuotaError::new(
+            "reset credit id is invalid",
+            "quota_reset_invalid_request",
+        )),
+        _ => Ok(value),
+    }
 }
 
 /// Classify one JSON-RPC error without exposing its upstream URL or body.
@@ -623,6 +639,7 @@ fn run_isolated_quota_process(
     timeout: Duration,
     allow_refresh: bool,
     reset_idempotency_key: Option<&str>,
+    reset_credit_id: Option<&str>,
     mut persist_rotation: Option<PersistRotation<'_>>,
 ) -> Result<QuotaProcessResult, QuotaError> {
     let directory = tempfile::Builder::new()
@@ -659,7 +676,13 @@ fn run_isolated_quota_process(
         }
     }
     let mut child = command.spawn().map_err(|_| quota_check_failed())?;
-    let result = query_child(&mut child, timeout, allow_refresh, reset_idempotency_key);
+    let result = query_child(
+        &mut child,
+        timeout,
+        allow_refresh,
+        reset_idempotency_key,
+        reset_credit_id,
+    );
     let cleanup = finish_child(&mut child);
     let refreshed_auth = fs::read(&auth_path)
         .ok()
@@ -753,6 +776,7 @@ fn query_child(
     timeout: Duration,
     allow_refresh: bool,
     reset_idempotency_key: Option<&str>,
+    reset_credit_id: Option<&str>,
 ) -> Result<String, QuotaError> {
     let stdout = child.stdout.take().ok_or_else(quota_check_failed)?;
     let stderr = child.stderr.take().ok_or_else(quota_check_failed)?;
@@ -780,10 +804,14 @@ fn query_child(
         reset_idempotency_key.map_or_else(
             || json!({"id": 3, "method": "account/rateLimits/read", "params": Value::Null}),
             |key| {
+                let mut params = json!({"idempotencyKey": key});
+                if let Some(credit_id) = reset_credit_id {
+                    params["creditId"] = Value::String(credit_id.to_owned());
+                }
                 json!({
                     "id": 3,
                     "method": "account/rateLimitResetCredit/consume",
-                    "params": {"idempotencyKey": key},
+                    "params": params,
                 })
             },
         ),
@@ -1055,6 +1083,11 @@ fn safe_reset_credits(value: Option<&Value>) -> Option<Value> {
                 .filter_map(Value::as_object)
                 .map(|credit| {
                     let mut safe = Map::new();
+                    if let Some(Value::String(id)) = credit.get("id") {
+                        if !id.trim().is_empty() && id.len() <= 256 {
+                            safe.insert("id".to_owned(), Value::String(id.clone()));
+                        }
+                    }
                     for (source, target) in [
                         ("resetType", "reset_type"),
                         ("status", "status"),
@@ -1099,6 +1132,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reset_credit_projection_preserves_only_usable_ids() {
+        let source = json!({"credits": [
+            {"id": " opaque ID ", "status": "available", "private": "drop"},
+            {"id": "   ", "status": "available"},
+            {"id": "x".repeat(257), "status": "available"},
+            {"id": 42, "status": "available"},
+        ]});
+        let projected = safe_reset_credits(Some(&source)).expect("reset credits");
+        assert_eq!(projected["credits"][0]["id"], " opaque ID ");
+        assert!(projected["credits"][0].get("private").is_none());
+        for index in 1..4 {
+            assert!(projected["credits"][index].get("id").is_none());
+        }
+    }
+
+    #[test]
     fn isolated_process_sequences_requests_and_returns_rotated_auth() {
         let target = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -1136,7 +1185,11 @@ for line in sys.stdin:
         assert request["params"] is None
         print(json.dumps({"id": request["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 7}}}}), flush=True)
     elif method == "account/rateLimitResetCredit/consume":
-        assert request["params"] == {"idempotencyKey": "12345678-1234-4123-8123-123456789abc"}
+        auth = json.loads((home / "auth.json").read_text())
+        expected = {"idempotencyKey": "12345678-1234-4123-8123-123456789abc"}
+        if auth["tokens"]["account_id"] == "selected":
+            expected["creditId"] = "opaque selected id"
+        assert request["params"] == expected
         print(json.dumps({"id": request["id"], "result": {"outcome": "reset"}}), flush=True)
 "#,
         )
@@ -1147,7 +1200,7 @@ for line in sys.stdin:
         let trusted = TrustedBinary::resolve(script.to_str().expect("UTF-8 fake Codex path"))
             .expect("trusted fake Codex");
         let result =
-            run_isolated_quota_process(&auth, &trusted, Duration::from_secs(5), false, None, None)
+            run_isolated_quota_process(&auth, &trusted, Duration::from_secs(5), false, None, None, None)
                 .expect("isolated quota query");
         assert_eq!(result.quota["account_label"], "x***@example.com");
         assert_eq!(result.quota["plan_type"], "pro");
@@ -1163,12 +1216,36 @@ for line in sys.stdin:
                 Duration::from_secs(5),
                 false,
                 "12345678-1234-4123-8123-123456789ABC",
+                None,
             )
             .expect("quota reset"),
+            "reset"
+        );
+        let mut selected_auth = auth.clone();
+        selected_auth["tokens"]["account_id"] = Value::String("selected".to_owned());
+        assert_eq!(
+            run_quota_reset(
+                &selected_auth,
+                script.to_str().expect("UTF-8 fake Codex path"),
+                Duration::from_secs(5),
+                false,
+                "12345678-1234-4123-8123-123456789ABC",
+                Some("opaque selected id"),
+            )
+            .expect("selected quota reset"),
             "reset"
         );
         let invalid =
             validated_reset_idempotency_key("retry-me").expect_err("non-UUID idempotency key");
         assert_eq!(invalid.code(), "quota_reset_invalid_request");
+        let too_long = "x".repeat(257);
+        for invalid in ["", " ", too_long.as_str()] {
+            assert_eq!(
+                validated_reset_credit_id(Some(invalid))
+                    .expect_err("invalid reset credit id")
+                    .code(),
+                "quota_reset_invalid_request"
+            );
+        }
     }
 }
