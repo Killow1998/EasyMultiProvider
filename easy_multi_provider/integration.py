@@ -1,8 +1,8 @@
 """Transactional, field-level integration with an explicit Codex config.
 
-The module owns only ``openai_base_url`` and ``model_catalog_json``.  TOML
-parsing and style-preserving serialization are delegated to tomlkit; lease
-transitions and file replacement remain local and explicit.
+The module owns the API URL, model catalog, and Voice sideband URL. TOML parsing
+and style-preserving serialization are delegated to tomlkit; lease transitions
+and file replacement remain local and explicit.
 """
 
 from __future__ import annotations
@@ -24,9 +24,11 @@ from tomlkit import document, dumps, parse
 from tomlkit.exceptions import ParseError
 
 
-MANAGED_FIELDS = ("openai_base_url", "model_catalog_json")
+LEGACY_MANAGED_FIELDS = ("openai_base_url", "model_catalog_json")
+REALTIME_SIDEBAND_FIELD = "experimental_realtime_ws_base_url"
+MANAGED_FIELDS = LEGACY_MANAGED_FIELDS + (REALTIME_SIDEBAND_FIELD,)
 LEASE_SCHEMA = "easy-multi-provider.integration-lease"
-LEASE_VERSION = 2
+LEASE_VERSION = 3
 LEASE_STATUSES = ("prepared", "active", "restoring", "restored")
 _ALLOWED_TRANSITIONS = {
     "prepared": {"active", "restoring", "restored"},
@@ -387,20 +389,26 @@ def _field_state(value: Any, field: str) -> FieldState:
     return FieldState(present, raw)
 
 
-def _lease_from_dict(raw: Any, config_path: Path) -> LeaseRecord:
+def _lease_from_dict(
+    raw: Any,
+    config_path: Path,
+    current_fields: Optional[Mapping[str, FieldState]] = None,
+) -> LeaseRecord:
     if not isinstance(raw, dict) or set(raw) != _LEASE_KEYS:
         raise LeaseError("lease record contains unsupported fields")
-    if raw.get("schema") != LEASE_SCHEMA or raw.get("version") != LEASE_VERSION:
+    version = raw.get("version")
+    if raw.get("schema") != LEASE_SCHEMA or version not in (2, LEASE_VERSION):
         raise LeaseError("unsupported lease record version")
     if raw.get("config_path") != str(config_path.resolve()):
         raise LeaseError("lease record targets another config")
     if not isinstance(raw.get("config_existed"), bool):
         raise LeaseError("invalid lease config existence")
     raw_fields = raw.get("fields")
-    if not isinstance(raw_fields, dict) or set(raw_fields) != set(MANAGED_FIELDS):
+    expected_fields = LEGACY_MANAGED_FIELDS if version == 2 else MANAGED_FIELDS
+    if not isinstance(raw_fields, dict) or set(raw_fields) != set(expected_fields):
         raise LeaseError("invalid lease managed fields")
     fields: Dict[str, FieldRecovery] = {}
-    for field in MANAGED_FIELDS:
+    for field in expected_fields:
         recovery = raw_fields[field]
         if not isinstance(recovery, dict) or set(recovery) != {"original", "applied"}:
             raise LeaseError("invalid lease recovery field: %s" % field)
@@ -409,6 +417,14 @@ def _lease_from_dict(raw: Any, config_path: Path) -> LeaseRecord:
         if field == "openai_base_url" and not applied.present:
             raise LeaseError("lease applied field is absent: %s" % field)
         fields[field] = FieldRecovery(original=original, applied=applied)
+    if version == 2:
+        if current_fields is None or REALTIME_SIDEBAND_FIELD not in current_fields:
+            raise LeaseError("legacy lease requires current Codex config state")
+        current_sideband = current_fields[REALTIME_SIDEBAND_FIELD]
+        fields[REALTIME_SIDEBAND_FIELD] = FieldRecovery(
+            original=current_sideband,
+            applied=current_sideband,
+        )
     for key in ("lease_id", "instance_id", "created_at", "updated_at"):
         if not isinstance(raw.get(key), str) or not raw[key]:
             raise LeaseError("invalid lease metadata: %s" % key)
@@ -538,7 +554,9 @@ class IntegrationManager:
         else:
             self._write_config(config)
 
-    def _read_lease(self) -> Optional[LeaseRecord]:
+    def _read_lease(
+        self, current_fields: Optional[Mapping[str, FieldState]] = None
+    ) -> Optional[LeaseRecord]:
         _reject_symlink(self.lease_path, "integration lease")
         if not self.lease_path.exists():
             return None
@@ -546,7 +564,7 @@ class IntegrationManager:
             raw = json.loads(self.lease_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise LeaseError("unable to read integration lease") from exc
-        return _lease_from_dict(raw, self.config_path)
+        return _lease_from_dict(raw, self.config_path, current_fields)
 
     def _write_lease(self, lease: LeaseRecord) -> LeaseRecord:
         self.lease_path.parent.mkdir(parents=True, exist_ok=True)
@@ -657,7 +675,7 @@ class IntegrationManager:
         with self._transaction_lock():
             config, config_exists = self._read_config()
             fields = self._states(config)
-            lease = self._read_lease()
+            lease = self._read_lease(fields)
             if lease is None:
                 return IntegrationStatus(
                     "native", "unleased", self.config_path, config_exists, fields, None, False, ()
@@ -689,10 +707,11 @@ class IntegrationManager:
         openai_base_url: str,
         model_catalog_json: Optional[str],
         service_ready: ServiceReady = False,
+        realtime_sideband_base_url: Optional[str] = None,
     ) -> IntegrationResult:
         """Prepare a lease, apply TOML, then commit the lease as active."""
 
-        desired = {
+        desired_base = {
             "openai_base_url": FieldState(True, _toml_value(openai_base_url, "openai_base_url")),
             "model_catalog_json": (FieldState(False, None) if model_catalog_json is None else
                                    FieldState(True, _toml_value(model_catalog_json, "model_catalog_json"))),
@@ -702,7 +721,19 @@ class IntegrationManager:
         with self._transaction_lock():
             config, config_exists = self._read_config()
             current = self._states(config)
-            lease = self._read_lease()
+            desired = dict(desired_base)
+            desired[REALTIME_SIDEBAND_FIELD] = (
+                current[REALTIME_SIDEBAND_FIELD]
+                if realtime_sideband_base_url is None
+                else FieldState(
+                    True,
+                    _toml_value(
+                        realtime_sideband_base_url,
+                        REALTIME_SIDEBAND_FIELD,
+                    ),
+                )
+            )
+            lease = self._read_lease(current)
             if lease is not None and lease.status != "restored":
                 relation = self._relation(current, lease)
                 if relation == "other" or relation == "mixed":
@@ -744,7 +775,7 @@ class IntegrationManager:
         with self._transaction_lock():
             config, config_exists = self._read_config()
             current = self._states(config)
-            lease = self._read_lease()
+            lease = self._read_lease(current)
             if lease is None:
                 return self._result("noop", "native", "unleased", current, None)
             relation = self._relation(current, lease)
@@ -803,7 +834,7 @@ class IntegrationManager:
         with self._transaction_lock():
             config, _ = self._read_config()
             current = self._states(config)
-            lease = self._read_lease()
+            lease = self._read_lease(current)
             if lease is None:
                 return self._result("noop", "native", "unleased", current, None)
             relation = self._relation(current, lease)
@@ -832,9 +863,13 @@ def enable(
     service_ready: ServiceReady = False,
     instance_id: Optional[str] = None,
     lock_timeout: float = 5.0,
+    realtime_sideband_base_url: Optional[str] = None,
 ) -> IntegrationResult:
     return IntegrationManager(config_path, lease_path, instance_id, lock_timeout).enable(
-        openai_base_url, model_catalog_json, service_ready
+        openai_base_url,
+        model_catalog_json,
+        service_ready,
+        realtime_sideband_base_url,
     )
 
 

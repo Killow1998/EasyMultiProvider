@@ -13,6 +13,7 @@ import json
 import time
 import uuid
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Tuple
+from urllib.parse import unquote, urlsplit
 
 from .diagnostic_journal import exception_details
 from .transport_failures import PHASE_CONNECT, network_failure, status_error_class
@@ -163,6 +164,7 @@ class NativeWebSocketTarget:
     headers: Mapping[str, str]
     connection_key: str
     proxy: Optional[str] = None
+    max_message_bytes: int = MAX_NATIVE_WEBSOCKET_EVENT_BYTES
 
 
 @dataclass(frozen=True)
@@ -249,7 +251,7 @@ def _compressed_connector(target: NativeWebSocketTarget):
             ping_interval=20,
             ping_timeout=20,
             close_timeout=5,
-            max_size=MAX_NATIVE_WEBSOCKET_EVENT_BYTES,
+            max_size=target.max_message_bytes,
             max_queue=16,
         ))
     except Exception as exc:
@@ -274,6 +276,24 @@ def _legacy_connector(target: NativeWebSocketTarget):
             "native upstream websocket support is not installed", 503, False
         ) from exc
 
+    proxy_options: Dict[str, Any] = {}
+    if target.proxy:
+        parsed = urlsplit(target.proxy)
+        if parsed.hostname and parsed.port:
+            proxy_options.update(
+                http_proxy_host=parsed.hostname,
+                http_proxy_port=parsed.port,
+                proxy_type=(
+                    parsed.scheme
+                    if parsed.scheme in ("socks4", "socks4a", "socks5", "socks5h")
+                    else "http"
+                ),
+            )
+            if parsed.username is not None:
+                proxy_options["http_proxy_auth"] = (
+                    unquote(parsed.username),
+                    unquote(parsed.password or ""),
+                )
     # Redirects are forbidden because these headers contain credentials.
     return create_connection(
         target.url,
@@ -282,6 +302,7 @@ def _legacy_connector(target: NativeWebSocketTarget):
         suppress_origin=True,
         redirect_limit=0,
         enable_multithread=False,
+        **proxy_options,
     )
 
 
@@ -290,6 +311,14 @@ def _default_connector(target: NativeWebSocketTarget):
         return _compressed_connector(target)
     except ImportError:
         return _legacy_connector(target)
+
+
+def open_native_websocket(target: NativeWebSocketTarget):
+    """Open one credential-bearing WebSocket without redirects or replay."""
+
+    if target.proxy and urlsplit(target.proxy).scheme.startswith("socks"):
+        return _legacy_connector(target)
+    return _default_connector(target)
 
 
 def _handshake_status(connection: Any) -> int:

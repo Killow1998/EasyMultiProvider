@@ -179,6 +179,72 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn("# keep\n", restored)
         self.assertIn("[other]\nvalue = true\n", restored)
 
+    def test_voice_sideband_url_is_managed_and_restored(self):
+        self.write_config(
+            'experimental_realtime_ws_base_url = "https://voice.example/v1"\n'
+        )
+        manager = self.manager()
+        result = manager.enable(
+            self.SERVICE_URL,
+            self.CATALOG,
+            service_ready=True,
+            realtime_sideband_base_url=self.SERVICE_URL,
+        )
+        self.assertEqual(
+            result.fields[integration.REALTIME_SIDEBAND_FIELD].value,
+            self.SERVICE_URL,
+        )
+        applied = self.config_path.read_text(encoding="utf-8")
+        self.assertIn(
+            'experimental_realtime_ws_base_url = "http://127.0.0.1:43123/v1"',
+            applied,
+        )
+        manager.restore()
+        restored = self.config_path.read_text(encoding="utf-8")
+        self.assertIn(
+            'experimental_realtime_ws_base_url = "https://voice.example/v1"',
+            restored,
+        )
+
+    def test_unmanaged_voice_sideband_url_is_preserved(self):
+        self.write_config(
+            'experimental_realtime_ws_base_url = "https://voice.example/v1"\n'
+        )
+        manager = self.manager()
+        manager.enable(self.SERVICE_URL, self.CATALOG, service_ready=True)
+        applied = self.config_path.read_text(encoding="utf-8")
+        self.assertIn(
+            'experimental_realtime_ws_base_url = "https://voice.example/v1"',
+            applied,
+        )
+        manager.restore()
+        self.assertIn(
+            'experimental_realtime_ws_base_url = "https://voice.example/v1"',
+            self.config_path.read_text(encoding="utf-8"),
+        )
+
+    def test_version_two_lease_restores_without_claiming_voice_sideband(self):
+        self.write_config(
+            'experimental_realtime_ws_base_url = "https://voice.example/v1"\n'
+        )
+        manager = self.manager()
+        manager.enable(self.SERVICE_URL, self.CATALOG, service_ready=True)
+        legacy = self.read_lease()
+        legacy["version"] = 2
+        legacy["fields"].pop(integration.REALTIME_SIDEBAND_FIELD)
+        self.lease_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        status = manager.status()
+        self.assertEqual(status.state, "active")
+        self.assertEqual(status.relation, "applied")
+        manager.restore()
+        restored = self.config_path.read_text(encoding="utf-8")
+        self.assertIn(
+            'experimental_realtime_ws_base_url = "https://voice.example/v1"',
+            restored,
+        )
+        self.assertEqual(self.read_lease()["version"], integration.LEASE_VERSION)
+
     def test_same_instance_status_and_stale_re_adopt(self):
         first = self.manager("first-instance")
         self.enable(first)

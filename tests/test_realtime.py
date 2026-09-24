@@ -1,13 +1,17 @@
 import io
 import json
+import queue
 import tempfile
 import threading
+import time
 import unittest
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
+
+import websocket
 
 from tests.support import ensure_test_master_key
 from easy_multi_provider.accounts import AccountError
@@ -20,6 +24,7 @@ from easy_multi_provider.realtime import (
     RealtimeError,
     RealtimeResponse,
     forward_native_realtime_call,
+    open_native_realtime_sideband,
     parse_realtime_multipart,
     read_realtime_call,
 )
@@ -68,6 +73,33 @@ class FakeResponse:
 
     def close(self):
         self.closed = True
+
+
+class FakeSideband:
+    def __init__(self):
+        self.incoming = queue.Queue()
+        self.incoming.put('{"type":"session.started"}')
+        self.sent = []
+        self.timeout = 1
+        self.closed = False
+
+    def settimeout(self, value):
+        self.timeout = value
+
+    def recv(self):
+        try:
+            return self.incoming.get(timeout=self.timeout)
+        except queue.Empty as exc:
+            raise TimeoutError from exc
+
+    def send_text(self, value):
+        self.sent.append(value)
+        if json.loads(value).get("type") == "session.close":
+            self.incoming.put('{"type":"session.closed"}')
+
+    def close(self):
+        self.closed = True
+        self.incoming.put(None)
 
 
 class CapturingJournal(NullJournal):
@@ -289,6 +321,48 @@ class RealtimeForwardingTests(unittest.TestCase):
             "native_realtime_unsupported",
         )
 
+    def test_sideband_uses_native_auth_and_selected_network_proxy(self):
+        connection = object()
+        captured = {}
+
+        def connect(target):
+            captured["target"] = target
+            return connection
+
+        with patch(
+            "easy_multi_provider.realtime.native_auth_headers",
+            return_value={
+                "Authorization": "Bearer native-secret",
+                "chatgpt-account-id": "acct-native",
+            },
+        ), patch(
+            "easy_multi_provider.realtime.proxy_for_url",
+            return_value="socks5h://127.0.0.1:7891",
+        ), patch(
+            "easy_multi_provider.realtime.open_native_websocket",
+            side_effect=connect,
+        ):
+            result = open_native_realtime_sideband(
+                Path("unused.json"),
+                {
+                    "Authorization": "Bearer caller-secret",
+                    "OpenAI-Alpha": "quicksilver=v2",
+                    "X-Session-Id": "session-voice",
+                },
+                "rtc_voice_proxy",
+            )
+        target = captured["target"]
+        self.assertIs(result, connection)
+        self.assertEqual(
+            target.url,
+            "wss://api.openai.com/v1/live/rtc_voice_proxy",
+        )
+        self.assertEqual(target.proxy, "socks5h://127.0.0.1:7891")
+        self.assertEqual(target.headers["Authorization"], "Bearer native-secret")
+        self.assertEqual(target.headers["chatgpt-account-id"], "acct-native")
+        self.assertEqual(target.headers["OpenAI-Alpha"], "quicksilver=v2")
+        self.assertEqual(target.headers["x-session-id"], "session-voice")
+
 
 class RealtimeServerTests(unittest.TestCase):
     def setUp(self):
@@ -460,6 +534,58 @@ class RealtimeServerTests(unittest.TestCase):
             json.loads(body)["error"]["message"],
             "Content-Type must be application/json",
         )
+
+    def test_sideband_relays_events_and_graceful_close(self):
+        upstream = FakeSideband()
+        url = "ws://127.0.0.1:%d/v1/live/rtc_relay_test" % self.server.server_port
+        with patch(
+            "easy_multi_provider.server.valid_caller_authorization",
+            return_value=True,
+        ), patch(
+            "easy_multi_provider.server.open_native_realtime_sideband",
+            return_value=upstream,
+        ):
+            client = websocket.create_connection(
+                url,
+                timeout=3,
+                header={"Authorization": "Bearer caller-native-secret"},
+                suppress_origin=True,
+            )
+            try:
+                self.assertEqual(
+                    json.loads(client.recv())["type"],
+                    "session.started",
+                )
+                client.send(
+                    json.dumps(
+                        {"type": "session.close", "private": "sideband-secret"}
+                    )
+                )
+                self.assertEqual(
+                    json.loads(client.recv())["type"],
+                    "session.closed",
+                )
+            finally:
+                client.close()
+        deadline = time.monotonic() + 2
+        while not upstream.closed and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(json.loads(upstream.sent[0])["type"], "session.close")
+        self.assertTrue(upstream.closed)
+        self.assertNotIn(
+            "sideband-secret",
+            json.dumps(self.journal.events, ensure_ascii=False),
+        )
+
+    def test_sideband_requires_caller_auth_before_upstream_connect(self):
+        url = "ws://127.0.0.1:%d/v1/live/rtc_unauthorized" % self.server.server_port
+        with patch(
+            "easy_multi_provider.server.open_native_realtime_sideband"
+        ) as connect:
+            with self.assertRaises(websocket.WebSocketBadStatusException) as raised:
+                websocket.create_connection(url, timeout=3, suppress_origin=True)
+        self.assertEqual(raised.exception.status_code, 401)
+        connect.assert_not_called()
 
 
 if __name__ == "__main__":

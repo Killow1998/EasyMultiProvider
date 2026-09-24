@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import struct
+import threading
 import zlib
 from typing import Any, Dict, Iterable, Iterator, Optional
 
@@ -206,19 +207,21 @@ class WebSocketConnection:
         self.set_read_timeout = set_read_timeout
         self.closed = False
         self.peer_close_code: Optional[int] = None
+        self._write_lock = threading.Lock()
 
     def _send_frame(self, opcode: int, payload: bytes = b"") -> None:
-        if self.closed:
-            return
-        length = len(payload)
-        if length < 126:
-            header = bytes((0x80 | opcode, length))
-        elif length <= 0xFFFF:
-            header = bytes((0x80 | opcode, 126)) + struct.pack("!H", length)
-        else:
-            header = bytes((0x80 | opcode, 127)) + struct.pack("!Q", length)
-        self.writer.write(header + payload)
-        self.writer.flush()
+        with self._write_lock:
+            if self.closed:
+                return
+            length = len(payload)
+            if length < 126:
+                header = bytes((0x80 | opcode, length))
+            elif length <= 0xFFFF:
+                header = bytes((0x80 | opcode, 126)) + struct.pack("!H", length)
+            else:
+                header = bytes((0x80 | opcode, 127)) + struct.pack("!Q", length)
+            self.writer.write(header + payload)
+            self.writer.flush()
 
     def send_json(self, value: Dict[str, Any]) -> None:
         payload = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -241,9 +244,13 @@ class WebSocketConnection:
         finally:
             self.closed = True
 
-    def receive_text(self, budget=None) -> Optional[str]:
+    def receive_text(
+        self, budget=None, max_length: Optional[int] = None
+    ) -> Optional[str]:
+        if max_length is None:
+            max_length = MAX_PROXY_REQUEST_BYTES
         try:
-            return self._receive_text(budget)
+            return self._receive_text(budget, max_length)
         finally:
             if self.set_read_timeout is not None:
                 try:
@@ -251,7 +258,11 @@ class WebSocketConnection:
                 except OSError:
                     pass
 
-    def _receive_text(self, budget=None) -> Optional[str]:
+    def _receive_text(
+        self, budget=None, max_length: Optional[int] = None
+    ) -> Optional[str]:
+        if max_length is None:
+            max_length = MAX_PROXY_REQUEST_BYTES
         message = bytearray()
         started = False
         while True:
@@ -288,8 +299,8 @@ class WebSocketConnection:
                             memory_used_bytes=exc.memory_used_bytes,
                             memory_used_percent=exc.memory_used_percent,
                         ) from exc
-                elif len(message) + length > MAX_PROXY_REQUEST_BYTES:
-                    raise WebSocketRequestTooLarge(MAX_PROXY_REQUEST_BYTES)
+                elif len(message) + length > max_length:
+                    raise WebSocketRequestTooLarge(max_length)
             mask = _read_exact(self.reader, 4)
             encoded = _read_exact(self.reader, length)
             payload = _unmask_websocket_payload(encoded, mask)

@@ -14,6 +14,7 @@ from easy_multi_provider.native_websocket import (
     NativeWebSocketTarget,
     _default_connector,
     native_websocket_request_fits,
+    open_native_websocket,
     terminal_observation,
 )
 
@@ -321,6 +322,24 @@ class NativeWebSocketTests(unittest.TestCase):
         ) as legacy:
             self.assertIs(_default_connector(target), connection)
         legacy.assert_called_once_with(target)
+
+    def test_one_shot_websocket_uses_explicit_socks_proxy(self):
+        connection = _FakeConnection([])
+        target = NativeWebSocketTarget(
+            "wss://example.invalid/live/rtc_test",
+            {"Authorization": "Bearer test-only"},
+            "rtc_test",
+            "socks5h://user%40name:pass%3Aword@127.0.0.1:7891",
+            max_message_bytes=4 * 1024 * 1024,
+        )
+        with patch("websocket.create_connection", return_value=connection) as opened:
+            self.assertIs(open_native_websocket(target), connection)
+        options = opened.call_args.kwargs
+        self.assertEqual(options["http_proxy_host"], "127.0.0.1")
+        self.assertEqual(options["http_proxy_port"], 7891)
+        self.assertEqual(options["proxy_type"], "socks5h")
+        self.assertEqual(options["http_proxy_auth"], ("user@name", "pass:word"))
+        self.assertEqual(options["redirect_limit"], 0)
 
     def test_gateway_failure_does_not_imply_websocket_is_unsupported(self):
         def fail(_target):

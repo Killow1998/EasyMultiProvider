@@ -1702,6 +1702,67 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(generated["models"][0]["display_name"], "[ 258K]  Native")
             self.assertEqual(state.runtime_sync_snapshot()["state"], "reload_required")
 
+    def test_startup_migrates_native_voice_sideband_from_version_two_lease(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(_integration_test_config(root), config_path)
+            codex_home = root / "codex"
+            catalog_path = codex_home / "easy-multi-provider" / "catalog.json"
+            lease_path = codex_home / "easy-multi-provider" / "integration" / "lease.json"
+            manager = IntegrationManager(
+                codex_home / "config.toml",
+                lease_path,
+                instance_id="legacy-sideband",
+            )
+            base_url = "http://127.0.0.1:43124/v1"
+            manager.enable(
+                base_url,
+                str(catalog_path.resolve()),
+                service_ready=True,
+            )
+            legacy = json.loads(lease_path.read_text(encoding="utf-8"))
+            legacy["version"] = 2
+            legacy["fields"].pop("experimental_realtime_ws_base_url")
+            lease_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+            class RuntimeWithoutRestart:
+                @staticmethod
+                def reload(_expected_models, target, *, confirm_reload, expected_catalog=None):
+                    return RuntimeSyncResult(
+                        STOPPED_WAITING_FOR_START,
+                        target,
+                        False,
+                        "controlled runtime is absent",
+                    )
+
+            state = AppState(
+                config_path,
+                integration_manager=manager,
+                catalog_path=catalog_path,
+                runtime_controller=RuntimeWithoutRestart(),
+            )
+            state.dynamic_model_catalog = lambda: True
+
+            class BoundServer:
+                server_address = ("127.0.0.1", 43124)
+
+                @staticmethod
+                def fileno():
+                    return 1
+
+            result = startup_reconcile(state, BoundServer())
+
+            self.assertTrue(result.ok)
+            config_text = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertIn(
+                'experimental_realtime_ws_base_url = "http://127.0.0.1:43124/v1"',
+                config_text,
+            )
+            migrated = json.loads(lease_path.read_text(encoding="utf-8"))
+            self.assertEqual(migrated["version"], 3)
+            self.assertIn("experimental_realtime_ws_base_url", migrated["fields"])
+
     def test_integration_status_is_safe_and_handler_is_ready(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2555,11 +2616,49 @@ class ServerAccountTests(unittest.TestCase):
                     % json.dumps(str(catalog_path.resolve())),
                     config_text,
                 )
+                self.assertNotIn("experimental_realtime_ws_base_url", config_text)
                 self.assertFalse((codex_home / "emp.config.toml").exists())
                 self.assertFalse((root / "generated").exists())
             finally:
                 server.shutdown()
                 server.server_close()
+
+    def test_native_enable_routes_voice_sideband_back_through_emp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            codex_home = root / "codex"
+            config_path = root / "config.json"
+            save(_integration_test_config(root), config_path)
+            manager = IntegrationManager(
+                codex_home / "config.toml",
+                codex_home / "easy-multi-provider" / "integration" / "lease.json",
+                instance_id="server-voice-sideband",
+            )
+            state = AppState(
+                config_path,
+                integration_manager=manager,
+                runtime_controller=_WaitingRuntimeController(),
+            )
+            state.dynamic_model_catalog = lambda: True
+            state.mark_service_ready()
+            base_url = "http://127.0.0.1:43123/v1"
+
+            result = state.enable_integration(base_url, confirm_reload=True)
+
+            self.assertTrue(result.ok)
+            config_text = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertIn(
+                'experimental_realtime_ws_base_url = "http://127.0.0.1:43123/v1"',
+                config_text,
+            )
+            state.restore_integration(confirm_reload=True)
+            restored_path = codex_home / "config.toml"
+            restored = (
+                restored_path.read_text(encoding="utf-8")
+                if restored_path.exists()
+                else ""
+            )
+            self.assertNotIn("experimental_realtime_ws_base_url", restored)
 
     def test_enable_conflict_is_non_2xx_and_does_not_overwrite_user_change(self):
         with tempfile.TemporaryDirectory() as directory:

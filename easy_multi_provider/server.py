@@ -105,6 +105,7 @@ from .integration import (
     IntegrationResult,
     IntegrationStatus,
     LockTimeout,
+    REALTIME_SIDEBAND_FIELD,
     ServiceNotReady,
     _FileLock,
 )
@@ -185,9 +186,12 @@ from .router_errors import UpstreamHTTPError
 from .tls_runtime import tls_trust_source
 from .request_limits import RequestLimits
 from .realtime import (
+    MAX_REALTIME_SIDEBAND_MESSAGE_BYTES,
     RealtimeError,
     forward_native_realtime_call,
+    open_native_realtime_sideband,
     read_realtime_call,
+    valid_realtime_call_id,
 )
 from .vault import file_transaction
 from .transport_continuity import (
@@ -1947,6 +1951,7 @@ class AppState:
                 base_url,
                 None if dynamic else str(catalog_path.resolve()),
                 service_ready=self.service_ready,
+                realtime_sideband_base_url=base_url if dynamic else None,
             )
             if result.ok and result.state == "active":
                 try:
@@ -4008,6 +4013,204 @@ def make_handler(state: AppState):
                 if websocket_slot_acquired:
                     self.server.release_websocket_slot()
 
+        def _serve_realtime_sideband(self, call_id: str) -> None:
+            if not self._proxy_allowed():
+                self._send(
+                    401 if self._same_origin() else 403,
+                    _json_bytes({"error": {
+                        "code": "realtime_caller_unauthorized",
+                        "message": "Caller authentication is required for Codex Voice",
+                    }}),
+                )
+                return
+            if not valid_realtime_call_id(call_id):
+                self._send(
+                    400,
+                    _json_bytes({"error": {
+                        "code": "realtime_invalid_call_id",
+                        "message": "Realtime sideband call ID is invalid",
+                    }}),
+                )
+                return
+            connection_tokens = {
+                item.strip().lower()
+                for item in self.headers.get("Connection", "").split(",")
+            }
+            if (
+                self.headers.get("Upgrade", "").lower() != "websocket"
+                or "upgrade" not in connection_tokens
+                or self.headers.get("Sec-WebSocket-Version") != "13"
+            ):
+                self._error(400, "invalid websocket upgrade")
+                return
+            try:
+                accept = websocket_accept(self.headers.get("Sec-WebSocket-Key", ""))
+            except TransportError as exc:
+                self._error(400, str(exc))
+                return
+
+            acquire_websocket_slot = getattr(
+                self.server, "acquire_websocket_slot", None
+            )
+            slot_acquired = False
+            if callable(acquire_websocket_slot):
+                slot_acquired = acquire_websocket_slot()
+                if not slot_acquired:
+                    self._send(
+                        503,
+                        _json_bytes({"error": {
+                            "code": "realtime_capacity_unavailable",
+                            "message": "Too many WebSocket connections",
+                        }}),
+                        headers={"Retry-After": "2"},
+                    )
+                    return
+
+            connection_id = uuid.uuid4().hex[:16]
+            upstream = None
+            websocket = None
+            stop = threading.Event()
+            upstream_close = {"code": 1000, "reason": ""}
+            relay_thread = None
+            try:
+                self._record_websocket_phase(
+                    connection_id, "upstream_handshake_started"
+                )
+                try:
+                    upstream = open_native_realtime_sideband(
+                        state.codex_home / "auth.json",
+                        dict(self.headers.items()),
+                        call_id,
+                    )
+                except RealtimeError as exc:
+                    self._record_websocket_phase(
+                        connection_id,
+                        "upstream_handshake_rejected",
+                        status=exc.status,
+                    )
+                    self._send(
+                        exc.status,
+                        _json_bytes({"error": {
+                            "code": exc.code,
+                            "message": str(exc),
+                        }}),
+                    )
+                    return
+                self._record_websocket_phase(
+                    connection_id, "upstream_handshake_accepted", status=101
+                )
+
+                self.wfile.write(
+                    (
+                        "HTTP/1.1 101 Switching Protocols\r\n"
+                        "Upgrade: websocket\r\n"
+                        "Connection: Upgrade\r\n"
+                        "Sec-WebSocket-Accept: %s\r\n\r\n" % accept
+                    ).encode("ascii")
+                )
+                self._response_status = 101
+                self.wfile.flush()
+                self.close_connection = True
+                self.connection.settimeout(None)
+                websocket = WebSocketConnection(
+                    self.rfile, self.wfile, self.connection.settimeout
+                )
+                self._record_websocket_phase(
+                    connection_id, "local_upgrade_accepted", status=101
+                )
+
+                def relay_upstream() -> None:
+                    setter = getattr(upstream, "settimeout", None)
+                    receiver = getattr(upstream, "recv", None)
+                    try:
+                        while not stop.is_set():
+                            try:
+                                if callable(setter):
+                                    setter(1)
+                                raw = receiver() if callable(receiver) else None
+                            except Exception as exc:
+                                if "timeout" in exc.__class__.__name__.lower():
+                                    continue
+                                close = getattr(exc, "rcvd", None)
+                                code = getattr(close, "code", None)
+                                if isinstance(code, int) and not isinstance(code, bool):
+                                    upstream_close.update(code=code, reason="")
+                                else:
+                                    upstream_close.update(
+                                        code=1011,
+                                        reason="upstream transport failed",
+                                    )
+                                return
+                            if raw in (None, "", b""):
+                                return
+                            if isinstance(raw, str):
+                                payload = raw.encode("utf-8")
+                            elif isinstance(raw, bytes):
+                                payload = raw
+                                try:
+                                    payload.decode("utf-8", errors="strict")
+                                except UnicodeDecodeError:
+                                    upstream_close.update(code=1007, reason="invalid UTF-8")
+                                    return
+                            else:
+                                upstream_close.update(code=1003, reason="unsupported frame")
+                                return
+                            if len(payload) > MAX_REALTIME_SIDEBAND_MESSAGE_BYTES:
+                                upstream_close.update(code=1009, reason="message too large")
+                                return
+                            websocket.send_json_bytes(payload)
+                    except Exception:
+                        upstream_close.update(code=1011, reason="upstream transport failed")
+                    finally:
+                        stop.set()
+
+                relay_thread = threading.Thread(
+                    target=relay_upstream,
+                    daemon=True,
+                    name="emp-realtime-sideband-recv",
+                )
+                relay_thread.start()
+                sender = getattr(upstream, "send_text", None)
+                if not callable(sender):
+                    sender = getattr(upstream, "send", None)
+                while not stop.is_set():
+                    try:
+                        self.connection.settimeout(1)
+                        text = websocket.receive_text(
+                            max_length=MAX_REALTIME_SIDEBAND_MESSAGE_BYTES
+                        )
+                    except TimeoutError:
+                        continue
+                    if text is None:
+                        break
+                    if not callable(sender):
+                        raise TransportError("upstream websocket cannot send text")
+                    sender(text)
+            except WebSocketRequestTooLarge as exc:
+                upstream_close.update(code=exc.code, reason="message too large")
+            except WebSocketProtocolError as exc:
+                upstream_close.update(code=exc.code, reason=str(exc))
+            except (OSError, TransportError):
+                upstream_close.update(code=1011, reason="sideband transport failed")
+            finally:
+                stop.set()
+                if upstream is not None:
+                    try:
+                        upstream.close()
+                    except Exception:
+                        pass
+                if relay_thread is not None:
+                    relay_thread.join(timeout=2)
+                if websocket is not None:
+                    websocket.close(
+                        upstream_close["code"], upstream_close["reason"]
+                    )
+                self._record_websocket_phase(
+                    connection_id, "connection_closed"
+                )
+                if slot_acquired:
+                    self.server.release_websocket_slot()
+
         def _serve_quota_events(self) -> None:
             if not state._quota_event_slots.acquire(blocking=False):
                 self._send(503, _json_bytes({"error": {"message": "Too many quota subscribers"}}),
@@ -4048,6 +4251,11 @@ def make_handler(state: AppState):
             path = parsed.path
             if path == "/v1/responses" and self.headers.get("Upgrade", "").lower() == "websocket":
                 self._serve_responses_websocket()
+                return
+            if path.startswith("/v1/live/"):
+                self._serve_realtime_sideband(
+                    unquote(path[len("/v1/live/"):])
+                )
                 return
             if path in ("/", "/index.html") and not self._same_origin():
                 self._error(403, "cross-origin Web UI request rejected")
@@ -5099,7 +5307,13 @@ def startup_reconcile(state: AppState, server: BoundedThreadingHTTPServer) -> In
     result = state.reconcile_startup(state.service_ready)
     if result.action == "re_adopted" and result.state == "active":
         state.refresh_catalog()
-        if state.dynamic_model_catalog() and result.lease.fields["model_catalog_json"].applied.present:
+        dynamic = state.dynamic_model_catalog()
+        sideband = result.lease.fields[REALTIME_SIDEBAND_FIELD].applied
+        if dynamic and (
+            result.lease.fields["model_catalog_json"].applied.present
+            or not sideband.present
+            or sideband.value != base_url
+        ):
             result = state.enable_integration(base_url, confirm_reload=False)
     return result
 

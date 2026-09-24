@@ -14,6 +14,12 @@ from urllib.request import Request
 from . import __version__
 from .accounts import AccountError, native_auth_headers
 from .http_pool import open_request_status
+from .native_websocket import (
+    NativeWebSocketError,
+    NativeWebSocketTarget,
+    open_native_websocket,
+)
+from .network_proxy import proxy_for_url
 
 
 MAX_REALTIME_REQUEST_BYTES = 256 * 1024
@@ -21,6 +27,8 @@ MAX_REALTIME_PART_BYTES = 128 * 1024
 MAX_REALTIME_PART_HEADER_BYTES = 4096
 MAX_REALTIME_RESPONSE_BYTES = 256 * 1024
 REALTIME_UPSTREAM_TIMEOUT_SECONDS = 30
+MAX_REALTIME_SIDEBAND_MESSAGE_BYTES = 4 * 1024 * 1024
+REALTIME_SIDEBAND_URL = "wss://api.openai.com/v1/live"
 
 _BOUNDARY = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,70}$")
 _CALL_ID = re.compile(
@@ -370,6 +378,66 @@ def _header_value(headers: Mapping[str, str], name: str) -> Optional[str]:
 def _location_has_call_id(location: str) -> bool:
     path = urlparse(location).path
     return any(_CALL_ID.fullmatch(segment) for segment in path.split("/") if segment)
+
+
+def valid_realtime_call_id(call_id: str) -> bool:
+    return isinstance(call_id, str) and bool(_CALL_ID.fullmatch(call_id))
+
+
+def open_native_realtime_sideband(
+    auth_path: Any,
+    incoming_headers: Mapping[str, str],
+    call_id: str,
+):
+    """Open the native Voice sideband through EMP's selected network proxy."""
+
+    if not valid_realtime_call_id(call_id):
+        raise RealtimeError(
+            400,
+            "realtime_invalid_call_id",
+            "Realtime sideband call ID is invalid",
+        )
+    try:
+        headers = native_auth_headers(auth_path)
+    except AccountError as exc:
+        raise RealtimeError(
+            401,
+            "native_subscription_unavailable",
+            "A current native ChatGPT subscription login is required for Codex Voice",
+        ) from exc
+    headers.update(_safe_forwarded_headers(incoming_headers))
+    headers["User-Agent"] = "EMP/%s" % __version__
+    url = REALTIME_SIDEBAND_URL + "/" + call_id
+    target = NativeWebSocketTarget(
+        url=url,
+        headers=headers,
+        connection_key=call_id,
+        proxy=proxy_for_url(url),
+        max_message_bytes=MAX_REALTIME_SIDEBAND_MESSAGE_BYTES,
+    )
+    try:
+        return open_native_websocket(target)
+    except NativeWebSocketError as exc:
+        code = (
+            "native_subscription_auth_failed"
+            if exc.status in (401, 403)
+            else "native_realtime_unsupported"
+            if exc.status in (404, 405, 426, 501)
+            else "native_realtime_transport_error"
+        )
+        raise RealtimeError(exc.status, code, str(exc)) from exc
+    except (OSError, TimeoutError, ValueError) as exc:
+        raise RealtimeError(
+            502,
+            "native_realtime_transport_error",
+            "Native realtime sideband connection failed",
+        ) from exc
+    except Exception as exc:
+        raise RealtimeError(
+            502,
+            "native_realtime_transport_error",
+            "Native realtime sideband connection failed",
+        ) from exc
 
 
 def _read_upstream_body(response: Any) -> bytes:
