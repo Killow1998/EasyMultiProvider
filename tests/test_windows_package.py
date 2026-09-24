@@ -24,7 +24,7 @@ class WindowsResourceDefinitionTests(unittest.TestCase):
     def test_resource_script_embeds_icon_and_exact_source_version(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            icon = root / 'source "icon" ✓.ico'
+            icon = root / "source icon ✓.ico"
             icon.write_bytes(b"fixture icon")
 
             script = builder._write_windows_resource_script(
