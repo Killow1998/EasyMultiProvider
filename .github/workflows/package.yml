@@ -81,7 +81,7 @@ jobs:
         uses: actions/checkout@v7.0.1
         with:
           repository: Killow1998/EasyMultiProvider
-          ref: b53ef16ebfe4bcade8ca9aaf6b504b1eacedc211
+          ref: b04bd525e69b3a92dfe2c3d62afd760bb7b845d3
           path: python-oracle
 
       - name: Set up Rust
