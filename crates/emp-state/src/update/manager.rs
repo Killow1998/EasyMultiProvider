@@ -351,7 +351,11 @@ impl UpdateManager {
                     .lock()
                     .map_err(|_| UpdateError("update_failed"))? = Some(asset);
                 self.set_checked(
-                    if migration { "migration_required" } else { "available" },
+                    if migration {
+                        "migration_required"
+                    } else {
+                        "available"
+                    },
                     Some(latest),
                     migration,
                 );
@@ -371,7 +375,11 @@ impl UpdateManager {
                             .map(|tag| tag.trim_start_matches('v').to_owned())
                     });
                 self.set_checked(
-                    if migration { "migration_required" } else { "current" },
+                    if migration {
+                        "migration_required"
+                    } else {
+                        "current"
+                    },
                     version,
                     migration,
                 );
