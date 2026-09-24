@@ -198,6 +198,11 @@ impl TlsTestServer {
                 while !shutdown.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((stream, _)) => {
+                            // Exercise the accepted-socket mode seen on macOS
+                            // and Windows even when Linux defaults to blocking.
+                            stream
+                                .set_nonblocking(true)
+                                .expect("nonblocking accepted TLS stream");
                             let config = Arc::clone(&server_config);
                             thread::spawn(move || serve_tls_connection(stream, config));
                         }
@@ -233,6 +238,11 @@ impl Drop for TlsTestServer {
 }
 
 fn serve_tls_connection(stream: TcpStream, config: Arc<ServerConfig>) {
+    // The listener is nonblocking, and accepted sockets can inherit that mode.
+    // The TLS fixture uses blocking reads and writes on its own worker thread.
+    stream
+        .set_nonblocking(false)
+        .expect("blocking accepted TLS stream");
     let connection = ServerConnection::new(config).expect("TLS server connection");
     let mut stream = BufReader::new(StreamOwned::new(connection, stream));
     let mut request_line = String::new();
@@ -690,23 +700,8 @@ async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
             None,
             false,
         )
-        .await;
-    let response = match response {
-        Ok(response) => response,
-        Err(error) => {
-            // The public transport error is intentionally content-free. This
-            // fixture can safely expose the underlying local TLS failure.
-            let root = reqwest::Certificate::from_der(&server.certificate_der)
-                .expect("fixture CA certificate");
-            let direct = reqwest::Client::builder()
-                .no_proxy()
-                .tls_certs_only([root])
-                .build()
-                .expect("direct TLS diagnostic client");
-            let direct_result = direct.get(server.url("127.0.0.1")).send().await;
-            panic!("trusted TLS request: {error:?}; direct reqwest: {direct_result:?}");
-        }
-    };
+        .await
+        .expect("trusted TLS request");
     assert_eq!(response.status(), 200);
     assert_eq!(response.header("content-length"), Some("2"));
     response.finish().await;
