@@ -189,6 +189,15 @@ impl OwnedChild {
     }
 }
 
+#[cfg(windows)]
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        if !self.job.is_null() {
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(self.job) };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::spawn;
@@ -200,13 +209,5 @@ mod tests {
             spawn(&executable, &[], &[("RUST_LOG", "trace".to_owned())], false),
             Err(super::super::UpdateError("worker_failed"))
         ));
-    }
-}
-#[cfg(windows)]
-impl Drop for OwnedChild {
-    fn drop(&mut self) {
-        if !self.job.is_null() {
-            unsafe { windows_sys::Win32::Foundation::CloseHandle(self.job) };
-        }
     }
 }

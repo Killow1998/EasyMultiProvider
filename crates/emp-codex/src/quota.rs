@@ -735,6 +735,8 @@ fn set_private_directory(path: &Path) -> Result<(), QuotaError> {
     #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
         .map_err(|_| quota_check_failed())?;
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -1180,7 +1182,7 @@ mod tests {
 import json, os, pathlib, sys
 
 home = pathlib.Path(os.environ["CODEX_HOME"])
-assert pathlib.Path.cwd() == home
+assert pathlib.Path.cwd().samefile(home)
 assert sys.argv[1:] == ["app-server", "--stdio"]
 requests = []
 for line in sys.stdin:
