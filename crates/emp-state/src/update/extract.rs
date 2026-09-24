@@ -116,6 +116,59 @@ fn validate_archive_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn extract_dmg(package: &Path, job: &Path) -> Result<PathBuf> {
+    let mount = job.join("mount");
+    let candidate = job.join("candidate.app");
+    fs::create_dir(&mount)?;
+    let attach = Command::new("/usr/bin/hdiutil")
+        .args(["attach", "-readonly", "-nobrowse", "-mountpoint"])
+        .arg(&mount)
+        .arg(package)
+        .status()
+        .map_err(|_| UpdateError("invalid_package"))?;
+    if !attach.success() {
+        let _ = fs::remove_dir(&mount);
+        return Err(UpdateError("invalid_package"));
+    }
+    let copy_result = copy_bundle(&mount.join("EMP.app"), &candidate);
+    let detach = Command::new("/usr/bin/hdiutil")
+        .args(["detach", "-force"])
+        .arg(&mount)
+        .status();
+    if copy_result.is_err() || !detach.is_ok_and(|status| status.success()) {
+        return Err(UpdateError("invalid_package"));
+    }
+    copy_result?;
+    Ok(candidate)
+}
+
+#[cfg(target_os = "macos")]
+fn copy_bundle(source: &Path, destination: &Path) -> Result<()> {
+    if !source.is_dir() || source.is_symlink() {
+        return Err(UpdateError("invalid_package"));
+    }
+    fs::create_dir(destination)?;
+    for item in fs::read_dir(source)? {
+        let item = item?;
+        let source_path = item.path();
+        let destination_path = destination.join(item.file_name());
+        let metadata = fs::symlink_metadata(&source_path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(UpdateError("invalid_package"));
+        }
+        if metadata.is_dir() {
+            copy_bundle(&source_path, &destination_path)?;
+        } else if metadata.is_file() {
+            fs::copy(&source_path, &destination_path)?;
+            fs::set_permissions(&destination_path, metadata.permissions())?;
+        } else {
+            return Err(UpdateError("invalid_package"));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::release::MAX_PACKAGE_BYTES;
@@ -225,57 +278,4 @@ mod tests {
             super::super::UpdateError("invalid_package")
         );
     }
-}
-
-#[cfg(target_os = "macos")]
-fn extract_dmg(package: &Path, job: &Path) -> Result<PathBuf> {
-    let mount = job.join("mount");
-    let candidate = job.join("candidate.app");
-    fs::create_dir(&mount)?;
-    let attach = Command::new("/usr/bin/hdiutil")
-        .args(["attach", "-readonly", "-nobrowse", "-mountpoint"])
-        .arg(&mount)
-        .arg(package)
-        .status()
-        .map_err(|_| UpdateError("invalid_package"))?;
-    if !attach.success() {
-        let _ = fs::remove_dir(&mount);
-        return Err(UpdateError("invalid_package"));
-    }
-    let copy_result = copy_bundle(&mount.join("EMP.app"), &candidate);
-    let detach = Command::new("/usr/bin/hdiutil")
-        .args(["detach", "-force"])
-        .arg(&mount)
-        .status();
-    if copy_result.is_err() || !detach.is_ok_and(|status| status.success()) {
-        return Err(UpdateError("invalid_package"));
-    }
-    copy_result?;
-    Ok(candidate)
-}
-
-#[cfg(target_os = "macos")]
-fn copy_bundle(source: &Path, destination: &Path) -> Result<()> {
-    if !source.is_dir() || source.is_symlink() {
-        return Err(UpdateError("invalid_package"));
-    }
-    fs::create_dir(destination)?;
-    for item in fs::read_dir(source)? {
-        let item = item?;
-        let source_path = item.path();
-        let destination_path = destination.join(item.file_name());
-        let metadata = fs::symlink_metadata(&source_path)?;
-        if metadata.file_type().is_symlink() {
-            return Err(UpdateError("invalid_package"));
-        }
-        if metadata.is_dir() {
-            copy_bundle(&source_path, &destination_path)?;
-        } else if metadata.is_file() {
-            fs::copy(&source_path, &destination_path)?;
-            fs::set_permissions(&destination_path, metadata.permissions())?;
-        } else {
-            return Err(UpdateError("invalid_package"));
-        }
-    }
-    Ok(())
 }

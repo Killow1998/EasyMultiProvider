@@ -38,7 +38,7 @@ pub fn created(pid: u32) -> Option<f64> {
             return None;
         }
         let info = unsafe { info.assume_init() };
-        return Some(info.pbi_start_tvsec as f64 + info.pbi_start_tvusec as f64 / 1e6);
+        Some(info.pbi_start_tvsec as f64 + info.pbi_start_tvusec as f64 / 1e6)
     }
     #[cfg(windows)]
     {
@@ -68,7 +68,7 @@ pub fn created(pid: u32) -> Option<f64> {
             return None;
         }
         let ticks = ((times[0].dwHighDateTime as u64) << 32) | times[0].dwLowDateTime as u64;
-        return Some(ticks as f64 / 1e7 - 11644473600.0);
+        Some(ticks as f64 / 1e7 - 11644473600.0)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
@@ -123,6 +123,7 @@ pub fn spawn(
     let child = command.spawn()?;
     #[cfg(windows)]
     {
+        let mut child = child;
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::{
             Foundation::CloseHandle,
@@ -140,10 +141,12 @@ pub fn spawn(
             let _ = child.wait();
             return Err(UpdateError("worker_failed"));
         }
-        return Ok(OwnedChild { child, job });
+        Ok(OwnedChild { child, job })
     }
     #[cfg(not(windows))]
-    Ok(OwnedChild { child })
+    {
+        Ok(OwnedChild { child })
+    }
 }
 impl OwnedChild {
     pub fn stop(&mut self) {

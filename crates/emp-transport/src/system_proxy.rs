@@ -163,6 +163,7 @@ fn capture_windows() -> Result<Option<ProxyEnvironment>, ()> {
     Ok(parse_windows_proxy_settings(&output))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_gnome_proxy_settings(
     mode: &str,
     values: &BTreeMap<String, String>,
@@ -382,6 +383,7 @@ fn normalize_windows_proxy(address: &str, default_scheme: &str) -> Option<String
     valid_proxy_url(&proxy).then_some(proxy)
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn proxy_url(host: Option<&str>, port: Option<u16>, scheme: &str) -> Option<String> {
     let host = host?.trim();
     let port = port?;
@@ -410,6 +412,7 @@ fn valid_proxy_url(value: &str) -> bool {
         && url.port_or_known_default().is_some()
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn gsettings_atom(value: &str) -> Option<String> {
     let value = value.trim();
     if value == "true" || value == "false" {
@@ -438,6 +441,7 @@ fn gsettings_atom(value: &str) -> Option<String> {
     Some(result)
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn gsettings_integer(value: &str) -> Option<u16> {
     let integer = parse_integer(value)?;
     u16::try_from(integer).ok().filter(|value| *value > 0)
@@ -451,6 +455,7 @@ fn parse_integer(value: &str) -> Option<u64> {
     )
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn gsettings_list(value: &str) -> Vec<String> {
     let value = value.trim();
     let Some(inner) = value
@@ -483,6 +488,7 @@ fn gsettings_list(value: &str) -> Vec<String> {
     result
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn push_nonempty(result: &mut Vec<String>, item: &mut String) {
     let value = std::mem::take(item);
     let value = value.trim();

@@ -43,10 +43,12 @@ pub fn installation_target(executable: &Path) -> Result<(PathBuf, String)> {
         {
             return Err(UpdateError("unsupported_installation"));
         }
-        return Ok((app.to_owned(), "Contents/Resources/EMP".into()));
+        Ok((app.to_owned(), "Contents/Resources/EMP".into()))
     }
     #[cfg(not(target_os = "macos"))]
-    Ok((executable, String::new()))
+    {
+        Ok((executable, String::new()))
+    }
 }
 fn write(path: &Path, value: &serde_json::Value) -> Result<()> {
     crate::filesystem::atomic_write_private_state(

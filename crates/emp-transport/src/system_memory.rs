@@ -31,6 +31,7 @@ pub fn system_memory_status() -> Option<MemoryStatus> {
     let mut count = libc::HOST_VM_INFO64_COUNT;
     // SAFETY: the host API writes `count` integer words into the correctly sized
     // vm_statistics64 buffer, and the host/flavor/count match Apple's ABI.
+    #[allow(deprecated)] // libc deprecates mach_host_self; its system ABI remains required here.
     let result = unsafe {
         libc::host_statistics64(
             libc::mach_host_self(),
@@ -67,7 +68,7 @@ fn mac_total_physical_bytes() -> Option<u64> {
     // SAFETY: sysctlbyname writes a u64 to the supplied buffer for hw.memsize.
     let result = unsafe {
         libc::sysctlbyname(
-            b"hw.memsize\0".as_ptr().cast(),
+            c"hw.memsize".as_ptr(),
             (&mut total as *mut u64).cast(),
             &mut length,
             std::ptr::null_mut(),

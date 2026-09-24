@@ -557,10 +557,12 @@ pub fn installation_target(executable: &Path) -> Result<(PathBuf, String)> {
         {
             return Err(UpdateError("unsupported_installation"));
         }
-        return Ok((app.to_owned(), "Contents/Resources/EMP".to_owned()));
+        Ok((app.to_owned(), "Contents/Resources/EMP".to_owned()))
     }
     #[cfg(not(target_os = "macos"))]
-    Ok((executable, String::new()))
+    {
+        Ok((executable, String::new()))
+    }
 }
 
 fn create_job(parent: &Path) -> Result<PathBuf> {
