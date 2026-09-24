@@ -57,6 +57,21 @@ def _failure_detail(exc: Exception) -> str:
     return f"{type(exc).__name__}: {message}"
 
 
+def strict_json_equal(left, right) -> bool:
+    """Compare JSON values without Python's bool/int and int/float coercions."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            strict_json_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            strict_json_equal(a, b) for a, b in zip(left, right)
+        )
+    return left == right
+
+
 def validate_parameters(rollout_records: int, ledger_rows: int) -> None:
     if not 1 <= rollout_records <= 1_000_000:
         raise BenchmarkError("rollout_records_must_be_1_to_1000000")
@@ -169,7 +184,7 @@ def seed_fixture(seed_root: Path, ledger_rows: int, now: int) -> tuple[Path, Pat
     state.mkdir(parents=True, exist_ok=True)
     price_path = state / "api_prices.json"
     price_path.write_text(json.dumps({
-        "fetched_at": now - 60,
+        "fetched_at": float(now - 60),
         "prices": {UPSTREAM_MODEL: RATES},
     }, separators=(",", ":")), encoding="utf-8")
     usage_path = state / "usage.sqlite3"
@@ -569,11 +584,13 @@ def main(argv: list[str] | None = None) -> int:
                 upstream.close()
 
         semantic_equal = (
-            results["python"]["usage"] == results["rust"]["usage"]
-            and results["python"]["checkpoint"] == results["rust"]["checkpoint"]
-            and results["python"]["scan_status"] == results["rust"]["scan_status"]
-            and results["python"]["forwarding_smoke"]["semantic"]
-            == results["rust"]["forwarding_smoke"]["semantic"]
+            strict_json_equal(results["python"]["usage"], results["rust"]["usage"])
+            and strict_json_equal(results["python"]["checkpoint"], results["rust"]["checkpoint"])
+            and strict_json_equal(results["python"]["scan_status"], results["rust"]["scan_status"])
+            and strict_json_equal(
+                results["python"]["forwarding_smoke"]["semantic"],
+                results["rust"]["forwarding_smoke"]["semantic"],
+            )
             and results["python"]["forwarding_smoke"]["passed"]
             and results["rust"]["forwarding_smoke"]["passed"]
         )

@@ -8,6 +8,7 @@ from tools.benchmark_emp_usage_scan import (
     canonical_checkpoints,
     canonical_scan_status,
     canonical_usage,
+    strict_json_equal,
     synthetic_ledger_row,
     validate_parameters,
     validate_total_requests,
@@ -102,6 +103,11 @@ class UsageScanBenchmarkTests(unittest.TestCase):
         other["groups"].reverse()
         other["totals"]["input_tokens"] = 43
         self.assertNotEqual(canonical_usage(base), canonical_usage(other))
+
+    def test_strict_json_equality_preserves_numeric_types_and_array_order(self):
+        self.assertTrue(strict_json_equal({"value": 3.0}, {"value": 3.0}))
+        self.assertFalse(strict_json_equal({"value": 3}, {"value": 3.0}))
+        self.assertFalse(strict_json_equal({"values": [1, 2]}, {"values": [2, 1]}))
 
     def test_checkpoint_normalization_keeps_state_and_prefix(self):
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
