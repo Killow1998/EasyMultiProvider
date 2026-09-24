@@ -184,16 +184,23 @@ pub fn mark_ready(version: &str, marker: Option<PathBuf>) -> Result<()> {
     let Some(marker) = marker.filter(|value| !value.as_os_str().is_empty()) else {
         return Ok(());
     };
+    mark_ready_for_executable(version, marker, &std::env::current_exe()?)
+}
+fn mark_ready_for_executable(version: &str, marker: PathBuf, executable: &Path) -> Result<()> {
     let ready = marker;
     let job = ready
         .parent()
         .ok_or(UpdateError("invalid_update_plan"))?
         .canonicalize()?;
     let plan = load(&job.join("plan.json"))?;
-    let (target, _) = installation_target(&std::env::current_exe()?)?;
+    let (target, _) = installation_target(executable)?;
+    let target_parent = target
+        .parent()
+        .ok_or(UpdateError("invalid_update_plan"))?
+        .canonicalize()?;
     if ready.file_name().is_none_or(|name| name != "ready.json")
         || plan.target.canonicalize()? != target.canonicalize()?
-        || job.parent() != target.parent()
+        || job.parent() != Some(target_parent.as_path())
         || !job
             .file_name()
             .is_some_and(|name| name.to_string_lossy().starts_with(".emp-update-"))
@@ -215,6 +222,37 @@ pub fn mark_ready(version: &str, marker: Option<PathBuf>) -> Result<()> {
             }
         })?;
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::mark_ready_for_executable;
+
+    #[test]
+    fn ready_marker_accepts_canonical_windows_job_and_installation_paths() {
+        let root = tempfile::TempDir::new().unwrap();
+        let target = root.path().join("EMP.exe");
+        std::fs::write(&target, b"candidate").unwrap();
+        let job = root.path().join(".emp-update-ready-test");
+        std::fs::create_dir(&job).unwrap();
+        let marker = job.join("ready.json");
+        let plan = serde_json::json!({
+            "target": target,
+            "candidate": job.join("candidate.exe"),
+            "relative_binary": "",
+            "parents": [],
+            "args": [],
+            "version": "0.12.0",
+            "nonce": "test-nonce",
+        });
+        std::fs::write(job.join("plan.json"), serde_json::to_vec(&plan).unwrap()).unwrap();
+
+        mark_ready_for_executable("0.12.0", marker.clone(), &target).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(marker).unwrap()).unwrap(),
+            serde_json::json!({"version":"0.12.0","nonce":"test-nonce"})
+        );
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

@@ -116,8 +116,14 @@ class PackagedUpdateSmokeTests(unittest.TestCase):
                     worker = subprocess.Popen([str(helper), "--emp-apply-update", str(plan_path)], env=environment,
                         cwd=root, stdout=log, stderr=subprocess.STDOUT,
                         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-                    self.assertEqual(worker.wait(timeout=85), 1 if fails_startup else 0,
-                                     "packaged update worker failed")
+                    worker_exit = worker.wait(timeout=85)
+                    status = job / "worker-status.json"
+                    self.assertEqual(
+                        worker_exit, 1 if fails_startup else 0,
+                        "packaged update worker failed: "
+                        f"status={status.read_text(encoding='utf-8') if status.exists() else 'missing'}; "
+                        f"output={output.read_text(encoding='utf-8', errors='replace')[-2048:]}",
+                    )
                 deadline = time.monotonic() + 25
                 while time.monotonic() < deadline:
                     connection = HTTPConnection("127.0.0.1", port, timeout=.5)
