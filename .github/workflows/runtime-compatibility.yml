@@ -44,11 +44,22 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: actions/setup-python@v7.0.0
-        if: matrix.os == 'ubuntu-22.04'
         with:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v10.0.1
-        if: matrix.os == 'ubuntu-22.04'
+      - run: uv sync --frozen
+      - name: Set Python oracle for Rust differential tests
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          interpreter = root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+          if not interpreter.is_file():
+              raise RuntimeError(f"missing Python oracle interpreter: {interpreter}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"EMP_PYTHON_INTEROP={interpreter}\n")
+              env.write(f"EMP_PYTHON_ORACLE_ROOT={root}\n")
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace --all-targets
@@ -251,7 +262,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
       - run: uv sync --frozen
       - name: Run complete unit suite
-        run: uv run --frozen python -m unittest discover -s tests -q
+        run: uv run --frozen python -m unittest discover -s tests -t . -q
 
   protocol:
     strategy:
