@@ -636,25 +636,36 @@ fn probe_candidate_version(
     }
     #[cfg(windows)]
     let mut child = super::process::spawn_quiet(&mut command)
-        .map_err(|_| UpdateError("version_mismatch"))?;
+        .map_err(|error| {
+            if error == UpdateError("worker_failed") {
+                UpdateError("update_failed")
+            } else {
+                error
+            }
+        })?;
     #[cfg(not(windows))]
-    let mut child = command.spawn().map_err(|_| UpdateError("version_mismatch"))?;
+    let mut child = command.spawn()?;
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
-            _ => {
+            Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(UpdateError("version_mismatch"));
+                return Err(UpdateError("update_failed"));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error.into());
             }
         }
     };
     if !status.success() {
         return Err(UpdateError("version_mismatch"));
     }
-    let stdout = fs::read(output).map_err(|_| UpdateError("version_mismatch"))?;
+    let stdout = fs::read(output)?;
     if String::from_utf8_lossy(&stdout).trim() != format!("EMP {version}") {
         return Err(UpdateError("version_mismatch"));
     }
@@ -723,6 +734,30 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn candidate_version_probe_maps_spawn_failures_like_python() {
+        let root = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            probe_candidate_version(
+                &root.path().join("missing"),
+                "0.12.0",
+                root.path(),
+                Duration::from_secs(1)
+            )
+            .unwrap_err(),
+            crate::update::UpdateError("update_failed")
+        );
+        let denied = candidate_script(root.path(), "denied", "exit 0");
+        std::fs::set_permissions(&denied, std::os::unix::fs::PermissionsExt::from_mode(0o000))
+            .unwrap();
+        assert_eq!(
+            probe_candidate_version(&denied, "0.12.0", root.path(), Duration::from_secs(1))
+                .unwrap_err(),
+            crate::update::UpdateError("directory_not_writable")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn candidate_version_probe_times_out_and_reaps_the_child() {
         let root = tempfile::TempDir::new().unwrap();
         let hanging = candidate_script(
@@ -734,7 +769,7 @@ mod tests {
         assert_eq!(
             probe_candidate_version(&hanging, "0.12.0", root.path(), Duration::from_millis(100))
                 .unwrap_err(),
-            crate::update::UpdateError("version_mismatch")
+            crate::update::UpdateError("update_failed")
         );
         assert!(started.elapsed() < Duration::from_secs(2));
         let pid: i32 = std::fs::read_to_string(root.path().join("candidate-version.stdout"))
@@ -761,7 +796,7 @@ mod tests {
         assert_eq!(
             probe_candidate_version(&binary, "0.12.0", root.path(), Duration::from_secs(1))
                 .unwrap_err(),
-            crate::update::UpdateError("version_mismatch")
+            crate::update::UpdateError("update_failed")
         );
         assert_eq!(unsafe { GetThreadErrorMode() }, previous);
     }
