@@ -467,7 +467,15 @@ pub(crate) fn run_server(
             "Configuration file: {}",
             server.state.backend.configuration.config_path.display()
         );
-        println!("Shutdown: terminate the process (SIGINT/SIGTERM where supported)");
+        println!(
+            "Network proxy: {}",
+            server
+                .state
+                .backend
+                .transport
+                .support_network
+                .source_at_startup()
+        );
         let bootstrap_url = server.bootstrap_url();
         println!("Open in browser: {bootstrap_url}");
         if open_browser && !crate::cli::desktop::open_browser(&bootstrap_url) {

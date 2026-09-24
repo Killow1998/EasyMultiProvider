@@ -128,13 +128,24 @@ fn spawn_emp(config: &std::path::Path) -> (u16, std::process::Child, String) {
         .next()
         .and_then(|raw| raw.trim_end().parse::<u16>().ok())
         .expect("readiness line contains a port");
-    let mut shutdown_line = String::new();
+    let mut config_line = String::new();
     stdout
-        .read_line(&mut shutdown_line)
-        .expect("read shutdown guidance");
+        .read_line(&mut config_line)
+        .expect("read configuration path");
     assert_eq!(
-        shutdown_line,
-        "Shutdown: terminate the process (SIGINT/SIGTERM where supported)\n"
+        config_line.trim_end(),
+        format!("Configuration file: {}", config.display())
+    );
+    let mut proxy_line = String::new();
+    stdout
+        .read_line(&mut proxy_line)
+        .expect("read network proxy");
+    assert!(
+        matches!(
+            proxy_line.trim_end(),
+            "Network proxy: environment" | "Network proxy: system" | "Network proxy: direct"
+        ),
+        "unexpected network line: {proxy_line:?}"
     );
     let mut bootstrap_line = String::new();
     stdout

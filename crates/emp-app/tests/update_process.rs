@@ -322,16 +322,40 @@ fn start_emp(
     let child = ChildGuard(process);
     let mut line = String::new();
     stdout.read_line(&mut line).unwrap();
-    assert!(
-        line.starts_with("EMP listening on http://127.0.0.1:"),
-        "{line:?}"
+    let port = line
+        .trim_end()
+        .strip_prefix("EMP listening on http://127.0.0.1:")
+        .unwrap_or_else(|| panic!("unexpected EMP readiness line: {line:?}"))
+        .parse::<u16>()
+        .unwrap_or_else(|_| panic!("EMP readiness line has invalid port: {line:?}"));
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+    let expected_config = std::fs::canonicalize(config).unwrap();
+    assert_eq!(
+        line.trim_end(),
+        format!("Configuration file: {}", expected_config.display()),
+        "unexpected configuration startup line"
     );
-    let port = line.rsplit(':').next().unwrap().trim().parse().unwrap();
     let mut line = String::new();
     stdout.read_line(&mut line).unwrap();
+    assert!(
+        matches!(
+            line.trim_end(),
+            "Network proxy: environment" | "Network proxy: system" | "Network proxy: direct"
+        ),
+        "unexpected network startup line: {line:?}"
+    );
     let mut line = String::new();
     stdout.read_line(&mut line).unwrap();
-    let token = line.trim().rsplit_once("bootstrap=").unwrap().1.to_owned();
+    let url = line
+        .trim_end()
+        .strip_prefix("Open in browser: ")
+        .unwrap_or_else(|| panic!("unexpected browser startup line: {line:?}"));
+    let token = url
+        .split_once("bootstrap=")
+        .unwrap_or_else(|| panic!("browser URL has no bootstrap token: {url:?}"))
+        .1
+        .to_owned();
     (port, token, child, stdout)
 }
 

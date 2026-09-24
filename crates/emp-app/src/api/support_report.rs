@@ -273,6 +273,10 @@ impl NetworkSnapshot {
         }
     }
 
+    pub(crate) fn source_at_startup(&self) -> &'static str {
+        self.source_at_startup
+    }
+
     fn report(&self) -> Value {
         let allowed_schemes = ["http", "https", "socks4", "socks4a", "socks5", "socks5h"];
         let scheme = self
