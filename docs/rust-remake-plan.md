@@ -3,7 +3,7 @@
 Status: in progress on remake4rust; verified state updated on 2026-09-24.
 
 Reference: formal Python EMP `main` at
-`b04bd525e69b3a92dfe2c3d62afd760bb7b845d3` (EMP 0.11.10).
+`6095e43f9641ac9f94010238a6adb4ac0bb4ec01` (EMP 0.11.10).
 Consumer fixtures cover Codex 0.155.0 and the installed 0.156.1 CLI.
 
 Target: replace the complete Python backend with a native EMP executable.
@@ -27,12 +27,12 @@ cross-platform package or production cutover.
 | --- | --- | --- |
 | Workspace | Nine Rust crates; `main.rs` is 9 lines and responsibilities live in modules | Keep the module boundary while fixing observed behavior |
 | Runtime | Release Rust EMP starts; native/external HTTP, SSE, WebSocket, history and model-switch fixtures have real-process coverage | Complete official CLI consumer and package acceptance |
-| Reset credits | Python and Rust preserve an opaque credit ID and pass optional `creditId`; the shared UI lets users choose and confirms again before spending | Verify packaged UI on every supported OS |
-| Python oracle | Its source and affected regressions are mirrored from formal Python `main`; 1,434 Python tests passed locally (71 conditional skips) | Keep the pinned formal commit stable for CI |
-| Rust workspace | `cargo test --workspace --all-targets` passed 405 tests in 74 suites; formatting and warnings-denied Clippy require the next cross-platform CI after current changes | Re-run after any Rust change |
+| Reset credits | Python and Rust preserve an opaque credit ID and pass optional `creditId`; the shared UI lets users choose and confirms again before spending. ISO grant/expiry dates and countdowns now render from official credit details | Verify packaged UI on every supported OS |
+| Python oracle | Its source and affected regressions are mirrored from formal Python `main`; 1,434 Python tests passed locally (71 conditional skips), and Package and Runtime compatibility CI passed at `6095e43` | Keep the pinned formal commit stable for Rust CI |
+| Rust workspace | `cargo test --workspace --all-targets` passed 411 tests in 74 suites; formatting and warnings-denied Clippy require the next cross-platform CI after current changes | Re-run after any Rust change |
 | Real processes | Release Python/Rust differential passed 30 tests; model refresh, usage and diagnostics passed 9 more; official Codex 0.156.1 consumer passed 20 tests including subagent routing | Keep these gates for package acceptance |
-| Performance | 50 cycles each runtime, 200 fake-upstream forwards, no errors or process residue; readiness p95 was 13.34 ms Rust and 236.33 ms Python on this host | Run package and longer-run gates before general performance claims |
-| Distribution | Python `main` Package and Runtime compatibility CI succeeded at the pinned commit; the Rust branch has passed Linux packaging and is correcting platform fixture failures | Run four-OS package and compatibility workflows on this state |
+| Performance | Two order-swapped fake-upstream runs covered 16 HTTP/SSE workload cases from 1 KiB to 1 MiB at concurrency 1/8/32/64 with zero errors; median Rust/Python throughput ratios were 3.68 and 3.77. Single-sample 16–128 MiB history checks also preserved output and had zero errors | Complete sustained and packaged gates before general performance claims |
+| Distribution | Python `main` Package and Runtime compatibility CI succeeded at the pinned commit. Rust now guards Linux package-managed updates, bounds candidate probes, and fixes the cross-platform TLS test fixture | Run four-OS package and compatibility workflows on this state |
 
 Progress means a named Python workflow works through Rust with the same
 output, failures and persistent effects. Line counts and test counts do not
