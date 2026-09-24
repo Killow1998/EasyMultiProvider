@@ -3,12 +3,25 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 fn repository_index_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../easy_multi_provider/web/index.html")
+}
+
+fn assert_embedded_index_matches(expected: &[u8], source: &str) {
+    let actual = emp_app::WEB_INDEX_BYTES;
+    assert!(
+        actual == expected,
+        "embedded Web UI differs from {source}: Rust {} bytes (SHA-256 {:x}), source {} bytes (SHA-256 {:x})",
+        actual.len(),
+        Sha256::digest(actual),
+        expected.len(),
+        Sha256::digest(expected),
+    );
 }
 
 fn canonical_root(directory: &TempDir) -> PathBuf {
@@ -158,8 +171,7 @@ fn spawn_emp(config: &std::path::Path) -> (u16, std::process::Child, String) {
 #[test]
 fn embedded_index_matches_repository_bytes_exactly() {
     let expected = std::fs::read(repository_index_path()).expect("read source Web UI");
-    assert_eq!(emp_app::WEB_INDEX_BYTES.len(), expected.len());
-    assert_eq!(emp_app::WEB_INDEX_BYTES, expected.as_slice());
+    assert_embedded_index_matches(&expected, "repository source");
 }
 
 #[test]
@@ -169,7 +181,7 @@ fn embedded_index_matches_current_python_release_bytes() {
     // CI checkouts may not include the adjacent oracle worktree; local
     // differential runs assert exact release bytes when it is available.
     if let Ok(expected) = std::fs::read(python) {
-        assert_eq!(emp_app::WEB_INDEX_BYTES, expected.as_slice());
+        assert_embedded_index_matches(&expected, "Python release");
     }
 }
 
