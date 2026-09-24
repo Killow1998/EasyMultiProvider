@@ -42,6 +42,11 @@ from easy_multi_provider.integration import IntegrationManager
 SHORT_SOCKET_TEMP_ROOT = "/tmp" if os.name != "nt" and Path("/tmp").is_dir() else None
 
 
+def short_socket_directory():
+    """Keep nested CODEX_HOME control sockets within AF_UNIX path limits."""
+    return tempfile.TemporaryDirectory(prefix="e-", dir=SHORT_SOCKET_TEMP_ROOT)
+
+
 def normalize_observation_times(value):
     if isinstance(value, list):
         return [normalize_observation_times(item) for item in value]
@@ -77,9 +82,7 @@ class RustEndToEnd(unittest.TestCase):
         cls.stack = ExitStack()
         cls.addClassCleanup(cls.stack.close)
         # CODEX_HOME contains a nested control socket with a short AF_UNIX path limit.
-        temporary = cls.stack.enter_context(
-            tempfile.TemporaryDirectory(prefix="e-", dir=SHORT_SOCKET_TEMP_ROOT)
-        )
+        temporary = cls.stack.enter_context(short_socket_directory())
         root = Path(temporary)
         cls.upstream = Upstream()
         cls.stack.callback(cls.upstream.close)
@@ -231,7 +234,7 @@ class RustEndToEnd(unittest.TestCase):
         from easy_multi_provider.catalog import generated_catalog_path
         for mismatch in (True, False):
             results = []
-            with tempfile.TemporaryDirectory(prefix="emp-recovery-") as temporary:
+            with short_socket_directory() as temporary:
                 root = Path(temporary)
                 for name, command in [
                     ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
@@ -283,7 +286,7 @@ class RustEndToEnd(unittest.TestCase):
         original = '# user preferences\nmodel = "native"\n[features]\nunified_exec = true\n'
         for edited in (False, True):
             results = []
-            with tempfile.TemporaryDirectory(prefix="emp-search-") as temporary:
+            with short_socket_directory() as temporary:
                 for name, command in [
                     ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                     ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
@@ -333,7 +336,7 @@ class RustEndToEnd(unittest.TestCase):
         original = '# user preferences\nmodel = "native"\n[features]\nunified_exec = true\n'
         results = []
         # Keep CODEX_HOME short enough for its nested AF_UNIX control socket.
-        with tempfile.TemporaryDirectory(prefix="e-", dir=SHORT_SOCKET_TEMP_ROOT) as temporary:
+        with short_socket_directory() as temporary:
             for name, command in [
                 ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
@@ -491,7 +494,7 @@ class RustEndToEnd(unittest.TestCase):
                 ),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
             ]:
-                with self.subTest(backend=name, desktop=desktop), tempfile.TemporaryDirectory(prefix="emp-desktop-") as temporary:
+                with self.subTest(backend=name, desktop=desktop), short_socket_directory() as temporary:
                     root = Path(temporary)
                     home = root / "codex"
                     home.mkdir()
@@ -553,7 +556,7 @@ class RustEndToEnd(unittest.TestCase):
             "import sys; sys.frozen=True; from easy_multi_provider.main import main; "
             "raise SystemExit(main())"
         )
-        with tempfile.TemporaryDirectory(prefix="emp-config-path-cli-") as temporary:
+        with short_socket_directory() as temporary:
             fixture_root = Path(temporary)
             browser = fixture_root / "browser"
             browser.write_text("#!/bin/sh\nexit 0\n")
@@ -570,9 +573,7 @@ class RustEndToEnd(unittest.TestCase):
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
             ):
                 for case_name, launch_mode, fixed_arguments, expected_kind in cases:
-                    with self.subTest(backend=backend_name, case=case_name), tempfile.TemporaryDirectory(
-                        prefix="emp-config-path-runtime-"
-                    ) as runtime_temporary:
+                    with self.subTest(backend=backend_name, case=case_name), short_socket_directory() as runtime_temporary:
                         root = Path(runtime_temporary)
                         home = root / "home"
                         home.mkdir()
@@ -729,7 +730,7 @@ class RustEndToEnd(unittest.TestCase):
             }
         )
         expected = {field: source["models"][0].get(field) for field in fields}
-        with tempfile.TemporaryDirectory(prefix="emp-migration-capabilities-") as temporary:
+        with short_socket_directory() as temporary:
             bundle = export_bundle(
                 source,
                 Path(temporary) / "source.json",
@@ -838,7 +839,7 @@ class RustEndToEnd(unittest.TestCase):
         # Exercise test_integration_cli's native/active/restore/repeated-restore
         # flows through executables instead of importing either CLI dispatcher.
         all_outputs = []
-        with tempfile.TemporaryDirectory(prefix="emp-offline-e2e-") as temporary:
+        with short_socket_directory() as temporary:
             for name, command in [
                 ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
@@ -900,7 +901,7 @@ class RustEndToEnd(unittest.TestCase):
         # messages, pagination, and no process-stop or model-generation command.
         for stale_name in (False, True):
             results = []
-            with tempfile.TemporaryDirectory(prefix="e-", dir=SHORT_SOCKET_TEMP_ROOT) as temporary:
+            with short_socket_directory() as temporary:
                 for name, command in [
                     ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                     ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
@@ -970,7 +971,7 @@ class RustEndToEnd(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix", "executable fixture scripts require POSIX")
     def test_runtime_scan_selection_and_restart(self):
         # Installed layout fixtures are shared byte-for-byte by both backends.
-        with tempfile.TemporaryDirectory(prefix="emp-runtimes-") as temporary:
+        with short_socket_directory() as temporary:
             root = Path(temporary)
             home = root / "codex"
             home.mkdir()
@@ -1051,7 +1052,7 @@ class RustEndToEnd(unittest.TestCase):
             {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 128}).to_safe_dict()
         self.assertTrue(context_cases.update_calibration(model, observation, "explicit_failure", 1250))
         results = []
-        with tempfile.TemporaryDirectory(prefix="emp-context-") as temporary:
+        with short_socket_directory() as temporary:
             root = Path(temporary)
             (root / "native.json").write_text('{"models":[]}')
             for name, command in [
@@ -1159,7 +1160,7 @@ class RustEndToEnd(unittest.TestCase):
 
 
     def test_quit_stops_the_actual_process(self):
-        with tempfile.TemporaryDirectory(prefix="emp-quit-e2e-") as temporary:
+        with short_socket_directory() as temporary:
             for name, command in [
                 ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
@@ -1175,7 +1176,7 @@ class RustEndToEnd(unittest.TestCase):
                         backend.close()
 
     def test_empty_picker_cannot_enable_integration(self):
-        with tempfile.TemporaryDirectory(prefix="emp-empty-e2e-") as temporary:
+        with short_socket_directory() as temporary:
             for name, command in [
                 ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
@@ -1201,7 +1202,7 @@ class RustEndToEnd(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "POSIX termination contract")
     def test_sigterm_restores_owned_integration(self):
-        with tempfile.TemporaryDirectory(prefix="emp-stop-e2e-") as temporary:
+        with short_socket_directory() as temporary:
             restored = []
             for name, command in [
                 ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
@@ -1283,7 +1284,7 @@ class RustEndToEnd(unittest.TestCase):
             '\n[nested]\nopenai_base_url = "nested-value"\nenabled = true\n'
         )
         restored = []
-        with tempfile.TemporaryDirectory(prefix="emp-preferences-e2e-") as temporary:
+        with short_socket_directory() as temporary:
             for name, command in [
                 ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
                 ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
