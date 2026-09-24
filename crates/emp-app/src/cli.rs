@@ -151,10 +151,7 @@ pub(crate) fn run() -> Result<ExitCode, String> {
         }
     };
     match command {
-        Cli::Version => print!(
-            "EMP {VERSION}{}",
-            if cfg!(windows) { "\r\n" } else { "\n" }
-        ),
+        Cli::Version => print!("EMP {VERSION}{}", if cfg!(windows) { "\r\n" } else { "\n" }),
         Cli::Help(command) => {
             let message = help::text(command.as_deref());
             if cfg!(windows) {
