@@ -823,8 +823,6 @@ class CodexMetadataCliTests(unittest.TestCase):
             }
             for record in observations
         ]
-        if summary:
-            summary[-1].update({"wait_call": wait_call_id, "wait_tool": wait_tool_name})
         self.assertIsNotNone(spawn_call_id, summary)
         self.assertIsNotNone(spawn_tool_name, summary)
         self.assertIsNotNone(wait_call_id, summary)
@@ -836,22 +834,49 @@ class CodexMetadataCliTests(unittest.TestCase):
             if record["body"].get("generate") is not False
         ]
         self.assertEqual(len(requests), 4, summary)
-        parent_start, child, parent_after_spawn, parent_after_wait = requests
+        children = [
+            record for record in requests
+            if record["headers"].get("x-openai-subagent")
+        ]
+        parents = [
+            record for record in requests
+            if not record["headers"].get("x-openai-subagent")
+        ]
+        self.assertEqual(len(children), 1, summary)
+        self.assertEqual(len(parents), 3, summary)
+        child = children[0]
+        self.assertEqual(child["body"].get("model"), "native-upstream", summary)
         self.assertEqual(
-            [record["body"].get("model") for record in requests],
-            ["external-upstream", "native-upstream", "external-upstream", "external-upstream"],
+            child["headers"].get("authorization"),
+            "Bearer app-server-caller-secret",
             summary,
         )
-        self.assertEqual(
-            [record["headers"].get("authorization") for record in requests],
-            [
-                "Bearer destination-secret",
-                "Bearer app-server-caller-secret",
-                "Bearer destination-secret",
-                "Bearer destination-secret",
-            ],
-            summary,
-        )
+
+        def has_tool_output(record, call_id):
+            source = record["body"].get("input")
+            return isinstance(source, list) and any(
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and item.get("call_id") == call_id
+                for item in source
+            )
+
+        after_wait = [record for record in parents if has_tool_output(record, wait_call_id)]
+        self.assertEqual(len(after_wait), 1, summary)
+        parent_after_wait = after_wait[0]
+        after_spawn = [
+            record for record in parents
+            if record is not parent_after_wait and has_tool_output(record, spawn_call_id)
+        ]
+        self.assertEqual(len(after_spawn), 1, summary)
+        parent_after_spawn = after_spawn[0]
+        starts = [
+            record for record in parents
+            if record is not parent_after_spawn and record is not parent_after_wait
+        ]
+        self.assertEqual(len(starts), 1, summary)
+        parent_start = starts[0]
+        self.assertIn("PARENT_SUBAGENT_REQUEST", json.dumps(parent_start["body"].get("input")), summary)
 
         child_headers = child["headers"]
         self.assertTrue(child_headers.get("x-openai-subagent"), summary)
@@ -876,6 +901,7 @@ class CodexMetadataCliTests(unittest.TestCase):
 
         for parent_request in (parent_start, parent_after_spawn, parent_after_wait):
             headers = parent_request["headers"]
+            self.assertEqual(parent_request["body"].get("model"), "external-upstream", summary)
             self.assertEqual(
                 headers.get("authorization"), "Bearer destination-secret", summary
             )
