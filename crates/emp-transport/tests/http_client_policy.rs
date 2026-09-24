@@ -3,6 +3,7 @@ use emp_transport::{
     ProxyEnvironment, ProxyPolicy, StreamingReadState, TimeoutPolicy,
 };
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 fn headers() -> BTreeMap<String, String> {
@@ -131,6 +132,83 @@ fn loopback_never_uses_proxy_and_environment_order_matches_python() {
         )
         .expect("wss proxy order");
     assert!(wss_plan.route.proxy_origin.is_proxy());
+}
+
+#[test]
+fn dynamic_proxy_resolution_keeps_plans_immutable_and_reloads_no_proxy() {
+    let settings = Arc::new(Mutex::new(ProxyEnvironment {
+        https: Some("http://user:password@private-proxy.example:8080".to_owned()),
+        no_proxy: vec!["bypass.example".to_owned()],
+        ..ProxyEnvironment::default()
+    }));
+    let resolver_settings = Arc::clone(&settings);
+    let policy = HttpClientPolicy::new(
+        ProxyPolicy::dynamic_with_resolver(move || resolver_settings.lock().unwrap().clone()),
+        TimeoutPolicy::default(),
+    );
+
+    let first = policy
+        .plan(
+            HttpMethod::Get,
+            "https://upstream.example/v1",
+            BTreeMap::new(),
+            false,
+        )
+        .expect("first dynamic plan");
+    let bypass = policy
+        .plan(
+            HttpMethod::Get,
+            "https://api.bypass.example/v1",
+            BTreeMap::new(),
+            false,
+        )
+        .expect("no_proxy plan");
+    let loopback = policy
+        .plan(
+            HttpMethod::Get,
+            "http://127.0.0.1:8080/health",
+            BTreeMap::new(),
+            false,
+        )
+        .expect("loopback plan");
+    assert!(first.route.proxy_origin.is_proxy());
+    assert!(!bypass.route.proxy_origin.is_proxy());
+    assert!(!loopback.route.proxy_origin.is_proxy());
+    let debug = format!("{first:?}");
+    for secret in ["user", "password", "private-proxy.example"] {
+        assert!(!debug.contains(secret), "debug leaked {secret}");
+    }
+
+    *settings.lock().unwrap() = ProxyEnvironment {
+        https: Some("http://second.proxy.example:8080".to_owned()),
+        ..ProxyEnvironment::default()
+    };
+    let second = policy
+        .plan(
+            HttpMethod::Get,
+            "https://upstream.example/v1",
+            BTreeMap::new(),
+            false,
+        )
+        .expect("second dynamic plan");
+    assert_ne!(
+        first.route.proxy_origin.pool_token(),
+        second.route.proxy_origin.pool_token()
+    );
+    assert!(
+        policy
+            .plan(
+                HttpMethod::Get,
+                "https://api.bypass.example/v1",
+                BTreeMap::new(),
+                false,
+            )
+            .unwrap()
+            .route
+            .proxy_origin
+            .is_proxy(),
+        "removing no_proxy takes effect on the next plan"
+    );
 }
 
 #[test]

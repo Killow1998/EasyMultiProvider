@@ -115,7 +115,7 @@ impl BackendState {
         let client = match http_client_override {
             Some(client) => client,
             None => HttpClient::new(HttpClientPolicy::new(
-                ProxyPolicy::from_environment(proxy_environment),
+                ProxyPolicy::dynamic_environment(),
                 TimeoutPolicy::default(),
             ))?,
         };

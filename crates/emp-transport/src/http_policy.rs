@@ -1,6 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The policy layer used by the future socket client. It deliberately owns no
@@ -74,10 +75,19 @@ impl std::error::Error for HttpClientPolicyError {}
 
 type HttpResult<T> = Result<T, HttpClientPolicyError>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum ProxyOrigin {
     Direct,
     Proxy { origin: String, token: String },
+}
+
+impl fmt::Debug for ProxyOrigin {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Direct => formatter.write_str("Direct"),
+            Self::Proxy { .. } => formatter.write_str("Proxy { configured: true }"),
+        }
+    }
 }
 
 impl ProxyOrigin {
@@ -129,6 +139,7 @@ pub struct RouteIdentity {
     pub path: String,
     pub query: Option<String>,
     pub proxy_origin: ProxyOrigin,
+    transport_proxy_url: Option<String>,
 }
 
 impl fmt::Debug for RouteIdentity {
@@ -146,6 +157,10 @@ impl fmt::Debug for RouteIdentity {
 }
 
 impl RouteIdentity {
+    pub(crate) fn transport_proxy_url(&self) -> Option<String> {
+        self.transport_proxy_url.clone()
+    }
+
     pub fn route_url(&self) -> String {
         let host = if self.host.contains(':') {
             format!("[{}]", self.host)
@@ -371,12 +386,30 @@ fn no_proxy_matches(host: &str, patterns: &[String]) -> bool {
         .any(|pattern| pattern == "*" || host_matches_bypass(host, pattern))
 }
 
-#[derive(Clone, PartialEq, Eq)]
+type ProxyEnvironmentResolver = dyn Fn() -> ProxyEnvironment + Send + Sync;
+
+#[derive(Clone)]
 pub struct ProxyPolicy {
     explicit: Option<String>,
     environment: Option<ProxyEnvironment>,
+    resolver: Option<Arc<ProxyEnvironmentResolver>>,
     bypass_loopback: bool,
 }
+
+impl PartialEq for ProxyPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        self.explicit == other.explicit
+            && self.environment == other.environment
+            && self.bypass_loopback == other.bypass_loopback
+            && match (&self.resolver, &other.resolver) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+    }
+}
+
+impl Eq for ProxyPolicy {}
 
 impl fmt::Debug for ProxyPolicy {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -384,6 +417,7 @@ impl fmt::Debug for ProxyPolicy {
             .debug_struct("ProxyPolicy")
             .field("explicit_configured", &self.explicit.is_some())
             .field("environment_configured", &self.environment.is_some())
+            .field("dynamic_resolver_configured", &self.resolver.is_some())
             .field("bypass_loopback", &self.bypass_loopback)
             .finish()
     }
@@ -400,6 +434,7 @@ impl ProxyPolicy {
         Self {
             explicit,
             environment,
+            resolver: None,
             bypass_loopback: true,
         }
     }
@@ -412,11 +447,24 @@ impl ProxyPolicy {
         Self::new(None, Some(environment))
     }
 
-    fn origin_for(&self, route: &UrlTarget) -> HttpResult<ProxyOrigin> {
-        self.proxy_url_for_target(route)?
-            .as_deref()
-            .map(ProxyOrigin::proxy)
-            .unwrap_or(Ok(ProxyOrigin::Direct))
+    /// Resolve conventional environment proxy settings for each new request.
+    pub fn dynamic_environment() -> Self {
+        Self::dynamic_with_resolver(ProxyEnvironment::capture)
+    }
+
+    /// Build a policy with an injectable resolver. Existing request plans keep
+    /// the resolved proxy URL they were created with; later plans call this
+    /// resolver again.
+    pub fn dynamic_with_resolver<F>(resolver: F) -> Self
+    where
+        F: Fn() -> ProxyEnvironment + Send + Sync + 'static,
+    {
+        Self {
+            explicit: None,
+            environment: None,
+            resolver: Some(Arc::new(resolver)),
+            bypass_loopback: true,
+        }
     }
 
     fn proxy_url_for_target(&self, route: &UrlTarget) -> HttpResult<Option<String>> {
@@ -424,8 +472,12 @@ impl ProxyPolicy {
         if self.bypass_loopback && is_loopback(host) {
             return Ok(None);
         }
-        let bypass = self
-            .environment
+        let environment = self
+            .resolver
+            .as_ref()
+            .map(|resolver| resolver())
+            .or_else(|| self.environment.clone());
+        let bypass = environment
             .as_ref()
             .is_some_and(|settings| no_proxy_matches(host, &settings.no_proxy));
         if bypass {
@@ -435,7 +487,7 @@ impl ProxyPolicy {
             ProxyOrigin::proxy(proxy)?;
             return Ok(Some(proxy.to_owned()));
         }
-        let Some(settings) = self.environment.as_ref() else {
+        let Some(settings) = environment.as_ref() else {
             return Ok(None);
         };
         let candidates: &[(&Option<String>, bool)] = match route.scheme.as_str() {
@@ -647,7 +699,11 @@ impl HttpClientPolicy {
             .host
             .clone()
             .ok_or(HttpClientPolicyError::InvalidUrl)?;
-        let proxy_origin = self.proxy_policy.origin_for(&target)?;
+        let transport_proxy_url = self.proxy_policy.proxy_url_for_target(&target)?;
+        let proxy_origin = transport_proxy_url
+            .as_deref()
+            .map(ProxyOrigin::proxy)
+            .unwrap_or(Ok(ProxyOrigin::Direct))?;
         let mut normalized_headers = BTreeMap::new();
         for (name, value) in headers {
             validate_header_name(&name)?;
@@ -666,6 +722,7 @@ impl HttpClientPolicy {
                 path: target.path,
                 query: target.query,
                 proxy_origin,
+                transport_proxy_url,
             },
             headers: normalized_headers,
             stream,
@@ -676,8 +733,7 @@ impl HttpClientPolicy {
     }
 
     pub(crate) fn transport_proxy_for(&self, route: &RouteIdentity) -> HttpResult<Option<String>> {
-        let target = parse_url(&route.route_url())?;
-        self.proxy_policy.proxy_url_for_target(&target)
+        Ok(route.transport_proxy_url())
     }
 }
 

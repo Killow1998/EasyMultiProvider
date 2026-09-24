@@ -323,7 +323,7 @@ impl HttpClient {
             identity: identity.to_owned(),
             client: client.clone(),
         });
-        while clients.len() > self.config.max_proxy_pools {
+        while clients.len() > self.config.max_proxy_pools.min(DEFAULT_MAX_PROXY_POOLS) {
             clients.pop_front();
         }
         Ok(client)
@@ -542,5 +542,97 @@ impl HttpResponse {
             }
             remaining -= chunk.len();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http_policy::{HttpClientPolicy, ProxyEnvironment, ProxyPolicy};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn new_requests_and_websockets_resolve_proxy_again_and_pool_is_bounded() {
+        let settings = Arc::new(Mutex::new(ProxyEnvironment::default()));
+        let resolver_settings = Arc::clone(&settings);
+        let policy = HttpClientPolicy::new(
+            ProxyPolicy::dynamic_with_resolver(move || resolver_settings.lock().unwrap().clone()),
+            TimeoutPolicy::default(),
+        );
+        let client = HttpClient::new(policy).expect("valid dynamic client");
+
+        let mut plan_tokens = Vec::new();
+        for index in 0..6 {
+            let proxy = format!("http://proxy-{index}.example:8080");
+            *settings.lock().unwrap() = ProxyEnvironment {
+                https: Some(proxy.clone()),
+                wss: Some(proxy.clone()),
+                ..ProxyEnvironment::default()
+            };
+            let plan = client
+                .policy
+                .plan(
+                    HttpMethod::Get,
+                    "https://upstream.example/v1",
+                    BTreeMap::new(),
+                    false,
+                )
+                .expect("dynamic request plan");
+            plan_tokens.push(plan.route.proxy_origin.pool_token().to_owned());
+
+            if index == 0 {
+                *settings.lock().unwrap() = ProxyEnvironment {
+                    https: Some("http://changed.example:8080".to_owned()),
+                    ..ProxyEnvironment::default()
+                };
+                assert_eq!(
+                    client
+                        .policy
+                        .transport_proxy_for(&plan.route)
+                        .unwrap()
+                        .as_deref(),
+                    Some("http://proxy-0.example:8080"),
+                    "an existing plan retains its selected proxy"
+                );
+                client
+                    .client_for(&plan, false)
+                    .expect("client uses the plan's selected proxy");
+                continue;
+            }
+            client
+                .client_for(&plan, false)
+                .expect("client uses current proxy");
+        }
+
+        let websocket_proxy = client
+            .websocket_proxy_for("wss://upstream.example/socket")
+            .expect("first websocket proxy");
+        assert_eq!(
+            websocket_proxy.as_deref(),
+            Some("http://proxy-5.example:8080")
+        );
+        *settings.lock().unwrap() = ProxyEnvironment {
+            wss: Some("http://websocket-updated.example:8080".to_owned()),
+            ..ProxyEnvironment::default()
+        };
+        assert_eq!(
+            client
+                .websocket_proxy_for("wss://upstream.example/socket")
+                .expect("updated websocket proxy")
+                .as_deref(),
+            Some("http://websocket-updated.example:8080")
+        );
+
+        let clients = client
+            .clients
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(clients.len(), 4, "the proxy pool cache remains bounded");
+        assert!(clients.iter().all(|entry| {
+            plan_tokens
+                .iter()
+                .skip(2)
+                .any(|token| entry.identity.starts_with(token))
+        }));
     }
 }
