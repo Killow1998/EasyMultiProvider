@@ -823,7 +823,7 @@ function quotaMeterBehavior() {
 async function creditLayoutBehavior() {
   context.__creditLayoutState = {
     native_account: null,
-    accounts: [{id:'credit-lines',name:'credit-lines',prefix:'credit-lines',credential_set:true,quota:{credits:{balance:1200,individual_limit:{remaining_percent:73},reset_credits:{available_count:2,credits:[{id:'reset-one',status:'available',title:'First reset',description:'Reset eligible Codex rate-limit windows.',expires_at:1893553445},{id:'reset-two',status:'available',title:'Second reset',expires_at:1896321906}]}}}},{id:'no-resets',name:'no-resets',prefix:'no-resets',credential_set:true,quota:{credits:{balance:20,reset_credits:{available_count:0,credits:[]}}}}],
+    accounts: [{id:'credit-lines',name:'credit-lines',prefix:'credit-lines',credential_set:true,quota:{credits:{balance:1200,individual_limit:{remaining_percent:73},reset_credits:{available_count:2,credits:[{id:'reset-one',reset_type:'codex_rate_limits',status:'available',title:'First reset',description:'Reset eligible Codex rate-limit windows.',granted_at:'2029-12-01T00:00:00Z',expires_at:'2030-01-01T00:24:05Z'},{id:'reset-two',status:'available',title:'Second reset',expires_at:1896321906}]}}}},{id:'no-resets',name:'no-resets',prefix:'no-resets',credential_set:true,quota:{credits:{balance:20,reset_credits:{available_count:0,credits:[]}}}}],
   };
   run("state = __creditLayoutState; renderAccounts()");
   const rendered = getElement("accounts").innerHTML;
@@ -836,8 +836,13 @@ async function creditLayoutBehavior() {
   const modal = getElement('modal_body').innerHTML;
   assert.match(modal, /新的额度与下一次刷新时间由 OpenAI 返回/);
   assert.doesNotMatch(modal, /10%|固定门槛|传闻|weekly quota below/, "unconfirmed reset rules must not appear in the UI");
-  assert.strictEqual((modal.match(/ UTC/g) || []).length, 2, "each reset expiry must use an absolute UTC date and time");
+  assert.strictEqual((modal.match(/到期 · [^<]* UTC/g) || []).length, 2, "ISO and numeric reset expiries must use absolute UTC date and time");
+  assert.match(modal, /获得 · 2029-12-01 00:00 UTC/, 'official ISO grant time must help distinguish credits');
+  assert.match(modal, /到期 · 2030-01-01 00:24 UTC/, 'official ISO expiry must be visible');
+  assert.doesNotMatch(modal, /reset-one|reset-two/, 'opaque credit IDs must not be displayed');
   assert.strictEqual((modal.match(/data-reset-countdown=/g) || []).length, 2, "each reset expiry must also show remaining time");
+  assert.match(modal, /data-reset-countdown="2030-01-01T00:24:05Z">[1-9]/, 'official ISO expiry must show a positive remaining time');
+  assert.strictEqual(run("resetCountdownText('2030-01-01T00:24:05Z', Date.UTC(2029,11,31,23,24,5))"), '1h');
   assert.match(modal, /First reset/);
   assert.strictEqual(resetCreditInputs.length, 3, 'two detailed credits and automatic selection must be available');
   assert.strictEqual(getElement('modal_submit').textContent, '继续确认');
@@ -860,6 +865,7 @@ async function creditLayoutBehavior() {
     assert.strictEqual(calls.length, 0, 'changing the selection must not spend a credit');
     resetCreditInputs.forEach(input => { input.checked = input.value === '0'; });
     await getElement('modal_submit').click();
+    assert.match(getElement('modal_body').innerHTML, /到期：2030-01-01 00:24 UTC/, 'the second confirmation must identify the selected ISO-dated credit');
     assert.notStrictEqual(run("resetAttempts.get('credit-lines').key"), secondCreditKey, 'changing credits must create a new attempt key');
     await getElement('reset_choice_back').click();
     resetCreditInputs.forEach(input => { input.checked = input.value === '1'; });
