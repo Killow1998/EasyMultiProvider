@@ -89,6 +89,7 @@ struct NativeUpstreamConnection {
 pub(crate) fn serve_responses_websocket(
     stream: &mut TcpStream,
     request: Request<'_>,
+    body_prefix: Vec<u8>,
     state: &ServerState,
     now: f64,
 ) {
@@ -156,7 +157,10 @@ pub(crate) fn serve_responses_websocket(
         return;
     }
     let _ = stream.set_read_timeout(None);
-    let mut websocket = WebSocketConnection::new(stream);
+    let mut websocket = match WebSocketConnection::new_with_prefix(stream, &body_prefix) {
+        Ok(websocket) => websocket,
+        Err(_) => return,
+    };
     let Some(_websocket_permit) = state.connection_admission.acquire_websocket() else {
         websocket.close(1013, "too many websocket connections");
         return;

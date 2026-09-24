@@ -1,10 +1,10 @@
-use super::realtime_contract::{app_server_for, RealtimeUpstream, UpstreamResponse};
+use super::realtime_contract::{RealtimeUpstream, UpstreamResponse, app_server_for};
 use super::*;
 use crate::api::realtime::sideband::{
-    prepare_sideband, serve_realtime_sideband_with_test_connector,
-    MAX_REALTIME_SIDEBAND_MESSAGE_BYTES,
+    MAX_REALTIME_SIDEBAND_MESSAGE_BYTES, prepare_sideband,
+    serve_realtime_sideband_with_test_connector,
 };
-use emp_transport::{websocket_accept, ClientWebSocket};
+use emp_transport::{ClientWebSocket, websocket_accept};
 use std::net::TcpListener;
 
 fn server_fixture(with_native_auth: bool) -> (TempDir, TempDir, RealtimeUpstream, ServerHandle) {
@@ -135,12 +135,14 @@ fn sideband_capacity_is_reserved_after_upgrade_validation_before_native_connect(
     assert_eq!(status, 503);
     assert_eq!(payload["error"]["code"], "realtime_capacity_unavailable");
     assert!(wire.lines().any(|line| line == "Retry-After: 2"));
-    assert!(request(
-        &server,
-        "/api/request-limits",
-        &[&session_cookie_header(&server)]
-    )
-    .starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(
+        request(
+            &server,
+            "/api/request-limits",
+            &[&session_cookie_header(&server)]
+        )
+        .starts_with("HTTP/1.1 200 OK\r\n")
+    );
     assert!(upstream.no_request());
     drop(permits);
     assert_eq!(server.state.connection_admission.active_websockets(), 0);
@@ -175,10 +177,12 @@ fn sideband_target_uses_native_credentials_allowlisted_headers_proxy_and_message
     assert_eq!(prepared.headers["OpenAI-Alpha"], "quicksilver=v2");
     assert_eq!(prepared.headers["session-id"], "session-voice");
     assert!(!prepared.headers.contains_key("X-Ignored-Secret"));
-    assert!(!prepared
-        .headers
-        .values()
-        .any(|value| value == "Bearer caller-secret"));
+    assert!(
+        !prepared
+            .headers
+            .values()
+            .any(|value| value == "Bearer caller-secret")
+    );
     // The proxy comes only from HttpClient's selected route; target construction
     // does not log or otherwise expose it.
     assert_eq!(
@@ -237,9 +241,11 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
             crate::util::system_now(),
             move |_url, headers, timeout, _proxy| {
                 assert_eq!(headers["Authorization"], "Bearer native-secret");
-                assert!(!headers
-                    .values()
-                    .any(|value| value == "Bearer caller-secret"));
+                assert!(
+                    !headers
+                        .values()
+                        .any(|value| value == "Bearer caller-secret")
+                );
                 ClientWebSocket::connect(&fake_url, headers, timeout)
             },
         );

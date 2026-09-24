@@ -891,7 +891,7 @@ fn native_sse_downstream_disconnect_cancels_upstream() {
     worker.join().unwrap();
 }
 
-fn send_masked_websocket_text(stream: &mut TcpStream, value: &Value) {
+fn masked_websocket_text(value: &Value) -> Vec<u8> {
     let payload = serde_json::to_vec(value).unwrap();
     let mask = [1u8, 2, 3, 4];
     let mut frame = vec![0x81];
@@ -908,7 +908,11 @@ fn send_masked_websocket_text(stream: &mut TcpStream, value: &Value) {
             .enumerate()
             .map(|(index, byte)| byte ^ mask[index % 4]),
     );
-    stream.write_all(&frame).unwrap();
+    frame
+}
+
+fn send_masked_websocket_text(stream: &mut TcpStream, value: &Value) {
+    stream.write_all(&masked_websocket_text(value)).unwrap();
     stream.flush().unwrap();
 }
 
@@ -941,7 +945,11 @@ fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_p
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    write!(stream,"GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: websocket-thread\r\n\r\n",server.local_addr().port()).unwrap();
+    let mut request = format!("GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\nAuthorization: Bearer caller\r\nthread-id: websocket-thread\r\n\r\n",server.local_addr().port()).into_bytes();
+    request.extend_from_slice(&masked_websocket_text(
+        &json!({"type":"response.create","model":"native/alias","input":"hello"}),
+    ));
+    stream.write_all(&request).unwrap();
     stream.flush().unwrap();
     let mut handshake = Vec::new();
     while !handshake.windows(4).any(|part| part == b"\r\n\r\n") {
@@ -952,10 +960,6 @@ fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_p
     let handshake = String::from_utf8(handshake).unwrap();
     assert!(handshake.starts_with("HTTP/1.1 101 Switching Protocols\r\n"));
     assert!(handshake.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"));
-    send_masked_websocket_text(
-        &mut stream,
-        &json!({"type":"response.create","model":"native/alias","input":"hello"}),
-    );
     let mut events = Vec::new();
     loop {
         let event = receive_websocket_json(&mut stream);

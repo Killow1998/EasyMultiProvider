@@ -1,16 +1,16 @@
 //! Authentication, admission and upstream target selection for Voice sidebands.
 
 use super::call::{incoming_headers, native_headers, safe_forwarded_headers};
-use super::{valid_call_id, RealtimeError};
+use super::{RealtimeError, valid_call_id};
+use crate::VERSION;
 use crate::app::ServerState;
 use crate::http::auth::{proxy_allowed, same_origin};
 use crate::http::request::Request;
 use crate::http::response::{json_error_response, status_text};
-use crate::VERSION;
 use emp_transport::{
-    websocket_accept, ClientWebSocket, ClientWebSocketError, ClientWebSocketPump, PumpCommand,
-    PumpEvent, WebSocketConnection, WebSocketPoll, WebSocketPumpConfig,
-    DEFAULT_PUMP_CHANNEL_CAPACITY,
+    ClientWebSocket, ClientWebSocketError, ClientWebSocketPump, DEFAULT_PUMP_CHANNEL_CAPACITY,
+    PumpCommand, PumpEvent, WebSocketConnection, WebSocketPoll, WebSocketPumpConfig,
+    websocket_accept,
 };
 use std::collections::BTreeMap;
 use std::io::Write;

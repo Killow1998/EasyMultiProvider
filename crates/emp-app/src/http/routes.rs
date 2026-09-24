@@ -173,7 +173,13 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
                         .header("Upgrade")
                         .is_some_and(|value| value.eq_ignore_ascii_case("websocket")) =>
             {
-                serve_responses_websocket(&mut stream, request, state, system_now());
+                serve_responses_websocket(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                );
                 None
             }
             Some(request)
