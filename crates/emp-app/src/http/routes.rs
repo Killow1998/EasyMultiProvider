@@ -46,6 +46,7 @@ use std::time::Duration;
 
 pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     if stream.set_nonblocking(false).is_err()
+        || stream.set_nodelay(true).is_err()
         || stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .is_err()
