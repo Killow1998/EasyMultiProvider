@@ -7,9 +7,10 @@ import ipaddress
 import json
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import quote, urlparse
 
 from .accounts import (
@@ -129,8 +130,34 @@ class ConfigError(ValueError):
     """Raised when Web-supplied configuration is invalid."""
 
 
+def resolve_desktop_config_path(
+    environ: Optional[Mapping[str, str]] = None,
+    user_home: Optional[Path] = None,
+    platform_name: Optional[str] = None,
+) -> Path:
+    """Return the same per-user configuration path for every launch mode."""
+
+    environment = os.environ if environ is None else environ
+    home = Path.home() if user_home is None else Path(user_home)
+    active_platform = sys.platform if platform_name is None else platform_name
+    if active_platform == "win32":
+        configured = (
+            environment.get("LOCALAPPDATA", "").strip()
+            or environment.get("APPDATA", "").strip()
+        )
+        root = Path(configured).expanduser() if configured else home / "AppData" / "Local"
+        return root / "EasyMultiProvider" / "config.json"
+    if active_platform == "darwin":
+        return home / "Library" / "Application Support" / "EasyMultiProvider" / "config.json"
+
+    configured = environment.get("XDG_CONFIG_HOME", "").strip()
+    root = Path(configured).expanduser() if configured else home / ".config"
+    return root / "easy-multi-provider" / "config.json"
+
+
 def config_path() -> Path:
-    return Path(os.environ.get("EASY_MULTI_PROVIDER_CONFIG", "config.json"))
+    override = os.environ.get("EASY_MULTI_PROVIDER_CONFIG", "").strip()
+    return Path(override).expanduser() if override else resolve_desktop_config_path()
 
 
 def _copy_default() -> Dict[str, Any]:

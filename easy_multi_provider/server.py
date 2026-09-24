@@ -26,8 +26,10 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 import urllib.request
 from .network_proxy import follow_system_proxy
+from .support_report import build_support_report
 
 from . import __version__
+from .auto_review import automatic_review_candidates, is_auto_review_model
 from .self_update import UpdateError, UpdateManager, mark_update_ready
 from .accounts import (
     NATIVE_ACCOUNT_ID,
@@ -104,6 +106,7 @@ from .integration import (
     IntegrationResult,
     IntegrationStatus,
     LockTimeout,
+    REALTIME_SIDEBAND_FIELD,
     ServiceNotReady,
     _FileLock,
 )
@@ -144,7 +147,11 @@ from .quota_history import (
     quota_history_path,
 )
 from .provider_replay import ProviderReplayCache
-from .performance import ResponsesPerformanceTracker, token_count
+from .performance import (
+    ResponsesPerformanceTracker,
+    request_tokens_per_second,
+    token_count,
+)
 from .usage_ledger import UsageLedger, usage_account_owner, usage_identity, usage_context
 from .usage_history import UsageHistoryScanner
 from .usage_pricing import PriceCatalog
@@ -180,6 +187,14 @@ from .transport_failures import failure_from_exception, public_failure_message, 
 from .router_errors import UpstreamHTTPError
 from .tls_runtime import tls_trust_source
 from .request_limits import RequestLimits
+from .realtime import (
+    MAX_REALTIME_SIDEBAND_MESSAGE_BYTES,
+    RealtimeError,
+    forward_native_realtime_call,
+    open_native_realtime_sideband,
+    read_realtime_call,
+    valid_realtime_call_id,
+)
 from .vault import file_transaction
 from .transport_continuity import (
     PREVIOUS_RESPONSE_NOT_FOUND_CODE,
@@ -1329,9 +1344,8 @@ class AppState:
         journal=None,
     ):
         self.path = Path(path or config_path())
+        self.proxy_source_at_startup = "unknown"
         self.lock = threading.RLock()
-        self.bootstrap_token = secrets.token_urlsafe(32)
-        self.bootstrap_used = False
         self._load_web_session()
         self.journal = journal if journal is not None else NullJournal()
         usage_state = self.path.resolve().parent / "state"
@@ -1366,6 +1380,7 @@ class AppState:
         )
         self.codex_home = Path(codex_home)
         self._native_quota: Optional[Dict[str, Any]] = None
+        self._auto_review_cooldowns: Dict[str, float] = {}
         self.quota_history = QuotaHistoryStore(quota_history_path(self.path))
         self._quota_sampler_stop = threading.Event()
         self._quota_sampler_thread: Optional[threading.Thread] = None
@@ -1494,6 +1509,9 @@ class AppState:
             return json.loads(json.dumps(self.config))
 
     def notify_quota_update(self, account_id: str, error: Optional[str] = None) -> None:
+        if not error:
+            with self.lock:
+                self._auto_review_cooldowns.pop(account_id, None)
         with self._quota_condition:
             if error:
                 self._quota_refresh_errors[account_id] = error
@@ -1547,10 +1565,25 @@ class AppState:
         with self.lock:
             snapshot = json.loads(json.dumps(self.config))
             manager = self.integration_manager
+            native_quota = json.loads(json.dumps(self._native_quota))
+            cooldowns = dict(self._auto_review_cooldowns)
         if manager is not None:
             snapshot["_native_auth_path"] = str(
                 manager.config_path.parent / "auth.json"
             )
+        native_auth = Path(
+            snapshot.get("_native_auth_path") or self.codex_home / "auth.json"
+        )
+        try:
+            native_available = native_auth.is_file() and not native_auth.is_symlink()
+        except OSError:
+            native_available = False
+        snapshot["_auto_review_candidates"] = automatic_review_candidates(
+            snapshot,
+            native_quota,
+            native_available,
+            cooldowns,
+        )
         return snapshot
 
     def ensure_integration_manager(self) -> IntegrationManager:
@@ -1909,11 +1942,19 @@ class AppState:
         dynamic = self.dynamic_model_catalog()
         with manager.operation_lock():
             status = manager.status()
-            if (dynamic and status.relation == "applied" and status.lease is not None
-                    and status.lease.fields["openai_base_url"].applied.value == base_url
-                    and status.lease.fields["model_catalog_json"].applied.value == str(catalog_path.resolve())):
+            lease = status.lease
+            if (dynamic and status.relation == "applied" and lease is not None
+                    and lease.fields["openai_base_url"].applied.value == base_url
+                    and (
+                        lease.fields["model_catalog_json"].applied.value == str(catalog_path.resolve())
+                        or (
+                            not lease.fields["model_catalog_json"].applied.present
+                            and lease.fields[REALTIME_SIDEBAND_FIELD].applied.value != base_url
+                        )
+                    )):
                 # Restore through the existing lease before changing its managed target.
-                # This preserves the user's original catalog for EMP shutdown recovery.
+                # This preserves the user's original catalog and sideband URL
+                # for EMP shutdown recovery, including existing v2 leases.
                 restored = manager.restore()
                 if not restored.ok:
                     return restored
@@ -1921,6 +1962,7 @@ class AppState:
                 base_url,
                 None if dynamic else str(catalog_path.resolve()),
                 service_ready=self.service_ready,
+                realtime_sideband_base_url=base_url if dynamic else None,
             )
             if result.ok and result.state == "active":
                 try:
@@ -2157,6 +2199,20 @@ class AppState:
         )
         safe_event["duration_ms"] = max(0, int(round((time.monotonic() - started) * 1000)))
         safe_event.setdefault("service_tier", requested_tier or "default")
+        success = safe_event.get("success")
+        successful = success is True or (
+            success is None
+            and safe_event.get("status") == 200
+            and safe_event.get("error_class") in (None, "none")
+        )
+        rate = request_tokens_per_second(
+            safe_event.get("output_tokens"), safe_event["duration_ms"]
+        ) if successful else None
+        if rate is None:
+            safe_event.pop("tokens_per_second", None)
+        else:
+            safe_event["tokens_per_second"] = rate
+        self._observe_auto_review_route(safe_event)
         self.usage.record(safe_event)
         context = safe_event.get("context_observation")
         if isinstance(context, Mapping):
@@ -2164,6 +2220,30 @@ class AppState:
             self._remember_context_calibration(safe_event, body)
         self._remember_resolved_protocol(safe_event, body.get("model"))
         self.diagnostics.record(safe_event)
+
+    def _observe_auto_review_route(self, event: Mapping[str, Any]) -> None:
+        model_id = event.get("client_model", event.get("model_id"))
+        if not is_auto_review_model(model_id):
+            return
+        provider_id = event.get("provider_id")
+        account_id = (
+            NATIVE_ACCOUNT_ID if provider_id == "codex-native" else provider_id
+        )
+        if not isinstance(account_id, str) or not account_id:
+            return
+        with self.lock:
+            if event.get("success") is True:
+                self._auto_review_cooldowns.pop(account_id, None)
+                return
+            reason = event.get("failure_reason")
+            error_class = event.get("error_class")
+            if reason in {
+                "quota_exhausted",
+                "rate_limited",
+                "payment_required",
+                "auth_rejected",
+            } or error_class in {"rate_limit", "auth"}:
+                self._auto_review_cooldowns[account_id] = time.monotonic() + 300
 
     def _remember_context_calibration(
         self, event: Mapping[str, Any], body: Mapping[str, Any]
@@ -3213,7 +3293,7 @@ def make_handler(state: AppState):
             super().send_response(code, message)
 
         def log_message(self, format: str, *args: Any) -> None:
-            # The bootstrap URL contains a one-time secret; never log its query.
+            # Management URLs may contain sensitive query values; never log them.
             message = format % args if args else format
             message = message.replace(self.path, urlparse(self.path).path)
             super().log_message("%s", message)
@@ -3252,23 +3332,6 @@ def make_handler(state: AppState):
                 and supplied.value.isascii()
                 and hmac.compare_digest(supplied.value, state.session_token)
             )
-
-        def _has_bootstrap(self) -> bool:
-            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-            values = query.get("bootstrap", [])
-            if (
-                len(values) != 1
-                or not values[0].isascii()
-                or not hmac.compare_digest(values[0], state.bootstrap_token)
-            ):
-                return False
-            with state.lock:
-                if state.bootstrap_used:
-                    return False
-                if time.time() >= state.session_expires_at:
-                    state._load_web_session()
-                state.bootstrap_used = True
-                return True
 
         def _management_allowed(self) -> bool:
             return self._same_origin() and self._has_session()
@@ -3965,6 +4028,204 @@ def make_handler(state: AppState):
                 if websocket_slot_acquired:
                     self.server.release_websocket_slot()
 
+        def _serve_realtime_sideband(self, call_id: str) -> None:
+            if not self._proxy_allowed():
+                self._send(
+                    401 if self._same_origin() else 403,
+                    _json_bytes({"error": {
+                        "code": "realtime_caller_unauthorized",
+                        "message": "Caller authentication is required for Codex Voice",
+                    }}),
+                )
+                return
+            if not valid_realtime_call_id(call_id):
+                self._send(
+                    400,
+                    _json_bytes({"error": {
+                        "code": "realtime_invalid_call_id",
+                        "message": "Realtime sideband call ID is invalid",
+                    }}),
+                )
+                return
+            connection_tokens = {
+                item.strip().lower()
+                for item in self.headers.get("Connection", "").split(",")
+            }
+            if (
+                self.headers.get("Upgrade", "").lower() != "websocket"
+                or "upgrade" not in connection_tokens
+                or self.headers.get("Sec-WebSocket-Version") != "13"
+            ):
+                self._error(400, "invalid websocket upgrade")
+                return
+            try:
+                accept = websocket_accept(self.headers.get("Sec-WebSocket-Key", ""))
+            except TransportError as exc:
+                self._error(400, str(exc))
+                return
+
+            acquire_websocket_slot = getattr(
+                self.server, "acquire_websocket_slot", None
+            )
+            slot_acquired = False
+            if callable(acquire_websocket_slot):
+                slot_acquired = acquire_websocket_slot()
+                if not slot_acquired:
+                    self._send(
+                        503,
+                        _json_bytes({"error": {
+                            "code": "realtime_capacity_unavailable",
+                            "message": "Too many WebSocket connections",
+                        }}),
+                        headers={"Retry-After": "2"},
+                    )
+                    return
+
+            connection_id = uuid.uuid4().hex[:16]
+            upstream = None
+            websocket = None
+            stop = threading.Event()
+            upstream_close = {"code": 1000, "reason": ""}
+            relay_thread = None
+            try:
+                self._record_websocket_phase(
+                    connection_id, "upstream_handshake_started"
+                )
+                try:
+                    upstream = open_native_realtime_sideband(
+                        state.codex_home / "auth.json",
+                        dict(self.headers.items()),
+                        call_id,
+                    )
+                except RealtimeError as exc:
+                    self._record_websocket_phase(
+                        connection_id,
+                        "upstream_handshake_rejected",
+                        status=exc.status,
+                    )
+                    self._send(
+                        exc.status,
+                        _json_bytes({"error": {
+                            "code": exc.code,
+                            "message": str(exc),
+                        }}),
+                    )
+                    return
+                self._record_websocket_phase(
+                    connection_id, "upstream_handshake_accepted", status=101
+                )
+
+                self.wfile.write(
+                    (
+                        "HTTP/1.1 101 Switching Protocols\r\n"
+                        "Upgrade: websocket\r\n"
+                        "Connection: Upgrade\r\n"
+                        "Sec-WebSocket-Accept: %s\r\n\r\n" % accept
+                    ).encode("ascii")
+                )
+                self._response_status = 101
+                self.wfile.flush()
+                self.close_connection = True
+                self.connection.settimeout(None)
+                websocket = WebSocketConnection(
+                    self.rfile, self.wfile, self.connection.settimeout
+                )
+                self._record_websocket_phase(
+                    connection_id, "local_upgrade_accepted", status=101
+                )
+
+                def relay_upstream() -> None:
+                    setter = getattr(upstream, "settimeout", None)
+                    receiver = getattr(upstream, "recv", None)
+                    try:
+                        while not stop.is_set():
+                            try:
+                                if callable(setter):
+                                    setter(1)
+                                raw = receiver() if callable(receiver) else None
+                            except Exception as exc:
+                                if "timeout" in exc.__class__.__name__.lower():
+                                    continue
+                                close = getattr(exc, "rcvd", None)
+                                code = getattr(close, "code", None)
+                                if isinstance(code, int) and not isinstance(code, bool):
+                                    upstream_close.update(code=code, reason="")
+                                else:
+                                    upstream_close.update(
+                                        code=1011,
+                                        reason="upstream transport failed",
+                                    )
+                                return
+                            if raw in (None, "", b""):
+                                return
+                            if isinstance(raw, str):
+                                payload = raw.encode("utf-8")
+                            elif isinstance(raw, bytes):
+                                payload = raw
+                                try:
+                                    payload.decode("utf-8", errors="strict")
+                                except UnicodeDecodeError:
+                                    upstream_close.update(code=1007, reason="invalid UTF-8")
+                                    return
+                            else:
+                                upstream_close.update(code=1003, reason="unsupported frame")
+                                return
+                            if len(payload) > MAX_REALTIME_SIDEBAND_MESSAGE_BYTES:
+                                upstream_close.update(code=1009, reason="message too large")
+                                return
+                            websocket.send_json_bytes(payload)
+                    except Exception:
+                        upstream_close.update(code=1011, reason="upstream transport failed")
+                    finally:
+                        stop.set()
+
+                relay_thread = threading.Thread(
+                    target=relay_upstream,
+                    daemon=True,
+                    name="emp-realtime-sideband-recv",
+                )
+                relay_thread.start()
+                sender = getattr(upstream, "send_text", None)
+                if not callable(sender):
+                    sender = getattr(upstream, "send", None)
+                while not stop.is_set():
+                    try:
+                        self.connection.settimeout(1)
+                        text = websocket.receive_text(
+                            max_length=MAX_REALTIME_SIDEBAND_MESSAGE_BYTES
+                        )
+                    except TimeoutError:
+                        continue
+                    if text is None:
+                        break
+                    if not callable(sender):
+                        raise TransportError("upstream websocket cannot send text")
+                    sender(text)
+            except WebSocketRequestTooLarge as exc:
+                upstream_close.update(code=exc.code, reason="message too large")
+            except WebSocketProtocolError as exc:
+                upstream_close.update(code=exc.code, reason=str(exc))
+            except (OSError, TransportError):
+                upstream_close.update(code=1011, reason="sideband transport failed")
+            finally:
+                stop.set()
+                if upstream is not None:
+                    try:
+                        upstream.close()
+                    except Exception:
+                        pass
+                if relay_thread is not None:
+                    relay_thread.join(timeout=2)
+                if websocket is not None:
+                    websocket.close(
+                        upstream_close["code"], upstream_close["reason"]
+                    )
+                self._record_websocket_phase(
+                    connection_id, "connection_closed"
+                )
+                if slot_acquired:
+                    self.server.release_websocket_slot()
+
         def _serve_quota_events(self) -> None:
             if not state._quota_event_slots.acquire(blocking=False):
                 self._send(503, _json_bytes({"error": {"message": "Too many quota subscribers"}}),
@@ -4006,6 +4267,11 @@ def make_handler(state: AppState):
             if path == "/v1/responses" and self.headers.get("Upgrade", "").lower() == "websocket":
                 self._serve_responses_websocket()
                 return
+            if path.startswith("/v1/live/"):
+                self._serve_realtime_sideband(
+                    unquote(path[len("/v1/live/"):])
+                )
+                return
             if path in ("/", "/index.html") and not self._same_origin():
                 self._error(403, "cross-origin Web UI request rejected")
                 return
@@ -4013,32 +4279,9 @@ def make_handler(state: AppState):
                 self._error(401 if self._same_origin() else 403, "management session is required")
                 return
             if path in ("/", "/index.html"):
-                if not self._has_session():
-                    if not self._has_bootstrap():
-                        self._send(401, (
-                            '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
-                            '<meta name="viewport" content="width=device-width,initial-scale=1">'
-                            '<title>登录 EMP</title><body style="font-family:system-ui;max-width:36rem;'
-                            'margin:12vh auto;padding:24px;line-height:1.7">'
-                            '<h1>请从 EMP 打开管理页</h1>'
-                            '<p>此浏览器尚未登录，或登录已过期。</p>'
-                            '<p>请打开 EMP 启动时自动弹出的网页；也可以使用终端中 '
-                            'Open in browser 后的完整链接。</p>'
-                            '<p>登录有效期为 30 天，期间重启 EMP 无需重新登录。</p>'
-                            '</body></html>'
-                        ).encode("utf-8"), "text/html; charset=utf-8",
-                            headers={"Cache-Control": "no-store"})
-                        return
-                    self._send(
-                        303,
-                        b"",
-                        "text/plain; charset=utf-8",
-                        {
-                            "Location": "/",
-                            "Set-Cookie": self._session_header(),
-                        },
-                    )
-                    return
+                with state.lock:
+                    if time.time() >= state.session_expires_at:
+                        state._load_web_session()
                 self._send(
                     200,
                     WEB_FILE.read_bytes(),
@@ -4071,6 +4314,18 @@ def make_handler(state: AppState):
                 return
             if path == "/api/diagnostics":
                 self._send(200, _json_bytes(state.diagnostics_snapshot()))
+                return
+            if path == "/api/support-report":
+                try:
+                    report = build_support_report(state, state.proxy_source_at_startup)
+                except (OSError, TypeError, ValueError):
+                    self._error(503, "Support report is unavailable")
+                    return
+                self._send(
+                    200,
+                    _json_bytes(report),
+                    headers={"Content-Disposition": 'attachment; filename="EMP-support-report.json"'},
+                )
                 return
             if path == "/api/usage":
                 query = parse_qs(parsed.query)
@@ -4208,8 +4463,29 @@ def make_handler(state: AppState):
             if path.startswith("/api/") and not self._management_allowed():
                 self._error(401 if self._same_origin() else 403, "management session is required")
                 return
-            if path in ("/v1/responses", "/v1/responses/compact", "/v1/alpha/search") and not self._proxy_allowed():
-                self._error(401 if self._same_origin() else 403, "proxy caller authentication is required")
+            if path in ("/v1/responses", "/v1/responses/compact", "/v1/alpha/search", "/v1/live") and not self._proxy_allowed():
+                status = 401 if self._same_origin() else 403
+                if path == "/v1/live":
+                    code = "realtime_caller_unauthorized"
+                    message = "Caller authentication is required for Codex Voice"
+                    if status == 401:
+                        try:
+                            native_auth_headers(state.codex_home / "auth.json")
+                        except AccountError:
+                            code = "native_subscription_unavailable"
+                            message = (
+                                "A current native ChatGPT subscription login is required "
+                                "for Codex Voice"
+                            )
+                    self._send(
+                        status,
+                        _json_bytes({"error": {
+                            "code": code,
+                            "message": message,
+                        }}),
+                    )
+                else:
+                    self._error(status, "proxy caller authentication is required")
                 return
             if path in {"/api/updates/check", "/api/updates/install"}:
                 try:
@@ -4222,6 +4498,41 @@ def make_handler(state: AppState):
                     self._error(413, "update request is too large")
                 except (ConfigError, ValueError):
                     self._error(400, "invalid update request")
+                return
+            if path == "/v1/live":
+                try:
+                    call = read_realtime_call(self.headers, self.rfile)
+                    response = forward_native_realtime_call(
+                        state.snapshot().get(
+                            "codex_base_url",
+                            "https://chatgpt.com/backend-api/codex",
+                        ),
+                        state.codex_home / "auth.json",
+                        dict(self.headers.items()),
+                        call,
+                    )
+                    headers = (
+                        {"Location": response.location}
+                        if response.location is not None
+                        else None
+                    )
+                    self._send(
+                        response.status,
+                        response.body,
+                        response.content_type,
+                        headers,
+                    )
+                except RealtimeError as exc:
+                    if exc.close:
+                        self.close_connection = True
+                    self._send(
+                        exc.status,
+                        _json_bytes({"error": {
+                            "code": exc.code,
+                            "message": str(exc),
+                        }}),
+                        headers={"Connection": "close"} if exc.close else None,
+                    )
                 return
             operation_started = time.monotonic()
             operation_logged = False
@@ -5029,7 +5340,13 @@ def startup_reconcile(state: AppState, server: BoundedThreadingHTTPServer) -> In
     result = state.reconcile_startup(state.service_ready)
     if result.action == "re_adopted" and result.state == "active":
         state.refresh_catalog()
-        if state.dynamic_model_catalog() and result.lease.fields["model_catalog_json"].applied.present:
+        dynamic = state.dynamic_model_catalog()
+        sideband = result.lease.fields[REALTIME_SIDEBAND_FIELD].applied
+        if dynamic and (
+            result.lease.fields["model_catalog_json"].applied.present
+            or not sideband.present
+            or sideband.value != base_url
+        ):
             result = state.enable_integration(base_url, confirm_reload=False)
     return result
 
@@ -5166,6 +5483,7 @@ def _serve_owned(
                 catalog_path=generated_catalog_path(paths.codex_home),
                 journal=journal,
             )
+            state.proxy_source_at_startup = proxy_source
             if host:
                 state.config["host"] = host
             if port is not None:
@@ -5243,15 +5561,15 @@ def _serve_owned(
             state.usage_history.start()
 
             print("EMP listening on %s" % base_url, flush=True)
+            print("Configuration file: %s" % effective_config_path, flush=True)
             print("Network proxy: %s" % proxy_source, flush=True)
-            bootstrap_url = "%s/?bootstrap=%s" % (base_url, state.bootstrap_token)
-            print("Open in browser: %s" % bootstrap_url, flush=True)
+            print("Open in browser: %s" % base_url, flush=True)
             if open_browser:
                 opened = False
                 try:
                     import webbrowser
 
-                    opened = bool(webbrowser.open(bootstrap_url, new=2))
+                    opened = bool(webbrowser.open(base_url, new=2))
                 except Exception:
                     pass
                 if not opened:

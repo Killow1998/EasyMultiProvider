@@ -186,7 +186,9 @@ class Response:
         self.close()
 
 
-def open_request(request, timeout):
+def open_request_status(request, timeout):
+    """Return one response without redirects, including non-success statuses."""
+
     manager = _manager(proxy_for_url(request.full_url))
     headers = dict(request.header_items())
     headers.setdefault("Accept-Encoding", "identity")
@@ -200,10 +202,15 @@ def open_request(request, timeout):
         raise TimeoutError("upstream connection timed out") from exc
     except urllib3.exceptions.HTTPError as exc:
         raise URLError(exc) from exc
-    result = Response(response)
+    return Response(response)
+
+
+def open_request(request, timeout):
+    result = open_request_status(request, timeout)
     if 300 <= result.status < 400:
         result.close()
         raise URLError("upstream redirects are disabled")
     if result.status >= 400:
-        raise HTTPError(request.full_url, result.status, response.reason, result.headers, result)
+        reason = getattr(result._response, "reason", "upstream request failed")
+        raise HTTPError(request.full_url, result.status, reason, result.headers, result)
     return result

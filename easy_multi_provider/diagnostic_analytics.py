@@ -13,6 +13,7 @@ from .performance import PERFORMANCE_SCHEMA, token_count
 _PERFORMANCE_WINDOW_CALLS = 20
 _PERFORMANCE_WINDOW_DAYS = 7
 _CACHE_BUCKET_SECONDS = 10 * 60
+_TTFT_SCHEMAS = frozenset({2, PERFORMANCE_SCHEMA})
 
 
 _CLIENT_ENDINGS = frozenset({
@@ -65,15 +66,21 @@ def _observed_at(value: Any) -> Optional[datetime]:
 
 def _successful_speed_sample(item: Mapping[str, Any]) -> bool:
     status = item.get("status")
+    schema = item.get("performance_schema")
     return (
-        item.get("performance_schema") == PERFORMANCE_SCHEMA
-        and item.get("error_class") == "none"
+        item.get("error_class") == "none"
         and isinstance(status, int)
         and not isinstance(status, bool)
         and 200 <= status < 300
         and (
-            (_number(item.get("ttft_ms")) or 0) > 0
-            or (_number(item.get("tokens_per_second")) or 0) > 0
+            (
+                schema in _TTFT_SCHEMAS
+                and (_number(item.get("ttft_ms")) or 0) > 0
+            )
+            or (
+                schema == PERFORMANCE_SCHEMA
+                and (_number(item.get("tokens_per_second")) or 0) > 0
+            )
         )
     )
 
@@ -234,13 +241,17 @@ def summarize_route_observations(
         previous_calls = history[-2 * _PERFORMANCE_WINDOW_CALLS:-_PERFORMANCE_WINDOW_CALLS]
         ttft_ms, ttft_samples = _metric(item.get("ttft_ms") for item in calls)
         tokens_per_second, tps_samples = _metric(
-            item.get("tokens_per_second") for item in calls
+            item.get("tokens_per_second")
+            for item in calls
+            if item.get("performance_schema") == PERFORMANCE_SCHEMA
         )
         previous_ttft_ms, previous_ttft_samples = _metric(
             item.get("ttft_ms") for item in previous_calls
         )
         previous_tokens_per_second, previous_tps_samples = _metric(
-            item.get("tokens_per_second") for item in previous_calls
+            item.get("tokens_per_second")
+            for item in previous_calls
+            if item.get("performance_schema") == PERFORMANCE_SCHEMA
         )
         if ttft_samples == 0 and tps_samples == 0:
             continue

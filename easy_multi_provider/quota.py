@@ -25,12 +25,28 @@ from .accounts import NATIVE_ACCOUNT_ID, AccountError, load_auth, load_native_au
 from .vault import VaultError, write_encrypted_json
 
 
+_WORKSPACE_ROUTING_CONNECTIVITY_ERRORS = frozenset(
+    {
+        "workspace routing discovery timed out",
+        "workspace routing discovery failed",
+    }
+)
+
+
 class QuotaError(ValueError):
     """Raised when Codex cannot provide a safe quota snapshot."""
 
-    def __init__(self, message: str, code: str = "quota_error"):
+    def __init__(
+        self,
+        message: str,
+        code: str = "quota_error",
+        *,
+        retry_imported_refresh: bool = False,
+    ):
         super().__init__(message)
         self.code = code
+        # Internal recovery hint. Public API responses expose only code/message.
+        self.retry_imported_refresh = bool(retry_imported_refresh)
 
 
 def _quota_rpc_error(method: str, error: Any) -> QuotaError:
@@ -53,6 +69,16 @@ def _quota_rpc_error(method: str, error: Any) -> QuotaError:
         return QuotaError("Codex quota access was denied (403); check account access and network", "quota_access_denied")
     if status_code == 429:
         return QuotaError("Codex quota queries are rate limited (429); try again later", "quota_rate_limited")
+    if (
+        method == "account/read"
+        and message.strip().lower() in _WORKSPACE_ROUTING_CONNECTIVITY_ERRORS
+    ):
+        return QuotaError(
+            "Codex could not reach ChatGPT workspace routing; check DNS, "
+            "VPN/TUN, proxy, and network connectivity",
+            "quota_transport_error",
+            retry_imported_refresh=True,
+        )
     if method == "account/rateLimits/read" and "error sending request" in message.lower():
         return QuotaError("Codex could not connect to the quota service; check the proxy and network connection", "quota_transport_error")
     if method == "account/rateLimits/read":
@@ -479,15 +505,28 @@ def parse_app_server_output(output: str) -> Dict[str, Any]:
             read_limits(message.get("params"))
     if rate_limits is None:
         raise QuotaError("Codex did not return account rate limits")
+    plan_type = (
+        account.get("planType")
+        if isinstance(account.get("planType"), str)
+        else rate_limits.get("planType")
+        if isinstance(rate_limits.get("planType"), str)
+        else None
+    )
+    if any(
+        window.get(
+            "windowDurationMins",
+            window.get("window_duration_mins", window.get("window_minutes")),
+        )
+        == 43_200
+        for bucket in buckets.values()
+        if isinstance(bucket, dict)
+        for window in (bucket.get("primary"), bucket.get("secondary"))
+        if isinstance(window, dict)
+    ):
+        plan_type = "free"
     return {
         "account_label": _mask_email(account.get("email")),
-        "plan_type": (
-            account.get("planType")
-            if isinstance(account.get("planType"), str)
-            else rate_limits.get("planType")
-            if isinstance(rate_limits.get("planType"), str)
-            else None
-        ),
+        "plan_type": plan_type,
         "rate_limits": rate_limits,
         "rate_limits_by_limit_id": buckets,
         "credits": _safe_credit_snapshot(rate_limits, rate_limits_result),
@@ -641,7 +680,8 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
 
     Read with the existing login first. Codex can reject a forced refresh
     even while its current access token is valid. Retry with rotation only
-    after an actual authentication failure, and persist changed credentials.
+    after an authentication failure or a workspace-routing failure that may
+    wrap an account-specific 401, and persist changed credentials.
     """
     auth_file = account.get("auth_file", "")
     if not auth_file:
@@ -657,7 +697,10 @@ def read_account_quota(account: Dict[str, Any], codex_binary: str = "codex", tim
             allow_refresh=False, persist_path=persist_path,
         )
     except QuotaError as exc:
-        if exc.code != "quota_auth_required":
+        if (
+            exc.code != "quota_auth_required"
+            and not exc.retry_imported_refresh
+        ):
             raise
     # The first process may have rotated an expired credential before its
     # quota call failed. Retry from the saved copy, not the stale input.

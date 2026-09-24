@@ -36,6 +36,14 @@ _SALT_BYTES = 16
 _SCRYPT_N = 2**14
 _SCRYPT_R = 8
 _SCRYPT_P = 1
+_MODEL_CAPABILITY_FIELDS = (
+    "input_modalities",
+    "output_modalities",
+    "supported_protocols",
+    "supports_image_detail_original",
+    "capabilities",
+    "capability_sources",
+)
 
 
 class MigrationError(ValueError):
@@ -100,6 +108,27 @@ def _portable_config(config: Dict[str, Any]) -> Dict[str, Any]:
         portable["api_key"] = ""
         result["providers"].append(portable)
     return result
+
+
+def _verify_model_capability_migration(
+    source: Dict[str, Any], target: Dict[str, Any]
+) -> None:
+    """Reject an import before commit if model capability evidence changed."""
+
+    imported = {
+        item["id"]: item
+        for item in target.get("models", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    for model in source.get("models", []):
+        destination = imported.get(model.get("id"))
+        if destination is None:
+            raise MigrationError("migration lost an imported model")
+        for field in _MODEL_CAPABILITY_FIELDS:
+            if destination.get(field) != model.get(field):
+                raise MigrationError(
+                    "migration changed model capability data: %s" % field
+                )
 
 
 def select_export_config(config: Dict[str, Any], groups: Any = None) -> Dict[str, Any]:
@@ -419,6 +448,7 @@ def import_bundle(
         if account["id"] in imported_auth:
             account["auth_file"] = str(account_auth_path(target, account["id"], config_path))
     target = normalize(target)
+    _verify_model_capability_migration(source, target)
 
     with file_transaction() as transaction:
         for account_id, auth in imported_auth.items():

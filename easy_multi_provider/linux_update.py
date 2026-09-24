@@ -7,7 +7,6 @@ from pathlib import Path
 from .self_update import UpdateError, version_tuple
 
 
-DEB_ASSET = "EMP-linux-x86_64.deb"
 PACKAGE = "easy-multi-provider"
 
 
