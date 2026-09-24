@@ -665,12 +665,36 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         thread::sleep(Duration::from_millis(25));
     }
     let candidate_pid = loop {
-        if let Ok(pid) = std::fs::read_to_string(temp.path().join("candidate.pid")) {
-            break pid.trim().parse::<u32>().expect("candidate PID");
+        if let Ok(pid) = std::fs::read_to_string(temp.path().join("candidate.pid"))
+            && let Ok(pid) = pid.trim().parse::<u32>()
+        {
+            break pid;
         }
         assert!(Instant::now() < deadline, "candidate did not start");
         thread::sleep(Duration::from_millis(25));
     };
+    let success_deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let installation = emp.executable.parent().expect("installation directory");
+        let success_marker_exists = std::fs::read_dir(installation)
+            .expect("read installation jobs")
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".emp-update-")
+                    && entry.path().join("success").is_file()
+            });
+        if success_marker_exists {
+            break;
+        }
+        assert!(
+            Instant::now() < success_deadline,
+            "update worker did not accept candidate readiness before timeout"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
     assert!(
         Command::new("kill")
             .args(["-TERM", &candidate_pid.to_string()])
@@ -710,9 +734,17 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         std::fs::read(&emp.account_auth).unwrap(),
         emp.original_account_auth
     );
+    let installed_hash = format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(&emp.executable).unwrap())
+    );
+    let candidate_hash = format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(temp.path().join("stage/EMP/EMP")).unwrap())
+    );
     assert_eq!(
-        std::fs::read(&emp.executable).unwrap(),
-        std::fs::read(temp.path().join("stage/EMP/EMP")).unwrap()
+        installed_hash, candidate_hash,
+        "installed executable digest differs from candidate"
     );
 }
 
