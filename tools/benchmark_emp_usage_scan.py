@@ -241,11 +241,13 @@ def _usage_url(start: int, end: int, category: str = "all") -> str:
     return "/api/usage?" + urlencode({"start": str(start), "end": str(end), "category": category})
 
 
-def _wait_baseline(backend, start: int, end: int, timeout: float = 30.0) -> dict:
+def _wait_baseline(backend, timeout: float = 30.0) -> dict:
     deadline = time.monotonic() + timeout
     previous = None
     while time.monotonic() < deadline:
-        status, _, payload = _request_json(backend, "GET", _usage_url(start, end))
+        # This is a status poll, not an accounting query. Keep its SQL window
+        # empty so a large ledger is not repeatedly aggregated during the scan.
+        status, _, payload = _request_json(backend, "GET", _usage_url(1, 2))
         if status != 200:
             raise BenchmarkError("baseline_usage_query_failed_" + str(status))
         history = payload.get("history", {})
@@ -385,7 +387,7 @@ def run_runtime(
     sampler = None
     sampler_started = False
     try:
-        baseline = _wait_baseline(backend, start, end)
+        baseline = _wait_baseline(backend)
         previous_scan = baseline["history"].get("last_scan_at")
         rollout = home / "sessions" / "rollout.jsonl"
         shutil.copyfile(rollout_source, rollout)
@@ -403,13 +405,16 @@ def run_runtime(
             raise BenchmarkError(f"usage_scan_post_failed_{scan_status}")
 
         smoke = None
-        final_payload = None
+        last_history = None
+        poll_count = 0
         deadline = time.monotonic() + SCAN_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
-            status, _, payload = _request_json(backend, "GET", _usage_url(start, end))
+            status, _, payload = _request_json(backend, "GET", _usage_url(1, 2))
             if status != 200:
                 raise BenchmarkError("usage_scan_poll_failed_" + str(status))
             history = payload.get("history", {})
+            last_history = history
+            poll_count += 1
             if history.get("running") and smoke is None:
                 smoke = _forwarding_smoke(backend, upstream)
             completed = (
@@ -418,13 +423,25 @@ def run_runtime(
                 and history.get("last_scan_at") != previous_scan
             )
             if completed:
-                final_payload = payload
                 break
             time.sleep(POLL_INTERVAL_SECONDS)
         elapsed_seconds = time.perf_counter() - started
-        if final_payload is None:
-            raise BenchmarkError("usage_scan_timeout")
-        peak_rss = sampler.case_peak()
+        if not last_history or last_history.get("running") or last_history.get("last_scan_at") == previous_scan:
+            safe_status = canonical_scan_status(last_history or {})
+            raise BenchmarkError(
+                "usage_scan_timeout_" + json.dumps(
+                    {"poll_count": poll_count, "last_status": safe_status}, sort_keys=True
+                )
+            )
+        scan_peak_rss = sampler.case_peak()
+
+        query_started = time.perf_counter()
+        query_status, _, final_payload = _request_json(backend, "GET", _usage_url(start, end))
+        if query_status != 200:
+            raise BenchmarkError("usage_scan_final_query_failed_" + str(query_status))
+        query_results = _query_semantics(backend, start, end)
+        query_elapsed_seconds = time.perf_counter() - query_started
+        workload_peak_rss = sampler.overall_peak()
 
         history = final_payload.get("history", {})
         if history.get("running") or history.get("errors") != 0 or history.get("updated") != 1:
@@ -445,14 +462,15 @@ def run_runtime(
         if saved.get("offset") != rollout.stat().st_size or saved.get("size") != rollout.stat().st_size:
             raise BenchmarkError("history_checkpoint_did_not_reach_eof")
 
-        query_results = _query_semantics(backend, start, end)
         validate_total_requests(query_results["all"], ledger_rows + rollout_records + 1)
         return {
             "scan_post_status": scan_status,
             "scan_post_payload": scan_payload,
             "scan_status": canonical_scan_status(history),
             "elapsed_seconds": elapsed_seconds,
-            "peak_rss_bytes": peak_rss,
+            "query_elapsed_seconds": query_elapsed_seconds,
+            "scan_peak_rss_bytes": scan_peak_rss,
+            "workload_peak_rss_bytes": workload_peak_rss,
             "usage": query_results,
             "checkpoint": checkpoint,
             "forwarding_smoke": smoke,
@@ -613,7 +631,9 @@ def main(argv: list[str] | None = None) -> int:
             "runs": {
                 name: {
                     "elapsed_seconds": result["elapsed_seconds"],
-                    "peak_rss_bytes": result["peak_rss_bytes"],
+                    "query_elapsed_seconds": result["query_elapsed_seconds"],
+                    "scan_peak_rss_bytes": result["scan_peak_rss_bytes"],
+                    "workload_peak_rss_bytes": result["workload_peak_rss_bytes"],
                     "scan_status": result["scan_status"],
                     "history_rows": result["checkpoint"]["history_rows"],
                     "forwarding_smoke": result["forwarding_smoke"],
