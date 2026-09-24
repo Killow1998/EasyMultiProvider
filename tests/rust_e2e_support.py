@@ -4,9 +4,11 @@ import os
 from pathlib import Path
 import queue
 import re
+import signal
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -246,6 +248,8 @@ class EmpProcess:
             environment.pop("PYTHONPATH", None)
         else:
             environment = PYTHON_RUNTIME.environment(environment)
+            # A startup timeout otherwise hides the Python frame that blocked.
+            environment["PYTHONFAULTHANDLER"] = "1"
         self.environment = environment
         self.cwd = process_cwd
         if arguments is None:
@@ -271,11 +275,32 @@ class EmpProcess:
                     line = lines.get(timeout=30)
                 except queue.Empty as exc:
                     control_socket = home / "app-server-control" / "app-server-control.sock"
+                    stalled_stack = ""
+                    if (self.runtime_kind == "python_oracle" and os.name == "posix"
+                            and self.process.poll() is None):
+                        # The fixture is already failing. Ask the child for a
+                        # traceback before close() terminates it anyway.
+                        try:
+                            self.process.send_signal(signal.SIGABRT)
+                        except ProcessLookupError:
+                            pass
+                        else:
+                            deadline = time.monotonic() + 3
+                            while time.monotonic() < deadline:
+                                try:
+                                    remaining = max(0.01, deadline - time.monotonic())
+                                    diagnostic_line = lines.get(timeout=remaining)
+                                except queue.Empty:
+                                    break
+                                if diagnostic_line is None:
+                                    break
+                                stalled_stack += diagnostic_line
                     raise AssertionError(
                         f"{self.runtime_kind} EMP gave no output for 30 seconds before readiness "
                         f"(pid={self.process.pid}, exit_code={self.process.poll()}, "
                         f"control_socket_bytes={len(os.fsencode(control_socket))}); "
-                        f"startup output: {''.join(startup[-12:]) or '<none>'}"
+                        f"startup output: {''.join(startup[-12:]) or '<none>'}; "
+                        f"timeout traceback: {stalled_stack[-10000:] or '<unavailable>'}"
                     ) from exc
                 if line is None:
                     raise AssertionError(
