@@ -286,8 +286,8 @@ impl<'a> ExternalRouter<'a> {
     ) -> Result<CompleteResponse, RouterError> {
         validate_complete_request(route, body)?;
         let mut tools = ExternalTools::default();
-        let prepared = tools.prepare(body).map_err(tool_request_error)?;
-        let body = &prepared;
+        let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
+        let body = prepared.as_ref();
         let provider = route.provider.value();
         let endpoint = endpoint(provider, route.protocol)?;
         let headers = upstream_headers(provider, route.protocol, incoming)?;
@@ -412,8 +412,8 @@ impl<'a> ExternalRouter<'a> {
         let request_started = std::time::Instant::now();
         validate_stream_request(route, body)?;
         let mut tools = ExternalTools::default();
-        let prepared = tools.prepare(body).map_err(tool_request_error)?;
-        let body = &prepared;
+        let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
+        let body = prepared.as_ref();
         let provider = route.provider.value();
         let endpoint = endpoint(provider, route.protocol)?;
         let mut headers = upstream_headers(provider, route.protocol, incoming)?;
@@ -568,10 +568,9 @@ impl<'a> ExternalRouter<'a> {
 
 /// Project the exact upstream request judged by EMP's destination context guard.
 pub fn project_external_payload(route: &ResolvedRoute, body: &Value) -> Result<Value, RouterError> {
-    let prepared = ExternalTools::default()
-        .prepare(body)
-        .map_err(tool_request_error)?;
-    project_prepared_external_payload(route, &prepared)
+    let mut tools = ExternalTools::default();
+    let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
+    project_prepared_external_payload(route, prepared.as_ref())
 }
 
 fn project_prepared_external_payload(

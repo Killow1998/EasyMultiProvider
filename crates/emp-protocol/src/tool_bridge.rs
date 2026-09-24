@@ -2,6 +2,7 @@
 use crate::collaboration::python_json;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -20,6 +21,58 @@ pub struct ExternalTools {
 }
 
 impl ExternalTools {
+    fn has_request_state(&self) -> bool {
+        !self.identities.is_empty()
+            || self.search_name.is_some()
+            || !self.search_indices.is_empty()
+            || !self.search_ids.is_empty()
+    }
+
+    fn input_requires_preparation(input: &Value) -> bool {
+        const TOOL_BRIDGE_ITEMS: &[&str] = &[
+            "additional_tools",
+            "tool_search_call",
+            "tool_search_output",
+            "function_call",
+            "custom_tool_call",
+            "function_call_output",
+            "custom_tool_call_output",
+        ];
+        matches!(
+            input.get("type").and_then(Value::as_str),
+            Some(kind) if TOOL_BRIDGE_ITEMS.contains(&kind)
+        )
+    }
+
+    fn body_requires_preparation(body: &Value) -> bool {
+        match body.get("tools") {
+            None => {}
+            Some(Value::Array(tools)) if tools.is_empty() => {}
+            Some(_) => return true,
+        }
+        if body.get("tool_choice").is_some() {
+            return true;
+        }
+        match body.get("input") {
+            Some(Value::Object(_)) => true,
+            Some(Value::Array(items)) => items.iter().any(Self::input_requires_preparation),
+            _ => false,
+        }
+    }
+
+    /// Borrow ordinary request bodies that require no tool namespace bridge.
+    /// Tool-bearing requests retain the existing owned projection and identity
+    /// bookkeeping used by response restoration.
+    pub fn prepare_or_borrow<'a>(
+        &mut self,
+        body: &'a Value,
+    ) -> Result<Cow<'a, Value>, &'static str> {
+        if !self.has_request_state() && !Self::body_requires_preparation(body) {
+            return Ok(Cow::Borrowed(body));
+        }
+        self.prepare(body).map(Cow::Owned)
+    }
+
     fn name(
         &mut self,
         name: &Value,
@@ -344,5 +397,126 @@ impl ExternalTools {
             *response = self.restore_response(response.take())?;
         }
         Ok(Some(event))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expect_owned(body: &Value) {
+        let mut tools = ExternalTools::default();
+        assert!(matches!(tools.prepare_or_borrow(body), Ok(Cow::Owned(_))));
+    }
+
+    #[test]
+    fn ordinary_message_array_is_borrowed_and_restoration_is_a_noop() {
+        let body = json!({
+            "input":[{
+                "type":"message", "role":"user",
+                "content":[{"type":"input_text","text":"x".repeat(1024 * 1024)}]
+            }],
+            "tools":[]
+        });
+        let mut tools = ExternalTools::default();
+        let prepared = tools.prepare_or_borrow(&body).expect("ordinary body");
+        assert!(matches!(prepared, Cow::Borrowed(value) if std::ptr::eq(value, &body)));
+
+        let response = json!({"output":[{
+            "type":"function_call", "name":"plain_tool", "arguments":"{}"
+        }]});
+        assert_eq!(
+            tools
+                .restore_response(response.clone())
+                .expect("restore response"),
+            response
+        );
+        let event = json!({
+            "type":"response.output_item.added", "output_index":0,
+            "item":{"type":"function_call","name":"plain_tool","arguments":"{}"}
+        });
+        assert_eq!(
+            tools.restore_event(event.clone()).expect("restore event"),
+            Some(event)
+        );
+        let arguments_event = json!({
+            "type":"response.function_call_arguments.delta",
+            "output_index":0,"item_id":"fc_plain"
+        });
+        assert_eq!(
+            tools
+                .restore_event(arguments_event.clone())
+                .expect("restore function call arguments"),
+            Some(arguments_event)
+        );
+    }
+
+    #[test]
+    fn object_input_and_tool_metadata_force_owned_preparation() {
+        let bodies = [
+            json!({"input":{"type":"message","role":"user","content":"hello"}}),
+            json!({"tools":[{"type":"function","name":"plain_tool"}]}),
+            json!({"tool_choice":"auto"}),
+        ];
+        for body in &bodies {
+            expect_owned(body);
+        }
+
+        let mut tools = ExternalTools::default();
+        let prepared = tools
+            .prepare_or_borrow(&bodies[0])
+            .expect("object input preparation");
+        assert!(matches!(prepared, Cow::Owned(_)));
+        assert_eq!(prepared["input"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn every_tool_bridge_input_shape_uses_owned_preparation() {
+        let bodies = [
+            json!({"input":[{"type":"additional_tools","tools":[]}]}),
+            json!({"input":[{"type":"tool_search_call","execution":"client","call_id":"c-search","arguments":{}}]}),
+            json!({"input":[{"type":"tool_search_output","execution":"client","call_id":"c-output","status":"ok","tools":[]}]}),
+            json!({"input":[{"type":"function_call","call_id":"c-function","name":"plain_tool","arguments":"{}"}]}),
+            json!({"input":[{"type":"custom_tool_call","call_id":"c-custom","name":"plain_tool","input":"{}"}]}),
+            json!({"input":[{"type":"function_call_output","call_id":"c-function","name":"plain_tool","output":"ok"}]}),
+            json!({"input":[{"type":"custom_tool_call_output","call_id":"c-custom","output":"ok"}]}),
+        ];
+        for body in &bodies {
+            expect_owned(body);
+        }
+    }
+
+    #[test]
+    fn namespaced_tool_preparation_restores_response_identity() {
+        let body = json!({
+            "tools":[{"type":"namespace","name":"math","tools":[{
+                "type":"function","name":"add","parameters":{"type":"object"}
+            }]}],
+            "input":[{"type":"function_call","call_id":"call-1","name":"add",
+                "namespace":"math","arguments":"{}"}]
+        });
+        let mut tools = ExternalTools::default();
+        let prepared = tools.prepare_or_borrow(&body).expect("namespaced request");
+        let Cow::Owned(prepared) = prepared else {
+            panic!("namespaced request must be projected");
+        };
+        let alias = prepared["input"][0]["name"].as_str().unwrap();
+        assert_ne!(alias, "add");
+        let restored = tools
+            .restore_response(json!({"output":[{
+                "type":"function_call","call_id":"call-1","name":alias,"arguments":"{}"
+            }]}))
+            .expect("restore namespaced tool");
+        assert_eq!(restored["output"][0]["name"], "add");
+        assert_eq!(restored["output"][0]["namespace"], "math");
+    }
+
+    #[test]
+    fn invalid_tool_definitions_keep_prepare_errors() {
+        let mut tools = ExternalTools::default();
+        assert_eq!(
+            tools.prepare_or_borrow(&json!({"tools":null,"input":"hello"})),
+            Err("request projection failed: invalid tools")
+        );
     }
 }
