@@ -11,8 +11,8 @@ use emp_transport::{
 };
 use serde_json::{Map, Value, json};
 use std::time::{Duration, Instant};
-use time::{Date, Month, OffsetDateTime};
 use time::format_description::well_known::Rfc3339;
+use time::{Date, Month, OffsetDateTime};
 use url::Url;
 
 use super::{RouterError, RouterErrorKind};
