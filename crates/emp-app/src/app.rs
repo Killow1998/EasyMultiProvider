@@ -109,9 +109,11 @@ impl BackendState {
             save_configuration(&config, Some(config_path), &vault)?;
             config = load_configuration(Some(config_path))?;
         }
-        let proxy_environment = ProxyEnvironment::capture();
-        let support_network =
-            crate::api::support_report::NetworkSnapshot::capture(&proxy_environment);
+        let proxy_snapshot = ProxyEnvironment::capture_current();
+        let support_network = crate::api::support_report::NetworkSnapshot::capture(
+            &proxy_snapshot.environment,
+            proxy_snapshot.source,
+        );
         let client = match http_client_override {
             Some(client) => client,
             None => HttpClient::new(HttpClientPolicy::new(

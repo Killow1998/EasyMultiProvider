@@ -4,7 +4,8 @@
 use crate::app::ServerState;
 use crate::http::response::{json_error_response, response, status_text};
 use emp_transport::{
-    HttpClientPolicy, HttpMethod, ProxyEnvironment, ProxyOrigin, ProxyPolicy, TimeoutPolicy,
+    HttpClientPolicy, HttpMethod, ProxyEnvironment, ProxyOrigin, ProxyPolicy, ProxySource,
+    TimeoutPolicy,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -241,7 +242,7 @@ pub(crate) struct NetworkSnapshot {
 }
 
 impl NetworkSnapshot {
-    pub(crate) fn capture(environment: &ProxyEnvironment) -> Self {
+    pub(crate) fn capture(environment: &ProxyEnvironment, source: ProxySource) -> Self {
         let policy = HttpClientPolicy::new(
             ProxyPolicy::from_environment(environment.clone()),
             TimeoutPolicy::default(),
@@ -265,29 +266,8 @@ impl NetworkSnapshot {
             }
             None => ("unknown", None),
         };
-        let source_at_startup = if [
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "WS_PROXY",
-            "WSS_PROXY",
-            "SOCKS_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "all_proxy",
-            "ws_proxy",
-            "wss_proxy",
-            "socks_proxy",
-        ]
-        .iter()
-        .any(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()))
-        {
-            "environment"
-        } else {
-            "direct"
-        };
         Self {
-            source_at_startup,
+            source_at_startup: source.as_str(),
             chatgpt_route,
             proxy_scheme,
         }

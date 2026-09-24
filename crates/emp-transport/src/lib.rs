@@ -13,6 +13,7 @@ mod failure;
 mod http_client;
 mod http_policy;
 mod system_memory;
+mod system_proxy;
 mod websocket;
 pub use admission::{
     MAX_EXPANDED_REQUEST_BYTES, MAX_PROXY_REQUEST_BYTES, MEMORY_RESERVATION_FACTOR,
@@ -31,8 +32,8 @@ pub use http_client::{
 };
 pub use http_policy::{
     ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod, IdleConnectionPool,
-    ProxyEnvironment, ProxyOrigin, ProxyPolicy, RedirectPolicy, RequestPlan, RetryPolicy,
-    StreamTimeoutError, StreamingReadState, TimeoutPolicy,
+    ProxyEnvironment, ProxyOrigin, ProxyPolicy, ProxySnapshot, ProxySource, RedirectPolicy,
+    RequestPlan, RetryPolicy, StreamTimeoutError, StreamingReadState, TimeoutPolicy,
 };
 pub use system_memory::system_memory_status;
 pub use websocket::{

@@ -318,9 +318,8 @@ impl Default for ProxyEnvironment {
 }
 
 impl ProxyEnvironment {
-    /// Snapshot conventional proxy environment variables once at service
-    /// construction. Secrets remain inside the transport policy and Debug only
-    /// reports whether each lane is configured.
+    /// Snapshot conventional proxy environment variables. Secrets remain
+    /// inside the transport policy and Debug only reports configured lanes.
     pub fn capture() -> Self {
         fn value(names: &[&str]) -> Option<String> {
             names
@@ -331,8 +330,9 @@ impl ProxyEnvironment {
                 .filter(|value| !value.is_empty())
         }
 
-        let mut no_proxy = value(&["no_proxy", "NO_PROXY"])
+        let mut no_proxy = ["no_proxy", "NO_PROXY"]
             .into_iter()
+            .filter_map(|name| value(&[name]))
             .flat_map(|value| {
                 value
                     .split(',')
@@ -356,6 +356,90 @@ impl ProxyEnvironment {
             all: value(&["all_proxy", "ALL_PROXY"]),
             no_proxy,
         }
+    }
+
+    pub(crate) fn has_proxy(&self) -> bool {
+        self.http.is_some()
+            || self.https.is_some()
+            || self.ws.is_some()
+            || self.wss.is_some()
+            || self.socks.is_some()
+            || self.all.is_some()
+    }
+
+    /// Resolve environment-first proxy settings, consulting the operating
+    /// system only when no explicit proxy variable is configured.
+    pub fn capture_current() -> ProxySnapshot {
+        let environment = Self::capture();
+        if environment.has_proxy() {
+            return ProxySnapshot::select(environment, None);
+        }
+        ProxySnapshot::select(environment, crate::system_proxy::capture())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxySource {
+    Environment,
+    System,
+    Direct,
+}
+
+impl ProxySource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Environment => "environment",
+            Self::System => "system",
+            Self::Direct => "direct",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProxySnapshot {
+    pub environment: ProxyEnvironment,
+    pub source: ProxySource,
+}
+
+impl ProxySnapshot {
+    pub(crate) fn select(environment: ProxyEnvironment, system: Option<ProxyEnvironment>) -> Self {
+        if environment.has_proxy() {
+            return Self {
+                environment,
+                source: ProxySource::Environment,
+            };
+        }
+        let Some(mut system) = system.filter(ProxyEnvironment::has_valid_proxy) else {
+            return Self {
+                environment,
+                source: ProxySource::Direct,
+            };
+        };
+        for bypass in environment.no_proxy {
+            if !system.no_proxy.contains(&bypass) {
+                system.no_proxy.push(bypass);
+            }
+        }
+        Self {
+            environment: system,
+            source: ProxySource::System,
+        }
+    }
+}
+
+impl ProxyEnvironment {
+    fn has_valid_proxy(&self) -> bool {
+        [
+            self.http.as_deref(),
+            self.https.as_deref(),
+            self.ws.as_deref(),
+            self.wss.as_deref(),
+            self.socks.as_deref(),
+            self.all.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|proxy| ProxyOrigin::proxy(proxy).is_ok())
     }
 }
 
@@ -381,9 +465,41 @@ fn host_matches_bypass(host: &str, pattern: &str) -> bool {
 }
 
 fn no_proxy_matches(host: &str, patterns: &[String]) -> bool {
-    patterns
-        .iter()
-        .any(|pattern| pattern == "*" || host_matches_bypass(host, pattern))
+    patterns.iter().any(|pattern| {
+        pattern == "*"
+            || (pattern.eq_ignore_ascii_case("<local>") && !host.contains('.'))
+            || host_matches_bypass(host, pattern)
+            || host_matches_wildcard(host, pattern)
+    })
+}
+
+fn host_matches_wildcard(host: &str, pattern: &str) -> bool {
+    if !pattern.contains('*') {
+        return false;
+    }
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let mut remaining = host.as_str();
+    let pattern = pattern.trim().to_ascii_lowercase();
+    let mut parts = pattern.split('*').peekable();
+    let mut first = true;
+    while let Some(part) = parts.next() {
+        if part.is_empty() {
+            first = false;
+            continue;
+        }
+        let Some(position) = remaining.find(part) else {
+            return false;
+        };
+        if first && position != 0 {
+            return false;
+        }
+        if parts.peek().is_none() && position + part.len() != remaining.len() {
+            return false;
+        }
+        remaining = &remaining[position + part.len()..];
+        first = false;
+    }
+    true
 }
 
 type ProxyEnvironmentResolver = dyn Fn() -> ProxyEnvironment + Send + Sync;
@@ -449,7 +565,7 @@ impl ProxyPolicy {
 
     /// Resolve conventional environment proxy settings for each new request.
     pub fn dynamic_environment() -> Self {
-        Self::dynamic_with_resolver(ProxyEnvironment::capture)
+        Self::dynamic_with_resolver(|| ProxyEnvironment::capture_current().environment)
     }
 
     /// Build a policy with an injectable resolver. Existing request plans keep
