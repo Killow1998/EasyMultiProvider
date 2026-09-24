@@ -151,7 +151,8 @@ fn encrypted_tasks_and_malformed_compactions_remain_opaque() {
 
     for malformed in ["emp1:Zg===", "emp1:Zm9v=", "emp1:Zm9v===="] {
         let body = json!({"input": [{"type": "compaction", "encrypted_content": malformed}]});
-        let native_error = native_responses::project_request(body.as_object().unwrap()).unwrap_err();
+        let native_error =
+            native_responses::project_request(body.as_object().unwrap()).unwrap_err();
         assert!(matches!(
             native_error,
             native_responses::NativeProjectionError::Projection(error)

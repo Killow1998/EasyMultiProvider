@@ -51,8 +51,8 @@ fn package_version(target: &Path, query: &Path) -> Result<Option<String>> {
         &["--show", "--showformat=${Status}\t${Version}", PACKAGE],
         None,
     )?;
-    let output = std::str::from_utf8(&version.stdout)
-        .map_err(|_| UpdateError("package_query_failed"))?;
+    let output =
+        std::str::from_utf8(&version.stdout).map_err(|_| UpdateError("package_query_failed"))?;
     let (status, value) = output
         .trim()
         .split_once('\t')
@@ -74,7 +74,9 @@ fn query_output(
     if let Some(target) = target {
         command.arg(target);
     }
-    command.env_remove("LD_LIBRARY_PATH_ORIG").env("LC_ALL", "C");
+    command
+        .env_remove("LD_LIBRARY_PATH_ORIG")
+        .env("LC_ALL", "C");
     if let Some(original) =
         std::env::var_os("LD_LIBRARY_PATH_ORIG").filter(|value| !value.is_empty())
     {
