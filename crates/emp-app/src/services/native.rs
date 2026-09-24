@@ -5,6 +5,8 @@ use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::services::accounts::native_auth_document;
 use crate::services::catalog::response_catalog_etag;
+use crate::services::disconnect::DisconnectMonitor;
+use crate::services::disconnect::DisconnectRace;
 use crate::services::quota::refresh_account_serialized;
 use emp_codex::account_auth_headers;
 use emp_core::ResolvedRoute;
@@ -146,10 +148,45 @@ pub(crate) fn open_stream_result(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<NativeStream, NativeHttpError> {
+    match open_stream_result_with_monitor(state, route, config, body, incoming, ids, None)? {
+        CancellableNativeStreamOpen::Opened(stream) => Ok(*stream),
+        CancellableNativeStreamOpen::Disconnected => {
+            unreachable!("non-cancellable native open cannot observe a disconnect")
+        }
+    }
+}
+
+pub(crate) enum CancellableNativeStreamOpen {
+    Opened(Box<NativeStream>),
+    Disconnected,
+}
+
+pub(crate) fn open_stream_cancellable(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    config: &Value,
+    body: &Map<String, Value>,
+    incoming: &BTreeMap<String, String>,
+    ids: &ProjectionIds,
+    monitor: &mut DisconnectMonitor,
+) -> Result<CancellableNativeStreamOpen, Vec<u8>> {
+    open_stream_result_with_monitor(state, route, config, body, incoming, ids, Some(monitor))
+        .map_err(error_response)
+}
+
+fn open_stream_result_with_monitor(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    config: &Value,
+    body: &Map<String, Value>,
+    incoming: &BTreeMap<String, String>,
+    ids: &ProjectionIds,
+    monitor: Option<&mut DisconnectMonitor>,
+) -> Result<CancellableNativeStreamOpen, NativeHttpError> {
     let started = std::time::Instant::now();
     let router = NativeRouter::new(&state.backend.transport.client);
     let mut usage_owner = String::new();
-    let result = state.backend.transport.runtime.block_on(router.open_stream(
+    let open = router.open_stream(
         route,
         body,
         plaintext_collaboration(config),
@@ -159,12 +196,20 @@ pub(crate) fn open_stream_result(
             usage_owner = emp_state::usage::account_owner(&headers);
             Ok(headers)
         },
-    ));
+    );
+    let result = match monitor {
+        Some(monitor) => state.backend.transport.runtime.block_on(monitor.race(open)),
+        None => DisconnectRace::Ready(state.backend.transport.runtime.block_on(open)),
+    };
+    let result = match result {
+        DisconnectRace::Ready(result) => result,
+        DisconnectRace::Disconnected => return Ok(CancellableNativeStreamOpen::Disconnected),
+    };
     match result {
         Ok(mut stream) => {
             stream.usage_owner = Some(usage_owner);
             replace_catalog_etag(state, &mut stream.headers);
-            Ok(stream)
+            Ok(CancellableNativeStreamOpen::Opened(Box::new(stream)))
         }
         Err(error) => {
             let mut observation = crate::services::observation::Observation::new(

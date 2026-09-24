@@ -794,6 +794,54 @@ fn native_sse_context_and_incomplete_boundaries_match_codex_http_behavior() {
 }
 
 #[test]
+fn native_sse_downstream_disconnect_cancels_open_before_headers() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_sender, request_received) = mpsc::sync_channel(1);
+    let (closed_sender, closed) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = receive_native_request(&mut stream);
+        request_sender.send(()).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut byte = [0u8; 1];
+        let ended = match stream.read(&mut byte) {
+            Ok(0) => true,
+            Err(error) => matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
+            ),
+            Ok(_) => false,
+        };
+        closed_sender.send(ended).unwrap();
+    });
+    let (_directory, server) = native_alias_server(&format!("http://{address}/v1"));
+    let cookie = session_cookie_header(&server);
+    let body = serde_json::to_vec(&json!({
+        "model":"native/alias", "input":"hello", "stream":true
+    }))
+    .unwrap();
+    let downstream = open_post_stream(
+        &server,
+        "/v1/responses",
+        &body,
+        &[&cookie, "Authorization: Bearer caller"],
+    );
+    request_received
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
+    drop(downstream);
+    assert!(
+        closed.recv_timeout(Duration::from_secs(3)).unwrap(),
+        "Rust EMP retained native upstream while open_stream awaited response headers"
+    );
+    server.shutdown().unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
 fn native_sse_downstream_disconnect_cancels_upstream() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();

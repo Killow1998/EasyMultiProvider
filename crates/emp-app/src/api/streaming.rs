@@ -139,15 +139,33 @@ pub(crate) fn serve_native_stream(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), Vec<u8>> {
-    let upstream = native::open_stream(
-        state,
-        route,
-        config,
-        body.as_object().expect("validated request object"),
-        incoming,
-        ids,
-    )?;
-    relay_native_stream(downstream, state, route, body, incoming, upstream).map(|_| ())
+    let monitor = DisconnectMonitor::start(downstream).ok();
+    let (upstream, monitor) = match monitor {
+        Some(mut monitor) => match native::open_stream_cancellable(
+            state,
+            route,
+            config,
+            body.as_object().expect("validated request object"),
+            incoming,
+            ids,
+            &mut monitor,
+        )? {
+            native::CancellableNativeStreamOpen::Opened(upstream) => (*upstream, Some(monitor)),
+            native::CancellableNativeStreamOpen::Disconnected => return Ok(()),
+        },
+        None => (
+            native::open_stream(
+                state,
+                route,
+                config,
+                body.as_object().expect("validated request object"),
+                incoming,
+                ids,
+            )?,
+            None,
+        ),
+    };
+    relay_native_stream(downstream, state, route, body, incoming, upstream, monitor).map(|_| ())
 }
 
 fn relay_native_stream(
@@ -157,6 +175,7 @@ fn relay_native_stream(
     body: &Value,
     incoming: &BTreeMap<String, String>,
     mut upstream: NativeStream,
+    monitor: Option<DisconnectMonitor>,
 ) -> Result<bool, Vec<u8>> {
     let mut usage = crate::services::observation::Observation::new(
         state,
@@ -168,7 +187,7 @@ fn relay_native_stream(
     )
     .started_at(upstream.request_started);
     let response_headers = upstream.headers.clone();
-    let mut monitor = DisconnectMonitor::start(downstream).ok();
+    let mut monitor = monitor.or_else(|| DisconnectMonitor::start(downstream).ok());
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;
     let mut started = false;
