@@ -268,6 +268,13 @@ fn receive_upstream_request(stream: &mut TcpStream) -> (String, BTreeMap<String,
         .set_read_timeout(Some(Duration::from_secs(5)))
         .expect("upstream timeout");
     let raw = read_request_head(stream).expect("upstream request head");
+    receive_upstream_request_from_head(stream, raw)
+}
+
+fn receive_upstream_request_from_head(
+    stream: &mut TcpStream,
+    raw: RequestHead,
+) -> (String, BTreeMap<String, String>, Value) {
     let request = parse_request(&raw.head).expect("upstream HTTP request");
     let path = request.target.to_owned();
     let headers = request

@@ -71,7 +71,14 @@ impl CatalogUpstream {
             while !stopped.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        let (path, headers, body) = receive_upstream_request(&mut stream);
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(5)))
+                            .expect("discovery request timeout");
+                        let Some(raw) = read_request_head(&mut stream) else {
+                            continue;
+                        };
+                        let (path, headers, body) =
+                            receive_upstream_request_from_head(&mut stream, raw);
                         sender
                             .send((path.clone(), headers, body))
                             .expect("record request");
@@ -795,6 +802,7 @@ json.dump(cases, sys.stdout)
 #[test]
 fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
     let upstream = CatalogUpstream::start(200);
+    drop(TcpStream::connect(upstream.address).expect("empty discovery connection"));
     let (directory, server) = catalog_server(&upstream);
     let root = canonical_root(&directory);
     let config_path = root.join("config.json");
