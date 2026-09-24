@@ -55,6 +55,10 @@ class ExternalTools:
                     raw.get("tools"), name, str(raw.get("description") or ""),
                 ))
                 continue
+            if kind == "web_search":
+                # Codex runs this server-side tool itself. External providers
+                # cannot execute it, so keep it out of their tool schemas.
+                continue
             tool = copy.deepcopy(dict(raw))
             if kind == "tool_search":
                 if tool.get("execution") != "client":
