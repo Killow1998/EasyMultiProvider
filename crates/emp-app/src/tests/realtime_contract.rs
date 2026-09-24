@@ -2,12 +2,12 @@ use super::*;
 use std::process::Command;
 
 #[derive(Clone, Copy)]
-struct UpstreamResponse {
-    status: u16,
-    reason: &'static str,
-    content_type: &'static str,
-    location: Option<&'static str>,
-    body: &'static [u8],
+pub(super) struct UpstreamResponse {
+    pub(super) status: u16,
+    pub(super) reason: &'static str,
+    pub(super) content_type: &'static str,
+    pub(super) location: Option<&'static str>,
+    pub(super) body: &'static [u8],
 }
 
 struct UpstreamRequest {
@@ -17,7 +17,7 @@ struct UpstreamRequest {
     body: Vec<u8>,
 }
 
-struct RealtimeUpstream {
+pub(super) struct RealtimeUpstream {
     address: SocketAddr,
     request: mpsc::Receiver<UpstreamRequest>,
     stop: Arc<AtomicBool>,
@@ -25,7 +25,7 @@ struct RealtimeUpstream {
 }
 
 impl RealtimeUpstream {
-    fn start(response: UpstreamResponse) -> Self {
+    pub(super) fn start(response: UpstreamResponse) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind Voice upstream");
         listener
             .set_nonblocking(true)
@@ -73,7 +73,7 @@ impl RealtimeUpstream {
         }
     }
 
-    fn base_url(&self) -> String {
+    pub(super) fn base_url(&self) -> String {
         format!("http://{}/backend", self.address)
     }
 
@@ -81,6 +81,10 @@ impl RealtimeUpstream {
         self.request
             .recv_timeout(Duration::from_secs(5))
             .expect("upstream call received")
+    }
+
+    pub(super) fn no_request(&self) -> bool {
+        matches!(self.request.try_recv(), Err(mpsc::TryRecvError::Empty))
     }
 }
 
@@ -192,7 +196,10 @@ fn error_code(raw: &str) -> String {
         .to_owned()
 }
 
-fn app_server_for(upstream: &RealtimeUpstream, native_auth: &Path) -> (TempDir, ServerHandle) {
+pub(super) fn app_server_for(
+    upstream: &RealtimeUpstream,
+    native_auth: &Path,
+) -> (TempDir, ServerHandle) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let app_config = canonical_root(&directory).join("config.json");
     std::fs::write(

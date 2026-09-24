@@ -2,8 +2,8 @@
 
 use super::multipart::read_realtime_call;
 use super::{
-    CALL_ID_PREFIX, MAX_REALTIME_RESPONSE_BYTES, REALTIME_TIMEOUT, RealtimeError, RealtimeResponse,
-    header,
+    MAX_REALTIME_RESPONSE_BYTES, REALTIME_TIMEOUT, RealtimeError, RealtimeResponse, header,
+    valid_call_id,
 };
 use crate::VERSION;
 use crate::app::ServerState;
@@ -166,7 +166,7 @@ pub(crate) fn serve_realtime_call(
     }
 }
 
-fn incoming_headers(request: Request<'_>) -> BTreeMap<String, String> {
+pub(super) fn incoming_headers(request: Request<'_>) -> BTreeMap<String, String> {
     request
         .headers
         .lines()
@@ -176,13 +176,13 @@ fn incoming_headers(request: Request<'_>) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn native_headers(state: &ServerState) -> Option<BTreeMap<String, String>> {
+pub(super) fn native_headers(state: &ServerState) -> Option<BTreeMap<String, String>> {
     let auth = native_auth_document(&state.backend.accounts.native_auth_path)?;
     let auth = emp_state::validate_auth_json(&auth).ok()?;
     account_auth_headers(&auth)
 }
 
-fn safe_forwarded_headers(
+pub(super) fn safe_forwarded_headers(
     incoming: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, RealtimeError> {
     const FORWARDED: [(&str, &str); 8] = [
@@ -242,23 +242,6 @@ fn safe_upstream_header(value: &str) -> Option<String> {
         && value.is_ascii()
         && !value.bytes().any(|byte| byte < 0x20 || byte == 0x7f))
     .then(|| value.to_owned())
-}
-
-fn valid_call_id(value: &str) -> bool {
-    if let Some(rest) = value.strip_prefix(CALL_ID_PREFIX) {
-        return !rest.is_empty()
-            && rest.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'~' | b'-')
-            });
-    }
-    let segments = value.split('-').collect::<Vec<_>>();
-    segments.len() == 5
-        && [8, 4, 4, 4, 12]
-            .into_iter()
-            .zip(segments)
-            .all(|(length, segment)| {
-                segment.len() == length && segment.bytes().all(|byte| byte.is_ascii_hexdigit())
-            })
 }
 
 fn location_has_call_id(location: &str) -> bool {

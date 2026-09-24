@@ -62,6 +62,7 @@ mod native_api_contract;
 mod performance_contract;
 mod quota_workspace_contract;
 mod realtime_contract;
+mod realtime_sideband_contract;
 mod websocket_capacity_contract;
 
 fn canonical_root(directory: &TempDir) -> PathBuf {

@@ -10,6 +10,7 @@ use crate::api::migration::management_migration_request;
 use crate::api::quota::management_quota_request;
 use crate::api::quota::serve_quota_events;
 use crate::api::realtime::serve_realtime_call;
+use crate::api::realtime::sideband::serve_realtime_sideband;
 use crate::api::responses::ResponsesRequestResult;
 use crate::api::responses::responses_request;
 use crate::api::search::native_search_request;
@@ -185,6 +186,22 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
                     state,
                     system_now(),
                 ))
+            }
+            Some(request)
+                if request.method == RequestMethod::Get
+                    && request.raw_path().starts_with("/v1/live/") =>
+            {
+                let raw_path = request.raw_path();
+                let call_id = percent_decode(&raw_path["/v1/live/".len()..], false);
+                serve_realtime_sideband(
+                    &mut stream,
+                    request,
+                    &call_id,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                );
+                None
             }
             Some(request)
                 if request.method == RequestMethod::Post

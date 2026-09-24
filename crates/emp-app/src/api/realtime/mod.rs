@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 mod call;
 pub(crate) mod multipart;
+pub(crate) mod sideband;
 
 pub(crate) use call::serve_realtime_call;
 
@@ -15,6 +16,23 @@ pub(crate) const MAX_REALTIME_PART_HEADER_BYTES: usize = 4096;
 const MAX_REALTIME_RESPONSE_BYTES: usize = 256 * 1024;
 const REALTIME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const CALL_ID_PREFIX: &str = "rtc_";
+
+pub(crate) fn valid_call_id(value: &str) -> bool {
+    if let Some(rest) = value.strip_prefix(CALL_ID_PREFIX) {
+        return !rest.is_empty()
+            && rest.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'~' | b'-')
+            });
+    }
+    let segments = value.split('-').collect::<Vec<_>>();
+    segments.len() == 5
+        && [8, 4, 4, 4, 12]
+            .into_iter()
+            .zip(segments)
+            .all(|(length, segment)| {
+                segment.len() == length && segment.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RealtimeCall {
