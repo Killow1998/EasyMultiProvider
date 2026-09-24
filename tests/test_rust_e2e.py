@@ -35,6 +35,8 @@ from tests import test_context_guard as context_cases
 from tests.test_tool_bridge import function, namespace
 from easy_multi_provider.tool_bridge import ExternalTools
 from tests.test_server import _masked_text_frame, _read_text_frame
+from tests.test_server import _integration_test_config
+from tests.test_usage_history import header as history_header, usage as history_usage
 from tests.test_shared_app_server_runtime import _UnixModelListServer
 from easy_multi_provider.integration import IntegrationManager
 
@@ -99,6 +101,70 @@ class RustEndToEnd(unittest.TestCase):
         # A failed scenario must not contaminate another scenario's observations.
         while not self.upstream.requests.empty():
             self.upstream.requests.get_nowait()
+
+    def test_usage_scan_prices_prefixed_history_routes(self):
+        prices = {model: {"input_cost_per_token": "0.000002",
+                          "output_cost_per_token": "0.000008",
+                          "cache_read_input_token_cost": "0.0000002"}
+                  for model in ("implicit", "actual")}
+        observations = []
+        with short_socket_directory() as temporary:
+            for name, command in (
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
+                ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+            ):
+                root = Path(temporary) / name
+                home = root / "codex"
+                sessions = home / "sessions"
+                sessions.mkdir(parents=True)
+                (home / "config.toml").write_text("# fixture\n")
+                (root / "native.json").write_text('{"models":[]}')
+                config = _integration_test_config(root)
+                config["providers"] = [{"id": "demo", "base_url": "https://example.invalid/v1",
+                                         "protocol": "responses", "auth_mode": "api_key"}]
+                config["models"] = [
+                    {"id": "demo/implicit", "provider": "demo", "upstream_id": "", "enabled": True},
+                    {"id": "demo/explicit", "provider": "demo", "upstream_id": "demo/actual", "enabled": True},
+                ]
+                config_path = root / "config.json"
+                config_path.write_text(json.dumps(config))
+                state = root / "state"
+                state.mkdir()
+                (state / "api_prices.json").write_text(json.dumps({
+                    "fetched_at": time.time() - 1, "prices": prices,
+                }))
+                for index, model in enumerate(("demo/implicit", "demo/explicit")):
+                    rows = history_header(model) + [history_usage()]
+                    rows[0]["payload"]["id"] = f"session-{index}"
+                    for row in rows[1:]:
+                        row["payload"]["turn_id"] = f"turn-{index}"
+                    (sessions / f"rollout-{index}.jsonl").write_text(
+                        "".join(json.dumps(row) + "\n" for row in rows))
+                backend = EmpProcess.from_config(command, config_path, home)
+                try:
+                    status, _, raw = backend.request("POST", "/api/usage/scan", {})
+                    self.assertEqual(status, 202, raw)
+                    deadline = time.monotonic() + 5
+                    while True:
+                        status, _, raw = backend.request(
+                            "GET", "/api/usage?start=1788825600&end=1788912000")
+                        self.assertEqual(status, 200, raw)
+                        payload = json.loads(raw)
+                        if (payload["totals"]["requests"] == 2
+                                and not payload["history"]["running"]):
+                            break
+                        self.assertLess(time.monotonic(), deadline, payload)
+                        time.sleep(0.05)
+                    observations.append((payload["totals"], sorted(
+                        (row["model"], row["priced_requests"], row["cost_nanos"])
+                        for row in payload["groups"])))
+                finally:
+                    backend.close()
+        self.assertEqual(observations[0], observations[1])
+        totals, groups = observations[0]
+        self.assertEqual(totals["priced_requests"], 2)
+        self.assertEqual(totals["cost_nanos"], 576000)
+        self.assertEqual(groups, [("actual", 1, 288000), ("implicit", 1, 288000)])
 
     def compare_exchange(self, body, payload, *, status=200, content_type="application/json",
                          compressed=False):

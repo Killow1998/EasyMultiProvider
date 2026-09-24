@@ -66,6 +66,8 @@ fn routes(config: &Value) -> Routes {
                 .as_str()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| model["id"].as_str().unwrap_or(""));
+            let provider_prefix = format!("{}/", provider["id"].as_str().unwrap_or(""));
+            let upstream = upstream.strip_prefix(&provider_prefix).unwrap_or(upstream);
             result.insert(text(model, "id"), (category.into(), upstream.into()));
         }
     }
