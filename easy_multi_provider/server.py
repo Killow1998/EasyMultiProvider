@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 import urllib.request
 from .network_proxy import follow_system_proxy
+from .support_report import build_support_report
 
 from . import __version__
 from .auto_review import automatic_review_candidates, is_auto_review_model
@@ -1342,6 +1343,7 @@ class AppState:
         journal=None,
     ):
         self.path = Path(path or config_path())
+        self.proxy_source_at_startup = "unknown"
         self.lock = threading.RLock()
         self._load_web_session()
         self.journal = journal if journal is not None else NullJournal()
@@ -4308,6 +4310,18 @@ def make_handler(state: AppState):
             if path == "/api/diagnostics":
                 self._send(200, _json_bytes(state.diagnostics_snapshot()))
                 return
+            if path == "/api/support-report":
+                try:
+                    report = build_support_report(state, state.proxy_source_at_startup)
+                except (OSError, TypeError, ValueError):
+                    self._error(503, "Support report is unavailable")
+                    return
+                self._send(
+                    200,
+                    _json_bytes(report),
+                    headers={"Content-Disposition": 'attachment; filename="EMP-support-report.json"'},
+                )
+                return
             if path == "/api/usage":
                 query = parse_qs(parsed.query)
                 try:
@@ -5458,6 +5472,7 @@ def _serve_owned(
                 catalog_path=generated_catalog_path(paths.codex_home),
                 journal=journal,
             )
+            state.proxy_source_at_startup = proxy_source
             if host:
                 state.config["host"] = host
             if port is not None:

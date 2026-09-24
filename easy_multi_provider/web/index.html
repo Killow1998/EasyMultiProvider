@@ -323,6 +323,7 @@ let quotaUpdatePending = false;
 let quotaUpdateRunning = false;
 let diagnosticsTimer = null;
 let diagnosticsRequest = 0;
+let supportReportRequest = 0;
 let runtimeSelectionDraft = null;
 const expandedModelGroups = new Set();
 const refreshErrors = {};
@@ -883,7 +884,58 @@ function diagnosticFailureAdvice(record) {
   if (['context_length_exceeded','history_reconstruction_failed','external_compaction_failed'].includes(record.error_class)) return tr('请求的上下文或历史未能处理，请保留诊断编号以便排查。','The context or history could not be processed. Keep the diagnostic ID for investigation.');
   return tr('可用诊断编号定位本地日志。没有收到输出，也不能确认上游未执行。','Use the diagnostic ID to locate local logs. Missing output does not prove the upstream did not execute.');
 }
-function stopDiagnostics() { diagnosticsRequest++; if (diagnosticsTimer !== null) clearInterval(diagnosticsTimer); diagnosticsTimer = null; }
+function stopDiagnostics() { diagnosticsRequest++; supportReportRequest++; if (diagnosticsTimer !== null) clearInterval(diagnosticsTimer); diagnosticsTimer = null; }
+function supportStatusLabel(value) {
+  const labels = language === 'en' ? {
+    auth_required:'Sign-in required', transport_error:'Network or proxy error', rate_limited:'Rate limited',
+    unclassified_error:'Other error', credential_missing:'No credential', not_checked:'Not checked', success:'Last check succeeded'
+  } : {
+    auth_required:'需要重新登录', transport_error:'网络或代理故障', rate_limited:'查询受限',
+    unclassified_error:'其他错误', credential_missing:'没有凭据', not_checked:'尚未检查', success:'上次检查成功'
+  };
+  return labels[value] || tr('未知','Unknown');
+}
+function supportDetailLabel(value) {
+  const labels = language === 'en' ? {
+    allowed:'Likely writable', denied:'Write permission denied', unknown:'Unknown',
+    environment:'Environment proxy', system:'System proxy', direct:'Direct', proxy:'Through proxy',
+    emp_loaded:'EMP loaded', native_loaded:'Native loaded', path_cli:'Codex CLI on PATH'
+  } : {
+    allowed:'可能可写', denied:'没有写入权限', unknown:'未知',
+    environment:'环境变量代理', system:'系统代理', direct:'直连', proxy:'经过代理',
+    emp_loaded:'EMP 已加载', native_loaded:'原生配置已加载', path_cli:'PATH 中的 Codex CLI'
+  };
+  return labels[value] || esc(value || 'unknown');
+}
+function renderSupportReport(report) {
+  const box = $('support_report'); if (!box) return;
+  const config = report.configuration || {}, codex = report.codex || {}, network = report.network || {}, accounts = report.accounts || {};
+  const imported = Array.isArray(accounts.imported) ? accounts.imported : [];
+  const accountLines = imported.map(account => `${tr('导入账号','Imported account')} ${Number(account.index) || 0}: ${supportStatusLabel(account.quota_status)}`);
+  box.innerHTML = `<p><strong>${tr('配置','Config')}</strong> ${esc(config.path || '—')} · ${config.exists ? tr('存在','present') : tr('不存在','missing')} · ${tr('写入权限提示','write permission hint')}: ${supportDetailLabel(config.write_access_hint)}</p>
+    <p><strong>Codex</strong> ${esc(codex.version || '—')} · ${supportDetailLabel(codex.source)} · ${supportDetailLabel(codex.state)}</p>
+    <p><strong>${tr('代理','Proxy')}</strong> ${supportDetailLabel(network.source_at_startup)} · ${supportDetailLabel(network.chatgpt_route)}${network.proxy_scheme ? ' (' + esc(network.proxy_scheme) + ')' : ''}</p>
+    <p><strong>${tr('账号','Accounts')}</strong> Native: ${supportStatusLabel(accounts.native?.quota_status)}${accountLines.length ? ' · ' + accountLines.map(esc).join(' · ') : ''}</p>
+    <small>${tr('账号状态来自保存的状态及本次运行的错误；此报告不会探测网络或刷新额度。','Account status comes from saved state and errors observed in this run; this report does not probe the network or refresh quota.')}</small>`;
+}
+async function loadSupportReport() {
+  const request = ++supportReportRequest;
+  try {
+    const report = await api('/api/support-report');
+    if (request === supportReportRequest) renderSupportReport(report);
+  } catch (_) {
+    if (request === supportReportRequest && $('support_report')) $('support_report').textContent = tr('诊断报告暂时不可用。','Support report is unavailable.');
+  }
+}
+async function downloadSupportReport() {
+  try {
+    const report = await api('/api/support-report');
+    const blob = new Blob([JSON.stringify(report, null, 2) + '\n'], {type:'application/json'});
+    const url = URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url; link.download = 'EMP-support-report.json'; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+    notice(tr('诊断报告已下载','Support report downloaded'));
+  } catch (_) { notice(tr('诊断报告下载失败','Could not download support report'), true); }
+}
 async function loadDiagnostics() {
   const request = ++diagnosticsRequest;
   try {
@@ -895,7 +947,7 @@ async function loadDiagnostics() {
     return false;
   }
 }
-function openDiagnostics() { openModal(tr('性能与健康','Performance and health'), `<div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics()">${esc(t('refresh'))}</button></div><div class="performance-help"><span><strong>TTFT</strong> · ${tr('请求进入 EMP 后，到收到首段正文或工具参数的时间。','Time from EMP receiving the request to the first text or tool-argument output.')}</span><span><strong>TPS</strong> · ${tr('上游回报的全部输出 token 除以完整请求耗时，包含首 token 等待与隐藏推理时间。','All upstream-reported output tokens divided by the complete request duration, including TTFT and hidden reasoning time.')}</span></div><div id="diagnostics_summary" class="muted"></div><div id="health_summary"></div><div id="performance_records"></div><div id="cache_records"></div><details class="failure-list"><summary>${tr('近期失败详情','Recent failure details')}</summary><div id="diagnostics_records"></div></details>`, '', null); loadDiagnostics(); diagnosticsTimer = setInterval(() => { if (document.visibilityState !== 'hidden') loadDiagnostics(); }, 10 * 60 * 1000); }
+function openDiagnostics() { openModal(tr('性能与健康','Performance and health'), `<div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics(); loadSupportReport()">${esc(t('refresh'))}</button><button type="button" class="secondary" data-icon="download" onclick="downloadSupportReport()">${tr('下载脱敏报告','Download redacted report')}</button></div><details class="diagnostics-details" open><summary>${tr('系统诊断','System diagnostics')}</summary><div id="support_report" class="performance-help">${tr('正在读取诊断报告…','Loading support report…')}</div></details><div class="performance-help"><span><strong>TTFT</strong> · ${tr('请求进入 EMP 后，到收到首段正文或工具参数的时间。','Time from EMP receiving the request to the first text or tool-argument output.')}</span><span><strong>TPS</strong> · ${tr('上游回报的全部输出 token 除以完整请求耗时，包含首 token 等待与隐藏推理时间。','All upstream-reported output tokens divided by the complete request duration, including TTFT and hidden reasoning time.')}</span></div><div id="diagnostics_summary" class="muted"></div><div id="health_summary"></div><div id="performance_records"></div><div id="cache_records"></div><details class="failure-list"><summary>${tr('近期失败详情','Recent failure details')}</summary><div id="diagnostics_records"></div></details>`, '', null); loadDiagnostics(); loadSupportReport(); diagnosticsTimer = setInterval(() => { if (document.visibilityState !== 'hidden') { loadDiagnostics(); loadSupportReport(); } }, 10 * 60 * 1000); }
 function confirmIntegrationAction(action) {
   const actions = language === 'en' ? {
     enable: ['Apply EMP to Codex', 'Apply the current EMP settings. Restart Codex when it finishes.'],

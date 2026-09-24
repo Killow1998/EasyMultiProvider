@@ -693,6 +693,7 @@ function performanceDiagnosticsBehavior() {
   assert.match(getElement('modal_title').textContent, /性能与健康/);
   assert.match(getElement('modal_body').innerHTML, /到收到首段正文或工具参数的时间/);
   assert.match(getElement('modal_body').innerHTML, /全部输出 token 除以完整请求耗时/);
+  assert.match(getElement('modal_body').innerHTML, /downloadSupportReport\(\)/);
   assert.doesNotMatch(getElement('modal_body').innerHTML, /SOL 原生参考|原生 A\/B/);
   assert.doesNotMatch(getElement('modal_body').innerHTML, /最近请求|失败原因/);
   run('closeModal()');
@@ -701,6 +702,17 @@ function performanceDiagnosticsBehavior() {
   ];
   run('renderDiagnostics(__performancePayload)');
   assert.doesNotMatch(getElement('performance_records').innerHTML, />模式<|>Mode<|未标记|Unmarked/);
+  context.__supportPayload = {
+    configuration:{path:'<img src=x onerror=bad>',exists:true,write_access_hint:'allowed'},
+    codex:{version:'0.156.1',source:'path_cli',state:'emp_loaded'},
+    network:{source_at_startup:'system',chatgpt_route:'proxy',proxy_scheme:'socks5h'},
+    accounts:{native:{quota_status:'not_checked'},imported:[{index:1,quota_status:'auth_required'}]},
+  };
+  getElement('support_report');
+  run('renderSupportReport(__supportPayload)');
+  assert.match(getElement('support_report').innerHTML, /&lt;img src=x onerror=bad&gt;/);
+  assert.doesNotMatch(getElement('support_report').innerHTML, /<img src=x/);
+  assert.match(getElement('support_report').innerHTML, /需要重新登录/);
 }
 
 async function cacheUsageBehavior() {
