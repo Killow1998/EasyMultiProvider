@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use super::{canonical_root, post, request, session_cookie_header};
 use crate::lifecycle::ServerHandle;
 use serde_json::{Value, json};

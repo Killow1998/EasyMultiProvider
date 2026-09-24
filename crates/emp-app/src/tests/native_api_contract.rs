@@ -144,12 +144,14 @@ impl Drop for NativeUpstream {
     }
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 struct RefreshUpstream {
     address: SocketAddr,
     observed: mpsc::Receiver<ObservedNativeRequest>,
     worker: Option<JoinHandle<()>>,
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 impl RefreshUpstream {
     fn start(expected_requests: usize) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind refresh upstream");
@@ -224,6 +226,7 @@ impl Drop for RefreshUpstream {
     }
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn account_server(
     upstream: &RefreshUpstream,
     codex_binary: &str,

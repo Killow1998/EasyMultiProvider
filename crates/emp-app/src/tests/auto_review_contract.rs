@@ -1,4 +1,6 @@
-use super::{OneShotUpstream, canonical_root, post, session_cookie_header};
+use super::canonical_root;
+#[cfg(unix)]
+use super::{OneShotUpstream, post, session_cookie_header};
 use crate::http::request::{parse_request, read_request_head};
 use crate::lifecycle::ServerHandle;
 use crate::services::accounts::account_catalog_headers;
@@ -205,6 +207,7 @@ fn make_review_server(
     (directory, server, config)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn write_owned_account_catalog(
     server: &ServerHandle,
     account: &Value,
@@ -405,12 +408,14 @@ fn http_auto_review_skips_symlink_native_and_missing_account_catalog_without_lea
     );
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 struct ReviewStreamUpstream {
     address: SocketAddr,
     observed: mpsc::Receiver<(String, BTreeMap<String, String>, Value)>,
     worker: Option<JoinHandle<()>>,
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 impl ReviewStreamUpstream {
     fn start() -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind WS upstream");

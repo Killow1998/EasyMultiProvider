@@ -16,7 +16,9 @@ use crate::services::accounts::notify_quota_update;
 use crate::services::compaction::COMPACTION_PROMPT;
 use crate::services::events::sse_frame;
 use crate::services::events::stream_event_activity;
+#[cfg(unix)]
 use crate::services::quota::QuotaSampleCounts;
+#[cfg(unix)]
 use crate::services::quota::sample_quotas_once;
 use crate::web::WEB_INDEX_BYTES;
 use base64::Engine as _;
