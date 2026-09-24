@@ -166,6 +166,63 @@ class RustEndToEnd(unittest.TestCase):
         self.assertEqual(totals["cost_nanos"], 576000)
         self.assertEqual(groups, [("actual", 1, 288000), ("implicit", 1, 288000)])
 
+    def test_discovery_date_only_preview_and_import_match_python(self):
+        advertised = {"data": [
+            {"id": "vision", "name": "Vision", "created_at": "2026-01-01",
+             "architecture": {"input_modalities": ["text", "image"],
+                              "output_modalities": ["text", "audio"]}},
+            {"id": "audio", "name": "Audio", "created_at": "2026-09-20T00:00:00Z",
+             "architecture": {"input_modalities": ["audio"]}},
+        ]}
+        observed = []
+        with short_socket_directory() as temporary:
+            for name, command in (
+                ("python", PYTHON_RUNTIME.command("-m", "easy_multi_provider")),
+                ("rust", [str(Path(os.environ["EMP_RUST_BINARY"]).resolve())]),
+            ):
+                root = Path(temporary) / name
+                home = root / "codex"
+                home.mkdir(parents=True)
+                (home / "config.toml").write_text("# fixture\n")
+                (root / "native.json").write_text('{"models":[]}')
+                config = _integration_test_config(root)
+                config["providers"] = [{
+                    "id": "demo", "base_url": self.upstream.base_url + "/responses/",
+                    "protocol": "responses", "auth_mode": "api_key", "api_key": "fake-key",
+                }]
+                config["models"] = []
+                config_path = root / "config.json"
+                config_path.write_text(json.dumps(config))
+                backend = EmpProcess.from_config(command, config_path, home)
+                try:
+                    self.upstream.configure(advertised)
+                    status, _, raw = backend.request("POST", "/api/providers/discover",
+                                                     {"provider": "demo"})
+                    self.assertEqual(status, 200, raw)
+                    preview = json.loads(raw)
+                    self.assertEqual(self.upstream.requests.get(timeout=5)[0], "/v1/models")
+                    self.upstream.configure(advertised)
+                    status, _, raw = backend.request("POST", "/api/providers/discover",
+                                                     {"provider": "demo", "selected": ["vision", "audio"]})
+                    self.assertEqual(status, 200, raw)
+                    self.assertEqual(json.loads(raw)["added"], 2)
+                    self.assertEqual(self.upstream.requests.get(timeout=5)[0], "/v1/models")
+                    status, _, raw = backend.request("GET", "/api/config")
+                    self.assertEqual(status, 200, raw)
+                    saved = json.loads(raw)
+                    self.assertEqual(saved["providers"][0]["base_url"], self.upstream.base_url)
+                    observed.append(([
+                        (item["upstream_id"], item["created_at"], item["input_modalities"])
+                        for item in preview["models"]
+                    ], [
+                        (item["id"], item["created_at"], item["input_modalities"])
+                        for item in saved["models"]
+                    ]))
+                finally:
+                    backend.close()
+        self.assertEqual(observed[0], observed[1])
+        self.assertEqual(observed[0][0][0][1], int(datetime(2026, 1, 1).timestamp()))
+
     def compare_exchange(self, body, payload, *, status=200, content_type="application/json",
                          compressed=False):
         observed = []

@@ -502,6 +502,7 @@ dependencies = [
  "emp-protocol",
  "emp-state",
  "emp-transport",
+ "libc",
  "serde_json",
  "time",
  "tokio",

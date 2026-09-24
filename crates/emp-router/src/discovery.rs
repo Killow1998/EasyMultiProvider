@@ -11,7 +11,7 @@ use emp_transport::{
 };
 use serde_json::{Map, Value, json};
 use std::time::{Duration, Instant};
-use time::OffsetDateTime;
+use time::{Date, Month, OffsetDateTime};
 use time::format_description::well_known::Rfc3339;
 use url::Url;
 
@@ -1052,6 +1052,7 @@ fn created_timestamp(value: Option<&Value>) -> i64 {
             OffsetDateTime::parse(python_trim(text), &Rfc3339)
                 .ok()
                 .map(|value| value.unix_timestamp() as f64)
+                .or_else(|| local_date_timestamp(python_trim(text)).map(|value| value as f64))
         }),
         _ => None,
     };
@@ -1067,6 +1068,45 @@ fn created_timestamp(value: Option<&Value>) -> i64 {
     } else {
         0
     }
+}
+
+/// Python's `datetime.fromisoformat(date).timestamp()` interprets a date-only
+/// value at local midnight, including the offset in force on that date.
+fn local_date_timestamp(value: &str) -> Option<i64> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let year = value[..4].parse::<i32>().ok()?;
+    let month = value[5..7].parse::<u8>().ok()?;
+    let day = value[8..].parse::<u8>().ok()?;
+    Date::from_calendar_date(year, Month::try_from(month).ok()?, day).ok()?;
+    // SAFETY: `tm` is a C plain-data struct. `mktime` initializes its derived
+    // fields from the supplied date and `tm_isdst = -1` asks it to infer DST.
+    let mut local: libc::tm = unsafe { std::mem::zeroed() };
+    local.tm_year = year - 1900;
+    local.tm_mon = i32::from(month) - 1;
+    local.tm_mday = i32::from(day);
+    local.tm_isdst = -1;
+    #[cfg(unix)]
+    let seconds = unsafe { libc::mktime(&mut local) as i64 };
+    #[cfg(windows)]
+    let seconds = unsafe { _mktime64(&mut local) };
+    #[cfg(not(any(unix, windows)))]
+    let seconds = 0;
+    Some(seconds)
+}
+
+#[cfg(windows)]
+unsafe extern "C" {
+    fn _mktime64(local: *mut libc::tm) -> i64;
 }
 
 fn first_truthy<'a>(item: &'a Map<String, Value>, fields: &[&str]) -> Option<&'a Value> {
