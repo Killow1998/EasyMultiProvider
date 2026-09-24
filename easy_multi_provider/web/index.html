@@ -1068,10 +1068,18 @@ function renderAccounts() {
   quotaAnimationAccounts.clear();
 }
 function utcOffsetLabel(date) { const minutes = -date.getTimezoneOffset(); const sign = minutes >= 0 ? '+' : '-'; const absolute = Math.abs(minutes); const hours = Math.floor(absolute / 60); const remainder = absolute % 60; return `UTC${sign}${hours}${remainder ? ':' + String(remainder).padStart(2, '0') : ''}`; }
-function resetCountdownText(value, now = Date.now()) {
+function resetTimestampMillis(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
+  }
   const timestamp = Number(value);
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
-  const remaining = (timestamp > 100000000000 ? timestamp : timestamp * 1000) - now;
+  return Number.isFinite(timestamp) && timestamp > 0 ? (timestamp > 100000000000 ? timestamp : timestamp * 1000) : null;
+}
+function resetCountdownText(value, now = Date.now()) {
+  const timestamp = resetTimestampMillis(value);
+  if (timestamp === null) return '';
+  const remaining = timestamp - now;
   if (remaining <= 0) return '0m';
   if (remaining < 60000) return '<1m';
   let minutes = Math.ceil(remaining / 60000);
@@ -1176,7 +1184,7 @@ async function refreshQuotaState() {
 function integerCredit(value) { const number = Number(value); return Number.isFinite(number) ? String(Math.round(number)) : String(value); }
 function resetCreditEntries(account) { const value = account?.quota?.credits?.reset_credits?.credits; return Array.isArray(value) ? value.filter(item => item && typeof item === 'object') : []; }
 function resetCreditCount(account) { const reset = account?.quota?.credits?.reset_credits; const count = Number(reset?.available_count); return Number.isInteger(count) && count >= 0 ? count : resetCreditEntries(account).length; }
-function utcDateTimeText(value) { const timestamp = Number(value); if (!Number.isFinite(timestamp) || timestamp <= 0) return ''; const date = new Date(timestamp > 100000000000 ? timestamp : timestamp * 1000); if (Number.isNaN(date.getTime())) return ''; return `${date.toISOString().slice(0,16).replace('T',' ')} UTC`; }
+function utcDateTimeText(value) { const timestamp = resetTimestampMillis(value); if (timestamp === null) return ''; const date = new Date(timestamp); if (Number.isNaN(date.getTime())) return ''; return `${date.toISOString().slice(0,16).replace('T',' ')} UTC`; }
 function resetIdempotencyKey() {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID();
   const bytes = new Uint8Array(16); for (let index=0; index<bytes.length; index++) bytes[index] = Math.floor(Math.random()*256);
@@ -1210,12 +1218,12 @@ function openResetCredits(accountId) {
   const prior = resetAttempts.get(accountId);
   const selectedIndex = prior ? selectable.findIndex(item => item.id === prior.creditId) : 0;
   const cards = entries.map((item,index) => {
-    const expires = utcDateTimeText(item.expires_at), remaining = resetCountdownText(item.expires_at);
+    const expires = utcDateTimeText(item.expires_at), remaining = resetCountdownText(item.expires_at), granted = utcDateTimeText(item.granted_at);
     const title = item.title || tr(`重置机会 ${index + 1}`,`Reset opportunity ${index + 1}`);
     const status = item.status ? `<span class="pill">${esc(item.status)}</span>` : '';
     const choiceIndex = selectable.indexOf(item);
     const choice = choiceIndex >= 0 ? `<label class="reset-credit-choice"><input type="radio" name="reset_credit_choice" value="${choiceIndex}"${choiceIndex === selectedIndex ? ' checked' : ''}><strong>${esc(title)}</strong></label>` : `<strong>${esc(title)}</strong>`;
-    return `<article class="reset-credit-card"><header>${choice}${status}</header>${item.description ? `<p>${esc(item.description)}</p>` : ''}<div class="reset-credit-time"><time>${expires ? `${tr('到期','Expires')} · ${esc(expires)}` : tr('未提供到期时间','No expiry provided')}</time>${remaining ? `<strong data-reset-countdown="${esc(item.expires_at)}">${esc(remaining)}</strong>` : ''}</div></article>`;
+    return `<article class="reset-credit-card"><header>${choice}${status}</header>${item.description ? `<p>${esc(item.description)}</p>` : ''}${granted ? `<div class="reset-credit-time"><time>${tr('获得','Granted')} · ${esc(granted)}</time></div>` : ''}<div class="reset-credit-time"><time>${expires ? `${tr('到期','Expires')} · ${esc(expires)}` : tr('未提供到期时间','No expiry provided')}</time>${remaining ? `<strong data-reset-countdown="${esc(item.expires_at)}">${esc(remaining)}</strong>` : ''}</div></article>`;
   }).join('');
   const automatic = selectable.length ? `<article class="reset-credit-card"><label class="reset-credit-choice"><input type="radio" name="reset_credit_choice" value="auto"${prior && prior.creditId === null ? ' checked' : ''}><strong>${tr('由 OpenAI 选择下一个可用机会','Let OpenAI choose the next available opportunity')}</strong></label></article>` : '';
   const fallback = !selectable.length ? `<p class="muted">${entries.length ? tr('没有可选择的机会明细；OpenAI 会选择下一个可用机会。','No selectable credit details were returned; OpenAI will choose the next available opportunity.') : tr('OpenAI 只返回了可用次数，未返回每次机会的到期明细；OpenAI 会选择下一个可用机会。','OpenAI returned only the available count; it will choose the next available opportunity.')}</p>` : '';
@@ -1233,7 +1241,8 @@ function openResetCredits(accountId) {
 function confirmResetCredit(account,credit) {
   const title = credit?.title || (credit ? tr('所选重置机会','Selected reset opportunity') : tr('由 OpenAI 选择下一个可用机会','OpenAI chooses the next available opportunity'));
   const expires = credit ? utcDateTimeText(credit.expires_at) : '';
-  const body = `<div class="reset-credit-note"><p><strong>${tr('请再次确认','Please confirm again')}</strong><br>${tr('账户','Account')}：${esc(account.name || account.id)}<br>${tr('使用机会','Opportunity')}：${esc(title)}${expires ? `<br>${tr('到期','Expires')}：${esc(expires)}` : ''}</p></div><p class="muted">${tr('确认后会消耗一次重置机会，重置 OpenAI 判定为符合资格的额度周期。此操作无法撤销。','Confirming spends one reset opportunity and resets the quota windows OpenAI considers eligible. This cannot be undone.')}</p><button type="button" class="secondary" id="reset_choice_back">${tr('返回选择','Change selection')}</button>`;
+  const granted = credit ? utcDateTimeText(credit.granted_at) : '';
+  const body = `<div class="reset-credit-note"><p><strong>${tr('请再次确认','Please confirm again')}</strong><br>${tr('账户','Account')}：${esc(account.name || account.id)}<br>${tr('使用机会','Opportunity')}：${esc(title)}${granted ? `<br>${tr('获得','Granted')}：${esc(granted)}` : ''}${expires ? `<br>${tr('到期','Expires')}：${esc(expires)}` : ''}</p></div><p class="muted">${tr('确认后会消耗一次重置机会，重置 OpenAI 判定为符合资格的额度周期。此操作无法撤销。','Confirming spends one reset opportunity and resets the quota windows OpenAI considers eligible. This cannot be undone.')}</p><button type="button" class="secondary" id="reset_choice_back">${tr('返回选择','Change selection')}</button>`;
   openModal(tr('确认重置额度','Confirm quota reset'),body,tr('确认并使用重置','Confirm and use reset'),async () => {
     const payload = {idempotency_key:resetAttemptKey(account.id,credit?.id || null)};
     if (credit) payload.credit_id = credit.id;
