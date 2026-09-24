@@ -11,6 +11,7 @@ use serde_json::json;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -418,15 +419,7 @@ impl UpdateManager {
         } else {
             candidate.join(relative)
         };
-        let probe = std::process::Command::new(&binary)
-            .arg("--version")
-            .output()
-            .map_err(|_| UpdateError("version_mismatch"))?;
-        if !probe.status.success()
-            || String::from_utf8_lossy(&probe.stdout).trim() != format!("EMP {}", asset.version)
-        {
-            return Err(UpdateError("version_mismatch"));
-        }
+        probe_candidate_version(&binary, &asset.version, job, Duration::from_secs(30))?;
 
         let worker = job.join(if cfg!(windows) {
             "worker.exe"
@@ -619,6 +612,55 @@ fn create_job(parent: &Path) -> Result<PathBuf> {
     Err(UpdateError("update_failed"))
 }
 
+fn probe_candidate_version(
+    binary: &Path,
+    version: &str,
+    job: &Path,
+    timeout: Duration,
+) -> Result<()> {
+    let output = job.join("candidate-version.stdout");
+    let stdout = fs::File::create(&output)?;
+    let mut command = Command::new(binary);
+    command
+        .arg("--version")
+        .env("PYINSTALLER_RESET_ENVIRONMENT", "1")
+        .env_remove("EMP_UPDATE_READY")
+        .env_remove("EMP_UPDATE_RESULT")
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    #[cfg(windows)]
+    let mut child = super::process::spawn_quiet(&mut command)
+        .map_err(|_| UpdateError("version_mismatch"))?;
+    #[cfg(not(windows))]
+    let mut child = command.spawn().map_err(|_| UpdateError("version_mismatch"))?;
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(UpdateError("version_mismatch"));
+            }
+        }
+    };
+    if !status.success() {
+        return Err(UpdateError("version_mismatch"));
+    }
+    let stdout = fs::read(output).map_err(|_| UpdateError("version_mismatch"))?;
+    if String::from_utf8_lossy(&stdout).trim() != format!("EMP {version}") {
+        return Err(UpdateError("version_mismatch"));
+    }
+    Ok(())
+}
+
 fn nonce() -> Result<String> {
     nonce_with(getrandom::getrandom)
 }
@@ -633,6 +675,8 @@ fn nonce_with(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(unix, windows))]
+    use super::probe_candidate_version;
     use super::{UpdateManager, nonce_with};
     use crate::update::release::UpdateEndpoints;
     use std::io::{Read, Write};
@@ -640,6 +684,87 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::thread;
     use std::time::{Duration, Instant};
+
+    #[cfg(unix)]
+    fn candidate_script(root: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let binary = root.join(name);
+        std::fs::write(&binary, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        binary
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn candidate_version_probe_accepts_only_successful_exact_output() {
+        let root = tempfile::TempDir::new().unwrap();
+        let valid = candidate_script(root.path(), "valid", "printf 'EMP 0.12.0\\n'");
+        assert!(
+            probe_candidate_version(&valid, "0.12.0", root.path(), Duration::from_secs(1)).is_ok()
+        );
+
+        let nonzero = candidate_script(
+            root.path(),
+            "nonzero",
+            "printf 'EMP 0.12.0\\n'; exit 7",
+        );
+        assert_eq!(
+            probe_candidate_version(&nonzero, "0.12.0", root.path(), Duration::from_secs(1))
+                .unwrap_err(),
+            crate::update::UpdateError("version_mismatch")
+        );
+        assert_eq!(
+            probe_candidate_version(&valid, "0.12.1", root.path(), Duration::from_secs(1))
+                .unwrap_err(),
+            crate::update::UpdateError("version_mismatch")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn candidate_version_probe_times_out_and_reaps_the_child() {
+        let root = tempfile::TempDir::new().unwrap();
+        let hanging = candidate_script(
+            root.path(),
+            "hanging",
+            "printf '%s\\n' \"$$\"; exec sleep 5",
+        );
+        let started = Instant::now();
+        assert_eq!(
+            probe_candidate_version(&hanging, "0.12.0", root.path(), Duration::from_millis(100))
+                .unwrap_err(),
+            crate::update::UpdateError("version_mismatch")
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let pid: i32 = std::fs::read_to_string(root.path().join("candidate-version.stdout"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn candidate_version_probe_restores_error_mode_after_bad_image() {
+        use windows_sys::Win32::System::Diagnostics::Debug::GetThreadErrorMode;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let binary = root.path().join("candidate.exe");
+        std::fs::write(&binary, b"deliberately invalid executable").unwrap();
+        let previous = unsafe { GetThreadErrorMode() };
+        assert_eq!(
+            probe_candidate_version(&binary, "0.12.0", root.path(), Duration::from_secs(1))
+                .unwrap_err(),
+            crate::update::UpdateError("version_mismatch")
+        );
+        assert_eq!(unsafe { GetThreadErrorMode() }, previous);
+    }
 
     #[test]
     fn concurrent_checks_start_only_one_release_job() {
