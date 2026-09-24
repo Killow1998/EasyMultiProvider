@@ -69,9 +69,12 @@ for kind, prefix in (('function_call', 'fc'), ('custom_tool_call', 'ctc')):
     for call_id in (None, '', 0, [], {}):
         add(native, {'input': [{'type': kind, 'id': 'foreign', 'call_id': call_id}]})
 
-# Shared summary decoder: UTF-8, mixed URL-safe/standard alphabets and unused bits.
-encodings = ['', 'Zg', 'Zg=', 'Zg==', 'Zh==', 'Zg===', 'Zm9=', 'Zm9v', 'Zm9v=',
-             'Zm9v====', '====', 'abc!','/w==', 'Zg==\n', '中文']
+# emp1: marks an EMP-owned portable summary, not opaque encrypted task data.
+# Shared decoder cases cover UTF-8, mixed URL-safe/standard alphabets, and unused bits.
+# Excess padding is Python-version-dependent (3.11 accepts Zm9v=, 3.14 rejects it)
+# and remains invalid in Rust; test that safety rule separately below.
+encodings = ['', 'Zg', 'Zg=', 'Zg==', 'Zh==', 'Zm9=', 'Zm9v',
+             '====', 'abc!','/w==', 'Zg==\n', '中文']
 for summary in ('summary', '\uFFFF\uFFFF', '\U0010FFFF', 'constraint\n工具🧪'):
     encoded = base64.b64encode(summary.encode()).decode()
     encodings.extend([encoded, encoded.replace('+', '-'), encoded.replace('/', '_')])
@@ -127,5 +130,36 @@ json.dump(records, sys.stdout, ensure_ascii=True)
             actual, record["result"],
             "native history fixture {index}: {record}"
         );
+    }
+}
+
+#[test]
+fn encrypted_tasks_and_malformed_compactions_remain_opaque() {
+    let portable = json!({"protocol": "responses", "auth_mode": "api_key"});
+    let task = json!({"input": [{"type": "agent_message", "content": [
+        {"type": "encrypted_content", "encrypted_content": "private-task-ciphertext"}
+    ]}]});
+    let native_result = native_responses::project_request(task.as_object().unwrap()).unwrap();
+    assert_eq!(native_result["input"], task["input"]);
+    let portable_error =
+        portable_responses::project_request(portable.as_object().unwrap(), &task, false)
+            .unwrap_err();
+    assert_eq!(
+        portable_error.failure_class(),
+        "encrypted_agent_task_requires_plaintext"
+    );
+
+    for malformed in ["emp1:Zg===", "emp1:Zm9v=", "emp1:Zm9v===="] {
+        let body = json!({"input": [{"type": "compaction", "encrypted_content": malformed}]});
+        let native_error = native_responses::project_request(body.as_object().unwrap()).unwrap_err();
+        assert!(matches!(
+            native_error,
+            native_responses::NativeProjectionError::Projection(error)
+                if error.failure_class() == "invalid_compaction"
+        ));
+        let portable_error =
+            portable_responses::project_request(portable.as_object().unwrap(), &body, false)
+                .unwrap_err();
+        assert_eq!(portable_error.failure_class(), "invalid_compaction");
     }
 }
