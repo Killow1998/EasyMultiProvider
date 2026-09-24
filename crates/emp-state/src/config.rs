@@ -3393,11 +3393,10 @@ print(json.dumps(result, separators=(",", ":")))
                 "user_home": user_home,
             });
             let actual = run_python_case(&python, &python_root, script, &case);
+            let python_path = PathBuf::from(actual["path"].as_str().expect("Python config path"));
             assert_eq!(
-                actual["path"],
+                python_path,
                 config_path_from_environment(environment, platform)
-                    .to_string_lossy()
-                    .as_ref()
             );
         }
     }
@@ -3457,11 +3456,10 @@ print(json.dumps(result, separators=(",", ":")))
                 "environment": oracle_environment(&environment),
             });
             let actual = run_python_case(&python, &python_root, script, &case);
+            let python_path = PathBuf::from(actual["path"].as_str().expect("Python config path"));
             assert_eq!(
-                actual["path"],
+                python_path,
                 config_path_from_environment(environment, platform)
-                    .to_string_lossy()
-                    .as_ref()
             );
         }
     }
