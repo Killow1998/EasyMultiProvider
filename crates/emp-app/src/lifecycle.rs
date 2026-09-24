@@ -40,6 +40,7 @@ pub(crate) struct ServerHandle {
     local_addr: SocketAddr,
     pub(crate) state: Arc<ServerState>,
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    _service_owner: emp_state::IntegrationFileLock,
 }
 
 struct ServerStartupOptions {
@@ -247,7 +248,6 @@ impl ServerHandle {
         );
         let state = Arc::new(ServerState {
             shutdown,
-            _service_owner: service_owner,
             sessions,
             connection_admission: ConnectionAdmission::new(startup_options.admission),
             bootstrap: BootstrapToken {
@@ -265,6 +265,7 @@ impl ServerHandle {
             local_addr,
             state,
             workers,
+            _service_owner: service_owner,
         };
         handle.add_worker(listener)?;
         handle.add_quota_sampler()?;
@@ -408,6 +409,7 @@ impl ServerHandle {
         for worker in workers {
             let _: () = worker.join().map_err(|_| AppError::ServerStopped)?;
         }
+        drop(self._service_owner);
         restoration
     }
 }
