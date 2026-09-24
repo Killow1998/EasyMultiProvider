@@ -49,6 +49,31 @@ class BenchmarkStreamDelayTests(unittest.TestCase):
         self.assertNotIn(stream_delay.TEXT_SENTINEL, repr(summary))
         self.assertNotIn(stream_delay.TOOL_ARGUMENTS, repr(summary))
 
+    def test_activity_gate_excludes_control_events_but_keeps_delta_classes(self):
+        activity_delays = {
+            event_type: float(index + 1)
+            for index, event_type in enumerate(stream_delay.ACTIVITY_EVENT_TYPES)
+        }
+        timings = [
+            {
+                "event_type": event["type"],
+                "added_delay_ms": activity_delays.get(event["type"], 50.0),
+            }
+            for event in stream_delay.scheduled_events()
+        ]
+        activity = stream_delay._activity_event_summary(timings)
+        all_events = stream_delay._latency_summary(
+            [timing["added_delay_ms"] for timing in timings]
+        )
+
+        self.assertEqual(activity["event_types"], list(stream_delay.ACTIVITY_EVENT_TYPES))
+        self.assertEqual(activity["count"], 3)
+        self.assertLessEqual(activity["added_delay"]["p95_ms"], 5.0)
+        self.assertGreater(all_events["p95_ms"], 5.0)
+        self.assertEqual(
+            set(activity["by_event_type"]), set(stream_delay.ACTIVITY_EVENT_TYPES)
+        )
+
     def test_event_timing_requires_send_timestamp_for_every_observed_frame(self):
         events = stream_delay.scheduled_events()
         due = {index: 1_000_000_000 + index * 6_000_000

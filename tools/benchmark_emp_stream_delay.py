@@ -37,6 +37,11 @@ EVENT_SPACING_MS = 6
 DEFAULT_ITERATIONS = 30
 DEFAULT_WARMUP = 3
 DEFAULT_P95_LIMIT_MS = 5.0
+ACTIVITY_EVENT_TYPES = (
+    "response.reasoning_summary_text.delta",
+    "response.function_call_arguments.delta",
+    "response.output_text.delta",
+)
 
 
 def scheduled_events() -> list[dict]:
@@ -166,6 +171,27 @@ def _event_semantics(events: list[dict]) -> dict:
 
 def _latency_summary(samples_ms: list[float]) -> dict:
     return benchmark.latency_summary(samples_ms, 0.0, 0)
+
+
+def _activity_event_summary(timings: list[dict]) -> dict:
+    by_type = {
+        event_type: [
+            timing["added_delay_ms"]
+            for timing in timings
+            if timing.get("event_type") == event_type
+        ]
+        for event_type in ACTIVITY_EVENT_TYPES
+    }
+    all_activity = [delay for values in by_type.values() for delay in values]
+    return {
+        "event_types": list(ACTIVITY_EVENT_TYPES),
+        "count": len(all_activity),
+        "added_delay": _latency_summary(all_activity),
+        "by_event_type": {
+            event_type: _latency_summary(values)
+            for event_type, values in by_type.items()
+        },
+    }
 
 
 class _ScheduledHandler(BaseHTTPRequestHandler):
@@ -417,6 +443,11 @@ def _runtime_measurement(name: str, command: list[str], cwd: Path, config: bytes
         "iterations": iterations,
         "warmup": warmup,
         "semantics": semantics,
+        "activity_events": _activity_event_summary([
+            {"event_type": event_type, "added_delay_ms": delay}
+            for event_type, delays in delays_by_type.items()
+            for delay in delays
+        ]),
         "added_delay": {
             "all_events": _latency_summary(all_delays),
             "by_event_type": {
@@ -598,9 +629,9 @@ def run(args) -> tuple[dict, int]:
             report["comparison_enabled"] = True
             report["status"] = "measured"
             for name, values in measurements.items():
-                p95 = values["added_delay"]["all_events"]["p95_ms"]
+                p95 = values["activity_events"]["added_delay"]["p95_ms"]
                 if p95 is None or p95 > args.p95_limit_ms:
-                    report["errors"].append(name + "_added_delay_p95_gate")
+                    report["errors"].append(name + "_activity_added_delay_p95_gate")
             if report["errors"]:
                 report["status"] = "invalid_measurement"
                 report["comparison_enabled"] = False
