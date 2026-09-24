@@ -274,6 +274,22 @@ fn release_server_with_mode(
     (base, thread)
 }
 
+fn spawn_staged_executable(command: &mut Command) -> std::io::Result<Child> {
+    // A freshly staged Linux executable can briefly reject exec with ETXTBSY.
+    // Retry only that handoff error; a persistent writer still fails the test.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match command.spawn() {
+            Err(error)
+                if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+}
+
 fn start_emp(
     config: &Path,
     executable: &Path,
@@ -311,7 +327,7 @@ fn start_emp(
     } else {
         command.env_remove("EMP_UPDATE_TEST_WORKER_FAIL_READY");
     }
-    let mut process = command.spawn().unwrap_or_else(|error| {
+    let mut process = spawn_staged_executable(&mut command).unwrap_or_else(|error| {
         panic!(
             "start EMP process for test {} at {}: {error}",
             std::thread::current().name().unwrap_or("unnamed"),
@@ -357,6 +373,33 @@ fn start_emp(
         .1
         .to_owned();
     (port, token, child, stdout)
+}
+
+#[test]
+fn staged_executable_waits_for_writer_to_close() {
+    let temp = TempDir::new().unwrap();
+    let executable = temp.path().join("EMP-test");
+    std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&executable)
+        .unwrap();
+    assert_eq!(
+        Command::new(&executable)
+            .spawn()
+            .unwrap_err()
+            .raw_os_error(),
+        Some(libc::ETXTBSY)
+    );
+    let release = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        drop(writer);
+    });
+    let mut command = Command::new(&executable);
+    let mut child = spawn_staged_executable(&mut command).unwrap();
+    assert!(child.wait().unwrap().success());
+    release.join().unwrap();
 }
 
 fn body_json(response: &[u8]) -> serde_json::Value {
