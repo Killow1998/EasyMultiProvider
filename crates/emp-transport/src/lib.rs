@@ -15,6 +15,7 @@ mod http_policy;
 mod system_memory;
 mod system_proxy;
 mod websocket;
+mod websocket_pump;
 pub use admission::{
     MAX_EXPANDED_REQUEST_BYTES, MAX_PROXY_REQUEST_BYTES, MEMORY_RESERVATION_FACTOR,
     MIN_MEMORY_HEADROOM_BYTES, MemoryStatus, REQUEST_GROWTH_QUANTUM, RequestBudget,
@@ -38,6 +39,10 @@ pub use http_policy::{
 pub use system_memory::system_memory_status;
 pub use websocket::{
     ClientWebSocket, ClientWebSocketError, WebSocketConnection, WebSocketError, websocket_accept,
+};
+pub use websocket_pump::{
+    ClientWebSocketPump, DEFAULT_PUMP_CHANNEL_CAPACITY, DEFAULT_WEBSOCKET_MESSAGE_BYTES,
+    PumpCommand, PumpEvent, WebSocketPoll, WebSocketPumpConfig,
 };
 
 pub const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;

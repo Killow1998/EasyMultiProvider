@@ -1,4 +1,5 @@
 use crate::MAX_PROXY_REQUEST_BYTES;
+use crate::websocket_pump::{FrameDecodeError, FrameDecoder, FramePoll, WebSocketPoll};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress};
 use ring::digest::{SHA1_FOR_LEGACY_USE_ONLY, digest};
@@ -51,6 +52,7 @@ pub struct WebSocketConnection<'a, S> {
     stream: &'a mut S,
     closed: bool,
     peer_close_code: Option<u16>,
+    frame_decoder: FrameDecoder,
 }
 
 impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
@@ -59,19 +61,25 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
             stream,
             closed: false,
             peer_close_code: None,
+            frame_decoder: FrameDecoder::new(MAX_PROXY_REQUEST_BYTES),
         }
+    }
+
+    pub fn new_with_prefix(stream: &'a mut S, read_prefix: &[u8]) -> Result<Self, WebSocketError> {
+        let mut connection = Self::new(stream);
+        connection.feed_read_bytes(read_prefix)?;
+        Ok(connection)
+    }
+
+    pub fn feed_read_bytes(&mut self, bytes: &[u8]) -> Result<(), WebSocketError> {
+        self.frame_decoder
+            .feed(bytes)
+            .map_err(map_downstream_frame_error)
     }
     pub const fn peer_close_code(&self) -> Option<u16> {
         self.peer_close_code
     }
 
-    fn read_exact(&mut self, length: usize) -> Result<Vec<u8>, WebSocketError> {
-        let mut value = vec![0u8; length];
-        self.stream
-            .read_exact(&mut value)
-            .map_err(|_| WebSocketError::new(1006, "websocket closed"))?;
-        Ok(value)
-    }
     fn send_frame(&mut self, opcode: u8, payload: &[u8]) -> Result<(), WebSocketError> {
         if self.closed {
             return Ok(());
@@ -94,6 +102,54 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
             .and_then(|_| self.stream.write_all(payload))
             .and_then(|_| self.stream.flush())
             .map_err(|_| WebSocketError::new(1006, "websocket closed"))
+    }
+
+    pub fn send_pong(&mut self, payload: &[u8]) -> Result<(), WebSocketError> {
+        if payload.len() > 125 {
+            return Err(WebSocketError::new(1002, "invalid websocket ping payload"));
+        }
+        self.send_frame(10, payload)
+    }
+
+    pub fn set_max_message_bytes(&mut self, maximum: usize) -> Result<(), WebSocketError> {
+        if maximum == 0 || maximum > MAX_PROXY_REQUEST_BYTES {
+            return Err(WebSocketError::new(
+                1009,
+                "websocket message limit is invalid",
+            ));
+        }
+        self.frame_decoder.set_max_message_bytes(maximum);
+        Ok(())
+    }
+
+    /// Poll one downstream frame. Callers should set a short read timeout on
+    /// the underlying socket and retain this connection across Pending results.
+    pub fn poll_text(&mut self) -> Result<WebSocketPoll<String>, WebSocketError> {
+        match self
+            .frame_decoder
+            .poll(self.stream, true, false)
+            .map_err(map_downstream_frame_error)?
+        {
+            FramePoll::Pending => Ok(WebSocketPoll::Pending),
+            FramePoll::Ping(payload) => Ok(WebSocketPoll::Ping(payload)),
+            FramePoll::Closed { code, payload } => {
+                self.peer_close_code = Some(code.unwrap_or(1005));
+                let _ = self.send_frame(8, &payload);
+                self.closed = true;
+                Ok(WebSocketPoll::Closed { code })
+            }
+            FramePoll::Message {
+                opcode: 1,
+                payload,
+                compressed: false,
+            } => String::from_utf8(payload)
+                .map(WebSocketPoll::Text)
+                .map_err(|_| WebSocketError::new(1007, "websocket text must be valid UTF-8")),
+            FramePoll::Message { .. } => Err(WebSocketError::new(
+                1003,
+                "only websocket text messages are supported",
+            )),
+        }
     }
     pub fn send_json(&mut self, value: &Value) -> Result<(), WebSocketError> {
         let encoded = serde_json::to_vec(value)
@@ -120,88 +176,30 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
     }
 
     pub fn receive_text(&mut self) -> Result<Option<String>, WebSocketError> {
-        let mut message = Vec::new();
-        let mut started = false;
         loop {
-            let header = self.read_exact(2)?;
-            let final_frame = header[0] & 0x80 != 0;
-            if header[0] & 0x70 != 0 {
-                return Err(WebSocketError::new(1002, "unsupported websocket extension"));
-            }
-            let opcode = header[0] & 0x0f;
-            let masked = header[1] & 0x80 != 0;
-            let mut length = u64::from(header[1] & 0x7f);
-            if length == 126 {
-                let raw = self.read_exact(2)?;
-                length = u64::from(u16::from_be_bytes([raw[0], raw[1]]));
-            } else if length == 127 {
-                let raw = self.read_exact(8)?;
-                length = u64::from_be_bytes(raw.try_into().expect("eight bytes"));
-            }
-            if opcode >= 8 && (!final_frame || length > 125) {
-                return Err(WebSocketError::new(1002, "invalid websocket control frame"));
-            }
-            if !masked {
-                return Err(WebSocketError::new(
-                    1002,
-                    "client websocket frames must be masked",
-                ));
-            }
-            let length = usize::try_from(length)
-                .map_err(|_| WebSocketError::new(1009, "websocket request is too large"))?;
-            if opcode < 8
-                && message
-                    .len()
-                    .checked_add(length)
-                    .is_none_or(|size| size > MAX_PROXY_REQUEST_BYTES)
-            {
-                return Err(WebSocketError::new(1009, "websocket request is too large"));
-            }
-            let mask = self.read_exact(4)?;
-            let mut payload = self.read_exact(length)?;
-            for (index, byte) in payload.iter_mut().enumerate() {
-                *byte ^= mask[index % 4];
-            }
-            match opcode {
-                8 => {
-                    if payload.len() == 1 {
-                        return Err(WebSocketError::new(1002, "invalid websocket close payload"));
-                    }
-                    self.peer_close_code = if payload.len() >= 2 {
-                        Some(u16::from_be_bytes([payload[0], payload[1]]))
-                    } else {
-                        Some(1005)
-                    };
-                    self.send_frame(8, &payload[..payload.len().min(125)])?;
-                    self.closed = true;
-                    return Ok(None);
-                }
-                9 => {
-                    self.send_frame(10, &payload)?;
-                    continue;
-                }
-                10 => continue,
-                1 => {
-                    if started {
-                        return Err(WebSocketError::new(1002, "unexpected websocket text frame"));
-                    }
-                    started = true;
-                }
-                0 if started => {}
-                _ => {
-                    return Err(WebSocketError::new(
-                        1003,
-                        "only websocket text messages are supported",
-                    ));
-                }
-            }
-            message.extend_from_slice(&payload);
-            if final_frame {
-                return String::from_utf8(message)
-                    .map(Some)
-                    .map_err(|_| WebSocketError::new(1007, "websocket text must be valid UTF-8"));
+            match self.poll_text()? {
+                WebSocketPoll::Pending => std::thread::sleep(Duration::from_millis(1)),
+                WebSocketPoll::Text(text) => return Ok(Some(text)),
+                WebSocketPoll::Ping(payload) => self.send_pong(&payload)?,
+                WebSocketPoll::Closed { .. } => return Ok(None),
             }
         }
+    }
+}
+
+fn map_downstream_frame_error(error: FrameDecodeError) -> WebSocketError {
+    match error {
+        FrameDecodeError::Protocol => WebSocketError::new(1002, "invalid websocket frame"),
+        FrameDecodeError::TooLarge => WebSocketError::new(1009, "websocket message is too large"),
+        FrameDecodeError::Io => WebSocketError::new(1006, "websocket closed"),
+    }
+}
+
+impl WebSocketConnection<'_, TcpStream> {
+    pub fn set_poll_timeout(&mut self, timeout: Duration) -> Result<(), WebSocketError> {
+        self.stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|_| WebSocketError::new(1011, "websocket poll timeout setup failed"))
     }
 }
 
@@ -513,6 +511,12 @@ struct PerMessageDeflate {
     server_no_context_takeover: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecompressionError {
+    Invalid,
+    TooLarge,
+}
+
 impl PerMessageDeflate {
     fn negotiated(value: &str) -> Result<Self, ClientWebSocketError> {
         let mut parts = value.split(';').map(str::trim);
@@ -592,30 +596,35 @@ impl PerMessageDeflate {
         Ok(output)
     }
 
-    fn decompress(&mut self, payload: &[u8]) -> Result<Vec<u8>, ClientWebSocketError> {
+    fn decompress(
+        &mut self,
+        payload: &[u8],
+        max_message_bytes: usize,
+    ) -> Result<Vec<u8>, DecompressionError> {
         let mut encoded = Vec::with_capacity(payload.len() + 4);
         encoded.extend_from_slice(payload);
         encoded.extend_from_slice(&[0, 0, 255, 255]);
         let before_in = self.decompressor.total_in();
-        let mut output = Vec::with_capacity(encoded.len().saturating_mul(2).max(8192));
+        let mut output = Vec::with_capacity(max_message_bytes.saturating_add(1).min(8192));
         loop {
-            output.reserve(8192);
+            let remaining = max_message_bytes
+                .saturating_add(1)
+                .saturating_sub(output.len());
+            let wanted = remaining.min(8192);
+            let spare = output.capacity().saturating_sub(output.len());
+            if spare < wanted {
+                output
+                    .try_reserve_exact(wanted - spare)
+                    .map_err(|_| DecompressionError::TooLarge)?;
+            }
             let consumed = usize::try_from(self.decompressor.total_in() - before_in)
                 .unwrap_or(encoded.len())
                 .min(encoded.len());
             self.decompressor
                 .decompress_vec(&encoded[consumed..], &mut output, FlushDecompress::Sync)
-                .map_err(|_| {
-                    ClientWebSocketError::new(
-                        502,
-                        "native upstream websocket compression is invalid",
-                    )
-                })?;
-            if output.len() > MAX_PROXY_REQUEST_BYTES {
-                return Err(ClientWebSocketError::new(
-                    502,
-                    "native upstream websocket event is too large",
-                ));
+                .map_err(|_| DecompressionError::Invalid)?;
+            if output.len() > max_message_bytes {
+                return Err(DecompressionError::TooLarge);
             }
             let consumed =
                 usize::try_from(self.decompressor.total_in() - before_in).unwrap_or(encoded.len());
@@ -636,7 +645,7 @@ pub struct ClientWebSocketError {
     message: &'static str,
 }
 impl ClientWebSocketError {
-    const fn new(status: u16, message: &'static str) -> Self {
+    pub(crate) const fn new(status: u16, message: &'static str) -> Self {
         Self { status, message }
     }
     pub const fn status(self) -> u16 {
@@ -657,6 +666,7 @@ pub struct ClientWebSocket {
     response_headers: std::collections::BTreeMap<String, String>,
     compression: Option<PerMessageDeflate>,
     max_message_bytes: usize,
+    frame_decoder: FrameDecoder,
     local_control: bool,
 }
 
@@ -725,7 +735,7 @@ impl ClientWebSocket {
             false,
             timeout,
         )?;
-        client.max_message_bytes = 2 * 1024 * 1024;
+        client.set_max_message_bytes(2 * 1024 * 1024)?;
         client.local_control = true;
         Ok(client)
     }
@@ -886,6 +896,7 @@ impl ClientWebSocket {
             response_headers,
             compression,
             max_message_bytes: MAX_PROXY_REQUEST_BYTES,
+            frame_decoder: FrameDecoder::new(MAX_PROXY_REQUEST_BYTES),
             local_control: false,
         })
     }
@@ -895,16 +906,23 @@ impl ClientWebSocket {
     pub const fn peer_close_code(&self) -> Option<u16> {
         self.peer_close_code
     }
-    fn read_exact(&mut self, length: usize) -> Result<Vec<u8>, ClientWebSocketError> {
-        let mut value = vec![0u8; length];
-        self.stream.read_exact(&mut value).map_err(|error| {
-            if self.local_control {
-                local_socket_error(error)
-            } else {
-                ClientWebSocketError::new(502, "native upstream websocket closed")
-            }
-        })?;
-        Ok(value)
+
+    pub fn set_max_message_bytes(&mut self, maximum: usize) -> Result<(), ClientWebSocketError> {
+        if maximum == 0 || maximum > MAX_PROXY_REQUEST_BYTES {
+            return Err(ClientWebSocketError::new(
+                413,
+                "native websocket message limit is invalid",
+            ));
+        }
+        self.max_message_bytes = maximum;
+        self.frame_decoder.set_max_message_bytes(maximum);
+        Ok(())
+    }
+
+    pub(crate) fn set_poll_timeout(&self, timeout: Duration) -> Result<(), ClientWebSocketError> {
+        self.stream.set_read_timeout(Some(timeout)).map_err(|_| {
+            ClientWebSocketError::new(503, "native upstream websocket timeout setup failed")
+        })
     }
     fn send_frame(
         &mut self,
@@ -941,20 +959,143 @@ impl ClientWebSocket {
             .map_err(|_| ClientWebSocketError::new(502, "native upstream websocket write failed"))
     }
     pub fn send_json(&mut self, value: &Value) -> Result<(), ClientWebSocketError> {
-        let payload = serde_json::to_vec(value).map_err(|_| {
+        let payload = serde_json::to_string(value).map_err(|_| {
             ClientWebSocketError::new(500, "native websocket request serialization failed")
         })?;
-        if payload.len() > MAX_PROXY_REQUEST_BYTES {
+        self.send_text(&payload)
+    }
+
+    pub fn send_text(&mut self, text: &str) -> Result<(), ClientWebSocketError> {
+        if text.len() > self.max_message_bytes {
             return Err(ClientWebSocketError::new(
                 413,
                 "native websocket request is too large",
             ));
         }
         if let Some(compression) = self.compression.as_mut() {
-            let payload = compression.compress(&payload)?;
+            let payload = compression.compress(text.as_bytes())?;
             self.send_frame(1, &payload, true)
         } else {
-            self.send_frame(1, &payload, false)
+            self.send_frame(1, text.as_bytes(), false)
+        }
+    }
+
+    pub fn send_pong(&mut self, payload: &[u8]) -> Result<(), ClientWebSocketError> {
+        if payload.len() > 125 {
+            return Err(ClientWebSocketError::new(
+                502,
+                "invalid upstream websocket ping",
+            ));
+        }
+        self.send_frame(10, payload, false)
+    }
+
+    pub fn close_with(&mut self, code: u16, reason: &str) {
+        if self.closed {
+            return;
+        }
+        let bytes = reason.as_bytes();
+        let mut count = bytes.len().min(123);
+        while !reason.is_char_boundary(count) {
+            count -= 1;
+        }
+        let mut payload = Vec::with_capacity(count + 2);
+        payload.extend_from_slice(&code.to_be_bytes());
+        payload.extend_from_slice(&bytes[..count]);
+        let _ = self.send_frame(8, &payload, false);
+        self.closed = true;
+    }
+
+    pub fn poll_receive_text(&mut self) -> Result<WebSocketPoll<String>, ClientWebSocketError> {
+        if self.closed {
+            return Ok(WebSocketPoll::Closed {
+                code: self.peer_close_code,
+            });
+        }
+        let poll = self
+            .frame_decoder
+            .poll(&mut *self.stream, false, self.compression.is_some())
+            .map_err(|error| self.map_frame_error(error))?;
+        match poll {
+            FramePoll::Pending => Ok(WebSocketPoll::Pending),
+            FramePoll::Ping(payload) => Ok(WebSocketPoll::Ping(payload)),
+            FramePoll::Closed { code, .. } => {
+                self.peer_close_code = code;
+                Ok(WebSocketPoll::Closed { code })
+            }
+            FramePoll::Message {
+                opcode: 1,
+                payload,
+                compressed,
+            } => {
+                let payload = if compressed {
+                    match self
+                        .compression
+                        .as_mut()
+                        .expect("compressed messages require negotiated compression")
+                        .decompress(&payload, self.max_message_bytes)
+                    {
+                        Ok(payload) => payload,
+                        Err(DecompressionError::TooLarge) => {
+                            self.close_with(1009, "message too large");
+                            return Err(ClientWebSocketError::new(
+                                502,
+                                "native upstream websocket event is too large",
+                            ));
+                        }
+                        Err(DecompressionError::Invalid) => {
+                            self.close_with(1002, "invalid compression");
+                            return Err(ClientWebSocketError::new(
+                                502,
+                                "native upstream websocket compression is invalid",
+                            ));
+                        }
+                    }
+                } else {
+                    payload
+                };
+                if payload.len() > self.max_message_bytes {
+                    self.close_with(1009, "message too large");
+                    return Err(ClientWebSocketError::new(
+                        502,
+                        "native upstream websocket event is too large",
+                    ));
+                }
+                match String::from_utf8(payload) {
+                    Ok(text) => Ok(WebSocketPoll::Text(text)),
+                    Err(_) => {
+                        self.close_with(1007, "text must be UTF-8");
+                        Err(ClientWebSocketError::new(
+                            502,
+                            "native upstream websocket event is not UTF-8",
+                        ))
+                    }
+                }
+            }
+            FramePoll::Message { .. } => {
+                self.close_with(1003, "unsupported data frame");
+                Err(ClientWebSocketError::new(
+                    502,
+                    "native upstream websocket frame type is unsupported",
+                ))
+            }
+        }
+    }
+
+    fn map_frame_error(&mut self, error: FrameDecodeError) -> ClientWebSocketError {
+        match error {
+            FrameDecodeError::Protocol => {
+                self.close_with(1002, "invalid frame");
+                ClientWebSocketError::new(502, "native upstream websocket frame is invalid")
+            }
+            FrameDecodeError::TooLarge => {
+                self.close_with(1009, "message too large");
+                ClientWebSocketError::new(502, "native upstream websocket event is too large")
+            }
+            FrameDecodeError::Io => ClientWebSocketError::new(
+                if self.local_control { 503 } else { 502 },
+                "native upstream websocket closed",
+            ),
         }
     }
     pub fn receive_json(&mut self) -> Result<Option<Value>, ClientWebSocketError> {
@@ -968,133 +1109,29 @@ impl ClientWebSocket {
 
     /// Control RPC skips unrelated JSON values; native Responses requires objects.
     pub fn receive_value(&mut self) -> Result<Option<Value>, ClientWebSocketError> {
-        let mut message = Vec::new();
-        let mut started = false;
-        let mut compressed = false;
         loop {
-            let header = self.read_exact(2)?;
-            let final_frame = header[0] & 0x80 != 0;
-            let rsv1 = header[0] & 0x40 != 0;
-            if header[0] & 0x30 != 0 {
-                return Err(ClientWebSocketError::new(
-                    502,
-                    "native upstream websocket extension is unsupported",
-                ));
-            }
-            let opcode = header[0] & 0x0f;
-            if header[1] & 0x80 != 0 {
-                return Err(ClientWebSocketError::new(
-                    502,
-                    "native upstream websocket frame is masked",
-                ));
-            }
-            let mut length = u64::from(header[1] & 0x7f);
-            if length == 126 {
-                let raw = self.read_exact(2)?;
-                length = u64::from(u16::from_be_bytes([raw[0], raw[1]]));
-            } else if length == 127 {
-                let raw = self.read_exact(8)?;
-                length = u64::from_be_bytes(raw.try_into().expect("eight bytes"));
-            }
-            if opcode >= 8 && (!final_frame || length > 125 || rsv1) {
-                return Err(ClientWebSocketError::new(
-                    502,
-                    "native upstream websocket control frame is invalid",
-                ));
-            }
-            let length = usize::try_from(length).map_err(|_| {
-                ClientWebSocketError::new(502, "native upstream websocket event is too large")
-            })?;
-            if opcode < 8
-                && message
-                    .len()
-                    .checked_add(length)
-                    .is_none_or(|size| size > self.max_message_bytes)
-            {
-                return Err(ClientWebSocketError::new(
-                    502,
-                    "native upstream websocket event is too large",
-                ));
-            }
-            let payload = self.read_exact(length)?;
-            match opcode {
-                1 | 2 => {
-                    if started {
-                        return Err(ClientWebSocketError::new(
-                            502,
-                            "native upstream websocket frame sequence is invalid",
-                        ));
-                    }
-                    if rsv1 && self.compression.is_none() {
-                        return Err(ClientWebSocketError::new(
-                            502,
-                            "native upstream websocket extension is unsupported",
-                        ));
-                    }
-                    started = true;
-                    compressed = rsv1;
-                    message.extend_from_slice(&payload);
-                }
-                0 => {
-                    if !started || rsv1 {
-                        return Err(ClientWebSocketError::new(
-                            502,
-                            "native upstream websocket frame sequence is invalid",
-                        ));
-                    }
-                    message.extend_from_slice(&payload);
-                }
-                8 => {
-                    self.peer_close_code = payload
-                        .get(..2)
-                        .map(|code| u16::from_be_bytes([code[0], code[1]]));
-                    self.closed = true;
+            match self.poll_receive_text()? {
+                WebSocketPoll::Pending => std::thread::sleep(Duration::from_millis(1)),
+                WebSocketPoll::Ping(payload) => self.send_pong(&payload)?,
+                WebSocketPoll::Closed { code } => {
+                    self.close_with(code.unwrap_or(1000), "");
                     return Ok(None);
                 }
-                9 => {
-                    self.send_frame(10, &payload, false)?;
-                }
-                10 => {}
-                _ => {
-                    return Err(ClientWebSocketError::new(
-                        502,
-                        "native upstream websocket frame type is unsupported",
-                    ));
-                }
-            }
-            if final_frame && started {
-                if compressed {
-                    message = self
-                        .compression
-                        .as_mut()
-                        .expect("RSV1 requires negotiated compression")
-                        .decompress(&message)?;
-                }
-                let text = std::str::from_utf8(&message).map_err(|_| {
-                    ClientWebSocketError::new(502, "native upstream websocket event is not UTF-8")
-                })?;
-                match serde_json::from_str(text) {
+                WebSocketPoll::Text(text) => match serde_json::from_str(&text) {
                     Ok(value) => return Ok(Some(value)),
-                    Err(_) if !self.local_control => {
-                        message.clear();
-                        started = false;
-                        compressed = false;
-                    }
+                    Err(_) if !self.local_control => continue,
                     Err(_) => {
                         return Err(ClientWebSocketError::new(
                             502,
                             "local control websocket event is invalid JSON",
                         ));
                     }
-                }
+                },
             }
         }
     }
     pub fn close(&mut self) {
-        if !self.closed {
-            let _ = self.send_frame(8, &1000u16.to_be_bytes(), false);
-            self.closed = true;
-        }
+        self.close_with(1000, "");
     }
 }
 impl Drop for ClientWebSocket {
@@ -1115,4 +1152,150 @@ fn local_socket_error(error: std::io::Error) -> ClientWebSocketError {
         _ => 500,
     };
     ClientWebSocketError::new(status, "local Codex control socket is unavailable")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::websocket_pump::WebSocketPumpConfig;
+    use flate2::{Compress, Compression, FlushCompress};
+    use std::io::Cursor;
+
+    impl ReadWrite for Cursor<Vec<u8>> {
+        fn set_read_timeout(&self, _timeout: Option<Duration>) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn client_socket() -> ClientWebSocket {
+        ClientWebSocket {
+            stream: Box::new(Cursor::new(Vec::new())),
+            closed: false,
+            peer_close_code: None,
+            response_headers: Default::default(),
+            compression: None,
+            max_message_bytes: MAX_PROXY_REQUEST_BYTES,
+            frame_decoder: FrameDecoder::new(MAX_PROXY_REQUEST_BYTES),
+            local_control: false,
+        }
+    }
+
+    fn masked_data_header(length: u64) -> Vec<u8> {
+        let mut bytes = vec![0x81, 0xff];
+        bytes.extend_from_slice(&length.to_be_bytes());
+        bytes.extend_from_slice(&[1, 2, 3, 4]);
+        bytes
+    }
+
+    fn masked_text_frame(text: &str) -> Vec<u8> {
+        let mask = [0x11, 0x22, 0x33, 0x44];
+        let bytes = text.as_bytes();
+        let mut frame = vec![0x81, 0x80 | bytes.len() as u8];
+        frame.extend_from_slice(&mask);
+        frame.extend(
+            bytes
+                .iter()
+                .enumerate()
+                .map(|(index, byte)| byte ^ mask[index % mask.len()]),
+        );
+        frame
+    }
+
+    #[test]
+    fn regular_websockets_keep_legacy_cap_while_sideband_can_use_four_mib() {
+        const FOUR_MIB: usize = 4 * 1024 * 1024;
+        let declared_length = (FOUR_MIB + 1) as u64;
+
+        let mut legacy_bytes = Cursor::new(masked_data_header(declared_length));
+        let mut legacy = WebSocketConnection::new(&mut legacy_bytes);
+        assert!(
+            matches!(
+                legacy.poll_text().unwrap(),
+                WebSocketPoll::Closed { code: None }
+            ),
+            "the legacy cap accepts a 4 MiB+1 declaration"
+        );
+
+        let mut sideband_bytes = Cursor::new(masked_data_header(declared_length));
+        let mut sideband = WebSocketConnection::new(&mut sideband_bytes);
+        sideband.set_max_message_bytes(FOUR_MIB).unwrap();
+        assert_eq!(sideband.poll_text().unwrap_err().close_code(), 1009);
+
+        let client = client_socket();
+        assert_eq!(client.max_message_bytes, MAX_PROXY_REQUEST_BYTES);
+        assert_eq!(WebSocketPumpConfig::default().max_message_bytes, FOUR_MIB);
+    }
+
+    #[test]
+    fn downstream_upgrade_prefix_preserves_first_frame() {
+        let prefix = masked_text_frame("first-frame");
+        let mut stream = Cursor::new(Vec::new());
+        let mut connection = WebSocketConnection::new_with_prefix(&mut stream, &prefix).unwrap();
+        assert!(matches!(
+            connection.poll_text().unwrap(),
+            WebSocketPoll::Text(text) if text == "first-frame"
+        ));
+    }
+
+    #[test]
+    fn downstream_ping_is_returned_for_single_owner_pong_and_empty_close_is_preserved() {
+        let mut ping = vec![0x89, 0x80 | 4, 1, 2, 3, 4];
+        ping.extend([b'p' ^ 1, b'i' ^ 2, b'n' ^ 3, b'g' ^ 4]);
+        let mut stream = Cursor::new(Vec::new());
+        let mut connection = WebSocketConnection::new_with_prefix(&mut stream, &ping).unwrap();
+        assert!(matches!(
+            connection.poll_text().unwrap(),
+            WebSocketPoll::Ping(payload) if payload == b"ping"
+        ));
+        connection.send_pong(b"ping").unwrap();
+        drop(connection);
+        assert_eq!(stream.into_inner(), [0x8a, 4, b'p', b'i', b'n', b'g']);
+
+        let empty_close = vec![0x88, 0x80, 5, 6, 7, 8];
+        let mut stream = Cursor::new(Vec::new());
+        let mut connection =
+            WebSocketConnection::new_with_prefix(&mut stream, &empty_close).unwrap();
+        assert_eq!(
+            connection.poll_text().unwrap(),
+            WebSocketPoll::Closed { code: None }
+        );
+        assert_eq!(connection.peer_close_code(), Some(1005));
+        drop(connection);
+        assert_eq!(stream.into_inner(), [0x88, 0]);
+    }
+
+    #[test]
+    fn deflate_output_is_incrementally_limited_and_errors_are_classified() {
+        let input = vec![b'x'; 4 * 1024 * 1024 + 1];
+        let mut compressor = Compress::new(Compression::fast(), false);
+        let mut compressed = Vec::with_capacity(8192);
+        loop {
+            let consumed = usize::try_from(compressor.total_in())
+                .unwrap_or(input.len())
+                .min(input.len());
+            compressor
+                .compress_vec(&input[consumed..], &mut compressed, FlushCompress::Sync)
+                .unwrap();
+            let consumed = usize::try_from(compressor.total_in())
+                .unwrap_or(input.len())
+                .min(input.len());
+            if consumed == input.len() && compressed.ends_with(&[0, 0, 255, 255]) {
+                compressed.truncate(compressed.len() - 4);
+                break;
+            }
+            compressed.reserve(8192);
+        }
+
+        let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
+        assert_eq!(
+            deflate.decompress(&compressed, 4 * 1024 * 1024),
+            Err(DecompressionError::TooLarge)
+        );
+
+        let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
+        assert_eq!(
+            deflate.decompress(&[0xff], 4 * 1024 * 1024),
+            Err(DecompressionError::Invalid)
+        );
+    }
 }
