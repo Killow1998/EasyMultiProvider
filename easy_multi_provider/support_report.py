@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from . import __version__
 from .accounts import NATIVE_ACCOUNT_ID
-from .main import resolve_desktop_config_path
+from .config import resolve_desktop_config_path
 from .network_proxy import proxy_for_url
 
 

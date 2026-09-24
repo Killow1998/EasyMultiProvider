@@ -227,9 +227,7 @@ def _smoke_executable(executable: Path, version: str, target: Target) -> None:
         port = _reserve_loopback_port()
         environment = os.environ.copy()
         environment["CODEX_HOME"] = str(codex_home)
-        environment["EASY_MULTI_PROVIDER_CONFIG"] = str(
-            temporary_root / "config.json"
-        )
+        environment.pop("EASY_MULTI_PROVIDER_CONFIG", None)
         environment["EASY_MULTI_PROVIDER_MASTER_KEY"] = ""
         environment["EASY_MULTI_PROVIDER_MASTER_KEY_FILE"] = str(
             temporary_root / "state" / "master.key"

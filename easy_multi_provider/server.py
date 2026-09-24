@@ -5550,6 +5550,7 @@ def _serve_owned(
             state.usage_history.start()
 
             print("EMP listening on %s" % base_url, flush=True)
+            print("Configuration file: %s" % effective_config_path, flush=True)
             print("Network proxy: %s" % proxy_source, flush=True)
             print("Open in browser: %s" % base_url, flush=True)
             if open_browser:

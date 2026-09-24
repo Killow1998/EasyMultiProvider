@@ -159,7 +159,7 @@ class IntegrationCliTests(unittest.TestCase):
         desktop_config = self.root / "desktop" / "config.json"
         with (
             patch.object(cli.sys, "frozen", True, create=True),
-            patch.object(cli, "resolve_desktop_config_path", return_value=desktop_config),
+            patch.object(cli, "config_path", return_value=desktop_config),
             patch("easy_multi_provider.server.serve") as serve,
         ):
             code, stdout, stderr = self.invoke()
@@ -173,6 +173,33 @@ class IntegrationCliTests(unittest.TestCase):
             None,
             open_browser=True,
         )
+
+    def test_source_serve_defaults_to_the_same_user_config_directory(self):
+        xdg = self.root / "xdg"
+        expected = xdg / "easy-multi-provider" / "config.json"
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg), "EASY_MULTI_PROVIDER_CONFIG": ""}), patch(
+            "easy_multi_provider.server.serve"
+        ) as serve:
+            code, stdout, stderr = self.invoke("serve")
+        self.assertEqual((code, stdout, stderr), (0, "", ""))
+        serve.assert_called_once_with(expected, None, None, open_browser=False)
+
+    def test_config_override_precedence_is_flag_then_environment_then_user_default(self):
+        xdg = self.root / "xdg"
+        from_environment = self.root / "environment.json"
+        explicit = self.root / "explicit.json"
+        with patch.dict(os.environ, {
+            "XDG_CONFIG_HOME": str(xdg),
+            "EASY_MULTI_PROVIDER_CONFIG": str(from_environment),
+        }), patch("easy_multi_provider.server.serve") as serve:
+            self.assertEqual(self.invoke("serve")[0], 0)
+            self.assertEqual(self.invoke("serve", "--config", str(explicit))[0], 0)
+            with patch.object(cli.sys, "frozen", True, create=True):
+                self.assertEqual(self.invoke()[0], 0)
+        self.assertEqual(serve.call_args_list[0].args[0], from_environment)
+        self.assertEqual(serve.call_args_list[1].args[0], explicit)
+        self.assertEqual(serve.call_args_list[2].args[0], from_environment)
+        self.assertEqual(serve.call_args_list[2].kwargs["open_browser"], True)
 
     def test_desktop_config_path_follows_platform_user_directories(self):
         home = self.root / "user"

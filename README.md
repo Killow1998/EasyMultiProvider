@@ -226,14 +226,14 @@ Windows:
 
 ~~~powershell
 .\EMP.exe --version
-.\EMP.exe serve --config config.json
+.\EMP.exe serve
 ~~~
 
 Linux archive, from its extracted directory:
 
 ~~~bash
 ./EMP --version
-./EMP serve --config config.json
+./EMP serve
 ~~~
 
 The user installer creates `~/.local/bin/EMP`; use that command after
@@ -249,20 +249,27 @@ Install Git and [`uv`](https://docs.astral.sh/uv/getting-started/installation/),
 git clone https://github.com/Killow1998/EasyMultiProvider.git
 cd EasyMultiProvider
 uv sync
-uv run python -m easy_multi_provider serve --config config.json
+uv run python -m easy_multi_provider serve
 ~~~
 
 `uv` manages Python, the virtual environment, and locked dependencies. No separate Python version manager is required.
 
 ## Configuration locations
 
-Desktop launch stores configuration in the normal per-user location:
+All launch modes use the same per-user configuration location by default:
 
 | Platform | Config |
 | --- | --- |
 | Windows | `%LOCALAPPDATA%\EasyMultiProvider\config.json` |
 | macOS | `~/Library/Application Support/EasyMultiProvider/config.json` |
 | Linux | `$XDG_CONFIG_HOME/easy-multi-provider/config.json` or `~/.config/easy-multi-provider/config.json` |
+
+`EMP serve` prints the configuration path it selected. Use `--config PATH`
+to open a separate configuration, or set `EASY_MULTI_PROVIDER_CONFIG` to
+choose a different default; the command-line option takes precedence.
+Earlier source launches that used `--config config.json` keep their files in
+the source directory. The Linux installer can copy that configuration and
+its state into the per-user location without removing the source files.
 
 The Linux user installer places the binary at `$XDG_DATA_HOME/easy-multi-provider/EMP` (default `~/.local/share/easy-multi-provider/EMP`) and the launcher at `~/.local/bin/EMP`.
 
