@@ -229,8 +229,10 @@ tool pairing errors and mixed reasoning/answer content immediately block the
 affected operation. Record other differences here and close them before final
 acceptance without delaying independent work or normalizing them away.
 
-Earlier non-blocking gaps needing revalidation: legacy Retry-After dates and
-malformed upstream JSON wording during plaintext collaboration restoration.
+Legacy Retry-After IMF/RFC850 dates and common malformed upstream JSON errors
+now have real-process Python/Rust parity fixtures (`ba5c723`, `db56918`).
+Uncommon malformed JSON forms still require evidence before claiming complete
+error-text parity.
 Older notes about missing native streaming and history preflight are
 superseded by current commits; verify those implementations instead of
 repeating their original implementation tasks.
