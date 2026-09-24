@@ -15,6 +15,7 @@ use emp_router::RouterError;
 use emp_router::project_external_payload;
 use emp_router::protocol_candidates;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 fn history_error_message(error: &HistoryError) -> &'static str {
@@ -87,17 +88,25 @@ pub(crate) enum DestinationPrepareError {
     Context(Box<emp_history::context::ContextAssessment>),
 }
 
+fn context_guard_body(body: &Value) -> Cow<'_, Value> {
+    if has_trailing_compaction_trigger(body) {
+        Cow::Owned(compaction_summary_body(body))
+    } else {
+        Cow::Borrowed(body)
+    }
+}
+
 pub(crate) fn prepare_destination_context(
     state: &ServerState,
     route: &ResolvedRoute,
-    body: &Value,
+    body: Value,
     incoming: &BTreeMap<String, String>,
 ) -> Result<Value, DestinationPrepareError> {
     if route.dialect == emp_core::Dialect::CodexNative {
         // Incremental native input has unknown history completeness. Codex owns
         // its existing chain; never judge the delta as a full conversation.
         if body.get("previous_response_id").is_none_or(Value::is_null)
-            && let Some(payload) = crate::services::context::payload(state, route, body)
+            && let Some(payload) = crate::services::context::payload(state, route, &body)
         {
             let assessment = emp_history::context::assess(
                 route.provider.value(),
@@ -109,7 +118,7 @@ pub(crate) fn prepare_destination_context(
                 return Err(DestinationPrepareError::Context(Box::new(assessment)));
             }
         }
-        return Ok(body.clone());
+        return Ok(body);
     }
     let protocol =
         protocol_candidates(route)
@@ -121,21 +130,19 @@ pub(crate) fn prepare_destination_context(
     let candidate = route
         .with_protocol(protocol)
         .map_err(|_| DestinationPrepareError::History("history_compaction_failed"))?;
-    let guard_body = if has_trailing_compaction_trigger(body) {
-        compaction_summary_body(body)
-    } else {
-        body.clone()
+    let assessment = {
+        let guard_body = context_guard_body(&body);
+        let payload = project_external_payload(&candidate, guard_body.as_ref())
+            .map_err(DestinationPrepareError::Router)?;
+        emp_history::context::assess(
+            candidate.provider.value(),
+            candidate.model.value(),
+            candidate.protocol.as_config_str(),
+            &payload,
+        )
     };
-    let payload = project_external_payload(&candidate, &guard_body)
-        .map_err(DestinationPrepareError::Router)?;
-    let assessment = emp_history::context::assess(
-        candidate.provider.value(),
-        candidate.model.value(),
-        candidate.protocol.as_config_str(),
-        &payload,
-    );
     if !assessment.blocked() {
-        return Ok(body.clone());
+        return Ok(body);
     }
     let Some(safe_budget) = assessment.safe_input_limit else {
         return Err(DestinationPrepareError::Context(assessment.into()));
@@ -143,7 +150,7 @@ pub(crate) fn prepare_destination_context(
     let router = ExternalRouter::new(&state.backend.transport.client);
     let mut summary_failure = None;
     let compacted = emp_history::context::compact_with(
-        body,
+        &body,
         candidate.model.value(),
         safe_budget,
         |summary_body| {
@@ -174,19 +181,17 @@ pub(crate) fn prepare_destination_context(
             DestinationPrepareError::Router,
         )
     })?;
-    let final_guard_body = if has_trailing_compaction_trigger(&compacted) {
-        compaction_summary_body(&compacted)
-    } else {
-        compacted.clone()
+    let final_assessment = {
+        let final_guard_body = context_guard_body(&compacted);
+        let payload = project_external_payload(&candidate, final_guard_body.as_ref())
+            .map_err(DestinationPrepareError::Router)?;
+        emp_history::context::assess(
+            candidate.provider.value(),
+            candidate.model.value(),
+            candidate.protocol.as_config_str(),
+            &payload,
+        )
     };
-    let payload = project_external_payload(&candidate, &final_guard_body)
-        .map_err(DestinationPrepareError::Router)?;
-    let final_assessment = emp_history::context::assess(
-        candidate.provider.value(),
-        candidate.model.value(),
-        candidate.protocol.as_config_str(),
-        &payload,
-    );
     if final_assessment.blocked() {
         return Err(DestinationPrepareError::Context(final_assessment.into()));
     }
@@ -215,5 +220,46 @@ pub(crate) fn destination_error_response(error: DestinationPrepareError) -> Vec<
                 &[],
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod context_guard_body_tests {
+    use super::context_guard_body;
+    use crate::services::compaction::COMPACTION_PROMPT;
+    use serde_json::json;
+    use std::borrow::Cow;
+
+    #[test]
+    fn ordinary_context_guard_borrows_the_original_body() {
+        let body = json!({
+            "model":"demo/model",
+            "input":[{"type":"message","role":"user","content":"history"}]
+        });
+
+        assert!(matches!(
+            context_guard_body(&body),
+            Cow::Borrowed(guard) if std::ptr::eq(guard, &body)
+        ));
+    }
+
+    #[test]
+    fn compaction_context_guard_owns_the_summary_projection() {
+        let body = json!({
+            "model":"demo/model",
+            "input":[
+                {"type":"message","role":"user","content":"history"},
+                {"type":"compaction_trigger"}
+            ]
+        });
+
+        let Cow::Owned(guard) = context_guard_body(&body) else {
+            panic!("compaction trigger must own its summary projection");
+        };
+        assert_eq!(guard["stream"], false);
+        assert_eq!(guard["input"].as_array().unwrap().len(), 2);
+        assert_eq!(guard["input"][1]["content"][0]["text"], COMPACTION_PROMPT);
+        assert!(!guard.to_string().contains("compaction_trigger"));
+        assert_eq!(body["input"][1]["type"], "compaction_trigger");
     }
 }

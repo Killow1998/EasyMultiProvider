@@ -102,7 +102,7 @@ pub(crate) fn compact_request(
         Ok(body) => body,
         Err(error) => return history_http_error(&error),
     };
-    body = match prepare_destination_context(state, &route, &body, &incoming) {
+    body = match prepare_destination_context(state, &route, body, &incoming) {
         Ok(body) => body,
         Err(error) => return destination_error_response(error),
     };

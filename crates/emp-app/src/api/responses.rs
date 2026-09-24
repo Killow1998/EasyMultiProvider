@@ -178,9 +178,10 @@ pub(crate) fn responses_request(
         }
         Err(error) => return ResponsesRequestResult::Buffered(history_http_error(&error)),
     };
-    body = match prepare_destination_context(state, &route, &body, &incoming) {
+    let stream_requested = python_truthy(body.get("stream"));
+    body = match prepare_destination_context(state, &route, body, &incoming) {
         Ok(body) => body,
-        Err(DestinationPrepareError::History(reason)) if python_truthy(body.get("stream")) => {
+        Err(DestinationPrepareError::History(reason)) if stream_requested => {
             let failed = history_stream_error(&HistoryError::new(reason));
             if let Ok(frame) = sse_frame("response.failed", &failed) {
                 let _ = write_stream_head(stream);

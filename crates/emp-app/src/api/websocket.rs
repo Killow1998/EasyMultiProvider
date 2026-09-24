@@ -294,7 +294,7 @@ pub(crate) fn serve_responses_websocket(
         request_body = match prepare_destination_context(
             state,
             &route,
-            &Value::Object(request_body.clone()),
+            Value::Object(request_body),
             &request_headers,
         ) {
             Ok(Value::Object(body)) => body,
