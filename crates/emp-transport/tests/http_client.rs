@@ -237,7 +237,11 @@ fn serve_tls_connection(stream: TcpStream, config: Arc<ServerConfig>) {
     let mut stream = BufReader::new(StreamOwned::new(connection, stream));
     let mut request_line = String::new();
     match stream.read_line(&mut request_line) {
-        Ok(0) | Err(_) => return,
+        Ok(0) => return,
+        Err(error) => {
+            eprintln!("TLS fixture could not read request: {error:?}");
+            return;
+        }
         Ok(_) => {}
     }
     let mut content_length = 0;
@@ -686,8 +690,23 @@ async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
             None,
             false,
         )
-        .await
-        .expect("trusted TLS request");
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            // The public transport error is intentionally content-free. This
+            // fixture can safely expose the underlying local TLS failure.
+            let root = reqwest::Certificate::from_der(&server.certificate_der)
+                .expect("fixture CA certificate");
+            let direct = reqwest::Client::builder()
+                .no_proxy()
+                .tls_certs_only([root])
+                .build()
+                .expect("direct TLS diagnostic client");
+            let direct_result = direct.get(server.url("127.0.0.1")).send().await;
+            panic!("trusted TLS request: {error:?}; direct reqwest: {direct_result:?}");
+        }
+    };
     assert_eq!(response.status(), 200);
     assert_eq!(response.header("content-length"), Some("2"));
     response.finish().await;
