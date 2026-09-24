@@ -496,16 +496,17 @@ class ServerAccountTests(unittest.TestCase):
         self.assertIn("toggleProviderModels", html)
         self.assertIn("隐藏全部模型", html)
 
-    def test_web_exposes_route_presentation_controls_and_live_preview(self):
+    def test_web_exposes_compact_route_presentation_editor(self):
         html = WEB_FILE.read_text(encoding="utf-8")
         self.assertIn("模型显示", html)
-        self.assertIn("data-catalog-alias", html)
-        self.assertIn("data-catalog-context", html)
-        self.assertIn("data-catalog-preview", html)
+        self.assertIn("modal_catalog_alias", html)
+        self.assertIn("modal_catalog_context", html)
         self.assertNotIn("data-catalog-summary", html)
         self.assertIn("presentationPreview", html)
-        self.assertIn("updateCatalogDisplayPreview", html)
+        self.assertIn("openCatalogDisplayEditor", html)
         self.assertIn("renderCatalogDisplay", html)
+        self.assertNotIn('id="catalog_display_toggle"', html)
+        self.assertNotIn('onclick="saveCatalogDisplay()"', html)
         self.assertNotIn("openNativePresentationModal", html)
         self.assertNotIn("openRoutePresentationModal", html)
 
@@ -1281,7 +1282,7 @@ class ServerAccountTests(unittest.TestCase):
         self.assertNotIn("TTFT 慢于参考", html)
         self.assertNotIn("TPS 低于参考", html)
         self.assertIn("到收到首段正文或工具参数的时间", html)
-        self.assertIn("输出期间每秒接收的 token 数估计", html)
+        self.assertIn("全部输出 token 除以完整请求耗时", html)
         self.assertIn("本地排队超限", html)
         self.assertNotIn("不保存消息内容、响应内容或凭据", html)
         self.assertIn("diagnosticsContextLabel", html)
@@ -1700,6 +1701,68 @@ class ServerAccountTests(unittest.TestCase):
             generated = json.loads(catalog_path.read_text(encoding="utf-8"))
             self.assertEqual(generated["models"][0]["display_name"], "[ 258K]  Native")
             self.assertEqual(state.runtime_sync_snapshot()["state"], "reload_required")
+
+    def test_startup_migrates_native_voice_sideband_from_version_two_lease(self):
+        for has_catalog in (True, False):
+            with self.subTest(has_catalog=has_catalog), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                config_path = root / "config.json"
+                save(_integration_test_config(root), config_path)
+                codex_home = root / "codex"
+                catalog_path = codex_home / "easy-multi-provider" / "catalog.json"
+                lease_path = codex_home / "easy-multi-provider" / "integration" / "lease.json"
+                manager = IntegrationManager(
+                    codex_home / "config.toml",
+                    lease_path,
+                    instance_id="legacy-sideband",
+                )
+                base_url = "http://127.0.0.1:43124/v1"
+                manager.enable(
+                    base_url,
+                    str(catalog_path.resolve()) if has_catalog else None,
+                    service_ready=True,
+                )
+                legacy = json.loads(lease_path.read_text(encoding="utf-8"))
+                legacy["version"] = 2
+                legacy["fields"].pop("experimental_realtime_ws_base_url")
+                lease_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+                class RuntimeWithoutRestart:
+                    @staticmethod
+                    def reload(_expected_models, target, *, confirm_reload, expected_catalog=None):
+                        return RuntimeSyncResult(
+                            STOPPED_WAITING_FOR_START,
+                            target,
+                            False,
+                            "controlled runtime is absent",
+                        )
+
+                state = AppState(
+                    config_path,
+                    integration_manager=manager,
+                    catalog_path=catalog_path,
+                    runtime_controller=RuntimeWithoutRestart(),
+                )
+                state.dynamic_model_catalog = lambda: True
+
+                class BoundServer:
+                    server_address = ("127.0.0.1", 43124)
+
+                    @staticmethod
+                    def fileno():
+                        return 1
+
+                result = startup_reconcile(state, BoundServer())
+
+                self.assertTrue(result.ok)
+                config_text = (codex_home / "config.toml").read_text(encoding="utf-8")
+                self.assertIn(
+                    'experimental_realtime_ws_base_url = "http://127.0.0.1:43124/v1"',
+                    config_text,
+                )
+                migrated = json.loads(lease_path.read_text(encoding="utf-8"))
+                self.assertEqual(migrated["version"], 3)
+                self.assertIn("experimental_realtime_ws_base_url", migrated["fields"])
 
     def test_integration_status_is_safe_and_handler_is_ready(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2170,7 +2233,8 @@ class ServerAccountTests(unittest.TestCase):
             self.assertIsNotNone(records[0]["ttft_ms"])
             self.assertEqual(records[0]["output_tokens"], 1)
             self.assertEqual(records[0]["generation_ms"], 0)
-            self.assertIsNone(records[0]["tokens_per_second"])
+            self.assertIsNotNone(records[0]["tokens_per_second"])
+            self.assertGreater(records[0]["tokens_per_second"], 0)
             self.assertEqual(records[1]["error_class"], "stream_error")
             self.assertEqual(records[1]["status"], 502)
             self.assertEqual(records[2]["error_class"], "client_disconnect")
@@ -2202,6 +2266,45 @@ class ServerAccountTests(unittest.TestCase):
                 [record["speed_mode"] for record in records],
                 ["fast", "standard"],
             )
+
+    def test_route_diagnostics_use_full_request_duration_for_tps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            save(normalize({}), config_path)
+            state = AppState(config_path)
+
+            state._record_route_event(
+                {
+                    "model_id": "gpt-6-luna",
+                    "status": 200,
+                    "success": True,
+                    "error_class": "none",
+                    "output_tokens": 120,
+                    "tokens_per_second": 999999,
+                },
+                {"model": "gpt-6-luna"},
+                time.monotonic() - 2,
+                "websocket",
+                "responses",
+            )
+            state._record_route_event(
+                {
+                    "model_id": "gpt-6-luna",
+                    "status": 502,
+                    "success": False,
+                    "error_class": "stream_error",
+                    "output_tokens": 120,
+                    "tokens_per_second": 999999,
+                },
+                {"model": "gpt-6-luna"},
+                time.monotonic() - 2,
+                "websocket",
+                "responses",
+            )
+
+            records = state.diagnostics.snapshot()["records"]
+            self.assertAlmostEqual(records[0]["tokens_per_second"], 60, delta=0.1)
+            self.assertIsNone(records[1]["tokens_per_second"])
 
     def test_route_replays_provider_signature_without_persisting_history(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2514,11 +2617,49 @@ class ServerAccountTests(unittest.TestCase):
                     % json.dumps(str(catalog_path.resolve())),
                     config_text,
                 )
+                self.assertNotIn("experimental_realtime_ws_base_url", config_text)
                 self.assertFalse((codex_home / "emp.config.toml").exists())
                 self.assertFalse((root / "generated").exists())
             finally:
                 server.shutdown()
                 server.server_close()
+
+    def test_native_enable_routes_voice_sideband_back_through_emp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            codex_home = root / "codex"
+            config_path = root / "config.json"
+            save(_integration_test_config(root), config_path)
+            manager = IntegrationManager(
+                codex_home / "config.toml",
+                codex_home / "easy-multi-provider" / "integration" / "lease.json",
+                instance_id="server-voice-sideband",
+            )
+            state = AppState(
+                config_path,
+                integration_manager=manager,
+                runtime_controller=_WaitingRuntimeController(),
+            )
+            state.dynamic_model_catalog = lambda: True
+            state.mark_service_ready()
+            base_url = "http://127.0.0.1:43123/v1"
+
+            result = state.enable_integration(base_url, confirm_reload=True)
+
+            self.assertTrue(result.ok)
+            config_text = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertIn(
+                'experimental_realtime_ws_base_url = "http://127.0.0.1:43123/v1"',
+                config_text,
+            )
+            state.restore_integration(confirm_reload=True)
+            restored_path = codex_home / "config.toml"
+            restored = (
+                restored_path.read_text(encoding="utf-8")
+                if restored_path.exists()
+                else ""
+            )
+            self.assertNotIn("experimental_realtime_ws_base_url", restored)
 
     def test_enable_conflict_is_non_2xx_and_does_not_overwrite_user_change(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3857,7 +3998,7 @@ class ServerAccountTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
-    def test_web_root_requires_bootstrap_url_before_issuing_session(self):
+    def test_web_root_issues_session_to_each_local_browser(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             save(normalize({}), config_path)
@@ -3866,37 +4007,33 @@ class ServerAccountTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                connection = HTTPConnection(*server.server_address)
-                connection.request("GET", "/")
-                response = connection.getresponse()
-                self.assertEqual(response.status, 401)
-                self.assertIsNone(response.getheader("Set-Cookie"))
-                response.read()
-                connection.close()
-
                 for path, headers in (
-                    ("/?bootstrap=%E4%B8%AD%E6%96%87", {}),
-                    ("/?bootstrap=%FF", {}),
+                    ("/", {}),
+                    ("/index.html", {}),
+                    ("/?bootstrap=legacy-link", {}),
                     ("/", {"Cookie": 'emp_session="\u00e9"'}),
                 ):
                     with self.subTest(path=path, headers=headers):
                         connection = HTTPConnection(*server.server_address)
                         connection.request("GET", path, headers=headers)
                         response = connection.getresponse()
-                        self.assertEqual(response.status, 401)
-                        self.assertIsNone(response.getheader("Set-Cookie"))
+                        self.assertEqual(response.status, 200)
+                        self.assertIn("emp_session=", response.getheader("Set-Cookie"))
+                        self.assertIn("Max-Age=", response.getheader("Set-Cookie"))
                         response.read()
                         connection.close()
-                        self.assertFalse(state.bootstrap_used)
 
-                connection = HTTPConnection(*server.server_address)
-                connection.request("GET", "/?bootstrap=" + state.bootstrap_token)
-                response = connection.getresponse()
-                self.assertEqual(response.status, 303)
-                self.assertIn("emp_session=", response.getheader("Set-Cookie"))
-                self.assertIn("Max-Age=", response.getheader("Set-Cookie"))
-                response.read()
-                connection.close()
+                for headers in (
+                    {"Host": "evil.example:%d" % server.server_address[1]},
+                    {"Origin": "http://evil.example:%d" % server.server_address[1]},
+                ):
+                    connection = HTTPConnection(*server.server_address)
+                    connection.request("GET", "/", headers=headers)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 403)
+                    self.assertIsNone(response.getheader("Set-Cookie"))
+                    response.read()
+                    connection.close()
             finally:
                 server.shutdown()
                 server.server_close()
@@ -3913,16 +4050,15 @@ class ServerAccountTests(unittest.TestCase):
             threading.Thread(target=server.serve_forever, daemon=True).start()
             try:
                 headers = {"Cookie": "emp_session=" + original.session_token}
-                for expired, expected in ((False, 200), (True, 401)):
+                for expired in (False, True):
                     if expired:
                         restarted.session_expires_at = 0
                     connection = HTTPConnection(*server.server_address)
                     connection.request("GET", "/", headers=headers)
                     response = connection.getresponse()
-                    self.assertEqual(response.status, expected)
-                    body = response.read().decode("utf-8")
-                    if expired:
-                        self.assertIn("请从 EMP 打开管理页", body)
+                    self.assertEqual(response.status, 200)
+                    self.assertIn("emp_session=", response.getheader("Set-Cookie"))
+                    response.read()
                     connection.close()
                 session_path = path.parent / "state" / "web-session.json"
                 saved = json.loads(session_path.read_text(encoding="utf-8"))

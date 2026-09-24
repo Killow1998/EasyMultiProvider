@@ -599,6 +599,47 @@ class NativeLoginQuotaTests(unittest.TestCase):
                 self.assertNotIn("example.invalid", str(raised.exception))
                 self.assertTrue(process.stdin.closed)
 
+    def test_workspace_routing_failures_are_connectivity_errors(self):
+        requests = [
+            {"id": 1, "method": "initialize"},
+            {"method": "initialized"},
+            {"id": 2, "method": "account/read"},
+            {"id": 3, "method": "account/rateLimits/read"},
+        ]
+        for message in (
+            "workspace routing discovery timed out",
+            "workspace routing discovery failed",
+        ):
+            with self.subTest(message=message):
+                process, _ = self._fake_process_factory(True)
+                process.stdout = io.StringIO(
+                    "\n".join(
+                        json.dumps(value)
+                        for value in (
+                            {"id": 1, "result": {}},
+                            {"id": 2, "error": {"code": -32603, "message": message}},
+                        )
+                    )
+                    + "\n"
+                )
+                with self.assertRaises(quota_module.QuotaError) as raised:
+                    _query_app_server(process, requests, 2)
+                self.assertEqual(raised.exception.code, "quota_transport_error")
+                self.assertTrue(raised.exception.retry_imported_refresh)
+                self.assertIn("DNS", str(raised.exception))
+                self.assertNotIn(message, str(raised.exception))
+                self.assertNotIn("account/rateLimits/read", process.stdin.body)
+
+        generic, _ = self._fake_process_factory(True)
+        generic.stdout = io.StringIO(
+            '{"id":1,"result":{}}\n'
+            '{"id":2,"error":{"code":-32603,"message":"private backend detail"}}\n'
+        )
+        with self.assertRaises(quota_module.QuotaError) as raised:
+            _query_app_server(generic, requests, 2)
+        self.assertEqual(raised.exception.code, "quota_account_read_failed")
+        self.assertNotIn("private backend detail", str(raised.exception))
+
     def test_missing_account_stops_before_quota_request(self):
         process, _ = self._fake_process_factory(True)
         process.stdout = io.StringIO(
@@ -772,6 +813,142 @@ class NativeLoginQuotaTests(unittest.TestCase):
                 (original, False, auth_file),
                 (rotated, True, auth_file),
             ])
+
+    def test_imported_workspace_timeout_retries_once_then_requires_sign_in(self):
+        first, _ = self._fake_process_factory(True)
+        first.stdout = io.StringIO(
+            '{"id":1,"result":{}}\n'
+            '{"id":2,"error":{"code":-32603,"message":"workspace routing discovery timed out"}}\n'
+        )
+        second, _ = self._fake_process_factory(True)
+        second.stdout = io.StringIO(
+            '{"id":1,"result":{}}\n'
+            '{"id":2,"result":{"account":null,"requiresOpenaiAuth":true}}\n'
+        )
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            auth_file = root / "auth.json.enc"
+            write_encrypted_json(
+                auth_file,
+                {"tokens": {"access_token": "old", "refresh_token": "refresh"}},
+            )
+            codex_file = root / "codex"
+            codex_file.write_text("#!/bin/sh\n", encoding="utf-8")
+            codex_file.chmod(0o700)
+            with patch.object(
+                quota_module.subprocess, "Popen", side_effect=[first, second]
+            ) as started:
+                with self.assertRaises(quota_module.QuotaError) as raised:
+                    read_account_quota(
+                        {"auth_file": str(auth_file)},
+                        codex_binary=str(codex_file),
+                    )
+        self.assertEqual(raised.exception.code, "quota_auth_required")
+        self.assertEqual(started.call_count, 2)
+        self.assertIs(
+            json.loads(first.stdin.body.splitlines()[2])["params"]["refreshToken"],
+            False,
+        )
+        self.assertIs(
+            json.loads(second.stdin.body.splitlines()[2])["params"]["refreshToken"],
+            True,
+        )
+
+    def test_imported_workspace_timeout_retry_persists_rotated_credentials(self):
+        original = {"tokens": {"access_token": "old", "refresh_token": "refresh"}}
+        rotated = {"tokens": {"access_token": "new", "refresh_token": "new-refresh"}}
+        first, _ = self._fake_process_factory(True)
+        first.stdout = io.StringIO(
+            '{"id":1,"result":{}}\n'
+            '{"id":2,"error":{"code":-32603,"message":"workspace routing discovery timed out"}}\n'
+        )
+        second, _ = self._fake_process_factory(True)
+        processes = iter((first, second))
+        starts = []
+
+        def start(*_args, **kwargs):
+            process = next(processes)
+            starts.append(process)
+            if process is second:
+                (Path(kwargs["cwd"]) / "auth.json").write_text(
+                    json.dumps(rotated), encoding="utf-8"
+                )
+            return process
+
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            auth_file = root / "auth.json.enc"
+            write_encrypted_json(auth_file, original)
+            codex_file = root / "codex"
+            codex_file.write_text("#!/bin/sh\n", encoding="utf-8")
+            codex_file.chmod(0o700)
+            with patch.object(quota_module.subprocess, "Popen", side_effect=start):
+                result = read_account_quota(
+                    {"auth_file": str(auth_file)}, codex_binary=str(codex_file)
+                )
+            saved = quota_module.load_auth({"auth_file": str(auth_file)})
+        self.assertEqual(result["plan_type"], "plus")
+        self.assertEqual(saved, rotated)
+        self.assertEqual(starts, [first, second])
+        self.assertIs(
+            json.loads(second.stdin.body.splitlines()[2])["params"]["refreshToken"],
+            True,
+        )
+
+    def test_imported_workspace_timeout_retry_stays_transport_error(self):
+        processes = []
+        for _ in range(2):
+            process, _sent = self._fake_process_factory(True)
+            process.stdout = io.StringIO(
+                '{"id":1,"result":{}}\n'
+                '{"id":2,"error":{"code":-32603,"message":"workspace routing discovery timed out"}}\n'
+            )
+            processes.append(process)
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            auth_file = root / "auth.json.enc"
+            write_encrypted_json(
+                auth_file,
+                {"tokens": {"access_token": "old", "refresh_token": "refresh"}},
+            )
+            codex_file = root / "codex"
+            codex_file.write_text("#!/bin/sh\n", encoding="utf-8")
+            codex_file.chmod(0o700)
+            with patch.object(
+                quota_module.subprocess, "Popen", side_effect=processes
+            ) as started:
+                with self.assertRaises(quota_module.QuotaError) as raised:
+                    read_account_quota(
+                        {"auth_file": str(auth_file)},
+                        codex_binary=str(codex_file),
+                    )
+        self.assertEqual(raised.exception.code, "quota_transport_error")
+        self.assertEqual(started.call_count, 2)
+        self.assertIs(
+            json.loads(processes[1].stdin.body.splitlines()[2])["params"]["refreshToken"],
+            True,
+        )
+
+    def test_imported_non_workspace_transport_error_does_not_refresh(self):
+        calls = []
+
+        def query(_auth, _binary, _timeout, *, allow_refresh, persist_path):
+            calls.append((allow_refresh, persist_path))
+            raise quota_module.QuotaError(
+                "network unavailable", "quota_transport_error"
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            auth_file = Path(directory) / "auth.json.enc"
+            write_encrypted_json(
+                auth_file,
+                {"tokens": {"access_token": "old", "refresh_token": "refresh"}},
+            )
+            with patch.object(quota_module, "_run_quota_query", side_effect=query):
+                with self.assertRaises(quota_module.QuotaError) as raised:
+                    read_account_quota({"auth_file": str(auth_file)})
+        self.assertEqual(raised.exception.code, "quota_transport_error")
+        self.assertEqual(calls, [(False, auth_file)])
 
 
 if __name__ == "__main__":
