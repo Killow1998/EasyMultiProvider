@@ -3,7 +3,12 @@
 use crate::app::ServerState;
 use crate::http::auth::parse_session_cookie;
 use emp_transport::ContentDecodeError;
+use emp_transport::MEMORY_RESERVATION_FACTOR;
+use emp_transport::MIN_MEMORY_HEADROOM_BYTES;
+use emp_transport::MemoryStatus;
+use emp_transport::REQUEST_GROWTH_QUANTUM;
 use emp_transport::RequestCapacityError;
+use emp_transport::RequestCapacityReason;
 use emp_transport::RequestLimitsConfig;
 use emp_transport::TransportKind;
 use emp_transport::decode_content;
@@ -171,6 +176,37 @@ fn body_size_error(limit: usize, decoded: bool) -> BodyError {
     })
 }
 
+fn allocation_capacity_error(limit: usize) -> BodyError {
+    let memory =
+        emp_transport::system_memory_status().unwrap_or_else(|| MemoryStatus::available(0));
+    let total = memory.total.unwrap_or(0);
+    let used = memory
+        .used
+        .unwrap_or_else(|| total.saturating_sub(memory.available));
+    let reserved_limit = limit
+        .div_ceil(REQUEST_GROWTH_QUANTUM)
+        .saturating_mul(REQUEST_GROWTH_QUANTUM);
+    BodyError::Capacity(RequestCapacityError {
+        limit: reserved_limit,
+        decoded: false,
+        reason: RequestCapacityReason::MemoryLimit,
+        available_bytes: memory.available,
+        required_memory_bytes: reserved_limit
+            .saturating_mul(MEMORY_RESERVATION_FACTOR)
+            .saturating_add(MIN_MEMORY_HEADROOM_BYTES),
+        memory_total_bytes: total,
+        memory_used_bytes: used,
+        memory_used_percent: memory.used_percent.filter(|value| value.is_finite()),
+    })
+}
+
+fn reserve_body_capacity(
+    body: &mut Vec<u8>,
+    target_length: usize,
+) -> Result<(), std::collections::TryReserveError> {
+    body.try_reserve_exact(target_length.saturating_sub(body.len()))
+}
+
 pub(crate) fn read_json_body(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -223,6 +259,9 @@ pub(crate) fn read_json_body(
     if body.len() > length {
         body.truncate(length);
     }
+    if reserve_body_capacity(&mut body, length).is_err() {
+        return Err(allocation_capacity_error(length));
+    }
     while body.len() < length {
         let remaining = length - body.len();
         let mut chunk = [0_u8; 64 * 1024];
@@ -253,4 +292,45 @@ pub(crate) fn read_json_body(
         ));
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod body_capacity_tests {
+    use super::{
+        BodyError, REQUEST_GROWTH_QUANTUM, allocation_capacity_error, reserve_body_capacity,
+    };
+    use emp_transport::RequestCapacityReason;
+
+    #[test]
+    fn reserves_wire_content_length_without_geometric_growth() {
+        let target_length = 1024 * 1024 + 269;
+        let mut body = Vec::with_capacity(1024);
+        body.extend_from_slice(&[0_u8; 1024]);
+
+        reserve_body_capacity(&mut body, target_length).expect("reserve validated wire size");
+        assert!(body.capacity() >= target_length);
+        let reserved_capacity = body.capacity();
+        let reserved_pointer = body.as_ptr();
+
+        let chunk = [7_u8; 64 * 1024];
+        while body.len() + chunk.len() <= target_length {
+            body.extend_from_slice(&chunk);
+        }
+        let remainder = target_length - body.len();
+        body.extend_from_slice(&chunk[..remainder]);
+        assert_eq!(body.len(), target_length);
+        assert_eq!(body.capacity(), reserved_capacity);
+        assert_eq!(body.as_ptr(), reserved_pointer);
+        assert!(body.iter().all(|byte| *byte == 0 || *byte == 7));
+    }
+
+    #[test]
+    fn allocation_failure_maps_to_safe_memory_capacity_error() {
+        let BodyError::Capacity(error) = allocation_capacity_error(1024) else {
+            panic!("allocation failure must map to capacity error");
+        };
+        assert_eq!(error.reason, RequestCapacityReason::MemoryLimit);
+        assert_eq!(error.http_status(), 503);
+        assert_eq!(error.limit, REQUEST_GROWTH_QUANTUM);
+    }
 }
