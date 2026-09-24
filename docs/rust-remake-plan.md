@@ -29,7 +29,7 @@ cross-platform package or production cutover.
 | Runtime | Release Rust EMP starts; native/external HTTP, SSE, WebSocket, history and model-switch fixtures have real-process coverage | Complete official CLI consumer and package acceptance |
 | Reset credits | Python and Rust preserve an opaque credit ID and pass optional `creditId`; the shared UI lets users choose and confirms again before spending | Verify packaged UI on every supported OS |
 | Python oracle | Its source and affected regressions are mirrored from formal Python `main`; 1,434 Python tests passed locally (71 conditional skips) | Keep the pinned formal commit stable for CI |
-| Rust workspace | `cargo test --workspace --all-targets` passed 404 tests in 74 suites; formatting and warnings-denied Clippy passed | Re-run after any Rust change |
+| Rust workspace | `cargo test --workspace --all-targets` passed 405 tests in 74 suites; formatting and warnings-denied Clippy require the next cross-platform CI after current changes | Re-run after any Rust change |
 | Real processes | Release Python/Rust differential passed 30 tests; model refresh, usage and diagnostics passed 9 more; official Codex 0.156.1 consumer passed 20 tests including subagent routing | Keep these gates for package acceptance |
 | Performance | 50 cycles each runtime, 200 fake-upstream forwards, no errors or process residue; readiness p95 was 13.34 ms Rust and 236.33 ms Python on this host | Run package and longer-run gates before general performance claims |
 | Distribution | Python `main` Package and Runtime compatibility CI succeeded at the pinned commit; the Rust branch has passed Linux packaging and is correcting platform fixture failures | Run four-OS package and compatibility workflows on this state |
