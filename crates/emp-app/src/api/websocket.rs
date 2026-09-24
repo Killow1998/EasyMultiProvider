@@ -270,27 +270,23 @@ pub(crate) fn serve_responses_websocket(
             let _ = websocket.send_json(&serde_json::json!({"type":"error","error":{"code":"previous_response_not_found","message":"Previous response was not found. Retrying the full request."}}));
             continue;
         }
-        request_body = match prepare_history(
-            state,
-            &route,
-            &Value::Object(request_body),
-            &request_headers,
-        ) {
-            Ok(Value::Object(body)) => body,
-            Ok(_) => {
-                let error = HistoryError::new("invalid_history_projection");
-                if websocket.send_json(&history_stream_error(&error)).is_err() {
-                    return;
+        request_body =
+            match prepare_history(state, &route, Value::Object(request_body), &request_headers) {
+                Ok(Value::Object(body)) => body,
+                Ok(_) => {
+                    let error = HistoryError::new("invalid_history_projection");
+                    if websocket.send_json(&history_stream_error(&error)).is_err() {
+                        return;
+                    }
+                    continue;
                 }
-                continue;
-            }
-            Err(error) => {
-                if websocket.send_json(&history_stream_error(&error)).is_err() {
-                    return;
+                Err(error) => {
+                    if websocket.send_json(&history_stream_error(&error)).is_err() {
+                        return;
+                    }
+                    continue;
                 }
-                continue;
-            }
-        };
+            };
         request_body = match prepare_destination_context(
             state,
             &route,

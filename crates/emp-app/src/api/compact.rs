@@ -98,7 +98,7 @@ pub(crate) fn compact_request(
     if let Ok(id) = random_hex(8) {
         incoming.insert("X-EMP-Request-ID".to_owned(), id);
     }
-    body = match prepare_history(state, &route, &body, &incoming) {
+    body = match prepare_history(state, &route, body, &incoming) {
         Ok(body) => body,
         Err(error) => return history_http_error(&error),
     };

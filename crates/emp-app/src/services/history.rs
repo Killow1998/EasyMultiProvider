@@ -69,12 +69,12 @@ pub(crate) fn history_stream_error(error: &HistoryError) -> Value {
 pub(crate) fn prepare_history(
     state: &ServerState,
     route: &ResolvedRoute,
-    body: &Value,
+    body: Value,
     incoming: &BTreeMap<String, String>,
 ) -> Result<Value, HistoryError> {
     let reader =
         emp_codex::history::CodexHomeHistoryReader::new(&state.backend.accounts.codex_home);
-    emp_history::prepare(
+    emp_history::prepare_owned(
         body,
         incoming,
         route.dialect == emp_core::Dialect::CodexNative,
