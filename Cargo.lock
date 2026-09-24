@@ -539,6 +539,7 @@ dependencies = [
  "base64 0.22.1",
  "flate2",
  "getrandom 0.2.17",
+ "libc",
  "rcgen",
  "reqwest",
  "ring",
@@ -550,6 +551,7 @@ dependencies = [
  "socket2",
  "tokio",
  "url",
+ "windows-sys 0.61.2",
  "zstd",
 ]
 

@@ -121,7 +121,7 @@ impl BackendState {
             .build()?;
         let request_limits = RequestLimits::new(
             RequestLimitsConfig::default(),
-            || None,
+            emp_transport::system_memory_status,
             || system_now().max(0.0) as u64,
             random_hex(16)?,
         )?;

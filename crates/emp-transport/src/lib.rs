@@ -12,6 +12,7 @@ mod content_encoding;
 mod failure;
 mod http_client;
 mod http_policy;
+mod system_memory;
 mod websocket;
 pub use admission::{
     MAX_EXPANDED_REQUEST_BYTES, MAX_PROXY_REQUEST_BYTES, MEMORY_RESERVATION_FACTOR,
@@ -33,6 +34,7 @@ pub use http_policy::{
     ProxyEnvironment, ProxyOrigin, ProxyPolicy, RedirectPolicy, RequestPlan, RetryPolicy,
     StreamTimeoutError, StreamingReadState, TimeoutPolicy,
 };
+pub use system_memory::system_memory_status;
 pub use websocket::{
     ClientWebSocket, ClientWebSocketError, WebSocketConnection, WebSocketError, websocket_accept,
 };

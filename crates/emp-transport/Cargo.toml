@@ -21,6 +21,12 @@ tokio = { version = "1.53.1", features = ["time"] }
 url = "2.5.7"
 zstd = "0.13"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_SystemInformation"] }
+
 [dev-dependencies]
 rcgen = "0.14.10"
 rustls = "0.23"
