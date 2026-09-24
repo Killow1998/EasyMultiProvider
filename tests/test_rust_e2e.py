@@ -1281,6 +1281,26 @@ class RustEndToEnd(unittest.TestCase):
             status=503,
         )
 
+    def test_retry_after_dates_match_python_on_native_and_external_routes(self):
+        upstream_error = {"error": {"message": "temporarily unavailable", "type": "server_error"}}
+        for model in ("test/model", "native/model"):
+            for advice in ("Thu, 01 Jan 1970 00:00:30 GMT",
+                           "Thursday, 01-Jan-70 00:00:30 GMT"):
+                observed = []
+                for backend in self.backends:
+                    with self.subTest(model=model, advice=advice, backend=backend.runtime_kind):
+                        self.upstream.configure(upstream_error, 503,
+                                                headers={"Retry-After": advice})
+                        status, headers, raw = backend.request(
+                            "POST", "/v1/responses", {"model": model, "input": "hello"})
+                        self.assertEqual(status, 503, raw)
+                        self.assertEqual(headers.get("retry-after"), "0")
+                        request = self.upstream.requests.get(timeout=5)
+                        self.assertTrue(self.upstream.requests.empty(), "unexpected retry")
+                        observed.append((status, headers.get("retry-after"),
+                                         json.loads(raw), request[0], request[2]))
+                self.assertEqual(normalized_ids(observed[0]), normalized_ids(observed[1]))
+
 
     def test_quit_stops_the_actual_process(self):
         with short_socket_directory() as temporary:

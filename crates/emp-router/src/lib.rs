@@ -31,6 +31,7 @@ pub mod native_http;
 pub mod native_metadata;
 pub mod native_request;
 pub mod official_registry;
+mod retry_after;
 pub mod subscription_catalog;
 
 pub const MAX_UPSTREAM_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -315,9 +316,7 @@ impl<'a> ExternalRouter<'a> {
             .header("content-type")
             .unwrap_or("application/json")
             .to_owned();
-        let retry_after_seconds = response
-            .header("retry-after")
-            .and_then(|value| value.trim().parse::<u64>().ok());
+        let retry_after_seconds = retry_after::parse(response.header("retry-after"));
         if !(200..300).contains(&status) {
             let raw = response
                 .read_prefix(MAX_UPSTREAM_ERROR_BYTES)
@@ -495,9 +494,7 @@ impl<'a> ExternalRouter<'a> {
             .await
             .map_err(transport_error)?;
         let status = response.status();
-        let retry_after_seconds = response
-            .header("retry-after")
-            .and_then(|value| value.trim().parse::<u64>().ok());
+        let retry_after_seconds = retry_after::parse(response.header("retry-after"));
         if !(200..300).contains(&status) {
             let raw = response
                 .read_prefix(MAX_UPSTREAM_ERROR_BYTES)

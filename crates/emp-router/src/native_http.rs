@@ -5,7 +5,7 @@
 use crate::native_metadata::{native_response_headers, rewrite_native_model_event};
 use crate::{
     MAX_UPSTREAM_BODY_BYTES, MAX_UPSTREAM_ERROR_BYTES, ProjectionIds, RouterError, RouterErrorKind,
-    endpoint, response_json_stream_events,
+    endpoint, response_json_stream_events, retry_after,
 };
 use emp_core::{Dialect, Protocol, ResolvedRoute};
 use emp_protocol::collaboration::{
@@ -626,21 +626,6 @@ fn proxy_evidence(headers: &str, detail: &str) -> bool {
     .any(|marker| text.contains(marker))
 }
 
-fn retry_after(value: Option<&str>) -> Option<u64> {
-    let value = value.filter(|value| value.len() <= 128)?.trim();
-    let delay = value.parse::<f64>().ok().or_else(|| {
-        let date =
-            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc2822)
-                .ok()?;
-        Some(
-            (date.unix_timestamp() as f64
-                - time::OffsetDateTime::now_utc().unix_timestamp_nanos() as f64 / 1e9)
-                .max(0.0),
-        )
-    })?;
-    (delay.is_finite() && delay >= 0.0 && delay <= u64::MAX as f64).then(|| delay.ceil() as u64)
-}
-
 fn upstream_http_error(
     status: u16,
     content_type: &str,
@@ -899,7 +884,7 @@ impl<'a> NativeRouter<'a> {
             let content_type = response.header("content-type").unwrap_or("").to_owned();
             let selected = selected_headers(&response, route);
             if status >= 400 {
-                let retry = retry_after(response.header("retry-after"));
+                let retry = retry_after::parse(response.header("retry-after"));
                 let proxy_headers = response
                     .headers()
                     .map(|(name, value)| {
@@ -1040,7 +1025,7 @@ impl<'a> NativeRouter<'a> {
         let content_type = response.header("content-type").unwrap_or("").to_owned();
         let selected = selected_headers(&response, route);
         if status >= 400 {
-            let retry = retry_after(response.header("retry-after"));
+            let retry = retry_after::parse(response.header("retry-after"));
             let proxy_headers = response
                 .headers()
                 .map(|(name, value)| {
