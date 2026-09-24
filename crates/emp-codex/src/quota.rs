@@ -161,7 +161,14 @@ pub fn consume_native_quota_reset(
     credit_id: Option<&str>,
 ) -> Result<String, QuotaError> {
     let auth = read_native_auth(auth_path)?;
-    run_quota_reset(&auth, codex_binary, timeout, false, idempotency_key, credit_id)
+    run_quota_reset(
+        &auth,
+        codex_binary,
+        timeout,
+        false,
+        idempotency_key,
+        credit_id,
+    )
 }
 
 /// Consume one reset opportunity for a validated auth document.
@@ -182,17 +189,25 @@ pub fn run_quota_reset(
         ));
     }
     let trusted = TrustedBinary::resolve(codex_binary)?;
-    run_isolated_quota_process(auth, &trusted, timeout, allow_refresh, Some(&key), credit_id, None)
-        .and_then(|result| {
-            result
-                .quota
-                .get("outcome")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| {
-                    QuotaError::new("Codex did not return a reset outcome", "quota_reset_failed")
-                })
-        })
+    run_isolated_quota_process(
+        auth,
+        &trusted,
+        timeout,
+        allow_refresh,
+        Some(&key),
+        credit_id,
+        None,
+    )
+    .and_then(|result| {
+        result
+            .quota
+            .get("outcome")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                QuotaError::new("Codex did not return a reset outcome", "quota_reset_failed")
+            })
+    })
 }
 
 /// Imported-account reset variant that persists token rotation even when the
@@ -1199,9 +1214,16 @@ for line in sys.stdin:
         let auth = json!({"tokens": {"access_token": "original-token", "account_id": "a"}});
         let trusted = TrustedBinary::resolve(script.to_str().expect("UTF-8 fake Codex path"))
             .expect("trusted fake Codex");
-        let result =
-            run_isolated_quota_process(&auth, &trusted, Duration::from_secs(5), false, None, None, None)
-                .expect("isolated quota query");
+        let result = run_isolated_quota_process(
+            &auth,
+            &trusted,
+            Duration::from_secs(5),
+            false,
+            None,
+            None,
+            None,
+        )
+        .expect("isolated quota query");
         assert_eq!(result.quota["account_label"], "x***@example.com");
         assert_eq!(result.quota["plan_type"], "pro");
         assert_eq!(result.quota["rate_limits"]["primary"]["usedPercent"], 7);

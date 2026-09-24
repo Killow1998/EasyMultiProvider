@@ -851,7 +851,10 @@ for line in sys.stdin:
             &invalid_body,
             &[&cookie],
         );
-        assert!(invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{invalid}");
+        assert!(
+            invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "{invalid}"
+        );
         assert!(invalid.contains("quota_reset_invalid_request"));
     }
 
