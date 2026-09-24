@@ -196,11 +196,20 @@ fn serve_realtime_sideband_with_connector(
     ) {
         Ok(client) => client,
         Err(error) => {
-            let status = error.status();
-            let (code, message) = match status {
-                401 | 403 => ("native_subscription_auth_failed", error.to_string()),
-                404 | 405 | 426 | 501 => ("native_realtime_unsupported", error.to_string()),
-                _ => ("native_realtime_transport_error", error.to_string()),
+            let (status, code, message) = if error.is_upgrade_rejection() {
+                let status = error.status();
+                let code = match status {
+                    401 | 403 => "native_subscription_auth_failed",
+                    404 | 405 | 426 | 501 => "native_realtime_unsupported",
+                    _ => "native_realtime_transport_error",
+                };
+                (status, code, error.to_string())
+            } else {
+                (
+                    502,
+                    "native_realtime_transport_error",
+                    "Native realtime sideband connection failed".to_owned(),
+                )
             };
             let response = RealtimeError::new(status, code, message).wire_response();
             write_http_response(stream, &response);
@@ -231,9 +240,9 @@ fn serve_realtime_sideband_with_connector(
     {
         shutdown_pump(&mut pump, 1011, "websocket setup failed");
         let response = RealtimeError::new(
-            500,
-            "realtime_websocket_unavailable",
-            "Realtime sideband socket setup failed",
+            502,
+            "native_realtime_transport_error",
+            "Native realtime sideband connection failed",
         )
         .wire_response();
         write_http_response(stream, &response);

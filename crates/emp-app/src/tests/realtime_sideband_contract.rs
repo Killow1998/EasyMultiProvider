@@ -360,6 +360,26 @@ fn sideband_upstream_handshake_errors_return_http_before_downstream_101() {
     }
 }
 
+#[test]
+fn sideband_connection_refused_maps_to_python_502_and_releases_admission() {
+    let (_fixture, _app_directory, idle_upstream, server) = server_fixture(true);
+    let refused = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("reserve refused port");
+    let url = format!(
+        "ws://{}/v1/live/rtc_connection_refused",
+        refused.local_addr().unwrap()
+    );
+    drop(refused);
+
+    let response = direct_sideband_request(&server, "rtc_connection_refused", &url);
+    let (status, payload) = status_and_body(&response);
+    assert_eq!(status, 502);
+    assert_eq!(payload["error"]["code"], "native_realtime_transport_error");
+    assert!(!response.starts_with("HTTP/1.1 101"));
+    assert_eq!(server.state.connection_admission.active_websockets(), 0);
+    assert!(idle_upstream.no_request());
+    server.shutdown().expect("shutdown fixture server");
+}
+
 struct FakeSideband {
     url: String,
     first_client: mpsc::Receiver<Vec<u8>>,

@@ -643,13 +643,28 @@ impl PerMessageDeflate {
 pub struct ClientWebSocketError {
     status: u16,
     message: &'static str,
+    upgrade_rejection: bool,
 }
 impl ClientWebSocketError {
     pub(crate) const fn new(status: u16, message: &'static str) -> Self {
-        Self { status, message }
+        Self {
+            status,
+            message,
+            upgrade_rejection: false,
+        }
+    }
+    const fn upgrade_rejected(status: u16, message: &'static str) -> Self {
+        Self {
+            status,
+            message,
+            upgrade_rejection: true,
+        }
     }
     pub const fn status(self) -> u16 {
         self.status
+    }
+    pub const fn is_upgrade_rejection(self) -> bool {
+        self.upgrade_rejection
     }
 }
 impl fmt::Display for ClientWebSocketError {
@@ -849,7 +864,7 @@ impl ClientWebSocket {
                 ClientWebSocketError::new(502, "native websocket handshake is invalid")
             })?;
         if status != 101 {
-            return Err(ClientWebSocketError::new(
+            return Err(ClientWebSocketError::upgrade_rejected(
                 status,
                 "native upstream websocket upgrade was rejected",
             ));
@@ -1178,6 +1193,14 @@ mod tests {
             frame_decoder: FrameDecoder::new(MAX_PROXY_REQUEST_BYTES),
             local_control: false,
         }
+    }
+
+    #[test]
+    fn client_websocket_error_marks_only_real_upgrade_rejections() {
+        assert!(!ClientWebSocketError::new(503, "transport failed").is_upgrade_rejection());
+        let rejected = ClientWebSocketError::upgrade_rejected(404, "upgrade rejected");
+        assert_eq!(rejected.status(), 404);
+        assert!(rejected.is_upgrade_rejection());
     }
 
     fn masked_data_header(length: u64) -> Vec<u8> {
