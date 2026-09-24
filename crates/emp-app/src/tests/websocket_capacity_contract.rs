@@ -136,13 +136,23 @@ fn health_status(server: &ServerHandle) -> Option<String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .expect("set health timeout");
-    write!(
+    let write_request = write!(
         stream,
         "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
         server.local_addr().port()
-    )
-    .expect("send health request");
-    stream.flush().expect("flush health request");
+    );
+    if let Err(error) = write_request {
+        if health_request_disconnected(&error) {
+            return None;
+        }
+        panic!("send health request: {error}");
+    }
+    if let Err(error) = stream.flush() {
+        if health_request_disconnected(&error) {
+            return None;
+        }
+        panic!("flush health request: {error}");
+    }
     let mut status = Vec::new();
     loop {
         let mut byte = [0_u8; 1];
@@ -154,21 +164,21 @@ fn health_status(server: &ServerHandle) -> Option<String> {
                     return Some(String::from_utf8(status).expect("HTTP status text"));
                 }
             }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock
-                        | std::io::ErrorKind::TimedOut
-                        | std::io::ErrorKind::ConnectionReset
-                        | std::io::ErrorKind::BrokenPipe
-                        | std::io::ErrorKind::UnexpectedEof
-                ) =>
-            {
-                return None;
-            }
+            Err(error) if health_request_disconnected(&error) => return None,
             Err(error) => panic!("read health response: {error}"),
         }
     }
+}
+
+fn health_request_disconnected(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::UnexpectedEof
+    )
 }
 
 fn stall_request(server: &ServerHandle) -> TcpStream {
