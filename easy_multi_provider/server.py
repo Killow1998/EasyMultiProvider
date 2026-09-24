@@ -1939,11 +1939,19 @@ class AppState:
         dynamic = self.dynamic_model_catalog()
         with manager.operation_lock():
             status = manager.status()
-            if (dynamic and status.relation == "applied" and status.lease is not None
-                    and status.lease.fields["openai_base_url"].applied.value == base_url
-                    and status.lease.fields["model_catalog_json"].applied.value == str(catalog_path.resolve())):
+            lease = status.lease
+            if (dynamic and status.relation == "applied" and lease is not None
+                    and lease.fields["openai_base_url"].applied.value == base_url
+                    and (
+                        lease.fields["model_catalog_json"].applied.value == str(catalog_path.resolve())
+                        or (
+                            not lease.fields["model_catalog_json"].applied.present
+                            and lease.fields[REALTIME_SIDEBAND_FIELD].applied.value != base_url
+                        )
+                    )):
                 # Restore through the existing lease before changing its managed target.
-                # This preserves the user's original catalog for EMP shutdown recovery.
+                # This preserves the user's original catalog and sideband URL
+                # for EMP shutdown recovery, including existing v2 leases.
                 restored = manager.restore()
                 if not restored.ok:
                     return restored

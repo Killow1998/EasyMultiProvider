@@ -1703,65 +1703,66 @@ class ServerAccountTests(unittest.TestCase):
             self.assertEqual(state.runtime_sync_snapshot()["state"], "reload_required")
 
     def test_startup_migrates_native_voice_sideband_from_version_two_lease(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config_path = root / "config.json"
-            save(_integration_test_config(root), config_path)
-            codex_home = root / "codex"
-            catalog_path = codex_home / "easy-multi-provider" / "catalog.json"
-            lease_path = codex_home / "easy-multi-provider" / "integration" / "lease.json"
-            manager = IntegrationManager(
-                codex_home / "config.toml",
-                lease_path,
-                instance_id="legacy-sideband",
-            )
-            base_url = "http://127.0.0.1:43124/v1"
-            manager.enable(
-                base_url,
-                str(catalog_path.resolve()),
-                service_ready=True,
-            )
-            legacy = json.loads(lease_path.read_text(encoding="utf-8"))
-            legacy["version"] = 2
-            legacy["fields"].pop("experimental_realtime_ws_base_url")
-            lease_path.write_text(json.dumps(legacy), encoding="utf-8")
+        for has_catalog in (True, False):
+            with self.subTest(has_catalog=has_catalog), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                config_path = root / "config.json"
+                save(_integration_test_config(root), config_path)
+                codex_home = root / "codex"
+                catalog_path = codex_home / "easy-multi-provider" / "catalog.json"
+                lease_path = codex_home / "easy-multi-provider" / "integration" / "lease.json"
+                manager = IntegrationManager(
+                    codex_home / "config.toml",
+                    lease_path,
+                    instance_id="legacy-sideband",
+                )
+                base_url = "http://127.0.0.1:43124/v1"
+                manager.enable(
+                    base_url,
+                    str(catalog_path.resolve()) if has_catalog else None,
+                    service_ready=True,
+                )
+                legacy = json.loads(lease_path.read_text(encoding="utf-8"))
+                legacy["version"] = 2
+                legacy["fields"].pop("experimental_realtime_ws_base_url")
+                lease_path.write_text(json.dumps(legacy), encoding="utf-8")
 
-            class RuntimeWithoutRestart:
-                @staticmethod
-                def reload(_expected_models, target, *, confirm_reload, expected_catalog=None):
-                    return RuntimeSyncResult(
-                        STOPPED_WAITING_FOR_START,
-                        target,
-                        False,
-                        "controlled runtime is absent",
-                    )
+                class RuntimeWithoutRestart:
+                    @staticmethod
+                    def reload(_expected_models, target, *, confirm_reload, expected_catalog=None):
+                        return RuntimeSyncResult(
+                            STOPPED_WAITING_FOR_START,
+                            target,
+                            False,
+                            "controlled runtime is absent",
+                        )
 
-            state = AppState(
-                config_path,
-                integration_manager=manager,
-                catalog_path=catalog_path,
-                runtime_controller=RuntimeWithoutRestart(),
-            )
-            state.dynamic_model_catalog = lambda: True
+                state = AppState(
+                    config_path,
+                    integration_manager=manager,
+                    catalog_path=catalog_path,
+                    runtime_controller=RuntimeWithoutRestart(),
+                )
+                state.dynamic_model_catalog = lambda: True
 
-            class BoundServer:
-                server_address = ("127.0.0.1", 43124)
+                class BoundServer:
+                    server_address = ("127.0.0.1", 43124)
 
-                @staticmethod
-                def fileno():
-                    return 1
+                    @staticmethod
+                    def fileno():
+                        return 1
 
-            result = startup_reconcile(state, BoundServer())
+                result = startup_reconcile(state, BoundServer())
 
-            self.assertTrue(result.ok)
-            config_text = (codex_home / "config.toml").read_text(encoding="utf-8")
-            self.assertIn(
-                'experimental_realtime_ws_base_url = "http://127.0.0.1:43124/v1"',
-                config_text,
-            )
-            migrated = json.loads(lease_path.read_text(encoding="utf-8"))
-            self.assertEqual(migrated["version"], 3)
-            self.assertIn("experimental_realtime_ws_base_url", migrated["fields"])
+                self.assertTrue(result.ok)
+                config_text = (codex_home / "config.toml").read_text(encoding="utf-8")
+                self.assertIn(
+                    'experimental_realtime_ws_base_url = "http://127.0.0.1:43124/v1"',
+                    config_text,
+                )
+                migrated = json.loads(lease_path.read_text(encoding="utf-8"))
+                self.assertEqual(migrated["version"], 3)
+                self.assertIn("experimental_realtime_ws_base_url", migrated["fields"])
 
     def test_integration_status_is_safe_and_handler_is_ready(self):
         with tempfile.TemporaryDirectory() as directory:
