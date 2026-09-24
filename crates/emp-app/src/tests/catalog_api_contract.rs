@@ -71,6 +71,14 @@ impl CatalogUpstream {
             while !stopped.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // Exercise inherited nonblocking mode on Linux too, then use the
+                        // blocking reads expected by this synchronous fake upstream.
+                        stream
+                            .set_nonblocking(true)
+                            .expect("nonblocking accepted discovery stream");
+                        stream
+                            .set_nonblocking(false)
+                            .expect("blocking accepted discovery stream");
                         stream
                             .set_read_timeout(Some(Duration::from_secs(5)))
                             .expect("discovery request timeout");

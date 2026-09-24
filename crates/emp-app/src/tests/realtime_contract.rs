@@ -38,6 +38,12 @@ impl RealtimeUpstream {
             while !stopped.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        stream
+                            .set_nonblocking(true)
+                            .expect("nonblocking accepted Voice stream");
+                        stream
+                            .set_nonblocking(false)
+                            .expect("blocking accepted Voice stream");
                         let observed = receive_request(&mut stream);
                         sender.send(observed).expect("record Voice call");
                         let location = response

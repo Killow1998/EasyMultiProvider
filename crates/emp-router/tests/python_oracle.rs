@@ -43,6 +43,12 @@ impl UpstreamServer {
                 while !shutdown.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((stream, _)) => {
+                            stream
+                                .set_nonblocking(true)
+                                .expect("nonblocking accepted route stream");
+                            stream
+                                .set_nonblocking(false)
+                                .expect("blocking accepted route stream");
                             let requests = Arc::clone(&requests);
                             thread::spawn(move || serve(stream, requests));
                         }

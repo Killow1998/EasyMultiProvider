@@ -43,6 +43,12 @@ impl NativeUpstream {
                 while !stop.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((stream, _)) => {
+                            stream
+                                .set_nonblocking(true)
+                                .expect("nonblocking accepted native stream");
+                            stream
+                                .set_nonblocking(false)
+                                .expect("blocking accepted native stream");
                             let requests = Arc::clone(&requests);
                             let attempts = Arc::clone(&attempts);
                             thread::spawn(move || serve(stream, requests, attempts));

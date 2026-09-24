@@ -1455,7 +1455,15 @@ fn accept_fixture_connection(listener: &TcpListener) -> Option<TcpStream> {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         match listener.accept() {
-            Ok((stream, _)) => return Some(stream),
+            Ok((stream, _)) => {
+                stream
+                    .set_nonblocking(true)
+                    .expect("nonblocking accepted native stream");
+                stream
+                    .set_nonblocking(false)
+                    .expect("blocking accepted native stream");
+                return Some(stream);
+            }
             Err(error)
                 if error.kind() == std::io::ErrorKind::WouldBlock
                     && std::time::Instant::now() < deadline =>

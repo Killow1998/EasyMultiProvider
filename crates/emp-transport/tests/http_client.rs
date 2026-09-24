@@ -57,6 +57,12 @@ impl TestServer {
                 while !shutdown.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((stream, peer)) => {
+                            stream
+                                .set_nonblocking(true)
+                                .expect("nonblocking accepted HTTP stream");
+                            stream
+                                .set_nonblocking(false)
+                                .expect("blocking accepted HTTP stream");
                             let connection = next_connection.fetch_add(1, Ordering::Relaxed);
                             let requests = Arc::clone(&requests);
                             let release_streams = Arc::clone(&release_streams);

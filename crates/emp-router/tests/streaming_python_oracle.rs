@@ -45,6 +45,12 @@ impl StreamServer {
                 while !shutdown.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((stream, _)) => {
+                            stream
+                                .set_nonblocking(true)
+                                .expect("nonblocking accepted stream route");
+                            stream
+                                .set_nonblocking(false)
+                                .expect("blocking accepted stream route");
                             let fixtures = Arc::clone(&fixtures);
                             let requests = Arc::clone(&requests);
                             thread::spawn(move || serve(stream, &fixtures, requests));
