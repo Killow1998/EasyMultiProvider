@@ -5,7 +5,7 @@ import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request
 from unittest.mock import Mock, patch
 
@@ -97,6 +97,13 @@ class HTTPPoolTests(unittest.TestCase):
                     self.send_header("Location", "/unexpected")
                     self.send_header("Content-Length", "0")
                     self.end_headers()
+                    return
+                if self.path == "/bad":
+                    self.send_response(400)
+                    self.send_header("Content-Type", "text/plain")
+                    self.send_header("Content-Length", "3")
+                    self.end_headers()
+                    self.wfile.write(b"bad")
                     return
                 if self.path == "/stream":
                     self.send_response(200)
@@ -196,6 +203,26 @@ class HTTPPoolTests(unittest.TestCase):
         with self.assertRaises(URLError):
             self.open("/redirect", headers={"Authorization": "Bearer private"})
         self.assertEqual([r[1] for r in self.requests], ["/drop", "/redirect"])
+
+    def test_status_request_returns_redirect_without_following_it(self):
+        with http_pool.open_request_status(
+            Request(self.url + "/redirect", headers={"Authorization": "Bearer private"}),
+            timeout=2,
+        ) as response:
+            self.assertEqual(response.status, 302)
+            self.assertEqual(response.headers["Location"], "/unexpected")
+            self.assertEqual(response.read(), b"")
+        self.assertEqual([item[1] for item in self.requests], ["/redirect"])
+
+    def test_regular_request_still_raises_http_error_with_body(self):
+        with self.assertRaises(HTTPError) as raised:
+            self.open("/bad")
+        response = raised.exception
+        try:
+            self.assertEqual(response.code, 400)
+            self.assertEqual(response.read(), b"bad")
+        finally:
+            response.close()
 
     def test_new_proxy_settings_select_another_pool(self):
         with patch.object(http_pool, "proxy_for_url", return_value=None):

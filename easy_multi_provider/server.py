@@ -184,6 +184,11 @@ from .transport_failures import failure_from_exception, public_failure_message, 
 from .router_errors import UpstreamHTTPError
 from .tls_runtime import tls_trust_source
 from .request_limits import RequestLimits
+from .realtime import (
+    RealtimeError,
+    forward_native_realtime_call,
+    read_realtime_call,
+)
 from .vault import file_transaction
 from .transport_continuity import (
     PREVIOUS_RESPONSE_NOT_FOUND_CODE,
@@ -4223,8 +4228,29 @@ def make_handler(state: AppState):
             if path.startswith("/api/") and not self._management_allowed():
                 self._error(401 if self._same_origin() else 403, "management session is required")
                 return
-            if path in ("/v1/responses", "/v1/responses/compact", "/v1/alpha/search") and not self._proxy_allowed():
-                self._error(401 if self._same_origin() else 403, "proxy caller authentication is required")
+            if path in ("/v1/responses", "/v1/responses/compact", "/v1/alpha/search", "/v1/live") and not self._proxy_allowed():
+                status = 401 if self._same_origin() else 403
+                if path == "/v1/live":
+                    code = "realtime_caller_unauthorized"
+                    message = "Caller authentication is required for Codex Voice"
+                    if status == 401:
+                        try:
+                            native_auth_headers(state.codex_home / "auth.json")
+                        except AccountError:
+                            code = "native_subscription_unavailable"
+                            message = (
+                                "A current native ChatGPT subscription login is required "
+                                "for Codex Voice"
+                            )
+                    self._send(
+                        status,
+                        _json_bytes({"error": {
+                            "code": code,
+                            "message": message,
+                        }}),
+                    )
+                else:
+                    self._error(status, "proxy caller authentication is required")
                 return
             if path in {"/api/updates/check", "/api/updates/install"}:
                 try:
@@ -4237,6 +4263,41 @@ def make_handler(state: AppState):
                     self._error(413, "update request is too large")
                 except (ConfigError, ValueError):
                     self._error(400, "invalid update request")
+                return
+            if path == "/v1/live":
+                try:
+                    call = read_realtime_call(self.headers, self.rfile)
+                    response = forward_native_realtime_call(
+                        state.snapshot().get(
+                            "codex_base_url",
+                            "https://chatgpt.com/backend-api/codex",
+                        ),
+                        state.codex_home / "auth.json",
+                        dict(self.headers.items()),
+                        call,
+                    )
+                    headers = (
+                        {"Location": response.location}
+                        if response.location is not None
+                        else None
+                    )
+                    self._send(
+                        response.status,
+                        response.body,
+                        response.content_type,
+                        headers,
+                    )
+                except RealtimeError as exc:
+                    if exc.close:
+                        self.close_connection = True
+                    self._send(
+                        exc.status,
+                        _json_bytes({"error": {
+                            "code": exc.code,
+                            "message": str(exc),
+                        }}),
+                        headers={"Connection": "close"} if exc.close else None,
+                    )
                 return
             operation_started = time.monotonic()
             operation_logged = False
