@@ -53,6 +53,7 @@ pub(crate) struct BackendState {
 
 pub(crate) struct TransportState {
     pub(crate) client: HttpClient,
+    pub(crate) support_network: crate::api::support_report::NetworkSnapshot,
     pub(crate) runtime: Runtime,
     pub(crate) request_limits: Arc<RequestLimits>,
     pub(crate) native_connections: crate::services::native_connections::NativeConnections,
@@ -108,10 +109,13 @@ impl BackendState {
             save_configuration(&config, Some(config_path), &vault)?;
             config = load_configuration(Some(config_path))?;
         }
+        let proxy_environment = ProxyEnvironment::capture();
+        let support_network =
+            crate::api::support_report::NetworkSnapshot::capture(&proxy_environment);
         let client = match http_client_override {
             Some(client) => client,
             None => HttpClient::new(HttpClientPolicy::new(
-                ProxyPolicy::from_environment(ProxyEnvironment::capture()),
+                ProxyPolicy::from_environment(proxy_environment),
                 TimeoutPolicy::default(),
             ))?,
         };
@@ -150,6 +154,7 @@ impl BackendState {
             },
             transport: TransportState {
                 client,
+                support_network,
                 runtime,
                 request_limits,
                 native_connections: Default::default(),

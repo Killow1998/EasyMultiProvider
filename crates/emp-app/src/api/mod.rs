@@ -9,6 +9,7 @@ pub(crate) mod quota;
 pub(crate) mod responses;
 pub(crate) mod search;
 pub(crate) mod streaming;
+pub(crate) mod support_report;
 pub(crate) mod websocket;
 
 pub(crate) mod runtime;

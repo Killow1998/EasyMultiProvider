@@ -159,7 +159,7 @@ for (const id of [
   "modal_submit", "integration", "integration_badge", "integration_title",
   "integration_summary", "integration_toggle", "codex_compatibility", "codex_runtime_save",
   "codex_runtime_scan", "codex_runtimes", "language_select", "theme_select",
-  "catalog_display_search", "catalog_display_toggle", "catalog_display_models",
+  "catalog_display_search", "catalog_display_models",
   "diagnostics_summary", "performance_records", "diagnostics_records", "accounts", "providers", "models",
 ]) getElement(id);
 
@@ -168,6 +168,7 @@ assert.doesNotMatch(html, /实际调用时自动使用其中兼容性最可靠�
 assert.match(html, /class="workspace-layout"/);
 assert.match(html, /<aside class="workspace-side">/);
 assert.match(html, /onclick="openUpdate\(\)"/);
+assert.match(html, /data-icon="usage" onclick="openUsage\(\)"/, "usage action must have its own icon");
 assert.doesNotMatch(html, /<details class="(?:header-menu|action-menu)">/, "primary actions must stay visible");
 for (const visibleControl of [
   /onclick="selectMigrationFile\(\)"/,
@@ -183,6 +184,7 @@ assert.match(html, /\.model-card \.entity-card-actions\{grid-column:3;grid-row:1
 assert.match(html, /\.model-card \.entity-card-meta\{grid-column:1\/-1;grid-row:2;[^}]*white-space:normal;/, "model metadata must remain fully readable across the card");
 assert.match(html, /\.credit-badge,.credit-monthly\{[^}]*border:1px solid var\(--border\)/, "credit values must use compact visual badges");
 assert.match(html, /\.account-card \.entity-card-quota\{[^}]*grid-column:1\/-1;grid-row:2/, "desktop quota must use a compact full-width row");
+assert.match(html, /\.account-card \.quota-stack\{[^}]*align-items:start/, "quota meters with and without reset text must keep their bars at the same height");
 assert.match(html, /\.account-card \.entity-card-actions\{grid-column:2;grid-row:1;[^}]*border:0/, "desktop account actions must stay at the upper right");
 assert.match(html, /\.account-identity\.has-plan \.account-identity-id\{border-radius:999px 0 0 999px\}/, "account ID and plan must form one segmented badge");
 assert.match(html, /\.subscription-plan\{[^}]*margin-left:-1px;[^}]*border-radius:0 999px 999px 0/, "the plan segment must join the account ID without a gap");
@@ -190,9 +192,10 @@ assert.match(html, /\.plan-prolite\{--plan-color:#d9c98f\}\.plan-pro\{--plan-col
 assert.match(html, /\.provider-card\{grid-template-columns:minmax\(220px,1fr\) auto;/, "provider cards must match the compact model-card layout");
 assert.match(html, /\.provider-card \.entity-card-actions\{grid-column:2;grid-row:1;flex-wrap:nowrap;/, "provider actions must stay visible on the title row");
 assert.match(html, /\.provider-card \.entity-card-meta\{grid-column:1\/-1;grid-row:2;/, "provider details must use one readable row across the card");
-assert.match(html, /\.display-row\{grid-template-columns:minmax\(0,1fr\) auto auto;/, "display cards must reserve one top row for the model and controls");
-assert.match(html, /\.display-row \.inline-check\{grid-column:2;grid-row:1;/, "context checkbox must stay at the upper right");
-assert.match(html, /\.display-row>button\{grid-column:3;grid-row:1;/, "advanced options must stay at the upper right");
+assert.match(html, /\.display-row\{grid-template-columns:minmax\(0,1fr\) auto;/, "display cards must show one compact model row and an editor arrow");
+assert.match(html, /\.display-row>button\{grid-column:2;grid-row:1;/, "the model display editor arrow must stay at the upper right");
+assert.doesNotMatch(html, /id="catalog_display_toggle"/, "model display must not collapse rows");
+assert.doesNotMatch(html, /onclick="saveCatalogDisplay\(\)"/, "model display must not expose a separate save action");
 assert.match(html, /href="https:\/\/github.com\/Killow1998\/EasyMultiProvider" target="_blank" rel="noopener noreferrer"/);
 assert.doesNotMatch(html, /id="subscription_search_account"/);
 assert.doesNotMatch(html, /data-catalog-summary/);
@@ -200,7 +203,7 @@ assert.doesNotMatch(html, /不会自动补|not added automatically/, "users must
 assert.match(html, /Icon paths derived from Lucide \(ISC\)/);
 assert.strictEqual(
   Array.from(html.matchAll(/button\[data-icon="[^"]+"\](?:,\.quota-reset)?\{--button-icon:url\("data:image\/svg\+xml,%3Csvg%20/g)).length,
-  14,
+  15,
   "all action icons must come from the embedded Lucide set",
 );
 for (const unwantedDefaultTip of [
@@ -455,6 +458,16 @@ function quotaHistoryBehavior() {
   assert.match(html, /--plan-color:#f2b705/);
   assert.doesNotMatch(html, /每 5 分钟|自动采样|保留 15 天/);
 
+  context.__recentQuotaPayload = {end_at:200000,series:[
+    {limit_id:'codex',window_kind:'primary',window_minutes:300,points:[{observed_at:1000,remaining_percent:50}]},
+    {limit_id:'codex',window_kind:'secondary',window_minutes:10080,points:[{observed_at:2000,remaining_percent:60}]},
+    {limit_id:'codex',window_kind:'primary',window_minutes:43200,points:[{observed_at:199900,remaining_percent:88}]},
+  ]};
+  run("activeQuotaWindow=''; renderQuotaHistory(__recentQuotaPayload,'1d')");
+  assert.strictEqual(run('activeQuotaWindow'), '43200', 'the default window must have records in the selected range');
+  assert.match(quotaHistoryHtml(), /data-label="30d"/);
+  assert.doesNotMatch(quotaHistoryHtml(), /data-label="5h"|data-label="7d"/);
+
   for (const [seriesValues, expectedMin, expectedMax] of [
     [[[72,74],[80]], 71, 81],
     [[[74.1,74.2]], 73, 76],
@@ -679,7 +692,8 @@ function performanceDiagnosticsBehavior() {
   run('openDiagnostics()');
   assert.match(getElement('modal_title').textContent, /性能与健康/);
   assert.match(getElement('modal_body').innerHTML, /到收到首段正文或工具参数的时间/);
-  assert.match(getElement('modal_body').innerHTML, /输出期间每秒接收的 token 数估计/);
+  assert.match(getElement('modal_body').innerHTML, /全部输出 token 除以完整请求耗时/);
+  assert.match(getElement('modal_body').innerHTML, /downloadSupportReport\(\)/);
   assert.doesNotMatch(getElement('modal_body').innerHTML, /SOL 原生参考|原生 A\/B/);
   assert.doesNotMatch(getElement('modal_body').innerHTML, /最近请求|失败原因/);
   run('closeModal()');
@@ -688,6 +702,17 @@ function performanceDiagnosticsBehavior() {
   ];
   run('renderDiagnostics(__performancePayload)');
   assert.doesNotMatch(getElement('performance_records').innerHTML, />模式<|>Mode<|未标记|Unmarked/);
+  context.__supportPayload = {
+    configuration:{path:'<img src=x onerror=bad>',exists:true,write_access_hint:'allowed'},
+    codex:{version:'0.156.1',source:'path_cli',state:'emp_loaded'},
+    network:{source_at_startup:'system',chatgpt_route:'proxy',proxy_scheme:'socks5h'},
+    accounts:{native:{quota_status:'not_checked'},imported:[{index:1,quota_status:'auth_required'}]},
+  };
+  getElement('support_report');
+  run('renderSupportReport(__supportPayload)');
+  assert.match(getElement('support_report').innerHTML, /&lt;img src=x onerror=bad&gt;/);
+  assert.doesNotMatch(getElement('support_report').innerHTML, /<img src=x/);
+  assert.match(getElement('support_report').innerHTML, /需要重新登录/);
 }
 
 async function cacheUsageBehavior() {
@@ -766,7 +791,18 @@ function quotaMeterBehavior() {
   assert.match(rendered, /is-low/);
   assert.match(rendered, /class="quota-meter is-unreported" title="7d 未回传限制"/);
   assert.match(rendered, /role="img" aria-label="7d 未回传限制"/);
-  assert.match(html, /\.quota-meter\.is-unreported \.quota-battery::before\{[^}]*inset:-5px 3px;[^}]*repeating-linear-gradient\(45deg/, "an unlimited window must use repeated slashes that extend beyond the battery");
+  assert.match(rendered, /class="quota-value">233%<\/strong>/);
+  assert.match(html, /\.quota-meter\.is-unreported \.quota-battery::before\{[^}]*linear-gradient\(90deg,[^}]*animation:quota-rainbow-flow/, "an unreported window must show a moving rainbow");
+  assert.match(html, /\.quota-meter\.is-unreported \.quota-battery-fill::after\{[^}]*animation:quota-charge/, "an unreported window must retain the moving light sweep");
+
+  context.__quotaMeterState.accounts[0].quota = {plan_type:'plus',rate_limits:{primary:{usedPercent:12,windowDurationMins:43200},secondary:{usedPercent:50,windowDurationMins:300}}};
+  run("renderAccounts()");
+  rendered = getElement("accounts").innerHTML;
+  assert.match(rendered, /class="subscription-plan plan-free">Free</);
+  assert.match(rendered, />30d</);
+  assert.match(rendered, /aria-valuenow="88"/);
+  assert.doesNotMatch(rendered, />5h|>7d|is-unreported/, "a 30-day Free quota must be the only displayed window");
+  assert.strictEqual(run("quotaText(__quotaMeterState.accounts[0])").split('\n').length, 1);
 
   run("refreshingAccounts.add('meter'); renderAccounts()");
   assert.match(getElement("accounts").innerHTML, /is-refreshing/);
@@ -974,6 +1010,10 @@ async function quotaErrorBehavior() {
   assert.strictEqual(await run("refreshAccount('ship', false)"), false);
   assert.match(getElement("accounts").innerHTML, /相同账户 ID 导入最新 auth.json/);
   assert.doesNotMatch(getElement("accounts").innerHTML, /safe fallback/);
+  context.__quotaError = Object.assign(new Error("unsafe backend detail"), {payload:{error:{code:'quota_transport_error'}}});
+  assert.strictEqual(await run("refreshAccount('ship', false)"), false);
+  assert.match(getElement("accounts").innerHTML, /DNS、VPN\/TUN、系统代理和网络连通性/);
+  assert.doesNotMatch(getElement("accounts").innerHTML, /unsafe backend detail/);
   run("api = __realQuotaApi");
 }
 
@@ -1054,19 +1094,16 @@ function capabilityMetadataBehavior() {
 async function presentationBehavior() {
   run("state = {catalog_presentations:{'provider-a/model':{catalog_alias:'Legacy',show_context:true,reasoning_summary:'auto'}},catalog_family_presentations:{model:{catalog_alias:'',show_context:true,reasoning_summary:'hide'}},catalog_families:[{id:'native-model',default_display_name:'Native Model',display_name:'Native Model',context_window:258000,supports_reasoning_summaries:true,routes:[{id:'native-model',source_type:'native',source_id:''}]},{id:'model',default_display_name:'Model',display_name:'Model',context_window:258000,supports_reasoning_summaries:true,routes:[{id:'provider-a/model',source_type:'provider',source_id:'provider-a'}]}],subscription_models:[{id:'native-model',display_name:'Native Model',context_window:258000}],providers:[{id:'provider-a',name:'Provider A'}],accounts:[],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',display_name:'Model',context_window:258000,enabled:true}]} ");
   run("renderCatalogDisplay()");
-  assert.match(getElement("catalog_display_models").innerHTML, /data-catalog-alias/);
+  assert.doesNotMatch(getElement("catalog_display_models").innerHTML, /data-catalog-alias/);
   assert.match(getElement("catalog_display_models").innerHTML, /provider-a\/model/);
-  const alias = catalogAliases.find(input => input.dataset.route === "model");
-  const contextInput = catalogContexts.find(input => input.dataset.route === "model");
-  const preview = catalogPreviews.find(input => input.dataset.route === "model");
-  assert(alias && contextInput && preview, "display controls must be rendered once per model family");
-  alias.value = "General";
-  contextInput.checked = false;
-  run("updateCatalogDisplayPreview('model')");
-  assert.strictEqual(preview.textContent, "General", "context visibility must update the preview before saving");
+  assert.doesNotMatch(getElement("catalog_display_models").innerHTML, /258k/, "the compact list must show only the name and slug");
+  assert.match(getElement("catalog_display_models").innerHTML, /openCatalogDisplayEditor\('model'\)/);
+  run("openCatalogDisplayEditor('model')");
+  getElement('modal_catalog_alias').value = 'General';
+  getElement('modal_catalog_context').checked = false;
   context.__persistStateStub = async (_message, candidate) => { context.__savedCandidate = candidate; context.state = candidate; };
   run("__realPersistState = persistState; persistState = __persistStateStub");
-  await run("saveCatalogDisplay()");
+  await getElement('modal_submit').onclick();
   run("persistState = __realPersistState");
   const saved = run("__savedCandidate.catalog_family_presentations['model']");
   assert.strictEqual(saved.catalog_alias, "General");

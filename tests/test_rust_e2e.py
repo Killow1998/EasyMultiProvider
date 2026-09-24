@@ -54,6 +54,16 @@ def normalize_observation_times(value):
     return value
 
 
+def normalize_support_report_time(report):
+    normalized = dict(report)
+    generated_at = normalized.get("generated_at")
+    if not isinstance(generated_at, str):
+        raise AssertionError("support report generated_at must be a string")
+    datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    normalized["generated_at"] = "<generated-at>"
+    return normalized
+
+
 @unittest.skipUnless(os.environ.get("EMP_RUST_BINARY"), "set EMP_RUST_BINARY for real-process E2E")
 class RustEndToEnd(unittest.TestCase):
     usage = chat_cases.ChatProjectionRegressions.usage
@@ -140,6 +150,46 @@ class RustEndToEnd(unittest.TestCase):
                 config = json.loads(raw)
                 self.assertEqual(len(config["models"]), 4)
                 self.assertEqual(config["emp_version"], "0.11.10")
+
+    def test_support_report_endpoint_is_allowlisted_authenticated_and_read_only(self):
+        reports = []
+        private_markers = (
+            "e2e-provider-token", "e2e-native-token", "e2e-owner",
+            "Alice Secret", "private-runtime-path", "private-proxy-password",
+        )
+        for backend in self.backends:
+            denied_status, _, _ = backend.request(
+                "GET", "/api/support-report", auth=False
+            )
+            self.assertEqual(denied_status, 401)
+            status, headers, raw = backend.request("GET", "/api/support-report")
+            self.assertEqual(status, 200, raw)
+            self.assertEqual(headers.get("cache-control"), "no-store")
+            self.assertEqual(
+                headers.get("content-disposition"),
+                'attachment; filename="EMP-support-report.json"',
+            )
+            report = json.loads(raw)
+            self.assertEqual(report["schema_version"], 1)
+            self.assertEqual(report["emp_version"], "0.11.10")
+            self.assertEqual(report["configuration"]["location"], "custom")
+            self.assertEqual(report["configuration"]["path"], "<custom>/config.json")
+            self.assertTrue(report["configuration"]["exists"])
+            self.assertEqual(report["configuration"]["write_access_hint"], "allowed")
+            self.assertLessEqual(len(report["codex"]["inventory"]), 16)
+            self.assertIsInstance(report["codex"]["inventory_truncated"], bool)
+            serialized = json.dumps(report, ensure_ascii=False)
+            for marker in private_markers:
+                self.assertNotIn(marker, serialized)
+            self.assertEqual(report["network"]["connectivity_probe"], "not_run")
+            self.assertIn(report["network"]["source_at_startup"], {"environment", "system", "direct"})
+            self.assertIn(report["network"]["chatgpt_route"], {"proxy", "direct", "unknown"})
+            self.assertEqual(report["accounts"]["imported_count"], 0)
+            self.assertEqual(report["accounts"]["imported"], [])
+            self.assertEqual(report["accounts"]["native"]["quota_status"], "not_checked")
+            reports.append(normalize_support_report_time(report))
+        self.assertEqual(reports[0], reports[1])
+        self.assertTrue(self.upstream.requests.empty(), "support report must not refresh quota")
 
     def test_existing_service_rejects_a_second_python_or_rust_owner(self):
         for owner in self.backends:

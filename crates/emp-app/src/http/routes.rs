@@ -357,6 +357,9 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
         }
         let supplied_cookie = request.session_cookie();
         if state.sessions.contains(supplied_cookie.as_deref(), now) {
+            if request.method == RequestMethod::Get && path == "/api/support-report" {
+                return crate::api::support_report::read(state);
+            }
             if request.method == RequestMethod::Get && path == "/api/diagnostics" {
                 return crate::api::diagnostics::read(state);
             }
