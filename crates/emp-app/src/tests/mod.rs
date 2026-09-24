@@ -54,6 +54,7 @@ use tempfile::TempDir;
 
 mod auto_review_contract;
 mod catalog_api_contract;
+mod cancellation_contract;
 mod config_api_contract;
 mod conversation_switch_contract;
 mod native_api_contract;

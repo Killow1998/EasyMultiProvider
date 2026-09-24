@@ -3,6 +3,8 @@
 use crate::app::ServerState;
 use crate::http::response::json_error_response;
 use crate::http::response::status_text;
+use crate::services::disconnect::DisconnectMonitor;
+use crate::services::disconnect::DisconnectRace;
 use crate::services::events::sse_frame;
 use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
@@ -16,100 +18,15 @@ use crate::util::random_hex;
 use emp_core::ResolvedRoute;
 use emp_router::ExternalStream;
 use emp_router::ProjectionIds;
-use emp_router::RouterError;
-use emp_router::StreamResponseEvent;
 use emp_router::native_http::NativeStream;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::TcpStream;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::thread;
-use std::thread::JoinHandle;
-use std::time::Duration;
 
 const MAX_PRE_OUTPUT_BUFFER_BYTES: usize = 1024 * 1024;
 
 const MAX_PRE_OUTPUT_BUFFER_EVENTS: usize = 256;
-
-struct DisconnectMonitor {
-    disconnected: tokio::sync::oneshot::Receiver<()>,
-    stop: Arc<AtomicBool>,
-    worker: Option<JoinHandle<()>>,
-}
-
-impl DisconnectMonitor {
-    fn start(stream: &TcpStream) -> std::io::Result<Self> {
-        let probe = stream.try_clone()?;
-        probe.set_read_timeout(Some(Duration::from_millis(50)))?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let worker_stop = Arc::clone(&stop);
-        let (sender, disconnected) = tokio::sync::oneshot::channel();
-        let worker = thread::spawn(move || {
-            let mut byte = [0_u8; 1];
-            while !worker_stop.load(Ordering::Acquire) {
-                match probe.peek(&mut byte) {
-                    Ok(0) => {
-                        let _ = sender.send(());
-                        return;
-                    }
-                    Ok(_) => thread::sleep(Duration::from_millis(10)),
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::WouldBlock
-                                | std::io::ErrorKind::TimedOut
-                                | std::io::ErrorKind::Interrupted
-                        ) => {}
-                    Err(_) => {
-                        let _ = sender.send(());
-                        return;
-                    }
-                }
-            }
-        });
-        Ok(Self {
-            disconnected,
-            stop,
-            worker: Some(worker),
-        })
-    }
-
-    async fn next_event(&mut self, stream: &mut ExternalStream) -> StreamPoll {
-        tokio::select! {
-            result = stream.next_event() => StreamPoll::Event(result),
-            _ = &mut self.disconnected => StreamPoll::Disconnected,
-        }
-    }
-
-    async fn next_native_event(&mut self, stream: &mut NativeStream) -> NativeStreamPoll {
-        tokio::select! {
-            result = stream.next_event() => NativeStreamPoll::Event(result),
-            _ = &mut self.disconnected => NativeStreamPoll::Disconnected,
-        }
-    }
-}
-
-impl Drop for DisconnectMonitor {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
-    }
-}
-
-enum StreamPoll {
-    Event(Result<Option<StreamResponseEvent>, RouterError>),
-    Disconnected,
-}
-
-enum NativeStreamPoll {
-    Event(Result<Option<emp_router::native_http::NativeStreamEvent>, RouterError>),
-    Disconnected,
-}
 
 pub(crate) fn write_stream_head(stream: &mut TcpStream) -> std::io::Result<()> {
     write_stream_head_with_headers(stream, &BTreeMap::new())
@@ -155,30 +72,62 @@ pub(crate) fn serve_external_stream(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), Vec<u8>> {
-    let (upstream, candidate) =
-        crate::services::providers::open_external_stream(state, route, body, incoming, ids)
-            .map_err(|error| match error {
-                crate::services::providers::ExternalStreamOpenError::Router(error) => {
-                    pre_output_router_error_response(&error)
+    let monitor = DisconnectMonitor::start(downstream).ok();
+    let (upstream, candidate, monitor) = match monitor {
+        Some(mut monitor) => {
+            let opened = crate::services::providers::open_external_stream_cancellable(
+                state,
+                route,
+                body,
+                incoming,
+                ids,
+                &mut monitor,
+            )
+            .map_err(external_open_error_response)?;
+            match opened {
+                crate::services::providers::CancellableExternalStreamOpen::Opened(
+                    upstream,
+                    candidate,
+                ) => (*upstream, candidate, Some(monitor)),
+                crate::services::providers::CancellableExternalStreamOpen::Disconnected => {
+                    return Ok(());
                 }
-                crate::services::providers::ExternalStreamOpenError::Route(error) => {
-                    route_resolution_response(error)
-                }
-                crate::services::providers::ExternalStreamOpenError::Unsupported => {
-                    json_error_response(
-                        503,
-                        status_text(503),
-                        "provider protocol is unsupported",
-                        Some("router_error"),
-                        &[],
-                    )
-                }
-            })?;
-    let completed = relay_external_stream(downstream, state, &candidate, body, incoming, upstream)?;
+            }
+        }
+        None => {
+            let (upstream, candidate) =
+                crate::services::providers::open_external_stream(state, route, body, incoming, ids)
+                    .map_err(external_open_error_response)?;
+            (upstream, candidate, None)
+        }
+    };
+    let completed = relay_external_stream(
+        downstream, state, &candidate, body, incoming, upstream, monitor,
+    )?;
     if completed {
         persist_protocol_observation(state, &candidate);
     }
     Ok(())
+}
+
+fn external_open_error_response(
+    error: crate::services::providers::ExternalStreamOpenError,
+) -> Vec<u8> {
+    match error {
+        crate::services::providers::ExternalStreamOpenError::Router(error) => {
+            pre_output_router_error_response(&error)
+        }
+        crate::services::providers::ExternalStreamOpenError::Route(error) => {
+            route_resolution_response(error)
+        }
+        crate::services::providers::ExternalStreamOpenError::Unsupported => json_error_response(
+            503,
+            status_text(503),
+            "provider protocol is unsupported",
+            Some("router_error"),
+            &[],
+        ),
+    }
 }
 
 pub(crate) fn serve_native_stream(
@@ -229,8 +178,8 @@ fn relay_native_stream(
                 .backend
                 .transport
                 .runtime
-                .block_on(monitor.next_native_event(&mut upstream)),
-            None => NativeStreamPoll::Event(
+                .block_on(monitor.race(upstream.next_event())),
+            None => DisconnectRace::Ready(
                 state
                     .backend
                     .transport
@@ -239,20 +188,20 @@ fn relay_native_stream(
             ),
         };
         let event = match polled {
-            NativeStreamPoll::Disconnected => {
+            DisconnectRace::Disconnected => {
                 usage.disconnected();
                 return Ok(false);
             }
-            NativeStreamPoll::Event(Ok(Some(event))) => event,
-            NativeStreamPoll::Event(Ok(None)) => {
+            DisconnectRace::Ready(Ok(Some(event))) => event,
+            DisconnectRace::Ready(Ok(None)) => {
                 usage.status(502, "stream_incomplete");
                 return Ok(false);
             }
-            NativeStreamPoll::Event(Err(error)) if !started => {
+            DisconnectRace::Ready(Err(error)) if !started => {
                 usage.router_error(&error);
                 return Err(pre_output_router_error_response(&error));
             }
-            NativeStreamPoll::Event(Err(error)) => {
+            DisconnectRace::Ready(Err(error)) => {
                 usage.router_error(&error);
                 let response_id = match random_hex(16) {
                     Ok(value) => format!("resp_{value}"),
@@ -329,6 +278,7 @@ fn relay_external_stream(
     body: &Value,
     incoming: &BTreeMap<String, String>,
     mut upstream: ExternalStream,
+    monitor: Option<DisconnectMonitor>,
 ) -> Result<bool, Vec<u8>> {
     let mut usage = crate::services::observation::Observation::new(
         state,
@@ -339,7 +289,7 @@ fn relay_external_stream(
         "responses",
     )
     .started_at(upstream.request_started);
-    let mut monitor = DisconnectMonitor::start(downstream).ok();
+    let mut monitor = monitor.or_else(|| DisconnectMonitor::start(downstream).ok());
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;
     let mut started = false;
@@ -349,8 +299,8 @@ fn relay_external_stream(
                 .backend
                 .transport
                 .runtime
-                .block_on(monitor.next_event(&mut upstream)),
-            None => StreamPoll::Event(
+                .block_on(monitor.race(upstream.next_event())),
+            None => DisconnectRace::Ready(
                 state
                     .backend
                     .transport
@@ -359,20 +309,20 @@ fn relay_external_stream(
             ),
         };
         let event = match polled {
-            StreamPoll::Disconnected => {
+            DisconnectRace::Disconnected => {
                 usage.disconnected();
                 return Ok(false);
             }
-            StreamPoll::Event(Ok(Some(event))) => event,
-            StreamPoll::Event(Ok(None)) => {
+            DisconnectRace::Ready(Ok(Some(event))) => event,
+            DisconnectRace::Ready(Ok(None)) => {
                 usage.status(502, "stream_incomplete");
                 return Ok(false);
             }
-            StreamPoll::Event(Err(error)) if !started => {
+            DisconnectRace::Ready(Err(error)) if !started => {
                 usage.router_error(&error);
                 return Err(pre_output_router_error_response(&error));
             }
-            StreamPoll::Event(Err(error)) => {
+            DisconnectRace::Ready(Err(error)) => {
                 usage.router_error(&error);
                 let response_id = match random_hex(16) {
                     Ok(value) => format!("resp_{value}"),

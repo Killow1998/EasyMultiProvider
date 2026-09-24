@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::app::ServerState;
+use crate::services::disconnect::DisconnectMonitor;
+use crate::services::disconnect::DisconnectRace;
 use emp_core::ResolvedRoute;
 use emp_state::VaultStore;
 use emp_state::load_configuration;
@@ -62,6 +64,11 @@ pub(crate) enum ExternalStreamOpenError {
     Unsupported,
 }
 
+pub(crate) enum CancellableExternalStreamOpen {
+    Opened(Box<emp_router::ExternalStream>, ResolvedRoute),
+    Disconnected,
+}
+
 /// One protocol/retry policy for HTTP SSE and downstream WebSocket turns.
 pub(crate) fn open_external_stream(
     state: &ServerState,
@@ -70,6 +77,33 @@ pub(crate) fn open_external_stream(
     incoming: &std::collections::BTreeMap<String, String>,
     ids: &emp_router::ProjectionIds,
 ) -> Result<(emp_router::ExternalStream, ResolvedRoute), ExternalStreamOpenError> {
+    match open_external_stream_with_monitor(state, route, body, incoming, ids, None)? {
+        CancellableExternalStreamOpen::Opened(stream, candidate) => Ok((*stream, candidate)),
+        CancellableExternalStreamOpen::Disconnected => {
+            unreachable!("non-cancellable open cannot observe a disconnect")
+        }
+    }
+}
+
+pub(crate) fn open_external_stream_cancellable(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &std::collections::BTreeMap<String, String>,
+    ids: &emp_router::ProjectionIds,
+    monitor: &mut DisconnectMonitor,
+) -> Result<CancellableExternalStreamOpen, ExternalStreamOpenError> {
+    open_external_stream_with_monitor(state, route, body, incoming, ids, Some(monitor))
+}
+
+fn open_external_stream_with_monitor(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &std::collections::BTreeMap<String, String>,
+    ids: &emp_router::ProjectionIds,
+    mut monitor: Option<&mut DisconnectMonitor>,
+) -> Result<CancellableExternalStreamOpen, ExternalStreamOpenError> {
     let router = emp_router::ExternalRouter::new(&state.backend.transport.client);
     let candidates = emp_router::protocol_candidates(route);
     'candidate: for (index, protocol) in candidates.iter().copied().enumerate() {
@@ -77,13 +111,32 @@ pub(crate) fn open_external_stream(
             .with_protocol(protocol)
             .map_err(ExternalStreamOpenError::Route)?;
         for attempt in 0..2 {
-            match state
-                .backend
-                .transport
-                .runtime
-                .block_on(router.open_stream(&candidate, body, incoming, ids))
-            {
-                Ok(stream) => return Ok((stream, candidate)),
+            let opened =
+                match monitor.as_deref_mut() {
+                    Some(monitor) => state.backend.transport.runtime.block_on(
+                        monitor.race(router.open_stream(&candidate, body, incoming, ids)),
+                    ),
+                    None => DisconnectRace::Ready(
+                        state
+                            .backend
+                            .transport
+                            .runtime
+                            .block_on(router.open_stream(&candidate, body, incoming, ids)),
+                    ),
+                };
+            let opened = match opened {
+                DisconnectRace::Ready(result) => result,
+                DisconnectRace::Disconnected => {
+                    return Ok(CancellableExternalStreamOpen::Disconnected);
+                }
+            };
+            match opened {
+                Ok(stream) => {
+                    return Ok(CancellableExternalStreamOpen::Opened(
+                        Box::new(stream),
+                        candidate,
+                    ));
+                }
                 Err(error) => {
                     if error.error_class() == emp_transport::FailureClass::ContextLengthExceeded {
                         crate::services::context::record(state, &candidate, body, false);
@@ -91,7 +144,21 @@ pub(crate) fn open_external_stream(
                     if let Some(delay) =
                         crate::services::failures::external_retry_delay(&error, attempt, &candidate)
                     {
-                        std::thread::sleep(delay);
+                        let delay_elapsed = match monitor.as_deref_mut() {
+                            Some(monitor) => matches!(
+                                state.backend.transport.runtime.block_on(
+                                    monitor.race(async { tokio::time::sleep(delay).await })
+                                ),
+                                DisconnectRace::Ready(()),
+                            ),
+                            None => {
+                                std::thread::sleep(delay);
+                                true
+                            }
+                        };
+                        if !delay_elapsed {
+                            return Ok(CancellableExternalStreamOpen::Disconnected);
+                        }
                         continue;
                     }
                     if index + 1 < candidates.len()
