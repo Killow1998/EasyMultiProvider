@@ -129,8 +129,14 @@ pub(crate) fn management_integration_request(
                 if status.relation == "applied"
                     && let Some(lease) = &status.lease
                     && lease.fields["openai_base_url"].applied.value.as_deref() == Some(&base_url)
-                    && lease.fields["model_catalog_json"].applied.value.as_deref()
+                    && (lease.fields["model_catalog_json"].applied.value.as_deref()
                         == Some(path.as_ref())
+                        || (!lease.fields["model_catalog_json"].applied.present
+                            && lease.fields[emp_integration::REALTIME_SIDEBAND_FIELD]
+                                .applied
+                                .value
+                                .as_deref()
+                                != Some(&base_url)))
                 {
                     match manager.restore() {
                         Ok(result) if !result.ok() => {
@@ -141,10 +147,11 @@ pub(crate) fn management_integration_request(
                     }
                 }
             }
-            manager.enable(
+            manager.enable_with_sideband(
                 &base_url,
                 if dynamic { None } else { Some(path.as_ref()) },
                 true,
+                dynamic.then_some(base_url.as_str()),
             )
         }
         "restore" => {

@@ -52,16 +52,21 @@ pub(crate) fn reconcile(state: &ServerState) -> Result<(), ()> {
             .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
             .is_some();
         if dynamic
-            && result
-                .lease
-                .as_ref()
-                .is_some_and(|lease| lease.fields["model_catalog_json"].applied.present)
+            && result.lease.as_ref().is_some_and(|lease| {
+                lease.fields["openai_base_url"].applied.value.as_deref() == Some(&state.base_url)
+                    && (lease.fields["model_catalog_json"].applied.present
+                        || lease.fields[emp_integration::REALTIME_SIDEBAND_FIELD]
+                            .applied
+                            .value
+                            .as_deref()
+                            != Some(&state.base_url))
+            })
         {
             if !manager.restore().map_err(|_| ())?.ok() {
                 return Err(());
             }
             if !manager
-                .enable(&state.base_url, None, true)
+                .enable_with_sideband(&state.base_url, None, true, Some(&state.base_url))
                 .map_err(|_| ())?
                 .ok()
             {

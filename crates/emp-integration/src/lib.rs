@@ -1,4 +1,4 @@
-//! Transactional ownership of the two top-level Codex TOML fields used by EMP.
+//! Transactional ownership of the top-level Codex TOML fields used by EMP.
 
 use emp_state::IntegrationFileLock;
 use serde::{Deserialize, Serialize};
@@ -12,9 +12,16 @@ use time::format_description::well_known::Rfc3339;
 
 pub mod runtime;
 
-pub const MANAGED_FIELDS: [&str; 2] = ["openai_base_url", "model_catalog_json"];
+const LEGACY_MANAGED_FIELDS: [&str; 2] = ["openai_base_url", "model_catalog_json"];
+pub const REALTIME_SIDEBAND_FIELD: &str = "experimental_realtime_ws_base_url";
+pub const MANAGED_FIELDS: [&str; 3] = [
+    "openai_base_url",
+    "model_catalog_json",
+    REALTIME_SIDEBAND_FIELD,
+];
 const LEASE_SCHEMA: &str = "easy-multi-provider.integration-lease";
-const LEASE_VERSION: u64 = 2;
+const LEGACY_LEASE_VERSION: u64 = 2;
+const LEASE_VERSION: u64 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldState {
@@ -151,7 +158,7 @@ impl IntegrationManager {
         let _lock = self.lock()?;
         let (document, exists) = self.read_config()?;
         let fields = states(&document)?;
-        let lease = self.read_lease()?;
+        let lease = self.read_lease(&fields)?;
         let Some(lease) = lease else {
             return Ok(IntegrationStatus {
                 state: "native".to_owned(),
@@ -194,6 +201,16 @@ impl IntegrationManager {
         catalog: Option<&str>,
         service_ready: bool,
     ) -> Result<IntegrationResult, IntegrationError> {
+        self.enable_with_sideband(base_url, catalog, service_ready, None)
+    }
+
+    pub fn enable_with_sideband(
+        &self,
+        base_url: &str,
+        catalog: Option<&str>,
+        service_ready: bool,
+        realtime_sideband_base_url: Option<&str>,
+    ) -> Result<IntegrationResult, IntegrationError> {
         if !service_ready {
             return Err(IntegrationError(
                 "EMP service must be listening and accepting requests",
@@ -202,6 +219,9 @@ impl IntegrationManager {
         validate_value(base_url)?;
         if let Some(catalog) = catalog {
             validate_value(catalog)?;
+        }
+        if let Some(sideband_url) = realtime_sideband_base_url {
+            validate_value(sideband_url)?;
         }
         self.assert_safe_paths()?;
         let _lock = self.lock()?;
@@ -213,8 +233,15 @@ impl IntegrationManager {
                 "model_catalog_json".to_owned(),
                 catalog.map_or_else(FieldState::absent, FieldState::value),
             ),
+            (
+                REALTIME_SIDEBAND_FIELD.to_owned(),
+                realtime_sideband_base_url.map_or_else(
+                    || current[REALTIME_SIDEBAND_FIELD].clone(),
+                    FieldState::value,
+                ),
+            ),
         ]);
-        if let Some(mut lease) = self.read_lease()?
+        if let Some(mut lease) = self.read_lease(&current)?
             && lease.status != "restored"
         {
             let relation = relation(&current, &lease);
@@ -291,7 +318,7 @@ impl IntegrationManager {
         let _lock = self.lock()?;
         let (mut document, exists) = self.read_config()?;
         let current = states(&document)?;
-        let Some(mut lease) = self.read_lease()? else {
+        let Some(mut lease) = self.read_lease(&current)? else {
             return Ok(result(
                 "noop",
                 "native",
@@ -458,7 +485,10 @@ impl IntegrationManager {
         }
     }
 
-    fn read_lease(&self) -> Result<Option<LeaseRecord>, IntegrationError> {
+    fn read_lease(
+        &self,
+        current: &BTreeMap<String, FieldState>,
+    ) -> Result<Option<LeaseRecord>, IntegrationError> {
         let raw = match fs::read(&self.lease_path) {
             Ok(raw) => raw,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -467,18 +497,39 @@ impl IntegrationManager {
         let lease: LeaseRecord = serde_json::from_slice(&raw)
             .map_err(|_| IntegrationError("unable to read integration lease"))?;
         if lease.schema != LEASE_SCHEMA
-            || lease.version != LEASE_VERSION
+            || !matches!(lease.version, LEGACY_LEASE_VERSION | LEASE_VERSION)
             || lease.config_path != absolute(&self.config_path)?.to_string_lossy()
             || !matches!(
                 lease.status.as_str(),
                 "prepared" | "active" | "restoring" | "restored"
             )
-            || lease.fields.len() != 2
-            || MANAGED_FIELDS
-                .iter()
-                .any(|name| !lease.fields.contains_key(*name))
+            || lease.fields.len()
+                != if lease.version == LEGACY_LEASE_VERSION {
+                    LEGACY_MANAGED_FIELDS.len()
+                } else {
+                    MANAGED_FIELDS.len()
+                }
+            || (if lease.version == LEGACY_LEASE_VERSION {
+                LEGACY_MANAGED_FIELDS.as_slice()
+            } else {
+                MANAGED_FIELDS.as_slice()
+            })
+            .iter()
+            .any(|name| !lease.fields.contains_key(*name))
         {
             return Err(IntegrationError("unsupported integration lease"));
+        }
+        let mut lease = lease;
+        if lease.version == LEGACY_LEASE_VERSION {
+            let sideband = current[REALTIME_SIDEBAND_FIELD].clone();
+            lease.fields.insert(
+                REALTIME_SIDEBAND_FIELD.to_owned(),
+                FieldRecovery {
+                    original: sideband.clone(),
+                    applied: sideband,
+                },
+            );
+            lease.version = LEASE_VERSION;
         }
         Ok(Some(lease))
     }
