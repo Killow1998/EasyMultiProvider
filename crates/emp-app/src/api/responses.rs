@@ -32,6 +32,7 @@ use crate::services::history::prepare_history;
 use crate::services::native;
 use crate::services::providers::hydrate_provider_keys;
 use crate::services::providers::persist_protocol_observation;
+use crate::services::request_preparation::prepare_external_request;
 use crate::util::projection_ids;
 use crate::util::python_truthy;
 use crate::util::random_hex;
@@ -72,7 +73,7 @@ pub(crate) fn responses_request(
             &[],
         ));
     }
-    let mut body = match read_json_body(stream, request, body_prefix, state) {
+    let body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,
         Err(error) => return ResponsesRequestResult::Buffered(body_error_response(error)),
     };
@@ -122,6 +123,18 @@ pub(crate) fn responses_request(
         Ok(route) => route,
         Err(error) => {
             return ResponsesRequestResult::Buffered(route_resolution_response(error));
+        }
+    };
+    let (route, mut body) = match prepare_external_request(&config, route, body) {
+        Ok(prepared) => prepared,
+        Err(_) => {
+            return ResponsesRequestResult::Buffered(json_error_response(
+                500,
+                status_text(500),
+                "internal server error",
+                None,
+                &[],
+            ));
         }
     };
     let ids = match projection_ids() {

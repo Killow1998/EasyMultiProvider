@@ -20,6 +20,7 @@ use crate::services::history::prepare_history;
 use crate::services::native;
 use crate::services::providers::hydrate_provider_keys;
 use crate::services::providers::persist_protocol_observation;
+use crate::services::request_preparation::prepare_external_request;
 use crate::util::projection_ids;
 use crate::util::random_hex;
 use emp_codex::subscription_route_model;
@@ -49,7 +50,7 @@ pub(crate) fn compact_request(
             &[],
         );
     }
-    let mut body = match read_json_body(stream, request, body_prefix, state) {
+    let body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
@@ -98,6 +99,12 @@ pub(crate) fn compact_request(
     if let Ok(id) = random_hex(8) {
         incoming.insert("X-EMP-Request-ID".to_owned(), id);
     }
+    let (route, mut body) = match prepare_external_request(&config, route, body) {
+        Ok(prepared) => prepared,
+        Err(_) => {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        }
+    };
     body = match prepare_history(state, &route, body, &incoming) {
         Ok(body) => body,
         Err(error) => return history_http_error(&error),

@@ -20,6 +20,7 @@ use crate::services::history::prepare_destination_context;
 use crate::services::history::prepare_history;
 use crate::services::native;
 use crate::services::providers::hydrate_provider_keys;
+use crate::services::request_preparation::prepare_external_request;
 use crate::util::projection_ids;
 use crate::util::random_hex;
 use emp_codex::subscription_route_model;
@@ -243,6 +244,18 @@ pub(crate) fn serve_responses_websocket(
                 continue;
             }
         };
+        let (route, mut request_body) =
+            match prepare_external_request(&config, route, Value::Object(request_body)) {
+                Ok((route, Value::Object(body))) => (route, body),
+                Ok(_) | Err(_) => {
+                    let _ = websocket.send_json(&serde_json::json!({
+                        "type":"error",
+                        "status":500,
+                        "error":{"code":"internal_error","message":"internal server error"}
+                    }));
+                    continue;
+                }
+            };
         let ids = match projection_ids() {
             Ok(ids) => ids,
             Err(_) => {

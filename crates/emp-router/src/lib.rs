@@ -234,7 +234,10 @@ pub fn protocol_candidates(route: &ResolvedRoute) -> Vec<Protocol> {
         .collect()
 }
 
-fn observed_protocol(route: &ResolvedRoute) -> Option<Protocol> {
+/// Return a saved protocol only when its endpoint, deployment, and upstream
+/// model identities still match this frozen route. Candidate order based on a
+/// URL suffix is not an observation and must not be treated as one.
+pub fn observed_protocol(route: &ResolvedRoute) -> Option<Protocol> {
     let upstream = route
         .model
         .value()
