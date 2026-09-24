@@ -39,7 +39,7 @@ from tests.test_shared_app_server_runtime import _UnixModelListServer
 from easy_multi_provider.integration import IntegrationManager
 
 
-SHORT_SOCKET_TEMP_ROOT = "/tmp" if os.name != "nt" and Path("/tmp").is_dir() else None
+SHORT_SOCKET_TEMP_ROOT = str(Path("/tmp").resolve()) if os.name != "nt" and Path("/tmp").is_dir() else None
 
 
 def short_socket_directory():
