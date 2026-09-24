@@ -151,8 +151,18 @@ pub(crate) fn run() -> Result<ExitCode, String> {
         }
     };
     match command {
-        Cli::Version => println!("EMP {VERSION}"),
-        Cli::Help(command) => print!("{}", help::text(command.as_deref())),
+        Cli::Version => print!(
+            "EMP {VERSION}{}",
+            if cfg!(windows) { "\r\n" } else { "\n" }
+        ),
+        Cli::Help(command) => {
+            let message = help::text(command.as_deref());
+            if cfg!(windows) {
+                print!("{}", message.replace('\n', "\r\n"));
+            } else {
+                print!("{message}");
+            }
+        }
         Cli::Control(command) => return command.run(),
         Cli::ApplyUpdate(path) => {
             return emp_state::update::worker::run(&path)

@@ -366,6 +366,15 @@ class EmpProcess:
 
     def close(self):
         if self.process.poll() is None:
+            # Windows terminate() kills the process without running its
+            # integration-restore cleanup. Use the product's shutdown API.
+            if os.name == "nt" and hasattr(self, "port"):
+                try:
+                    self.request("POST", "/api/quit", {})
+                    self.process.wait(timeout=5)
+                except (OSError, AssertionError, subprocess.TimeoutExpired):
+                    pass
+        if self.process.poll() is None:
             self.process.terminate()
             try:
                 self.process.wait(timeout=5)
