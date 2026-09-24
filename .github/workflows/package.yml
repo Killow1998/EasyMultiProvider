@@ -72,7 +72,7 @@ jobs:
       CARGO_BUILD_JOBS: 6
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_RELEASE_DEBUG: 0
-      CARGO_TARGET_DIR: ${{ runner.temp }}/emp-package-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.emp-package-target
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1
