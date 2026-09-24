@@ -11,7 +11,7 @@ import time
 import unittest
 from contextlib import redirect_stdout
 from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
 from unittest.mock import patch
 from pathlib import Path
@@ -220,6 +220,17 @@ class _CompletedResponse:
 
 
 class ServerAccountTests(unittest.TestCase):
+    def test_local_listener_bind_does_not_resolve_reverse_dns(self):
+        with patch("socket.getfqdn", side_effect=AssertionError("reverse DNS lookup")):
+            service = BoundedThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+        try:
+            self.assertEqual(service.server_address[0], "127.0.0.1")
+            self.assertGreater(service.server_address[1], 0)
+            self.assertEqual(service.server_name, "127.0.0.1")
+            self.assertEqual(service.server_port, service.server_address[1])
+        finally:
+            service.server_close()
+
     def test_runtime_selection_persists_multiple_selectable_inventory_sources(self):
         class RuntimeInventory:
             def __init__(self):

@@ -22,6 +22,7 @@ import uuid
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 import urllib.request
@@ -5221,6 +5222,12 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     websocket_limit_max = 224
     websocket_limit_growth = 32
     request_queue_size = 128
+
+    def server_bind(self) -> None:
+        # HTTPServer.server_bind calls getfqdn(), which may block on reverse DNS
+        # even when the local listener uses a numeric loopback address.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def __init__(self, server_address, handler_cls):
         self.capacity_reporter = None
