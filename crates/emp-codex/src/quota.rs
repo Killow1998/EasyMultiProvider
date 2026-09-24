@@ -1098,10 +1098,11 @@ fn safe_reset_credits(value: Option<&Value>) -> Option<Value> {
                 .filter_map(Value::as_object)
                 .map(|credit| {
                     let mut safe = Map::new();
-                    if let Some(Value::String(id)) = credit.get("id") {
-                        if !id.trim().is_empty() && id.len() <= 256 {
-                            safe.insert("id".to_owned(), Value::String(id.clone()));
-                        }
+                    if let Some(Value::String(id)) = credit.get("id")
+                        && !id.trim().is_empty()
+                        && id.len() <= 256
+                    {
+                        safe.insert("id".to_owned(), Value::String(id.clone()));
                     }
                     for (source, target) in [
                         ("resetType", "reset_type"),
