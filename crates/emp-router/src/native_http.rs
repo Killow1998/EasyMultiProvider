@@ -2,6 +2,7 @@
 //! A request is projected once; retries retain that projection and credential
 //! snapshot except for Python's explicit account refresh/effort fallback.
 
+use crate::discovery::python_json_error_message;
 use crate::native_metadata::{native_response_headers, rewrite_native_model_event};
 use crate::{
     MAX_UPSTREAM_BODY_BYTES, MAX_UPSTREAM_ERROR_BYTES, ProjectionIds, RouterError, RouterErrorKind,
@@ -949,8 +950,8 @@ impl<'a> NativeRouter<'a> {
                 return Err(NativeHttpError::context(BTreeMap::new()));
             }
             let body = if plaintext_collaboration && !compact {
-                let value: Value = serde_json::from_slice(&raw).map_err(|_| {
-                    NativeHttpError::plain(400, "upstream native response is not valid JSON")
+                let value: Value = serde_json::from_slice(&raw).map_err(|error| {
+                    NativeHttpError::plain(400, python_json_error_message(&raw, &error))
                 })?;
                 let restored = restore_collaboration(&value).map_err(collaboration_error)?;
                 serde_json::to_vec(&restored)

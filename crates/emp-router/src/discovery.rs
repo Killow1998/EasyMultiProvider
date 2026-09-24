@@ -275,10 +275,17 @@ fn metadata_error(
     RouterError::new(kind, status, error_class, None, None, message)
 }
 
-fn python_json_error_message(input: &[u8], error: &serde_json::Error) -> String {
+pub(crate) fn python_json_error_message(input: &[u8], error: &serde_json::Error) -> String {
     let input = String::from_utf8_lossy(input);
     let detail = error.to_string();
-    let (message, position) = if detail.starts_with("expected ident") {
+    let (message, position) = if detail.starts_with("EOF while parsing an object")
+        && input.trim_end().ends_with('{')
+    {
+        (
+            "Expecting property name enclosed in double quotes",
+            input.chars().count(),
+        )
+    } else if detail.starts_with("expected ident") {
         let position = input
             .chars()
             .position(|character| !character.is_whitespace())

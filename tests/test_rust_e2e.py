@@ -1274,6 +1274,21 @@ class RustEndToEnd(unittest.TestCase):
             contexts.append(record["context"])
         self.assertEqual(contexts[0], contexts[1])
 
+    def test_native_plaintext_collaboration_malformed_json_matches_python(self):
+        # The configured external API-key provider enables native plaintext
+        # collaboration restoration, which parses an otherwise opaque response.
+        for invalid in (b"not-json", b"{bad}", b"{"):
+            observed = []
+            for backend in self.backends:
+                with self.subTest(invalid=invalid, backend=backend.runtime_kind):
+                    self.upstream.configure(invalid)
+                    status, _, raw = backend.request(
+                        "POST", "/v1/responses", {"model": "native/model", "input": "hello"})
+                    request = self.upstream.requests.get(timeout=5)
+                    self.assertTrue(self.upstream.requests.empty(), "unexpected retry")
+                    observed.append((status, json.loads(raw), request[0], request[2]))
+            self.assertEqual(observed[0], observed[1])
+
     def test_upstream_503_is_visible_without_replay(self):
         self.compare_exchange(
             {"model": "test/model", "input": "hello"},
