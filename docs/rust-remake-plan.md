@@ -1,6 +1,6 @@
 # Rust backend remake plan
 
-Status: in progress on remake4rust; verified state updated on 2026-09-24.
+Status: in progress on remake4rust; verified state updated on 2026-09-25.
 
 CI-pinned Python reference: `3bcf72a5481a951cf9713f7d92784a6872970e1e`
 (EMP 0.11.10). Local differential runs use the same formal Python `main`.
@@ -20,7 +20,7 @@ define the current next action.
 ## Current verified state
 
 The 2026-09-22 inventory below this section remains historical. This snapshot
-records the current source and local tests on 2026-09-24. Python is still the
+records the current source and local tests on 2026-09-25. Python is still the
 formal service; the Rust release runs separately on port 4201 for local
 real-model testing. The last cross-platform workflows passed at `ed1509f`;
 the subsequent Linux memory change has local verification only. A production
@@ -28,16 +28,16 @@ cutover has not occurred.
 
 | Area | Observed state | Next proof |
 | --- | --- | --- |
-| Workspace | Nine Rust crates; `main.rs` is 9 lines. History reading, update operations, core validation and observation were separated into bounded modules without behavior changes | Keep the module boundary while fixing observed behavior |
+| Workspace | Nine Rust crates; `main.rs` is 9 lines. History reading, update operations, core validation and observation were separated into bounded modules without behavior changes. The 2,663-line app test file was split by real server workflow into a 532-line shared fixture and five focused contract files. Native HTTP failure translation now has its own 279-line module, leaving forwarding at 568 lines. Gemini metadata lookup was separated from common model discovery (192 and 645 lines) | Keep the module boundary while fixing observed behavior |
 | Runtime | Release Rust EMP starts as an isolated persistent test service; native/external HTTP, SSE, WebSocket, history, model switches and subagents have real-process coverage | Keep Python formal until final acceptance and reversible cutover |
 | Reset credits | Python and Rust preserve an opaque credit ID and pass optional `creditId`; the shared UI lets users choose and confirms again before spending. ISO grant/expiry dates and countdowns now render from official credit details | Verify packaged UI on every supported OS |
 | Python oracle | Formal Python `main` is at `3bcf72a`; its server-side web-search fix and regression are mirrored here. The Package CI oracle pin targets that commit and passed on all four platforms at `ed1509f` | Keep differential fixtures tied to the formal source |
-| Rust workspace | Format, warnings-denied Clippy, and all 74 workspace test suites (414 tests) passed on the current source. Runtime CI `36095683710` passed all seven jobs at `ed1509f` | Verify the subsequent memory change on the next cross-platform build |
-| Real processes | The current release passed 54 Python/Rust endpoint and installed Codex CLI tests. Earlier live tests completed 12 alternating external-provider turns and native/external model switches. After the memory change, an isolated Codex CLI turn through an imported subscription route succeeded at low reasoning; Python port 4200 stayed active | Continue real-provider soak and verify reversible formal cutover before replacement |
+| Rust workspace | Format, warnings-denied Clippy, and all 83 workspace test suites (414 tests) passed on the final local source. Runtime CI `36095683710` passed all seven jobs at `ed1509f` | Verify the new commits on the next cross-platform build |
+| Real processes | The memory-patched release passed 54 Python/Rust endpoint and installed Codex CLI tests. Earlier live tests completed 12 alternating external-provider turns and native/external model switches. A fresh installed-CLI thread completed four real turns through an imported subscription, AILab, chuang/GLM, then the subscription again; each later model recalled the first turn's marker. A forced Codex compaction preserved that marker across a subsequent AILab → subscription switch and Rust service restart. A real subscription subagent turn completed. The final rebuilt release again recalled the marker in a real subscription turn and refreshed its Pro Lite quota with HTTP 200. Python port 4200 stayed active | Verify reversible formal cutover before replacement |
 | Performance | With Linux large-request buffer and context-projection page reclamation, full Python-first and Rust-first fake-upstream runs each passed ordinary throughput/latency and all 12 individual 16/128 MiB identity/gzip/zstd history memory/CPU limits with zero errors. Median Responses throughput ratios were 3.93 and 4.01; Rust whole-run peak RSS was 464/497 MiB versus Python 518/516 MiB. Removing projected-JSON preallocation worsened memory and was reverted | Repeat on packaged builds before broad improvement claims |
-| Service load | With 224 idle WebSockets, Rust management p95 was 2.2 ms. SSE activity p95 was 1.1 ms; WebSocket activity p95 was 0.9 ms at one stream and 8.0 ms at 128 streams, with ordered terminal events. Rust cancellation closed the upstream and released resources at every tested phase (worst p99 34.5 ms); the Python oracle failed to close the upstream socket in this fixture. A 100,000-record scan with 120,000 seeded ledger rows matched Python after pinning only the synthetic live request timestamp; Rust scan time was 6.1 versus 12.3 seconds. A 3,000-sample quota-history query matched and took 70% of Python's time | Complete final-source one-hour churn and packaged service acceptance |
-| Lifecycle | A one-hour 3,590-cycle-per-runtime startup/shutdown/forward churn passed on an earlier release. The same test is running on the current release | Check the final-source report before claiming lifecycle acceptance |
-| Distribution | Local Linux release assembly, service/Web UI smoke, user installation and update/rollback passed. Package CI `36095686559` passed Linux x64, Windows x64, macOS Intel and Apple Silicon at `ed1509f` with the updated Python pin. The memory change is not yet in those packages | Verify the current release on all platforms, then perform reversible formal cutover |
+| Service load | With 224 idle WebSockets, Rust management p95 was 2.2 ms. SSE activity p95 was 1.1 ms; WebSocket activity p95 was 0.9 ms at one stream and 8.0 ms at 128 streams, with ordered terminal events. Rust cancellation closed the upstream and released resources at every tested phase (worst p99 34.5 ms); the Python oracle failed to close the upstream socket in this fixture. A 100,000-record scan with 120,000 seeded ledger rows matched Python after pinning only the synthetic live request timestamp; Rust scan time was 6.1 versus 12.3 seconds. A 3,000-sample quota-history query matched and took 70% of Python's time | Verify packaged service acceptance |
+| Lifecycle | The one-hour memory-patched release test completed 2,157 startup/shutdown/forward cycles per runtime, 8,628 forwarded requests, zero errors and no process residue. Rust readiness p95 was 22 ms versus Python 271 ms; API quit p95 was 32 ms versus Python 618 ms. All readiness and post-warmup resource-slope gates passed. Subsequent source-only module moves passed final full tests and the rebuilt release passed isolated service smoke | Verify packaged service acceptance |
+| Distribution | Local Linux release assembly, service/Web UI smoke, user installation and update/rollback passed. The final rebuilt release served Web, configuration, catalog and real subscription traffic on port 4201. Package CI `36095686559` passed Linux x64, Windows x64, macOS Intel and Apple Silicon at `ed1509f` with the updated Python pin. The memory change is not yet in those packages | Verify the current release on all platforms, then perform reversible formal cutover |
 
 Progress means a named Python workflow works through Rust with the same
 output, failures and persistent effects. Line counts and test counts do not
