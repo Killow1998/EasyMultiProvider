@@ -284,8 +284,11 @@ pub(crate) fn read_json_body(
         ContentDecodeError::DecodedTooLarge { limit } => body_size_error(limit, true),
         error => BodyError::Decode(error),
     })?;
+    let decoded_size = body.len();
     let value: Value = serde_json::from_slice(&body)
         .map_err(|error| BodyError::Invalid(format!("request body must be valid JSON: {error}")))?;
+    drop(body);
+    release_large_temporary_pages(decoded_size);
     if !value.is_object() {
         return Err(BodyError::Invalid(
             "request body must be a JSON object".to_owned(),
@@ -293,6 +296,18 @@ pub(crate) fn read_json_body(
     }
     Ok(value)
 }
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub(crate) fn release_large_temporary_pages(size: usize) {
+    if size >= REQUEST_GROWTH_QUANTUM {
+        // The parsed value or projected request owns its text. Return pages
+        // from its now-free temporary before another large projection.
+        unsafe { libc::malloc_trim(0) };
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+pub(crate) fn release_large_temporary_pages(_size: usize) {}
 
 #[cfg(test)]
 mod body_capacity_tests {

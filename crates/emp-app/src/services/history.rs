@@ -141,6 +141,13 @@ pub(crate) fn prepare_destination_context(
             &payload,
         )
     };
+    if let Some(bytes) = assessment
+        .input_estimate
+        .and_then(|tokens| tokens.checked_mul(2))
+        .and_then(|bytes| usize::try_from(bytes).ok())
+    {
+        crate::http::request::release_large_temporary_pages(bytes);
+    }
     if !assessment.blocked() {
         return Ok(body);
     }
