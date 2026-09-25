@@ -10,6 +10,7 @@ use crate::http::response::status_text;
 use crate::services::accounts::account_catalog_headers;
 use crate::services::auto_review::resolve_auto_review_route;
 use crate::services::catalog::response_catalog_etag;
+use crate::services::disconnect::DisconnectRace;
 use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
 use crate::services::failures::safe_failure_reason;
@@ -156,7 +157,7 @@ pub(crate) fn serve_responses_websocket(
     if stream.write_all(head.as_bytes()).is_err() || stream.flush().is_err() {
         return;
     }
-    let _ = stream.set_read_timeout(None);
+    let monitor_stream = stream.try_clone().ok();
     let mut websocket = match WebSocketConnection::new_with_prefix(stream, &body_prefix) {
         Ok(websocket) => websocket,
         Err(_) => return,
@@ -635,14 +636,30 @@ pub(crate) fn serve_responses_websocket(
             )
             .started_at(upstream.request_started)
             .transport("websocket");
+            let mut monitor = monitor_stream.as_ref().and_then(|probe| {
+                crate::services::disconnect::DisconnectMonitor::start(probe).ok()
+            });
             loop {
-                match state
-                    .backend
-                    .transport
-                    .runtime
-                    .block_on(upstream.next_event())
-                {
-                    Ok(Some(event)) => {
+                let polled = match monitor.as_mut() {
+                    Some(monitor) => state
+                        .backend
+                        .transport
+                        .runtime
+                        .block_on(monitor.race(upstream.next_event())),
+                    None => DisconnectRace::Ready(
+                        state
+                            .backend
+                            .transport
+                            .runtime
+                            .block_on(upstream.next_event()),
+                    ),
+                };
+                match polled {
+                    DisconnectRace::Disconnected => {
+                        usage.disconnected();
+                        return;
+                    }
+                    DisconnectRace::Ready(Ok(Some(event))) => {
                         usage.observe(&event.body);
                         crate::services::context::record_event(
                             state,
@@ -658,8 +675,8 @@ pub(crate) fn serve_responses_websocket(
                             break;
                         }
                     }
-                    Ok(None) => break,
-                    Err(error) => {
+                    DisconnectRace::Ready(Ok(None)) => break,
+                    DisconnectRace::Ready(Err(error)) => {
                         if sent_output {
                             let id = format!(
                                 "resp_{}",
@@ -709,14 +726,30 @@ pub(crate) fn serve_responses_websocket(
             )
             .started_at(upstream.request_started)
             .transport("websocket");
+            let mut monitor = monitor_stream.as_ref().and_then(|probe| {
+                crate::services::disconnect::DisconnectMonitor::start(probe).ok()
+            });
             loop {
-                match state
-                    .backend
-                    .transport
-                    .runtime
-                    .block_on(upstream.next_event())
-                {
-                    Ok(Some(event)) => {
+                let polled = match monitor.as_mut() {
+                    Some(monitor) => state
+                        .backend
+                        .transport
+                        .runtime
+                        .block_on(monitor.race(upstream.next_event())),
+                    None => DisconnectRace::Ready(
+                        state
+                            .backend
+                            .transport
+                            .runtime
+                            .block_on(upstream.next_event()),
+                    ),
+                };
+                match polled {
+                    DisconnectRace::Disconnected => {
+                        usage.disconnected();
+                        return;
+                    }
+                    DisconnectRace::Ready(Ok(Some(event))) => {
                         usage.observe(&event.body);
                         crate::services::context::record_event(
                             state,
@@ -737,8 +770,8 @@ pub(crate) fn serve_responses_websocket(
                             break;
                         }
                     }
-                    Ok(None) => break,
-                    Err(error) => {
+                    DisconnectRace::Ready(Ok(None)) => break,
+                    DisconnectRace::Ready(Err(error)) => {
                         if sent_output {
                             let id = format!(
                                 "resp_{}",
