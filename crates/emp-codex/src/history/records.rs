@@ -70,182 +70,34 @@ pub(super) fn locate(database: &Path, thread: &str) -> Result<Location, HistoryE
     })
 }
 
-pub(super) fn parse_records(bytes: &[u8]) -> Result<Vec<Record>, HistoryError> {
-    let mut records = Vec::new();
-    let lines = bytes.split(|byte| *byte == b'\n').collect::<Vec<_>>();
-    for (line, raw) in lines.iter().enumerate() {
-        let raw = raw.strip_suffix(b"\r").unwrap_or(raw);
-        if raw.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        match serde_json::from_slice::<Value>(raw) {
-            Ok(Value::Object(value)) => records.push(Record { value }),
-            Ok(_) => return Err(HistoryError::new("invalid_json")),
-            Err(error) if line + 1 == lines.len() && !bytes.ends_with(b"\n") && error.is_eof() => {}
-            Err(_) => return Err(HistoryError::new("invalid_json")),
-        }
-    }
-    Ok(records)
+pub(super) fn session_meta_id(record: &Map<String, Value>) -> Option<String> {
+    let payload = record.get("payload").and_then(Value::as_object);
+    string_from(
+        payload.unwrap_or(record),
+        &["id", "thread_id", "threadId", "session_id", "sessionId"],
+    )
 }
 
-pub(super) fn validate_thread(
-    records: &[Record],
-    expected: Option<&str>,
-) -> Result<(), HistoryError> {
-    let ids = records
-        .iter()
-        .filter(|record| {
-            matches!(
-                token(record.value.get("type")).as_str(),
-                "session_meta" | "sessionmeta"
-            )
+pub(super) fn replacement_contains_encoded(record: &Map<String, Value>, encoded: &str) -> bool {
+    if !matches!(
+        token(record.get("type")).as_str(),
+        "compaction" | "compaction_summary" | "compacted" | "compacted_summary"
+    ) {
+        return false;
+    }
+    let payload = record
+        .get("payload")
+        .and_then(Value::as_object)
+        .unwrap_or(record);
+    payload
+        .get("replacement_history")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("type").and_then(Value::as_str) == Some("compaction")
+                    && item.get("encrypted_content").and_then(Value::as_str) == Some(encoded)
+            })
         })
-        .filter_map(|record| {
-            let payload = record.value.get("payload").and_then(Value::as_object);
-            string_from(
-                payload.unwrap_or(&record.value),
-                &["id", "thread_id", "threadId", "session_id", "sessionId"],
-            )
-        })
-        .collect::<Vec<_>>();
-    if ids.is_empty() {
-        return Err(HistoryError::new("session_meta_missing"));
-    }
-    if ids.iter().any(|id| Some(id.as_str()) != expected) {
-        return Err(HistoryError::new("thread_mismatch"));
-    }
-    if ids.iter().collect::<BTreeSet<_>>().len() != 1 {
-        return Err(HistoryError::new("thread_identity_conflict"));
-    }
-    Ok(())
-}
-
-pub(super) fn anchor_boundary(
-    records: &[Record],
-    turn: Option<&str>,
-) -> Result<usize, HistoryError> {
-    let Some(turn) = turn else {
-        return Ok(records.len());
-    };
-    if let Some(index) = records
-        .iter()
-        .position(|record| record_turn_id(&record.value).as_deref() == Some(turn))
-    {
-        return Ok(index);
-    }
-    let explicit = records
-        .iter()
-        .filter_map(|record| record_turn_id(&record.value))
-        .collect::<BTreeSet<_>>();
-    let terminal = records
-        .iter()
-        .filter_map(|record| {
-            let payload = record.value.get("payload").and_then(Value::as_object)?;
-            (token(record.value.get("type")) == "event_msg"
-                && token(payload.get("type")) == "task_complete")
-                .then(|| record_turn_id(&record.value))
-                .flatten()
-        })
-        .collect::<BTreeSet<_>>();
-    if explicit.is_subset(&terminal) {
-        Ok(records.len())
-    } else {
-        Err(HistoryError::new("turn_not_found"))
-    }
-}
-
-pub(super) fn exact_compaction_boundary(
-    records: &[Record],
-    compaction: &Map<String, Value>,
-) -> Result<usize, HistoryError> {
-    let encoded = compaction
-        .get("encrypted_content")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| HistoryError::new("compaction_identity_missing"))?;
-    let matches = records
-        .iter()
-        .enumerate()
-        .filter_map(|(index, record)| {
-            replacement_history(&record.value)
-                .ok()
-                .flatten()
-                .is_some_and(|items| {
-                    items.iter().any(|item| {
-                        item.get("type").and_then(Value::as_str) == Some("compaction")
-                            && item.get("encrypted_content").and_then(Value::as_str)
-                                == Some(encoded)
-                    })
-                })
-                .then_some(index)
-        })
-        .collect::<Vec<_>>();
-    match matches.as_slice() {
-        [index] => Ok(index + 1),
-        [] => Err(HistoryError::new("compaction_identity_missing")),
-        _ => Err(HistoryError::new("compaction_identity_ambiguous")),
-    }
-}
-
-pub(super) fn successful_turns(records: &[Record]) -> BTreeSet<String> {
-    let mut outcomes = BTreeMap::new();
-    for record in records {
-        let Some(payload) = record.value.get("payload").and_then(Value::as_object) else {
-            continue;
-        };
-        if token(record.value.get("type")) != "event_msg"
-            || token(payload.get("type")) != "task_complete"
-        {
-            continue;
-        }
-        if let Some(turn) = record_turn_id(&record.value) {
-            outcomes.insert(turn, payload.get("error").is_none_or(Value::is_null));
-        }
-    }
-    outcomes
-        .into_iter()
-        .filter_map(|(turn, success)| success.then_some(turn))
-        .collect()
-}
-
-pub(super) fn record_turn_ids(records: &[Record]) -> Vec<Option<String>> {
-    let mut active = None;
-    records
-        .iter()
-        .map(|record| {
-            let explicit = record_turn_id(&record.value);
-            if explicit.is_some() {
-                active = explicit.clone();
-            }
-            explicit.or_else(|| active.clone())
-        })
-        .collect()
-}
-
-pub(super) fn source_model(records: &[Record], incoming_turn: Option<&str>) -> Option<String> {
-    let successful = successful_turns(records);
-    records
-        .iter()
-        .filter_map(|record| {
-            if !matches!(
-                token(record.value.get("type")).as_str(),
-                "turn_context" | "turncontext"
-            ) {
-                return None;
-            }
-            let payload = record
-                .value
-                .get("payload")
-                .and_then(Value::as_object)
-                .unwrap_or(&record.value);
-            let turn = record_turn_id(&record.value)?;
-            successful
-                .contains(&turn)
-                .then(|| string_from(payload, &["model", "model_id", "modelId", "selected_model"]))
-                .flatten()
-        })
-        .next_back()
-        .or_else(|| incoming_turn.is_none().then_some(None).flatten())
 }
 
 pub(super) fn replacement_history(
