@@ -179,6 +179,21 @@ def _seed_usage_database(path: Path, price_path: Path, row_count: int, now: int)
     connection.close()
 
 
+def pin_forwarding_smoke_timestamp(path: Path, timestamp: int) -> None:
+    """Fix only the live fixture request's clock before comparing minute bins."""
+    with sqlite3.connect(path, timeout=10) as connection:
+        rows = connection.execute(
+            "SELECT id FROM usage_events WHERE origin='realtime' "
+            "AND input_tokens=9 AND output_tokens=4"
+        ).fetchall()
+        if len(rows) != 1:
+            raise BenchmarkError("forwarding_smoke_usage_record_not_unique")
+        connection.execute(
+            "UPDATE usage_events SET observed_at=? WHERE id=?",
+            (float(timestamp), rows[0][0]),
+        )
+
+
 def seed_fixture(seed_root: Path, ledger_rows: int, now: int) -> tuple[Path, Path]:
     state = seed_root / "state"
     state.mkdir(parents=True, exist_ok=True)
@@ -365,6 +380,7 @@ def run_runtime(
     ledger_rows: int,
     start: int,
     end: int,
+    smoke_timestamp: int,
     resource_sampler_type,
     emp_process_type,
 ):
@@ -449,6 +465,11 @@ def run_runtime(
                 )
             )
         scan_peak_rss = sampler.case_peak()
+
+        # The one real-time fixture request is generated during each separate
+        # run. Pin only its timestamp; otherwise a minute boundary can move
+        # exactly one request between adjacent chart bins.
+        pin_forwarding_smoke_timestamp(state / "usage.sqlite3", smoke_timestamp)
 
         query_started = time.perf_counter()
         query_status, _, final_payload = _request_json(backend, "GET", _usage_url(start, end))
@@ -577,7 +598,8 @@ def main(argv: list[str] | None = None) -> int:
                 ):
                     results[name] = run_runtime(
                         command, work / name, seed_usage, price_file,
-                        rollout_source, upstream, args.rollout_records, args.ledger_rows, start, end,
+                        rollout_source, upstream, args.rollout_records, args.ledger_rows,
+                        start, end, now,
                         ResourceSampler, EmpProcess,
                     )
             finally:
