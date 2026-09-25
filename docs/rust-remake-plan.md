@@ -2,8 +2,9 @@
 
 Status: in progress on remake4rust; verified state updated on 2026-09-24.
 
-Reference: formal Python EMP `main` at
-`6095e43f9641ac9f94010238a6adb4ac0bb4ec01` (EMP 0.11.10).
+CI-pinned Python reference: `6095e43f9641ac9f94010238a6adb4ac0bb4ec01`
+(EMP 0.11.10). Local differential runs use formal Python `main` at
+`3bcf72a` (also EMP 0.11.10); the newer commit has not yet been pushed.
 Consumer fixtures cover Codex 0.155.0 and the installed 0.156.1 CLI.
 
 Target: replace the complete Python backend with a native EMP executable.
@@ -20,19 +21,21 @@ define the current next action.
 ## Current verified state
 
 The 2026-09-22 inventory below this section remains historical. This snapshot
-records the working tree and local tests on 2026-09-24; it does not claim a
-cross-platform package or production cutover.
+records commit `615aa95` and local tests on 2026-09-24. Python is still the
+formal service; the Rust release runs separately on port 4201 for local
+real-model testing. Cross-platform workflows passed for this commit, but a
+production cutover has not occurred.
 
 | Area | Observed state | Next proof |
 | --- | --- | --- |
 | Workspace | Nine Rust crates; `main.rs` is 9 lines and responsibilities live in modules | Keep the module boundary while fixing observed behavior |
-| Runtime | Release Rust EMP starts; native/external HTTP, SSE, WebSocket, history and model-switch fixtures have real-process coverage | Complete official CLI consumer and package acceptance |
+| Runtime | Release Rust EMP starts as an isolated persistent test service; native/external HTTP, SSE, WebSocket, history, model switches and subagents have real-process coverage | Keep Python formal until final acceptance and reversible cutover |
 | Reset credits | Python and Rust preserve an opaque credit ID and pass optional `creditId`; the shared UI lets users choose and confirms again before spending. ISO grant/expiry dates and countdowns now render from official credit details | Verify packaged UI on every supported OS |
-| Python oracle | Its source and affected regressions are mirrored from formal Python `main`; 1,434 Python tests passed locally (71 conditional skips), and Package and Runtime compatibility CI passed at `6095e43` | Keep the pinned formal commit stable for Rust CI |
-| Rust workspace | `cargo test --workspace --all-targets` passed all 74 suites locally at `6b745ad`; `cargo fmt --check` and warnings-denied Clippy passed | Confirm the same source on all CI platforms |
-| Real processes | Rebuilt release Python/Rust differential passed 32 HTTP/WebSocket tests, including prefixed usage-history pricing and date-only discovery; the installed official Codex 0.156.1 consumer passed 20 tests including subagent routing | Keep these gates for package acceptance |
-| Performance | Two order-swapped fake-upstream runs covered 16 HTTP/SSE workload cases from 1 KiB to 1 MiB at concurrency 1/8/32/64 with zero errors; median Rust/Python throughput ratios were 3.68 and 3.77. Isolated checks passed 100k-rollout/120k-ledger usage scan (Rust/Python elapsed ratio 0.53), 224 idle WebSockets (Rust management p95 1.37 ms), 30 scheduled SSE and WS turns (Rust activity-event p95 1.02/0.74 ms), 128 concurrent WS short runs (p95 9.63 ms), and three cancellation phases (p99 release below 26 ms). A five-minute 354-cycle per-runtime startup/shutdown and forward churn passed with no residue or post-warmup resource slope failure | Complete the one-hour and packaged gates before general performance claims |
-| Distribution | Python `main` Package and Runtime compatibility CI succeeded at the pinned commit. Rust Package run `36024673887` passed Linux x64, Windows x64, macOS Intel and Apple Silicon, including Windows update replacement. Runtime run `36028715572` passed the full Python suite, protocol regressions, and Rust workspace on Linux, macOS and Windows | Keep cross-platform CI green for subsequent production changes |
+| Python oracle | Its source and affected regressions are mirrored from formal Python `main`; 1,434 Python tests passed locally (71 conditional skips), and the pinned-source Package and Runtime CI passed | Reconcile the local Python fix with the pinned CI reference before cutover |
+| Rust workspace | Full workspace tests passed locally after request-buffer preallocation; format and warnings-denied Clippy passed again at `615aa95`. Runtime CI `36090376967` passed on Linux, macOS and Windows at `615aa95` | Keep cross-platform checks green for subsequent source changes |
+| Real processes | Latest release passed 34 Python/Rust HTTP/WebSocket differential tests and 20 installed official Codex 0.156.1 CLI tests, including native/external model switches and subagent routing. Earlier real-provider testing completed 12 alternating turns across two external providers. The persistent 4201 release also completed a real `chuang/gemma-3.1` HTTP turn and an installed Codex CLI turn through the corrected local test launcher | Continue real-provider soak and verify reversible formal cutover before replacement |
+| Performance | Latest full Python-first fake-upstream run passed all 32 ordinary HTTP/SSE throughput and latency cases with zero errors; median Rust/Python throughput ratio was 4.76. Twelve 16/128 MiB history cases had matching outcomes and lower Rust CPU. Whole-run peak RSS was 496 MiB Rust versus 520 MiB Python. Two individual 16 MiB SSE case peaks exceeded the per-case 105% + 8 MiB threshold after earlier large allocations, so per-case memory non-inferiority is not yet proven. A separate Rust-first six-case 128 MiB run passed all CPU/memory limits. A one-hour 3,594-cycle per-runtime startup/shutdown/forward churn passed with no errors, residue or post-warmup resource slope failure on an earlier source revision | Resolve or characterize the per-case allocator variance and verify final packaged performance before broad improvement claims |
+| Distribution | Local Linux release assembly, service/Web UI smoke, user installation and update/rollback passed. Package CI `36090380310` passed Linux x64, Windows x64, macOS Intel and Apple Silicon at `615aa95`; Runtime CI `36090376967` passed all seven jobs | Complete the reversible formal cutover gate before replacing Python 4200 |
 
 Progress means a named Python workflow works through Rust with the same
 output, failures and persistent effects. Line counts and test counts do not
@@ -135,7 +138,9 @@ WS share request/history preparation where Python behavior agrees, while
 keeping transport state explicit. Only composition/lifecycle starts background
 jobs. Preserve unknown native JSON fields.
 
-Update mechanics and final observation coverage still need backend work.
+Update mechanics have local installation and rollback coverage. Final
+cross-platform package evidence and observation edge cases remain part of
+acceptance.
 Start with cohesive modules; introduce emp-observability or emp-update only
 when actual dependency boundaries justify a crate. Additional architecture
 must not block working product behavior.
