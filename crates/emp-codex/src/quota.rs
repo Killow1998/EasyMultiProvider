@@ -18,8 +18,6 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 mod process;
 mod projection;
 use process::{TrustedBinary, read_native_auth, rpc_http_status, run_isolated_quota_process};
-#[cfg(test)]
-use projection::safe_reset_credits;
 use projection::{mask_email, read_limits, safe_credit_snapshot};
 
 const MAX_AUTH_BYTES: u64 = 1024 * 1024;
@@ -506,6 +504,7 @@ pub fn reset_outcome(output: &str, request_id: i64) -> Result<&'static str, Quot
 
 #[cfg(all(test, unix))]
 mod tests {
+    use super::projection::safe_reset_credits;
     use super::*;
 
     #[test]
