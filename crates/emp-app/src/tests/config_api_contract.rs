@@ -126,6 +126,14 @@ import json, os, sys, threading
 from pathlib import Path
 from types import SimpleNamespace
 from easy_multi_provider import server
+import easy_multi_provider
+# The archived Python oracle keeps its release identity; the contract compares
+# state handling, so pin its version to the Rust build under test.
+easy_multi_provider.__version__ = "0.12.1"
+import easy_multi_provider.management_views as management_views
+management_views.__version__ = "0.12.1"
+import easy_multi_provider.server as emp_server
+emp_server.__version__ = "0.12.1"
 fixture=json.load(sys.stdin)
 state=server.AppState.__new__(server.AppState)
 state.config=fixture['initial']

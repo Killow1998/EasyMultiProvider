@@ -1108,7 +1108,7 @@ def _parse_args(argv=None):
     parser.add_argument(
         "--large-modes", choices=LARGE_MODES, nargs="+", default=list(LARGE_MODES)
     )
-    parser.add_argument("--expected-version", default="0.11.10")
+    parser.add_argument("--expected-version", default="0.12.1")
     parser.add_argument("--order", choices=("python-first", "rust-first"), default="python-first")
     return parser.parse_args(argv)
 

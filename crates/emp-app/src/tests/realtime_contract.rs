@@ -258,19 +258,24 @@ fn live_call_matches_official_python_forwarding_over_real_http() {
         location: Some("/v1/live/rtc_voice_123"),
         body: b"v=answer\r\n",
     });
-    let script = r#"
+    let script = format!(
+        r#"
 import json, sys
 from pathlib import Path
+import easy_multi_provider.realtime as realtime
+realtime.__version__ = "{}"
 from easy_multi_provider.realtime import RealtimeCall, forward_native_realtime_call
 result = forward_native_realtime_call(
-    sys.argv[1], Path(sys.argv[2]), {
+    sys.argv[1], Path(sys.argv[2]), {{
         "Authorization":"Bearer caller-secret", "OpenAI-Alpha":"quicksilver=v2",
         "Session-Id":"session-voice", "Thread-Id":"thread-voice",
         "X-Ignored-Secret":"must-not-forward",
-    }, RealtimeCall("v=0\r\no=offer\r\n", {"model":"gpt-live","delegation":{"type":"client"}}))
-print(json.dumps({"status":result.status,"content_type":result.content_type,
-    "location":result.location,"body":result.body.decode("utf-8")}))
-"#;
+    }}, RealtimeCall("v=0\r\no=offer\r\n", {{"model":"gpt-live","delegation":{{"type":"client"}}}}))
+print(json.dumps({{"status":result.status,"content_type":result.content_type,
+    "location":result.location,"body":result.body.decode("utf-8")}}))
+"#,
+        env!("CARGO_PKG_VERSION")
+    );
     let oracle = Command::new(python)
         .arg("-c")
         .arg(script)

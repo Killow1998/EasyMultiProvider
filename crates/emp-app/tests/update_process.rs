@@ -103,18 +103,18 @@ fn create_package_mode(root: &Path, fail_startup: bool) -> Vec<u8> {
     let script = if fail_startup {
         r#"#!/bin/sh
 set -eu
-if [ "${1:-}" = "--version" ]; then printf 'EMP 0.12.0\n'; exit 0; fi
+if [ "${1:-}" = "--version" ]; then printf 'EMP 0.12.2\n'; exit 0; fi
 exit 17
 "#
     } else {
         r#"#!/bin/sh
 set -eu
-if [ "${1:-}" = "--version" ]; then printf 'EMP 0.12.0\n'; exit 0; fi
+if [ "${1:-}" = "--version" ]; then printf 'EMP 0.12.2\n'; exit 0; fi
 printf '%s' "$$" > "$EMP_UPDATE_TEST_PID"
 if [ -n "${EMP_UPDATE_READY:-}" ]; then
   job="${EMP_UPDATE_READY%/ready.json}"
   nonce=$(sed -n 's/.*"nonce":"\([^"]*\)".*/\1/p' "$job/plan.json")
-  printf '{"version":"0.12.0","nonce":"%s"}\n' "$nonce" > "$EMP_UPDATE_READY"
+  printf '{"version":"0.12.2","nonce":"%s"}\n' "$nonce" > "$EMP_UPDATE_READY"
 fi
 exec sleep 90
 "#
@@ -177,9 +177,9 @@ fn release_server_with_mode(
     let address = listener.local_addr().unwrap();
     let base = format!("http://{address}");
     let name = "EMP-linux-x86_64.tar.gz";
-    let asset_url = format!("{base}/releases/download/v0.12.0/{name}");
+    let asset_url = format!("{base}/releases/download/v0.12.2/{name}");
     let metadata = serde_json::json!({
-        "tag_name":"v0.12.0", "draft":false, "prerelease":false,
+        "tag_name":"v0.12.2", "draft":false, "prerelease":false,
         "assets":[{"name":name,"digest":format!("sha256:{digest}"),"size":package.len(),"browser_download_url":asset_url}]
     }).to_string().into_bytes();
     let api_redirect = format!("{base}/api/latest");
@@ -233,7 +233,7 @@ fn release_server_with_mode(
                         stream.write_all(&metadata).unwrap();
                     }
                 }
-            } else if path == format!("/releases/download/v0.12.0/{name}") {
+            } else if path == format!("/releases/download/v0.12.2/{name}") {
                 write!(stream, "HTTP/1.1 302 Found\r\nLocation: {artifact_redirect}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
             } else if path == format!("/assets/{name}") {
                 if matches!(mode, FakeReleaseMode::PackageError) {
@@ -467,7 +467,7 @@ fn check_for_available(emp: &RunningEmp) {
         String::from_utf8_lossy(&check)
     );
     let available = wait_for_state(emp.port, &emp.cookie, "available", Duration::from_secs(10));
-    assert_eq!(available["latest_version"], "0.12.0");
+    assert_eq!(available["latest_version"], "0.12.2");
 }
 
 fn stop_emp(emp: &mut RunningEmp) {

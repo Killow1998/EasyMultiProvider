@@ -506,7 +506,7 @@ class CodexMetadataCliTests(unittest.TestCase):
             timeout=10,
             check=True,
         ).stdout.strip()
-        self.assertEqual(version, "EMP 0.11.10")
+        self.assertEqual(version, "EMP 0.12.1")
         print("Rust EMP consumer binary:", version, rust_binary)
 
         upstream = ThreadingHTTPServer(("127.0.0.1", 0), _AppServerSwitchUpstream)

@@ -193,10 +193,7 @@ fn version_output_matches_the_existing_cli() {
         .expect("run EMP --version");
     assert!(output.status.success());
     let line_ending = if cfg!(windows) { "\r\n" } else { "\n" };
-    assert_eq!(
-        output.stdout,
-        format!("EMP 0.11.10{line_ending}").as_bytes()
-    );
+    assert_eq!(output.stdout, format!("EMP 0.12.1{line_ending}").as_bytes());
     assert!(output.stderr.is_empty());
 }
 

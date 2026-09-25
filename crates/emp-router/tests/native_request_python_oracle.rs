@@ -13,8 +13,13 @@ fn native_credentials_and_context_headers_match_python() {
     let script = r#"
 import ast, inspect, json, sys
 from unittest.mock import patch
+import easy_multi_provider
 import easy_multi_provider.router as router
 from easy_multi_provider.accounts import AccountError
+
+# The archived Python oracle stays at its release version; the differential
+# contract compares header logic, so pin its identity to the Rust build.
+router.__version__ = "{version}"
 
 # Exercise every current Python allowlisted context header, including additions.
 function = ast.parse(inspect.getsource(router._headers))
@@ -51,8 +56,9 @@ for mode in ('forward', 'account', 'implicit', 'implicit_missing', 'implicit_emp
                             'selected': selected, 'result': result})
 json.dump(records, sys.stdout)
 "#;
+    let script = script.replace("{version}", env!("CARGO_PKG_VERSION"));
     let output = Command::new(python)
-        .args(["-c", script])
+        .args(["-c", script.as_str()])
         .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
         .output()
         .expect("run Python native headers oracle");

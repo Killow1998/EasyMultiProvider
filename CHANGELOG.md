@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.12.1 (2026-09-25)
+
+- Ship the Rust rewrite as the release implementation: the Python source moves
+  to the `python_archive` branch and the `main` branch now builds the native
+  EMP service from the Rust workspace.
+- Stream Codex rollout history with bounded reconstruction instead of loading
+  the whole file, and add reverse scan with Codex-style checkpoint replay for
+  paginated resumes; the real 523 MB rollout answers in ~4.4 s within 223 MiB
+  RSS.
+- Align external 429/504 handling with OMP: honor `Retry-After` up to 300 s,
+  back off exponentially (500 ms base, 8 s cap, ≤25% jitter) when absent,
+  retry capacity 429s while keeping quota exhaustion terminal, and never retry
+  free routes.
+- Separate model reasoning from answer text in Codex output for Gemma-family
+  models, matching the OMP reference event layout.
+- Cancel Responses-WebSocket turns as soon as the downstream client
+  disconnects, releasing native and external upstream streams immediately.
+
 
 ## 0.11.6 (2026-09-21)
 

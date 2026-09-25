@@ -845,7 +845,7 @@ def _parse_args(argv=None):
     parser.add_argument("--python", dest="python", type=Path)
     parser.add_argument("--rust-binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path("-"))
-    parser.add_argument("--expected-version", default="0.11.10")
+    parser.add_argument("--expected-version", default="0.12.1")
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--release-timeout", type=float, default=RELEASE_TIMEOUT_SECONDS)

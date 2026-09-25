@@ -71,9 +71,10 @@ def normalize_support_report_time(report):
         raise AssertionError("support report generated_at must be a string")
     datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
     normalized["generated_at"] = "<generated-at>"
+    # Python oracle stays 0.11.10 while the Rust release is 0.12.1; identity
+    # differs by design and each backend asserts its own version explicitly.
+    normalized["emp_version"] = "<emp-version>"
     return normalized
-
-
 @unittest.skipUnless(os.environ.get("EMP_RUST_BINARY"), "set EMP_RUST_BINARY for real-process E2E")
 class RustEndToEnd(unittest.TestCase):
     usage = chat_cases.ChatProjectionRegressions.usage
@@ -281,7 +282,10 @@ class RustEndToEnd(unittest.TestCase):
                 self.assertNotIn(b"e2e-native-token", raw)
                 config = json.loads(raw)
                 self.assertEqual(len(config["models"]), 4)
-                self.assertEqual(config["emp_version"], "0.11.10")
+                self.assertEqual(
+                    config["emp_version"],
+                    "0.12.1" if backend.runtime_kind == "rust" else "0.11.10",
+                )
 
     def test_support_report_endpoint_is_allowlisted_authenticated_and_read_only(self):
         reports = []
@@ -303,7 +307,10 @@ class RustEndToEnd(unittest.TestCase):
             )
             report = json.loads(raw)
             self.assertEqual(report["schema_version"], 1)
-            self.assertEqual(report["emp_version"], "0.11.10")
+            self.assertEqual(
+                report["emp_version"],
+                "0.12.1" if backend.runtime_kind == "rust" else "0.11.10",
+            )
             self.assertEqual(report["configuration"]["location"], "custom")
             try:
                 backend.config_path.relative_to(Path.home())
@@ -601,7 +608,13 @@ class RustEndToEnd(unittest.TestCase):
                     timeout=8,
                 )
                 results.append((result.returncode, result.stdout, result.stderr))
-            self.assertEqual(results[0], results[1])
+            # The archived Python oracle stays 0.11.10 while the Rust release is
+            # 0.12.1; --version output differs by design and is asserted below.
+            if arguments == ["--version"]:
+                self.assertEqual(results[0], (0, b"EMP 0.11.10\n", b""))
+                self.assertEqual(results[1], (0, b"EMP 0.12.1\n", b""))
+            else:
+                self.assertEqual(results[0], results[1])
 
     @unittest.skipUnless(os.name == "posix", "browser fixture requires an executable script")
     def test_desktop_launch_and_configured_listener_defaults(self):
