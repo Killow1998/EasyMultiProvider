@@ -28,6 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRODUCT_NAME = "EMP"
 EXECUTABLE_NAME = "EMP"
 ARTIFACT_NAME = "EMP"
+RUST_TOOLCHAIN = "1.93.1"
 
 
 @dataclass(frozen=True)
@@ -117,10 +118,21 @@ def _build_icons(build_root: Path) -> PackageIcons:
 def _build_binary(
     target: Target, windows_resource_file: Optional[Path] = None
 ) -> Path:
-    cargo = os.environ.get("CARGO") or shutil.which("cargo")
+    cargo_override = os.environ.get("CARGO")
+    cargo = cargo_override or shutil.which("cargo")
     if not cargo:
         raise RuntimeError("Rust Cargo is required to build EMP")
-    cargo_command = [cargo, "+1.93.1"]
+    cargo_command = [cargo]
+    if cargo_override or shutil.which("rustup") is None:
+        version = subprocess.run(
+            [cargo, "--version"], capture_output=True, text=True, timeout=15
+        )
+        if version.returncode != 0 or not version.stdout.startswith(
+            f"cargo {RUST_TOOLCHAIN} "
+        ):
+            raise RuntimeError(f"Rust Cargo {RUST_TOOLCHAIN} is required to build EMP")
+    else:
+        cargo_command.append(f"+{RUST_TOOLCHAIN}")
     if os.environ.get("CARGO_NET_OFFLINE", "").lower() in {"1", "true", "yes"}:
         cargo_command.append("--offline")
     cargo_command.extend(
