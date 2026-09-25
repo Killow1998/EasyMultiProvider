@@ -32,6 +32,7 @@ impl<'a> ExternalRouter<'a> {
                 "request serialization failed",
             )
         })?;
+        drop(payload);
         let response = self
             .client
             .open(HttpMethod::Post, &endpoint, headers, Some(encoded), false)
@@ -214,6 +215,7 @@ impl<'a> ExternalRouter<'a> {
                 "request serialization failed",
             )
         })?;
+        drop(payload);
         let response = self
             .client
             .open(HttpMethod::Post, &endpoint, headers, Some(encoded), true)
