@@ -22,7 +22,7 @@ impl<'a> ExternalRouter<'a> {
         let endpoint = endpoint(provider, route.protocol)?;
         let headers = upstream_headers(provider, route.protocol, incoming)?;
         let payload = project_prepared_external_payload(route, body)?;
-        let encoded = serde_json::to_vec(&payload).map_err(|_| {
+        let encoded = request_encoding::encode_projected_request(&payload).map_err(|_| {
             RouterError::new(
                 RouterErrorKind::InvalidRequest,
                 422,
@@ -204,7 +204,7 @@ impl<'a> ExternalRouter<'a> {
                 )
             }
         };
-        let encoded = serde_json::to_vec(&payload).map_err(|_| {
+        let encoded = request_encoding::encode_projected_request(&payload).map_err(|_| {
             RouterError::new(
                 RouterErrorKind::InvalidRequest,
                 422,

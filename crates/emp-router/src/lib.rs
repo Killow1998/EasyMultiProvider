@@ -317,6 +317,7 @@ fn project_prepared_external_payload(
 mod errors;
 mod external_route;
 mod external_stream;
+mod request_encoding;
 use errors::*;
 pub use external_stream::response_json_stream_events;
 
