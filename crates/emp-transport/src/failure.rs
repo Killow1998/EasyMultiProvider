@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -326,6 +327,10 @@ pub fn retry_allowed(
         )
 }
 
+/// External requests retry twice before any output: 429 (never on `:free`
+/// routes; quota exhaustion stays terminal), 504, and 5xx-capacity. The
+/// caller supplies an exponential backoff base of 500 ms capped at 8 s with
+/// ±25% jitter when no `Retry-After` applies.
 pub fn external_http_retry_allowed(
     failure: &UpstreamFailure,
     attempt: usize,
@@ -333,14 +338,39 @@ pub fn external_http_retry_allowed(
     tool_activity: bool,
     free_route: bool,
 ) -> bool {
-    if attempt != 0 || output_emitted || tool_activity || failure.terminal_event {
+    const MAX_EXTERNAL_ATTEMPTS: usize = 3;
+    const MAX_RETRY_AFTER_SECONDS: u64 = 300;
+    if attempt >= MAX_EXTERNAL_ATTEMPTS - 1
+        || output_emitted
+        || tool_activity
+        || failure.terminal_event
+    {
         return false;
     }
     let retryable = failure.status == 504
         || (failure.status == 429
-            && failure.failure_reason.as_deref() == Some("rate_limited")
-            && !free_route);
-    retryable && failure.retry_after_seconds.unwrap_or(1) <= 5
+            && !free_route
+            && matches!(
+                failure.failure_reason.as_deref(),
+                Some("rate_limited") | Some("upstream_capacity")
+            ));
+    retryable && failure.retry_after_seconds.unwrap_or(1) <= MAX_RETRY_AFTER_SECONDS
+}
+
+/// Exponential backoff with ±25% jitter for attempts without usable
+/// `Retry-After`: 500 ms, 1 s, 2 s — each capped at 8 s.
+pub fn external_backoff_delay(attempt: usize) -> Duration {
+    const BASE_MS: u64 = 500;
+    const CAP_MS: u64 = 8_000;
+    let mut nonce = [0u8; 1];
+    // Jitter shrinks the delay by 0–25%; getrandom failure falls back to 0.
+    let jitter_byte = getrandom::getrandom(&mut nonce)
+        .ok()
+        .map(|_| nonce[0])
+        .unwrap_or(0);
+    let shrink = u64::from(jitter_byte % 64);
+    let base = BASE_MS.saturating_mul(1 << attempt.min(4)).min(CAP_MS);
+    Duration::from_millis(base.saturating_sub(base / 4 * shrink / 64))
 }
 
 pub fn public_failure_message(

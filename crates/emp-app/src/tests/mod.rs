@@ -81,7 +81,7 @@ fn canonical_root(directory: &TempDir) -> PathBuf {
 
 fn complete_response(stream: &mut TcpStream) -> String {
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(20)))
         .expect("response timeout");
     let mut response = Vec::new();
     let mut buffer = [0_u8; 4096];
@@ -109,7 +109,7 @@ fn complete_response(stream: &mut TcpStream) -> String {
 
 fn response_until_close(stream: &mut TcpStream) -> String {
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(20)))
         .expect("response timeout");
     let mut response = Vec::new();
     stream.read_to_end(&mut response).expect("read response");
@@ -329,31 +329,39 @@ impl OneShotUpstream {
         Self::start_wire(200, "text/event-stream", None, chunks)
     }
 
-    fn start_error(status: u16, retry_after: Option<u64>, response_body: Value) -> Self {
-        let encoded = serde_json::to_vec(&response_body).expect("upstream error JSON");
-        Self::start_wire(status, "application/json", retry_after, vec![encoded])
-    }
-
     fn start_wire(
         status: u16,
         content_type: &'static str,
         retry_after: Option<u64>,
         chunks: Vec<Vec<u8>>,
     ) -> Self {
+        Self::start_repeated_wire(status, content_type, retry_after, 1, chunks)
+    }
+
+    /// Answers every connection identically; `connections` bounds the
+    /// accept loop so callers can exercise the full retry budget.
+    fn start_repeated_wire(
+        status: u16,
+        content_type: &'static str,
+        retry_after: Option<u64>,
+        connections: usize,
+        chunks: Vec<Vec<u8>>,
+    ) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream");
         let address = listener.local_addr().expect("upstream address");
-        let (sender, observed) = mpsc::sync_channel(1);
+        let (sender, observed) = mpsc::sync_channel(8);
         let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept upstream");
-            let (path, headers, body) = receive_upstream_request(&mut stream);
-            sender
-                .send((path, headers, body))
-                .expect("record upstream request");
-            let content_length = chunks.iter().map(Vec::len).sum::<usize>();
-            let retry_after = retry_after
-                .map(|delay| format!("Retry-After: {delay}\r\n"))
-                .unwrap_or_default();
-            stream
+            for _ in 0..connections {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let (path, headers, body) = receive_upstream_request(&mut stream);
+                let _ = sender.send((path, headers, body));
+                let content_length = chunks.iter().map(Vec::len).sum::<usize>();
+                let retry_after = retry_after
+                    .map(|delay| format!("Retry-After: {delay}\r\n"))
+                    .unwrap_or_default();
+                stream
                     .write_all(
                         format!(
                             "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {content_length}\r\n{retry_after}Connection: close\r\n\r\n",
@@ -362,11 +370,12 @@ impl OneShotUpstream {
                         .as_bytes(),
                     )
                     .expect("write upstream response head");
-            for chunk in chunks {
-                stream
-                    .write_all(&chunk)
-                    .expect("write upstream response body");
-                stream.flush().expect("flush upstream response body");
+                for chunk in chunks.clone() {
+                    stream
+                        .write_all(&chunk)
+                        .expect("write upstream response body");
+                    stream.flush().expect("flush upstream response body");
+                }
             }
         });
         Self {
@@ -409,6 +418,9 @@ fn fallback_upstream(
     two_attempt_upstream(404, None, content_type, success_body)
 }
 
+/// Serves `first_status` until the client stops retrying, then success.
+/// Accepts up to three connections to cover the full retry budget; unused
+/// accepts are drained by `Drop` of the test's server handle.
 fn two_attempt_upstream(
     first_status: u16,
     retry_after: Option<u64>,
@@ -417,12 +429,14 @@ fn two_attempt_upstream(
 ) -> (String, mpsc::Receiver<String>, JoinHandle<()>) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind fallback upstream");
     let address = listener.local_addr().expect("fallback upstream address");
-    let (path_sender, paths) = mpsc::sync_channel(2);
+    let (path_sender, paths) = mpsc::sync_channel(4);
     let worker = thread::spawn(move || {
-        for attempt in 0..2 {
-            let (mut stream, _) = listener.accept().expect("accept fallback upstream");
+        for attempt in 0..3 {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
             let (path, _, _) = receive_upstream_request(&mut stream);
-            path_sender.send(path).expect("record fallback path");
+            let _ = path_sender.send(path);
             let (status, response_type, body) = if attempt == 0 {
                 (
                     first_status,
@@ -438,16 +452,20 @@ fn two_attempt_upstream(
                 .map(|delay| format!("Retry-After: {delay}\r\n"))
                 .unwrap_or_default();
             stream
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 {status} {}\r\nContent-Type: {response_type}\r\nContent-Length: {}\r\n{retry_header}Connection: close\r\n\r\n",
-                            status_text(status),
-                            body.len()
-                        )
-                        .as_bytes(),
+                .write_all(
+                    format!(
+                        "HTTP/1.1 {status} {}\r\nContent-Type: {response_type}\r\nContent-Length: {}\r\n{retry_header}Connection: close\r\n\r\n",
+                        status_text(status),
+                        body.len()
                     )
-                    .expect("write fallback response head");
+                    .as_bytes(),
+                )
+                .expect("write fallback response head");
             stream.write_all(&body).expect("write fallback body");
+            if attempt >= 1 {
+                // Success ends the scenario; further accepts would hang join.
+                break;
+            }
         }
     });
     (format!("http://{address}/v1"), paths, worker)

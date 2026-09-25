@@ -286,7 +286,7 @@ pub(crate) fn responses_request(
                 return ResponsesRequestResult::Buffered(route_resolution_response(error));
             }
         };
-        for attempt in 0..2 {
+        for attempt in 0..3 {
             match state
                 .backend
                 .transport

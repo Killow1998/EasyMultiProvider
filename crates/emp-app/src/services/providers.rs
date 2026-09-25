@@ -110,7 +110,7 @@ fn open_external_stream_with_monitor(
         let candidate = route
             .with_protocol(protocol)
             .map_err(ExternalStreamOpenError::Route)?;
-        for attempt in 0..2 {
+        for attempt in 0..3 {
             let opened =
                 match monitor.as_deref_mut() {
                     Some(monitor) => state.backend.transport.runtime.block_on(

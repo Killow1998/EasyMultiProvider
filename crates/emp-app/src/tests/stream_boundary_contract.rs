@@ -240,10 +240,17 @@ fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
 
 #[test]
 fn stream_errors_keep_pre_and_post_output_boundaries() {
-    let upstream = OneShotUpstream::start_error(
+    // The retry budget is three attempts, so the fixture answers every
+    // connection with the same 429 before the budget is exhausted.
+    let upstream = OneShotUpstream::start_repeated_wire(
         429,
+        "application/json",
         Some(6),
-        json!({"error":{"message":"provider detail must not escape"}}),
+        3,
+        vec![
+            serde_json::to_vec(&json!({"error":{"message":"provider detail must not escape"}}))
+                .expect("upstream error JSON"),
+        ],
     );
     let (_directory, server) = configured_server(&upstream.base_url());
     let body = serde_json::to_vec(&json!({

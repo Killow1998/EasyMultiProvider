@@ -9,6 +9,7 @@ use emp_router::RouterErrorKind;
 use emp_transport::FailureClass;
 use emp_transport::FailurePhase;
 use emp_transport::UpstreamFailure;
+use emp_transport::external_backoff_delay;
 use emp_transport::external_http_retry_allowed;
 use emp_transport::normalize_error_class;
 use emp_transport::public_failure_message;
@@ -270,6 +271,10 @@ pub(crate) fn external_retry_delay(
         .trim()
         .to_ascii_lowercase()
         .ends_with(":free");
-    external_http_retry_allowed(&failure, attempt, false, false, free_route)
-        .then(|| Duration::from_secs(failure.retry_after_seconds.unwrap_or(1)))
+    external_http_retry_allowed(&failure, attempt, false, false, free_route).then(|| {
+        failure
+            .retry_after_seconds
+            .map(Duration::from_secs)
+            .unwrap_or_else(|| external_backoff_delay(attempt))
+    })
 }
