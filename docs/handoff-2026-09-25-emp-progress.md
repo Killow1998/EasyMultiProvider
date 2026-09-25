@@ -227,3 +227,28 @@ Parity gaps, cheapest first:
 - Routing: OMP resolves roles plus `retry.fallbackChains` (model and
   provider wildcards); EMP routes via per-request candidates and
   protocol fallback. Role-based chains are the only missing concept.
+
+## Follow-up session results (2026-09-25, later)
+
+1. OMP-aligned 429/504 retry shipped (`52be217`): `Retry-After` honored
+   to 300 s, exponential backoff (500 ms base, 8 s cap, ≤25% jitter)
+   when absent, capacity 429s retried alongside rate limits, quota
+   exhaustion still terminal, free routes still never retry. Budget is
+   3 pre-output attempts; mid-stream stays single-failure.
+2. Gemma 3.1 CoT: reasoning stays separated from `response.output_text`
+   in both Python and Rust stacks (23 reasoning deltas + 1 answer delta
+   verified live per fresh turn); protocol tests pin complete/stream/
+   late-reasoning separation.
+3. Responses WebSocket external execution: an external route inside the
+   Responses-WS endpoint executes over the provider's HTTP/SSE
+   transport (the fallback) and now races upstream events against a
+   downstream DisconnectMonitor (`1758108`). Previously a stalled
+   upstream kept the worker and its HTTP stream alive after the codex
+   client vanished. Contract test drops the WS after `response.created`
+   and asserts the SSE upstream observes the closed connection.
+4. Perf flake fixed (`b099a38`): upstream deltas can coalesce in one
+   socket read, so `generation_ms >= 100` was not deterministic; the
+   contract now asserts `ttft >= 100ms`, `generation <= duration`, and
+   `duration >= 200ms`.
+5. Full workspace suite green (112 app-lib + all crates), strict Clippy
+   `-D warnings` clean, `cargo fmt` applied.
