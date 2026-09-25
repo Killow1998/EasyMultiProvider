@@ -148,8 +148,31 @@ cd /home/fumo/codex_ws/agent_dev/EasyMultiProvider-rust
 
 ## Immediate next actions
 
-1. Run strict Clippy using the isolated toolchain.
-2. Run the full workspace suite with the Python oracle variables set.
-3. Re-test the real 523 MB rollout through the Rust service.
-4. Review the diff and commit Phase A once all CI-equivalent checks pass.
-5. Then start Phase B: bounded reverse scan and Codex-style checkpoint replay.
+1. ~~Run strict Clippy using the isolated toolchain.~~ Done: `-D warnings` clean.
+2. ~~Run the full workspace suite with the Python oracle variables set.~~
+   Done: all crates pass; the only failure inside full-workspace parallel
+   runs is the pre-existing `performance_contract` timing flake (passes
+   standalone and in crate-scoped runs).
+3. ~~Re-test the real 523 MB rollout through the Rust service.~~ Done:
+   200 OK in 4.4 s, 9,945 messages, no opaque tokens leaked, 223 MiB RSS.
+4. ~~Review the diff and commit Phase A once all CI-equivalent checks
+   pass.~~ Done: `2218a10 Stream Codex rollouts with bounded history
+   reconstruction`.
+5. ~~Start Phase B: bounded reverse scan and Codex-style checkpoint
+   replay.~~ Done: `581c789 Add reverse scan and checkpoint replay for
+   paginated resumes`.
+
+## Phase B result and known limits
+
+- Reverse locate scans doubling windows from the tail (16 MiB steps,
+  64 MiB cap); a self-contained newest compaction (window-numbered,
+  opaque-free `replacement_history`) becomes the replay base.
+- All 63 compactions in the real 523 MB rollout carry an opaque
+  compaction item, so today's real Codex files always take the
+  full-scan fallback (~4.4 s end-to-end). Base replay wins only for
+  opaque-free checkpoints; keep it for the resume contract when Codex
+  stops emitting opaque references.
+- Remaining Phase B ideas (not started): SQLite `threads`/turn
+  projection pushdown for anchor lookup, and streaming the suffix
+  replay directly into the provider request instead of materializing
+  the full visible vector.
