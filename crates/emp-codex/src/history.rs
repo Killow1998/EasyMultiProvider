@@ -296,8 +296,11 @@ fn snapshot_from_base(
     (suffix_start, captured_end): (u64, u64),
     (anchor, location_mode, exact_compaction): (&HistoryAnchor, &str, bool),
 ) -> Result<HistorySnapshot, HistoryError> {
-    let mut visible = Vec::<VisibleItem>::new();
-    visible = replacement_entries(base.replacement, &visible, base.turn.clone())?;
+    let mut visible = replacement_entries(
+        base.replacement,
+        &Vec::<VisibleItem>::new(),
+        base.turn.clone(),
+    )?;
     if exact_compaction {
         // Inherited checkpoints capture the parent prefix through the
         // compaction record; newer parent records stay excluded.
