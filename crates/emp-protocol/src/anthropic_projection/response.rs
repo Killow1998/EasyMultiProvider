@@ -54,7 +54,9 @@ pub(super) fn anthropic_usage(usage: &Value) -> Value {
     Value::Object(result)
 }
 
-pub(super) fn incomplete_reason(value: Option<&Value>) -> Result<Option<&'static str>, AnthropicError> {
+pub(super) fn incomplete_reason(
+    value: Option<&Value>,
+) -> Result<Option<&'static str>, AnthropicError> {
     let Some(reason) = value.and_then(Value::as_str) else {
         return Err(upstream_error("Anthropic upstream returned no stop reason"));
     };

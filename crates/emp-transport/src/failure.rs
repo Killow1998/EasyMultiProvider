@@ -268,9 +268,7 @@ fn http_failure_reason(status: u16, detail: &str) -> &'static str {
         _ if contains_any(&["context length", "context window", "maximum context"]) => {
             "context_length_exceeded"
         }
-        429 if contains_any(&["quota", "credit", "balance", "insufficient"]) => {
-            "quota_exhausted"
-        }
+        429 if contains_any(&["quota", "credit", "balance", "insufficient"]) => "quota_exhausted",
         429 if contains_any(&["capacity", "overloaded", "saturated"]) => "upstream_capacity",
         429 => "rate_limited",
         504 => "upstream_504",

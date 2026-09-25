@@ -32,9 +32,9 @@ pub use http_client::{
     HttpClient, HttpClientConfig, HttpResponse, HttpTransportError, HttpTransportErrorKind,
 };
 pub use http_policy::{
-    ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod,
-    ProxyEnvironment, ProxyOrigin, ProxyPolicy, ProxySnapshot, ProxySource, RedirectPolicy,
-    RequestPlan, RetryPolicy, StreamTimeoutError, StreamingReadState, TimeoutPolicy,
+    ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod, ProxyEnvironment,
+    ProxyOrigin, ProxyPolicy, ProxySnapshot, ProxySource, RedirectPolicy, RequestPlan, RetryPolicy,
+    StreamTimeoutError, StreamingReadState, TimeoutPolicy,
 };
 pub use system_memory::system_memory_status;
 pub use websocket::{

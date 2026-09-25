@@ -213,5 +213,5 @@ pub use export::{
     ExportGroup, ExportGroups, export_migration_bundle, export_migration_bundle_with_summary,
     select_export_config,
 };
-pub use import::import_migration_bundle;
 use import::id_of;
+pub use import::import_migration_bundle;

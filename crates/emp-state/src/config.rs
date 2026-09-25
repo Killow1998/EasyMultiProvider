@@ -78,16 +78,22 @@ mod catalog_etag;
 pub use catalog_etag::{canonical_catalog_json, catalog_etag};
 
 mod provider_url;
-pub use provider_url::{normalize_provider_base_url, normalize_provider_id};
 use provider_url::{hostname, parse_provider_url, string_value, userinfo};
+pub use provider_url::{normalize_provider_base_url, normalize_provider_id};
 
 mod context_calibration;
 pub use context_calibration::normalize_context_calibrations;
-use context_calibration::{MAX_CONTEXT_WINDOW, model_python_int_or_zero, normalize_created_at, python_int, python_int_conversion_error};
+use context_calibration::{
+    MAX_CONTEXT_WINDOW, model_python_int_or_zero, normalize_created_at, python_int,
+    python_int_conversion_error,
+};
 
 mod model_provider;
+use model_provider::{
+    MODEL_BOOLEAN_CAPABILITIES, TOP_LEVEL_PROVENANCE_FIELDS, json_truthy, python_capability_trim,
+    safe_capability_identity, valid_python_iso_timestamp,
+};
 pub use model_provider::{normalize_model, normalize_model_capability_sources, normalize_provider};
-use model_provider::{MODEL_BOOLEAN_CAPABILITIES, TOP_LEVEL_PROVENANCE_FIELDS, json_truthy, python_capability_trim, safe_capability_identity, valid_python_iso_timestamp};
 
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: i64 = 4200;
@@ -202,14 +208,20 @@ fn account_error(error: impl fmt::Display) -> ConfigError {
 }
 
 mod paths;
-pub use paths::{canonicalize_account_paths, canonicalize_private_paths, config_path, generated_catalog_path, resolve_user_path};
 pub(crate) use paths::{
     account_root, expand_home, expand_home_default_native_catalog_path, path_python_resolve,
 };
 use paths::{canonical_secret_root, percent_encode};
+pub use paths::{
+    canonicalize_account_paths, canonicalize_private_paths, config_path, generated_catalog_path,
+    resolve_user_path,
+};
 
 mod merge;
-pub use merge::{merge_web_update, merge_web_update_with_time, observed_at_now, remember_resolved_protocol, remember_resolved_protocol_at};
+pub use merge::{
+    merge_web_update, merge_web_update_with_time, observed_at_now, remember_resolved_protocol,
+    remember_resolved_protocol_at,
+};
 
 /// Save a normalized configuration and its derived secret files atomically.
 pub fn save_configuration(

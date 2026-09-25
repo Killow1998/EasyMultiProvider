@@ -436,7 +436,6 @@ impl ChatStream {
         ));
         Ok(events)
     }
-
 }
 
 mod events;

@@ -286,47 +286,46 @@ fn metadata_error(
 pub(crate) fn python_json_error_message(input: &[u8], error: &serde_json::Error) -> String {
     let input = String::from_utf8_lossy(input);
     let detail = error.to_string();
-    let (message, position) = if detail.starts_with("EOF while parsing an object")
-        && input.trim_end().ends_with('{')
-    {
-        (
-            "Expecting property name enclosed in double quotes",
-            input.chars().count(),
-        )
-    } else if detail.starts_with("expected ident") {
-        let position = input
-            .chars()
-            .position(|character| !character.is_whitespace())
-            .unwrap_or(0);
-        ("Expecting value", position)
-    } else {
-        let message = if detail.starts_with("expected value") {
-            "Expecting value"
-        } else if detail.starts_with("key must be a string") {
-            "Expecting property name enclosed in double quotes"
-        } else if detail.starts_with("expected `:`") {
-            "Expecting ':' delimiter"
-        } else if detail.starts_with("expected `,`") {
-            "Expecting ',' delimiter"
-        } else if detail.starts_with("trailing characters") {
-            "Extra data"
+    let (message, position) =
+        if detail.starts_with("EOF while parsing an object") && input.trim_end().ends_with('{') {
+            (
+                "Expecting property name enclosed in double quotes",
+                input.chars().count(),
+            )
+        } else if detail.starts_with("expected ident") {
+            let position = input
+                .chars()
+                .position(|character| !character.is_whitespace())
+                .unwrap_or(0);
+            ("Expecting value", position)
         } else {
-            return detail;
+            let message = if detail.starts_with("expected value") {
+                "Expecting value"
+            } else if detail.starts_with("key must be a string") {
+                "Expecting property name enclosed in double quotes"
+            } else if detail.starts_with("expected `:`") {
+                "Expecting ':' delimiter"
+            } else if detail.starts_with("expected `,`") {
+                "Expecting ',' delimiter"
+            } else if detail.starts_with("trailing characters") {
+                "Extra data"
+            } else {
+                return detail;
+            };
+            let line_start = input
+                .split_inclusive('\n')
+                .take(error.line().saturating_sub(1))
+                .map(|line| line.chars().count())
+                .sum::<usize>();
+            let line_length = input
+                .split('\n')
+                .nth(error.line().saturating_sub(1))
+                .map_or(0, |line| line.chars().count());
+            (
+                message,
+                line_start + error.column().saturating_sub(1).min(line_length),
+            )
         };
-        let line_start = input
-            .split_inclusive('\n')
-            .take(error.line().saturating_sub(1))
-            .map(|line| line.chars().count())
-            .sum::<usize>();
-        let line_length = input
-            .split('\n')
-            .nth(error.line().saturating_sub(1))
-            .map_or(0, |line| line.chars().count());
-        (
-            message,
-            line_start + error.column().saturating_sub(1).min(line_length),
-        )
-    };
     let characters = input.chars().collect::<Vec<_>>();
     let position = position.min(characters.len());
     let line = characters[..position]

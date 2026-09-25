@@ -1,6 +1,6 @@
 use emp_transport::{
-    ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod,
-    ProxyEnvironment, ProxyPolicy, StreamingReadState, TimeoutPolicy,
+    ConnectionPoolPolicy, HttpClientPolicy, HttpClientPolicyError, HttpMethod, ProxyEnvironment,
+    ProxyPolicy, StreamingReadState, TimeoutPolicy,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -307,5 +307,8 @@ fn pool_key_and_idle_pool_are_route_scoped() {
         max_idle_total: 0,
         idle_timeout: Duration::ZERO,
     };
-    assert_eq!(invalid.validate(), Err(HttpClientPolicyError::InvalidPoolKey));
+    assert_eq!(
+        invalid.validate(),
+        Err(HttpClientPolicyError::InvalidPoolKey)
+    );
 }

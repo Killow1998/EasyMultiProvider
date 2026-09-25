@@ -1,9 +1,9 @@
 //! Config mutation for protocol observations and browser edits.
 
 use super::{
-    ConfigError, ConfigResult, Map, Value, MODEL_BOOLEAN_CAPABILITIES,
-    TOP_LEVEL_PROVENANCE_FIELDS, deployment_identity, endpoint_fingerprint, json_truthy,
-    normalize_configuration, normalize_input_modalities,
+    ConfigError, ConfigResult, MODEL_BOOLEAN_CAPABILITIES, Map, TOP_LEVEL_PROVENANCE_FIELDS, Value,
+    deployment_identity, endpoint_fingerprint, json_truthy, normalize_configuration,
+    normalize_input_modalities,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 

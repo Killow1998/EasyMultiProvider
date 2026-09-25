@@ -1,7 +1,7 @@
 //! Incremental Responses SSE projection and custom tool state.
 
-use super::*;
 use super::response::{custom_tool_ids, custom_tool_input, project_reasoning_item};
+use super::*;
 
 fn python_truthy(value: &Value) -> bool {
     match value {

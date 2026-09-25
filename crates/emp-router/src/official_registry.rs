@@ -315,7 +315,10 @@ mod tests {
             std::fs::write(&path, serde_json::to_vec(&data).expect("registry JSON"))
                 .expect("write registry override");
             let loaded = registry_from_path(Some(&path));
-            assert_eq!(loaded.get("reviewed_at").and_then(Value::as_str), Some(reviewed_at));
+            assert_eq!(
+                loaded.get("reviewed_at").and_then(Value::as_str),
+                Some(reviewed_at)
+            );
             assert_eq!(
                 identify_provider_in_registry(provider, &loaded).as_deref(),
                 Some("example")

@@ -139,43 +139,6 @@ fn verify_model_capability_migration(source: &Value, target: &Value) -> Migratio
     Ok(())
 }
 
-#[cfg(test)]
-mod model_capability_migration_tests {
-    use super::{
-        MODEL_CAPABILITY_MIGRATION_FIELDS, MigrationError, verify_model_capability_migration,
-    };
-    use serde_json::json;
-
-    #[test]
-    fn verifier_rejects_missing_models_and_each_changed_capability_field() {
-        let source = json!({"models": [{"id": "demo/model"}]});
-        assert_eq!(
-            verify_model_capability_migration(&source, &json!({"models": []})),
-            Err(MigrationError::ModelLost)
-        );
-
-        for field in MODEL_CAPABILITY_MIGRATION_FIELDS {
-            let mut source_model = json!({"id": "demo/model"});
-            let mut target_model = json!({"id": "demo/model"});
-            source_model
-                .as_object_mut()
-                .expect("model object")
-                .insert(field.to_owned(), json!({"observed": "source"}));
-            target_model
-                .as_object_mut()
-                .expect("model object")
-                .insert(field.to_owned(), json!({"observed": "target"}));
-            let source = json!({"models": [source_model]});
-            let target = json!({"models": [target_model]});
-            assert_eq!(
-                verify_model_capability_migration(&source, &target),
-                Err(MigrationError::ModelCapabilityChanged(field)),
-                "capability field {field} must be protected"
-            );
-        }
-    }
-}
-
 fn unique_segment(value: &str, reserved: &mut BTreeSet<String>) -> String {
     for suffix in 2_u64.. {
         let ending = format!("-{suffix}");
@@ -475,4 +438,41 @@ pub fn import_migration_bundle(
         load_configuration(Some(config_path)).map_err(|_| MigrationError::StateUpdateFailed)
     })?;
     Ok((result, summary))
+}
+
+#[cfg(test)]
+mod model_capability_migration_tests {
+    use super::{
+        MODEL_CAPABILITY_MIGRATION_FIELDS, MigrationError, verify_model_capability_migration,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn verifier_rejects_missing_models_and_each_changed_capability_field() {
+        let source = json!({"models": [{"id": "demo/model"}]});
+        assert_eq!(
+            verify_model_capability_migration(&source, &json!({"models": []})),
+            Err(MigrationError::ModelLost)
+        );
+
+        for field in MODEL_CAPABILITY_MIGRATION_FIELDS {
+            let mut source_model = json!({"id": "demo/model"});
+            let mut target_model = json!({"id": "demo/model"});
+            source_model
+                .as_object_mut()
+                .expect("model object")
+                .insert(field.to_owned(), json!({"observed": "source"}));
+            target_model
+                .as_object_mut()
+                .expect("model object")
+                .insert(field.to_owned(), json!({"observed": "target"}));
+            let source = json!({"models": [source_model]});
+            let target = json!({"models": [target_model]});
+            assert_eq!(
+                verify_model_capability_migration(&source, &target),
+                Err(MigrationError::ModelCapabilityChanged(field)),
+                "capability field {field} must be protected"
+            );
+        }
+    }
 }

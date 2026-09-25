@@ -263,7 +263,10 @@ impl ChatStream {
             .unwrap_or(self.content_parts.len())
     }
 
-    pub(super) fn consume_tool_calls(&mut self, delta: &Map<String, Value>) -> Result<(), ProtocolError> {
+    pub(super) fn consume_tool_calls(
+        &mut self,
+        delta: &Map<String, Value>,
+    ) -> Result<(), ProtocolError> {
         let calls = match delta.get("tool_calls") {
             None => return Ok(()),
             Some(Value::Array(calls)) => calls,

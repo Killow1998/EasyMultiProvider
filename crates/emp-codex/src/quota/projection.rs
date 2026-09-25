@@ -59,7 +59,10 @@ pub(super) fn mask_email(value: Option<&Value>) -> String {
     format!("{first}***@{domain}")
 }
 
-pub(super) fn safe_credit_snapshot(rate_limits: &Map<String, Value>, result: &Map<String, Value>) -> Value {
+pub(super) fn safe_credit_snapshot(
+    rate_limits: &Map<String, Value>,
+    result: &Map<String, Value>,
+) -> Value {
     let mut snapshot = Map::new();
     if let Some(credits) = rate_limits.get("credits").and_then(Value::as_object) {
         copy_renamed_scalar(credits, &mut snapshot, "hasCredits", "has_credits");

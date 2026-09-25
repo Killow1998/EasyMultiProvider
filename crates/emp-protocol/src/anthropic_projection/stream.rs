@@ -1,7 +1,10 @@
 //! Anthropic SSE stream state and event synthesis.
 
+use super::response::{
+    anthropic_usage, custom_tool_id, custom_tool_input, incomplete_reason, output_message,
+    tool_arguments,
+};
 use super::*;
-use super::response::{anthropic_usage, custom_tool_id, custom_tool_input, incomplete_reason, output_message, tool_arguments};
 
 #[derive(Debug, Clone)]
 pub struct AnthropicIds {

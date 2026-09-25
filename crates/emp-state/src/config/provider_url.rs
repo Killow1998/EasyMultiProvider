@@ -85,7 +85,11 @@ pub(super) fn hostname(netloc: &str) -> Option<&str> {
     )
 }
 
-pub(super) fn string_value(raw: Option<&Value>, field: &str, required: bool) -> ConfigResult<String> {
+pub(super) fn string_value(
+    raw: Option<&Value>,
+    field: &str,
+    required: bool,
+) -> ConfigResult<String> {
     let value = match raw {
         None | Some(Value::Null) => "",
         Some(Value::String(value)) => python_capability_trim(value),
