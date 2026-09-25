@@ -176,3 +176,54 @@ cd /home/fumo/codex_ws/agent_dev/EasyMultiProvider-rust
   projection pushdown for anchor lookup, and streaming the suffix
   replay directly into the provider request instead of materializing
   the full visible vector.
+
+## Follow-up investigation: 429 retry policy vs OMP (oh-my-pi)
+
+OMP retry (extracted from the bundled `pi-ai` runtime):
+
+- `retry.enabled=true`, `maxRetries=10`, `baseDelayMs=500` with
+  exponential `2**attempt`, per-delay cap 8 s, ±25% jitter,
+  `maxDelayMs=300 s`.
+- `Retry-After` honored in both integer-seconds and HTTP-date forms;
+  retry fires when `Retry-After` is present OR the error class is
+  Transient (`>=500`, `408`, `429`, network/timeout regex) OR
+  UsageLimit (`429`/`402`, `CONCURRENT_LIMIT`).
+- `ContextOverflow` is never retried; `retry.waitForUsageReset` sleeps
+  until `x-ratelimit-reset-*`; usage-aware fallback reserves 10%
+  (`usageReservePct`); `retry.fallbackChains` provides ordered
+  role/provider/model fallback chains (`modelFallback=true` default).
+
+EMP (crates/emp-transport/src/failure.rs,
+crates/emp-app/src/services/failures.rs): a single retry
+(`attempt in 0..2`), only 429 with reason `rate_limited` (never on
+`:free` routes) or 504, `Retry-After <= 5 s`, sleeps exactly
+`Retry-After`; 429 quota/capacity/balance reasons are terminal; no
+backoff curve; protocol fallback instead of model fallback. EMP is
+stricter mid-stream: retries only before any output/tool activity.
+
+Parity gaps, cheapest first:
+
+1. Honor `Retry-After` up to ~300 s instead of rejecting above 5 s.
+2. Add exponential backoff + jitter when `Retry-After` is absent
+   (500 ms base, 8 s per-delay cap) for 429/504/5xx before output.
+3. Treat 429 `upstream_capacity` as failover-to-next-candidate rather
+   than terminal when more candidates exist.
+4. Optionally raise the external retry budget for non-streamed
+   requests from 1 retry to 2–3.
+
+## Follow-up investigation: metrics and pricing vs OMP
+
+- TTFT: EMP records `ttft_ms`, `generation_ms`, `duration_ms`,
+  `tokens_per_second` (schema 3 diagnostics); OMP exports only
+  `gen_ai.response.time_to_first_chunk` via OTel. EMP surface is
+  richer; nothing to port.
+- Cost: OMP computes `per_million_rate * tokens / 1e6` with a 2x-input
+  rule for 1h cache writes; EMP
+  (crates/emp-state/src/usage/pricing.rs) uses decimal per-token rates
+  with tier suffixes (`_priority`, `_flex`), threshold tiers
+  (`_above_Nk_tokens`), 5m/1h cache-write split, and reasoning-token
+  rates, producing `cost_nanos`. EMP is strictly richer; OMP has no
+  equivalent to port.
+- Routing: OMP resolves roles plus `retry.fallbackChains` (model and
+  provider wildcards); EMP routes via per-request candidates and
+  protocol fallback. Role-based chains are the only missing concept.
