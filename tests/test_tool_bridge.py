@@ -32,6 +32,19 @@ def search():
 
 
 class ExternalToolsTests(unittest.TestCase):
+    def test_codex_server_web_search_does_not_block_external_cli_tools(self):
+        source = {"input": "hello", "tools": [
+            function("exec"), search(),
+            {"type": "web_search", "external_web_access": True},
+        ]}
+        original = copy.deepcopy(source)
+        prepared = ExternalTools().prepare(source)
+        self.assertEqual(source, original)
+        self.assertEqual([tool["type"] for tool in prepared["tools"]],
+                         ["function", "function"])
+        self.assertEqual(prepared["tools"][0]["name"], "exec")
+        self.assertEqual(len(responses_to_chat(prepared, "fixture")["tools"]), 2)
+
     def test_shared_leaf_objects_keep_original_and_distinct_namespace_identities(self):
         shared = function()
         shared["parameters"]["properties"] = {"query": {"type": "string"}}
