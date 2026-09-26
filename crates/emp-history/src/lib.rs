@@ -12,7 +12,7 @@ pub mod context;
 
 pub const ACTIVE_INPUT_START: &str = "_emp_active_input_start";
 const COMPACTION_PREFIX: &str = "emp1:";
-const CHECKPOINT_PREFIX: &str = "Portable checkpoint from Codex-visible local history. Continue from this state without repeating completed work.";
+pub(crate) const CHECKPOINT_PREFIX: &str = "Portable checkpoint from Codex-visible local history. Continue from this state without repeating completed work.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryError {
@@ -171,13 +171,8 @@ pub fn prepare<R: HistoryReader + ?Sized>(
     native_destination: bool,
     reader: &R,
 ) -> Result<Value, HistoryError> {
-    let root = body
-        .as_object()
-        .ok_or_else(|| HistoryError::new("invalid_history_projection"))?;
-    if root
-        .get("previous_response_id")
-        .is_some_and(|value| !value.is_null())
-    {
+    let root = history_projection_root(body)?;
+    if has_previous_response(root) {
         return Ok(body.clone());
     }
     let decoded = decode_portable_items(root)?;
@@ -237,13 +232,8 @@ pub fn prepare_owned<R: HistoryReader + ?Sized>(
     native_destination: bool,
     reader: &R,
 ) -> Result<Value, HistoryError> {
-    let root = body
-        .as_object()
-        .ok_or_else(|| HistoryError::new("invalid_history_projection"))?;
-    if root
-        .get("previous_response_id")
-        .is_some_and(|value| !value.is_null())
-    {
+    let root = history_projection_root(&body)?;
+    if has_previous_response(root) {
         return Ok(body);
     }
     let needs_preparation = if native_destination {
@@ -257,6 +247,16 @@ pub fn prepare_owned<R: HistoryReader + ?Sized>(
     prepare(&body, incoming, native_destination, reader)
 }
 
+fn history_projection_root(body: &Value) -> Result<&Map<String, Value>, HistoryError> {
+    body.as_object()
+        .ok_or_else(|| HistoryError::new("invalid_history_projection"))
+}
+
+fn has_previous_response(root: &Map<String, Value>) -> bool {
+    root.get("previous_response_id")
+        .is_some_and(|value| !value.is_null())
+}
+
 fn contains_compaction(root: &Map<String, Value>) -> bool {
     input_objects_match(root, |item| {
         item.get("type").and_then(Value::as_str) == Some("compaction")
@@ -266,10 +266,7 @@ fn contains_compaction(root: &Map<String, Value>) -> bool {
 fn contains_portable_compaction(root: &Map<String, Value>) -> bool {
     input_objects_match(root, |item| {
         item.get("type").and_then(Value::as_str) == Some("compaction")
-            && item
-                .get("encrypted_content")
-                .and_then(Value::as_str)
-                .is_some_and(|value| value.starts_with(COMPACTION_PREFIX))
+            && portable_encrypted(item).is_some_and(|value| value.starts_with(COMPACTION_PREFIX))
     })
 }
 
@@ -345,12 +342,16 @@ fn opaque_compaction_indexes(source: &[Value]) -> Vec<usize> {
         .filter_map(|(index, item)| {
             (item.get("type").and_then(Value::as_str) == Some("compaction")
                 && item
-                    .get("encrypted_content")
-                    .and_then(Value::as_str)
+                    .as_object()
+                    .and_then(portable_encrypted)
                     .is_none_or(|value| !value.starts_with(COMPACTION_PREFIX)))
             .then_some(index)
         })
         .collect()
+}
+
+fn portable_encrypted(item: &Map<String, Value>) -> Option<&str> {
+    item.get("encrypted_content").and_then(Value::as_str)
 }
 
 fn normalize_tool_pairs(items: Vec<VisibleItem>) -> Result<Vec<VisibleItem>, HistoryError> {
@@ -453,39 +454,32 @@ fn wire_item(item: &VisibleItem) -> Option<Value> {
             (!text.trim().is_empty())
                 .then(|| message("user", &format!("{CHECKPOINT_PREFIX}\n\n{}", text.trim())))
         }
-        "tool_call" | "tool_result" => {
+        "tool_call" | "tool_result" | "standalone_tool_output" => {
+            let standalone = item.kind == "standalone_tool_output";
             let mut value =
                 item.content.as_object().cloned().unwrap_or_else(|| {
                     Map::from_iter([("output".to_owned(), item.content.clone())])
                 });
-            value.insert(
-                "type".to_owned(),
-                Value::String(item.raw_type.clone().unwrap_or_else(|| {
+            let raw_type = if standalone {
+                "function_call_output".to_owned()
+            } else {
+                item.raw_type.clone().unwrap_or_else(|| {
                     if item.kind == "tool_call" {
                         "function_call".to_owned()
                     } else {
                         "function_call_output".to_owned()
                     }
-                })),
-            );
-            if let Some(call_id) = &item.call_id {
+                })
+            };
+            value.insert("type".to_owned(), Value::String(raw_type));
+            if standalone {
+                value.remove("call_id");
+            } else if let Some(call_id) = &item.call_id {
                 value.insert("call_id".to_owned(), Value::String(call_id.clone()));
             }
-            if let Some(item_id) = &item.item_id {
+            if !standalone && let Some(item_id) = &item.item_id {
                 value.insert("id".to_owned(), Value::String(item_id.clone()));
             }
-            Some(Value::Object(value))
-        }
-        "standalone_tool_output" => {
-            let mut value =
-                item.content.as_object().cloned().unwrap_or_else(|| {
-                    Map::from_iter([("output".to_owned(), item.content.clone())])
-                });
-            value.insert(
-                "type".to_owned(),
-                Value::String("function_call_output".to_owned()),
-            );
-            value.remove("call_id");
             Some(Value::Object(value))
         }
         _ => {
@@ -574,10 +568,8 @@ fn string_alias(
     snake: &str,
     camel: &str,
 ) -> Result<Option<String>, HistoryError> {
-    match optional_string(value, snake)? {
-        Some(value) => Ok(Some(value)),
-        None => optional_string(value, camel),
-    }
+    optional_string(value, snake)?
+        .map_or_else(|| optional_string(value, camel), |value| Ok(Some(value)))
 }
 
 fn optional_string(value: &Map<String, Value>, key: &str) -> Result<Option<String>, HistoryError> {

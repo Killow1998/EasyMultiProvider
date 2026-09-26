@@ -476,7 +476,7 @@ pub(crate) fn run_server(
                 .backend
                 .transport
                 .support_network
-                .source_at_startup()
+                .source_at_startup
         );
         let bootstrap_url = server.bootstrap_url();
         println!("Open in browser: {bootstrap_url}");

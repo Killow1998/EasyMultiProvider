@@ -30,6 +30,21 @@ impl WebSocketError {
     }
 }
 
+/// RFC 6455 payload length prefix: 7-bit inline, 126 + u16, or 127 + u64.
+fn frame_length_prefix(length: usize) -> Vec<u8> {
+    if length < 126 {
+        vec![length as u8]
+    } else if length <= u16::MAX as usize {
+        let mut bytes = vec![126];
+        bytes.extend_from_slice(&(length as u16).to_be_bytes());
+        bytes
+    } else {
+        let mut bytes = vec![127];
+        bytes.extend_from_slice(&(length as u64).to_be_bytes());
+        bytes
+    }
+}
+
 impl fmt::Display for WebSocketError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.message)
@@ -88,17 +103,7 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
         }
         let mut header = Vec::with_capacity(10);
         header.push(0x80 | opcode);
-        match payload.len() {
-            length if length < 126 => header.push(length as u8),
-            length if length <= u16::MAX as usize => {
-                header.push(126);
-                header.extend_from_slice(&(length as u16).to_be_bytes());
-            }
-            length => {
-                header.push(127);
-                header.extend_from_slice(&(length as u64).to_be_bytes());
-            }
-        }
+        header.extend(&frame_length_prefix(payload.len()));
         self.stream
             .write_all(&header)
             .and_then(|_| self.stream.write_all(payload))
@@ -205,15 +210,7 @@ impl WebSocketConnection<'_, TcpStream> {
     }
 }
 
-impl<S> Drop for WebSocketConnection<'_, S> {
-    fn drop(&mut self) {
-        if !self.closed {
-            self.closed = true;
-        }
-    }
-}
-
-trait ReadWrite: Read + Write + Send {
+pub(crate) trait ReadWrite: Read + Write + Send {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
 }
 type OpenedWebSocketTransport = (Box<dyn ReadWrite>, bool, Option<String>);
@@ -291,7 +288,7 @@ fn tls_stream(
     Ok(Box::new(rustls::StreamOwned::new(connection, stream)))
 }
 
-fn read_http_head(stream: &mut dyn ReadWrite) -> Result<Vec<u8>, ClientWebSocketError> {
+pub(crate) fn read_http_head(stream: &mut dyn ReadWrite) -> Result<Vec<u8>, ClientWebSocketError> {
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
         if head.len() >= 64 * 1024 {
@@ -326,17 +323,16 @@ fn socks_connect(
     host: &str,
     port: u16,
 ) -> Result<(), ClientWebSocketError> {
+    let proxy_io = || ClientWebSocketError::new(503, "native websocket proxy failed");
     let credential = (!proxy.username().is_empty() || proxy.password().is_some())
         .then(|| (proxy.username(), proxy.password().unwrap_or_default()));
     let methods: &[u8] = if credential.is_some() { &[0, 2] } else { &[0] };
     stream
         .write_all(&[&[5, methods.len() as u8], methods].concat())
         .and_then(|_| stream.flush())
-        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+        .map_err(|_| proxy_io())?;
     let mut selected = [0_u8; 2];
-    stream
-        .read_exact(&mut selected)
-        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+    stream.read_exact(&mut selected).map_err(|_| proxy_io())?;
     if selected[0] != 5 || selected[1] == 255 {
         return Err(ClientWebSocketError::new(
             503,
@@ -360,11 +356,9 @@ fn socks_connect(
         stream
             .write_all(&request)
             .and_then(|_| stream.flush())
-            .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+            .map_err(|_| proxy_io())?;
         let mut response = [0_u8; 2];
-        stream
-            .read_exact(&mut response)
-            .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+        stream.read_exact(&mut response).map_err(|_| proxy_io())?;
         if response != [1, 0] {
             return Err(ClientWebSocketError::new(
                 503,
@@ -389,11 +383,9 @@ fn socks_connect(
     stream
         .write_all(&request)
         .and_then(|_| stream.flush())
-        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+        .map_err(|_| proxy_io())?;
     let mut response = [0_u8; 4];
-    stream
-        .read_exact(&mut response)
-        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+    stream.read_exact(&mut response).map_err(|_| proxy_io())?;
     if response[0] != 5 || response[1] != 0 {
         return Err(ClientWebSocketError::new(
             503,
@@ -405,9 +397,7 @@ fn socks_connect(
         4 => 16,
         3 => {
             let mut length = [0_u8; 1];
-            stream
-                .read_exact(&mut length)
-                .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+            stream.read_exact(&mut length).map_err(|_| proxy_io())?;
             usize::from(length[0])
         }
         _ => {
@@ -418,9 +408,7 @@ fn socks_connect(
         }
     };
     let mut ignored = vec![0_u8; address_bytes + 2];
-    stream
-        .read_exact(&mut ignored)
-        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))
+    stream.read_exact(&mut ignored).map_err(|_| proxy_io())
 }
 
 fn websocket_connection(

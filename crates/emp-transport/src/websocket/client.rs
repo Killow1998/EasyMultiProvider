@@ -156,20 +156,7 @@ impl ClientWebSocket {
             .map_err(|_| {
                 ClientWebSocketError::new(503, "native upstream websocket handshake failed")
             })?;
-        let mut head = Vec::new();
-        while !head.ends_with(b"\r\n\r\n") {
-            if head.len() >= 64 * 1024 {
-                return Err(ClientWebSocketError::new(
-                    502,
-                    "native websocket handshake is too large",
-                ));
-            }
-            let mut byte = [0u8; 1];
-            stream.read_exact(&mut byte).map_err(|_| {
-                ClientWebSocketError::new(503, "native upstream websocket handshake failed")
-            })?;
-            head.push(byte[0]);
-        }
+        let head = read_http_head(stream.as_mut())?;
         let text = std::str::from_utf8(&head)
             .map_err(|_| ClientWebSocketError::new(502, "native websocket handshake is invalid"))?;
         let mut lines = text.split("\r\n");
@@ -267,17 +254,9 @@ impl ClientWebSocket {
             ClientWebSocketError::new(500, "native websocket randomness is unavailable")
         })?;
         let mut frame = vec![0x80 | if compressed { 0x40 } else { 0 } | opcode];
-        match payload.len() {
-            length if length < 126 => frame.push(0x80 | length as u8),
-            length if length <= u16::MAX as usize => {
-                frame.push(0x80 | 126);
-                frame.extend_from_slice(&(length as u16).to_be_bytes());
-            }
-            length => {
-                frame.push(0x80 | 127);
-                frame.extend_from_slice(&(length as u64).to_be_bytes());
-            }
-        }
+        let prefix = frame_length_prefix(payload.len());
+        frame.push(0x80 | prefix[0]);
+        frame.extend(&prefix[1..]);
         frame.extend_from_slice(&mask);
         frame.extend(
             payload

@@ -11,7 +11,7 @@ use std::io::{self, Write};
 pub const SAFETY_RESERVE_TOKENS: u64 = 256;
 const CLEAR_EXCESS_TOKENS: u64 = 64;
 const IMAGE_INPUT_TOKEN_ESTIMATE: u64 = 4096;
-const CHECKPOINT_PREFIX: &str = "Portable checkpoint from Codex-visible local history. Continue from this state without repeating completed work.";
+const IMAGE_TYPES: &[&str] = &["input_image", "output_image", "image", "image_url"];
 const MAP_PROMPT: &str = "Create a structured portable checkpoint from the visible history below.\nInclude only visible facts: objective, user constraints, decisions, completed work,\nfiles and code changed, relevant tool results, current state, failures, and remaining\nsteps. Preserve important identifiers and facts. Do not include hidden reasoning or\ninvented details. Return only the checkpoint text.";
 const REDUCE_PROMPT: &str = "Merge the visible portable checkpoints and any visible history below\ninto one structured portable checkpoint. Preserve objective, user constraints,\ndecisions, completed work, files and code changed, relevant tool results, current\nstate, failures, and remaining steps. Do not include hidden reasoning or invented\ndetails. Return only the checkpoint text.";
 
@@ -95,12 +95,7 @@ pub fn estimate_json_tokens(value: &Value) -> Option<u64> {
 
 fn estimate_protocol_payload_tokens(payload: &Value, protocol: &str) -> Option<u64> {
     let root = payload.as_object()?;
-    let fields = match protocol {
-        "responses" => &["input", "instructions", "tools", "text", "response_format"][..],
-        "chat_completions" => &["messages", "tools", "response_format"][..],
-        "anthropic_messages" => &["system", "messages", "tools"][..],
-        _ => return None,
-    };
+    let fields = protocol_fields(protocol)?;
     let mut images = false;
     for field in fields {
         if let Some(value) = root.get(*field) {
@@ -132,7 +127,7 @@ fn tokens_from_bytes(bytes: u64, image_count: u64) -> u64 {
 
 fn materialized_estimate_json_tokens(value: &Value) -> Option<u64> {
     let mut image_count = 0_u64;
-    let redacted = redact_images(value, &mut image_count, 0)?;
+    let redacted = redact_images_with(value, &mut image_count, 0, &[])?;
     let bytes = serde_json::to_vec(&redacted).ok()?.len() as u64;
     Some(tokens_from_bytes(bytes, image_count))
 }
@@ -203,7 +198,7 @@ fn contains_image(value: &Value, depth: usize) -> Option<bool> {
         Value::Object(values) => {
             if matches!(
                 values.get("type").and_then(Value::as_str),
-                Some("input_image" | "output_image" | "image" | "image_url")
+                Some(kind) if IMAGE_TYPES.contains(&kind)
             ) {
                 return Some(true);
             }
@@ -264,7 +259,13 @@ where
                 None => (Vec::new(), Vec::new()),
             }
         };
-    let before = input_view(&projected, &candidate, &active, &suffix);
+    let before = input_view_value(&final_body(
+        &projected,
+        None,
+        &[candidate.to_vec()],
+        &active,
+        &suffix,
+    ));
     if estimate_json_tokens(&before).is_some_and(|estimate| estimate <= safe_budget) {
         projected.insert(
             "input".to_owned(),
@@ -272,7 +273,7 @@ where
         );
         return Ok(Value::Object(projected));
     }
-    let active_only = input_view(&projected, &[], &active, &suffix);
+    let active_only = input_view_value(&final_body(&projected, None, &[], &active, &suffix));
     if estimate_json_tokens(&active_only).is_none_or(|estimate| estimate > safe_budget) {
         return Err("compaction_unit_too_large");
     }
@@ -442,7 +443,10 @@ fn final_body(
 ) -> Value {
     let mut input = Vec::new();
     if let Some(summary) = summary {
-        input.push(message(&format!("{CHECKPOINT_PREFIX}\n\n{summary}")));
+        input.push(message(&format!(
+            "{}\n\n{summary}",
+            super::CHECKPOINT_PREFIX
+        )));
     }
     input.extend(flatten(tail));
     input.extend_from_slice(active);
@@ -450,20 +454,6 @@ fn final_body(
     let mut result = root.clone();
     result.insert("input".to_owned(), Value::Array(input));
     Value::Object(result)
-}
-
-fn input_view(
-    root: &Map<String, Value>,
-    candidate: &[Value],
-    active: &[Value],
-    suffix: &[Value],
-) -> Value {
-    let mut input = candidate.to_vec();
-    input.extend_from_slice(active);
-    input.extend_from_slice(suffix);
-    let mut projected = root.clone();
-    projected.insert("input".to_owned(), Value::Array(input));
-    input_view_value(&Value::Object(projected))
 }
 
 fn input_view_value(body: &Value) -> Value {
@@ -535,32 +525,21 @@ fn is_user_item(item: &Value) -> bool {
 
 fn tool_role(item: &Value) -> Option<&'static str> {
     let kind = item.get("type").and_then(Value::as_str).unwrap_or_default();
-    if matches!(
-        kind,
-        "tool_call"
-            | "tool_use"
-            | "function_call"
-            | "custom_tool_call"
-            | "command_call"
-            | "tool_search_call"
-    ) || kind.ends_with("_call")
-    {
-        Some("call")
-    } else if matches!(
-        kind,
-        "tool_result"
-            | "tool_output"
-            | "tool_return"
-            | "function_call_output"
-            | "custom_tool_call_output"
-            | "tool_search_output"
-            | "function_result"
-            | "command_result"
-    ) || kind.ends_with("_result")
-    {
-        Some("result")
-    } else {
-        None
+    match kind {
+        _ if kind.ends_with("_call") => Some("call"),
+        _ if kind.ends_with("_result")
+            || matches!(
+                kind,
+                "tool_output"
+                    | "tool_return"
+                    | "function_call_output"
+                    | "custom_tool_call_output"
+                    | "tool_search_output"
+            ) =>
+        {
+            Some("result")
+        }
+        _ => None,
     }
 }
 
@@ -588,12 +567,7 @@ fn message(text: &str) -> Value {
 
 fn payload_view(payload: &Value, protocol: &str) -> Option<Value> {
     let root = payload.as_object()?;
-    let fields: &[&str] = match protocol {
-        "responses" => &["input", "instructions", "tools", "text", "response_format"],
-        "chat_completions" => &["messages", "tools", "response_format"],
-        "anthropic_messages" => &["system", "messages", "tools"],
-        _ => return None,
-    };
+    let fields = protocol_fields(protocol)?;
     Some(Value::Object(
         fields
             .iter()
@@ -604,6 +578,15 @@ fn payload_view(payload: &Value, protocol: &str) -> Option<Value> {
             })
             .collect(),
     ))
+}
+
+fn protocol_fields(protocol: &str) -> Option<&'static [&'static str]> {
+    Some(match protocol {
+        "responses" => &["input", "instructions", "tools", "text", "response_format"],
+        "chat_completions" => &["messages", "tools", "response_format"],
+        "anthropic_messages" => &["system", "messages", "tools"],
+        _ => return None,
+    })
 }
 
 fn context_window(
@@ -660,10 +643,6 @@ fn positive_integer(value: Option<&Value>) -> Option<u64> {
     }
 }
 
-fn redact_images(value: &Value, images: &mut u64, depth: usize) -> Option<Value> {
-    redact_images_with(value, images, depth, &[])
-}
-
 fn redact_images_with(
     value: &Value,
     images: &mut u64,
@@ -683,7 +662,7 @@ fn redact_images_with(
         Value::Object(value) => {
             let image = matches!(
                 value.get("type").and_then(Value::as_str),
-                Some("input_image" | "output_image" | "image" | "image_url")
+                Some(kind) if IMAGE_TYPES.contains(&kind)
             );
             if image {
                 *images = images.saturating_add(1);

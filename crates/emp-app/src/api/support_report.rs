@@ -75,8 +75,9 @@ fn quota_status(
     error: Option<&str>,
     credential_status: &str,
     credential_present: bool,
-    quota_is_object: bool,
+    quota: Option<&Value>,
 ) -> &'static str {
+    let quota_is_object = quota.is_some_and(Value::is_object);
     match error {
         Some("quota_auth_required") => return "auth_required",
         Some("quota_transport_error") => return "transport_error",
@@ -236,7 +237,7 @@ fn configuration_path_mask(
 
 #[derive(Clone, Debug)]
 pub(crate) struct NetworkSnapshot {
-    source_at_startup: &'static str,
+    pub(crate) source_at_startup: &'static str,
     chatgpt_route: &'static str,
     proxy_scheme: Option<String>,
 }
@@ -271,10 +272,6 @@ impl NetworkSnapshot {
             chatgpt_route,
             proxy_scheme,
         }
-    }
-
-    pub(crate) fn source_at_startup(&self) -> &'static str {
-        self.source_at_startup
     }
 
     fn report(&self) -> Value {
@@ -412,20 +409,6 @@ fn runtime_report(state: &ServerState) -> Value {
     })
 }
 
-fn quota_status_value(
-    error: Option<&str>,
-    credential_status: &str,
-    credential_present: bool,
-    quota: Option<&Value>,
-) -> &'static str {
-    quota_status(
-        error,
-        credential_status,
-        credential_present,
-        quota.is_some_and(Value::is_object),
-    )
-}
-
 fn accounts_report(state: &ServerState) -> Result<Value, ()> {
     let public = crate::services::accounts::accounts_snapshot(state).ok_or(())?;
     let errors = public.get("refresh_errors").and_then(Value::as_object);
@@ -435,7 +418,7 @@ fn accounts_report(state: &ServerState) -> Result<Value, ()> {
         .and_then(Value::as_bool)
         == Some(true);
     let native_quota = native.and_then(|account| account.get("quota"));
-    let native_status = quota_status_value(
+    let native_status = quota_status(
         errors
             .and_then(|errors| errors.get("@native"))
             .and_then(Value::as_str),
@@ -464,8 +447,7 @@ fn accounts_report(state: &ServerState) -> Result<Value, ()> {
             Some(json!({
                 "index": index + 1,
                 "credential_present": present,
-                "credential_status": credential_status,
-                "quota_status": quota_status_value(error, credential_status, present, account.get("quota")),
+                "quota_status": quota_status(error, credential_status, present, account.get("quota")),
             }))
         })
         .collect::<Vec<_>>();
@@ -524,6 +506,7 @@ mod tests {
         COMPATIBILITY, CREDENTIAL_STATES, ConfigPlatform, RUNTIME_SOURCES, choice,
         configuration_path_mask, desktop_config_path, quota_status, valid_version,
     };
+    use serde_json::json;
 
     #[test]
     fn support_report_allowlists_reject_unknown_values() {
@@ -547,28 +530,39 @@ mod tests {
     #[test]
     fn support_report_quota_status_matches_python_precedence() {
         assert_eq!(
-            quota_status(Some("quota_auth_required"), "valid", true, true),
+            quota_status(Some("quota_auth_required"), "valid", true, Some(&json!({}))),
             "auth_required"
         );
         assert_eq!(
-            quota_status(Some("quota_transport_error"), "valid", true, true),
+            quota_status(
+                Some("quota_transport_error"),
+                "valid",
+                true,
+                Some(&json!({}))
+            ),
             "transport_error"
         );
         assert_eq!(
-            quota_status(Some("quota_rate_limited"), "valid", true, true),
+            quota_status(Some("quota_rate_limited"), "valid", true, Some(&json!({}))),
             "rate_limited"
         );
         assert_eq!(
-            quota_status(Some("other"), "valid", true, true),
+            quota_status(Some("other"), "valid", true, Some(&json!({}))),
             "unclassified_error"
         );
-        assert_eq!(quota_status(None, "invalid", true, true), "auth_required");
         assert_eq!(
-            quota_status(None, "unknown", false, true),
+            quota_status(None, "invalid", true, Some(&json!({}))),
+            "auth_required"
+        );
+        assert_eq!(
+            quota_status(None, "unknown", false, Some(&json!({}))),
             "credential_missing"
         );
-        assert_eq!(quota_status(None, "valid", true, true), "success");
-        assert_eq!(quota_status(None, "valid", true, false), "not_checked");
+        assert_eq!(
+            quota_status(None, "valid", true, Some(&json!({}))),
+            "success"
+        );
+        assert_eq!(quota_status(None, "valid", true, None), "not_checked");
     }
 
     #[test]

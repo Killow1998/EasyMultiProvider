@@ -100,40 +100,13 @@ impl fmt::Display for PortableProjectionError {
 impl std::error::Error for PortableProjectionError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResponsesValidationErrorKind {
-    NotObject,
-    MissingStatus,
-    UnknownStatus,
-    InvalidOutput,
-    InvalidOutputItem,
-    UnsupportedOutputItem,
-    InvalidMessage,
-    InvalidMessageContent,
-    UnsupportedMessageContent,
-    InvalidToolCall,
-    InvalidToolSearch,
-    InvalidReasoning,
-    InvalidOpaqueOutput,
-    InvalidOutputText,
-    MissingFailure,
-    ContradictoryFailure,
-    InvalidIncompleteDetails,
-    ContradictoryIncompleteDetails,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResponsesValidationError {
-    kind: ResponsesValidationErrorKind,
     message: &'static str,
 }
 
 impl ResponsesValidationError {
-    const fn new(kind: ResponsesValidationErrorKind, message: &'static str) -> Self {
-        Self { kind, message }
-    }
-
-    pub const fn kind(self) -> ResponsesValidationErrorKind {
-        self.kind
+    pub(crate) const fn new(message: &'static str) -> Self {
+        Self { message }
     }
 
     pub const fn message(self) -> &'static str {
@@ -170,11 +143,8 @@ fn python_string(value: Option<&Value>, fallback: &str) -> String {
         Some(Value::String(value)) => value.clone(),
         Some(Value::Bool(value)) => if *value { "True" } else { "False" }.to_owned(),
         Some(Value::Number(value)) => value.to_string(),
-        Some(Value::Array(value)) => {
-            serde_json::to_string(value).unwrap_or_else(|_| fallback.into())
-        }
-        Some(Value::Object(value)) => {
-            serde_json::to_string(value).unwrap_or_else(|_| fallback.into())
+        Some(v @ (Value::Array(_) | Value::Object(_))) => {
+            serde_json::to_string(v).unwrap_or_else(|_| fallback.into())
         }
     }
 }
@@ -192,6 +162,15 @@ fn text_part_types(content: &[Value]) -> Vec<String> {
         .iter()
         .filter_map(|part| object(part).map(|part| python_string(part.get("type"), "unknown")))
         .collect()
+}
+
+fn text_part_text(part: &Map<String, Value>) -> Option<String> {
+    let text = part.get("text").and_then(Value::as_str)?;
+    matches!(
+        part.get("type").and_then(Value::as_str),
+        Some("input_text" | "output_text" | "text")
+    )
+    .then(|| text.to_owned())
 }
 
 fn project_content(value: Option<&Value>, index: usize) -> Result<Value, PortableProjectionError> {
@@ -214,10 +193,8 @@ fn project_content(value: Option<&Value>, index: usize) -> Result<Value, Portabl
                     ));
                 };
                 let kind = part.get("type").and_then(Value::as_str);
-                if matches!(kind, Some("input_text" | "output_text" | "text"))
-                    && part.get("text").is_some_and(Value::is_string)
-                {
-                    projected.push(json!({"type": kind, "text": part["text"]}));
+                if let Some(text) = text_part_text(part) {
+                    projected.push(json!({"type": kind, "text": text}));
                     continue;
                 }
                 if kind == Some("refusal") && part.get("refusal").is_some_and(Value::is_string) {
@@ -277,13 +254,8 @@ fn instruction_text(
             for part in content {
                 match part {
                     Value::String(value) => text.push(value.clone()),
-                    Value::Object(part)
-                        if matches!(
-                            part.get("type").and_then(Value::as_str),
-                            Some("input_text" | "output_text" | "text")
-                        ) && part.get("text").is_some_and(Value::is_string) =>
-                    {
-                        text.push(part["text"].as_str().unwrap().to_owned());
+                    Value::Object(part) if text_part_text(part).is_some() => {
+                        text.push(text_part_text(part).unwrap());
                     }
                     _ => {
                         return Err(PortableProjectionError::new(
@@ -332,20 +304,16 @@ fn portable_input(
     source: Option<&Value>,
     preserve_reasoning_state: bool,
 ) -> Result<(Value, Vec<String>), PortableProjectionError> {
-    if matches!(source, None | Some(Value::Null)) {
-        return Ok((Value::Null, Vec::new()));
-    }
-    if let Some(Value::String(value)) = source {
-        return Ok((Value::String(value.clone()), Vec::new()));
-    }
     let owned;
-    let source = match source.unwrap() {
-        Value::Object(value) => {
+    let source = match source {
+        None | Some(Value::Null) => return Ok((Value::Null, Vec::new())),
+        Some(Value::String(value)) => return Ok((Value::String(value.clone()), Vec::new())),
+        Some(Value::Object(value)) => {
             owned = vec![Value::Object(value.clone())];
             owned.as_slice()
         }
-        Value::Array(value) => value.as_slice(),
-        _ => return Err(error(0, "input", "invalid_input")),
+        Some(Value::Array(value)) => value.as_slice(),
+        Some(_) => return Err(error(0, "input", "invalid_input")),
     };
     let mut projected = Vec::with_capacity(source.len());
     let mut instructions = Vec::new();

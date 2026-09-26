@@ -23,13 +23,8 @@ pub(crate) fn capture() -> Option<ProxyEnvironment> {
 
 #[derive(Default)]
 struct SystemProxyCache {
-    state: Mutex<SystemProxyCacheState>,
-}
-
-#[derive(Default)]
-struct SystemProxyCacheState {
-    value: Option<ProxyEnvironment>,
-    last_attempt: Option<Instant>,
+    value: Mutex<Option<ProxyEnvironment>>,
+    last_attempt: Mutex<Option<Instant>>,
 }
 
 impl SystemProxyCache {
@@ -38,23 +33,26 @@ impl SystemProxyCache {
         C: Fn() -> Instant,
         R: FnOnce() -> Result<Option<ProxyEnvironment>, ()>,
     {
-        let mut state = self
-            .state
+        let mut value = self
+            .value
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut last_attempt = self
+            .last_attempt
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = clock();
-        let is_fresh = state
-            .last_attempt
+        let is_fresh = last_attempt
             .and_then(|last| now.checked_duration_since(last))
             .is_some_and(|elapsed| elapsed < SYSTEM_PROXY_CACHE_TTL);
         if !force && is_fresh {
-            return state.value.clone();
+            return value.clone();
         }
-        if let Ok(value) = reader() {
-            state.value = value;
+        if let Ok(entry) = reader() {
+            *value = entry;
         }
-        state.last_attempt = Some(clock());
-        state.value.clone()
+        *last_attempt = Some(clock());
+        value.clone()
     }
 }
 
@@ -73,6 +71,12 @@ fn read_system_proxy() -> Result<Option<ProxyEnvironment>, ()> {
     }
     #[allow(unreachable_code)]
     Ok(None)
+}
+
+fn push_unique_no_proxy(environment: &mut ProxyEnvironment, host: String) {
+    if !environment.no_proxy.contains(&host) {
+        environment.no_proxy.push(host);
+    }
 }
 
 fn run_command(program: &str, arguments: &[&str], timeout: Duration) -> Option<String> {
@@ -95,15 +99,10 @@ fn run_command(program: &str, arguments: &[&str], timeout: Duration) -> Option<S
                 return Some(output);
             }
             Ok(Some(_)) => return None,
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
             Ok(None) if Instant::now() < deadline => {
                 thread::sleep(Duration::from_millis(10));
             }
-            Ok(None) => {
+            Ok(None) | Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return None;
@@ -216,9 +215,7 @@ fn parse_gnome_proxy_settings(
     };
     if let Some(ignored) = values.get("ignore_hosts") {
         for host in gsettings_list(ignored) {
-            if !environment.no_proxy.contains(&host) {
-                environment.no_proxy.push(host);
-            }
+            push_unique_no_proxy(&mut environment, host);
         }
     }
     environment.has_proxy().then_some(environment)
@@ -262,9 +259,7 @@ fn parse_macos_proxy_settings(output: &str) -> Option<ProxyEnvironment> {
         ..ProxyEnvironment::default()
     };
     for host in exceptions {
-        if !environment.no_proxy.contains(&host) {
-            environment.no_proxy.push(host);
-        }
+        push_unique_no_proxy(&mut environment, host);
     }
     environment.has_proxy().then_some(environment)
 }
@@ -361,9 +356,7 @@ fn parse_windows_proxy_settings(output: &str) -> Option<ProxyEnvironment> {
             .map(str::trim)
             .filter(|host| !host.is_empty())
         {
-            if !environment.no_proxy.contains(&host.to_owned()) {
-                environment.no_proxy.push(host.to_owned());
-            }
+            push_unique_no_proxy(&mut environment, host.to_owned());
         }
     }
     environment.has_proxy().then_some(environment)
