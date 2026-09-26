@@ -4,6 +4,7 @@ use emp_history::{HistoryAnchor, HistoryError, HistoryReader, HistorySnapshot, V
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -85,10 +86,19 @@ fn first_line_boundary(file: &mut File, start: u64, end: u64) -> Result<u64, His
 ///
 /// Windows grow from the tail so large rollouts only parse a bounded suffix.
 /// The returned suffix starts at the first record boundary after the
-/// compaction record. `None` means no compaction record exists anywhere.
+/// compaction record. `None` means reconstruction must replay the whole
+/// rollout.
+///
+/// Selection mirrors Codex: only the newest compaction can bound replay. An
+/// older compaction cannot replace the history or window state that a newer
+/// one may have changed, so the newest compaction record decides on its own
+/// whether the bounded replay applies. A paginated history accepts the newest
+/// compaction when it carries a replacement history and window number; other
+/// histories additionally require the newer resume metadata contract.
 fn locate_latest_compaction(
     file: &mut File,
     captured_end: u64,
+    history_mode: &str,
 ) -> Result<Option<ReverseBase>, HistoryError> {
     if captured_end == 0 {
         return Ok(None);
@@ -102,7 +112,7 @@ fn locate_latest_compaction(
             .map_err(|_| HistoryError::new("source_unavailable"))?;
         let mut reader = BufReader::with_capacity(64 * 1024, file.by_ref().take(length as u64));
         let mut line = Vec::new();
-        let mut base: Option<(ReverseBase, u64)> = None;
+        let mut candidate: Option<(ReverseBase, u64)> = None;
         let mut active_turn = None;
         let mut offset = line_start;
         loop {
@@ -116,27 +126,39 @@ fn locate_latest_compaction(
                     if let Some(turn) = record_turn_id(&record) {
                         active_turn = Some(turn);
                     }
-                    if token(record.get("type")) == "compacted"
-                        && let Some(replacement) = replacement_history(&record)?
-                        // A base with an opaque compaction item resolves
-                        // against the pre-compaction visible history, so it is
-                        // not self-contained; the full scan owns that case.
-                        && !replacement.iter().any(|item| {
-                            item.get("type").and_then(Value::as_str) == Some("compaction")
-                                && item
-                                    .get("encrypted_content")
-                                    .and_then(Value::as_str)
-                                    .is_some_and(|value| !value.is_empty())
-                        })
-                    {
-                        base = Some((
-                            ReverseBase {
-                                replacement,
-                                suffix_start: offset,
-                                turn: active_turn.clone(),
-                            },
-                            record_start,
-                        ));
+                    if token(record.get("type")).as_str() == "compacted" {
+                        // Scanning forward, so each later compaction replaces
+                        // the earlier one: the newest encountered record is
+                        // the only candidate. Whether it is eligible decides
+                        // the whole outcome; never fall back to an older one.
+                        let replacement = replacement_history(&record)?;
+                        let eligible = replacement.is_some()
+                            && payload_window_number(&record).is_some()
+                            && (history_mode == "paginated"
+                                || payload_resume_metadata(&record).is_some())
+                            // An opaque compaction item resolves against the
+                            // pre-compaction visible history, so it is not
+                            // self-contained; the full scan owns that case.
+                            && !replacement.as_ref().is_some_and(|items| {
+                                items.iter().any(|item| {
+                                    item.get("type").and_then(Value::as_str)
+                                        == Some("compaction")
+                                        && item
+                                            .get("encrypted_content")
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|value| !value.is_empty())
+                                })
+                            });
+                        candidate = eligible.then(|| {
+                            (
+                                ReverseBase {
+                                    replacement: replacement.unwrap_or_default(),
+                                    suffix_start: offset,
+                                    turn: active_turn.clone(),
+                                },
+                                record_start,
+                            )
+                        });
                     }
                 }
                 Ok(None) => {}
@@ -145,15 +167,14 @@ fn locate_latest_compaction(
                 Err(error) => return Err(error),
             }
         }
-        if let Some((base, _)) = base {
+        if let Some((base, _)) = candidate {
             return Ok(Some(base));
         }
         if start == 0 {
-            // Whole file scanned without a self-contained compaction base.
+            // Whole file scanned without an eligible compaction base.
             return Ok(None);
         }
         if window >= REVERSE_SCAN_WINDOW_CAP {
-            // Deep or opaque-bound checkpoints fall back to the full scan.
             return Ok(None);
         }
         window = window.saturating_mul(2);
@@ -190,6 +211,33 @@ fn verify_session_thread(
         }
     }
     Err(HistoryError::new("session_meta_missing"))
+}
+
+/// Read the lineage pointer from the rollout's first session meta record.
+///
+/// Returns `None` for rollouts without a `history_base`, which covers every
+/// rollout written before Codex paginated persistent forks.
+fn read_history_base(path: &Path) -> Result<Option<(String, u64)>, HistoryError> {
+    let mut file = File::open(path).map_err(|_| HistoryError::new("source_missing"))?;
+    let head = file
+        .metadata()
+        .map_err(|_| HistoryError::new("source_unavailable"))?
+        .len()
+        .min(MAX_ROLLOUT_LINE_BYTES as u64);
+    let mut reader = BufReader::with_capacity(64 * 1024, file.by_ref().take(head));
+    let mut line = Vec::new();
+    while let Some(terminated) = read_bounded_line(&mut reader, &mut line)? {
+        let Some(record) = rollout_json_line(&line, terminated)? else {
+            continue;
+        };
+        if matches!(
+            token(record.get("type")).as_str(),
+            "session_meta" | "sessionmeta"
+        ) {
+            return Ok(session_meta_history_base(&record));
+        }
+    }
+    Ok(None)
 }
 
 /// Forward scan of the records after a reverse-located compaction base.
@@ -295,6 +343,7 @@ fn snapshot_from_base(
     mut scan: RolloutScan,
     (suffix_start, captured_end): (u64, u64),
     (anchor, location_mode, exact_compaction): (&HistoryAnchor, &str, bool),
+    lineage_bound: Option<u64>,
 ) -> Result<HistorySnapshot, HistoryError> {
     let mut visible = replacement_entries(
         base.replacement,
@@ -330,6 +379,10 @@ fn snapshot_from_base(
         let Some(record) = rollout_json_line(&line, terminated)? else {
             continue;
         };
+        if lineage_bound.is_some_and(|bound| ordinal(&record).is_some_and(|value| value >= bound)) {
+            // The lineage cutoff owns everything from this ordinal on.
+            break;
+        }
         let explicit_turn = record_turn_id(&record);
         if explicit_turn.is_some() {
             active_turn = explicit_turn.clone();
@@ -348,6 +401,20 @@ fn snapshot_from_base(
         {
             index += 1;
             continue;
+        }
+        if token(record.get("type")) == "event_msg" {
+            let payload = record.get("payload").and_then(Value::as_object);
+            if token(payload.and_then(|payload| payload.get("type"))).as_str()
+                == "thread_rolled_back"
+            {
+                let num_turns = payload
+                    .and_then(|payload| payload.get("num_turns"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                apply_thread_rollback(&mut visible, num_turns);
+                index += 1;
+                continue;
+            }
         }
         let Some(raw) = visible_payload(&record) else {
             index += 1;
@@ -389,7 +456,98 @@ impl CodexHomeHistoryReader {
             .ok_or_else(|| HistoryError::new("thread_identity_missing"))?;
         let database = self.latest_state_database()?;
         let location = locate(&database, thread)?;
-        self.read_rollout(anchor, &location, None)
+        let prefix = if location.mode == "paginated" {
+            self.lineage_prefix(&database, &location.path, &mut vec![thread.to_owned()])?
+        } else {
+            Vec::new()
+        };
+        let snapshot = self.read_rollout(anchor, &location, None, None)?;
+        if prefix.is_empty() {
+            return Ok(snapshot);
+        }
+        let mut items = prefix;
+        items.extend(snapshot.items);
+        Ok(HistorySnapshot {
+            thread_id: snapshot.thread_id,
+            items,
+            source_model: snapshot.source_model,
+        })
+    }
+
+    /// Inherited prefix for a paginated rollout: every ancestor segment
+    /// recorded through `history_base` pointers, oldest first.
+    ///
+    /// Cycles and unbounded chains are rejected; a missing ancestor rollout
+    /// surfaces as `source_missing` because the visible history would be
+    /// silently incomplete otherwise.
+    fn lineage_prefix(
+        &self,
+        database: &Path,
+        path: &Path,
+        visited: &mut Vec<String>,
+    ) -> Result<Vec<VisibleItem>, HistoryError> {
+        let mut prefix = Vec::new();
+        let mut base = read_history_base(path)?;
+        let mut chain = Vec::new();
+        while let Some((parent_id, bound)) = base {
+            if visited.contains(&parent_id) || chain.len() >= 32 {
+                return Err(HistoryError::new("lineage_cycle"));
+            }
+            chain.push(parent_id.clone());
+            visited.push(parent_id.clone());
+            let parent_location = self.locate_parent(database, &parent_id)?;
+            let parent_anchor = HistoryAnchor {
+                thread_id: Some(parent_id.clone()),
+                ..HistoryAnchor::default()
+            };
+            let mut snapshot =
+                self.read_rollout(&parent_anchor, &parent_location, None, Some(bound))?;
+            base = read_history_base(&parent_location.path)?;
+            // Ancestors are resolved oldest-first, so each parent segment is
+            // appended after the segments older than it.
+            prefix.append(&mut snapshot.items);
+        }
+        Ok(prefix)
+    }
+
+    /// Resolve a lineage ancestor either through the threads database or by
+    /// scanning the sessions tree for the rollout file name.
+    fn locate_parent(&self, database: &Path, rollout_id: &str) -> Result<Location, HistoryError> {
+        if let Ok(location) = locate(database, rollout_id) {
+            return Ok(location);
+        }
+        let suffix = format!("{rollout_id}.jsonl");
+        let mut found = None;
+        let mut stack = vec![self.home.clone()];
+        while let Some(directory) = stack.pop() {
+            let entries = match fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(|name| name.ends_with(&suffix))
+                {
+                    found = Some(path);
+                    break;
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        found
+            .map(|path| Location {
+                path,
+                mode: "paginated".to_owned(),
+                source_model: None,
+            })
+            .ok_or_else(|| HistoryError::new("source_missing"))
     }
 
     fn latest_state_database(&self) -> Result<PathBuf, HistoryError> {
@@ -415,6 +573,7 @@ impl CodexHomeHistoryReader {
         anchor: &HistoryAnchor,
         location: &Location,
         exact_compaction: Option<&Map<String, Value>>,
+        lineage_bound: Option<u64>,
     ) -> Result<HistorySnapshot, HistoryError> {
         let home = self
             .home
@@ -449,7 +608,7 @@ impl CodexHomeHistoryReader {
         // covers its suffix. Fork checkpoints (exact compaction) keep the full
         // scan because ambiguity detection must see every matching record.
         let reverse_base = if exact_compaction.is_none() && location.mode == "paginated" {
-            locate_latest_compaction(&mut file, captured_end)?
+            locate_latest_compaction(&mut file, captured_end, &location.mode)?
         } else {
             None
         };
@@ -472,6 +631,7 @@ impl CodexHomeHistoryReader {
                     scan,
                     (suffix_start, captured_end),
                     (anchor, &location.mode, exact_compaction.is_some()),
+                    lineage_bound,
                 )?);
             }
         }
@@ -516,6 +676,12 @@ impl CodexHomeHistoryReader {
             if index >= scan.boundary {
                 return Ok(false);
             }
+            if lineage_bound
+                .is_some_and(|bound| ordinal(&record).is_some_and(|value| value >= bound))
+            {
+                // The lineage cutoff owns everything from this ordinal on.
+                return Ok(false);
+            }
             let explicit_turn = record_turn_id(&record);
             if explicit_turn.is_some() {
                 active_turn = explicit_turn.clone();
@@ -534,6 +700,20 @@ impl CodexHomeHistoryReader {
             {
                 index += 1;
                 return Ok(true);
+            }
+            if token(record.get("type")) == "event_msg" {
+                let payload = record.get("payload").and_then(Value::as_object);
+                if token(payload.and_then(|payload| payload.get("type"))).as_str()
+                    == "thread_rolled_back"
+                {
+                    let num_turns = payload
+                        .and_then(|payload| payload.get("num_turns"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    apply_thread_rollback(&mut visible, num_turns);
+                    index += 1;
+                    return Ok(true);
+                }
             }
             if let Some(replacement) = replacement_history(&record)? {
                 visible = replacement_entries(replacement, &visible, turn.clone())?;
@@ -816,7 +996,7 @@ impl HistoryReader for CodexHomeHistoryReader {
             thread_id: Some(parent.to_owned()),
             ..HistoryAnchor::default()
         };
-        let mut snapshot = self.read_rollout(&parent_anchor, &location, Some(compaction))?;
+        let mut snapshot = self.read_rollout(&parent_anchor, &location, Some(compaction), None)?;
         snapshot.thread_id = anchor.thread_id.clone().unwrap_or_default();
         Ok(snapshot)
     }
@@ -829,6 +1009,8 @@ mod tests {
     use tempfile::tempdir;
 
     const THREAD: &str = "01a00000-0000-7000-8000-000000000001";
+    const CHILD: &str = "01a00000-0000-7000-8000-000000000002";
+    const PARENT: &str = "01a00000-0000-7000-8000-000000000003";
     const TURN: &str = "01a00000-0000-7000-8000-000000000004";
 
     #[test]
@@ -1023,8 +1205,6 @@ mod tests {
 
     #[test]
     fn duplicate_exact_compaction_is_ambiguous() {
-        const CHILD: &str = "01a00000-0000-7000-8000-000000000002";
-        const PARENT: &str = "01a00000-0000-7000-8000-000000000003";
         let directory = tempdir().unwrap();
         let rollout = directory.path().join("parent.jsonl");
         let records = [
@@ -1222,5 +1402,305 @@ mod tests {
         assert!(!text.contains("legacy prefix"), "{text}");
         // Legacy full scan replays everything through the compaction base.
         assert!(text.contains("compact base"), "{text}");
+    }
+
+    #[test]
+    fn newer_compaction_without_window_number_blocks_older_base() {
+        let directory = tempdir().unwrap();
+        let rollout = directory.path().join("rollout.jsonl");
+        let records = [
+            json!({"type":"session_meta","payload":{"id":THREAD,"history_mode":"paginated"}}),
+            json!({"ordinal":0,"type":"event_msg","payload":{"type":"task_started","turn_id":"pre"}}),
+            json!({"ordinal":1,"type":"response_item","payload":{"type":"message","role":"user","content":"pre-compaction prefix"}}),
+            json!({"ordinal":2,"type":"event_msg","payload":{"type":"task_complete","turn_id":"pre"}}),
+            // Older, fully eligible checkpoint.
+            json!({"ordinal":900,"type":"compacted","payload":{"message":"","window_number":1,
+                "replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"older base"}]}]}}),
+            json!({"ordinal":901,"type":"event_msg","payload":{"type":"task_started","turn_id":"mid"}}),
+            json!({"ordinal":902,"type":"response_item","payload":{"type":"message","role":"user","content":"between checkpoints"}}),
+            json!({"ordinal":903,"type":"event_msg","payload":{"type":"task_complete","turn_id":"mid"}}),
+            // Newest checkpoint is ineligible: no window number. Codex never
+            // falls back to the older base, so the full scan owns the rebuild.
+            json!({"ordinal":910,"type":"compacted","payload":{"message":"","replacement_history":[
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"newer base"}]}]}}),
+            json!({"ordinal":911,"type":"event_msg","payload":{"type":"task_started","turn_id":TURN}}),
+        ];
+        fs::write(
+            &rollout,
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        write_state_database(directory.path(), &rollout, THREAD, "paginated");
+
+        let snapshot = CodexHomeHistoryReader::new(directory.path())
+            .read_visible_history(&HistoryAnchor {
+                thread_id: Some(THREAD.to_owned()),
+                turn_id: Some(TURN.to_owned()),
+                ..HistoryAnchor::default()
+            })
+            .unwrap();
+        let text = snapshot
+            .items
+            .iter()
+            .map(|item| content_text(&item.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The newest compaction carries a replacement history, so the prefix
+        // it replaced must never reappear; the ineligible newest checkpoint
+        // forces full replay rather than the older base.
+        assert!(!text.contains("pre-compaction prefix"), "{text}");
+        assert!(!text.contains("older base"), "{text}");
+        // The newest compaction's replacement history supersedes everything
+        // recorded before it, including the older base and the interim turn.
+        assert!(text.contains("newer base"), "{text}");
+        assert!(!text.contains("between checkpoints"), "{text}");
+    }
+
+    #[test]
+    fn legacy_compaction_without_resume_metadata_blocks_base() {
+        let directory = tempdir().unwrap();
+        let rollout = directory.path().join("rollout.jsonl");
+        let records = [
+            json!({"type":"session_meta","payload":{"id":THREAD,"history_mode":"legacy"}}),
+            json!({"type":"compacted","payload":{"message":"","window_number":1,
+                "replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"legacy base"}]}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":TURN}}),
+        ];
+        fs::write(
+            &rollout,
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        write_state_database(directory.path(), &rollout, THREAD, "legacy");
+
+        // The reverse path never engages for legacy rollouts; assert the gate
+        // helper directly so the resume-metadata requirement stays pinned.
+        let file = File::open(&rollout).unwrap();
+        let captured_end = file.metadata().unwrap().len();
+        let mut file = file;
+        let base = locate_latest_compaction(&mut file, captured_end, "legacy").unwrap();
+        assert!(base.is_none());
+        let base = locate_latest_compaction(&mut file, captured_end, "paginated").unwrap();
+        assert!(base.is_some());
+    }
+
+    #[test]
+    fn thread_rollback_removes_rolled_back_turns() {
+        let directory = tempdir().unwrap();
+        let rollout = directory.path().join("rollout.jsonl");
+        let records = [
+            json!({"type":"session_meta","payload":{"id":THREAD,"history_mode":"legacy"}}),
+            // Turn A: real user message and assistant reply.
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"user A"}}),
+            json!({"type":"event_msg","payload":{"type":"agent_message","message":"assistant A"}}),
+            // Turn B: real user message, assistant reply, then a rollback that
+            // removes it. The external model must never see turn B.
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"user B"}}),
+            json!({"type":"event_msg","payload":{"type":"agent_message","message":"assistant B"}}),
+            json!({"type":"event_msg","payload":{"type":"thread_rolled_back","num_turns":1}}),
+            // Resumed work continues from the post-rollback history.
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"user C"}}),
+            json!({"type":"event_msg","payload":{"type":"agent_message","message":"assistant C"}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":TURN}}),
+        ];
+        fs::write(
+            &rollout,
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        write_state_database(directory.path(), &rollout, THREAD, "legacy");
+
+        let snapshot = CodexHomeHistoryReader::new(directory.path())
+            .read_visible_history(&HistoryAnchor {
+                thread_id: Some(THREAD.to_owned()),
+                turn_id: Some(TURN.to_owned()),
+                ..HistoryAnchor::default()
+            })
+            .unwrap();
+        let text = snapshot
+            .items
+            .iter()
+            .map(|item| content_text(&item.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("user A"), "{text}");
+        assert!(text.contains("assistant A"), "{text}");
+        assert!(!text.contains("user B"), "{text}");
+        assert!(!text.contains("assistant B"), "{text}");
+        assert!(text.contains("user C"), "{text}");
+        assert!(text.contains("assistant C"), "{text}");
+    }
+
+    #[test]
+    fn rollback_keeps_contextual_user_messages() {
+        let directory = tempdir().unwrap();
+        let rollout = directory.path().join("rollout.jsonl");
+        let records = [
+            json!({"type":"session_meta","payload":{"id":THREAD,"history_mode":"legacy"}}),
+            // Contextual user messages are not user turns.
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"<user_instructions>\nAGENTS\n</user_instructions>"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"real turn one"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"real turn two"}}),
+            json!({"type":"event_msg","payload":{"type":"thread_rolled_back","num_turns":1}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":TURN}}),
+        ];
+        fs::write(
+            &rollout,
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        write_state_database(directory.path(), &rollout, THREAD, "legacy");
+
+        let snapshot = CodexHomeHistoryReader::new(directory.path())
+            .read_visible_history(&HistoryAnchor {
+                thread_id: Some(THREAD.to_owned()),
+                turn_id: Some(TURN.to_owned()),
+                ..HistoryAnchor::default()
+            })
+            .unwrap();
+        let text = snapshot
+            .items
+            .iter()
+            .map(|item| content_text(&item.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("user_instructions"), "{text}");
+        assert!(text.contains("real turn one"), "{text}");
+        assert!(!text.contains("real turn two"), "{text}");
+    }
+
+    #[test]
+    fn paginated_lineage_prepends_ancestor_prefix() {
+        let directory = tempdir().unwrap();
+        let parent = directory
+            .path()
+            .join(format!("rollout-2026-09-26T00-00-00-{PARENT}.jsonl"));
+        let parent_records = [
+            json!({"type":"session_meta","payload":{"id":PARENT,"history_mode":"paginated"}}),
+            json!({"ordinal":1,"type":"event_msg","payload":{"type":"user_message","message":"parent turn"}}),
+            json!({"ordinal":2,"type":"event_msg","payload":{"type":"agent_message","message":"parent answer"}}),
+            // Everything from ordinal 3 on belongs to the child, never the
+            // ancestor prefix.
+            json!({"ordinal":3,"type":"event_msg","payload":{"type":"user_message","message":"parent excluded"}}),
+        ];
+        fs::write(
+            &parent,
+            parent_records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let child = directory
+            .path()
+            .join(format!("rollout-2026-09-26T00-00-01-{CHILD}.jsonl"));
+        let child_records = [
+            json!({"type":"session_meta","payload":{"id":CHILD,"history_mode":"paginated",
+                "history_base":{"thread_id":PARENT,"end_ordinal_exclusive":3,"end_byte_offset":0}}}),
+            json!({"ordinal":3,"type":"event_msg","payload":{"type":"user_message","message":"child turn"}}),
+            json!({"ordinal":4,"type":"event_msg","payload":{"type":"agent_message","message":"child answer"}}),
+            json!({"ordinal":5,"type":"event_msg","payload":{"type":"task_started","turn_id":TURN}}),
+        ];
+        fs::write(
+            &child,
+            child_records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+
+        let database = directory.path().join("state_5.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, history_mode TEXT, model TEXT)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO threads VALUES (?1, ?2, 'paginated', 'gpt-native')",
+                params![CHILD, child.to_str().unwrap()],
+            )
+            .unwrap();
+
+        let snapshot = CodexHomeHistoryReader::new(directory.path())
+            .read_visible_history(&HistoryAnchor {
+                thread_id: Some(CHILD.to_owned()),
+                turn_id: Some(TURN.to_owned()),
+                ..HistoryAnchor::default()
+            })
+            .unwrap();
+        let text = snapshot
+            .items
+            .iter()
+            .map(|item| content_text(&item.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The full visible history is the ancestor segment followed by the
+        // child's own records; the post-cutoff parent record stays excluded.
+        assert!(text.contains("parent turn"), "{text}");
+        assert!(text.contains("parent answer"), "{text}");
+        assert!(!text.contains("parent excluded"), "{text}");
+        assert!(text.contains("child turn"), "{text}");
+        assert!(text.contains("child answer"), "{text}");
+    }
+
+    #[test]
+    fn lineage_cycle_is_rejected() {
+        let directory = tempdir().unwrap();
+        let child = directory
+            .path()
+            .join(format!("rollout-2026-09-26T00-00-02-{CHILD}.jsonl"));
+        let records = [
+            json!({"type":"session_meta","payload":{"id":CHILD,"history_mode":"paginated",
+                "history_base":{"thread_id":CHILD,"end_ordinal_exclusive":2,"end_byte_offset":0}}}),
+            json!({"ordinal":1,"type":"event_msg","payload":{"type":"user_message","message":"cyclic"}}),
+            json!({"ordinal":2,"type":"event_msg","payload":{"type":"task_started","turn_id":TURN}}),
+        ];
+        fs::write(
+            &child,
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let database = directory.path().join("state_5.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, history_mode TEXT, model TEXT)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO threads VALUES (?1, ?2, 'paginated', 'gpt-native')",
+                params![CHILD, child.to_str().unwrap()],
+            )
+            .unwrap();
+
+        let error = CodexHomeHistoryReader::new(directory.path())
+            .read_visible_history(&HistoryAnchor {
+                thread_id: Some(CHILD.to_owned()),
+                turn_id: Some(TURN.to_owned()),
+                ..HistoryAnchor::default()
+            })
+            .unwrap_err();
+        assert_eq!(error.reason(), "lineage_cycle");
     }
 }

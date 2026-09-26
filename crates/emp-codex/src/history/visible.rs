@@ -63,6 +63,64 @@ pub(super) fn visible_payload(record: &Map<String, Value>) -> Option<Map<String,
         .or_else(|| record.get("type").is_some().then(|| record.clone()))
 }
 
+/// Apply a persisted `ThreadRolledBack` marker to the visible history.
+///
+/// Codex records the event as `event_msg` / `thread_rolled_back` with the
+/// number of user turns that left the effective thread history. A user turn
+/// starts at a real (non-contextual) user message; its assistant reply and any
+/// tool activity ride along in the same turn segment. Truncating from the
+/// start of the counted-from-last user turn drops the whole stale suffix,
+/// which matches the durable truncation Codex applies to rollouts.
+pub(super) fn apply_thread_rollback(visible: &mut Vec<VisibleItem>, num_turns: u64) {
+    let Some(last_user) = visible.iter().rposition(|item| {
+        item.kind == "user_message" && !is_contextual_user_message(&item.content)
+    }) else {
+        // No real user turn remains; the marker has nothing to remove.
+        return;
+    };
+    let mut remaining = num_turns as usize;
+    let mut cut = last_user;
+    while remaining > 1 {
+        remaining -= 1;
+        match visible[..cut].iter().rposition(|item| {
+            item.kind == "user_message" && !is_contextual_user_message(&item.content)
+        }) {
+            Some(previous) => cut = previous,
+            // More rollbacks requested than user turns recorded: drop
+            // everything visible.
+            None => {
+                cut = 0;
+                break;
+            }
+        }
+    }
+    visible.truncate(cut);
+}
+
+/// Detect contextual user messages Codex never counts as user turns.
+///
+/// Marker pairs mirror the durable contextual fragments: system-injected
+/// instructions, environment snapshots, shell-command wrappers, abort and
+/// subagent notices, and internal model context.
+fn is_contextual_user_message(content: &Value) -> bool {
+    let text = content_text(content);
+    let trimmed = text.trim_start();
+    const MARKERS: &[&str] = &[
+        "<user_instructions>",
+        "<ENVIRONMENT_CONTEXT>",
+        "<user_shell_command>",
+        "<turn_aborted>",
+        "<subagent_notification>",
+        "<agent_message_board_notification>",
+        "<codex_internal_context",
+        "<goal_context>",
+        "<external_",
+        "<permissions instructions>",
+        "<user_actions>",
+    ];
+    MARKERS.iter().any(|marker| trimmed.starts_with(marker))
+}
+
 pub(super) fn normalize_visible_item(
     raw: &Map<String, Value>,
     turn: Option<String>,

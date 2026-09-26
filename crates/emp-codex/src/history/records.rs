@@ -78,6 +78,21 @@ pub(super) fn session_meta_id(record: &Map<String, Value>) -> Option<String> {
     )
 }
 
+/// Lineage pointer recorded on a paginated rollout's session meta.
+///
+/// Returns `(parent rollout id, end_ordinal_exclusive)` when the child
+/// inherits a bounded prefix from another rollout.
+pub(super) fn session_meta_history_base(record: &Map<String, Value>) -> Option<(String, u64)> {
+    let payload = record.get("payload").and_then(Value::as_object)?;
+    let base = payload.get("history_base")?.as_object()?;
+    let thread_id = string_from(base, &["thread_id", "threadId", "rollout_id", "rolloutId"])?;
+    let end_ordinal_exclusive = base
+        .get("end_ordinal_exclusive")
+        .or_else(|| base.get("endOrdinalExclusive"))
+        .and_then(Value::as_u64)?;
+    Some((thread_id, end_ordinal_exclusive))
+}
+
 pub(super) fn replacement_contains_encoded(record: &Map<String, Value>, encoded: &str) -> bool {
     if !matches!(
         token(record.get("type")).as_str(),
@@ -174,4 +189,22 @@ pub(super) fn replacement_entries(
     marker.turn_id = turn;
     output.push(marker);
     Ok(output)
+}
+
+/// Window number persisted on a compaction record, when present.
+pub(super) fn payload_window_number(record: &Map<String, Value>) -> Option<u64> {
+    let payload = record.get("payload").and_then(Value::as_object);
+    payload
+        .unwrap_or(record)
+        .get("window_number")
+        .and_then(Value::as_u64)
+}
+
+/// Resume metadata contract marker on a compaction record.
+pub(super) fn payload_resume_metadata(record: &Map<String, Value>) -> Option<&Value> {
+    let payload = record.get("payload").and_then(Value::as_object);
+    payload
+        .unwrap_or(record)
+        .get("resume_metadata")
+        .filter(|value| !value.is_null())
 }
