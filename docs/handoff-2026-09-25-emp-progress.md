@@ -252,3 +252,17 @@ Parity gaps, cheapest first:
    `duration >= 200ms`.
 5. Full workspace suite green (112 app-lib + all crates), strict Clippy
    `-D warnings` clean, `cargo fmt` applied.
+6. Phase B replay regressions pinned (`2e2dc0d`): an eligible-looking
+   paginated compaction whose replacement history contains an opaque
+   compaction item is rejected as a reverse base (full scan owns that
+   case), and a `thread_rolled_back` event after the checkpoint base
+   truncates the replayed suffix exactly like the full scan.
+   `cargo test -p emp-codex --lib` 20/20, `emp-app history` and
+   `conversation` green, strict Clippy `-D warnings` clean, fmt applied.
+   Real 523 MB rollout retested end-to-end through the Rust service:
+   reverse locate ~2.4 s, opaque gate forces full-scan fallback, request
+   replayed (55.7 MB projected request, 256 items) and served an upstream
+   429 rate-limit response; the service stayed alive and healthy
+   throughout. Host OOM pressure (7.6 GB RAM, swap full, `oom_kill`
+   events in the user slice) killed earlier foreground test-server
+   instances; run such retests from a detached (`setsid`) process.
