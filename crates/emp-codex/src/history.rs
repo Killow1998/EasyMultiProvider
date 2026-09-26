@@ -1709,4 +1709,115 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.reason(), "lineage_cycle");
     }
+
+    #[test]
+    fn opaque_replacement_item_blocks_paginated_reverse_base() {
+        let directory = tempdir().unwrap();
+        let rollout = directory.path().join("rollout.jsonl");
+        let records = [
+            json!({"type":"session_meta","payload":{"id":THREAD,"history_mode":"paginated"}}),
+            json!({"ordinal":0,"type":"event_msg","payload":{"type":"task_started","turn_id":"pre"}}),
+            json!({"ordinal":1,"type":"response_item","payload":{"type":"message","role":"user","content":"pre-compaction context"}}),
+            json!({"ordinal":2,"type":"event_msg","payload":{"type":"task_complete","turn_id":"pre"}}),
+            // Eligible except for the opaque compaction item: the suffix
+            // replay cannot rebuild the pre-compaction history it references,
+            // so Codex parity requires the full scan, not the suffix.
+            json!({"ordinal":900,"type":"compacted","payload":{"message":"","window_number":7,
+            "replacement_history":[
+                {"type":"compaction","encrypted_content":"gAAAA-opaque"},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"opaque base"}]}
+            ]}}),
+            json!({"ordinal":901,"type":"event_msg","payload":{"type":"task_started","turn_id":TURN}}),
+        ];
+        fs::write(
+            &rollout,
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        write_state_database(directory.path(), &rollout, THREAD, "paginated");
+
+        let file = File::open(&rollout).unwrap();
+        let captured_end = file.metadata().unwrap().len();
+        let mut file = file;
+        let base = locate_latest_compaction(&mut file, captured_end, "paginated").unwrap();
+        assert!(
+            base.is_none(),
+            "opaque compaction items block the reverse base"
+        );
+
+        let snapshot = CodexHomeHistoryReader::new(directory.path())
+            .read_visible_history(&HistoryAnchor {
+                thread_id: Some(THREAD.to_owned()),
+                turn_id: Some(TURN.to_owned()),
+                ..HistoryAnchor::default()
+            })
+            .unwrap();
+        let text = snapshot
+            .items
+            .iter()
+            .map(|item| content_text(&item.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The full scan rebuilds the prefix and replays the checkpointed
+        // message; the opaque ciphertext itself never becomes visible.
+        assert!(text.contains("pre-compaction context"), "{text}");
+        assert!(text.contains("opaque base"), "{text}");
+        assert!(!text.contains("gAAAA"), "{text}");
+    }
+
+    #[test]
+    fn suffix_replay_applies_thread_rollback_after_the_base() {
+        let directory = tempdir().unwrap();
+        let rollout = directory.path().join("rollout.jsonl");
+        let records = [
+            json!({"type":"session_meta","payload":{"id":THREAD,"history_mode":"paginated"}}),
+            json!({"ordinal":0,"type":"event_msg","payload":{"type":"task_started","turn_id":"pre"}}),
+            json!({"ordinal":1,"type":"event_msg","payload":{"type":"task_complete","turn_id":"pre"}}),
+            json!({"ordinal":900,"type":"compacted","payload":{"message":"","window_number":1,
+            "replacement_history":[
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"checkpoint base"}]}
+            ]}}),
+            // Post-base turn gets rolled back; the suffix replay must apply
+            // the same truncation the full scan does.
+            json!({"ordinal":901,"type":"event_msg","payload":{"type":"task_started","turn_id":"stale"}}),
+            json!({"ordinal":902,"type":"event_msg","payload":{"type":"user_message","message":"stale user"}}),
+            json!({"ordinal":903,"type":"event_msg","payload":{"type":"agent_message","message":"stale reply"}}),
+            json!({"ordinal":904,"type":"event_msg","payload":{"type":"task_complete","turn_id":"stale"}}),
+            json!({"ordinal":905,"type":"event_msg","payload":{"type":"thread_rolled_back","num_turns":1}}),
+            json!({"ordinal":906,"type":"event_msg","payload":{"type":"user_message","message":"fresh user"}}),
+            json!({"ordinal":907,"type":"event_msg","payload":{"type":"agent_message","message":"fresh reply"}}),
+            json!({"ordinal":908,"type":"event_msg","payload":{"type":"task_started","turn_id":TURN}}),
+        ];
+        fs::write(
+            &rollout,
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        write_state_database(directory.path(), &rollout, THREAD, "paginated");
+
+        let snapshot = CodexHomeHistoryReader::new(directory.path())
+            .read_visible_history(&HistoryAnchor {
+                thread_id: Some(THREAD.to_owned()),
+                turn_id: Some(TURN.to_owned()),
+                ..HistoryAnchor::default()
+            })
+            .unwrap();
+        let text = snapshot
+            .items
+            .iter()
+            .map(|item| content_text(&item.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("checkpoint base"), "{text}");
+        assert!(!text.contains("stale user"), "{text}");
+        assert!(!text.contains("stale reply"), "{text}");
+        assert!(text.contains("fresh user"), "{text}");
+        assert!(text.contains("fresh reply"), "{text}");
+    }
 }
