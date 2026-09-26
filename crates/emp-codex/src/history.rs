@@ -556,6 +556,12 @@ impl CodexHomeHistoryReader {
             .filter_map(Result::ok)
             .filter_map(|entry| {
                 let path = entry.path();
+                // SQLite -wal/-shm sidecars share the `state_N` stem but are
+                // not queryable databases; only the exact `state_N.sqlite`
+                // file can answer the thread lookup.
+                if path.extension().and_then(|extension| extension.to_str()) != Some("sqlite") {
+                    return None;
+                }
                 let name = path.file_stem()?.to_str()?;
                 let version = name.strip_prefix("state_")?.parse::<u64>().ok()?;
                 path.is_file().then_some((version, path))

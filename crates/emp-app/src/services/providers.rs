@@ -111,19 +111,11 @@ fn open_external_stream_with_monitor(
             .with_protocol(protocol)
             .map_err(ExternalStreamOpenError::Route)?;
         for attempt in 0..3 {
-            let opened =
-                match monitor.as_deref_mut() {
-                    Some(monitor) => state.backend.transport.runtime.block_on(
-                        monitor.race(router.open_stream(&candidate, body, incoming, ids)),
-                    ),
-                    None => DisconnectRace::Ready(
-                        state
-                            .backend
-                            .transport
-                            .runtime
-                            .block_on(router.open_stream(&candidate, body, incoming, ids)),
-                    ),
-                };
+            let opened = crate::services::disconnect::raced(
+                &state.backend.transport.runtime,
+                monitor.as_deref_mut(),
+                router.open_stream(&candidate, body, incoming, ids),
+            );
             let opened = match opened {
                 DisconnectRace::Ready(result) => result,
                 DisconnectRace::Disconnected => {
@@ -144,17 +136,13 @@ fn open_external_stream_with_monitor(
                     if let Some(delay) =
                         crate::services::failures::external_retry_delay(&error, attempt, &candidate)
                     {
-                        let delay_elapsed = match monitor.as_deref_mut() {
-                            Some(monitor) => matches!(
-                                state.backend.transport.runtime.block_on(
-                                    monitor.race(async { tokio::time::sleep(delay).await })
-                                ),
-                                DisconnectRace::Ready(()),
-                            ),
-                            None => {
-                                std::thread::sleep(delay);
-                                true
-                            }
+                        let delay_elapsed = match crate::services::disconnect::raced(
+                            &state.backend.transport.runtime,
+                            monitor.as_deref_mut(),
+                            async { tokio::time::sleep(delay).await },
+                        ) {
+                            DisconnectRace::Ready(()) => true,
+                            DisconnectRace::Disconnected => false,
                         };
                         if !delay_elapsed {
                             return Ok(CancellableExternalStreamOpen::Disconnected);

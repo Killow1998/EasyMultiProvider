@@ -66,6 +66,24 @@ impl DisconnectMonitor {
     }
 }
 
+/// Await `future`, abandoning it as soon as the monitored peer disconnects.
+///
+/// The single call site pattern that every streamed proxy loop previously
+/// hand-rolled (`match monitor { Some(..) => race, None => Ready(block_on) }`).
+pub(crate) fn raced<T, F>(
+    runtime: &tokio::runtime::Runtime,
+    monitor: Option<&mut DisconnectMonitor>,
+    future: F,
+) -> DisconnectRace<T>
+where
+    F: Future<Output = T>,
+{
+    match monitor {
+        Some(monitor) => runtime.block_on(monitor.race(future)),
+        None => DisconnectRace::Ready(runtime.block_on(future)),
+    }
+}
+
 impl Drop for DisconnectMonitor {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
