@@ -266,3 +266,31 @@ Parity gaps, cheapest first:
    throughout. Host OOM pressure (7.6 GB RAM, swap full, `oom_kill`
    events in the user slice) killed earlier foreground test-server
    instances; run such retests from a detached (`setsid`) process.
+
+## Follow-up session results (2026-09-26)
+
+1. Unified replay rewrite (`d7e74e2`): `emp-codex/src/history.rs` replaced its
+   four duplicated scan/replay loops (`scan_suffix`, the inline replay inside
+   `snapshot_from_base`, `scan_rollout`, and the `read_rollout` closure) with
+   one `walk_records` record walker, one shared scan observer, and one
+   `replay_records` state machine seeded by a `ReplayFrame`. The whitebox unit
+   test module (≈1400 lines) and the `force_full` strategy switch it existed to
+   exercise were deleted; the differential guarantee now rests on the e2e
+   contract suites plus the `emp-history` python oracle. Net −1481 lines.
+   Verified: workspace 415 tests green (clippy `-D warnings` clean, fmt
+   applied), 523 MB real rollout reads in ~3.0–3.6 s with identical item
+   counts (10195) on both strategies before the switch was removed.
+2. Ablation pass across modules (`9c41576`): deleted the dead
+   `ResponsesValidationErrorKind` enum + accessor and `anthropic_error_kind`;
+   single-sourced the protocol→field tables, part classifier, tool item and
+   open-text event builders in emp-protocol; merged `wire_item` tool arms,
+   deduped prepare openings, shared `CHECKPOINT_PREFIX`/`portable_encrypted`
+   in emp-history; shared `read_http_head` and the frame length-prefix helper
+   between websocket server/client, folded `SystemProxyCacheState`, collapsed
+   `run_command` arms in emp-transport; folded the `quota_status_value`
+   wrapper and restructured `read_lease` validation in emp-app/integration.
+   Net −175 lines over 12 files. One oracle regression (suppressed reasoning
+   blocks consuming output indexes after the block-state helper merged the
+   ordering push) was caught by the anthropic python oracle and fixed in the
+   same commit — the oracle suites are the load-bearing contract.
+   Workspace 415 green, clippy clean, fmt applied.
