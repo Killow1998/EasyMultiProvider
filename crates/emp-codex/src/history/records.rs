@@ -80,9 +80,11 @@ pub(super) fn session_meta_id(record: &Map<String, Value>) -> Option<String> {
 
 /// Lineage pointer recorded on a paginated rollout's session meta.
 ///
-/// Returns `(parent rollout id, end_ordinal_exclusive)` when the child
-/// inherits a bounded prefix from another rollout.
-pub(super) fn session_meta_history_base(record: &Map<String, Value>) -> Option<(String, u64)> {
+/// Returns `(parent rollout id, end_ordinal_exclusive, end_byte_offset)` when
+/// the child inherits a bounded prefix from another rollout. The byte offset
+/// freezes the physical prefix the child forked from; `0` (or absent) keeps
+/// the ordinal bound as the only cutoff.
+pub(super) fn session_meta_history_base(record: &Map<String, Value>) -> Option<(String, u64, u64)> {
     let payload = record.get("payload").and_then(Value::as_object)?;
     let base = payload.get("history_base")?.as_object()?;
     let thread_id = string_from(base, &["thread_id", "threadId", "rollout_id", "rolloutId"])?;
@@ -90,7 +92,12 @@ pub(super) fn session_meta_history_base(record: &Map<String, Value>) -> Option<(
         .get("end_ordinal_exclusive")
         .or_else(|| base.get("endOrdinalExclusive"))
         .and_then(Value::as_u64)?;
-    Some((thread_id, end_ordinal_exclusive))
+    let end_byte_offset = base
+        .get("end_byte_offset")
+        .or_else(|| base.get("endByteOffset"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Some((thread_id, end_ordinal_exclusive, end_byte_offset))
 }
 
 pub(super) fn replacement_contains_encoded(record: &Map<String, Value>, encoded: &str) -> bool {
