@@ -608,13 +608,19 @@ class RustEndToEnd(unittest.TestCase):
                     timeout=8,
                 )
                 results.append((result.returncode, result.stdout, result.stderr))
+            # Windows console output carries CRLF; compare with newline endings
+            # normalized so the assertion is cross-platform.
+            normalized = [
+                (code, stdout.replace(b"\r\n", b"\n"), stderr.replace(b"\r\n", b"\n"))
+                for code, stdout, stderr in results
+            ]
             # The archived Python oracle stays 0.11.10 while the Rust release is
             # 0.12.1; --version output differs by design and is asserted below.
             if arguments == ["--version"]:
-                self.assertEqual(results[0], (0, b"EMP 0.11.10\n", b""))
-                self.assertEqual(results[1], (0, b"EMP 0.12.1\n", b""))
+                self.assertEqual(normalized[0], (0, b"EMP 0.11.10\n", b""))
+                self.assertEqual(normalized[1], (0, b"EMP 0.12.1\n", b""))
             else:
-                self.assertEqual(results[0], results[1])
+                self.assertEqual(normalized[0], normalized[1])
 
     @unittest.skipUnless(os.name == "posix", "browser fixture requires an executable script")
     def test_desktop_launch_and_configured_listener_defaults(self):
