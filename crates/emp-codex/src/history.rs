@@ -1397,13 +1397,13 @@ fn walk_bounded_reader(
         if bytes_read > end {
             return Err(HistoryError::new("invalid_replay_range"));
         }
-        if let Some(record) = rollout_json_line(&line, terminated)? {
-            if !visit(record)? {
-                return Ok(WalkReport {
-                    bytes_read,
-                    stopped_early: true,
-                });
-            }
+        if let Some(record) = rollout_json_line(&line, terminated)?
+            && !visit(record)?
+        {
+            return Ok(WalkReport {
+                bytes_read,
+                stopped_early: true,
+            });
         }
     }
     Ok(WalkReport {

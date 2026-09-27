@@ -86,14 +86,26 @@ impl SessionStore {
     /// browser login receives a fresh token and earlier ones stop working.
     pub(crate) fn rotate(&self, now: f64) -> Option<(String, u64)> {
         let mut session = self.session.lock().ok()?;
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        // Keep the previous session aside until the new one is persisted, so
+        // a failed rotation (disk full, permissions) leaves existing browsers
+        // signed in instead of deleting the only valid session.
+        let backup = self.path.with_extension("rotating");
+        let had_previous = match std::fs::rename(&self.path, &backup) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(_) => return None,
-        }
-        let rotated = load_or_create_web_session(&self.path, now).ok()?;
-        if !rotated.is_active_at(now) {
-            return None;
+        };
+        let rotated = match load_or_create_web_session(&self.path, now) {
+            Ok(rotated) if rotated.is_active_at(now) => rotated,
+            _ => {
+                if had_previous {
+                    let _ = std::fs::rename(&backup, &self.path);
+                }
+                return None;
+            }
+        };
+        if had_previous {
+            let _ = std::fs::remove_file(&backup);
         }
         *session = rotated;
         if let Ok(mut confirmation) = self.export_confirmation.lock() {

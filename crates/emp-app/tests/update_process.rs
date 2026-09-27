@@ -33,34 +33,21 @@ fn response_body(response: &[u8]) -> &[u8] {
     &response[separator + 4..]
 }
 
-fn response_header<'a>(response: &'a [u8], name: &str) -> Option<&'a str> {
-    let separator = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")?;
-    std::str::from_utf8(&response[..separator])
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            let (header, value) = line.split_once(':')?;
-            header.eq_ignore_ascii_case(name).then(|| value.trim())
-        })
-}
-
 fn request(
     port: u16,
     method: &str,
     path: &str,
-    cookie: Option<&str>,
+    session: Option<&str>,
     body: Option<&[u8]>,
 ) -> Vec<u8> {
-    try_request(port, method, path, cookie, body).expect("connect to EMP")
+    try_request(port, method, path, session, body).expect("connect to EMP")
 }
 
 fn try_request(
     port: u16,
     method: &str,
     path: &str,
-    cookie: Option<&str>,
+    session: Option<&str>,
     body: Option<&[u8]>,
 ) -> std::io::Result<Vec<u8>> {
     let mut stream = TcpStream::connect(("127.0.0.1", port))?;
@@ -69,8 +56,8 @@ fn try_request(
         stream,
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
     )?;
-    if let Some(cookie) = cookie {
-        write!(stream, "Cookie: {cookie}\r\n")?;
+    if let Some(session) = session {
+        write!(stream, "X-EMP-Session: {session}\r\n")?;
     }
     if body.is_some() {
         write!(
@@ -85,6 +72,26 @@ fn try_request(
     let mut response = Vec::new();
     stream.read_to_end(&mut response)?;
     Ok(response)
+}
+
+/// Exchange the one-use bootstrap token for a management session header.
+fn bootstrap_session(port: u16, bootstrap: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to EMP");
+    write!(
+        stream,
+        "POST /api/session HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+         X-EMP-Bootstrap: {bootstrap}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    assert_eq!(status(&response), 200, "bootstrap session response");
+    let body: serde_json::Value =
+        serde_json::from_slice(response_body(&response)).expect("session JSON");
+    body["session"].as_str().expect("session token").to_owned()
 }
 
 fn create_package(root: &Path) -> Vec<u8> {
@@ -416,10 +423,15 @@ fn status(response: &[u8]) -> u16 {
         .expect("numeric HTTP status")
 }
 
-fn wait_for_state(port: u16, cookie: &str, expected: &str, timeout: Duration) -> serde_json::Value {
+fn wait_for_state(
+    port: u16,
+    session: &str,
+    expected: &str,
+    timeout: Duration,
+) -> serde_json::Value {
     let deadline = Instant::now() + timeout;
     loop {
-        let response = request(port, "GET", "/api/updates", Some(cookie), None);
+        let response = request(port, "GET", "/api/updates", Some(session), None);
         assert_eq!(status(&response), 200, "update snapshot request");
         let snapshot = body_json(&response);
         if snapshot["state"] == expected {
@@ -434,10 +446,15 @@ fn wait_for_state(port: u16, cookie: &str, expected: &str, timeout: Duration) ->
     }
 }
 
-fn wait_for_error(port: u16, cookie: &str, expected: &str, timeout: Duration) -> serde_json::Value {
+fn wait_for_error(
+    port: u16,
+    session: &str,
+    expected: &str,
+    timeout: Duration,
+) -> serde_json::Value {
     let deadline = Instant::now() + timeout;
     loop {
-        let response = request(port, "GET", "/api/updates", Some(cookie), None);
+        let response = request(port, "GET", "/api/updates", Some(session), None);
         assert_eq!(status(&response), 200, "update snapshot request");
         let snapshot = body_json(&response);
         if snapshot["state"] == "error" {
@@ -457,7 +474,7 @@ fn check_for_available(emp: &RunningEmp) {
         emp.port,
         "POST",
         "/api/updates/check",
-        Some(&emp.cookie),
+        Some(&emp.session),
         Some(b"{}"),
     );
     assert_eq!(
@@ -466,7 +483,7 @@ fn check_for_available(emp: &RunningEmp) {
         "check request: {}",
         String::from_utf8_lossy(&check)
     );
-    let available = wait_for_state(emp.port, &emp.cookie, "available", Duration::from_secs(10));
+    let available = wait_for_state(emp.port, &emp.session, "available", Duration::from_secs(10));
     assert_eq!(available["latest_version"], "0.12.2");
 }
 
@@ -476,7 +493,7 @@ fn stop_emp(emp: &mut RunningEmp) {
             emp.port,
             "POST",
             "/api/quit",
-            Some(&emp.cookie),
+            Some(&emp.session),
             Some(b"{}"),
         );
         assert_eq!(status(&quit), 200, "idle EMP quits cleanly");
@@ -490,7 +507,7 @@ fn stop_emp(emp: &mut RunningEmp) {
 
 struct RunningEmp {
     port: u16,
-    cookie: String,
+    session: String,
     process: ChildGuard,
     executable: std::path::PathBuf,
     original_executable: Vec<u8>,
@@ -567,17 +584,10 @@ fn start_authenticated_emp_with_api(
         &pid_file,
         fail_worker_ready,
     );
-    let bootstrap_response = request(port, "GET", &format!("/?bootstrap={bootstrap}"), None, None);
-    assert_eq!(status(&bootstrap_response), 303, "bootstrap login response");
-    let cookie = response_header(&bootstrap_response, "Set-Cookie")
-        .expect("session cookie")
-        .split(';')
-        .next()
-        .unwrap()
-        .to_owned();
+    let session = bootstrap_session(port, &bootstrap);
     RunningEmp {
         port,
-        cookie,
+        session,
         process,
         executable,
         original_executable,
@@ -596,7 +606,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
     let (repository, release_server) = release_server(package);
     let mut emp = start_authenticated_emp(temp.path(), &repository, false);
 
-    let idle = request(emp.port, "GET", "/api/updates", Some(&emp.cookie), None);
+    let idle = request(emp.port, "GET", "/api/updates", Some(&emp.session), None);
     assert_eq!(status(&idle), 200);
     assert_eq!(body_json(&idle)["state"], "idle");
 
@@ -606,7 +616,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
     let mut installs = Vec::new();
     for _ in 0..2 {
         let gate = Arc::clone(&install_gate);
-        let cookie = emp.cookie.clone();
+        let session = emp.session.clone();
         let port = emp.port;
         installs.push(thread::spawn(move || {
             gate.wait();
@@ -614,7 +624,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
                 port,
                 "POST",
                 "/api/updates/install",
-                Some(&cookie),
+                Some(&session),
                 Some(b"{}"),
             )
         }));
@@ -638,7 +648,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
             emp.port,
             "GET",
             "/api/updates",
-            Some(&emp.cookie),
+            Some(&emp.session),
             None,
         ));
         if matches!(snapshot["state"].as_str(), Some("waiting" | "installing")) {
@@ -646,7 +656,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
                 emp.port,
                 "POST",
                 "/api/quit",
-                Some(&emp.cookie),
+                Some(&emp.session),
                 Some(b"{}"),
             );
             match status(&quit) {
@@ -656,7 +666,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
                         emp.port,
                         "POST",
                         "/api/updates/check",
-                        Some(&emp.cookie),
+                        Some(&emp.session),
                         Some(b"{}"),
                     );
                     assert_eq!(
@@ -672,7 +682,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
                         emp.port,
                         "DELETE",
                         "/api/accounts/update-fixture",
-                        Some(&emp.cookie),
+                        Some(&emp.session),
                         None,
                     ));
                     config_during_update = Some(std::fs::read(&emp.config).unwrap());
@@ -815,7 +825,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
             emp.port,
             "POST",
             "/api/updates/check",
-            Some(&emp.cookie),
+            Some(&emp.session),
             Some(b"{}"),
         );
         assert_eq!(
@@ -824,7 +834,7 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
             "check request: {}",
             String::from_utf8_lossy(&check)
         );
-        wait_for_error(emp.port, &emp.cookie, expected, Duration::from_secs(10));
+        wait_for_error(emp.port, &emp.session, expected, Duration::from_secs(10));
         stop_emp(&mut emp);
         server.join().expect("fake release error server completed");
     }
@@ -841,13 +851,13 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         emp.port,
         "POST",
         "/api/updates/check",
-        Some(&emp.cookie),
+        Some(&emp.session),
         Some(b"{}"),
     );
     assert_eq!(status(&check), 202);
     wait_for_error(
         emp.port,
-        &emp.cookie,
+        &emp.session,
         "update_failed",
         Duration::from_secs(10),
     );
@@ -883,13 +893,13 @@ fn release_transport_json_and_http_failures_have_python_error_codes() {
         emp.port,
         "POST",
         "/api/updates/check",
-        Some(&emp.cookie),
+        Some(&emp.session),
         Some(b"{}"),
     );
     assert_eq!(status(&check), 202);
     wait_for_error(
         emp.port,
-        &emp.cookie,
+        &emp.session,
         "update_failed",
         Duration::from_secs(10),
     );
@@ -928,11 +938,11 @@ fn package_http_and_checksum_failures_preserve_the_running_installation() {
             emp.port,
             "POST",
             "/api/updates/install",
-            Some(&emp.cookie),
+            Some(&emp.session),
             Some(b"{}"),
         );
         assert_eq!(status(&install), 202);
-        wait_for_error(emp.port, &emp.cookie, expected, Duration::from_secs(10));
+        wait_for_error(emp.port, &emp.session, expected, Duration::from_secs(10));
         assert_eq!(
             std::fs::read(&emp.executable).unwrap(),
             emp.original_executable
@@ -954,13 +964,13 @@ fn malicious_symlink_package_is_rejected_before_replacement() {
         emp.port,
         "POST",
         "/api/updates/install",
-        Some(&emp.cookie),
+        Some(&emp.session),
         Some(b"{}"),
     );
     assert_eq!(status(&install), 202);
     wait_for_error(
         emp.port,
-        &emp.cookie,
+        &emp.session,
         "invalid_package",
         Duration::from_secs(10),
     );
@@ -983,13 +993,13 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
         emp.port,
         "POST",
         "/api/updates/install",
-        Some(&emp.cookie),
+        Some(&emp.session),
         Some(b"{}"),
     );
     assert_eq!(status(&install), 202);
     wait_for_error(
         emp.port,
-        &emp.cookie,
+        &emp.session,
         "worker_failed",
         Duration::from_secs(10),
     );
@@ -997,7 +1007,7 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
         emp.port,
         "DELETE",
         "/api/accounts/update-fixture",
-        Some(&emp.cookie),
+        Some(&emp.session),
         None,
     );
     assert_eq!(
@@ -1015,7 +1025,7 @@ fn worker_ready_failure_reopens_gate_and_reports_error() {
         emp.port,
         "POST",
         "/api/quit",
-        Some(&emp.cookie),
+        Some(&emp.session),
         Some(b"{}"),
     );
     assert_eq!(
@@ -1042,7 +1052,7 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
         emp.port,
         "POST",
         "/api/updates/install",
-        Some(&emp.cookie),
+        Some(&emp.session),
         Some(b"{}"),
     );
     assert_eq!(status(&install), 202);
@@ -1068,7 +1078,7 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
         );
         thread::sleep(Duration::from_millis(20));
     }
-    let rolled_back = request(emp.port, "GET", "/api/updates", Some(&emp.cookie), None);
+    let rolled_back = request(emp.port, "GET", "/api/updates", Some(&emp.session), None);
     assert_eq!(status(&rolled_back), 200);
     assert_eq!(body_json(&rolled_back)["state"], "error");
     assert_eq!(body_json(&rolled_back)["error"], "install_rolled_back");
@@ -1081,7 +1091,7 @@ fn failed_candidate_rolls_back_and_restarts_old_emp_with_visible_error() {
         emp.port,
         "POST",
         "/api/quit",
-        Some(&emp.cookie),
+        Some(&emp.session),
         Some(b"{}"),
     );
     assert_eq!(status(&quit), 200);

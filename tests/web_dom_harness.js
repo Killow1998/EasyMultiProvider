@@ -302,6 +302,24 @@ async function sessionBootstrapBehavior() {
   const legacyRequest = requests.at(-1);
   assert.strictEqual(legacyRequest.options.credentials, "same-origin");
   assert.strictEqual(new Headers(legacyRequest.options.headers).has("X-EMP-Session"), false);
+
+  // A token left on this origin by a Rust EMP must not hide a Python server.
+  storage.setItem(run("SESSION_STORAGE_KEY"), "stale-rust-session");
+  run("sessionToken=''; legacyCookieAuth=false");
+  await run("establishSession()");
+  assert.strictEqual(run("legacyCookieAuth"), true, "stored tokens still probe for a legacy server");
+
+  // Against a header-session server the unauthenticated probe is rejected
+  // and the stored token stays in use.
+  context.fetch = async (path, options = {}) => {
+    requests.push({path, options});
+    return {ok:false, status:401, json:async()=>({})};
+  };
+  run("sessionToken=''; legacyCookieAuth=false");
+  await run("establishSession()");
+  assert.strictEqual(run("legacyCookieAuth"), false);
+  assert.strictEqual(run("sessionToken"), "stale-rust-session");
+  storage.removeItem(run("SESSION_STORAGE_KEY"));
   context.fetch = originalFetch;
   run("sessionToken=''; legacyCookieAuth=false");
 }

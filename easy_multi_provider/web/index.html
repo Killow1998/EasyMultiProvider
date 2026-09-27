@@ -560,15 +560,16 @@ async function establishSession() {
       saveSessionToken(data.session);
     }
   } else {
+    // Probe even with a stored token: a token left by a header-session EMP on
+    // this origin must not hide a cookie-session server. The probe carries no
+    // bootstrap token and has no side effects.
     sessionToken = readStoredSessionToken();
-    if (!sessionToken) {
-      const response = await fetch('/api/session', {
-        method:'POST', credentials:'same-origin', cache:'no-store', redirect:'error',
-      });
-      if (response.status === 404) {
-        legacyCookieAuth = true;
-        return;
-      }
+    const response = await fetch('/api/session', {
+      method:'POST', credentials:'same-origin', cache:'no-store', redirect:'error',
+    });
+    if (response.status === 404) {
+      legacyCookieAuth = true;
+      return;
     }
   }
   if (!legacyCookieAuth && !sessionToken) throw new Error(tr('请从 EMP 启动时提供的链接打开管理页。','Open the management page from the link printed by EMP.'));
@@ -1226,7 +1227,7 @@ async function runQuotaEventStream(controller) {
     try {
       const response = await managementFetch('/api/accounts/events', {headers:{'Accept':'text/event-stream'}, signal:controller.signal, cache:'no-store'});
       if (!response.ok) {
-        if (response.status === 401) { clearSessionToken(); return; }
+        if (response.status === 401) { clearSessionToken(); controller.abort(); return; }
         throw new Error(`Quota event stream returned HTTP ${response.status}`);
       }
       quotaEventsConnected = true;
@@ -1243,13 +1244,13 @@ async function runQuotaEventStream(controller) {
   }
 }
 function startQuotaEvents() {
-  if (quotaEventsController || !sessionToken || document.visibilityState === 'hidden') return;
+  if (quotaEventsController || !(sessionToken || legacyCookieAuth) || document.visibilityState === 'hidden') return;
   const controller = new AbortController();
   quotaEventsController = controller;
   runQuotaEventStream(controller).finally(() => {
     if (quotaEventsController === controller) {
       quotaEventsController = null;
-      if (sessionToken && document.visibilityState !== 'hidden') startQuotaEvents();
+      if (!controller.signal.aborted && (sessionToken || legacyCookieAuth) && document.visibilityState !== 'hidden') startQuotaEvents();
     }
     quotaEventsConnected = false;
   });
