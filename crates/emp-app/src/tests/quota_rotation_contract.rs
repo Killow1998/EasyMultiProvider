@@ -87,9 +87,15 @@ for line in sys.stdin:
         .expect("write original auth");
     let session = session_header(&server);
     let fail_saves = |failing: bool| {
-        *crate::services::quota::FAIL_ROTATION_SAVES_TO
+        let mut failing_paths = crate::services::quota::FAIL_ROTATION_SAVES_TO
             .lock()
-            .unwrap() = failing.then(|| auth_path.to_str().unwrap().to_owned());
+            .unwrap();
+        let path = auth_path.to_str().unwrap().to_owned();
+        if failing {
+            failing_paths.insert(path);
+        } else {
+            failing_paths.remove(&path);
+        }
     };
 
     // Saving fails: the rotated credential is reported and kept in memory.
@@ -233,4 +239,57 @@ fn shutdown_flushes_pending_rotations_of_configured_accounts_only() {
         .expect("read flushed auth");
     assert_eq!(stored["tokens"]["access_token"], "rotated");
     assert!(!gone_path.exists());
+}
+
+/// Shutdown that cannot save a rotated credential is not a clean exit: the
+/// only valid credential is lost, so the caller must see an error.
+#[test]
+fn shutdown_reports_rotated_credentials_it_could_not_save() {
+    let directory = tempfile::tempdir().expect("unsaved temporary directory");
+    let root = canonical_root(&directory);
+    let account_root = root.join("state/accounts");
+    let auth_path = account_root.join("unsaved/auth.json.enc");
+    let config_path = root.join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({
+            "account_store_path": account_root,
+            "accounts": [{"id":"unsaved","name":"unsaved","prefix":"unsaved","auth_file":auth_path}],
+        }))
+        .expect("encode unsaved config"),
+    )
+    .expect("write unsaved config");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "codex-not-needed",
+        root.join("codex/auth.json"),
+    )
+    .expect("start quota service");
+    server
+        .state
+        .backend
+        .accounts
+        .pending_rotations
+        .lock()
+        .unwrap()
+        .insert(
+            auth_path.to_str().unwrap().to_owned(),
+            json!({"tokens":{"access_token":"rotated"}}),
+        );
+    let failing_path = auth_path.to_str().unwrap().to_owned();
+    crate::services::quota::FAIL_ROTATION_SAVES_TO
+        .lock()
+        .unwrap()
+        .insert(failing_path.clone());
+    let result = server.shutdown();
+    crate::services::quota::FAIL_ROTATION_SAVES_TO
+        .lock()
+        .unwrap()
+        .remove(&failing_path);
+    assert!(
+        matches!(result, Err(crate::error::AppError::CredentialsUnsaved(1))),
+        "{result:?}"
+    );
 }

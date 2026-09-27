@@ -103,29 +103,30 @@ _SERVER_AUTH_OID = "1.3.6.1.5.5.7.3.1"
 def _private_groups(current_uid):
     """Groups whose write permission grants no other user access.
 
-    The root group or the current user's primary group, with no
-    supplementary member other than the current user (user-private groups
-    from umask 002 npm/nvm installs). Matches the Rust executable trust rule.
+    Every member, both users whose primary group it is and its supplementary
+    members, must be root or the current user (user-private groups from
+    umask 002 npm/nvm installs). Matches the Rust executable trust rule.
     """
     try:
         import grp
         import pwd
-    except ImportError:
+
+        accounts = [(user.pw_name, user.pw_uid, user.pw_gid) for user in pwd.getpwall()]
+    except (ImportError, OSError):
         return lambda _gid: False
-    try:
-        user = pwd.getpwuid(current_uid)
-        name, primary = user.pw_name, user.pw_gid
-    except KeyError:
-        name, primary = None, None
+    if not accounts:
+        return lambda _gid: False
+    trusted = {0, current_uid}
+    uids = {name: uid for name, uid, _ in accounts}
 
     def contains(gid):
-        if gid != 0 and (current_uid == 0 or gid != primary):
+        if any(primary == gid and uid not in trusted for _, uid, primary in accounts):
             return False
         try:
             members = grp.getgrgid(gid).gr_mem
         except KeyError:
             return False
-        return all(member == name for member in members)
+        return all(uids.get(member) in trusted for member in members)
 
     return contains
 
@@ -158,6 +159,9 @@ def _trusted_codex_binary(codex_binary: str):
                 info = parent.stat()
             except OSError as exc:
                 raise QuotaError("Codex executable is unavailable") from exc
+            # An owner can always change its entry's permissions.
+            if info.st_uid not in allowed_owners:
+                raise QuotaError("Codex executable path is writable")
             # A sticky directory such as /tmp stops other users renaming or
             # removing an entry owned by root or the current user.
             sticky_protects_entry = (
@@ -165,9 +169,7 @@ def _trusted_codex_binary(codex_binary: str):
                 and stat.S_ISDIR(info.st_mode)
                 and info.st_mode & stat.S_ISVTX
             )
-            group_foreign = info.st_mode & stat.S_IWGRP and not (
-                info.st_uid in allowed_owners and private_group(info.st_gid)
-            )
+            group_foreign = info.st_mode & stat.S_IWGRP and not private_group(info.st_gid)
             if (info.st_mode & stat.S_IWOTH or group_foreign) and not sticky_protects_entry:
                 raise QuotaError("Codex executable path is writable")
             entry_uid = info.st_uid

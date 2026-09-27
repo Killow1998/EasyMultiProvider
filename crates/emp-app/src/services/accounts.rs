@@ -127,6 +127,18 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
         .get("auth_json")
         .ok_or_else(|| "auth_json must be a JSON object".to_owned())?;
     let auth = validate_auth_json(auth).map_err(|error| error.to_string())?;
+    let account_id = metadata
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "account.id must be a safe single path segment".to_owned())?;
+    // Quota refresh and rotated-credential flushes save credentials under
+    // this lock; replacing them outside it could let an older rotated copy
+    // overwrite the imported credential.
+    let refresh_lock =
+        quota_refresh_lock(state, account_id).ok_or_else(|| "internal server error".to_owned())?;
+    let _refresh_guard = refresh_lock
+        .lock()
+        .map_err(|_| "internal server error".to_owned())?;
     let current = state
         .backend
         .configuration
@@ -134,10 +146,6 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
         .lock()
         .map_err(|_| "internal server error".to_owned())?
         .clone();
-    let account_id = metadata
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "account.id must be a safe single path segment".to_owned())?;
     let auth_path = emp_state::account_auth_path(
         &current,
         account_id,
@@ -176,7 +184,8 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
     {
         // The id is about to name new credentials: its legacy rows must be
         // attributed with the credentials that recorded them, or dropped.
-        crate::services::quota::settle_legacy_quota_history(state, account_id);
+        crate::services::quota::settle_legacy_quota_history(state, account_id)
+            .map_err(|_| "quota history is unavailable; the account was not replaced".to_owned())?;
     }
     let mut accounts = existing
         .into_iter()
@@ -254,7 +263,8 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
         .map_err(|_| "internal server error".to_owned())?;
     // Legacy rows keyed by this id must reach the identity they belong to,
     // or be dropped, before the id becomes free for a different account.
-    crate::services::quota::settle_legacy_quota_history(state, account_id);
+    crate::services::quota::settle_legacy_quota_history(state, account_id)
+        .map_err(|_| "quota history is unavailable; the account was not deleted".to_owned())?;
     let current = state
         .backend
         .configuration
@@ -353,6 +363,60 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
         .map_err(|_| "internal server error".to_owned())? = committed;
     notify_quota_update(state, account_id, None);
     Ok(())
+}
+
+/// Run `replace`, which may rewrite configured accounts' stored credentials
+/// (migration import), under every account's refresh lock. Rotated
+/// credentials whose stored file it rewrote are dropped: the replacement is
+/// the user's explicit choice, and a flush must not overwrite it later.
+pub(crate) fn replacing_account_credentials<T>(
+    state: &ServerState,
+    replace: impl FnOnce() -> T,
+) -> Option<T> {
+    let mut account_ids = state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .ok()?
+        .get("accounts")
+        .and_then(Value::as_array)
+        .map(|accounts| {
+            accounts
+                .iter()
+                .filter_map(|account| account.get("id")?.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    account_ids.sort();
+    let locks = account_ids
+        .iter()
+        .map(|id| quota_refresh_lock(state, id))
+        .collect::<Option<Vec<_>>>()?;
+    let _guards = locks
+        .iter()
+        .map(|lock| lock.lock().ok())
+        .collect::<Option<Vec<_>>>()?;
+    let pending_files = state
+        .backend
+        .accounts
+        .pending_rotations
+        .lock()
+        .ok()?
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    let before = pending_files
+        .iter()
+        .map(|path| std::fs::read(path).ok())
+        .collect::<Vec<_>>();
+    let result = replace();
+    for (path, before) in pending_files.iter().zip(before) {
+        if std::fs::read(path).ok() != before {
+            forget_pending_rotation(state, Path::new(path));
+        }
+    }
+    Some(result)
 }
 
 /// Drop a rotated credential awaiting a durable save: the account's stored

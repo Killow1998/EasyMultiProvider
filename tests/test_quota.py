@@ -77,6 +77,32 @@ class QuotaTests(unittest.TestCase):
                 with self.assertRaisesRegex(quota_module.QuotaError, "path is writable"):
                     _trusted_codex_binary(str(owned))
 
+    @unittest.skipIf(os.name == "nt", "Unix path permission checks do not apply")
+    def test_private_group_needs_every_member_trusted(self):
+        import grp
+        import pwd
+
+        accounts = [
+            pwd.struct_passwd(("me", "x", os.getuid(), 5000, "", "/", "/bin/sh")),
+            pwd.struct_passwd(("eve", "x", os.getuid() + 7919, 5000, "", "/", "/bin/sh")),
+            pwd.struct_passwd(("solo", "x", os.getuid(), 5001, "", "/", "/bin/sh")),
+        ]
+
+        def group(gid):
+            members = {5000: [], 5001: [], 5002: ["eve"], 5003: ["me"]}
+            if gid not in members:
+                raise KeyError(gid)
+            return grp.struct_group(("g%d" % gid, "x", gid, members[gid]))
+
+        with patch.object(pwd, "getpwall", return_value=accounts), patch.object(grp, "getgrgid", side_effect=group):
+            private = quota_module._private_groups(os.getuid())
+            # eve's primary group, though gr_mem is empty.
+            self.assertFalse(private(5000))
+            self.assertTrue(private(5001))
+            self.assertFalse(private(5002))
+            self.assertTrue(private(5003))
+            self.assertFalse(private(5999))
+
     def test_slow_account_does_not_block_another_account(self):
         entered = threading.Event()
         release = threading.Event()

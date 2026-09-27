@@ -74,10 +74,11 @@ fn save_account_quota_state(
 /// Durable-save attempts for credentials Codex rotated during a quota check.
 const PERSIST_ROTATION_ATTEMPTS: u32 = 3;
 
-/// Test-only fault injection: rotated-credential saves to this auth file fail.
+/// Test-only fault injection: rotated-credential saves to these auth files
+/// fail. A set, so tests running in parallel do not clear each other's paths.
 #[cfg(test)]
-pub(crate) static FAIL_ROTATION_SAVES_TO: std::sync::Mutex<Option<String>> =
-    std::sync::Mutex::new(None);
+pub(crate) static FAIL_ROTATION_SAVES_TO: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 fn save_rotated_credential(
     vault: &emp_state::VaultStore,
@@ -85,10 +86,11 @@ fn save_rotated_credential(
     auth: &Value,
 ) -> Result<(), ()> {
     #[cfg(test)]
-    if FAIL_ROTATION_SAVES_TO
-        .lock()
-        .is_ok_and(|failing| failing.as_deref() == auth_path.to_str())
-    {
+    if FAIL_ROTATION_SAVES_TO.lock().is_ok_and(|failing| {
+        auth_path
+            .to_str()
+            .is_some_and(|path| failing.contains(path))
+    }) {
         return Err(());
     }
     vault.write_encrypted_json(auth_path, auth).map_err(|_| ())
@@ -275,16 +277,19 @@ pub(crate) fn adopt_legacy_quota_history(state: &ServerState, account_id: &str) 
 /// Settle an account id's legacy rows before the id is freed or reassigned
 /// to other credentials: adopt them into the current identity, or delete
 /// them as pre-identity EMP did, so a later account reusing the id cannot
-/// inherit them.
-pub(crate) fn settle_legacy_quota_history(state: &ServerState, account_id: &str) {
+/// inherit them. Callers must not free or reassign the id on error.
+pub(crate) fn settle_legacy_quota_history(
+    state: &ServerState,
+    account_id: &str,
+) -> Result<(), QuotaHistoryError> {
     if account_id == "@native" || adopt_legacy_quota_history(state, account_id) {
-        return;
+        return Ok(());
     }
-    let _ = state
+    state
         .backend
         .accounts
         .quota_history
-        .delete_account(account_id);
+        .delete_account(account_id)
 }
 
 /// Run [`adopt_legacy_quota_history`] for every imported account. Accounts

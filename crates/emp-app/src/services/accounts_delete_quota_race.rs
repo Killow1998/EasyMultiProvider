@@ -440,3 +440,144 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
         .shutdown()
         .expect("shutdown legacy quota history state");
 }
+
+#[test]
+fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
+    let directory = tempfile::tempdir().expect("import lock directory");
+    let root = directory
+        .path()
+        .canonicalize()
+        .expect("canonical import root");
+    let config_path = root.join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({"account_store_path":root.join("state/accounts")})).unwrap(),
+    )
+    .expect("write import configuration");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "/bin/false",
+        root.join("codex/auth.json"),
+    )
+    .expect("start import lock state");
+    let body = |token: &str| {
+        json!({"id": "egg", "name": "egg", "prefix": "egg",
+            "auth_json": {"tokens": {"access_token": token, "account_id": "upstream-egg"}}})
+    };
+    import_account_state(&server.state, &body("first")).expect("first import");
+    let auth_path = emp_state::account_auth_path(
+        &server
+            .state
+            .backend
+            .configuration
+            .config
+            .lock()
+            .unwrap()
+            .clone(),
+        "egg",
+        &server.state.backend.configuration.config_path,
+    )
+    .unwrap();
+    // A rotation of the first credential is still waiting to be saved.
+    server
+        .state
+        .backend
+        .accounts
+        .pending_rotations
+        .lock()
+        .unwrap()
+        .insert(
+            auth_path.to_string_lossy().into_owned(),
+            json!({"tokens":{"access_token":"first-rotated","account_id":"upstream-egg"}}),
+        );
+
+    let lock = super::quota_refresh_lock(&server.state, "egg").unwrap();
+    let guard = lock.lock().unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            import_account_state(&server.state, &body("second")).expect("second import");
+            done_tx.send(()).unwrap();
+        });
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "import replaced credentials while a refresh held the account lock"
+        );
+        drop(guard);
+        done_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("import finishes once the lock is free");
+    });
+
+    assert_eq!(
+        crate::services::quota::flush_pending_rotations(&server.state),
+        0
+    );
+    let stored = server
+        .state
+        .backend
+        .configuration
+        .vault
+        .read_encrypted_json(&auth_path)
+        .expect("read imported auth");
+    assert_eq!(stored["tokens"]["access_token"], "second");
+    server.shutdown().expect("shutdown import lock state");
+}
+
+#[test]
+fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
+    let directory = tempfile::tempdir().expect("settle failure directory");
+    let root = directory
+        .path()
+        .canonicalize()
+        .expect("canonical settle root");
+    let config_path = root.join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({"account_store_path":root.join("state/accounts")})).unwrap(),
+    )
+    .expect("write settle configuration");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "/bin/false",
+        root.join("codex/auth.json"),
+    )
+    .expect("start settle failure state");
+    let body = |upstream: &str| {
+        json!({"id": "egg", "name": "egg", "prefix": "egg",
+            "auth_json": {"tokens": {"access_token": "token", "account_id": upstream}}})
+    };
+    import_account_state(&server.state, &body("upstream-egg")).expect("import egg");
+    // Legacy rows exist, but neither adoption nor deletion can reach them.
+    let history_path = server
+        .state
+        .backend
+        .accounts
+        .quota_history
+        .path()
+        .to_path_buf();
+    std::fs::write(&history_path, b"not a sqlite database").expect("break quota history");
+
+    assert!(delete_account_state(&server.state, "egg").is_err());
+    assert!(import_account_state(&server.state, &body("someone-else")).is_err());
+    let config = server
+        .state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .unwrap()
+        .clone();
+    assert!(
+        config["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|account| account["id"] == "egg")
+    );
+    server.shutdown().expect("shutdown settle failure state");
+}

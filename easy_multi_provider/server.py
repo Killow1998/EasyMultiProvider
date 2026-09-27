@@ -2932,14 +2932,18 @@ class AppState:
         """Adopt or drop an id's legacy rows before the id is freed or reused.
 
         Rows that cannot be attributed are deleted, as pre-identity EMP did,
-        so a later account reusing the id cannot inherit them.
+        so a later account reusing the id cannot inherit them. Raises
+        ConfigError when neither is possible: the id must not be freed or
+        reassigned then.
         """
         if account_id == NATIVE_ACCOUNT_ID or self._adopt_legacy_quota_history(account_id):
             return
         try:
             self.quota_history.delete_account(account_id)
-        except (OSError, QuotaHistoryError):
-            pass
+        except (OSError, QuotaHistoryError) as exc:
+            raise ConfigError(
+                "quota history is unavailable; account %s was not changed" % account_id
+            ) from exc
 
     def migrate_legacy_quota_history(self) -> None:
         with self.lock:

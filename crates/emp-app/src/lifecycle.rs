@@ -412,14 +412,21 @@ impl ServerHandle {
         }
         // Last chance to save credentials Codex rotated: the stored copies
         // may already be invalid upstream.
+        // A shutdown that loses them is not a clean exit.
         let unsaved = crate::services::quota::flush_pending_rotations(&self.state);
-        if unsaved > 0 {
-            eprintln!(
-                "EMP could not save {unsaved} rotated Codex account credential(s); re-import the affected accounts if their quota checks fail after restart"
-            );
-        }
         drop(self._service_owner);
-        restoration
+        if unsaved == 0 {
+            return restoration;
+        }
+        let unsaved = AppError::CredentialsUnsaved(unsaved);
+        match restoration {
+            Ok(()) => Err(unsaved),
+            Err(error) => {
+                // Only one error is returned; do not let it hide this one.
+                eprintln!("{unsaved}");
+                Err(error)
+            }
+        }
     }
 }
 

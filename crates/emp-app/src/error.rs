@@ -17,6 +17,9 @@ pub(crate) enum AppError {
     Filesystem(FilesystemError),
     Transport(emp_transport::HttpTransportError),
     RequestLimits(RequestLimitsError),
+    /// Rotated account credentials still unsaved at shutdown; the stored
+    /// copies may already be invalid upstream.
+    CredentialsUnsaved(usize),
 }
 
 impl std::fmt::Display for AppError {
@@ -36,6 +39,10 @@ impl std::fmt::Display for AppError {
             Self::Filesystem(error) => write!(formatter, "{error}"),
             Self::Transport(error) => write!(formatter, "{error}"),
             Self::RequestLimits(error) => write!(formatter, "{error}"),
+            Self::CredentialsUnsaved(count) => write!(
+                formatter,
+                "{count} rotated Codex account credential(s) could not be saved; re-import the affected accounts if their quota checks fail"
+            ),
         }
     }
 }

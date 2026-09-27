@@ -186,30 +186,32 @@ pub(crate) fn management_migration_request(
             );
         }
     };
-    let current = match state.backend.configuration.config.lock() {
-        Ok(config) => config.clone(),
-        Err(_) => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+    // Same-identity accounts in the bundle replace stored credentials; keep
+    // quota refreshes and rotated-credential flushes out while that happens.
+    let imported = crate::services::accounts::replacing_account_credentials(state, || {
+        let current = state.backend.configuration.config.lock().ok()?.clone();
+        let imported = import_migration_bundle(
+            &current,
+            &bundle,
+            password,
+            &state.backend.configuration.config_path,
+            &state.backend.configuration.vault,
+        );
+        if let Ok((updated, _)) = &imported {
+            *state.backend.configuration.config.lock().ok()? = updated.clone();
         }
-    };
-    let (updated, summary) = match import_migration_bundle(
-        &current,
-        &bundle,
-        password,
-        &state.backend.configuration.config_path,
-        &state.backend.configuration.vault,
-    ) {
-        Ok(result) => result,
-        Err(error) => {
+        Some(imported)
+    })
+    .flatten();
+    let summary = match imported {
+        Some(Ok((_, summary))) => summary,
+        Some(Err(error)) => {
             return json_error_response(400, status_text(400), &error.to_string(), None, &[]);
         }
-    };
-    match state.backend.configuration.config.lock() {
-        Ok(mut config) => *config = updated,
-        Err(_) => {
+        None => {
             return json_error_response(500, status_text(500), "internal server error", None, &[]);
         }
-    }
+    };
     let (catalog_path, _) = match crate::services::catalog::refresh_catalog(state) {
         Ok(result) => result,
         Err(()) => {

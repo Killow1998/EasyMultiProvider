@@ -2,16 +2,18 @@
 //! inventory probes and quota app-server processes.
 //!
 //! The canonical target must be a regular file. On Unix it must also be
-//! executable, owned by root or the current user and not set-id, and neither
-//! it nor any ancestor directory may be writable by another user:
+//! executable and not set-id, and neither it nor any ancestor directory may
+//! be modifiable by another user:
 //!
+//! - every entry must be owned by root or the current user, since an owner
+//!   can always change its entry's permissions;
 //! - world write is foreign unless the directory is sticky and the entry
 //!   below it belongs to root or the current user (`/tmp`), since then other
 //!   users cannot rename or remove that entry;
-//! - group write is foreign unless the entry is owned by root or the current
-//!   user and its group is private: the root group or the current user's
-//!   primary group, with no supplementary member other than the current user
-//!   (user-private groups from umask 002 npm/nvm installs).
+//! - group write is foreign unless the group is private: every member, both
+//!   users whose primary group it is and its supplementary members, is root
+//!   or the current user (user-private groups from umask 002 npm/nvm
+//!   installs).
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -74,83 +76,93 @@ fn foreign_writable(
     current_uid: u32,
     private_groups: &PrivateGroups,
 ) -> bool {
+    if !trusted_owner(info.uid(), current_uid) {
+        return true;
+    }
     let mode = info.mode();
+    // The directory owner is trusted (checked above), so only root, the
+    // current user and the entry's owner can rename or remove the entry.
     let sticky_protects_entry = mode & 0o1000 != 0
         && info.is_dir()
         && entry_uid.is_some_and(|uid| trusted_owner(uid, current_uid));
-    if mode & 0o002 != 0 && !sticky_protects_entry {
-        return true;
+    if sticky_protects_entry {
+        return false;
     }
-    mode & 0o020 != 0
-        && !(trusted_owner(info.uid(), current_uid) && private_groups.contains(info.gid()))
-        && !sticky_protects_entry
+    mode & 0o002 != 0 || (mode & 0o020 != 0 && !private_groups.contains(info.gid()))
 }
 
 /// Groups whose write permission grants no other user access.
 #[cfg(unix)]
 struct PrivateGroups {
     current_uid: u32,
-    primary_gid: Option<u32>,
-    user_name: Option<Vec<u8>>,
+    /// `(name, uid, primary gid)` of every enumerable account; `None` when
+    /// the account database cannot be enumerated.
+    accounts: Option<Vec<(Vec<u8>, u32, u32)>>,
 }
 
 #[cfg(unix)]
 impl PrivateGroups {
     fn current(current_uid: u32) -> Self {
-        let (primary_gid, user_name) = match passwd_entry(current_uid) {
-            Some((gid, name)) => (Some(gid), Some(name)),
-            None => (None, None),
-        };
         Self {
             current_uid,
-            primary_gid,
-            user_name,
+            accounts: enumerate_accounts(),
         }
     }
 
     fn contains(&self, gid: u32) -> bool {
-        let expected = if self.current_uid == 0 {
-            gid == 0
-        } else {
-            gid == 0 || Some(gid) == self.primary_gid
+        self.contains_with_members(gid, group_members(gid))
+    }
+
+    fn contains_with_members(&self, gid: u32, members: Option<Vec<Vec<u8>>>) -> bool {
+        let Some(accounts) = &self.accounts else {
+            return false;
         };
-        if !expected {
+        let trusted = |uid: u32| trusted_owner(uid, self.current_uid);
+        // Users whose primary group this is are members without appearing
+        // in the group's member list.
+        if accounts
+            .iter()
+            .any(|(_, uid, primary)| *primary == gid && !trusted(*uid))
+        {
             return false;
         }
-        group_members(gid).is_some_and(|members| {
-            members
-                .iter()
-                .all(|member| self.user_name.as_deref() == Some(member.as_slice()))
+        members.is_some_and(|members| {
+            members.iter().all(|member| {
+                accounts
+                    .iter()
+                    .find(|(name, _, _)| name == member)
+                    .is_some_and(|(_, uid, _)| trusted(*uid))
+            })
         })
     }
 }
 
+/// Every account the passwd database enumerates. `getpwent` keeps global
+/// cursor state, so enumerations are serialized.
 #[cfg(unix)]
-fn passwd_entry(uid: u32) -> Option<(u32, Vec<u8>)> {
-    let mut buffer = vec![0 as libc::c_char; 16 * 1024];
-    // SAFETY: an all-zero passwd is a valid out-parameter for getpwuid_r.
-    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut result = std::ptr::null_mut();
-    // SAFETY: every pointer is valid for the call and `buffer` outlives the
-    // strings copied out of `entry` below.
-    let status = unsafe {
-        libc::getpwuid_r(
-            uid,
-            &mut entry,
-            buffer.as_mut_ptr(),
-            buffer.len(),
-            &mut result,
-        )
-    };
-    if status != 0 || result.is_null() || entry.pw_name.is_null() {
-        return None;
+fn enumerate_accounts() -> Option<Vec<(Vec<u8>, u32, u32)>> {
+    static ENUMERATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = ENUMERATION.lock().ok()?;
+    let mut accounts = Vec::new();
+    // SAFETY: setpwent/getpwent/endpwent are called under the lock above;
+    // each returned entry is copied before the next call invalidates it.
+    unsafe {
+        libc::setpwent();
+        loop {
+            let entry = libc::getpwent();
+            if entry.is_null() {
+                break;
+            }
+            let entry = &*entry;
+            if entry.pw_name.is_null() {
+                continue;
+            }
+            let name = std::ffi::CStr::from_ptr(entry.pw_name).to_bytes().to_vec();
+            accounts.push((name, entry.pw_uid, entry.pw_gid));
+        }
+        libc::endpwent();
     }
-    // SAFETY: getpwuid_r succeeded, so pw_name is a NUL-terminated string
-    // inside `buffer`.
-    let name = unsafe { std::ffi::CStr::from_ptr(entry.pw_name) }
-        .to_bytes()
-        .to_vec();
-    Some((entry.pw_gid, name))
+    (!accounts.is_empty()).then_some(accounts)
 }
 
 /// Supplementary members of `gid`; `None` when the group cannot be resolved.
@@ -194,24 +206,66 @@ fn group_members(gid: u32) -> Option<Vec<Vec<u8>>> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn root_group_without_members_is_private() {
-        // Every Unix system resolves gid 0; containers and CI list no members.
-        if group_members(0).is_some_and(|members| members.is_empty()) {
-            // SAFETY: getuid has no preconditions and cannot fail.
-            assert!(PrivateGroups::current(unsafe { libc::getuid() }).contains(0));
+    fn groups(current_uid: u32, accounts: &[(&str, u32, u32)]) -> PrivateGroups {
+        PrivateGroups {
+            current_uid,
+            accounts: Some(
+                accounts
+                    .iter()
+                    .map(|(name, uid, gid)| (name.as_bytes().to_vec(), *uid, *gid))
+                    .collect(),
+            ),
         }
     }
 
+    fn names(members: &[&str]) -> Option<Vec<Vec<u8>>> {
+        Some(
+            members
+                .iter()
+                .map(|name| name.as_bytes().to_vec())
+                .collect(),
+        )
+    }
+
     #[test]
-    fn unrelated_groups_are_not_private() {
-        // SAFETY: getuid has no preconditions and cannot fail.
-        let uid = unsafe { libc::getuid() };
-        let groups = PrivateGroups::current(uid);
-        let unrelated = (1..65_534)
-            .find(|gid| Some(*gid) != groups.primary_gid && group_members(*gid).is_some());
-        if let Some(gid) = unrelated {
-            assert!(!groups.contains(gid), "gid {gid}");
+    fn a_group_is_private_only_when_every_member_is_trusted() {
+        let accounts = [("root", 0, 0), ("me", 1000, 1000), ("bob", 1001, 100)];
+        let private = groups(1000, &accounts);
+        // User-private group and the root group.
+        assert!(private.contains_with_members(1000, names(&[])));
+        assert!(private.contains_with_members(0, names(&["root"])));
+        assert!(private.contains_with_members(1000, names(&["me"])));
+        // Another user listed as a supplementary member.
+        assert!(!private.contains_with_members(1000, names(&["bob"])));
+        // Another user whose primary group it is, absent from gr_mem.
+        assert!(!private.contains_with_members(100, names(&[])));
+        let shared_primary = groups(1000, &[("me", 1000, 1000), ("eve", 1002, 1000)]);
+        assert!(!shared_primary.contains_with_members(1000, names(&[])));
+        // Unknown members, unresolvable groups and an unenumerable account
+        // database are never private.
+        assert!(!private.contains_with_members(1000, names(&["ghost"])));
+        assert!(!private.contains_with_members(1000, None));
+        let unknown = PrivateGroups {
+            current_uid: 1000,
+            accounts: None,
+        };
+        assert!(!unknown.contains_with_members(1000, names(&[])));
+    }
+
+    #[test]
+    fn entries_owned_by_another_user_are_foreign_whatever_their_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let info = std::fs::metadata(dir.path()).unwrap();
+        let owner = info.uid();
+        let nobody_groups = groups(owner, &[]);
+        assert!(!foreign_writable(&info, None, owner, &nobody_groups));
+        // Seen from another (non-root) user, the owner can chmod or replace
+        // entries at will, even without group or other write.
+        if owner != 0 {
+            let other = owner.wrapping_add(7919);
+            assert!(foreign_writable(&info, None, other, &groups(other, &[])));
         }
     }
 

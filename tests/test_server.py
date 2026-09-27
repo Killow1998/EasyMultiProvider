@@ -1355,6 +1355,33 @@ class ServerAccountTests(unittest.TestCase):
             state.migrate_legacy_quota_history()
             self.assertEqual(points(state._quota_owner_key("egg")), 0)
 
+    def test_account_id_is_not_freed_while_its_legacy_history_cannot_be_settled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(
+                normalize({"account_store_path": str(root / "state" / "accounts")}),
+                config_path,
+            )
+            state = AppState(config_path)
+
+            def import_account(upstream_id):
+                state.import_account(
+                    {"id": "egg", "name": "egg", "prefix": "egg"},
+                    {"tokens": {"access_token": "token", "account_id": upstream_id}},
+                )
+
+            import_account("upstream-egg")
+            # Legacy rows exist, but neither adoption nor deletion can reach them.
+            state.quota_history.path.parent.mkdir(parents=True, exist_ok=True)
+            state.quota_history.path.write_bytes(b"not a sqlite database")
+
+            with self.assertRaises(ConfigError):
+                state.delete_account("egg")
+            with self.assertRaises(ConfigError):
+                import_account("someone-else")
+            self.assertTrue(any(item["id"] == "egg" for item in state.config["accounts"]))
+
     def test_web_config_update_keeps_api_key_out_of_config(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
