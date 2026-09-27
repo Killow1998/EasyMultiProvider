@@ -1,5 +1,61 @@
 # EMP Handoff
 
+## coz (Opus) progress log — started 2026-09-27 07:10 UTC
+
+Latest first. "Committed" is not "accepted"; final acceptance runs after
+integration. Commit trailer per Xian: `Co-authored-by: coz <coz@local.invalid>`.
+
+### Build-cache hazard (affects earlier worker evidence)
+
+Worktrees sharing one `CARGO_TARGET_DIR` reuse each other's workspace-crate
+artifacts: Cargo's metadata hash for path crates uses the workspace-relative
+path, and fingerprints stay "fresh" against the other worktree's unchanged
+sources. Observed directly: `emp-sec-state` linked `emp-history` compiled from
+`emp-sec-history-ctx`. Test results recorded from the shared
+`.emp-rust-target-root` are therefore not trustworthy evidence for a specific
+branch. From now on use `/home/fumo/codex_ws/agent_dev/.emp-cargo.sh` (flock +
+pinned 1.93.1 toolchain + per-worktree target
+`.emp-rust-target-root/per-worktree/<worktree>`). Branch evidence is re-run
+during integration.
+
+### STATE — committed on `sec/state` (not yet integrated)
+
+- `4a0c04c` migration v2 (fixed scrypt N=2^17, 12-byte export minimum, v1
+  import with 8-byte legacy minimum, fixed-per-version KDF), provider key
+  origin binding, overwritten-provider summary, bounded state/integration
+  reads, private file/dir helpers (ancestor-link check removed so macOS
+  `/var`/`/tmp` links work). Fixed the known failing origin test (rejected
+  URLs now asserted separately). Python v1 fixture now derives v1 explicitly.
+- `d232e38` quota history keyed by upstream identity (Rust + Python), no
+  history deletion on credential removal; fixed a draft regression where
+  Rust background sampling skipped every imported account (now uses duplicate
+  status like Python); rotated-credential retry + in-memory pending copy used
+  by the next check and cleared on delete/reimport; private temp CODEX_HOME
+  files, stale-dir sweep; atomic Codex account `config.toml`.
+- `debbda5` identity-verified, idempotent adoption of legacy `egg`/`@native`
+  rows at sampler start and before deletion (Rust + Python).
+- Evidence (per-worktree target): emp-state/emp-codex/emp-integration/emp-app
+  283 passed 0 failed with `EMP_PYTHON_ORACLE_ROOT`/`EMP_PYTHON_INTEROP`;
+  real Rust<->Python v2 exporter/importer interop test passes; strict Clippy
+  clean on those crates; Python `tests.test_migration` 11/11,
+  `tests.test_server.ServerAccountTests` 89/89 (worktree sources).
+- Python changes are in `sec/state` only; NOT yet mirrored to the running
+  `python_archive` checkout.
+
+### Live egg trend restoration — done 2026-09-27 07:47 UTC
+
+- Ownership verified from credentials, not names: old store
+  (`EasyMultiProvider/state`) and live store (`state/live-20260921/state`) egg
+  credentials share the same hashed chatgpt account id, user id and email;
+  only the plan changed (prolite -> plus), matching sample plan types.
+- Fresh snapshots: `artifacts/security-recovery/20260927T074659Z/quota-history/`
+  (`live-before-restore`, `old-source`). Inserted the 406 old egg rows under
+  the live key `egg` with INSERT OR IGNORE in one transaction (live 56 -> 462,
+  quick_check ok). Python 4200 not restarted; its API returns 462 points,
+  plans `pro_lite`+`plus`. After upgrade the adoption migration moves `egg`
+  rows to the upstream identity automatically. Old-store `@native` (812) was
+  not merged (no ownership evidence gathered for it).
+
 ## Active Opus takeover — 2026-09-27 07:06 UTC
 
 This section is the current resume point. Xian requested a documented handoff
