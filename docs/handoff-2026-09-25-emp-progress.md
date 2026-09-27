@@ -1,5 +1,57 @@
 # EMP Handoff — 2026-09-25
 
+## CI worker checkpoint — 2026-09-26
+
+- Xian authorized continuation of the CI assignment after TRANSPORT. Worktree
+  is `/home/fumo/codex_ws/agent_dev/emp-sec-ci`, branch `sec/ci`, at
+  `d7ebcc0` (`Pin workflow actions to SHAs, gate releases on default branch`).
+- The preexisting uncommitted runtime inventory draft is preserved across
+  `discovery.rs`, `mod.rs`, `version.rs`, and `trust.rs`. This phase adds
+  Unix writable-file and set-id rejection plus a trusted symlink discovery
+  test. No workflow or packaging source was changed.
+- Scope: complete safe runtime candidate validation without rejecting
+  supported installations, inspect release gating and provenance locally,
+  and record remaining trust/configuration prerequisites. No workflow,
+  release, publish, push, environment change, or Python 4200 restart is
+  authorized.
+- Use the shared Cargo lock and target directory from the coordinator
+  handoff. Next: final diff/status review, then commit the reviewed CI source
+  and handoff locally.
+- Baseline targeted checks passed: `cargo test --locked --offline -p emp-codex
+  runtime_inventory` (7 unit tests; unrelated integration tests filtered) and
+  `python3 -m unittest tests.test_release_packaging -v` (5 tests).
+- Review confirms `version::observe` applies the trust check before probing;
+  actual Codex process startup separately resolves and validates the selected
+  path in `quota::process`. Rust's Windows `Command` preserves its `.bat`
+  launch behavior, so PATH shims do not need a new shell wrapper here.
+- Release workflow review confirms the default-branch ancestry check, a
+  `release` environment reference, package manifest/checksum validation, and
+  pinned build-provenance action with `id-token` and `attestations` write
+  permissions. YAML parsing passed for both workflows and Dependabot; a local
+  static audit found all 10 action references pinned to 40-character SHAs.
+  `actionlint` is not installed, and no workflow was run. Repository
+  configuration must require reviewers and restrict the `release` environment
+  to approved refs; artifact attestations must also be enabled for the repo or
+  organization. The local checkout cannot verify those settings. Updaters
+  validate the release digest from GitHub metadata, but do not verify the
+  generated provenance; a verifier and pinned workflow/source identity policy
+  are still needed before provenance can authorize updates.
+- Runtime trust limitation: Unix candidates are checked for absolute path,
+  file type, owner, execute/write/set-id modes, and ancestor write modes.
+  Windows candidates are currently checked for canonical absolute regular
+  paths only; ACL ownership/writability is not inspected, matching the
+  existing quota process validator. No Windows cross-compile was run here.
+- No quota tool is exposed in this worker. The latest coordinator snapshot was
+  native remaining 58%/83% and egg 99%/84%, above the switch threshold.
+- Runtime hardening now rejects Unix executables with group/world write or
+  set-id bits. The first post-edit targeted run found an incorrect new test
+  expectation: PATH discovery intentionally preserves the symlink path rather
+  than returning its canonical target. The implementation behavior is kept;
+  the test now asserts that public path and still exercises trust validation.
+- After that correction, `cargo test --locked --offline -p emp-codex
+  runtime_inventory` passed 8/8 unit tests and the isolated rustfmt check passed
+  for all four runtime inventory Rust files.
+
 ## Current branch and scope
 
 - Repository: `/home/fumo/codex_ws/agent_dev/EasyMultiProvider-rust`

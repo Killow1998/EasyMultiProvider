@@ -1,5 +1,6 @@
 //! Cached installation inventory and independent helper/target selection.
 mod discovery;
+mod trust;
 mod version;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
