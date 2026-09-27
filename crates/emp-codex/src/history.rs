@@ -249,6 +249,9 @@ fn locate_latest_compaction(
 /// Returns `None` for rollouts without a `history_base`, which covers every
 /// rollout written before Codex paginated persistent forks.
 fn read_session_meta(path: &Path) -> Result<Option<Map<String, Value>>, HistoryError> {
+    if !fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
+        return Err(HistoryError::new("source_missing"));
+    }
     let mut file = File::open(path).map_err(|_| HistoryError::new("source_missing"))?;
     let captured_end = file
         .metadata()
@@ -757,7 +760,7 @@ impl CodexHomeHistoryReader {
             byte_offset: 0,
         }];
         let mut visited = vec![thread.to_owned()];
-        let mut next_base = read_history_base(path)?;
+        let mut next_base = read_history_base(&self.contained_rollout_path(path)?)?;
         while let Some(base) = next_base {
             if visited.contains(&base.thread_id) {
                 return Err(HistoryError::new("lineage_cycle"));
@@ -910,7 +913,14 @@ impl CodexHomeHistoryReader {
             if !canonical.starts_with(root) {
                 return false;
             }
-            let Ok(relative) = absolute.strip_prefix(root) else {
+            // `absolute` may reach the root through a symlinked or otherwise
+            // non-canonical home; strip the ancestor that resolves to the
+            // root, then require every component below it to be a real entry.
+            let Some(relative) = absolute.ancestors().skip(1).find_map(|ancestor| {
+                (ancestor.canonicalize().ok()? == *root)
+                    .then(|| absolute.strip_prefix(ancestor).ok())
+                    .flatten()
+            }) else {
                 return false;
             };
             let mut current = root.clone();
@@ -954,27 +964,34 @@ impl CodexHomeHistoryReader {
             .ok_or_else(|| HistoryError::new("state_database_missing"))
     }
 
+    /// Canonical rollout path, provided it is a regular file inside the
+    /// Codex home. Checked before any open so a database row cannot point a
+    /// read at a FIFO or at a file outside the home.
+    fn contained_rollout_path(&self, path: &Path) -> Result<PathBuf, HistoryError> {
+        let home = self
+            .home
+            .canonicalize()
+            .map_err(|_| HistoryError::new("history_unavailable"))?;
+        let path = path
+            .canonicalize()
+            .map_err(|_| HistoryError::new("source_missing"))?;
+        if !path.starts_with(&home) {
+            return Err(HistoryError::new("rollout_outside_codex_home"));
+        }
+        let metadata = fs::metadata(&path).map_err(|_| HistoryError::new("source_missing"))?;
+        if !metadata.is_file() {
+            return Err(HistoryError::new("source_missing"));
+        }
+        Ok(path)
+    }
+
     fn read_rollout(
         &self,
         anchor: &HistoryAnchor,
         location: &Location,
         replay: ReplayContext<'_>,
     ) -> Result<HistorySnapshot, HistoryError> {
-        let home = self
-            .home
-            .canonicalize()
-            .map_err(|_| HistoryError::new("history_unavailable"))?;
-        let path = location
-            .path
-            .canonicalize()
-            .map_err(|_| HistoryError::new("source_missing"))?;
-        if !path.starts_with(&home) {
-            return Err(HistoryError::new("rollout_outside_codex_home"));
-        }
-        let before = fs::metadata(&path).map_err(|_| HistoryError::new("source_missing"))?;
-        if !before.is_file() {
-            return Err(HistoryError::new("source_missing"));
-        }
+        let path = self.contained_rollout_path(&location.path)?;
         let mut file = File::open(&path).map_err(|_| HistoryError::new("source_unavailable"))?;
         let opened = file
             .metadata()

@@ -715,6 +715,46 @@ fn ancestor_database_path_rejects_symlinked_session_directories() {
     assert_eq!(error.reason(), "rollout_outside_session_root");
 }
 
+#[cfg(unix)]
+#[test]
+fn ancestor_database_path_resolves_through_a_symlinked_codex_home() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempdir().unwrap();
+    let real = directory.path().join("real");
+    std::fs::create_dir_all(real.join("sessions")).unwrap();
+    let home = directory.path().join("home");
+    symlink(&real, &home).unwrap();
+    write_rollout(
+        &real,
+        &[
+            json!({"ordinal":0,"type":"session_meta","payload":{"id":THREAD,"history_mode":"paginated",
+            "history_base":{"thread_id":PARENT,"end_ordinal_exclusive":10,"end_byte_offset":0}}}),
+        ],
+    );
+    state_database(&real, &home.join("rollout.jsonl"));
+    write_records(
+        &real.join(format!("sessions/2026/09/27/{PARENT}.jsonl")),
+        &[session_meta(PARENT, "paginated"), user(1, "parent")],
+    );
+    let parent = home.join(format!("sessions/2026/09/27/{PARENT}.jsonl"));
+    let connection = rusqlite::Connection::open(real.join("state_5.sqlite")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO threads VALUES (?1, ?2, 'paginated', ?3)",
+            params![PARENT, parent.to_str().unwrap(), MODEL],
+        )
+        .unwrap();
+
+    let snapshot = CodexHomeHistoryReader::new(&home)
+        .read_visible_history(&HistoryAnchor {
+            thread_id: Some(THREAD.to_owned()),
+            ..HistoryAnchor::default()
+        })
+        .unwrap();
+    assert!(!snapshot.items.is_empty());
+}
+
 #[test]
 fn frozen_prefix_replay_matches_full_on_the_same_plain_and_zstd_inputs() {
     let inherited_text = "inherited ".repeat(2_000);
