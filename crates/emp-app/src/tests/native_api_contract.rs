@@ -528,7 +528,7 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
         }))
         .unwrap()
     };
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let context = [
         "Authorization: Bearer caller-secret",
         "chatgpt-account-id: caller-owner",
@@ -613,7 +613,7 @@ for line in sys.stdin:
 "#).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (_directory, server, auth_path) = account_server(&successful, script.to_str().unwrap());
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let body = serde_json::to_vec(&json!({"model":"egg/upstream","input":"hello","stream":false}))
         .unwrap();
     let response = post(
@@ -645,7 +645,7 @@ for line in sys.stdin:
 
     let failed = RefreshUpstream::start(1);
     let (_directory, server, _) = account_server(&failed, "missing-test-codex");
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let response = post(
         &server,
         "/v1/responses",
@@ -675,7 +675,7 @@ fn native_endpoint_matches_retry_and_terminal_error_decisions() {
     ] {
         let upstream = ScenarioUpstream::start(case, attempts);
         let (_directory, server) = forward_server(&upstream.base_url());
-        let cookie = session_cookie_header(&server);
+        let cookie = session_header(&server);
         let mut body = json!({"model":"upstream","input":"hello","stream":false});
         if case == "reasoning" {
             body["reasoning_effort"] = json!("low");
@@ -716,7 +716,7 @@ fn native_sse_and_ordinary_json_cross_the_real_endpoint() {
     for ordinary in [false, true] {
         let upstream = NativeSseUpstream::start(ordinary);
         let (_directory, server) = native_alias_server(&upstream.base_url());
-        let cookie = session_cookie_header(&server);
+        let cookie = session_header(&server);
         let body =
             serde_json::to_vec(&json!({"model":"native/alias","input":"hello","stream":true}))
                 .unwrap();
@@ -772,7 +772,7 @@ fn native_sse_context_and_incomplete_boundaries_match_codex_http_behavior() {
     for (name, wire, expected, streamed) in cases {
         let upstream = NativeErrorSseUpstream::start(wire);
         let (_directory, server) = native_alias_server(&upstream.base_url());
-        let cookie = session_cookie_header(&server);
+        let cookie = session_header(&server);
         let body =
             serde_json::to_vec(&json!({"model":"native/alias","input":"hello","stream":true}))
                 .unwrap();
@@ -821,7 +821,7 @@ fn native_sse_downstream_disconnect_cancels_open_before_headers() {
         closed_sender.send(ended).unwrap();
     });
     let (_directory, server) = native_alias_server(&format!("http://{address}/v1"));
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let body = serde_json::to_vec(&json!({
         "model":"native/alias", "input":"hello", "stream":true
     }))
@@ -875,7 +875,7 @@ fn native_sse_downstream_disconnect_cancels_upstream() {
         closed_sender.send(ended).unwrap();
     });
     let (_directory, server) = native_alias_server(&format!("http://{address}/v1"));
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let body =
         serde_json::to_vec(&json!({"model":"native/alias","input":"hello","stream":true})).unwrap();
     let downstream = open_post_stream(
@@ -943,7 +943,7 @@ fn receive_websocket_json(stream: &mut TcpStream) -> Value {
 fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_previous() {
     let upstream = NativeSseUpstream::start(false);
     let (_directory, server) = native_alias_server(&upstream.base_url());
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let mut stream = TcpStream::connect(server.local_addr()).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -1091,7 +1091,7 @@ fn responses_websocket_disconnect_cancels_external_http_stream() {
     .unwrap();
     let server =
         ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config).unwrap();
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let mut stream = TcpStream::connect(server.local_addr()).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -1145,7 +1145,7 @@ fn native_compact_endpoint_preserves_opaque_response_and_owned_headers() {
         stream.write_all(&returned).unwrap();
     });
     let (_directory, server) = native_alias_server(&format!("http://{address}/v1"));
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let body=serde_json::to_vec(&json!({"model":"native/alias","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"history"}]}]})).unwrap();
     let response = post(
         &server,
@@ -1236,7 +1236,7 @@ impl Drop for NativeWebSocketUpstream {
 fn responses_websocket_reuses_matching_native_upstream_for_incremental_turn() {
     let upstream = NativeWebSocketUpstream::start();
     let (_directory, server) = native_alias_server(&upstream.base_url());
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let mut stream = TcpStream::connect(server.local_addr()).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -1436,7 +1436,7 @@ fn responses_websocket_retains_last_successful_previous_id_after_failed_or_incom
     for terminal in ["response.failed", "response.incomplete"] {
         let upstream = NativeFailureContinuityUpstream::start(terminal);
         let (_directory, server) = native_alias_server(&upstream.base_url());
-        let cookie = session_cookie_header(&server);
+        let cookie = session_header(&server);
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -1588,7 +1588,7 @@ impl Drop for NativeTooLargeFallbackUpstream {
 fn native_websocket_peer_1009_before_events_falls_back_to_full_http_request() {
     let upstream = NativeTooLargeFallbackUpstream::start();
     let (_directory, server) = native_alias_server(&upstream.base_url());
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let mut stream = TcpStream::connect(server.local_addr()).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))

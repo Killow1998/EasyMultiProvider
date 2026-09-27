@@ -4,11 +4,10 @@ use crate::app::BackendState;
 use crate::app::ServerState;
 use crate::cli::is_loopback;
 use crate::error::AppError;
+use crate::http::auth::BOOTSTRAP_LIFETIME_SECONDS;
 use crate::http::auth::BootstrapToken;
 use crate::http::auth::SessionStore;
 use crate::http::auth::codex_auth_path;
-#[cfg(test)]
-use crate::http::auth::session_cookie;
 use crate::http::routes::handle_connection;
 use crate::services::connection_admission::{ConnectionAdmission, ConnectionAdmissionConfig};
 use crate::services::quota::sample_quotas_once;
@@ -232,10 +231,7 @@ impl ServerHandle {
         let listener = TcpListener::bind((host, port))?;
         let local_addr = listener.local_addr()?;
         let shutdown = Arc::new(AtomicBool::new(false));
-        let sessions = Arc::new(SessionStore {
-            session: Mutex::new(session),
-            path: session_path,
-        });
+        let sessions = Arc::new(SessionStore::new(session, session_path));
         let mut random = [0_u8; WEB_SESSION_TOKEN_BYTES];
         getrandom::getrandom(&mut random).map_err(|_| AppError::RandomUnavailable)?;
         let updates = crate::services::updates::UpdateState::new(
@@ -253,6 +249,7 @@ impl ServerHandle {
             bootstrap: BootstrapToken {
                 token: URL_SAFE_NO_PAD.encode(random),
                 used: AtomicBool::new(false),
+                expires_at: system_now() + BOOTSTRAP_LIFETIME_SECONDS,
             },
             backend,
             port: local_addr.port(),
@@ -366,14 +363,14 @@ impl ServerHandle {
     }
 
     #[cfg(test)]
-    pub fn session_cookie(&self) -> String {
+    pub fn session_token(&self) -> String {
         let session = self
             .state
             .sessions
             .session
             .lock()
             .expect("session lock is not poisoned");
-        session_cookie(session.token(), session.remaining_seconds_at(system_now()))
+        session.token().to_owned()
     }
 
     fn reconcile_startup(&self) {

@@ -301,6 +301,8 @@ button[data-icon]{display:inline-flex}
 </div>
 
 <script>
+const SESSION_STORAGE_KEY = 'emp_management_session_v1';
+let sessionToken = '';
 let state = null;
 let pendingAccountAuth = null;
 let pendingMigrationFile = null;
@@ -319,7 +321,7 @@ let quotaHistoryZoom = [];
 let quotaHistoryLoading = false;
 let quotaStateTimer = null;
 let quotaStateBusy = false;
-let quotaEvents = null;
+let quotaEventsController = null;
 let quotaEventsConnected = false;
 let quotaUpdatePending = false;
 let quotaUpdateRunning = false;
@@ -336,6 +338,18 @@ const integrationVerificationAttempts = new Set();
 const webPageId = `${Date.now().toString(36)}-${Math.random().toString(16).slice(2,10)}`;
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const SESSION_HEADER = 'X-EMP-Session';
+let legacyCookieAuth = false;
+function readStoredSessionToken() { try { return localStorage.getItem(SESSION_STORAGE_KEY) || ''; } catch (_) { return ''; } }
+function saveSessionToken(token) { sessionToken = token; try { localStorage.setItem(SESSION_STORAGE_KEY, token); } catch (_) {} }
+function clearSessionToken() { sessionToken = ''; try { localStorage.removeItem(SESSION_STORAGE_KEY); } catch (_) {} }
+function managementFetch(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (legacyCookieAuth) headers.delete(SESSION_HEADER);
+  else if (sessionToken) headers.set(SESSION_HEADER, sessionToken);
+  else headers.delete(SESSION_HEADER);
+  return fetch(path, {...options, headers, credentials:legacyCookieAuth ? 'same-origin' : 'omit', redirect:'error'});
+}
 const translations = {
   'zh-CN': {
     subtitle:'管理 Codex 的账号和模型。', settings_menu:'设置与数据', language_label:'语言', theme_label:'外观', quit_emp:'退出 EMP', more_actions:'更多操作', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', diagnostics:'性能与健康', usage:'用量与估算', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', accounts_title:'Subscription 账号', import_account:'导入账号', refresh_quotas:'刷新余量', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
@@ -484,7 +498,7 @@ function renderUsage() {
     const w = Math.max(1,(Math.min(data.end,row.end)-Math.max(data.start,row.start))/range*plot-2);
     const tokens = row.input_tokens+row.output_tokens, h = tokens/max*130;
     const label = new Date(row.start*1000).toLocaleString() + ' · ' + usageNumber(tokens) + ' tokens · ' + cost(row);
-    return `<rect x="${x}" y="${150-h}" width="${w}" height="${Math.max(1,h)}" rx="2" tabindex="0" role="button" aria-label="${esc(label)}" onclick="zoomUsage(${row.start},${row.end})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();zoomUsage(${row.start},${row.end});}"><title>${esc(label)}</title></rect>`;
+    return `<rect x="${x}" y="${150-h}" width="${w}" height="${Math.max(1,h)}" rx="2" tabindex="0" role="button" aria-label="${esc(label)}" data-ui-action="usage-zoom" data-start="${Number(row.start)}" data-end="${Number(row.end)}"><title>${esc(label)}</title></rect>`;
   }).join('');
   const rows = data.groups.sort((a,b)=>(b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)).map(row => `<tr><td>${esc(usageSource(row.category))}<small>${esc(usageOwner(row))}</small></td><td>${esc(row.model)}<small>${row.service_tier === 'default' ? tr('普通','Standard') : esc(row.service_tier)}</small></td><td>${row.input_reports ? usageNumber(row.input_tokens) : '—'}<small>${tr('缓存 ','Cached ')}${row.cache_reports ? usageNumber(row.cached_input_tokens) : '—'}${row.cache_write_tokens ? ' · '+tr('写入 ','Write ')+usageNumber(row.cache_write_tokens) : ''}</small></td><td>${row.output_reports ? usageNumber(row.output_tokens) : '—'}<small>${tr('推理 ','Reasoning ')}${row.reasoning_reports ? usageNumber(row.reasoning_tokens) : '—'}</small></td><td>${cost(row)}</td><td>${usageNumber(row.requests)}</td></tr>`).join('');
   const history = data.history || {}, historical = data.sources?.find(row => row.origin === 'history')?.requests || 0;
@@ -501,18 +515,63 @@ function renderUsage() {
 }
 
 async function api(path, options = {}) {
-  options.headers = Object.assign({'Content-Type':'application/json'}, options.headers || {});
-  const response = await fetch(path, options);
+  const headers = new Headers(options.headers || {});
+  if (!headers.has('Content-Type')) headers.set('Content-Type','application/json');
+  const response = await managementFetch(path, {...options, headers});
   const text = await response.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {error:{message:text || tr('服务器返回了无效响应', 'The server returned an invalid response')}}; }
   if (!response.ok) {
+    if (response.status === 401) clearSessionToken();
     const error = new Error(data.error?.message || response.statusText || `HTTP ${response.status}`);
     error.payload = data;
     error.status = response.status;
     throw error;
   }
   return data;
+}
+async function establishSession() {
+  const pageUrl = new URL(window.location.href);
+  const bootstrapTokens = pageUrl.searchParams.getAll('bootstrap');
+  if (bootstrapTokens.length) {
+    pageUrl.searchParams.delete('bootstrap');
+    window.history.replaceState(window.history.state, '', pageUrl.pathname + pageUrl.search + pageUrl.hash);
+  }
+  if (bootstrapTokens.length > 1) throw new Error(tr('登录链接无效，请从 EMP 重新打开管理页。','This sign-in link is invalid. Reopen the management page from EMP.'));
+  if (bootstrapTokens.length === 1) {
+    const response = await fetch('/api/session', {
+      method:'POST',
+      headers:{'X-EMP-Bootstrap':bootstrapTokens[0]},
+      credentials:'same-origin',
+      cache:'no-store',
+      redirect:'error',
+    });
+    if (response.status === 404) {
+      legacyCookieAuth = true;
+      return;
+    }
+    let data = {};
+    try { data = await response.json(); } catch (_) {}
+    if (!response.ok) {
+      sessionToken = readStoredSessionToken();
+      if (!sessionToken) throw new Error(data.error?.message || response.statusText || `HTTP ${response.status}`);
+    } else {
+      if (typeof data.session !== 'string' || !data.session) throw new Error(tr('服务器未返回登录会话。','The server did not return a management session.'));
+      saveSessionToken(data.session);
+    }
+  } else {
+    sessionToken = readStoredSessionToken();
+    if (!sessionToken) {
+      const response = await fetch('/api/session', {
+        method:'POST', credentials:'same-origin', cache:'no-store', redirect:'error',
+      });
+      if (response.status === 404) {
+        legacyCookieAuth = true;
+        return;
+      }
+    }
+  }
+  if (!legacyCookieAuth && !sessionToken) throw new Error(tr('请从 EMP 启动时提供的链接打开管理页。','Open the management page from the link printed by EMP.'));
 }
 function webFailureClass(error) {
   const message = String(error?.message || '').toLowerCase();
@@ -525,7 +584,7 @@ function webFailureClass(error) {
 }
 function reportWebClientPhase(kind, phase, error = null, extra = {}) {
   const payload = Object.assign({kind, phase, page_id:webPageId, failure_class:error ? webFailureClass(error) : 'none'}, extra);
-  fetch('/api/client-events', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), keepalive:true}).catch(() => {});
+  managementFetch('/api/client-events', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), keepalive:true}).catch(() => {});
 }
 if (typeof window?.addEventListener === 'function') {
   window.addEventListener('error', event => reportWebClientPhase('window_error', 'failed', event.error || new Error('window error'), {line:Number(event.lineno)||0,column:Number(event.colno)||0}));
@@ -533,15 +592,20 @@ if (typeof window?.addEventListener === 'function') {
 }
 function bytesToBase64(bytes) { let binary = ''; const chunk = 0x8000; for (let index = 0; index < bytes.length; index += chunk) binary += String.fromCharCode(...bytes.subarray(index, index + chunk)); return btoa(binary); }
 async function exportMigration() {
-  openModal(tr('导出 EMP 数据','Export EMP data'), `<p class="muted">${tr('选择导出内容','Choose what to export')}</p><div class="grid"><label class="inline-check"><input id="export_native" type="checkbox" checked>Native</label><label class="inline-check"><input id="export_subscriptions" type="checkbox" checked>${tr('其他 Subscription','Other subscriptions')}</label><label class="inline-check"><input id="export_external" type="checkbox" checked>External Provider</label></div><p class="muted">${tr('Native 包含本机登录凭据；导入后作为额外 Subscription 账号，不替换当前登录。','Native includes this machine’s login credentials; import adds a Subscription account without replacing the current login.')}</p><p class="muted">${tr('请设置至少 8 个字节的迁移密码。','Set a migration password of at least 8 bytes.')}</p><label>${tr('迁移密码','Migration password')}<input id="modal_migration_password" type="password" autocomplete="new-password" autofocus></label><label>${tr('确认迁移密码','Confirm password')}<input id="modal_migration_password_confirm" type="password" autocomplete="new-password"></label>`, tr('下载 .emp','Download .emp'), async () => {
+  openModal(tr('导出 EMP 数据','Export EMP data'), `<p class="muted">${tr('选择导出内容','Choose what to export')}</p><div class="grid"><label class="inline-check"><input id="export_native" type="checkbox" checked>Native</label><label class="inline-check"><input id="export_subscriptions" type="checkbox" checked>${tr('其他 Subscription','Other subscriptions')}</label><label class="inline-check"><input id="export_external" type="checkbox" checked>External Provider</label></div><p class="muted">${tr('Native 包含本机登录凭据；导入后作为额外 Subscription 账号，不替换当前登录。','Native includes this machine’s login credentials; import adds a Subscription account without replacing the current login.')}</p><p class="muted">${tr('导出密码至少需要 12 个 UTF-8 字节；旧版 8 字节迁移包仍可导入。','Exports require at least 12 UTF-8 bytes; legacy 8-byte migration bundles remain importable.')}</p><label>${tr('迁移密码','Migration password')}<input id="modal_migration_password" type="password" autocomplete="new-password" autofocus></label><label>${tr('确认迁移密码','Confirm password')}<input id="modal_migration_password_confirm" type="password" autocomplete="new-password"></label>`, tr('下载 .emp','Download .emp'), async () => {
     const groups = ['native','subscriptions','external'].filter(group => $('export_' + group).checked);
     if (!groups.length) throw new Error(tr('请至少选择一类导出内容','Select at least one export category'));
     const password = $('modal_migration_password').value; const confirmPassword = $('modal_migration_password_confirm').value;
-    if (password !== confirmPassword) throw new Error(tr('两次迁移密码不一致','The migration passwords do not match')); if (new TextEncoder().encode(password).length < 8) throw new Error(tr('迁移密码至少需要 8 个字节','The migration password must be at least 8 bytes'));
-    const response = await fetch('/api/migration/export', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password, groups})});
-    if (!response.ok) { let data = {}; try { data = await response.json(); } catch (_) {} throw new Error(data.error?.message || response.statusText); }
+    if (password !== confirmPassword) throw new Error(tr('两次迁移密码不一致','The migration passwords do not match')); if (new TextEncoder().encode(password).length < 12) throw new Error(tr('导出密码至少需要 12 个 UTF-8 字节','Export passwords must be at least 12 UTF-8 bytes'));
+    const exportRequest = {password, groups};
+    if (!legacyCookieAuth) {
+      const confirmation = await api('/api/migration/export/confirm', {method:'POST', body:'{}'});
+      exportRequest.confirmation = confirmation.confirmation;
+    }
+    const response = await managementFetch('/api/migration/export', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(exportRequest)});
+    if (!response.ok) { let data = {}; try { data = await response.json(); } catch (_) {} if (response.status === 401) clearSessionToken(); throw new Error(data.error?.message || response.statusText); }
     const summary = JSON.parse(response.headers.get('X-EMP-Export-Summary') || '{}');
-    const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = migrationFilename(); document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); closeModal();
+    const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = migrationFilename(); document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 0); closeModal();
     const missing = summary.native_login_missing;
     notice(tr(`已导出：账户 ${summary.accounts ?? 0} 个，Provider ${summary.providers ?? 0} 个，模型 ${summary.models ?? 0} 个`,`Exported: ${summary.accounts ?? 0} accounts, ${summary.providers ?? 0} providers, ${summary.models ?? 0} models`) + (missing ? tr('；未找到 Native 登录凭据，仅导出其配置。','; Native login credentials were not found; only its settings were exported.') : ''), missing);
   });
@@ -627,7 +691,7 @@ function renderCatalogDisplay() {
     const routes = model.routes || []; const routeText = routes.map(route => route.id).join(' · ');
     const presentation = familyPresentationFor(model.id);
     const displayName = presentation.catalog_alias || model.default_display_name || model.display_name || model.id;
-    return `<div class="display-row"><div class="route"><strong>${esc(displayName)}</strong><code>${esc(routeText || model.id)}</code></div><button type="button" class="secondary" onclick="openCatalogDisplayEditor('${esc(model.id)}')" aria-label="${esc(tr('修改模型显示','Edit model display'))}">›</button></div>`;
+    return `<div class="display-row"><div class="route"><strong>${esc(displayName)}</strong><code>${esc(routeText || model.id)}</code></div><button type="button" class="secondary" data-ui-action="catalog-display-editor" data-id="${esc(model.id)}" aria-label="${esc(tr('修改模型显示','Edit model display'))}">›</button></div>`;
   }).join('');
 }
 function openCatalogDisplayEditor(family) {
@@ -1047,8 +1111,8 @@ function renderAccounts() {
     const duplicateCurrent = a.duplicate && a.duplicate_of === '当前 Codex 登录';
     const duplicateText = a.duplicate ? (duplicateCurrent ? tr('与当前 Codex 登录重复；模型显示由原生账户管理','Duplicates the current Codex login; model visibility is managed by Native') : `${tr('与','Duplicates ')}${esc(a.duplicate_of)}${tr('重复；不生成重复前缀模型','; duplicate prefixed routes are omitted')}`) : '';
     const status = a.native ? (a.credential_set ? '' : tr('未检测到 .codex 登录','No .codex login detected')) : (a.credential_status === 'invalid' ? tr('登录已失效','Sign-in expired') : (a.credential_set ? '' : tr('未导入凭据','No credentials')));
-    const remove = a.native ? '' : `<button class="danger" data-icon="trash" onclick="removeAccount('${esc(a.id)}')">${tr('删除','Delete')}</button>`;
-    const edit = duplicateCurrent ? `<button class="secondary" data-icon="edit" disabled title="${esc(tr('模型显示由原生账户管理','Model visibility is managed by Native'))}">${tr('编辑','Edit')}</button>` : `<button class="secondary" data-icon="edit" onclick="editAccount('${esc(a.id)}')">${tr('编辑','Edit')}</button>`;
+    const remove = a.native ? '' : `<button class="danger" data-icon="trash" data-ui-action="account-remove" data-id="${esc(a.id)}">${tr('删除','Delete')}</button>`;
+    const edit = duplicateCurrent ? `<button class="secondary" data-icon="edit" disabled title="${esc(tr('模型显示由原生账户管理','Model visibility is managed by Native'))}">${tr('编辑','Edit')}</button>` : `<button class="secondary" data-icon="edit" data-ui-action="account-edit" data-id="${esc(a.id)}">${tr('编辑','Edit')}</button>`;
     const titleText = a.native ? tr('当前 Codex 登录','Current Codex login') : String(a.name || a.id);
     const accountLabel = String(a.quota && a.quota.account_label || '');
     const nativeDetail = a.native ? tr('使用 .codex 当前登录','Using current .codex login') : '';
@@ -1061,7 +1125,7 @@ function renderAccounts() {
     return `<article class="entity-card account-card${duplicateCurrent ? ' account-duplicate' : ''}">
       <div class="entity-card-main"><div class="entity-card-title">${title}${identity}</div>${statusHtml}</div>
       <div class="entity-card-quota">${quotaMetersHtml(a, busy, animateQuota)}${creditHtml(a)}${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</div>
-      <div class="entity-card-actions">${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} onclick="refreshAccount('${esc(a.id)}')">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" onclick="openQuotaHistory('${esc(a.id)}')">${tr('趋势','Trend')}</button>${remove}</div>
+      <div class="entity-card-actions">${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} data-ui-action="account-refresh" data-id="${esc(a.id)}">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" data-ui-action="account-quota-history" data-id="${esc(a.id)}">${tr('趋势','Trend')}</button>${remove}</div>
     </article>`;
   }).join('');
   $('accounts').innerHTML = `<div class="entity-list">${rows}</div>`;
@@ -1135,17 +1199,65 @@ function quotaMetersHtml(account, busy = false, animate = false) {
   return `<div class="quota-stack">${buckets.map(item => { const duration = compactWindowText(item.windowMinutes); const limitLabel = item.limitId && item.limitId !== 'codex' ? `${quotaLimitLabel(item.limitId)} · ${duration}` : duration; if (item.unreported) { const unavailable = tr(`${limitLabel} 未回传限制`, `No ${limitLabel} limit reported`); return `<div class="quota-meter is-unreported" title="${esc(unavailable)}"><div class="quota-meter-head"><span class="quota-window">${esc(limitLabel)}</span><strong class="quota-value">233%</strong></div><div class="quota-battery" role="img" aria-label="${esc(unavailable)}"><span class="quota-battery-fill"></span></div></div>`; } const levelClass = item.remaining <= 20 ? 'is-low' : item.remaining <= 50 ? 'is-medium' : 'is-high'; const reset = resetCountdownText(item.resetsAt); const aria = tr(`${limitLabel} 剩余 ${item.remaining}%`, `${limitLabel} ${item.remaining}% remaining`); return `<div class="quota-meter ${levelClass}${busy ? ' is-refreshing' : ''}${animate ? ' is-updated' : ''}"><div class="quota-meter-head"><span class="quota-window">${esc(limitLabel)}</span><strong class="quota-value">${esc(item.remaining)}%</strong></div><div class="quota-battery" role="progressbar" aria-label="${esc(aria)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(item.remaining)}" style="--quota-level:${esc(item.remaining)}%"><span class="quota-battery-fill"></span></div>${reset ? `<span class="quota-reset" title="${tr('距离额度重置','Time until quota reset')}" data-reset-countdown="${esc(item.resetsAt)}">${esc(reset)}</span>` : ''}</div>`; }).join('')}</div>`;
 }
 function accountQuotaSignature(account) { return JSON.stringify(account?.quota || null); }
+async function consumeQuotaEventStream(response, signal) {
+  if (!response.body) throw new Error('Quota event stream has no readable body');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (!signal.aborted) {
+      const {done, value} = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, {stream:true}).replace(/\r\n/g, '\n');
+      let boundary;
+      while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        if (frame.split('\n').some(line => line.startsWith('event:') && line.slice(6).trim() === 'quota-updated')) requestQuotaSync();
+      }
+    }
+  } finally {
+    try { await reader.cancel(); } catch (_) {}
+  }
+}
+async function runQuotaEventStream(controller) {
+  let retryDelay = 1000;
+  while (!controller.signal.aborted && document.visibilityState !== 'hidden') {
+    try {
+      const response = await managementFetch('/api/accounts/events', {headers:{'Accept':'text/event-stream'}, signal:controller.signal, cache:'no-store'});
+      if (!response.ok) {
+        if (response.status === 401) { clearSessionToken(); return; }
+        throw new Error(`Quota event stream returned HTTP ${response.status}`);
+      }
+      quotaEventsConnected = true;
+      retryDelay = 1000;
+      await consumeQuotaEventStream(response, controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      quotaEventsConnected = false;
+    }
+    if (!controller.signal.aborted && document.visibilityState !== 'hidden') {
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+      retryDelay = Math.min(retryDelay * 2, 15000);
+    }
+  }
+}
 function startQuotaEvents() {
-  if (quotaEvents || typeof EventSource === 'undefined' || document.visibilityState === 'hidden') return;
-  const events = new EventSource('/api/accounts/events');
-  quotaEvents = events;
-  events.onopen = () => { if (quotaEvents === events) quotaEventsConnected = true; };
-  events.onerror = () => { if (quotaEvents === events) quotaEventsConnected = false; };
-  events.addEventListener('quota-updated', () => { if (quotaEvents === events) requestQuotaSync(); });
+  if (quotaEventsController || !sessionToken || document.visibilityState === 'hidden') return;
+  const controller = new AbortController();
+  quotaEventsController = controller;
+  runQuotaEventStream(controller).finally(() => {
+    if (quotaEventsController === controller) {
+      quotaEventsController = null;
+      if (sessionToken && document.visibilityState !== 'hidden') startQuotaEvents();
+    }
+    quotaEventsConnected = false;
+  });
 }
 function stopQuotaEvents() {
-  if (quotaEvents) quotaEvents.close();
-  quotaEvents = null; quotaEventsConnected = false;
+  if (quotaEventsController) quotaEventsController.abort();
+  quotaEventsController = null;
+  quotaEventsConnected = false;
 }
 function requestQuotaSync() { quotaUpdatePending = true; return drainQuotaUpdates(); }
 async function drainQuotaUpdates() {
@@ -1206,7 +1318,7 @@ function creditHtml(account) {
   else if (credit.balance !== undefined) items.push(`<span class="credit-badge" title="${esc(tr('可用 Credit','Available credit'))}"><span class="credit-mark">C</span><span>Credit</span><strong>${esc(integerCredit(credit.balance))}</strong></span>`);
   if (credit.individual_limit && typeof credit.individual_limit.remaining_percent === 'number') items.push(`<span class="credit-monthly"><span>${tr('月额度','Monthly')}</span><strong>${esc(credit.individual_limit.remaining_percent)}%</strong></span>`);
   const resetCount = resetCreditCount(account);
-  if (resetCount > 0) items.push(`<button type="button" class="secondary reset-credit-button" data-icon="refresh" onclick="openResetCredits('${esc(account.id)}')" title="${esc(tr('查看重置机会与到期时间','View reset opportunities and expiry'))}">${tr('重置额度','Resets')} <strong>${esc(resetCount)}</strong></button>`);
+  if (resetCount > 0) items.push(`<button type="button" class="secondary reset-credit-button" data-icon="refresh" data-ui-action="account-reset-credits" data-id="${esc(account.id)}" title="${esc(tr('查看重置机会与到期时间','View reset opportunities and expiry'))}">${tr('重置额度','Resets')} <strong>${esc(resetCount)}</strong></button>`);
   if (credit.spend_control_reached === true) items.push(`<span class="credit-warning">${tr('已达消费上限','Spend limit reached')}</span>`);
   return items.length ? `<div class="quota-credit">${items.join('')}</div>` : '';
 }
@@ -1433,7 +1545,7 @@ async function loadQuotaHistory(accountId, rangeName) {
   if (request === quotaHistoryRequest) await refreshQuotaState();
   drainQuotaUpdates();
 }
-function openQuotaHistory(accountId) { activeQuotaAccountId = accountId; activeQuotaRange = '1d'; activeQuotaLimit = 'codex'; activeQuotaWindow = ''; quotaHistoryZoom = []; quotaHistoryPayload = null; quotaHistoryLoading = true; const ranges = ['1h','1d','1w','all']; openModal(tr('Subscription 余量趋势','Subscription quota trend'), `<div class="quota-ranges">${ranges.map(rangeName => `<button type="button" class="secondary${rangeName === '1d' ? ' active' : ''}" data-range="${rangeName}" onclick="selectQuotaHistoryRange('${rangeName}')">${esc(quotaRangeLabel(rangeName))}</button>`).join('')}</div><div id="quota_history_content"></div>`, '', null); renderQuotaHistory({series:[]},activeQuotaRange); loadQuotaHistory(accountId, activeQuotaRange); quotaHistoryTimer = setInterval(() => { if (!quotaHistoryLoading) loadQuotaHistory(activeQuotaAccountId, activeQuotaRange); }, 5 * 60 * 1000); }
+function openQuotaHistory(accountId) { activeQuotaAccountId = accountId; activeQuotaRange = '1d'; activeQuotaLimit = 'codex'; activeQuotaWindow = ''; quotaHistoryZoom = []; quotaHistoryPayload = null; quotaHistoryLoading = true; const ranges = ['1h','1d','1w','all']; openModal(tr('Subscription 余量趋势','Subscription quota trend'), `<div class="quota-ranges">${ranges.map(rangeName => `<button type="button" class="secondary${rangeName === '1d' ? ' active' : ''}" data-ui-action="quota-range" data-range="${esc(rangeName)}">${esc(quotaRangeLabel(rangeName))}</button>`).join('')}</div><div id="quota_history_content"></div>`, '', null); renderQuotaHistory({series:[]},activeQuotaRange); loadQuotaHistory(accountId, activeQuotaRange); quotaHistoryTimer = setInterval(() => { if (!quotaHistoryLoading) loadQuotaHistory(activeQuotaAccountId, activeQuotaRange); }, 5 * 60 * 1000); }
 
 function selectAccountFile() { $('a_auth_json').click(); }
 async function accountFileChosen(input) {
@@ -1455,7 +1567,7 @@ function renderSubscriptionModels(editor) {
     const route = editor.native ? model.id : editor.account.prefix + '/' + model.id;
     const maximum = Number(model.max_context_window || 0);
     const value = editor.windows[model.id] ?? '';
-    return `<div class="model-option" style="flex-wrap:wrap"><label style="display:flex;gap:10px;flex:1;min-width:180px"><input type="checkbox" name="subscription_model" value="${esc(model.id)}" ${editor.hidden.has(model.id) ? '' : 'checked'}><span><strong>${esc(canonicalDisplayName(model.display_name || model.id))}</strong><small>${esc(route)}</small></span></label><div style="width:220px"><label>${tr('上下文（tokens）','Context (tokens)')}<input type="number" name="subscription_context" data-model="${esc(model.id)}" min="1" step="1" ${maximum ? `max="${maximum}"` : 'disabled'} value="${esc(value)}" placeholder="${esc(tr('默认 ','Default ') + Number(model.default_context_window || 0))}" oninput="previewSubscriptionContext(this,${index})" style="width:100%;margin-top:4px"></label><small id="subscription_context_preview_${index}"></small></div></div>`;
+    return `<div class="model-option" style="flex-wrap:wrap"><label style="display:flex;gap:10px;flex:1;min-width:180px"><input type="checkbox" name="subscription_model" value="${esc(model.id)}" ${editor.hidden.has(model.id) ? '' : 'checked'}><span><strong>${esc(canonicalDisplayName(model.display_name || model.id))}</strong><small>${esc(route)}</small></span></label><div style="width:220px"><label>${tr('上下文（tokens）','Context (tokens)')}<input type="number" name="subscription_context" data-model="${esc(model.id)}" min="1" step="1" ${maximum ? `max="${maximum}"` : 'disabled'} value="${esc(value)}" placeholder="${esc(tr('默认 ','Default ') + Number(model.default_context_window || 0))}" data-context-index="${index}" style="width:100%;margin-top:4px"></label><small id="subscription_context_preview_${index}"></small></div></div>`;
   }).join('') || `<p class="muted">${tr('没有可用的订阅模型，请刷新模型目录。','No subscription models available. Refresh the model catalog.')}</p>`;
   container.querySelectorAll('input[name="subscription_context"]').forEach((input, index) => previewSubscriptionContext(input, index));
 }
@@ -1534,7 +1646,7 @@ function renderProviders() {
     return `<article class="entity-card provider-card">
       <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(p.name || p.id)}</strong>${providerPill}</div></div>
       <div class="entity-card-meta"><code class="endpoint">${esc(p.base_url)}</code> · ${esc(protocolLabel(p.protocol))} · ${esc(authLabel(p.auth_mode))}${p.api_key_set ? tr(' · Key 已设置',' · Key set') : ''} · ${tr(`${models.length} 个模型`,`${models.length} models`)}</div>
-      <div class="entity-card-actions"><button class="secondary" data-icon="download" onclick="discoverProvider('${esc(p.id)}')">${tr('拉取模型','Fetch models')}</button><button class="secondary" data-icon="edit" onclick="editProvider('${esc(p.id)}')">${tr('编辑','Edit')}</button><button class="secondary" ${models.length ? '' : 'disabled'} onclick="toggleProviderModels('${esc(p.id)}', ${allHidden})">${allHidden ? tr('显示全部模型','Show all models') : tr('隐藏全部模型','Hide all models')}</button><button class="danger" data-icon="trash" onclick="removeProvider('${esc(p.id)}')">${tr('删除','Delete')}</button></div>
+      <div class="entity-card-actions"><button class="secondary" data-icon="download" data-ui-action="provider-discover" data-id="${esc(p.id)}">${tr('拉取模型','Fetch models')}</button><button class="secondary" data-icon="edit" data-ui-action="provider-edit" data-id="${esc(p.id)}">${tr('编辑','Edit')}</button><button class="secondary" ${models.length ? '' : 'disabled'} data-ui-action="provider-toggle-models" data-id="${esc(p.id)}" data-all-hidden="${allHidden ? 'true' : 'false'}">${allHidden ? tr('显示全部模型','Show all models') : tr('隐藏全部模型','Hide all models')}</button><button class="danger" data-icon="trash" data-ui-action="provider-remove" data-id="${esc(p.id)}">${tr('删除','Delete')}</button></div>
     </article>`;
   }).join('')}</div>`;
 }
@@ -1546,7 +1658,7 @@ async function toggleProviderModels(id, enabled) {
   catch (error) { notice(error.message, true); }
 }
 function openProviderChooser() {
-  openModal(tr('添加 Provider','Add Provider'), `<p class="muted">${tr('官方 Provider 使用固定的 Base URL、协议和认证方式。自建 Provider 可选择自动检测。','Official Providers use fixed endpoints, protocols, and authentication. Custom Providers may use automatic protocol detection.')}</p><div class="choice-grid">` + Object.entries(officialProviders).map(([key,p]) => `<button class="choice" onclick="chooseOfficialProvider('${key}')"><strong>${esc(p.name)}</strong><small>${esc(key === 'chatgpt' ? tr('转发当前 Codex 登录态，不需要 API Key','Forward the active Codex login; no API Key required') : p.hint)}</small></button>`).join('') + `<button class="choice" onclick="openCustomProviderForm()"><strong>${tr('自建 Provider','Custom Provider')}</strong><small>${tr('填写 Base URL、API Key 和协议','Enter a Base URL, API Key, and protocol')}</small></button></div>`, '', null);
+  openModal(tr('添加 Provider','Add Provider'), `<p class="muted">${tr('官方 Provider 使用固定的 Base URL、协议和认证方式。自建 Provider 可选择自动检测。','Official Providers use fixed endpoints, protocols, and authentication. Custom Providers may use automatic protocol detection.')}</p><div class="choice-grid">` + Object.entries(officialProviders).map(([key,p]) => `<button class="choice" data-ui-action="official-provider-choose" data-provider="${esc(key)}"><strong>${esc(p.name)}</strong><small>${esc(key === 'chatgpt' ? tr('转发当前 Codex 登录态，不需要 API Key','Forward the active Codex login; no API Key required') : p.hint)}</small></button>`).join('') + `<button class="choice" onclick="openCustomProviderForm()"><strong>${tr('自建 Provider','Custom Provider')}</strong><small>${tr('填写 Base URL、API Key 和协议','Enter a Base URL, API Key, and protocol')}</small></button></div>`, '', null);
   $('modal_submit').style.display = 'none';
 }
 function chooseOfficialProvider(key) {
@@ -1591,11 +1703,11 @@ function renderModels() {
         <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, m.context_window))}</strong></div>
         <div class="entity-card-subtitle"><code>${esc(m.id)}</code></div></div>
         <div class="entity-card-meta">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</div>
-        <label class="visibility"><input type="checkbox" ${m.enabled ? 'checked' : ''} onchange="toggleModel('${esc(m.id)}', this.checked)"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</label>
-        <div class="entity-card-actions"><button class="secondary" data-icon="edit" onclick="openManualModelModal('${esc(m.id)}')">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" onclick="testModel('${esc(m.id)}')">${tr('测试','Test')}</button><button class="secondary" data-icon="test" onclick="testModelVision('${esc(m.id)}')">${tr('测试图像','Test image')}</button><button class="danger" data-icon="trash" onclick="removeModel('${esc(m.id)}')">${tr('删除','Delete')}</button></div>
+        <label class="visibility"><input type="checkbox" ${m.enabled ? 'checked' : ''} data-ui-action="model-toggle" data-id="${esc(m.id)}"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</label>
+        <div class="entity-card-actions"><button class="secondary" data-icon="edit" data-ui-action="model-edit" data-id="${esc(m.id)}">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" data-ui-action="model-test" data-id="${esc(m.id)}">${tr('测试','Test')}</button><button class="secondary" data-icon="test" data-ui-action="model-test-vision" data-id="${esc(m.id)}">${tr('测试图像','Test image')}</button><button class="danger" data-icon="trash" data-ui-action="model-remove" data-id="${esc(m.id)}">${tr('删除','Delete')}</button></div>
       </article>`;
     }).join('');
-    const toggle = items.length > 6 ? `<button type="button" class="secondary" onclick="toggleModelGroup('${esc(provider)}')">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : '';
+    const toggle = items.length > 6 ? `<button type="button" class="secondary" data-ui-action="model-group-toggle" data-id="${esc(provider)}">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : '';
     return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><div class="entity-list">${rows}</div>${toggle}</div>`;
   }).join('');
 }
@@ -1768,18 +1880,80 @@ async function openUpdate() {
   openModal(tr('更新 EMP','Update EMP'), `<p id="update_version" class="muted"></p><div id="update_status" role="status" aria-live="polite">${tr('正在检查…','Checking…')}</div><progress id="update_progress" class="update-progress" max="100" hidden></progress><div id="update_manual" class="muted" hidden><p>${tr('建議：下載 Linux 雙語安裝腳本，退出目前 EMP 後執行。安裝器會詢問是否移除舊系統套件，並可遷移源碼目錄中的設定。','Recommended: download the bilingual Linux installer, exit EMP, then run it. The installer asks before removing a system package and can migrate configuration from a source checkout.')}</p><p>${tr('舊系統安裝的使用者設定會保留；來源設定也只會複製，不會刪除。','Existing system-install user settings are kept; source settings are copied and remain in place.')}</p></div><div class="modal-actions"><button id="update_release" type="button" class="secondary" hidden onclick="openLatestRelease()">${tr('打開最新 Release','Open latest Release')}</button><button id="update_commands" type="button" class="secondary" hidden onclick="copyLinuxMigrationCommands()">${tr('複製安裝命令','Copy installer command')}</button><button id="update_install" type="button" data-icon="update" hidden onclick="requestUpdate('install')">${tr('后台更新','Update in background')}</button></div>`, '', null);
   await requestUpdate('check');
 }
+function dynamicActionElement(target) {
+  return target instanceof Element ? target.closest('[data-ui-action]') : null;
+}
+function runDynamicUiAction(element) {
+  const id = element.dataset.id || '';
+  switch (element.dataset.uiAction) {
+    case 'usage-zoom': {
+      const start = Number(element.dataset.start), end = Number(element.dataset.end);
+      if (Number.isFinite(start) && Number.isFinite(end) && end > start) zoomUsage(start, end);
+      return true;
+    }
+    case 'catalog-display-editor': openCatalogDisplayEditor(id); return true;
+    case 'account-remove': removeAccount(id); return true;
+    case 'account-edit': editAccount(id); return true;
+    case 'account-refresh': refreshAccount(id); return true;
+    case 'account-quota-history': openQuotaHistory(id); return true;
+    case 'account-reset-credits': openResetCredits(id); return true;
+    case 'quota-range': selectQuotaHistoryRange(element.dataset.range || ''); return true;
+    case 'provider-discover': discoverProvider(id); return true;
+    case 'provider-edit': editProvider(id); return true;
+    case 'provider-toggle-models': toggleProviderModels(id, element.dataset.allHidden === 'true'); return true;
+    case 'provider-remove': removeProvider(id); return true;
+    case 'official-provider-choose': chooseOfficialProvider(element.dataset.provider || ''); return true;
+    case 'model-toggle': toggleModel(id, element.checked); return true;
+    case 'model-edit': openManualModelModal(id); return true;
+    case 'model-test': testModel(id); return true;
+    case 'model-test-vision': testModelVision(id); return true;
+    case 'model-remove': removeModel(id); return true;
+    case 'model-group-toggle': toggleModelGroup(id); return true;
+    default: return false;
+  }
+}
+function handleDynamicUiClick(event) {
+  const element = dynamicActionElement(event.target);
+  if (element && element.dataset.uiAction !== 'model-toggle') runDynamicUiAction(element);
+}
+function handleDynamicUiChange(event) {
+  const element = dynamicActionElement(event.target);
+  if (element?.dataset.uiAction === 'model-toggle') runDynamicUiAction(element);
+}
+function handleDynamicUiKeydown(event) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  const element = dynamicActionElement(event.target);
+  if (!element || element.dataset.uiAction !== 'usage-zoom') return;
+  event.preventDefault();
+  runDynamicUiAction(element);
+}
+function handleSubscriptionContextInput(event) {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || !input.hasAttribute('data-context-index')) return;
+  const index = Number(input.dataset.contextIndex);
+  if (Number.isInteger(index) && index >= 0) previewSubscriptionContext(input, index);
+}
 function handleModalKeydown(event) {
   if (event.key === 'Escape') {
     if (!$('modal_backdrop').classList.contains('hidden')) closeModal();
   }
 }
+document.addEventListener('click', handleDynamicUiClick);
+document.addEventListener('change', handleDynamicUiChange);
+document.addEventListener('keydown', handleDynamicUiKeydown);
 document.addEventListener('keydown', handleModalKeydown);
+document.addEventListener('input', handleSubscriptionContextInput);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { startQuotaEvents(); requestQuotaSync(); } else stopQuotaEvents(); });
 if (window.addEventListener) {
+  window.addEventListener('storage', event => {
+    if (event.key !== SESSION_STORAGE_KEY) return;
+    sessionToken = event.newValue || '';
+    if (sessionToken && document.visibilityState !== 'hidden') startQuotaEvents();
+  });
   window.addEventListener('pagehide', stopQuotaEvents);
   window.addEventListener('pageshow', startQuotaEvents);
 }
-load();
+establishSession().then(load).catch(error => notice(error.message, true));
 </script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 //! Downstream SSE delivery and cancellation.
 
 use crate::app::ServerState;
+use crate::http::response::SECURITY_HEADERS;
 use crate::http::response::json_error_response;
 use crate::http::response::status_text;
 use crate::services::disconnect::DisconnectMonitor;
@@ -40,10 +41,17 @@ fn write_stream_head_with_headers(
     stream.write_all(
         b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n",
     )?;
+    stream.write_all(SECURITY_HEADERS)?;
     for (name, value) in headers {
         if matches!(
             name.to_ascii_lowercase().as_str(),
-            "content-type" | "content-length" | "connection" | "cache-control"
+            "content-type"
+                | "content-length"
+                | "connection"
+                | "cache-control"
+                | "x-frame-options"
+                | "content-security-policy"
+                | "x-content-type-options"
         ) {
             continue;
         }

@@ -33,10 +33,13 @@ fn assert_stream_protocol(protocol: &str, auth_mode: &str, expected_path: &str, 
         &server,
         "/v1/responses",
         &request_body,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.contains("Content-Type: text/event-stream\r\n"));
+    assert!(response.contains("X-Frame-Options: DENY\r\n"));
+    assert!(response.contains("Content-Security-Policy: frame-ancestors 'none'\r\n"));
+    assert!(response.contains("X-Content-Type-Options: nosniff\r\n"));
     assert!(!response.contains("Content-Length:"));
     assert!(response.contains("event: response.created\n"), "{response}");
     assert!(
@@ -148,12 +151,8 @@ fn streaming_flushes_before_upstream_eof() {
         "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
     }))
     .expect("request JSON");
-    let mut downstream = open_post_stream(
-        &server,
-        "/v1/responses",
-        &body,
-        &[&session_cookie_header(&server)],
-    );
+    let mut downstream =
+        open_post_stream(&server, "/v1/responses", &body, &[&session_header(&server)]);
     first_ready
         .recv_timeout(Duration::from_secs(2))
         .expect("upstream first event");
@@ -218,12 +217,7 @@ fn downstream_disconnect_cancels_a_waiting_upstream_stream() {
         "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
     }))
     .expect("request JSON");
-    let downstream = open_post_stream(
-        &server,
-        "/v1/responses",
-        &body,
-        &[&session_cookie_header(&server)],
-    );
+    let downstream = open_post_stream(&server, "/v1/responses", &body, &[&session_header(&server)]);
     head_ready
         .recv_timeout(Duration::from_secs(2))
         .expect("upstream response head");
@@ -258,12 +252,7 @@ fn stream_errors_keep_pre_and_post_output_boundaries() {
         "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
     }))
     .expect("request JSON");
-    let response = post(
-        &server,
-        "/v1/responses",
-        &body,
-        &[&session_cookie_header(&server)],
-    );
+    let response = post(&server, "/v1/responses", &body, &[&session_header(&server)]);
     assert!(response.starts_with("HTTP/1.1 429 Too Many Requests\r\n"));
     assert!(response.contains("Retry-After: 6\r\n"));
     assert!(response.contains("\"type\":\"rate_limit\""));
@@ -282,12 +271,7 @@ fn stream_errors_keep_pre_and_post_output_boundaries() {
     .into_bytes();
     let upstream = OneShotUpstream::start_sse(vec![partial]);
     let (_directory, server) = configured_server(&upstream.base_url());
-    let response = post_stream(
-        &server,
-        "/v1/responses",
-        &body,
-        &[&session_cookie_header(&server)],
-    );
+    let response = post_stream(&server, "/v1/responses", &body, &[&session_header(&server)]);
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(response.contains("event: response.output_text.delta\n"));
     assert!(response.contains("event: response.failed\n"));
@@ -317,7 +301,7 @@ fn auto_protocol_falls_back_only_after_explicit_endpoint_rejection() {
         &server,
         "/v1/responses",
         &complete_request,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.contains("\"text\":\"answer\""));
@@ -355,7 +339,7 @@ fn auto_protocol_falls_back_only_after_explicit_endpoint_rejection() {
         &server,
         "/v1/responses",
         &stream_request,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.contains("event: response.output_text.delta\n"));
@@ -392,7 +376,7 @@ fn external_pre_output_retry_is_single_and_route_local() {
         &server,
         "/v1/responses",
         &complete_request,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.contains("\"text\":\"answer\""));
@@ -422,7 +406,7 @@ fn external_pre_output_retry_is_single_and_route_local() {
         &server,
         "/v1/responses",
         &stream_request,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.contains("event: response.completed\n"));
@@ -513,7 +497,7 @@ print(json.dumps({
 #[test]
 fn response_body_errors_keep_the_python_status_boundary() {
     let (_directory, server) = test_server();
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let wrong_type = post(
         &server,
         "/v1/responses",
@@ -541,7 +525,7 @@ fn response_body_errors_keep_the_python_status_boundary() {
     server.shutdown().expect("shutdown");
 
     let (_directory, server) = configured_server("http://127.0.0.1:9/v1");
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let stream = post(
         &server,
         "/v1/responses",

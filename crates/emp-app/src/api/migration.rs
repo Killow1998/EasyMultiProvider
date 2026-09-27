@@ -1,6 +1,8 @@
 //! Api migration.
 
 use crate::app::ServerState;
+use crate::http::auth::EXPORT_CONFIRMATION_LIFETIME_SECONDS;
+use crate::http::auth::EXPORT_CONFIRMATION_OPERATION;
 use crate::http::auth::same_origin;
 use crate::http::request::Request;
 use crate::http::request::read_json_body;
@@ -18,6 +20,8 @@ use emp_state::import_migration_bundle;
 use serde_json::Value;
 use std::net::TcpStream;
 
+const MIN_EXPORT_PASSWORD_UTF8_BYTES: usize = 12;
+
 pub(crate) fn management_migration_request(
     stream: &mut TcpStream,
     request: Request<'_>,
@@ -30,7 +34,7 @@ pub(crate) fn management_migration_request(
     }
     if !state
         .sessions
-        .contains(request.session_cookie().as_deref(), now)
+        .contains(request.session_token().as_deref(), now)
     {
         return unauthorized_response();
     }
@@ -38,11 +42,53 @@ pub(crate) fn management_migration_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
+    if request.raw_path() == "/api/migration/export/confirm" {
+        let Some(confirmation) = state
+            .sessions
+            .issue_export_confirmation(EXPORT_CONFIRMATION_OPERATION, now)
+        else {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        };
+        let body = serde_json::to_vec(&serde_json::json!({
+            "confirmation": confirmation,
+            "expires_in": EXPORT_CONFIRMATION_LIFETIME_SECONDS as u64,
+        }))
+        .expect("export confirmation is JSON serializable");
+        return response("HTTP/1.1 200 OK", "application/json", &body, &[]);
+    }
     let password = body
         .get("password")
         .and_then(Value::as_str)
         .unwrap_or_default();
     if request.raw_path() == "/api/migration/export" {
+        // Exports carry every credential, so each one needs a fresh
+        // confirmation issued by a separate request just before it.
+        let confirmation = body
+            .get("confirmation")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !state.sessions.consume_export_confirmation(
+            confirmation,
+            EXPORT_CONFIRMATION_OPERATION,
+            now,
+        ) {
+            return json_error_response(
+                403,
+                status_text(403),
+                "export confirmation is missing or expired; confirm the export again",
+                Some("export_confirmation_required"),
+                &[],
+            );
+        }
+        if password.len() < MIN_EXPORT_PASSWORD_UTF8_BYTES {
+            return json_error_response(
+                400,
+                status_text(400),
+                "migration export password must contain at least 12 UTF-8 bytes",
+                Some("migration_password_too_short"),
+                &[],
+            );
+        }
         let group_values = body.get("groups").and_then(Value::as_array);
         let groups = match group_values {
             Some(values) => {

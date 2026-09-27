@@ -1,4 +1,4 @@
-use super::{canonical_root, request, session_cookie_header};
+use super::{canonical_root, request, session_header};
 use crate::lifecycle::ServerHandle;
 use crate::services::observation::request_tokens_per_second;
 use serde_json::{Value, json};
@@ -188,7 +188,7 @@ fn responses_endpoint_records_schema3_full_request_tps_and_preserves_stream_timi
         native_auth_path,
     )
     .expect("start performance EMP");
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let body = serde_json::to_vec(&json!({
         "model":"gpt-6-luna",
         "input":"hello",

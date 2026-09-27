@@ -24,7 +24,7 @@ fn http_request(
         .expect("set endpoint timeout");
     write!(
         stream,
-        "{method} {target} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nCookie: {cookie}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "{method} {target} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-EMP-Session: {cookie}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         address.port(),
         body.len()
     )
@@ -139,12 +139,7 @@ for line in sys.stdin:
         .expect("write encrypted account auth");
 
     let address = server.local_addr();
-    let cookie = server
-        .session_cookie()
-        .split(';')
-        .next()
-        .expect("session cookie pair")
-        .to_owned();
+    let cookie = server.session_token();
     let quota_cookie = cookie.clone();
     let quota = thread::spawn(move || {
         http_request(

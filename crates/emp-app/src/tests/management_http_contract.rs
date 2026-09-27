@@ -18,11 +18,24 @@ fn migration_export_and_import_cross_the_authenticated_http_boundary() {
         source_root.join("auth.json"),
     )
     .unwrap();
+    let export_body = br#"{"password":"migration-pass","groups":["external"]}"#;
+    let unconfirmed = post(
+        &source,
+        "/api/migration/export",
+        export_body,
+        &[&session_header(&source)],
+    );
+    assert!(
+        unconfirmed.starts_with("HTTP/1.1 403 Forbidden\r\n"),
+        "{unconfirmed}"
+    );
+    assert!(unconfirmed.contains("export_confirmation_required"));
+    let confirmation = export_confirmation(&source);
     let export = post(
         &source,
         "/api/migration/export",
-        br#"{"password":"12345678","groups":["external"]}"#,
-        &[&session_cookie_header(&source)],
+        &export_request(&confirmation),
+        &[&session_header(&source)],
     );
     assert!(export.starts_with("HTTP/1.1 200 OK\r\n"), "{export}");
     assert!(export.contains("Content-Disposition: attachment; filename=\"EMP.emp\"\r\n"));
@@ -43,7 +56,7 @@ fn migration_export_and_import_cross_the_authenticated_http_boundary() {
     )
     .unwrap();
     let import_body = serde_json::to_vec(&json!({
-        "password":"12345678",
+        "password":"migration-pass",
         "bundle":STANDARD.encode(bundle)
     }))
     .unwrap();
@@ -51,10 +64,10 @@ fn migration_export_and_import_cross_the_authenticated_http_boundary() {
         &target,
         "/api/migration/import",
         &import_body,
-        &[&session_cookie_header(&target)],
+        &[&session_header(&target)],
     );
     assert!(imported.starts_with("HTTP/1.1 200 OK\r\n"), "{imported}");
-    let config = request(&target, "/api/config", &[&session_cookie_header(&target)]);
+    let config = request(&target, "/api/config", &[&session_header(&target)]);
     assert!(config.contains("demo/model"));
     assert!(!config.contains("\"api_key\":\"secret\""));
     let stored = target
@@ -95,7 +108,7 @@ fn account_import_and_delete_keep_credentials_managed_and_private() {
             "auth_json":{"tokens":{"access_token":"account-secret","account_id":"account-id"}}
         }))
         .unwrap(),
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(imported.starts_with("HTTP/1.1 200 OK\r\n"), "{imported}");
     assert!(imported.contains("\"credential_set\":true"));
@@ -121,11 +134,7 @@ fn account_import_and_delete_keep_credentials_managed_and_private() {
             .unwrap()["tokens"]["access_token"],
         "account-secret"
     );
-    let removed = delete(
-        &server,
-        "/api/accounts/egg",
-        &[&session_cookie_header(&server)],
-    );
+    let removed = delete(&server, "/api/accounts/egg", &[&session_header(&server)]);
     assert!(removed.starts_with("HTTP/1.1 200 OK\r\n"), "{removed}");
     assert!(!auth_path.exists());
     assert!(!auth_path.parent().unwrap().join("config.toml").exists());
@@ -166,7 +175,7 @@ fn native_search_forwards_raw_json_with_the_best_available_login() {
         "/v1/alpha/search",
         br#"{"query":"codex"}"#,
         &[
-            &session_cookie_header(&server),
+            &session_header(&server),
             "Authorization: Bearer caller-token",
             "chatgpt-account-id: caller-account",
         ],
@@ -206,17 +215,13 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
         root.join("auth.json"),
     )
     .unwrap();
-    let before = request(
-        &server,
-        "/api/integration",
-        &[&session_cookie_header(&server)],
-    );
+    let before = request(&server, "/api/integration", &[&session_header(&server)]);
     assert!(before.contains("\"state\":\"native\""), "{before}");
     let enabled = post(
         &server,
         "/api/integration/enable",
         br#"{"confirm_reload":true}"#,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(enabled.starts_with("HTTP/1.1 200 OK\r\n"), "{enabled}");
     assert!(enabled.contains("\"state\":\"emp_applied\""));
@@ -232,4 +237,161 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     assert!(restored.contains("openai_base_url = \"native\""));
     assert!(!restored.contains("model_catalog_json"));
     assert!(restored.contains("[features]\nweb_search = true"));
+}
+
+fn export_confirmation(server: &ServerHandle) -> String {
+    let response = post(
+        server,
+        "/api/migration/export/confirm",
+        b"{}",
+        &[&session_header(server)],
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    let body: Value = serde_json::from_str(response.split_once("\r\n\r\n").expect("separator").1)
+        .expect("confirmation JSON");
+    assert_eq!(body["expires_in"], 60);
+    body["confirmation"]
+        .as_str()
+        .expect("confirmation token")
+        .to_owned()
+}
+
+fn export_request(confirmation: &str) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "password":"migration-pass",
+        "groups":["external"],
+        "confirmation":confirmation,
+    }))
+    .expect("export request JSON")
+}
+
+#[test]
+fn migration_export_requires_twelve_utf8_password_bytes() {
+    let (_directory, server) = test_server();
+    assert_eq!("密码好ab".len(), 11);
+    assert_eq!("四海升平".len(), 12);
+    let confirmation = export_confirmation(&server);
+    let short_password = serde_json::to_vec(&json!({
+        "password":"密码好ab",
+        "groups":["external"],
+        "confirmation":confirmation,
+    }))
+    .expect("short export request JSON");
+    let rejected = post(
+        &server,
+        "/api/migration/export",
+        &short_password,
+        &[&session_header(&server)],
+    );
+    assert!(
+        rejected.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "{rejected}"
+    );
+    assert!(rejected.contains("migration_password_too_short"));
+    let spent = post(
+        &server,
+        "/api/migration/export",
+        &export_request(&confirmation),
+        &[&session_header(&server)],
+    );
+    assert!(spent.starts_with("HTTP/1.1 403 Forbidden\r\n"), "{spent}");
+
+    let confirmation = export_confirmation(&server);
+    let exact_password = serde_json::to_vec(&json!({
+        "password":"四海升平",
+        "groups":["external"],
+        "confirmation":confirmation,
+    }))
+    .expect("exact-byte export request JSON");
+    let accepted = post(
+        &server,
+        "/api/migration/export",
+        &exact_password,
+        &[&session_header(&server)],
+    );
+    assert!(accepted.starts_with("HTTP/1.1 200 OK\r\n"), "{accepted}");
+    server.shutdown().expect("shutdown");
+}
+
+#[test]
+fn migration_export_confirmation_is_single_use_and_session_bound() {
+    let (_directory, server) = test_server();
+    let unauthenticated = post(&server, "/api/migration/export/confirm", b"{}", &[]);
+    assert!(unauthenticated.starts_with("HTTP/1.1 401 Unauthorized\r\n"));
+
+    let confirmation = export_confirmation(&server);
+    let wrong = post(
+        &server,
+        "/api/migration/export",
+        &export_request("wrong"),
+        &[&session_header(&server)],
+    );
+    assert!(wrong.starts_with("HTTP/1.1 403 Forbidden\r\n"), "{wrong}");
+    // A failed attempt spends the pending confirmation.
+    let spent = post(
+        &server,
+        "/api/migration/export",
+        &export_request(&confirmation),
+        &[&session_header(&server)],
+    );
+    assert!(spent.starts_with("HTTP/1.1 403 Forbidden\r\n"), "{spent}");
+
+    let confirmation = export_confirmation(&server);
+    let exported = post(
+        &server,
+        "/api/migration/export",
+        &export_request(&confirmation),
+        &[&session_header(&server)],
+    );
+    assert!(exported.starts_with("HTTP/1.1 200 OK\r\n"), "{exported}");
+    let replayed = post(
+        &server,
+        "/api/migration/export",
+        &export_request(&confirmation),
+        &[&session_header(&server)],
+    );
+    assert!(
+        replayed.starts_with("HTTP/1.1 403 Forbidden\r\n"),
+        "{replayed}"
+    );
+
+    let now = crate::util::system_now();
+    let wrong_operation = server
+        .state
+        .sessions
+        .issue_export_confirmation("/api/migration/import", now)
+        .expect("issue import-scoped confirmation");
+    assert!(!server.state.sessions.consume_export_confirmation(
+        &wrong_operation,
+        "/api/migration/export",
+        now,
+    ));
+
+    let confirmation = server
+        .state
+        .sessions
+        .issue_export_confirmation("/api/migration/export", now)
+        .expect("issue confirmation");
+    server
+        .state
+        .sessions
+        .rotate(now + 1.0)
+        .expect("rotate session");
+    assert!(!server.state.sessions.consume_export_confirmation(
+        &confirmation,
+        "/api/migration/export",
+        now + 2.0,
+    ));
+
+    let expired = server
+        .state
+        .sessions
+        .issue_export_confirmation("/api/migration/export", now + 3.0)
+        .expect("issue expiring confirmation");
+    assert!(!server.state.sessions.consume_export_confirmation(
+        &expired,
+        "/api/migration/export",
+        now + 64.0,
+    ));
+    server.shutdown().expect("shutdown");
 }

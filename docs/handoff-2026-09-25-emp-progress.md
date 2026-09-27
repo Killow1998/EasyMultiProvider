@@ -294,3 +294,37 @@ Parity gaps, cheapest first:
    ordering push) was caught by the anthropic python oracle and fixed in the
    same commit — the oracle suites are the load-bearing contract.
    Workspace 415 green, clippy clean, fmt applied.
+
+## HTTP worker result (2026-09-26)
+
+- Worktree and branch: `/home/fumo/codex_ws/agent_dev/emp-sec-http` / `sec/http`.
+- The browser UI exchanges the single-use bootstrap token for a rotated,
+  origin-scoped session stored in local storage and sends it in
+  `X-EMP-Session` on API calls, downloads, and quota event streams. The shared
+  UI keeps a same-origin Cookie fallback for the existing Python server.
+- Management exports require a fresh, session-bound, operation-bound,
+  single-use confirmation that expires after 60 seconds. Export passwords
+  require 12 UTF-8 bytes; the legacy 8-byte import minimum remains supported.
+  Dynamic values no longer appear in executable inline event-handler
+  attributes. All framed responses and streamed SSE responses carry the shared
+  security headers.
+- Request heads and bodies have total deadlines; ambiguous framing, duplicate
+  Host/Origin/session headers, unsafe account-path suffixes, and duplicate
+  realtime framing/media headers are rejected. Existing Codex bearer caller
+  authentication remains supported. Desktop browser launch uses absolute
+  system paths.
+- Kept the pre-existing HTTP/auth/lifecycle/desktop/API and test drafts, and
+  added regressions for bootstrap/session boundaries, host checks, deadlines,
+  export confirmation/password length, SSE headers, and realtime framing.
+- Verification passed: 21 session-boundary tests, 6 migration/management
+  tests, 7 realtime tests, 10 catalog/config tests, 13 native/Codex tests, the
+  quota-event and streamed-response contracts, and the desktop path test.
+  `cargo clippy -p emp-app --all-targets -- -D warnings`, `cargo fmt -p
+  emp-app -- --check`, JS syntax validation, the dynamic-handler scan, and the
+  browser DOM harness also passed. Cargo commands were serialized with the
+  shared lock. The loopback fixtures did not connect to or restart Python port
+  4200.
+- Next: commit this HTTP stage locally as `h2q` with
+  `Co-authored-by: Point <point@local.invalid>`, then continue the authorized
+  STATE phase in its existing worktree. Do not push or run workspace-wide
+  checks.

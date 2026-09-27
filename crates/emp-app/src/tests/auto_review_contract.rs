@@ -1,6 +1,6 @@
 use super::canonical_root;
 #[cfg(unix)]
-use super::{OneShotUpstream, post, session_cookie_header};
+use super::{OneShotUpstream, post, session_header};
 use crate::http::request::{parse_request, read_request_head};
 use crate::lifecycle::ServerHandle;
 use crate::services::accounts::account_catalog_headers;
@@ -392,7 +392,7 @@ fn http_auto_review_skips_symlink_native_and_missing_account_catalog_without_lea
         &server,
         "/v1/responses",
         br#"{"model":"stale-prefix/codex-auto-review","input":"review"}"#,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     let (path, headers, body) = upstream.observed();
     assert_eq!(body["model"], "codex-auto-review");
@@ -523,9 +523,9 @@ fn websocket_auto_review_uses_the_shared_imported_account_route() {
         make_review_server(&upstream.base_url(), &accounts, Some("symlink"));
     let url = format!("ws://{}/v1/responses", server.local_addr());
     let headers = BTreeMap::from([(
-        "cookie".to_owned(),
-        session_cookie_header(&server)
-            .trim_start_matches("Cookie: ")
+        "x-emp-session".to_owned(),
+        session_header(&server)
+            .trim_start_matches("X-EMP-Session: ")
             .to_owned(),
     )]);
     let mut socket =

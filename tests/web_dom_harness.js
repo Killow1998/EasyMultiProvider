@@ -210,6 +210,7 @@ assert.match(html, /href="https:\/\/github.com\/Killow1998\/EasyMultiProvider" t
 assert.doesNotMatch(html, /id="subscription_search_account"/);
 assert.doesNotMatch(html, /data-catalog-summary/);
 assert.doesNotMatch(html, /不会自动补|not added automatically/, "users must not manage provider API path suffixes");
+assert.doesNotMatch(html, /\bon[a-z]+\s*=\s*["'][^"']*\$\{/i, "dynamic values must not be interpolated into inline event handlers");
 assert.match(html, /Icon paths derived from Lucide \(ISC\)/);
 assert.strictEqual(
   Array.from(html.matchAll(/button\[data-icon="[^"]+"\](?:,\.quota-reset)?\{--button-icon:url\("data:image\/svg\+xml,%3Csvg%20/g)).length,
@@ -230,15 +231,22 @@ for (const unwantedDefaultTip of [
 }
 const match = html.match(/<script>([\s\S]*)<\/script>/);
 assert(match, "page script not found");
-const script = match[1].replace(/\nload\(\);\s*$/, "\n");
+const script = match[1].replace(/\nestablishSession\(\)\.then\(load\)\.catch\(error => notice\(error\.message, true\)\);\s*$/, "\n");
+const browserWindow = {
+  location: {origin:"http://127.0.0.1:4200", href:"http://127.0.0.1:4200/"},
+  history: {state:null, replaced:null, replaceState(state, _title, url) { this.state = state; this.replaced = url; }},
+};
 const context = vm.createContext({
   console,
   document,
-  window: {location: {origin: "http://127.0.0.1:4200"}},
+  window: browserWindow,
   localStorage: {values:new Map(), getItem(key) { return this.values.get(key) || null; }, setItem(key, value) { this.values.set(key, String(value)); }},
   URL,
+  Headers,
   TextEncoder,
+  TextDecoder,
   Uint8Array,
+  AbortController,
   setTimeout,
   clearTimeout,
   setInterval: () => 1,
@@ -250,6 +258,53 @@ const context = vm.createContext({
 vm.runInContext(script, context, {filename: "index.html"});
 
 function run(source) { return vm.runInContext(source, context); }
+
+async function sessionBootstrapBehavior() {
+  const originalFetch = context.fetch;
+  const requests = [];
+  const storage = context.localStorage;
+  storage.removeItem = key => storage.values.delete(key);
+  browserWindow.location.href = "http://127.0.0.1:4200/?bootstrap=one-use-secret";
+  context.fetch = async (path, options = {}) => {
+    requests.push({path, options});
+    if (path === "/api/session") return {ok:true, status:200, json:async()=>({session:"rust-session"})};
+    return {ok:true, status:200};
+  };
+  run("sessionToken=''; legacyCookieAuth=false");
+  await run("establishSession()");
+  assert.strictEqual(requests[0].path, "/api/session");
+  assert.strictEqual(requests[0].options.headers['X-EMP-Bootstrap'], "one-use-secret");
+  assert.strictEqual(requests[0].options.credentials, "same-origin");
+  assert.strictEqual(browserWindow.history.replaced, "/");
+  assert.strictEqual(run("sessionToken"), "rust-session");
+  assert.strictEqual(storage.getItem(run("SESSION_STORAGE_KEY")), "rust-session");
+  await run("managementFetch('/api/config')");
+  const rustRequest = requests.at(-1);
+  assert.strictEqual(new Headers(rustRequest.options.headers).get("X-EMP-Session"), "rust-session");
+  assert.strictEqual(rustRequest.options.credentials, "omit");
+
+  browserWindow.location.href = "http://127.0.0.1:4200/?bootstrap=already-consumed";
+  context.fetch = async () => ({ok:false, status:401, statusText:"Unauthorized", json:async()=>({})});
+  await run("establishSession()");
+  assert.strictEqual(run("sessionToken"), "rust-session", "a repeated one-use link can reuse this origin's active session");
+
+  storage.removeItem(run("SESSION_STORAGE_KEY"));
+  browserWindow.location.href = "http://127.0.0.1:4200/";
+  requests.length = 0;
+  context.fetch = async (path, options = {}) => {
+    requests.push({path, options});
+    return {ok:false, status:404};
+  };
+  run("sessionToken=''; legacyCookieAuth=false");
+  await run("establishSession()");
+  assert.strictEqual(run("legacyCookieAuth"), true, "legacy Python server uses its same-origin session cookie");
+  await run("managementFetch('/api/config')");
+  const legacyRequest = requests.at(-1);
+  assert.strictEqual(legacyRequest.options.credentials, "same-origin");
+  assert.strictEqual(new Headers(legacyRequest.options.headers).has("X-EMP-Session"), false);
+  context.fetch = originalFetch;
+  run("sessionToken=''; legacyCookieAuth=false");
+}
 
 async function integrationBehavior() {
   const calls = [];
@@ -425,18 +480,18 @@ function duplicateAccountBehavior() {
   assert.match(html, /模型显示由原生账户管理/);
   const cards = [...html.matchAll(/<article class="entity-card account-card[^\"]*"[\s\S]*?<\/article>/g)].map(match => match[0]);
   assert.strictEqual(cards.length, 3, "each account should render as one aligned card");
-  const nativeCard = cards.find(card => card.includes("refreshAccount('@native')"));
-  assert.doesNotMatch(nativeCard, /removeAccount\('@native'\)/);
+  const nativeCard = cards.find(card => card.includes('data-ui-action="account-refresh" data-id="@native"'));
+  assert.doesNotMatch(nativeCard, /data-ui-action="account-remove"/);
   assert.match(nativeCard, /title="n\*\*\*@example\.com · 使用 \.codex 当前登录"/);
   assert.match(nativeCard, /class="account-identity has-plan"><span class="account-identity-id"[^>]*>Native<\/span><span class="subscription-plan plan-pro">Pro<\/span><\/span>/);
   assert.doesNotMatch(nativeCard, /<div class="entity-card-status">使用 \.codex 当前登录/);
-  const duplicateCard = cards.find(card => card.includes("refreshAccount('same-login-account')"));
+  const duplicateCard = cards.find(card => card.includes('data-ui-action="account-refresh" data-id="same-login-account"'));
   assert(duplicateCard, "duplicate account card must render");
   assert.match(duplicateCard, /account-duplicate/);
-  assert.doesNotMatch(duplicateCard, /editAccount\('same-login-account'\)/);
+  assert.doesNotMatch(duplicateCard, /data-ui-action="account-edit"/);
   assert.doesNotMatch(duplicateCard, /<details class="action-menu">/);
-  assert.match(duplicateCard, /openQuotaHistory\('same-login-account'\)/);
-  const usableCard = cards.find(card => card.includes("refreshAccount('usable-account')"));
+  assert.match(duplicateCard, /data-ui-action="account-quota-history" data-id="same-login-account"/);
+  const usableCard = cards.find(card => card.includes('data-ui-action="account-refresh" data-id="usable-account"'));
   assert.match(usableCard, /class="account-identity has-plan"><span class="account-identity-id" title="u\*\*\*@example\.com">usable-account<\/span><span class="subscription-plan plan-prolite">Pro Lite<\/span><\/span>/);
   assert.doesNotMatch(usableCard, /entity-card-subtitle/, "a differing account ID must not add a second title row");
   assert.doesNotMatch(usableCard, /<span class="pill">usable-account<\/span>/, "an account ID must not be repeated as a badge");
@@ -829,8 +884,8 @@ async function creditLayoutBehavior() {
   const rendered = getElement("accounts").innerHTML;
   assert.match(rendered, /class="credit-mark">C<\/span><span>Credit<\/span><strong>1200<\/strong>/);
   assert.match(rendered, /class="credit-monthly"><span>月额度<\/span><strong>73%<\/strong>/);
-  assert.match(rendered, /onclick="openResetCredits\('credit-lines'\)"/);
-  assert.doesNotMatch(rendered, /openResetCredits\('no-resets'\)/, "accounts without reset opportunities must not show the reset option");
+  assert.match(rendered, /data-ui-action="account-reset-credits" data-id="credit-lines"/);
+  assert.doesNotMatch(rendered, /data-ui-action="account-reset-credits" data-id="no-resets"/, "accounts without reset opportunities must not show the reset option");
   assert.doesNotMatch(rendered, /expire 20|到期 · 20/, "expiry details must stay out of the compact card");
   run("openResetCredits('credit-lines')");
   const modal = getElement('modal_body').innerHTML;
@@ -918,11 +973,44 @@ async function quotaStateSyncBehavior() {
 }
 
 async function quotaNotificationBehavior() {
-  const instances = [];
-  context.EventSource = class {
-    constructor(url) { this.url = url; this.listeners = {}; this.closed = false; instances.push(this); }
-    addEventListener(name, listener) { this.listeners[name] = listener; }
-    close() { this.closed = true; }
+  const originalFetch = context.fetch;
+  let fetchCalls = 0;
+  let pendingRead = null;
+  let canceled = false;
+  const queued = [];
+  const reader = {
+    read() {
+      if (queued.length) return Promise.resolve(queued.shift());
+      return new Promise(resolve => { pendingRead = {resolve}; });
+    },
+    cancel() {
+      canceled = true;
+      if (pendingRead) {
+        pendingRead.resolve({done:true});
+        pendingRead = null;
+      }
+      return Promise.resolve();
+    },
+  };
+  const pushFrame = value => {
+    const item = {done:false,value:new TextEncoder().encode(value)};
+    if (pendingRead) {
+      pendingRead.resolve(item);
+      pendingRead = null;
+    } else queued.push(item);
+  };
+  context.fetch = async (path, options) => {
+    assert.strictEqual(path, '/api/accounts/events');
+    fetchCalls++;
+    assert.strictEqual(new Headers(options.headers).get('X-EMP-Session'), 'fixture-session');
+    assert.strictEqual(options.credentials, 'omit');
+    options.signal.addEventListener('abort', () => {
+      if (pendingRead) {
+        pendingRead.resolve({done:true});
+        pendingRead = null;
+      }
+    }, {once:true});
+    return {ok:true,body:{getReader:() => reader}};
   };
   let resolveFirst;
   let reads = 0;
@@ -932,33 +1020,31 @@ async function quotaNotificationBehavior() {
     reads++;
     return reads === 1 ? new Promise(resolve => { resolveFirst = resolve; }) : snapshot(70);
   };
-  run("closeModal(); state={accounts:[],providers:[],models:[]}; api=__liveQuotaApi; startQuotaEvents(); startQuotaEvents()");
-  assert.strictEqual(instances.length, 1, 'reloading the page state must not add subscribers');
-  const source = instances[0];
-  assert.strictEqual(source.url, '/api/accounts/events');
-  source.onopen();
+  run("sessionToken='fixture-session'; closeModal(); state={accounts:[],providers:[],models:[]}; api=__liveQuotaApi; startQuotaEvents(); startQuotaEvents()");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.strictEqual(fetchCalls, 1, 'reloading the page state must not add subscribers');
   assert.strictEqual(run('quotaEventsConnected'), true);
   const pending = run('requestQuotaSync()');
-  source.listeners['quota-updated']();
-  source.listeners['quota-updated']();
+  pushFrame('event: quota-updated\ndata: {}\n\nevent: quota-updated\ndata: {}\n\n');
+  await new Promise(resolve => setImmediate(resolve));
   resolveFirst(snapshot(20));
   await pending;
   assert.strictEqual(reads, 2, 'events during a read must coalesce into a fresh read');
   assert.match(getElement('accounts').innerHTML, /aria-valuenow="70"/);
-  source.onerror();
-  assert.strictEqual(run('quotaEventsConnected'), false, 'disconnect enables polling fallback');
   run('stopQuotaEvents()');
-  assert.strictEqual(source.closed, true);
-  source.onopen();
-  assert.strictEqual(run('quotaEventsConnected'), false, 'closed subscriptions cannot change state');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.strictEqual(canceled, true, 'stopping the stream releases its reader');
+  assert.strictEqual(run('quotaEventsConnected'), false);
   document.visibilityState = 'hidden';
   run('startQuotaEvents()');
-  assert.strictEqual(instances.length, 1, 'hidden pages must release their subscription');
+  assert.strictEqual(fetchCalls, 1, 'hidden pages must not open a subscription');
   document.visibilityState = 'visible';
   run('startQuotaEvents()');
-  assert.strictEqual(instances.length, 2);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.strictEqual(fetchCalls, 2);
   run('stopQuotaEvents()');
-  delete context.EventSource;
+  context.fetch = originalFetch;
+  run("sessionToken=''");
 
   context.__liveQuotaApi = async () => ({...snapshot(70),refresh_errors:{live:'quota_auth_required'}});
   run('api=__liveQuotaApi');
@@ -1074,8 +1160,8 @@ function modelGroupBehavior() {
   assert(html.indexOf("provider-b/old") < html.indexOf("provider-b/hidden"), "hidden models must sort last");
   assert.strictEqual((html.match(/class="entity-card model-card/g) || []).length, 4);
   assert.strictEqual((html.match(/<details class="action-menu">/g) || []).length, 0);
-  assert.strictEqual((html.match(/testModelVision\('/g) || []).length, 4);
-  assert.strictEqual((html.match(/removeModel\('/g) || []).length, 4);
+  assert.strictEqual((html.match(/data-ui-action="model-test-vision"/g) || []).length, 4);
+  assert.strictEqual((html.match(/data-ui-action="model-remove"/g) || []).length, 4);
   assert.doesNotMatch(html, /<table>/, "model actions should not be squeezed into table cells");
   assert.doesNotMatch(html, /<br>/, "model metadata should wrap naturally instead of forcing extra lines");
   assert.match(html, /<\/div>\s*<div class="entity-card-meta">/, "model metadata must use a full-width row outside the narrow title column");
@@ -1085,11 +1171,11 @@ function providerCardBehavior() {
   run("state = {providers:[{id:'provider-a',name:'Provider A',base_url:'https://example.test/v1',protocol:'chat_completions',auth_mode:'api_key'}],models:[{provider:'provider-a',enabled:true}]}; renderProviders()");
   const html = getElement("providers").innerHTML;
   assert.match(html, /class="entity-card provider-card"/);
-  assert.match(html, /discoverProvider\('provider-a'\)/);
-  assert.match(html, /editProvider\('provider-a'\)/);
+  assert.match(html, /data-ui-action="provider-discover" data-id="provider-a"/);
+  assert.match(html, /data-ui-action="provider-edit" data-id="provider-a"/);
   assert.doesNotMatch(html, /<details class="action-menu">/);
-  assert.match(html, /toggleProviderModels\('provider-a', false\)/);
-  assert.match(html, /removeProvider\('provider-a'\)/);
+  assert.match(html, /data-ui-action="provider-toggle-models" data-id="provider-a" data-all-hidden="false"/);
+  assert.match(html, /data-ui-action="provider-remove" data-id="provider-a"/);
   assert.doesNotMatch(html, /<table>/);
   assert.match(html, /<\/div>\s*<div class="entity-card-meta"><code class="endpoint">/, "provider details must sit outside the narrow title column");
 }
@@ -1146,7 +1232,7 @@ async function presentationBehavior() {
   assert.doesNotMatch(getElement("catalog_display_models").innerHTML, /data-catalog-alias/);
   assert.match(getElement("catalog_display_models").innerHTML, /provider-a\/model/);
   assert.doesNotMatch(getElement("catalog_display_models").innerHTML, /258k/, "the compact list must show only the name and slug");
-  assert.match(getElement("catalog_display_models").innerHTML, /openCatalogDisplayEditor\('model'\)/);
+  assert.match(getElement("catalog_display_models").innerHTML, /data-ui-action="catalog-display-editor" data-id="model"/);
   run("openCatalogDisplayEditor('model')");
   getElement('modal_catalog_alias').value = 'General';
   getElement('modal_catalog_context').checked = false;
@@ -1437,6 +1523,7 @@ function updateBehavior() {
 
 (async () => {
   updateBehavior();
+  await sessionBootstrapBehavior();
   await integrationBehavior();
   pickerBehavior();
   duplicateAccountBehavior();

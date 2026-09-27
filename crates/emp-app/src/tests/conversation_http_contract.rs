@@ -27,7 +27,7 @@ fn complete_chat_request_crosses_the_real_server_boundary() {
         &server,
         "/v1/responses",
         &request_body,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     let response_body: Value = serde_json::from_str(
@@ -80,7 +80,7 @@ fn external_compact_endpoint_uses_the_selected_model_and_returns_a_portable_chec
         &server,
         "/v1/responses/compact",
         &request_body,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     let response_body: Value = serde_json::from_str(
@@ -137,7 +137,7 @@ fn external_compaction_trigger_streams_one_emp_owned_checkpoint() {
         &server,
         "/v1/responses",
         &request_body,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.contains("Content-Type: text/event-stream\r\n"));
@@ -224,7 +224,7 @@ fn native_checkpoint_switch_to_external_rebuilds_visible_codex_history() {
         "/v1/responses",
         &body,
         &[
-            &session_cookie_header(&server),
+            &session_header(&server),
             &format!("thread-id: {thread_id}"),
             &format!("x-codex-turn-metadata: {metadata}"),
         ],
@@ -300,12 +300,7 @@ fn long_to_short_external_switch_compacts_before_the_destination_request() {
                 {"type":"message","role":"user","content":[{"type":"input_text","text":"active request"}]}
             ]
         })).unwrap();
-    let response = post(
-        &server,
-        "/v1/responses",
-        &body,
-        &[&session_cookie_header(&server)],
-    );
+    let response = post(&server, "/v1/responses", &body, &[&session_header(&server)]);
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     let requests = observed.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(

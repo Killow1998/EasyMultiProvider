@@ -4,7 +4,6 @@ use base64::engine::general_purpose::STANDARD;
 
 use crate::cli::Cli;
 use crate::cli::parse_cli;
-use crate::http::auth::parse_session_cookie;
 use crate::http::auth::valid_caller_authorization;
 use crate::http::request::RequestHead;
 use crate::http::request::parse_request;
@@ -199,7 +198,7 @@ fn read_sse_frame(reader: &mut BufReader<TcpStream>) -> String {
     }
 }
 
-fn open_quota_events(server: &ServerHandle, cookie: &str) -> BufReader<TcpStream> {
+fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<TcpStream> {
     let mut stream = TcpStream::connect(server.local_addr()).expect("connect SSE");
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -207,7 +206,7 @@ fn open_quota_events(server: &ServerHandle, cookie: &str) -> BufReader<TcpStream
     stream
             .write_all(
                 format!(
-                    "GET /api/accounts/events HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{cookie}\r\nConnection: close\r\n\r\n",
+                    "GET /api/accounts/events HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{session}\r\nConnection: close\r\n\r\n",
                     server.local_addr().port()
                 )
                 .as_bytes(),
@@ -228,6 +227,9 @@ fn open_quota_events(server: &ServerHandle, cookie: &str) -> BufReader<TcpStream
     assert!(head.contains("Content-Type: text/event-stream\r\n"));
     assert!(head.contains("Cache-Control: no-store\r\n"));
     assert!(head.contains("X-Accel-Buffering: no\r\n"));
+    assert!(head.contains("X-Frame-Options: DENY\r\n"));
+    assert!(head.contains("Content-Security-Policy: frame-ancestors 'none'\r\n"));
+    assert!(head.contains("X-Content-Type-Options: nosniff\r\n"));
     assert_eq!(
         read_sse_frame(&mut reader),
         "event: quota-updated\ndata: {}\n"
@@ -533,12 +535,8 @@ fn assert_saved_protocol_observation(directory: &TempDir, server: &ServerHandle,
     );
 }
 
-fn session_cookie_header(server: &ServerHandle) -> String {
-    let cookie = server.session_cookie();
-    format!(
-        "Cookie: {}",
-        cookie.split(';').next().expect("session cookie pair")
-    )
+fn session_header(server: &ServerHandle) -> String {
+    format!("X-EMP-Session: {}", server.session_token())
 }
 
 fn test_server() -> (TempDir, ServerHandle) {

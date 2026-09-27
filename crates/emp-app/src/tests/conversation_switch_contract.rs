@@ -1,4 +1,4 @@
-use super::{OneShotUpstream, canonical_root, post, session_cookie_header};
+use super::{OneShotUpstream, canonical_root, post, session_header};
 use crate::lifecycle::ServerHandle;
 use serde_json::{Value, json};
 use std::net::{IpAddr, Ipv4Addr};
@@ -132,7 +132,7 @@ fn external_to_native_http_switch_preserves_python_visible_tool_history_and_head
         "/v1/responses",
         &serde_json::to_vec(&body).expect("request JSON"),
         &[
-            &session_cookie_header(&server),
+            &session_header(&server),
             "Authorization: Bearer caller",
             "thread-id: switch-thread",
             "x-openai-subagent: switch-subagent",
@@ -261,7 +261,7 @@ fn short_to_long_native_history_fork_uses_exact_checkpoint_and_never_reads_later
         "/v1/responses",
         &serde_json::to_vec(&body).expect("sidechat request JSON"),
         &[
-            &session_cookie_header(&server),
+            &session_header(&server),
             &format!("thread-id: {child_id}"),
             &format!("x-codex-turn-metadata: {turn_metadata}"),
         ],

@@ -9,6 +9,9 @@ use std::io::Write;
 /// Exact compact JSON body observed in the Python server tests.
 pub const HEALTH_JSON_BYTES: &[u8] = b"{\"status\":\"ok\"}";
 
+/// Framing and sniffing protections sent with every framed response.
+pub(crate) const SECURITY_HEADERS: &[u8] = b"X-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\nX-Content-Type-Options: nosniff\r\n";
+
 pub(crate) fn response(
     status_line: &str,
     content_type: &str,
@@ -24,7 +27,18 @@ pub(crate) fn response(
     if content_type == "application/json" {
         response.extend_from_slice(b"Cache-Control: no-store\r\n");
     }
+    response.extend_from_slice(SECURITY_HEADERS);
     for (name, value) in headers {
+        if [
+            "X-Frame-Options",
+            "Content-Security-Policy",
+            "X-Content-Type-Options",
+        ]
+        .iter()
+        .any(|security_header| name.eq_ignore_ascii_case(security_header))
+        {
+            continue;
+        }
         let _ = write!(response, "{name}: {value}\r\n");
     }
     response.extend_from_slice(b"Connection: close\r\n\r\n");
@@ -105,6 +119,7 @@ pub(crate) fn status_text(status: u16) -> &'static str {
         202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",
+        408 => "Request Timeout",
         403 => "Forbidden",
         404 => "Not Found",
         413 => "Content Too Large",
@@ -161,6 +176,13 @@ pub(crate) fn body_error_response(error: BodyError) -> Vec<u8> {
         BodyError::Invalid(message) => {
             json_error_response(400, status_text(400), &message, None, &[])
         }
+        BodyError::Timeout => json_error_response(
+            408,
+            status_text(408),
+            "request body timed out",
+            Some("request_timeout"),
+            &[],
+        ),
         BodyError::Capacity(error) => capacity_response(&error),
         BodyError::Decode(ContentDecodeError::Capacity(error)) => capacity_response(&error),
         BodyError::Decode(error) => json_error_response(
