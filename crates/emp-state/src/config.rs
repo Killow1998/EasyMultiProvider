@@ -6,7 +6,8 @@
 
 use crate::accounts::{normalize_account, normalize_context_windows, normalize_hidden_models};
 use crate::filesystem::{
-    FileTransaction, FilesystemError, VaultStore, atomic_write_config, with_file_transaction,
+    FileTransaction, FilesystemError, VaultStore, atomic_write_config, read_file_limited,
+    with_file_transaction,
 };
 use crate::model_values::{
     input_modalities_known, normalize_input_modalities, normalize_output_modalities,
@@ -23,6 +24,9 @@ use std::path::{Path, PathBuf};
 
 pub const CONFIG_PATH_ENV: &str = "EASY_MULTI_PROVIDER_CONFIG";
 const REASONING_SUMMARIES: [&str; 3] = ["auto", "show", "hide"];
+/// Configuration files larger than a transaction snapshot cannot be saved
+/// atomically either, so loading refuses them before reading into memory.
+const MAX_CONFIG_FILE_BYTES: usize = crate::filesystem::MAX_TRANSACTION_FILE_BYTES;
 const MASKED_API_KEY: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}";
 /// A stable Python-visible configuration failure without private input data.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -356,7 +360,10 @@ pub fn load_configuration(path: Option<&Path>) -> ConfigResult<Value> {
         return normalize_configuration(None);
     }
 
-    let raw = std::fs::read(&path).map_err(|error| {
+    let raw = read_file_limited(&path, MAX_CONFIG_FILE_BYTES).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::FileTooLarge {
+            return ConfigError::python("OSError", "configuration file is too large");
+        }
         let python_type = match error.kind() {
             std::io::ErrorKind::NotFound => "FileNotFoundError",
             std::io::ErrorKind::PermissionDenied => "PermissionError",

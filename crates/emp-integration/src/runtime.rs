@@ -3,7 +3,6 @@ use crate::{IntegrationError, now};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 const SCHEMA: &str = "easy-multi-provider.runtime-recovery";
@@ -65,7 +64,7 @@ impl RuntimeStore {
     }
 
     pub fn load(&self) -> Result<Option<RuntimeRecord>, IntegrationError> {
-        let bytes = match fs::read(&self.path) {
+        let bytes = match emp_state::read_file_limited(&self.path, crate::MAX_LEASE_BYTES) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(IntegrationError("runtime recovery record is unreadable")),

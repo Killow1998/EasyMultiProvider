@@ -188,6 +188,7 @@ fn merge_import(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let mut overwritten_providers = BTreeSet::new();
     for raw in source
         .get("providers")
         .and_then(Value::as_array)
@@ -196,6 +197,9 @@ fn merge_import(
     {
         let mut provider = raw.clone();
         let id = id_of(&provider).to_owned();
+        if providers.iter().any(|existing| id_of(existing) == id) {
+            overwritten_providers.insert(id.clone());
+        }
         let key = provider_keys.get(&id).and_then(Value::as_str).unwrap_or("");
         set_string(&mut provider, "api_key", key);
         set_string(&mut provider, "api_key_file", "");
@@ -408,6 +412,7 @@ fn merge_import(
         providers: source_provider_count,
         models: source_model_count,
         renamed_accounts,
+        overwritten_providers: overwritten_providers.into_iter().collect(),
     };
     Ok((target, imported_auth, summary))
 }

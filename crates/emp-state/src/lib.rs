@@ -43,14 +43,17 @@ pub use config::{
 pub use fernet::{Fernet, FernetError, FernetKey, FernetKeyError};
 pub use filesystem::{
     FileTransaction, FilesystemError, MASTER_KEY_ENV, MASTER_KEY_FILE_ENV,
-    MAX_TRANSACTION_FILE_BYTES, VaultStore, with_file_transaction,
+    MAX_ENCRYPTED_FILE_BYTES, MAX_TRANSACTION_FILE_BYTES, VaultStore, atomic_write_private_state,
+    create_private_directory, read_file_limited, read_to_limit, with_file_transaction,
+    write_new_private_file,
 };
 pub use lock::{IntegrationFileLock, LockError};
 pub use migration::{
-    ExportGroup, ExportGroups, MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES, MIGRATION_MAGIC,
-    MIGRATION_SCHEMA, MIGRATION_VERSION, MIN_PASSWORD_BYTES, MigrationError,
-    MigrationExportSummary, MigrationImportSummary, MigrationParams, MigrationResult, SALT_BYTES,
-    SCRYPT_N, SCRYPT_P, SCRYPT_R, decode_migration, encode_migration, export_migration_bundle,
+    ExportGroup, ExportGroups, MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES, MIGRATION_ENVELOPE_VERSION,
+    MIGRATION_MAGIC, MIGRATION_SCHEMA, MIGRATION_VERSION, MIN_IMPORT_PASSWORD_BYTES,
+    MIN_PASSWORD_BYTES, MigrationError, MigrationExportSummary, MigrationImportSummary,
+    MigrationParams, MigrationResult, SALT_BYTES, SCRYPT_N, SCRYPT_P, SCRYPT_R, SCRYPT_V2_N,
+    SCRYPT_V2_P, SCRYPT_V2_R, decode_migration, encode_migration, export_migration_bundle,
     export_migration_bundle_with_summary, import_migration_bundle, parse_envelope,
     select_export_config,
 };

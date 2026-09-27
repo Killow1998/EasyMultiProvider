@@ -18,10 +18,17 @@ fn migration_export_and_import_cross_the_authenticated_http_boundary() {
         source_root.join("auth.json"),
     )
     .unwrap();
-    let export = post(
+    let short = post(
         &source,
         "/api/migration/export",
         br#"{"password":"12345678","groups":["external"]}"#,
+        &[&session_cookie_header(&source)],
+    );
+    assert!(!short.starts_with("HTTP/1.1 200 OK\r\n"), "{short}");
+    let export = post(
+        &source,
+        "/api/migration/export",
+        br#"{"password":"123456789012","groups":["external"]}"#,
         &[&session_cookie_header(&source)],
     );
     assert!(export.starts_with("HTTP/1.1 200 OK\r\n"), "{export}");
@@ -43,7 +50,7 @@ fn migration_export_and_import_cross_the_authenticated_http_boundary() {
     )
     .unwrap();
     let import_body = serde_json::to_vec(&json!({
-        "password":"12345678",
+        "password":"123456789012",
         "bundle":STANDARD.encode(bundle)
     }))
     .unwrap();

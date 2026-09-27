@@ -23,6 +23,8 @@ use std::os::windows::fs::OpenOptionsExt as StdOpenOptionsExt;
 pub const MASTER_KEY_ENV: &str = "EASY_MULTI_PROVIDER_MASTER_KEY";
 pub const MASTER_KEY_FILE_ENV: &str = "EASY_MULTI_PROVIDER_MASTER_KEY_FILE";
 pub const MAX_TRANSACTION_FILE_BYTES: usize = 64 * 1024 * 1024;
+/// Upper bound for one encrypted vault file (credentials and provider keys).
+pub const MAX_ENCRYPTED_FILE_BYTES: usize = 16 * 1024 * 1024;
 const CONFIG_FILE_MODE: u32 = 0o600;
 
 static FILE_TRANSACTION_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -47,6 +49,7 @@ pub enum FilesystemError {
     CredentialDecryptFailed,
     InvalidJson,
     InvalidText,
+    CredentialFileTooLarge,
 }
 
 impl fmt::Display for FilesystemError {
@@ -92,6 +95,9 @@ impl fmt::Display for FilesystemError {
             }
             Self::InvalidText => {
                 formatter.write_str("encrypted credential content is not valid text")
+            }
+            Self::CredentialFileTooLarge => {
+                formatter.write_str("encrypted credential file is too large")
             }
         }
     }
@@ -202,9 +208,16 @@ impl VaultStore {
         if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
             return Err(FilesystemError::CredentialFileUnavailable);
         }
-        let mut raw = Vec::new();
-        file.read_to_end(&mut raw)
-            .map_err(|_| FilesystemError::CredentialFileUnavailable)?;
+        if metadata.len() > MAX_ENCRYPTED_FILE_BYTES as u64 {
+            return Err(FilesystemError::CredentialFileTooLarge);
+        }
+        let raw = read_to_limit(&mut file, MAX_ENCRYPTED_FILE_BYTES).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::FileTooLarge {
+                FilesystemError::CredentialFileTooLarge
+            } else {
+                FilesystemError::CredentialFileUnavailable
+            }
+        })?;
         decode_vault(&self.key, &raw).map_err(Into::into)
     }
 
@@ -229,6 +242,85 @@ impl VaultStore {
             String::from_utf8(plaintext.to_vec()).map_err(|_| FilesystemError::InvalidText)?;
         Ok(Zeroizing::new(value))
     }
+}
+
+/// Read at most `limit` bytes from `reader`. A longer input fails with
+/// `ErrorKind::FileTooLarge` instead of growing memory without bound.
+pub fn read_to_limit(reader: &mut impl Read, limit: usize) -> std::io::Result<Vec<u8>> {
+    let mut data = Vec::new();
+    reader.take(limit as u64 + 1).read_to_end(&mut data)?;
+    if data.len() > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            format!("file exceeds the {limit}-byte limit"),
+        ));
+    }
+    Ok(data)
+}
+
+/// Read a whole file of at most `limit` bytes. Oversized files fail with
+/// `ErrorKind::FileTooLarge`; other failures keep their original kind.
+pub fn read_file_limited(path: &Path, limit: usize) -> std::io::Result<Vec<u8>> {
+    let mut file = fs::File::open(path)?;
+    if file.metadata()?.len() > limit as u64 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            format!("file exceeds the {limit}-byte limit"),
+        ));
+    }
+    read_to_limit(&mut file, limit)
+}
+
+/// Open an existing file for reading without following a final symlink or
+/// reparse point, and without blocking on FIFOs or devices.
+fn open_nofollow_for_read(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path)
+}
+
+/// Create (if needed) an EMP-owned directory that only the current user can
+/// access: mode 0700 on Unix, a protected current-user DACL on Windows. The
+/// directory itself must be a real directory, not a link. Its ancestors are
+/// not checked: system locations such as macOS `/var` or `/tmp` are links.
+pub fn create_private_directory(path: &Path) -> Result<(), FilesystemError> {
+    let candidate = absolute(path).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
+    fs::create_dir_all(&candidate).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
+    let metadata =
+        fs::symlink_metadata(&candidate).map_err(|_| FilesystemError::ManagedFileUnavailable)?;
+    if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+        return Err(FilesystemError::ManagedFileNotRegular);
+    }
+    set_private_directory(&candidate).map_err(|_| FilesystemError::ManagedFileUnavailable)
+}
+
+/// Create a new private file (never replacing or following an existing path)
+/// and write `data` to it. The file is mode 0600 on Unix and has a protected
+/// current-user DACL on Windows. A partially written file is removed.
+pub fn write_new_private_file(path: &Path, data: &[u8]) -> Result<(), FilesystemError> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    let mut file = options
+        .open(path)
+        .map_err(|_| FilesystemError::ManagedFileUnavailable)?;
+    let result = set_private_file_mode(&file, 0o600).and_then(|()| {
+        file.write_all(data)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| FilesystemError::ManagedFileUnavailable)
+    });
+    if result.is_err() {
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+    result
 }
 
 fn expand_user(path: &Path) -> PathBuf {
@@ -506,18 +598,32 @@ impl FileTransaction {
                 if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
                     return Err(FilesystemError::ManagedFileNotRegular);
                 }
+                // Re-validate on the opened handle so a path swapped for a
+                // link or special file after the check above is not followed.
+                let mut file = open_nofollow_for_read(&path).map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        FilesystemError::ManagedFileUnavailable
+                    } else {
+                        FilesystemError::ManagedFileNotRegular
+                    }
+                })?;
+                let metadata = file
+                    .metadata()
+                    .map_err(|_| FilesystemError::ManagedFileUnavailable)?;
+                if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+                    return Err(FilesystemError::ManagedFileNotRegular);
+                }
                 if metadata.len() > MAX_TRANSACTION_FILE_BYTES as u64 {
                     return Err(FilesystemError::ManagedFileTooLarge);
                 }
-                let mut data = Vec::new();
-                fs::File::open(&path)
-                    .map_err(|_| FilesystemError::ManagedFileUnavailable)?
-                    .take(MAX_TRANSACTION_FILE_BYTES as u64 + 1)
-                    .read_to_end(&mut data)
-                    .map_err(|_| FilesystemError::ManagedFileUnavailable)?;
-                if data.len() > MAX_TRANSACTION_FILE_BYTES {
-                    return Err(FilesystemError::ManagedFileTooLarge);
-                }
+                let data =
+                    read_to_limit(&mut file, MAX_TRANSACTION_FILE_BYTES).map_err(|error| {
+                        if error.kind() == std::io::ErrorKind::FileTooLarge {
+                            FilesystemError::ManagedFileTooLarge
+                        } else {
+                            FilesystemError::ManagedFileUnavailable
+                        }
+                    })?;
                 Snapshot {
                     path,
                     data: Some(Zeroizing::new(data)),
