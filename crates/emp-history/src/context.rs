@@ -41,9 +41,7 @@ pub fn assess(
     payload: &Value,
 ) -> ContextAssessment {
     let input_estimate = estimate_protocol_payload_tokens(payload, protocol);
-    let output_reserve = positive_integer(payload.get("max_output_tokens"))
-        .or_else(|| positive_integer(payload.get("max_tokens")))
-        .or_else(|| positive_integer(model.get("output_limit")));
+    let output_reserve = output_reserve(payload, model);
     let limits = calibration::limits(
         provider,
         model,
@@ -81,6 +79,13 @@ pub fn assess(
         source,
         decision,
     }
+}
+
+fn output_reserve(payload: &Value, model: &Map<String, Value>) -> Option<u64> {
+    ["max_output_tokens", "max_completion_tokens", "max_tokens"]
+        .into_iter()
+        .find_map(|key| positive_integer(payload.get(key)))
+        .or_else(|| positive_integer(model.get("output_limit")))
 }
 
 pub fn estimate_json_tokens(value: &Value) -> Option<u64> {
@@ -213,6 +218,11 @@ fn contains_image(value: &Value, depth: usize) -> Option<bool> {
     }
 }
 
+/// Upper bound on atomic history units considered for one destination compaction.
+const MAX_COMPACTION_UNITS: usize = 50_000;
+/// Upper bound on map and reduce summary requests issued for one compaction.
+const MAX_SUMMARY_REQUESTS: usize = 256;
+
 pub fn compact_with<F>(
     body: &Value,
     model: &Map<String, Value>,
@@ -231,10 +241,12 @@ where
         .remove(super::ACTIVE_INPUT_START)
         .and_then(|value| value.as_u64())
         .and_then(|value| usize::try_from(value).ok());
-    let mut source = match projected.get("input") {
-        Some(Value::Array(items)) => items.clone(),
-        Some(Value::Object(item)) => vec![Value::Object(item.clone())],
-        Some(Value::String(text)) => vec![Value::String(text.clone())],
+    // Every body built below replaces `input`; keep the key (and its position)
+    // but drop the original array so it is never cloned or re-serialised again.
+    let mut source = match projected.get_mut("input").map(Value::take) {
+        Some(Value::Array(items)) => items,
+        Some(Value::Object(item)) => vec![Value::Object(item)],
+        Some(Value::String(text)) => vec![Value::String(text)],
         _ => Vec::new(),
     };
     let suffix = if source
@@ -249,20 +261,21 @@ where
     };
     let (candidate, active) =
         if let Some(index) = active_start.filter(|index| *index <= source.len()) {
-            (source[..index].to_vec(), source[index..].to_vec())
+            let active = source.split_off(index);
+            (source, active)
         } else if !suffix.is_empty() {
             (source, Vec::new())
         } else {
-            let units = split_atomic_units(&source, false);
-            match units.split_last() {
-                Some((last, prior)) => (flatten(prior), last.clone()),
+            let mut units = split_atomic_units(&source, false);
+            match units.pop() {
+                Some(last) => (units.into_iter().flatten().collect(), last),
                 None => (Vec::new(), Vec::new()),
             }
         };
     let before = input_view_value(&final_body(
         &projected,
         None,
-        &[candidate.to_vec()],
+        std::slice::from_ref(&candidate),
         &active,
         &suffix,
     ));
@@ -273,6 +286,7 @@ where
         );
         return Ok(Value::Object(projected));
     }
+    drop(before);
     let active_only = input_view_value(&final_body(&projected, None, &[], &active, &suffix));
     if estimate_json_tokens(&active_only).is_none_or(|estimate| estimate > safe_budget) {
         return Err("compaction_unit_too_large");
@@ -284,6 +298,9 @@ where
             .collect::<Vec<_>>(),
         true,
     );
+    if units.len() > MAX_COMPACTION_UNITS {
+        return Err("compaction_unit_too_large");
+    }
     let configured_output = positive_integer(projected.get("max_output_tokens"))
         .or_else(|| positive_integer(projected.get("max_tokens")))
         .or_else(|| positive_integer(model.get("max_output_tokens")))
@@ -291,26 +308,42 @@ where
         .unwrap_or(1024);
     let output_limit = configured_output.min((safe_budget / 8).max(1));
     let placeholder = "x".repeat(usize::try_from(output_limit.saturating_mul(2)).unwrap_or(2048));
-    let mut retained = Vec::<Vec<Value>>::new();
+    // The tentative body is the placeholder checkpoint, the retained units,
+    // then the active turn and suffix; units only add their own items.
+    let mut tail = IncrementalEstimate::new(
+        &input_view_value(&final_body(
+            &projected,
+            Some(&placeholder),
+            &[],
+            &active,
+            &suffix,
+        )),
+        1 + active.len() + suffix.len(),
+    );
+    let mut kept = 0;
     for unit in units.iter().rev() {
-        let mut tentative = vec![unit.clone()];
-        tentative.extend(retained.clone());
-        let value = final_body(&projected, Some(&placeholder), &tentative, &active, &suffix);
-        if estimate_json_tokens(&input_view_value(&value))
-            .is_some_and(|estimate| estimate <= safe_budget)
-        {
-            retained.insert(0, unit.clone());
-        } else {
-            break;
+        let costs = unit
+            .iter()
+            .map(|item| json_cost(item, 2))
+            .collect::<Option<Vec<_>>>();
+        let fits = costs.as_ref().is_some_and(|costs| {
+            tail.tokens_with(costs)
+                .is_some_and(|estimate| estimate <= safe_budget)
+        });
+        match costs {
+            Some(costs) if fits => {
+                tail.extend(&costs);
+                kept += 1;
+            }
+            _ => break,
         }
     }
-    let mapped = &units[..units.len().saturating_sub(retained.len())];
+    let (mapped, retained) = units.split_at(units.len() - kept);
     let summary = if mapped.is_empty() {
         None
     } else {
         Some(map_reduce(
             mapped,
-            &projected,
             body.get("model")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown"),
@@ -319,7 +352,7 @@ where
             &mut summarize,
         )?)
     };
-    let result = final_body(&projected, summary.as_deref(), &retained, &active, &suffix);
+    let result = final_body(&projected, summary.as_deref(), retained, &active, &suffix);
     if estimate_json_tokens(&input_view_value(&result))
         .is_none_or(|estimate| estimate > safe_budget)
     {
@@ -328,9 +361,75 @@ where
     Ok(result)
 }
 
+/// Serialized size of one JSON value in the token estimator's terms: bytes
+/// after image redaction plus the number of redacted images.
+#[derive(Clone, Copy, Default)]
+struct JsonCost {
+    bytes: u64,
+    images: u64,
+}
+
+/// Mirrors `estimate_json_tokens` for a value nested `depth` levels deep, so
+/// per-item costs sum to the estimate of the enclosing array.
+fn json_cost(value: &Value, depth: usize) -> Option<JsonCost> {
+    match contains_image(value, depth)? {
+        false => Some(JsonCost {
+            bytes: serialized_json_bytes(value)?,
+            images: 0,
+        }),
+        true => {
+            let mut images = 0_u64;
+            let redacted = redact_images_with(value, &mut images, depth, &[])?;
+            Some(JsonCost {
+                bytes: serialized_json_bytes(&redacted)?,
+                images,
+            })
+        }
+    }
+}
+
+/// Token estimate of a request whose `input` array grows one item at a time,
+/// computed without re-serialising the request for every candidate.
+struct IncrementalEstimate {
+    total: Option<JsonCost>,
+    items: u64,
+}
+
+impl IncrementalEstimate {
+    /// `base` is the request with only its `fixed` always-present input items.
+    fn new(base: &Value, fixed: usize) -> Self {
+        Self {
+            total: json_cost(base, 0),
+            items: fixed as u64,
+        }
+    }
+
+    fn added(&self, costs: &[JsonCost]) -> Option<JsonCost> {
+        let mut total = self.total?;
+        let mut items = self.items;
+        for cost in costs {
+            // One separating comma per item beyond the first.
+            let comma = u64::from(items > 0);
+            total.bytes = total.bytes.checked_add(cost.bytes)?.checked_add(comma)?;
+            total.images = total.images.saturating_add(cost.images);
+            items += 1;
+        }
+        Some(total)
+    }
+
+    fn tokens_with(&self, costs: &[JsonCost]) -> Option<u64> {
+        self.added(costs)
+            .map(|total| tokens_from_bytes(total.bytes, total.images))
+    }
+
+    fn extend(&mut self, costs: &[JsonCost]) {
+        self.total = self.added(costs);
+        self.items = self.items.saturating_add(costs.len() as u64);
+    }
+}
+
 fn map_reduce<F>(
     units: &[Vec<Value>],
-    body: &Map<String, Value>,
     model: &str,
     safe_budget: u64,
     output_limit: u64,
@@ -339,20 +438,27 @@ fn map_reduce<F>(
 where
     F: FnMut(&Value) -> Result<String, ()>,
 {
+    let mut requests = 0_usize;
+    let mut run = |chunks: Vec<Vec<Vec<Value>>>, prompt: &str| {
+        requests = requests.saturating_add(chunks.len());
+        if requests > MAX_SUMMARY_REQUESTS {
+            return Err("compaction_unit_too_large");
+        }
+        chunks
+            .iter()
+            .map(|chunk| summary_body(model, chunk, prompt, output_limit))
+            .map(|request| summarize(&request).map_err(|_| "summary_call_failed"))
+            .collect::<Result<Vec<_>, _>>()
+    };
     let chunks = pack(
         units,
-        body,
         model,
         MAP_PROMPT,
         safe_budget,
         output_limit,
         "compaction_unit_too_large",
     )?;
-    let mut summaries = chunks
-        .iter()
-        .map(|chunk| summary_body(model, chunk, MAP_PROMPT, output_limit))
-        .map(|request| summarize(&request).map_err(|_| "summary_call_failed"))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut summaries = run(chunks, MAP_PROMPT)?;
     while summaries.len() > 1 {
         let reduce_units = summaries
             .iter()
@@ -360,7 +466,6 @@ where
             .collect::<Vec<_>>();
         let chunks = pack(
             &reduce_units,
-            body,
             model,
             REDUCE_PROMPT,
             safe_budget,
@@ -370,18 +475,13 @@ where
         if chunks.len() >= summaries.len() {
             return Err("history_compaction_failed");
         }
-        summaries = chunks
-            .iter()
-            .map(|chunk| summary_body(model, chunk, REDUCE_PROMPT, output_limit))
-            .map(|request| summarize(&request).map_err(|_| "summary_call_failed"))
-            .collect::<Result<Vec<_>, _>>()?;
+        summaries = run(chunks, REDUCE_PROMPT)?;
     }
     summaries.pop().ok_or("history_compaction_failed")
 }
 
 fn pack(
     units: &[Vec<Value>],
-    _body: &Map<String, Value>,
     model: &str,
     prompt: &str,
     safe_budget: u64,
@@ -392,24 +492,43 @@ fn pack(
     if input_budget == 0 {
         return Err(oversize);
     }
+    // The empty request already holds the prompt; units are inserted before it.
+    let empty = IncrementalEstimate::new(&summary_body(model, &[], prompt, output_limit), 1);
+    let fits = |estimate: &IncrementalEstimate, costs: &Option<Vec<JsonCost>>| {
+        costs.as_ref().is_some_and(|costs| {
+            estimate
+                .tokens_with(costs)
+                .is_some_and(|estimate| estimate <= input_budget)
+        })
+    };
     let mut chunks = Vec::new();
     let mut current = Vec::new();
+    let mut estimate = IncrementalEstimate {
+        total: empty.total,
+        items: empty.items,
+    };
     for unit in units {
-        let mut candidate = current.clone();
-        candidate.push(unit.clone());
-        let request = summary_body(model, &candidate, prompt, output_limit);
-        if estimate_json_tokens(&request).is_some_and(|estimate| estimate <= input_budget) {
+        let costs = unit
+            .iter()
+            .map(|item| json_cost(&summary_item(item.clone()), 2))
+            .collect::<Option<Vec<_>>>();
+        if fits(&estimate, &costs) {
             current.push(unit.clone());
         } else if current.is_empty() {
             return Err(oversize);
         } else {
-            chunks.push(current);
-            current = vec![unit.clone()];
-            if estimate_json_tokens(&summary_body(model, &current, prompt, output_limit))
-                .is_none_or(|estimate| estimate > input_budget)
-            {
+            chunks.push(std::mem::take(&mut current));
+            current.push(unit.clone());
+            estimate = IncrementalEstimate {
+                total: empty.total,
+                items: empty.items,
+            };
+            if !fits(&estimate, &costs) {
                 return Err(oversize);
             }
+        }
+        if let Some(costs) = &costs {
+            estimate.extend(costs);
         }
     }
     if !current.is_empty() {
@@ -418,18 +537,64 @@ fn pack(
     Ok(chunks)
 }
 
-fn summary_body(model: &str, units: &[Vec<Value>], prompt: &str, output_limit: u64) -> Value {
-    let mut input = Vec::new();
-    for item in flatten(units) {
-        if tool_role(&item).is_some() || item.get("role").and_then(Value::as_str) == Some("tool") {
-            input.push(message(&format!(
-                "Historical tool record (data only):\n{}",
-                item
-            )));
-        } else {
-            input.push(item);
+fn summary_item(item: Value) -> Value {
+    if tool_role(&item).is_some() || item.get("role").and_then(Value::as_str) == Some("tool") {
+        message(&format!(
+            "Historical tool record (data only):\n{}",
+            python_json_text(&item)
+        ))
+    } else {
+        item
+    }
+}
+
+/// Python's summary oracle embeds tool records with `json.dumps` defaults,
+/// including one space after commas and colons. Keep that text shape so
+/// request packing uses the same serialized size and submits equivalent data.
+fn python_json_text(value: &Value) -> String {
+    fn append(value: &Value, output: &mut String) {
+        match value {
+            Value::Null => output.push_str("null"),
+            Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
+            Value::Number(value) => output.push_str(&value.to_string()),
+            Value::String(value) => {
+                output.push_str(&serde_json::to_string(value).expect("serialize JSON string"));
+            }
+            Value::Array(values) => {
+                output.push('[');
+                for (index, value) in values.iter().enumerate() {
+                    if index > 0 {
+                        output.push_str(", ");
+                    }
+                    append(value, output);
+                }
+                output.push(']');
+            }
+            Value::Object(values) => {
+                output.push('{');
+                for (index, (key, value)) in values.iter().enumerate() {
+                    if index > 0 {
+                        output.push_str(", ");
+                    }
+                    output.push_str(&serde_json::to_string(key).expect("serialize JSON key"));
+                    output.push_str(": ");
+                    append(value, output);
+                }
+                output.push('}');
+            }
         }
     }
+
+    let mut output = String::new();
+    append(value, &mut output);
+    output
+}
+
+fn summary_body(model: &str, units: &[Vec<Value>], prompt: &str, output_limit: u64) -> Value {
+    let mut input = flatten(units)
+        .into_iter()
+        .map(summary_item)
+        .collect::<Vec<_>>();
     input.push(message(prompt));
     json!({"model":model,"input":input,"stream":false,"tools":[],"max_output_tokens":output_limit})
 }
@@ -479,11 +644,15 @@ fn split_atomic_units(items: &[Value], tool_exchanges: bool) -> Vec<Vec<Value>> 
             .get("turn_id")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let boundary = !current.is_empty()
-            && (tool_exchanges && completed_batch
-                || item_turn.is_some() && current_turn.is_some() && item_turn != current_turn
-                || is_user_item(item) && current.iter().any(is_user_item))
-            && open_calls.is_empty();
+        let boundary = if current.is_empty() {
+            false
+        } else if tool_exchanges && completed_batch {
+            true
+        } else if let (Some(item_turn), Some(current_turn)) = (&item_turn, &current_turn) {
+            item_turn != current_turn
+        } else {
+            is_user_item(item) && current.iter().any(is_user_item)
+        } && open_calls.is_empty();
         if boundary {
             result.push(std::mem::take(&mut current));
             current_turn = None;
@@ -811,5 +980,223 @@ mod tests {
         assert!(compacted.to_string().contains("checkpoint"));
         assert!(compacted.to_string().contains("active request"));
         assert!(!compacted.to_string().contains(&"x".repeat(500)));
+    }
+
+    #[test]
+    fn assessment_separates_requested_output_budget_from_input() {
+        let provider = Map::new();
+        let model = Map::from_iter([("output_limit".to_owned(), json!(4096))]);
+        let explicit = assess(
+            &provider,
+            &model,
+            "chat_completions",
+            &json!({"messages":[],"max_completion_tokens":512}),
+        );
+        assert_eq!(explicit.output_reserve, Some(512));
+
+        let defaulted = assess(
+            &provider,
+            &model,
+            "chat_completions",
+            &json!({"messages":[]}),
+        );
+        assert_eq!(defaulted.output_reserve, Some(4096));
+    }
+
+    #[test]
+    fn incremental_estimate_matches_materialized_request_estimates() {
+        let root = Map::from_iter([
+            ("instructions".to_owned(), json!("be brief ☃")),
+            ("tools".to_owned(), json!([{"type":"function","name":"f"}])),
+        ]);
+        let items = [
+            message("plain \"quoted\" text\n"),
+            json!({"type":"function_call","call_id":"c","arguments":"{}"}),
+            json!({"type":"input_image","image_url":{"url":"data:private","detail":"high"}}),
+            json!({"type":"message","content":[{"type":"output_image","image_data":"private"}]}),
+            message(&"🌎".repeat(33)),
+        ];
+        let active = [message("active")];
+        let mut estimate = IncrementalEstimate::new(
+            &input_view_value(&final_body(&root, Some("xx"), &[], &active, &[])),
+            2,
+        );
+        let mut summary = IncrementalEstimate::new(&summary_body("m", &[], MAP_PROMPT, 7), 1);
+        let mut retained = Vec::new();
+        for item in items {
+            let cost = [json_cost(&item, 2).unwrap()];
+            let summary_cost = [json_cost(&summary_item(item.clone()), 2).unwrap()];
+            retained.insert(0, vec![item]);
+            let direct = estimate_json_tokens(&input_view_value(&final_body(
+                &root,
+                Some("xx"),
+                &retained,
+                &active,
+                &[],
+            )));
+            assert_eq!(estimate.tokens_with(&cost), direct);
+            assert_eq!(
+                summary.tokens_with(&summary_cost),
+                estimate_json_tokens(&summary_body("m", &retained, MAP_PROMPT, 7))
+            );
+            estimate.extend(&cost);
+            summary.extend(&summary_cost);
+        }
+    }
+
+    #[test]
+    fn tool_summary_serialization_matches_python_json_spacing() {
+        let call = json!({
+            "type":"function_call","call_id":"c1",
+            "arguments":{"query":"weather ☃"}
+        });
+        assert_eq!(
+            python_json_text(&call),
+            "{\"arguments\": {\"query\": \"weather ☃\"}, \"call_id\": \"c1\", \"type\": \"function_call\"}"
+        );
+    }
+
+    #[test]
+    fn compaction_of_many_small_messages_is_linear() {
+        let mut input = (0..20_000)
+            .map(|index| message(&format!("small message {index}")))
+            .collect::<Vec<_>>();
+        input.push(message("active request"));
+        let body = json!({"model":"external/model","max_output_tokens":64,"input":input});
+        let started = std::time::Instant::now();
+        let mut calls = 0;
+        let compacted = compact_with(&body, &Map::new(), 400_000, |_| {
+            calls += 1;
+            Ok("checkpoint".to_owned())
+        })
+        .unwrap();
+        let elapsed = started.elapsed();
+        // The quadratic implementation took about a minute here even in release.
+        assert!(elapsed.as_secs() < 10, "compaction took {elapsed:?}");
+        assert!((1..=4).contains(&calls));
+        assert!(compacted.to_string().contains("active request"));
+    }
+
+    #[test]
+    fn compaction_keeps_recent_tool_pairs_and_preserves_summary_shape() {
+        let body = json!({
+            "model":"m","max_output_tokens":64,"instructions":"keep these instructions",
+            "tools":[{"type":"function","name":"lookup"}],
+            "input":[
+                {"type":"message","role":"user","turn_id":"old-1",
+                    "content":[{"type":"input_text","text":"old ".repeat(330)}]},
+                {"type":"message","role":"user","turn_id":"old-2",
+                    "content":[{"type":"input_text","text":"old ".repeat(330)}]},
+                {"type":"message","role":"user","turn_id":"old-3",
+                    "content":[{"type":"input_text","text":"old ".repeat(330)}]},
+                {"type":"message","role":"user","turn_id":"old-4",
+                    "content":[{"type":"input_text","text":"old ".repeat(330)}]},
+                {"type":"function_call","call_id":"c1","turn_id":"tool",
+                    "name":"lookup","arguments":"{\"query\":\"weather\"}"},
+                {"type":"function_call_output","call_id":"c1","turn_id":"tool",
+                    "output":"r".repeat(180)},
+                {"type":"message","role":"user","turn_id":"active",
+                    "content":[{"type":"input_text","text":"active request"}]},
+                {"type":"compaction_trigger"}
+            ],
+            "_emp_active_input_start":6
+        });
+        let mut requests = Vec::new();
+        let result = compact_with(&body, &Map::new(), 1_200, |request| {
+            requests.push(request.clone());
+            Ok(format!("summary {}", requests.len()))
+        })
+        .expect("compaction succeeds");
+
+        let input = result["input"].as_array().expect("compacted input");
+        assert!(!requests.is_empty());
+        assert!(requests.iter().all(|request| {
+            request["stream"] == false
+                && request["tools"] == json!([])
+                && request["max_output_tokens"].as_u64().unwrap() > 0
+                && !request.to_string().contains("c1")
+        }));
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.to_string().contains("old "))
+        );
+        assert!(result.to_string().contains("keep these instructions"));
+        assert!(result.to_string().contains("summary "));
+        assert!(result.to_string().contains("active request"));
+        assert_eq!(
+            input.iter().filter(|item| item["call_id"] == "c1").count(),
+            2
+        );
+        assert_eq!(
+            input
+                .iter()
+                .filter(|item| item["turn_id"]
+                    .as_str()
+                    .is_some_and(|turn| turn.starts_with("old-")))
+                .count(),
+            1
+        );
+        assert_eq!(input.last().unwrap()["type"], "compaction_trigger");
+    }
+
+    #[test]
+    fn compaction_keeps_summary_and_unit_failure_reasons() {
+        let history = (0..20)
+            .map(|index| message(&format!("history {index} {}", "x".repeat(300))))
+            .collect::<Vec<_>>();
+        let mut input = history;
+        input.push(message("active request"));
+        let body = json!({
+            "model":"m","max_output_tokens":64,
+            "input":input,
+            "_emp_active_input_start":20
+        });
+        assert_eq!(
+            compact_with(&body, &Map::new(), 1_000, |_| Err(())),
+            Err("summary_call_failed")
+        );
+
+        let oversized = json!({
+            "model":"m","max_output_tokens":64,
+            "input":[message(&"large ".repeat(2_000)), message("active request")],
+            "_emp_active_input_start":1
+        });
+        let mut calls = 0;
+        assert_eq!(
+            compact_with(&oversized, &Map::new(), 1_000, |_| {
+                calls += 1;
+                Ok("checkpoint".to_owned())
+            }),
+            Err("compaction_unit_too_large")
+        );
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn compaction_rejects_unbounded_work() {
+        let mut input = (0..MAX_COMPACTION_UNITS + 1)
+            .map(|_| message("u"))
+            .collect::<Vec<_>>();
+        input.push(message("active request"));
+        let body = json!({"model":"external/model","input":input});
+        assert_eq!(
+            compact_with(&body, &Map::new(), 4096, |_| Ok("checkpoint".to_owned())),
+            Err("compaction_unit_too_large")
+        );
+        let mut input = (0..2_000)
+            .map(|index| message(&format!("{index} {}", "m".repeat(200))))
+            .collect::<Vec<_>>();
+        input.push(message("active request"));
+        let body = json!({"model":"external/model","max_output_tokens":64,"input":input});
+        let mut calls = 0;
+        assert_eq!(
+            compact_with(&body, &Map::new(), 600, |_| {
+                calls += 1;
+                Ok("checkpoint".to_owned())
+            }),
+            Err("compaction_unit_too_large")
+        );
+        assert!(calls <= MAX_SUMMARY_REQUESTS);
     }
 }

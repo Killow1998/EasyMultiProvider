@@ -40,6 +40,25 @@ fn fresh(value: Option<&Value>) -> bool {
     let age = OffsetDateTime::now_utc() - stamp;
     !age.is_negative() && age.whole_seconds() <= 24 * 60 * 60
 }
+/// Confidence of a failure seen once, far below the known window; it is kept
+/// as evidence but only lowers limits once a second failure corroborates it.
+const UNCONFIRMED_FAILURE_CONFIDENCE: f64 = 0.5;
+const FAILURE_CORROBORATION_PERCENT: u64 = 5;
+const MIN_FAILURE_CORROBORATION_TOKENS: u64 = 256;
+
+fn confirmed(calibration: &Value) -> bool {
+    calibration
+        .get("smallest_failure_confidence")
+        .and_then(Value::as_f64)
+        .is_none_or(|confidence| confidence >= 1.0)
+}
+
+fn corroborates_failure(previous: u64, current: u64) -> bool {
+    previous.abs_diff(current)
+        <= (previous.max(current) / FAILURE_CORROBORATION_PERCENT)
+            .max(MIN_FAILURE_CORROBORATION_TOKENS)
+}
+
 pub(super) fn limits(
     provider: &Map<String, Value>,
     model: &Map<String, Value>,
@@ -68,11 +87,13 @@ pub(super) fn limits(
                 .all(|(key, value)| item.get(key) == Some(value))
         })
         .cloned();
+    // A confirmed failure bounds the whole request (input plus requested
+    // output), so it caps the usable window exactly like `context` does.
     let failure = calibration
         .as_ref()
-        .filter(|value| fresh(value.get("smallest_failure_observed_at")))
+        .filter(|value| fresh(value.get("smallest_failure_observed_at")) && confirmed(value))
         .and_then(|value| positive_integer(value.get("smallest_failure_estimate")))
-        .map(|value| value - 1);
+        .map(|value| (value - 1).saturating_sub(reserves.unwrap_or(0)));
     let base = context
         .zip(reserves)
         .map(|(limit, reserve)| limit.saturating_sub(reserve));
@@ -108,11 +129,18 @@ pub fn status(provider: &Map<String, Value>, model: &Map<String, Value>, protoco
 }
 
 /// Retain only numeric evidence, bound to the actual upstream deployment.
+///
+/// `estimate` is the input estimate and `output_reserve` is the request's
+/// output budget. Store their sum as the observed total request boundary;
+/// `limits` subtracts the next request's own output budget to recover an
+/// input ceiling. A low failure is only applied after a nearby explicit
+/// failure corroborates it.
 pub fn update(
     provider: &Map<String, Value>,
     model: &mut Map<String, Value>,
     protocol: &str,
     estimate: u64,
+    output_reserve: Option<u64>,
     success: bool,
     observed_at: &str,
 ) -> bool {
@@ -149,29 +177,49 @@ pub fn update(
             }
             value
         });
+    let total_estimate = estimate.saturating_add(output_reserve.unwrap_or(0));
     let mut changed = false;
-    let field = if success {
-        "largest_success"
+    let recorded = if success {
+        let old = positive_integer(current.get("largest_success_estimate"));
+        old.is_none_or(|old| total_estimate > old).then_some((
+            "largest_success",
+            total_estimate,
+            1.0,
+        ))
     } else {
-        "smallest_failure"
-    };
-    let old = positive_integer(current.get(format!("{field}_estimate")));
-    if old.is_none_or(|old| {
-        if success {
-            estimate > old
-        } else {
-            !fresh(current.get("smallest_failure_observed_at")) || estimate < old
+        let window = context_window(provider, model).0;
+        if window.is_some_and(|window| total_estimate > window) {
+            return false;
         }
-    }) {
+        let plausible = window.is_none_or(|window| total_estimate.saturating_mul(2) >= window);
+        let old = positive_integer(current.get("smallest_failure_estimate"))
+            .filter(|_| fresh(current.get("smallest_failure_observed_at")));
+        match old {
+            None if plausible => Some((total_estimate, 1.0)),
+            None => Some((total_estimate, UNCONFIRMED_FAILURE_CONFIDENCE)),
+            Some(_) if !confirmed(&current) && plausible => Some((total_estimate, 1.0)),
+            Some(old) if !confirmed(&current) && corroborates_failure(old, total_estimate) => {
+                Some((old.min(total_estimate), 1.0))
+            }
+            // Replace unrelated unconfirmed evidence without applying it.
+            Some(_) if !confirmed(&current) => {
+                Some((total_estimate, UNCONFIRMED_FAILURE_CONFIDENCE))
+            }
+            Some(old) if plausible && total_estimate < old => Some((total_estimate, 1.0)),
+            Some(_) => None,
+        }
+        .map(|(total, confidence)| ("smallest_failure", total, confidence))
+    };
+    if let Some((field, estimate, confidence)) = recorded {
         current[format!("{field}_estimate")] = json!(estimate);
         current[format!("{field}_source")] = json!("observed");
-        current[format!("{field}_confidence")] = json!(1.0);
+        current[format!("{field}_confidence")] = json!(confidence);
         current[format!("{field}_observed_at")] = json!(observed_at);
         changed = true;
     }
     if success
         && positive_integer(current.get("smallest_failure_estimate"))
-            .is_some_and(|failure| estimate >= failure)
+            .is_some_and(|failure| total_estimate >= failure)
     {
         current["smallest_failure_estimate"] = Value::Null;
         current["smallest_failure_source"] = json!("unknown");
@@ -195,4 +243,153 @@ pub fn update(
     }
     model.insert("context_calibrations".into(), json!(entries));
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider() -> Map<String, Value> {
+        Map::from_iter([
+            ("id".to_owned(), json!("provider")),
+            ("base_url".to_owned(), json!("https://api.example.test/v1")),
+            ("context_window".to_owned(), json!(100_000)),
+            (
+                "capability_sources".to_owned(),
+                json!({"context_window":{"source":"manual","confidence":1.0}}),
+            ),
+        ])
+    }
+
+    fn model(deployment: &str) -> Map<String, Value> {
+        Map::from_iter([
+            ("id".to_owned(), json!("alias/model")),
+            ("upstream_id".to_owned(), json!("actual/model")),
+            ("deployment_identity".to_owned(), json!(deployment)),
+            ("output_limit".to_owned(), json!(4_000)),
+        ])
+    }
+
+    fn observed_at() -> String {
+        let now = OffsetDateTime::now_utc();
+        let (year, month, day) = now.to_calendar_date();
+        format!(
+            "{year:04}-{:02}-{day:02}T{:02}:{:02}:{:02}Z",
+            month as u8,
+            now.hour(),
+            now.minute(),
+            now.second(),
+        )
+    }
+
+    #[test]
+    fn failure_boundary_accounts_for_each_requests_output_budget() {
+        let provider = provider();
+        let mut model = model("deployment-a");
+        assert!(update(
+            &provider,
+            &mut model,
+            "responses",
+            40_000,
+            Some(20_000),
+            false,
+            &observed_at(),
+        ));
+        assert_eq!(
+            model["context_calibrations"][0]["smallest_failure_estimate"],
+            60_000
+        );
+
+        let same_output = limits(&provider, &model, "responses", Some(20_256));
+        assert_eq!(same_output.input, Some(39_743));
+        let smaller_output = limits(&provider, &model, "responses", Some(5_256));
+        assert_eq!(smaller_output.input, Some(54_743));
+    }
+
+    #[test]
+    fn distant_low_failures_do_not_confirm_a_global_window_reduction() {
+        let provider = provider();
+        let mut model = model("deployment-a");
+        let first = observed_at();
+        assert!(update(
+            &provider,
+            &mut model,
+            "responses",
+            9_000,
+            Some(1_000),
+            false,
+            &first,
+        ));
+        let unconfirmed = limits(&provider, &model, "responses", Some(1_256));
+        assert_eq!(unconfirmed.input, Some(98_744));
+        assert_eq!(unconfirmed.source, "manual");
+
+        assert!(update(
+            &provider,
+            &mut model,
+            "responses",
+            15_000,
+            Some(1_000),
+            false,
+            &observed_at(),
+        ));
+        assert_eq!(
+            model["context_calibrations"][0]["smallest_failure_estimate"],
+            16_000
+        );
+        assert_eq!(
+            model["context_calibrations"][0]["smallest_failure_confidence"],
+            UNCONFIRMED_FAILURE_CONFIDENCE
+        );
+        assert_eq!(
+            limits(&provider, &model, "responses", Some(1_256)).source,
+            "manual"
+        );
+
+        assert!(update(
+            &provider,
+            &mut model,
+            "responses",
+            15_100,
+            Some(1_000),
+            false,
+            &observed_at(),
+        ));
+        assert_eq!(
+            model["context_calibrations"][0]["smallest_failure_estimate"],
+            16_000
+        );
+        assert_eq!(
+            model["context_calibrations"][0]["smallest_failure_confidence"],
+            1.0
+        );
+        assert_eq!(
+            limits(&provider, &model, "responses", Some(1_256)).input,
+            Some(14_743)
+        );
+    }
+
+    #[test]
+    fn calibration_is_isolated_by_actual_deployment_identity() {
+        let provider = provider();
+        let mut deployment_a = model("deployment-a");
+        assert!(update(
+            &provider,
+            &mut deployment_a,
+            "responses",
+            70_000,
+            Some(2_000),
+            false,
+            &observed_at(),
+        ));
+        assert_eq!(
+            limits(&provider, &deployment_a, "responses", Some(2_256)).source,
+            "observed"
+        );
+
+        let deployment_b = model("deployment-b");
+        let limits_b = limits(&provider, &deployment_b, "responses", Some(2_256));
+        assert_eq!(limits_b.input, Some(97_744));
+        assert_eq!(limits_b.source, "manual");
+    }
 }
