@@ -236,6 +236,47 @@ impl QuotaHistoryStore {
         }))
     }
 
+    /// Move samples recorded under a legacy local account key (an account id
+    /// or `@native`) to the verified upstream identity `owner`. Idempotent: a
+    /// slot `owner` already has keeps its own sample and the legacy duplicate
+    /// is dropped. Returns the number of samples moved.
+    pub fn adopt_legacy_key(
+        &self,
+        legacy_key: &str,
+        owner: &str,
+    ) -> Result<usize, QuotaHistoryError> {
+        if legacy_key.is_empty() || owner.is_empty() || legacy_key == owner {
+            return Ok(0);
+        }
+        if !self.path.exists() {
+            return Ok(0);
+        }
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| QuotaHistoryError::unavailable())?;
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| QuotaHistoryError::unavailable())?;
+        let moved = transaction
+            .execute(
+                "UPDATE OR IGNORE quota_samples SET account_key = ?2 WHERE account_key = ?1",
+                params![legacy_key, owner],
+            )
+            .map_err(|_| QuotaHistoryError::unavailable())?;
+        transaction
+            .execute(
+                "DELETE FROM quota_samples WHERE account_key = ?1",
+                params![legacy_key],
+            )
+            .map_err(|_| QuotaHistoryError::unavailable())?;
+        transaction
+            .commit()
+            .map_err(|_| QuotaHistoryError::unavailable())?;
+        Ok(moved)
+    }
+
     pub fn delete_account(&self, account_key: &str) -> Result<(), QuotaHistoryError> {
         if !self.path.exists() {
             return Ok(());

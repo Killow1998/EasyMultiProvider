@@ -244,6 +244,9 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
     let _refresh_guard = refresh_lock
         .lock()
         .map_err(|_| "internal server error".to_owned())?;
+    // Legacy rows keyed by this id must reach the identity they belong to
+    // before the id becomes free for a different account.
+    crate::services::quota::adopt_legacy_quota_history(state, account_id);
     let current = state
         .backend
         .configuration

@@ -1280,6 +1280,59 @@ class ServerAccountTests(unittest.TestCase):
             self.assertNotEqual(state._quota_owner_key("egg"), original_owner)
             self.assertEqual(state.quota_history_snapshot("egg", "all")["series"], [])
 
+    def test_legacy_local_key_history_moves_to_the_verified_identity_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(
+                normalize({"account_store_path": str(root / "state" / "accounts")}),
+                config_path,
+            )
+            state = AppState(config_path)
+            state.codex_home.mkdir(parents=True, exist_ok=True)
+            (state.codex_home / "auth.json").write_text(
+                json.dumps({"tokens": {"access_token": "native", "account_id": "upstream-native"}}),
+                encoding="utf-8",
+            )
+
+            def import_account(account_id, upstream_id):
+                state.import_account(
+                    {"id": account_id, "name": account_id, "prefix": account_id},
+                    {"tokens": {"access_token": account_id + "-token", "account_id": upstream_id}},
+                )
+
+            def sample(used):
+                return {"rate_limits": {"limitId": "codex", "primary": {"usedPercent": used, "windowDurationMins": 300}}}
+
+            def points(owner):
+                return sum(len(series["points"]) for series in state.quota_history.query(owner, "all")["series"])
+
+            import_account("egg", "upstream-egg")
+            history = state.quota_history
+            history.append_snapshot("egg", sample(10), observed_at=int(time.time()) - 900)
+            history.append_snapshot("egg", sample(20), observed_at=int(time.time()) - 300)
+            history.append_snapshot("@native", sample(30), observed_at=int(time.time()) - 900)
+            history.append_snapshot("ghost", sample(40), observed_at=int(time.time()) - 900)
+
+            state.migrate_legacy_quota_history()
+            state.migrate_legacy_quota_history()
+            egg = state._quota_owner_key("egg")
+            native = state._quota_owner_key("@native")
+            self.assertEqual(points(egg), 2)
+            self.assertEqual(points(native), 1)
+            self.assertEqual(points("egg"), 0)
+            self.assertEqual(points("@native"), 0)
+            self.assertEqual(points("ghost"), 1)
+
+            history.append_snapshot("egg", sample(50), observed_at=int(time.time()))
+            state.delete_account("egg")
+            self.assertEqual(points(egg), 3)
+            import_account("egg", "someone-else")
+            other = state._quota_owner_key("egg")
+            self.assertNotEqual(other, egg)
+            state.migrate_legacy_quota_history()
+            self.assertEqual(points(other), 0)
+
     def test_web_config_update_keeps_api_key_out_of_config(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

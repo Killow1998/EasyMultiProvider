@@ -94,6 +94,40 @@ fn save_rotated_credential(
     vault.write_encrypted_json(auth_path, auth).map_err(|_| ())
 }
 
+/// Attach history recorded under an account's legacy local key (its id, or
+/// `@native`) to the upstream identity of its current credentials. Before
+/// identity keys, EMP deleted an account's history with the account and
+/// renamed reimports of a different identity, so rows under a local key were
+/// always recorded from that entry's current credentials. Accounts whose
+/// identity cannot be derived keep their legacy rows untouched.
+pub(crate) fn adopt_legacy_quota_history(state: &ServerState, account_id: &str) {
+    if let Ok(owner) = quota_owner_key(state, account_id) {
+        let _ = state
+            .backend
+            .accounts
+            .quota_history
+            .adopt_legacy_key(account_id, &owner);
+    }
+}
+
+/// Run [`adopt_legacy_quota_history`] for the native login and every account.
+pub(crate) fn migrate_legacy_quota_history(state: &ServerState) {
+    let accounts = state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .ok()
+        .and_then(|config| config.get("accounts").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
+    adopt_legacy_quota_history(state, "@native");
+    for account in accounts {
+        if let Some(id) = account.get("id").and_then(Value::as_str) {
+            adopt_legacy_quota_history(state, id);
+        }
+    }
+}
+
 fn record_quota_snapshot(state: &ServerState, account_id: &str, quota: &Value) {
     let Ok(owner) = quota_owner_key(state, account_id) else {
         return;

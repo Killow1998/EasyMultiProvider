@@ -317,6 +317,7 @@ impl ServerHandle {
         let worker = thread::Builder::new()
             .name("emp-quota-sampler".to_owned())
             .spawn(move || {
+                crate::services::quota::migrate_legacy_quota_history(&state);
                 while !state.shutdown.load(Ordering::Acquire) {
                     let deadline = Instant::now() + QUOTA_SAMPLE_INTERVAL;
                     let mut wait = match state.backend.accounts.quota_sampler_wait.lock() {
