@@ -26,6 +26,9 @@ struct ReplayContext<'a> {
     lineage_bound: Option<u64>,
     lineage_byte_offset: u64,
     seed: Vec<VisibleItem>,
+    /// `true` disables the reverse-base fast path; production always uses
+    /// `false` (auto). Exposed only for same-input fast/full parity tests.
+    force_full: bool,
 }
 
 impl<'a> ReplayContext<'a> {
@@ -35,6 +38,7 @@ impl<'a> ReplayContext<'a> {
             lineage_bound: None,
             lineage_byte_offset: 0,
             seed: Vec::new(),
+            force_full: false,
         }
     }
 }
@@ -85,6 +89,9 @@ struct ReverseBase {
     /// suffix-local scan cannot see them, but the failed-turn filter needs
     /// them to match full-scan replay.
     successful: BTreeMap<String, bool>,
+    /// (turn, model) contexts observed before the compaction record; the
+    /// suffix scan resolves its source model from these, matching full scan.
+    successful_models: Vec<(String, Option<String>)>,
     response_roles: BTreeSet<(Option<String>, String)>,
 }
 
@@ -176,6 +183,15 @@ fn locate_latest_compaction(
         let mut active_turn = None;
         let mut successful: BTreeMap<String, bool> = BTreeMap::new();
         let mut response_roles: BTreeSet<(Option<String>, String)> = BTreeSet::new();
+        // Turn ids whose `task_started` was observed inside this window. The
+        // probe sees a suffix of the file, so a compaction owner's turn
+        // context may predate `line_start`; only owners with a visible start
+        // have provably complete context.
+        // (turn, model) contexts observed inside the window; the base's
+        // pre-checkpoint model state seeds the suffix scan's source-model
+        // resolution exactly as the full scan observes it.
+        let mut successful_models: Vec<(String, Option<String>)> = Vec::new();
+        let mut started_turns: BTreeSet<String> = BTreeSet::new();
         let mut offset = line_start;
         loop {
             let Some(terminated) = read_bounded_line(&mut reader, &mut line)? else {
@@ -216,34 +232,71 @@ fn locate_latest_compaction(
                         // suffix monotonicity check; the full scan owns it.
                         let has_seed_ordinal =
                             history_mode != "paginated" || base_ordinal.is_some();
-                        candidate = (eligible && has_seed_ordinal).then(|| {
-                            (
-                                ReverseBase {
-                                    replacement: replacement.unwrap_or_default(),
-                                    suffix_start: offset,
-                                    turn: active_turn.clone(),
-                                    ordinal: base_ordinal,
-                                    successful: successful.clone(),
-                                    response_roles: response_roles.clone(),
-                                },
-                                record_start,
-                            )
-                        });
+                        // The window is a suffix: an owner turn whose
+                        // `task_started` predates `line_start` has incomplete
+                        // context here, and the completion state the failed-
+                        // turn filter needs may sit outside the window. Only
+                        // an owner with a visible start (or no owner at all)
+                        // is provable; anything else falls back to a wider
+                        // window or the full scan.
+                        // `None` owner is only provable when the window
+                        // covers the file head: a mid-file window may have
+                        // skipped the owner's `task_started` (or an earlier
+                        // record that names the turn), so the real owner and
+                        // its completion state may sit outside the window.
+                        let owner_context_complete = match &active_turn {
+                            None => line_start == 0,
+                            Some(turn) => started_turns.contains(turn),
+                        };
+                        candidate =
+                            (eligible && has_seed_ordinal && owner_context_complete).then(|| {
+                                (
+                                    ReverseBase {
+                                        replacement: replacement.unwrap_or_default(),
+                                        suffix_start: offset,
+                                        turn: active_turn.clone(),
+                                        ordinal: base_ordinal,
+                                        successful: successful.clone(),
+                                        successful_models: successful_models.clone(),
+                                        response_roles: response_roles.clone(),
+                                    },
+                                    record_start,
+                                )
+                            });
                     }
                     let turn = record_turn_id(&record).or_else(|| active_turn.clone());
                     if let Some(turn) = &turn {
                         let payload = record.get("payload").and_then(Value::as_object);
-                        if token(record.get("type")) == "event_msg"
-                            && payload.map(|payload| token(payload.get("type"))).as_deref()
-                                == Some("task_complete")
-                        {
-                            successful.insert(
-                                turn.clone(),
-                                payload
-                                    .and_then(|payload| payload.get("error"))
-                                    .is_none_or(Value::is_null),
-                            );
+                        let payload_type = payload
+                            .map(|payload| token(payload.get("type")))
+                            .unwrap_or_default();
+                        if token(record.get("type")) == "event_msg" {
+                            if payload_type == "task_started" {
+                                started_turns.insert(turn.clone());
+                            } else if payload_type == "task_complete" {
+                                successful.insert(
+                                    turn.clone(),
+                                    payload
+                                        .and_then(|payload| payload.get("error"))
+                                        .is_none_or(Value::is_null),
+                                );
+                            }
                         }
+                    }
+                    if token(record.get("type")) == "turn_context"
+                        && let Some(turn) = &turn
+                    {
+                        let payload = record
+                            .get("payload")
+                            .and_then(Value::as_object)
+                            .unwrap_or(&record);
+                        successful_models.push((
+                            turn.clone(),
+                            string_from(
+                                payload,
+                                &["model", "model_id", "modelId", "selected_model"],
+                            ),
+                        ));
                     }
                     if token(record.get("type")) == "response_item"
                         && let Some(role) = message_role(&record)
@@ -368,6 +421,9 @@ struct ReplayFrame {
     seed_ordinal: Option<u64>,
     /// Turn completion states observed before `start`.
     seed_successful: BTreeMap<String, bool>,
+    /// (turn, model) contexts observed before `start`; the replay resolves
+    /// its source model from these exactly as the full scan resolves its own.
+    seed_models: Vec<(String, Option<String>)>,
     /// Response roles observed before `start`.
     seed_roles: BTreeSet<(Option<String>, String)>,
 }
@@ -381,6 +437,7 @@ impl ReplayFrame {
             seed_turn: None,
             seed_ordinal: None,
             seed_successful: BTreeMap::new(),
+            seed_models: Vec::new(),
             seed_roles: BTreeSet::new(),
         }
     }
@@ -404,6 +461,8 @@ fn scan_suffix(
     let mut scan = RolloutScan {
         last_ordinal: frame.seed_ordinal,
         saw_ordinal: frame.seed_ordinal.is_some(),
+        successful_models: frame.seed_models.clone(),
+        successful: frame.seed_successful.clone(),
         ..RolloutScan::default()
     };
     let mut active_turn = frame.seed_turn.clone();
@@ -418,7 +477,11 @@ fn scan_suffix(
         // anchor hit itself; skipping it would let a suffix that contains
         // only the anchor pass off a missing-ordinal defect.
         track_ordinal(&mut scan, &record);
-        if anchor
+        if scan.history_closed {
+            // The full scan stops observing once the anchor closes history;
+            // semantic state after the boundary (model contexts, roles,
+            // completion states) must not influence the fast replay either.
+        } else if anchor
             .turn_id
             .as_deref()
             .is_some_and(|turn| record_turn_id(&record).as_deref() == Some(turn))
@@ -449,16 +512,17 @@ fn scan_suffix(
     if !scan.saw_ordinal || scan.ordinal_missing || scan.ordinal_regressed {
         return Ok(SuffixScan::FallBack);
     }
-    // A replacement committed by a turn that later failed is excluded from
-    // the history by the failed-turn filter; a base owned by such a turn
-    // would seed visible items the full replay would never produce.
+    // A replacement is excluded from history by the failed-turn filter
+    // unless its owning turn completed successfully; a turn with no
+    // task_complete at all (interrupted) is unsuccessful too. A base owned
+    // by any non-successful turn would seed visible items full replay
+    // would never produce.
     if let Some(turn) = &frame.seed_turn {
-        if scan
+        let outcome = scan
             .successful
             .get(turn)
-            .or_else(|| frame.seed_successful.get(turn))
-            == Some(&false)
-        {
+            .or_else(|| frame.seed_successful.get(turn));
+        if outcome != Some(&true) {
             return Ok(SuffixScan::FallBack);
         }
     }
@@ -662,6 +726,19 @@ impl CodexHomeHistoryReader {
         &self,
         anchor: &HistoryAnchor,
     ) -> Result<HistorySnapshot, HistoryError> {
+        self.read_visible_history_with_strategy(anchor, false)
+    }
+
+    /// Test seam: replays the same durable rollout with the reverse-base
+    /// fast path disabled, so the differential contract suite can prove the
+    /// two strategies agree on byte-identical inputs. Production callers
+    /// always use [`Self::read_visible_history`].
+    #[doc(hidden)]
+    pub fn read_visible_history_with_strategy(
+        &self,
+        anchor: &HistoryAnchor,
+        force_full: bool,
+    ) -> Result<HistorySnapshot, HistoryError> {
         let thread = anchor
             .thread_id
             .as_deref()
@@ -669,7 +746,14 @@ impl CodexHomeHistoryReader {
         let database = self.latest_state_database()?;
         let location = locate(&database, thread)?;
         if location.mode != "paginated" {
-            return self.read_rollout(anchor, &location, ReplayContext::resume());
+            return self.read_rollout(
+                anchor,
+                &location,
+                ReplayContext {
+                    force_full,
+                    ..ReplayContext::resume()
+                },
+            );
         }
         // The lineage is one logical rollout: ancestors replay oldest first
         // into the same visible vector, and the child replays on top of that
@@ -697,6 +781,7 @@ impl CodexHomeHistoryReader {
                     lineage_bound: segment.bound,
                     lineage_byte_offset: segment.byte_offset,
                     seed: std::mem::take(&mut visible),
+                    force_full,
                     ..ReplayContext::resume()
                 },
             )?;
@@ -867,6 +952,7 @@ impl CodexHomeHistoryReader {
         // covers its suffix. Fork checkpoints (exact compaction) keep the full
         // scan because ambiguity detection must see every matching record.
         let reverse_base = if replay.exact_compaction.is_none()
+            && !replay.force_full
             && location.mode == "paginated"
             // A byte-capped ancestor never resumes from a reverse base: the
             // frozen prefix is a bounded replay, not a live resume.
@@ -888,6 +974,7 @@ impl CodexHomeHistoryReader {
                 seed_turn: base.turn.clone(),
                 seed_ordinal: base.ordinal,
                 seed_successful: base.successful.clone(),
+                seed_models: base.successful_models.clone(),
                 seed_roles: base.response_roles.clone(),
             };
             let unchanged = file
@@ -955,7 +1042,7 @@ impl CodexHomeHistoryReader {
                 return Err(HistoryError::new("ordinal_missing"));
             }
             if scan.ordinal_regressed {
-                return Err(HistoryError::new("ordinal_regressed"));
+                return Err(HistoryError::new("ordinal_not_monotonic"));
             }
         }
         Ok(HistorySnapshot {
@@ -1200,5 +1287,43 @@ impl HistoryReader for CodexHomeHistoryReader {
         )?;
         snapshot.thread_id = anchor.thread_id.clone().unwrap_or_default();
         Ok(snapshot)
+    }
+}
+
+#[cfg(test)]
+mod walker_boundary_tests {
+    use super::*;
+    use std::io::Write;
+
+    /// The walker's `end` is an absolute offset captured BEFORE the walk
+    /// starts. Records appended after the capture (a concurrent writer) must
+    /// never be observed, even when the handle's file grew behind the walk.
+    #[test]
+    fn walker_absolute_end_ignores_concurrent_append() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rollout.jsonl");
+        std::fs::write(&path, "{\"ordinal\":1,\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"first\"}}\n").unwrap();
+        let mut file = File::open(&path).unwrap();
+        let captured_end = file.metadata().unwrap().len();
+        // Seek somewhere non-zero like the reverse probe does, then append.
+        file.seek(SeekFrom::Start(4)).unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(
+                b"{\"ordinal\":2,\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"APPENDED\"}}\n",
+            )
+            .unwrap();
+        // Rewind to a non-zero start and walk to the frozen absolute end.
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let mut seen = Vec::new();
+        walk_records(&mut file, captured_end, |record| {
+            seen.push(serde_json::to_string(&record).unwrap());
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(seen.len(), 1, "walker must stop at the frozen end");
+        assert!(!seen[0].contains("APPENDED"), "{:?}", seen[0]);
     }
 }

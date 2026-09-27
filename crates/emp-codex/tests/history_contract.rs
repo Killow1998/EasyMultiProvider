@@ -266,25 +266,14 @@ fn failed_checkpoint_owner_turn_forces_full() {
 // --- Differential guarantee: fast and full agree on shared fixtures. ---
 
 fn assert_fast_matches_full(records: &[Value], name: &str) {
-    let fast =
-        CodexHomeHistoryReader::new(build_home(records).path()).read_visible_history(&anchor());
-    // Full path via the same reader: make the reverse probe find nothing by
-    // stripping the window number from the checkpoint.
-    let full_records = records
-        .iter()
-        .map(|record| {
-            let mut record = record.clone();
-            if record.get("type").and_then(Value::as_str) == Some("compacted") {
-                record["payload"]["window_number_absent"] = json!(1);
-                if let Some(payload) = record.get_mut("payload").and_then(Value::as_object_mut) {
-                    payload.remove("window_number");
-                }
-            }
-            record
-        })
-        .collect::<Vec<_>>();
-    let full = CodexHomeHistoryReader::new(build_home(&full_records).path())
-        .read_visible_history(&anchor());
+    // Same durable rollout, two strategies: the hidden `force_full` seam
+    // replays byte-identical input without the reverse-base fast path, so
+    // any divergence is a real fast-path bug rather than a fixture rewrite.
+    let directory = build_home(records);
+    let fast = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history_with_strategy(&anchor(), false);
+    let full = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history_with_strategy(&anchor(), true);
     match (&fast, &full) {
         (Ok(fast), Ok(full)) => {
             assert_eq!(fast.items, full.items, "{name}: items diverge");
@@ -582,4 +571,142 @@ fn opaque_checkpoint_and_rollback_match_full_semantics() {
         started(990, TURN),
     ];
     assert_fast_matches_full(&records, "opaque checkpoint");
+}
+
+// --- Round-2 review regressions. ---
+
+#[test]
+fn interrupted_checkpoint_owner_forces_full() {
+    // A turn with NO task_complete at all is unsuccessful in full replay,
+    // so a checkpoint it owns must not seed the fast path.
+    let records = [
+        meta(),
+        user(1, "GOOD HISTORY"),
+        started(2, "turnB"),
+        checkpoint("BAD CHECKPOINT"),
+        // No task_complete for turnB — interrupted.
+        started(990, TURN),
+    ];
+    let snapshot = CodexHomeHistoryReader::new(build_home(&records).path())
+        .read_visible_history(&anchor())
+        .unwrap();
+    let text = visible_text(&snapshot);
+    assert!(text.contains("GOOD HISTORY"), "{text}");
+    assert!(!text.contains("BAD CHECKPOINT"), "{text}");
+}
+
+#[test]
+fn reverse_window_missing_turn_start_forces_full() {
+    // A 17 MiB record pushes the 16 MiB reverse window past the checkpoint
+    // owner's task_started; the probe cannot prove the owner context, must
+    // widen the window (which then sees it), and the failed owner still
+    // forces the full scan. The end state matches full replay either way.
+    let huge = "x".repeat(17 * 1024 * 1024);
+    let records = [
+        meta(),
+        user(1, "GOOD HISTORY"),
+        started(2, "turnB"),
+        json!({"ordinal":3,"type":"response_item","payload":{"type":"message","role":"user",
+            "content":[{"type":"input_text","text":huge}],"turn_id":"turnB"}}),
+        checkpoint("BAD CHECKPOINT"),
+        json!({"ordinal":901,"type":"event_msg","payload":{"type":"task_complete","turn_id":"turnB","error":{"code":"boom"}}}),
+        started(990, TURN),
+    ];
+    let snapshot = CodexHomeHistoryReader::new(build_home(&records).path())
+        .read_visible_history(&anchor())
+        .unwrap();
+    let text = visible_text(&snapshot);
+    assert!(text.contains("GOOD HISTORY"), "{text}");
+    assert!(!text.contains("BAD CHECKPOINT"), "{text}");
+}
+
+#[test]
+fn fast_preserves_precheckpoint_source_model() {
+    // The reverse base seeds the suffix scan with the pre-checkpoint model
+    // contexts; the newest successful one is the source model, exactly as
+    // the full scan resolves it.
+    let records = [
+        meta(),
+        started(1, "A"),
+        json!({"ordinal":2,"type":"turn_context","turn_id":"A","payload":{"model":"gpt-native"}}),
+        user(3, "hi"),
+        completed(4, "A"),
+        checkpoint("checkpoint base"),
+        started(990, TURN),
+    ];
+    let directory = build_home(&records);
+    let fast = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history_with_strategy(&anchor(), false)
+        .unwrap();
+    let full = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history_with_strategy(&anchor(), true)
+        .unwrap();
+    assert_eq!(fast.source_model.as_deref(), Some("gpt-native"));
+    assert_eq!(fast.source_model, full.source_model);
+}
+
+#[test]
+fn fast_does_not_observe_source_model_after_anchor() {
+    // The full scan stops observing once the anchor closes history; the
+    // fast suffix must not pick up model contexts past the boundary.
+    let records = [
+        meta(),
+        started(1, "early"),
+        json!({"ordinal":2,"type":"turn_context","turn_id":"early","payload":{"model":"early-model"}}),
+        completed(3, "early"),
+        checkpoint("checkpoint base"),
+        started(990, TURN),
+        started(991, "future"),
+        json!({"ordinal":992,"type":"turn_context","turn_id":"future","payload":{"model":"future-model"}}),
+        completed(993, "future"),
+    ];
+    let directory = build_home(&records);
+    let fast = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history_with_strategy(&anchor(), false)
+        .unwrap();
+    let full = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history_with_strategy(&anchor(), true)
+        .unwrap();
+    assert_eq!(fast.source_model.as_deref(), Some("early-model"));
+    assert_eq!(fast.source_model, full.source_model);
+}
+
+#[test]
+fn suffix_rollback_after_checkpoint_matches_full() {
+    // checkpoint -> turn A -> thread_rolled_back(1) -> fresh turn anchor:
+    // the fast suffix must apply the rollback to its own seed exactly like
+    // the full scan, so the stale turn disappears on both paths.
+    let records = [
+        meta(),
+        started(1, "A"),
+        user(2, "stale turn"),
+        checkpoint("checkpoint base"),
+        json!({"ordinal":901,"type":"event_msg","payload":{"type":"thread_rolled_back","num_turns":1}}),
+        user(902, "fresh turn"),
+        started(990, TURN),
+    ];
+    assert_fast_matches_full(&records, "rollback after checkpoint");
+    let snapshot = CodexHomeHistoryReader::new(build_home(&records).path())
+        .read_visible_history(&anchor())
+        .unwrap();
+    let text = visible_text(&snapshot);
+    assert!(text.contains("fresh turn"), "{text}");
+    assert!(!text.contains("stale turn"), "{text}");
+}
+
+#[test]
+fn ordinal_regression_reason_is_python_canonical() {
+    // The Python oracle raises HistoryAmbiguousError("ordinal_not_monotonic");
+    // the Rust reason must match byte for byte.
+    let records = [
+        meta(),
+        user(5, "later"),
+        user(4, "earlier"),
+        started(990, TURN),
+    ];
+    let directory = build_home(&records);
+    let error = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history(&anchor())
+        .unwrap_err();
+    assert_eq!(error.reason(), "ordinal_not_monotonic");
 }
