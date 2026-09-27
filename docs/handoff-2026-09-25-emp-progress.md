@@ -1,3 +1,133 @@
+# EMP Transport Security Handoff — 2026-09-26
+
+## Active transport assignment
+
+- Worktree: `/home/fumo/codex_ws/agent_dev/emp-sec-transport`
+- Branch: `sec/transport`
+- Verified worker turn context: `gpt-6-luna`, effort `max`; the coordinator
+  independently verified the same active-thread metadata. The parent confirmed
+  quota is above the switch threshold; coordinator owns any account switch.
+- Starting HEAD: `bda4092` (`Scan SSE line buffers linearly across chunks`),
+  following `24d87f1` (`Stop permessage-deflate decompression spinning on stream end`).
+- Preserve the existing uncommitted context classifier and SSE call-site drafts.
+  At the initial checkpoint, only these files were modified:
+  `crates/emp-protocol/src/context_error.rs` and
+  `crates/emp-router/src/native_http/stream.rs`.
+- Current Git author is `h2q`; new local commits must include
+  `Co-authored-by: Point <point@local.invalid>`.
+- Do not push, start CI, create worktrees, or stop Python port 4200. Serialize
+  Cargo commands using the shared lock and target directory specified in the
+  active security handoff in the integration checkout.
+
+## Scope and next action
+
+The transport implementation and targeted validation are complete. The next
+step is the final diff review and local commit of source plus this checkpoint.
+Then continue Xian's authorized CI assignment in the existing `emp-sec-ci`
+worktree; do not push or start workflows. No shared origin/credential config
+was changed, so no STATE edit was needed.
+
+### Work log
+
+- Initial checkpoint: confirmed effective model/effort, branch, existing
+  commits and dirty draft scope. No implementation changes or tests run yet.
+- Next: inspect the existing transport diffs and adjacent behavior, then make
+  the smallest scoped fixes and record each targeted validation here.
+- Resume: Xian revoked the pause and authorized completion through a tested
+  local commit. Coordinator confirms active `gpt-6-luna/max`, native remaining
+  quota 58% / 83% and egg 99% / 84%; coordinator owns threshold-based account
+  switching. Refreshed the coordinator scope on 2026-09-26; no tests have run.
+- Next: complete `may_carry_context_error` and the bounded classifier, then
+  repair account-prefix fallback, credential-safe Gemini redirects and Windows
+  registry tool lookup. Review streaming/retry/cancellation coverage and test
+  only changed behavior using the shared Cargo lock.
+- Validation: `cargo test --offline -p emp-protocol --test
+  context_error_python_oracle explicit_context_error` passed (2/2), including
+  the configured Python oracle. The initial `--locked` attempt correctly
+  reported that adding the existing `regex` dependency required a lockfile
+  update; the offline rerun updated `Cargo.lock`.
+- Validation: `cargo test --locked -p emp-protocol --lib context_error` passed
+  (3/3), covering evidence text, node and depth limits with adversarial JSON.
+- Validation: `cargo test --locked -p emp-core --test route_python_oracle
+  native_forward` passed (2/2). The security change intentionally rejects
+  unknown/disabled slash-qualified fallback routes while preserving bare model
+  forwarding and explicitly configured slash-qualified models.
+- Validation: `cargo test --locked -p emp-router --lib context_error` passed
+  (2/2), confirming ordinary output events are untouched and terminal context
+  errors retain the 413 mapping. Initial build exposed one unused platform
+  import; it is now cfg-gated to Windows/tests.
+- Validation: `cargo test --locked -p emp-transport --test http_client
+  followed_redirects_stay_on_the_initial_origin` compiled but could not start
+  its loopback fixture in the default sandbox (`PermissionDenied` on bind).
+  Retry this targeted test with approved local-network access; no assertion has
+  failed yet.
+- Validation: after approval-gated local-network access, the same targeted
+  redirect test passed (1/1). Same-origin redirects retain credentials;
+  cross-origin redirects return the 3xx without sending a second request.
+- Validation: `cargo test --locked -p emp-transport --lib
+  redirect_origin_rejects_host_port_and_scheme_changes` passed (1/1), including
+  the HTTPS-to-HTTP downgrade case.
+- Validation: `cargo test --locked -p emp-transport --lib
+  windows_registry_tool_uses_absolute_systemroot_path_with_spaces` passed
+  (1/1), covering absolute roots, spaces and missing/relative roots on this host.
+- Validation: after tightening array traversal to stop at the node budget,
+  `cargo test --locked -p emp-protocol --lib context_error` passed again (3/3).
+- Review of `24d87f1`: `cargo test --locked -p emp-transport --lib
+  deflate_stream_end_terminates_instead_of_spinning` passed (1/1), covering
+  BFINAL termination, next-message reset and trailing bytes.
+- Review of `bda4092`: `cargo test --locked -p emp-transport --test
+  sse_parser` passed (7/7), covering split chunks, CRLF, multiline frames,
+  completion markers and bounded unterminated lines.
+- Review of `bda4092`: `cargo test --locked -p emp-router --lib
+  sse_lines_split_across_every_byte` passed (1/1), confirming native event and
+  wire-frame order is stable across byte-at-a-time chunks.
+- Transport cancellation review: the targeted streaming-before-EOF test passed
+  (1/1) with approval-gated loopback access; dropping a partial stream forces a
+  fresh connection for the next request.
+- Retry review: `native_complete_http_matches_python_retries_errors_and_wire_requests`
+  passed (1/1) against the live Python oracle, covering pre-output retries,
+  account refresh and terminal error classes.
+- Streaming retry review: `native_stream_http_matches_python_events_headers_and_retry_decisions`
+  passed (1/1) against the live Python oracle. The stream route preserves event
+  order and terminal/retry behavior without replaying after output.
+- Route compatibility: `cargo test --locked -p emp-core --test
+  route_python_oracle route_resolution_matches_live_python_oracle_when_configured`
+  passed (1/1); existing Python route fixtures remain unchanged by the stricter
+  fallback rule.
+- Gemini metadata: the new `gemini_metadata_follows_same_origin_redirect_with_api_key`
+  targeted test passed (1/1). The configured Google API-key header is retained
+  across a same-origin redirect; the transport test confirms cross-origin and
+  HTTPS-downgrade redirects are not followed.
+- Validation: the complete targeted `provider_discovery_python_oracle` test
+  binary passed (3/3), including Gemini metadata redirect, normal Gemini model
+  discovery, Anthropic pagination and the Python projection oracle.
+- Validation: `cargo test --locked -p emp-transport --test http_client` passed
+  (10/10), including redirect origin checks, no replay on dropped POSTs,
+  cancellation, TLS policy and the live Python socket oracle.
+- Formatting and diff checks: isolated `rustfmt --check --edition 2024
+  --config skip_children=true` passed for all touched Rust files; `git diff
+  --check` passed. `cargo fmt` is not installed in this environment.
+- Windows cross-check: `cargo check --locked --offline --target
+  x86_64-pc-windows-msvc -p emp-transport --lib` could not reach this crate;
+  `aws-lc-sys` attempted to use GNU `cc` for an MSVC target and failed on
+  `pthread_rwlock_t`. The Windows path helper unit test passed on Linux, but
+  Windows compilation still needs an MSVC-capable environment.
+
+### Pause checkpoint — 2026-09-26
+
+- Changed files: the pre-existing drafts in
+  `crates/emp-protocol/src/context_error.rs` and
+  `crates/emp-router/src/native_http/stream.rs`; this handoff copy was updated.
+  No implementation files were changed in this turn. Commits `24d87f1` and
+  `bda4092` remain intact.
+- Tests run: none.
+- Unfinished next step: define and test `may_carry_context_error`, then finish
+  the assigned route-prefix, credential/redirect, Gemini metadata and Windows
+  registry-path review. Initial review found the Gemini metadata request follows
+  redirects with `x-goog-api-key`, and Windows invokes `reg` through PATH.
+
+---
+
 # EMP Handoff — 2026-09-25
 
 ## Current branch and scope

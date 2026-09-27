@@ -1,5 +1,6 @@
 use emp_router::discovery::{
-    discover_anthropic_models, discover_models, project_anthropic_models, project_gemini_models,
+    discover_anthropic_models, discover_models, model_metadata, project_anthropic_models,
+    project_gemini_models,
 };
 use emp_transport::{HttpClient, HttpClientConfig, HttpClientPolicy};
 use serde_json::{Value, json};
@@ -202,8 +203,27 @@ struct PageServer {
     thread: Option<thread::JoinHandle<()>>,
 }
 
+struct PageResponse {
+    status: u16,
+    location: Option<String>,
+    body: Value,
+}
+
 impl PageServer {
     fn start(pages: Vec<Value>) -> Self {
+        Self::start_responses(
+            pages
+                .into_iter()
+                .map(|body| PageResponse {
+                    status: 200,
+                    location: None,
+                    body,
+                })
+                .collect(),
+        )
+    }
+
+    fn start_responses(pages: Vec<PageResponse>) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind discovery pages");
         let address = listener.local_addr().expect("discovery page address");
         let records = Arc::new(Mutex::new(Vec::new()));
@@ -241,14 +261,24 @@ impl PageServer {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .push(RequestRecord { path, headers });
-                    let body = serde_json::to_vec(&page).expect("serialize page");
-                    write!(
-                        stream,
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    )
-                    .expect("write page headers");
-                    stream.write_all(&body).expect("write page body");
+                    if let Some(location) = page.location {
+                        write!(
+                            stream,
+                            "HTTP/1.1 {} Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                            page.status
+                        )
+                        .expect("write redirect headers");
+                    } else {
+                        let body = serde_json::to_vec(&page.body).expect("serialize page");
+                        write!(
+                            stream,
+                            "HTTP/1.1 {} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            page.status,
+                            body.len()
+                        )
+                        .expect("write page headers");
+                        stream.write_all(&body).expect("write page body");
+                    }
                 }
             })
         };
@@ -273,6 +303,51 @@ impl Drop for PageServer {
             thread.join().expect("join discovery page server");
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gemini_metadata_follows_same_origin_redirect_with_api_key() {
+    let server = PageServer::start_responses(vec![
+        PageResponse {
+            status: 302,
+            location: Some("/v1beta/models/gemini-redirected".to_owned()),
+            body: Value::Null,
+        },
+        PageResponse {
+            status: 200,
+            location: None,
+            body: json!({"inputTokenLimit": 32768, "outputTokenLimit": 8192}),
+        },
+    ]);
+    let mut config = HttpClientConfig::default();
+    config
+        .add_dns_override("generativelanguage.googleapis.com", server.address)
+        .expect("Gemini metadata DNS override");
+    let client = HttpClient::with_config(HttpClientPolicy::default(), config).expect("HTTP client");
+    let provider = json!({
+        "id": "gemini-metadata-fixture",
+        "base_url": format!(
+            "http://generativelanguage.googleapis.com:{}/v1beta/openai",
+            server.address.port()
+        ),
+        "api_key": "metadata-key"
+    });
+    let metadata = model_metadata(
+        &client,
+        provider.as_object().expect("provider object"),
+        "gemini-redirect-test",
+    )
+    .await
+    .expect("same-origin metadata redirect");
+    assert_eq!(metadata["input_token_limit"], 32768);
+    assert_eq!(metadata["output_token_limit"], 8192);
+    let requests = server.records();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].path, "/v1beta/models/gemini-redirect-test");
+    assert_eq!(requests[1].path, "/v1beta/models/gemini-redirected");
+    assert!(requests.iter().all(|request| {
+        request.headers.get("x-goog-api-key").map(String::as_str) == Some("metadata-key")
+    }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

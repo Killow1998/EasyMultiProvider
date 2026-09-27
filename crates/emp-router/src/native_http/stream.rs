@@ -2,6 +2,13 @@
 
 use super::*;
 
+fn may_carry_context_error(event: &Value) -> bool {
+    matches!(
+        event.get("type").and_then(Value::as_str),
+        Some("error" | "response.failed" | "response.incomplete")
+    )
+}
+
 impl NativeStream {
     pub async fn next_event(&mut self) -> Result<Option<NativeStreamEvent>, RouterError> {
         if let Some(event) = self.pending.pop_front() {
@@ -197,7 +204,9 @@ impl NativeStream {
         if !event.is_object() {
             return Ok(());
         }
-        if is_explicit_context_error(400, "application/json", &data) {
+        if may_carry_context_error(&event)
+            && is_explicit_context_error(400, "application/json", &data)
+        {
             return Err(native_stream_error(
                 413,
                 FailureClass::ContextLengthExceeded,
@@ -337,5 +346,41 @@ mod tests {
             .unwrap();
         assert_eq!(partial.pending.len(), 1);
         assert_eq!(partial.line_scanned, 0);
+    }
+
+    #[test]
+    fn context_errors_are_observed_only_on_error_events() {
+        let ordinary = json!({
+            "type": "response.output_text.delta",
+            "delta": "context_length_exceeded",
+        });
+        let mut stream = detached_stream();
+        let frame = format!("data: {ordinary}\n\n");
+        stream.consume_chunk(frame.as_bytes()).unwrap();
+        assert_eq!(stream.pending.len(), 1);
+        assert!(!stream.saw_terminal);
+
+        let failed = json!({
+            "type": "response.failed",
+            "response": {"error": {"code": "context_length_exceeded"}},
+        });
+        let frame = format!("data: {failed}\n\n");
+        let error = stream
+            .consume_chunk(frame.as_bytes())
+            .expect_err("terminal context error is classified");
+        assert_eq!(error.status(), 413);
+    }
+
+    #[test]
+    fn context_error_observation_cost_has_body_and_node_caps() {
+        let mut stream = detached_stream();
+        let failed = json!({
+            "type": "response.failed",
+            "response": {"error": {"details": vec![Value::Null; 5_000]}},
+        });
+        let frame = format!("data: {failed}\n\n");
+        stream.consume_chunk(frame.as_bytes()).unwrap();
+        assert_eq!(stream.pending.len(), 1);
+        assert!(stream.saw_terminal);
     }
 }

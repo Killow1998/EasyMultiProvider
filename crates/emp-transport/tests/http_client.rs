@@ -25,6 +25,7 @@ struct RecordedRequest {
     method: String,
     target: String,
     authorization: Option<String>,
+    google_api_key: Option<String>,
     proxy_authorization: Option<String>,
     accept_encoding: Option<String>,
     oracle_lane: Option<String>,
@@ -311,18 +312,22 @@ fn serve_connection(
         let method = request_line.next().unwrap_or_default().to_owned();
         let target = request_line.next().unwrap_or_default().to_owned();
         let mut authorization = None;
+        let mut google_api_key = None;
         let mut proxy_authorization = None;
         let mut accept_encoding = None;
         let mut oracle_lane = None;
+        let mut redirect_to = None;
         for line in lines {
             let Some((name, value)) = line.split_once(':') else {
                 continue;
             };
             match name.trim().to_ascii_lowercase().as_str() {
                 "authorization" => authorization = Some(value.trim().to_owned()),
+                "x-goog-api-key" => google_api_key = Some(value.trim().to_owned()),
                 "proxy-authorization" => proxy_authorization = Some(value.trim().to_owned()),
                 "accept-encoding" => accept_encoding = Some(value.trim().to_owned()),
                 "x-oracle-lane" => oracle_lane = Some(value.trim().to_owned()),
+                "x-test-redirect-to" => redirect_to = Some(value.trim().to_owned()),
                 _ => {}
             }
         }
@@ -335,6 +340,7 @@ fn serve_connection(
                 method,
                 target: target.clone(),
                 authorization,
+                google_api_key,
                 proxy_authorization,
                 accept_encoding,
                 oracle_lane,
@@ -349,6 +355,18 @@ fn serve_connection(
                     b"HTTP/1.1 302 Found\r\nLocation: /unexpected\r\nContent-Length: 0\r\n\r\n",
                 )
                 .is_err()
+            {
+                return;
+            }
+            continue;
+        }
+        if target.ends_with("/redirect-to") {
+            let location = redirect_to.as_deref().unwrap_or("/unexpected");
+            if write!(
+                stream,
+                "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n"
+            )
+            .is_err()
             {
                 return;
             }
@@ -519,6 +537,62 @@ async fn redirects_and_dropped_posts_are_never_replayed() {
             .map(|request| request.target.as_str())
             .collect::<Vec<_>>(),
         ["/drop", "/redirect"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn followed_redirects_stay_on_the_initial_origin() {
+    let server = TestServer::start();
+    let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
+    let response = client
+        .open_following_redirects(
+            HttpMethod::Get,
+            &server.url("/redirect"),
+            headers("Bearer same-origin"),
+            None,
+            false,
+        )
+        .await
+        .expect("same-origin redirect");
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.read_all().await.unwrap(), b"OK");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| { request.authorization.as_deref() == Some("Bearer same-origin") })
+    );
+
+    let server = TestServer::start();
+    let mut config = HttpClientConfig::default();
+    config
+        .add_dns_override("other.test", server.address)
+        .expect("cross-origin redirect DNS fixture");
+    let client = HttpClient::with_config(HttpClientPolicy::default(), config)
+        .expect("HTTP client with local DNS override");
+    let location = format!("http://other.test:{}/destination", server.address.port());
+    let headers = BTreeMap::from([
+        ("x-goog-api-key".to_owned(), "private-gemini-key".to_owned()),
+        ("x-test-redirect-to".to_owned(), location),
+    ]);
+    let response = client
+        .open_following_redirects(
+            HttpMethod::Get,
+            &server.url("/redirect-to"),
+            headers,
+            None,
+            false,
+        )
+        .await
+        .expect("cross-origin redirect is returned without following");
+    assert_eq!(response.status(), 302);
+    response.read_all().await.expect("redirect body");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1, "the second origin receives no request");
+    assert_eq!(
+        requests[0].google_api_key.as_deref(),
+        Some("private-gemini-key")
     );
 }
 

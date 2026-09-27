@@ -1,6 +1,6 @@
 use emp_core::{
-    deployment_identity, endpoint_fingerprint, normalize_endpoint, resolve_route,
-    resolved_upstream_model,
+    RouteResolutionError, RouteSource, deployment_identity, endpoint_fingerprint,
+    normalize_endpoint, resolve_route, resolve_route_without_catalog, resolved_upstream_model,
 };
 use serde_json::{Map, Value, json};
 use std::io::Write;
@@ -209,4 +209,56 @@ fn negotiated_protocol_rebuilds_an_immutable_snapshot() {
     assert_eq!(route.provider.value()["protocol"], "auto");
     assert_eq!(concrete.protocol, emp_core::Protocol::ChatCompletions);
     assert_eq!(concrete.provider.value()["protocol"], "chat_completions");
+}
+
+#[test]
+fn native_forward_fallback_rejects_unknown_and_disabled_account_prefixes() {
+    let base = json!({
+        "providers": [{
+            "id": "native",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+            "protocol": "responses",
+            "auth_mode": "forward"
+        }]
+    });
+    let unknown = resolve_route_without_catalog(&base, "missing/model").unwrap_err();
+    assert_eq!(
+        unknown,
+        RouteResolutionError::UnknownModel("missing/model".to_owned())
+    );
+
+    let mut disabled = base.clone();
+    disabled["accounts"] = json!([{"id":"old", "prefix":"old", "enabled":false}]);
+    let error = resolve_route_without_catalog(&disabled, "old/model").unwrap_err();
+    assert_eq!(
+        error,
+        RouteResolutionError::ProviderUnavailable("old/model".to_owned())
+    );
+}
+
+#[test]
+fn native_forward_fallback_and_explicit_slash_models_remain_available() {
+    let config = json!({
+        "providers": [{
+            "id": "native",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+            "protocol": "responses",
+            "auth_mode": "forward"
+        }]
+    });
+    let route = resolve_route_without_catalog(&config, "gpt-test").expect("forward fallback");
+    assert_eq!(route.source, RouteSource::ForwardProvider);
+
+    let explicit = json!({
+        "providers": [{
+            "id": "native",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+            "protocol": "responses",
+            "auth_mode": "forward"
+        }],
+        "models": [{"id":"vendor/model", "provider":"native", "enabled":true}]
+    });
+    let route = resolve_route_without_catalog(&explicit, "vendor/model")
+        .expect("explicitly configured slash model");
+    assert_eq!(route.source, RouteSource::ExplicitModel);
 }
