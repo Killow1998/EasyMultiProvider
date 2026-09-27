@@ -1,22 +1,36 @@
 # EMP Handoff
 
-## Active security repair handoff — 2026-09-27 UTC
+## Active Opus takeover — 2026-09-27 07:06 UTC
 
-This section is the current resume point. The dated records below it are
-historical. Xian authorized Point to continue the interrupted review with
-Luna 6 **max** workers and to preserve enough progress for Opus to take over.
-Do not restart the Rust rewrite or discard the existing work.
+This section is the current resume point. Xian requested a documented handoff
+to Opus after Codex quota exhaustion. Four work areas have local implementation
+commits; STATE and CONTEXT remain uncommitted and incomplete. Nothing from the
+worker branches has been integrated into `security-fixes`, deployed, or pushed.
+The records below the historical divider describe earlier stages, not current
+acceptance. Do not restart the Rust rewrite or discard existing work.
+
+Point checked commits, worktree diffs, worker records and tool outputs for this
+handoff. No new implementation or tests were run during handoff preparation.
+Worker verification below is recorded evidence, not an independent final review.
 
 ### Coordinator and recovery
 
-- Integration checkout: `EasyMultiProvider-rust`, branch `security-fixes`,
-  starting at `2c35c8f`. Point owns integration, review, and this active section.
-- Six existing `emp-sec-*` worktrees contain four completed local commits,
-  48 modified tracked files, and two untracked files. None was integrated at
-  handoff start. Preserve all of them, including partial implementation.
+- Integration checkout: `EasyMultiProvider-rust`, branch `security-fixes`.
+  Before this documentation checkpoint its HEAD was `df37abc` (only coordinator
+  docs beyond common source base `2c35c8f`). Opus should take over review,
+  implementation completion, and integration using the existing worktrees.
+- Six existing `emp-sec-*` worktrees are retained. Four are clean with local
+  commits. STATE has 17 modified tracked files; CONTEXT has five modified
+  tracked files and untracked `crates/emp-history/tests/tmp_baseline.rs`.
+  The formal Python checkout remains clean at `3bcf72a` on `python_archive`.
 - Baseline patches, HEADs, status, and untracked files were copied to ignored
   `artifacts/security-recovery/20260927T052409Z/` in the integration checkout.
   These are local recovery data; never publish credentials or private logs.
+- A new complete snapshot of current dirty patches, untracked files, worker
+  handoffs, HEADs and status is in ignored
+  `artifacts/security-recovery/20260927T070554Z/`, including `manifest.json`.
+  The earlier `20260927T052409Z/coordinator.json` contains local task IDs and
+  terminal status. Preserve both snapshots until integration is validated.
 - Each worker updates **its own worktree's copy of this existing handoff file**
   before substantial work and after each tested change. Record exact commits,
   commands/results, remaining work, and the next action. Point consolidates
@@ -30,8 +44,15 @@ Do not restart the Rust rewrite or discard the existing work.
 - Python EMP is the control service on port **4200**. It must remain running.
   Rust on **4201** is a separate test service. Point may stop/restart Rust as
   needed; workers use their own temporary test listeners and never touch 4200.
-- Use the app-server task tools, with `gpt-6-luna` and effective effort `max`.
-  Do not substitute low/high, another model, or a `codex exec` worker.
+- The three Luna app-server workers were verified as `gpt-6-luna` / `max`.
+  HTTP→STATE and ROLLOUT→CONTEXT terminated around 07:00:40 UTC with
+  `429 Too Many Requests` / retry exhaustion; TRANSPORT→CI completed at
+  06:31:32 UTC. No new Luna turns were started for this handoff. No Cargo or
+  rustc process was observed during the final handoff check. Before editing,
+  recheck that no resumed worker is writing the same worktree.
+- Opus is the user-selected next implementation model; it does not need to
+  relaunch Codex or wait for Codex quota. The Luna rules below only apply if
+  Xian later resumes Luna workers.
 - When the current native account has about **10% or less remaining** in any
   applicable finite quota window, change every Luna task to
   `egg/gpt-6-luna`, still at `max`. Preserve task history and worktree state.
@@ -44,20 +65,132 @@ Do not restart the Rust rewrite or discard the existing work.
   used 12% (remaining 93% / 88%). Xian subsequently reimported egg; both its
   credential-set flag and `egg/gpt-6-luna` catalog route are now present.
   No quota reset was performed.
+- The later native 58%/83% and egg 99%/84% readings are historical, not current
+  availability. Worker terminal records still show `gpt-6-luna`; a successful
+  switch to egg was **not verified** before the 429 failures. Do not describe
+  the threshold policy as an implemented automatic failover mechanism.
 
 ### Work ownership and sequence
 
-At most three implementation workers run at once. Use the existing worktrees;
-do not create additional worktrees or new per-worktree Cargo caches.
+Use the existing worktrees; do not create more worktrees or per-worktree Cargo
+caches. The Luna queues have stopped at the states below. Opus may work directly
+or use previously authorized nonconflicting delegation, within resource limits.
 
-| Task | Worktree / branch | Starting state | Owner status |
+| Task | Worktree / branch | Current HEAD / local source commits | Verified checkpoint |
 | --- | --- | --- | --- |
-| HTTP | `emp-sec-http` / `sec/http` | 29 changed files; header-auth backend, UI still on cookie/EventSource; not integrated | Running, Luna/max verified |
-| ROLLOUT | `emp-sec-rollout` / `sec/rollout` | `2abc9fe` metadata validation; other reader fixes incomplete | Running, Luna/max verified |
-| TRANSPORT | `emp-sec-transport` / `sec/transport` | `24d87f1`, `bda4092`; unfinished context classifier and undefined `may_carry_context_error` call | Running, Luna/max verified |
-| CONTEXT | `emp-sec-history-ctx` / `sec/history-ctx` | Compaction/calibration drafts plus `tests/tmp_baseline.rs` | After an initial worker finishes |
-| STATE | `emp-sec-state` / `sec/state` | Migration v2, origin-bound secrets, bounded filesystem drafts; quota persistence unfinished | After an initial worker finishes |
-| CI | `emp-sec-ci` / `sec/ci` | `d7ebcc0`; runtime inventory trust draft | After an initial worker finishes |
+| HTTP | `emp-sec-http` / `sec/http` | `6cdbae7` | Clean; focused checks passed; integration review pending |
+| ROLLOUT | `emp-sec-rollout` / `sec/rollout` | `2abc9fe` → `b1c9b22` | Clean; history contracts 29/29; integration review pending |
+| TRANSPORT | `emp-sec-transport` / `sec/transport` | `24d87f1` → `bda4092` → `85ed7b2` → `001d299` | Clean; focused checks passed; Windows build unverified |
+| CONTEXT | `emp-sec-history-ctx` / `sec/history-ctx` | `2c35c8f` + five modified files + one untracked fixture | Uncommitted; 216-case differential and 15 context tests passed; app check unfinished |
+| STATE | `emp-sec-state` / `sec/state` | `2c35c8f` + 17 modified files | Uncommitted; known failed test and untested final Python migration edit |
+| CI | `emp-sec-ci` / `sec/ci` | `d7ebcc0` → `2289db2` → `092b5f1` → `f7ae1ce` | Clean; local checks passed; no workflow was run |
+
+### Completed branch work and evidence
+
+- **HTTP (`6cdbae7`):** header sessions, bootstrap exchange, browser request and
+  fetch-SSE integration, operation/session-bound export confirmation, safe
+  dynamic handlers, response security headers, request deadlines, framing and
+  account-path validation, desktop absolute paths. Worker records 21 session,
+  6 migration/management, 7 realtime, 10 catalog/config, 13 native/Codex tests,
+  quota/stream/desktop contracts, app warnings-denied Clippy, app fmt, JS syntax,
+  DOM harness and handler scan passing. The UI retains a compatibility path for
+  Python cookie auth. Migration v2 still depends on STATE; combined behavior
+  has not passed integration. Read this branch's `HTTP worker result` section.
+- **ROLLOUT (`b1c9b22`, plus `2abc9fe`):** prefix control scanning, bounded
+  plain/Zstd source adapter, lineage validation, root/symlink/ambiguity checks,
+  metadata/mode validation, partial-window and nonzero frozen-prefix cases.
+  Final history contract suite passed 29/29; the decompressed byte-limit unit
+  test passed separately. `cargo fmt -p emp-codex` and diff check passed.
+  Source implementation and new tests require coordinator review before merge.
+- **TRANSPORT (`85ed7b2`, plus prior two fixes):** bounded context classifier,
+  completed event filter, account-prefix fallback protection, same-origin
+  redirect policy and Windows registry absolute path. Native complete/stream
+  Python oracle, route oracle, SSE, deflate, cancellation, HTTP client 10/10,
+  discovery 3/3 and targeted classifier/path tests passed. Windows cross-check
+  stopped in `aws-lc-sys` because GNU `cc` was used for an MSVC target; this is
+  not Windows validation. `001d299` records the checkpoint.
+- **CI (`2289db2`, plus `d7ebcc0`):** runtime candidate trust checks; pinned
+  Actions, default-branch release gate, environment/provenance wiring. Runtime
+  tests 8/8, packaging validator 5/5, YAML parsing and SHA-reference inspection
+  passed locally. `actionlint` was unavailable. Windows ACL checks, protected
+  environment settings and attestation enablement remain unverified. The
+  updater checks GitHub metadata digests and does **not** verify provenance or
+  an independent release signature. Do not mark these trust gaps complete.
+
+### Exact unfinished resume points
+
+**STATE first:** All changes are in `emp-sec-state`, including the Python
+`easy_multi_provider/server.py`, `migration.py`, and `tests/test_server.py`.
+They are NOT applied to the running `EasyMultiProvider/python_archive` checkout.
+
+1. The new Python and Rust `quota_history_follows_upstream_identity_across_delete_and_reimport`
+   tests were run; the Python test passed with the existing venv. The draft
+   removes deletion of trend samples and keys new samples by upstream identity.
+   Review identity separation and missing/expired-auth behavior before adoption.
+   **Existing rows keyed `egg` / `@native` have no implemented migration to the
+   new identity keys.** Merely keeping old rows will not make old graphs appear.
+   Plan an identity-verified, idempotent migration/recovery; never guess ownership
+   from a reused display name. Historical snapshots remain read-only.
+2. A crate-scoped `emp-state` run ended with the known failure
+   `changing_provider_origin_does_not_carry_over_a_stored_key` in
+   `crates/emp-state/tests/web_update_merge_compat.rs:177`. The fixture calls
+   `.expect("valid Web update")` on non-loopback HTTP, which existing validation
+   correctly rejects. Keep HTTPS enforcement; distinguish rejected URLs from
+   valid origin changes in the regression. Earlier sandbox fixture failures
+   were retried with local-network access; this assertion remained.
+3. The last code edit changed Python migration to write a v2 envelope with
+   fixed scrypt N=2^17, 12-byte export passwords and v1/v2 import (8-byte legacy
+   minimum). **No test ran after this edit.** Existing `_fernet` fixture calls
+   may still assume v1. Rust's current `python_interop` check manually decrypts
+   ciphertext; it is not proof that the real Python `read_bundle`/import accepts
+   v2. Finish actual importer interoperability, legacy fixtures, invalid fixed
+   KDF rejection and UI consistency without weakening old-data compatibility.
+4. Token-rotation save-failure recovery, private temporary auth storage, atomic
+   integration writes and cross-platform filesystem behavior still need review
+   and completion; the quota process/integration files have not been changed
+   by this worker. Do not claim the whole STATE assignment is implemented.
+
+**CONTEXT second:** In `emp-sec-history-ctx`, five tracked files are dirty:
+`context.rs`, `context/calibration.rs`, the app context service, the Python
+oracle test and this worktree's handoff; `tests/tmp_baseline.rs` is untracked.
+
+- The 216-case live Python differential found and fixed same-turn boundary
+  precedence and tool-record JSON-spacing differences. It compares outcomes,
+  bodies and every summary request. The complete targeted `python_oracle`
+  binary passed 4/4; `cargo test --offline -p emp-history --lib context::`
+  passed 15/15 (including calibration/deployment/output-budget tests).
+- The last launched check was
+  `cargo test --offline -p emp-app --lib services::context::tests::only_explicit_context_errors_produce_failure_observations`.
+  Its tool output stopped during compilation before the 429. There is no
+  recorded final exit status; rerun this focused check, not the entire workspace.
+- Review performance/bounds and retained-history equivalence, then finish
+  targeted formatting/Clippy and commit. Preserve or replace the scratch matrix
+  only after retaining its useful evidence. Do not equate one passing wall-clock
+  guard with a measured performance improvement.
+
+### Opus execution order
+
+1. Read this section, inspect current branch/status in each existing worktree,
+   and verify no revived worker is editing. Use the saved patches as recovery,
+   not as replacements for newer work. Do not launch new Luna turns.
+2. Finish and locally commit STATE, then CONTEXT, using the concrete failures
+   and pending checks above. Mirror required Python fixes deliberately into
+   `python_archive` only after review; never restart Python 4200 during control.
+3. Review and integrate all six branches into `security-fixes`. Preserve the
+   coordinator's current handoff when resolving doc conflicts; retain useful
+   worker verification instead of accepting a stale file wholesale. Both
+   ROLLOUT and TRANSPORT alter `Cargo.lock` (zstd and regex edges); retain both.
+   HTTP and STATE overlap in the account deletion/refresh-race tests; combine
+   header-auth and retention behavior. No source integration has happened yet.
+4. Run affected tests per change. Once all source is integrated, run final fmt,
+   warnings-denied Clippy, workspace tests and main browser/HTTP/SSE/WS/history/
+   compaction/model-switch/subagent E2E. Authenticate the updated browser flow;
+   do not rewrite the oracle to silently accept intentional security changes.
+5. Rebuild only isolated Rust test service/package; keep Python 4200 serving.
+   Cross-platform evidence, trust prerequisites and any live-history recovery
+   are distinct remaining acceptance items. No new CI run or release is
+   authorized by this handoff. Preserve progress if an external prerequisite
+   blocks one item; complete unaffected work and report the exact gap.
 
 **HTTP assignment:** Own `emp-app` HTTP/auth/web, request lifecycle, desktop
 launcher, the migration/quota management adapters, relevant app tests, and
@@ -116,8 +249,8 @@ archived Python oracle to hide a difference.
 **New user-reported STATE priority — quota history retention:** Xian removed
 egg after OAuth expired, then reimported it and found the trend empty. Both
 Python `AppState._delete_account` and Rust `delete_account_state` call the
-history store's delete operation. The live store currently has only two new
-egg samples; a separate older local store has 406 egg samples. Point saved
+history store's delete operation. At discovery, the live store had only two new
+egg samples; a separate older local store had 406 egg samples. Point saved
 read-only SQLite snapshots under the ignored recovery directory before any
 recovery. Do not automatically clear historical usage when removing credentials.
 Reimporting the same upstream account should reconnect its history; reusing a
@@ -126,7 +259,8 @@ Use stable account ownership, keep history within its existing retention policy,
 and preserve explicit deletion semantics as a separate operation if needed.
 This fix includes the Python source in `EasyMultiProvider` and the Rust source,
 with focused removal/reimport and identity-separation tests. Do not restart the
-Python service. Point handles any live history restoration after identity review.
+Python service. Live restoration remains undone: Opus must verify ownership,
+preserve a fresh SQLite snapshot, and review the merge before touching live data.
 
 **CI assignment:** Own `.github/**`, packaging scripts and
 `emp-codex/src/runtime_inventory/**` with their tests. Review `d7ebcc0`; finish
@@ -165,24 +299,19 @@ the remaining trust/configuration prerequisites explicitly.
 
 ### Latest coordinator checkpoint
 
-- Latest Xian clarification: only the root Point thread should stop active
-  implementation. Luna workers continue. Root is limited to analysis, dispatch
-  and review. Prior pause messages were explicitly revoked. Worker queues are
-  HTTP → STATE (including Python/Rust trend retention), ROLLOUT → CONTEXT,
-  TRANSPORT → CI. Workers check quota and switch to egg Luna/max at <=10%.
-  Root leaves the workers running and reviews their completed results later.
-
-- Baseline saved; HTTP, ROLLOUT and TRANSPORT app-server workers started.
-  Point verified all three in both thread metadata and actual `turn_context`:
-  `model=gpt-6-luna`, `effort=max`. Generic system wording "GPT-6" is not
-  contrary evidence. Local task IDs are in the ignored recovery manifest.
-- Python 4200 and Rust 4201 both observed running. Existing TCP connections
-  were to 4200, with none observed to 4201. Rust's old executable and temporary
-  cwd are marked deleted; recreate an isolated installation when restarting it.
-- Next: supervise targeted work, prioritize STATE/history retention as the next
-  available worker, and verify/restorably merge older quota samples if ownership
-  agrees. If Codex quota runs out, Opus resumes from this
-  section and the corresponding worktree progress without reverting drafts.
+- Latest instruction is handoff to Opus after Codex quota exhaustion. Point
+  prepared documentation only, without restarting workers, compiling, testing,
+  changing product source, merging branches, recovering live data or starting CI.
+- Completed and dirty worktree contents were saved in the 07:05:54 UTC recovery
+  snapshot. The two unfinished workers' 429 errors and their last commands are
+  reflected above. No completed integration or release is claimed.
+- Python `emp-xian-local.service` (4200) and Rust `emp-rust-test-4201.service`
+  were both observed active/running during this handoff. Earlier inspection
+  found Rust's executable and temporary cwd marked deleted; recreate its
+  isolated installation before a future restart. Protect Python 4200.
+- Next action: Opus begins with STATE's failed origin-update fixture and
+  unfinished migration/legacy-history handling, then CONTEXT's pending app
+  check and commit, followed by branch review/integration and final acceptance.
 
 ---
 
