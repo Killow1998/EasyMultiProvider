@@ -2,9 +2,10 @@
 //!
 //! Mirrors the quota app-server binary validation (`quota::process`): the
 //! candidate must be an absolute path to a regular file and, on Unix, must be
-//! executable, owned by root or the current user, not writable by other
-//! users, and every ancestor directory must be neither world-writable nor
-//! group-writable by a foreign owner.
+//! executable, owned by root or the current user, not world-writable and not
+//! set-id, and every ancestor directory must be neither world-writable nor
+//! group-writable by a foreign owner, unless it is sticky and the entry
+//! below it belongs to root or the current user.
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -30,22 +31,32 @@ fn validate_binary_path(path: &Path) -> bool {
     {
         // SAFETY: getuid has no preconditions and cannot fail.
         let current_uid = unsafe { libc::getuid() };
+        // Group write is accepted on the user's own file, as for ancestor
+        // directories: default umask 002 installs (npm, nvm) are 0775.
         if metadata.mode() & 0o111 == 0
-            || metadata.mode() & 0o022 != 0
+            || metadata.mode() & 0o002 != 0
             || metadata.mode() & 0o6000 != 0
             || (metadata.uid() != 0 && metadata.uid() != current_uid)
         {
             return false;
         }
-        for parent in path.ancestors() {
+        // Owner of the entry directly below the ancestor being checked.
+        let mut entry_uid = metadata.uid();
+        for parent in path.ancestors().skip(1) {
             let Ok(info) = fs::metadata(parent) else {
                 return false;
             };
-            if info.mode() & 0o002 != 0
-                || (info.mode() & 0o020 != 0 && info.uid() != 0 && info.uid() != current_uid)
-            {
+            let foreign_writable = info.mode() & 0o002 != 0
+                || (info.mode() & 0o020 != 0 && info.uid() != 0 && info.uid() != current_uid);
+            // A sticky directory such as /tmp stops other users renaming or
+            // removing entries they do not own, so an entry owned by root or
+            // the current user below it cannot be swapped.
+            let sticky_protects_entry =
+                info.mode() & 0o1000 != 0 && (entry_uid == 0 || entry_uid == current_uid);
+            if foreign_writable && !sticky_protects_entry {
                 return false;
             }
+            entry_uid = info.uid();
         }
     }
     true
@@ -121,6 +132,17 @@ pub(super) mod tests {
         std::os::unix::fs::symlink(&hijack, &link).unwrap();
         assert_eq!(trusted_binary(&link), None);
         std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        // Like /tmp: sticky and world-writable, but our own entry below it
+        // cannot be renamed or removed by other users.
+        let sticky = dir.path().join("sticky");
+        std::fs::create_dir(&sticky).unwrap();
+        let owned = script(&sticky, "codex", "exit 0", 0o755);
+        std::fs::set_permissions(&sticky, std::fs::Permissions::from_mode(0o1777)).unwrap();
+        if ancestors_are_private(dir.path()) {
+            assert_eq!(trusted_binary(&owned), Some(owned.canonicalize().unwrap()));
+        }
+        std::fs::set_permissions(&sticky, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         let writable = script(dir.path(), "writable", "exit 0", 0o777);
         assert_eq!(trusted_binary(&writable), None);

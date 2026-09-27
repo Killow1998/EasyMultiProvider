@@ -87,13 +87,14 @@ pub(super) fn limits(
                 .all(|(key, value)| item.get(key) == Some(value))
         })
         .cloned();
-    // A confirmed failure bounds the whole request (input plus requested
-    // output), so it caps the usable window exactly like `context` does.
+    // A failure estimate is an input estimate (Python contract), so
+    // `failure - 1` is already an input ceiling; reserves are not subtracted
+    // again. Calibration data is shared with Python through the config file.
     let failure = calibration
         .as_ref()
         .filter(|value| fresh(value.get("smallest_failure_observed_at")) && confirmed(value))
         .and_then(|value| positive_integer(value.get("smallest_failure_estimate")))
-        .map(|value| (value - 1).saturating_sub(reserves.unwrap_or(0)));
+        .map(|value| value - 1);
     let base = context
         .zip(reserves)
         .map(|(limit, reserve)| limit.saturating_sub(reserve));
@@ -130,11 +131,11 @@ pub fn status(provider: &Map<String, Value>, model: &Map<String, Value>, protoco
 
 /// Retain only numeric evidence, bound to the actual upstream deployment.
 ///
-/// `estimate` is the input estimate and `output_reserve` is the request's
-/// output budget. Store their sum as the observed total request boundary;
-/// `limits` subtracts the next request's own output budget to recover an
-/// input ceiling. A low failure is only applied after a nearby explicit
-/// failure corroborates it.
+/// `estimate` is the input estimate and is what gets stored, matching the
+/// Python calibration contract. `output_reserve` is the request's output
+/// budget: a failure whose input plus output exceeds the known window says
+/// nothing about the input ceiling and is ignored, and one far below the
+/// window is only applied after a nearby explicit failure corroborates it.
 pub fn update(
     provider: &Map<String, Value>,
     model: &mut Map<String, Value>,
@@ -181,11 +182,8 @@ pub fn update(
     let mut changed = false;
     let recorded = if success {
         let old = positive_integer(current.get("largest_success_estimate"));
-        old.is_none_or(|old| total_estimate > old).then_some((
-            "largest_success",
-            total_estimate,
-            1.0,
-        ))
+        old.is_none_or(|old| estimate > old)
+            .then_some(("largest_success", estimate, 1.0))
     } else {
         let window = context_window(provider, model).0;
         if window.is_some_and(|window| total_estimate > window) {
@@ -195,20 +193,18 @@ pub fn update(
         let old = positive_integer(current.get("smallest_failure_estimate"))
             .filter(|_| fresh(current.get("smallest_failure_observed_at")));
         match old {
-            None if plausible => Some((total_estimate, 1.0)),
-            None => Some((total_estimate, UNCONFIRMED_FAILURE_CONFIDENCE)),
-            Some(_) if !confirmed(&current) && plausible => Some((total_estimate, 1.0)),
-            Some(old) if !confirmed(&current) && corroborates_failure(old, total_estimate) => {
-                Some((old.min(total_estimate), 1.0))
+            None if plausible => Some((estimate, 1.0)),
+            None => Some((estimate, UNCONFIRMED_FAILURE_CONFIDENCE)),
+            Some(_) if !confirmed(&current) && plausible => Some((estimate, 1.0)),
+            Some(old) if !confirmed(&current) && corroborates_failure(old, estimate) => {
+                Some((old.min(estimate), 1.0))
             }
             // Replace unrelated unconfirmed evidence without applying it.
-            Some(_) if !confirmed(&current) => {
-                Some((total_estimate, UNCONFIRMED_FAILURE_CONFIDENCE))
-            }
-            Some(old) if plausible && total_estimate < old => Some((total_estimate, 1.0)),
+            Some(_) if !confirmed(&current) => Some((estimate, UNCONFIRMED_FAILURE_CONFIDENCE)),
+            Some(old) if plausible && estimate < old => Some((estimate, 1.0)),
             Some(_) => None,
         }
-        .map(|(total, confidence)| ("smallest_failure", total, confidence))
+        .map(|(input, confidence)| ("smallest_failure", input, confidence))
     };
     if let Some((field, estimate, confidence)) = recorded {
         current[format!("{field}_estimate")] = json!(estimate);
@@ -219,7 +215,7 @@ pub fn update(
     }
     if success
         && positive_integer(current.get("smallest_failure_estimate"))
-            .is_some_and(|failure| total_estimate >= failure)
+            .is_some_and(|failure| estimate >= failure)
     {
         current["smallest_failure_estimate"] = Value::Null;
         current["smallest_failure_source"] = json!("unknown");
@@ -283,14 +279,14 @@ mod tests {
     }
 
     #[test]
-    fn failure_boundary_accounts_for_each_requests_output_budget() {
+    fn failure_estimates_are_input_ceilings_like_python() {
         let provider = provider();
         let mut model = model("deployment-a");
         assert!(update(
             &provider,
             &mut model,
             "responses",
-            40_000,
+            60_000,
             Some(20_000),
             false,
             &observed_at(),
@@ -299,11 +295,27 @@ mod tests {
             model["context_calibrations"][0]["smallest_failure_estimate"],
             60_000
         );
+        // Python stores the input estimate; `failure - 1` is the input
+        // ceiling whatever the next request's output budget is.
+        for reserves in [Some(20_256), Some(5_256), None] {
+            assert_eq!(
+                limits(&provider, &model, "responses", reserves).input,
+                Some(59_999)
+            );
+        }
 
-        let same_output = limits(&provider, &model, "responses", Some(20_256));
-        assert_eq!(same_output.input, Some(39_743));
-        let smaller_output = limits(&provider, &model, "responses", Some(5_256));
-        assert_eq!(smaller_output.input, Some(54_743));
+        // Input plus output beyond the known window says nothing about the
+        // input ceiling.
+        let mut other = super::tests::model("deployment-b");
+        assert!(!update(
+            &provider,
+            &mut other,
+            "responses",
+            90_000,
+            Some(20_000),
+            false,
+            &observed_at(),
+        ));
     }
 
     #[test]
@@ -335,7 +347,7 @@ mod tests {
         ));
         assert_eq!(
             model["context_calibrations"][0]["smallest_failure_estimate"],
-            16_000
+            15_000
         );
         assert_eq!(
             model["context_calibrations"][0]["smallest_failure_confidence"],
@@ -357,7 +369,7 @@ mod tests {
         ));
         assert_eq!(
             model["context_calibrations"][0]["smallest_failure_estimate"],
-            16_000
+            15_000
         );
         assert_eq!(
             model["context_calibrations"][0]["smallest_failure_confidence"],
@@ -365,7 +377,7 @@ mod tests {
         );
         assert_eq!(
             limits(&provider, &model, "responses", Some(1_256)).input,
-            Some(14_743)
+            Some(14_999)
         );
     }
 
