@@ -65,6 +65,7 @@ mod management_http_contract;
 mod native_api_contract;
 mod performance_contract;
 mod quota_management_contract;
+mod quota_rotation_contract;
 mod quota_workspace_contract;
 mod realtime_contract;
 mod realtime_sideband_contract;

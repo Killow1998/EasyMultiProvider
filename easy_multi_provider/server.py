@@ -2806,15 +2806,31 @@ class AppState:
 
     def _quota_owner_key(self, account_id: str) -> str:
         if account_id == NATIVE_ACCOUNT_ID:
-            return NATIVE_ACCOUNT_ID
-        with self.lock:
-            accounts = [dict(item) for item in self.config.get("accounts", [])]
-        if not any(item.get("id") == account_id for item in accounts):
-            raise QuotaError("unknown account: %s" % account_id)
-        source = duplicate_account_status(accounts).get(account_id)
-        if source == "当前 Codex 登录":
-            return NATIVE_ACCOUNT_ID
-        return source or account_id
+            try:
+                headers = native_auth_headers(self.codex_home / "auth.json")
+            except AccountError as exc:
+                raise QuotaError("Native Codex authentication is unavailable") from exc
+        else:
+            with self.lock:
+                account = next(
+                    (
+                        dict(item)
+                        for item in self.config.get("accounts", [])
+                        if item.get("id") == account_id
+                    ),
+                    None,
+                )
+            if account is None:
+                raise QuotaError("unknown account: %s" % account_id)
+            try:
+                headers = auth_headers(account)
+            except AccountError as exc:
+                raise QuotaError("Subscription account authentication is unavailable") from exc
+
+        owner = usage_account_owner(headers)
+        if not owner:
+            raise QuotaError("Account identity is unavailable")
+        return owner
 
     def _record_quota_snapshot(
         self, account_id: str, quota: Mapping[str, Any]
@@ -2911,7 +2927,6 @@ class AppState:
             self.notify_quota_update(account_id)
 
     def _delete_account(self, account_id: str) -> None:
-        owner = self._quota_owner_key(account_id)
         with self.lock:
             accounts = self.config.get("accounts", [])
             target = next((item for item in accounts if item.get("id") == account_id), None)
@@ -2944,8 +2959,6 @@ class AppState:
                 account_dir.rmdir()
             except OSError:
                 pass
-        if owner == account_id:
-            self.quota_history.delete_account(account_id)
 
 
 def load_from_value(value: Dict[str, Any]) -> Dict[str, Any]:

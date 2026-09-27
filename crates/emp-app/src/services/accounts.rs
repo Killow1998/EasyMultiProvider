@@ -9,13 +9,13 @@ use emp_codex::account_auth_headers;
 use emp_codex::quota::QuotaError;
 use emp_state::FileTransaction;
 use emp_state::VaultStore;
+use emp_state::duplicate_account_status;
 use emp_state::load_configuration;
 use emp_state::normalize_account;
 use emp_state::normalize_configuration;
 use emp_state::public_configuration_with_file_status;
 use emp_state::save_configuration_in_transaction;
 use emp_state::validate_auth_json;
-use emp_state::{duplicate_account_status, same_account_auth};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -196,14 +196,12 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
             .vault
             .write_encrypted_json(&auth_path, &auth)
             .map_err(|error| error.to_string())?;
-        std::fs::write(&config_toml, b"cli_auth_credentials_store = \"file\"\n")
-            .map_err(|error| error.to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&config_toml, std::fs::Permissions::from_mode(0o600))
-                .map_err(|error| error.to_string())?;
-        }
+        forget_pending_rotation(state, &auth_path);
+        emp_state::atomic_write_private_state(
+            &config_toml,
+            b"cli_auth_credentials_store = \"file\"\n",
+        )
+        .map_err(|error| error.to_string())?;
         let duplicates = duplicate_accounts(
             &updated,
             &state.backend.configuration.vault,
@@ -276,7 +274,6 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
     if configured != expected {
         return Err("refusing to delete credentials outside the account store".to_owned());
     }
-    let owner = quota_owner_key(state, account_id).map_err(|error| error.to_string())?;
     let mut updated = current.clone();
     updated["accounts"] = Value::Array(
         accounts
@@ -316,6 +313,7 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
             &mut transaction,
         )
         .map_err(|error| error.to_string())?;
+        forget_pending_rotation(state, &expected);
         for path in [&expected, &config_toml] {
             match std::fs::remove_file(path) {
                 Ok(()) => {}
@@ -342,16 +340,16 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
         .config
         .lock()
         .map_err(|_| "internal server error".to_owned())? = committed;
-    if owner == account_id {
-        state
-            .backend
-            .accounts
-            .quota_history
-            .delete_account(account_id)
-            .map_err(|error| error.to_string())?;
-    }
     notify_quota_update(state, account_id, None);
     Ok(())
+}
+
+/// Drop a rotated credential awaiting a durable save: the account's stored
+/// credentials were replaced or removed, so the pending copy is stale.
+pub(crate) fn forget_pending_rotation(state: &ServerState, auth_path: &Path) {
+    if let Ok(mut pending) = state.backend.accounts.pending_rotations.lock() {
+        pending.remove(auth_path.to_string_lossy().as_ref());
+    }
 }
 
 pub(crate) struct AccountState {
@@ -367,6 +365,10 @@ pub(crate) struct AccountState {
     pub(crate) quota_event_slots: AtomicUsize,
     pub(crate) quota_sampler_wait: Mutex<()>,
     pub(crate) quota_sampler_condition: Condvar,
+    /// Rotated credentials whose durable save failed, keyed by encrypted
+    /// auth file. Codex may already have invalidated the stored refresh token,
+    /// so the next quota check uses (and re-saves) this copy instead.
+    pub(crate) pending_rotations: Mutex<BTreeMap<String, Value>>,
 }
 
 pub(crate) fn duplicate_accounts(
@@ -396,64 +398,55 @@ pub(crate) fn duplicate_accounts(
 }
 
 pub(crate) fn quota_owner_key(state: &ServerState, account_id: &str) -> Result<String, QuotaError> {
-    if account_id == "@native" {
-        return Ok(account_id.to_owned());
-    }
-    let accounts = state
-        .backend
-        .configuration
-        .config
-        .lock()
-        .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?
-        .get("accounts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    if !accounts
-        .iter()
-        .any(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
-    {
-        return Err(QuotaError::new(
-            format!("unknown account: {account_id}"),
-            "quota_error",
-        ));
-    }
-    let mut owners = Vec::<(String, Value)>::new();
-    if let Some(native) = native_auth_document(&state.backend.accounts.native_auth_path) {
-        owners.push(("@native".to_owned(), native));
-    }
-    for account in accounts {
-        let Some(id) = account.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        let auth = account
+    let auth = if account_id == "@native" {
+        native_auth_document(&state.backend.accounts.native_auth_path)
+    } else {
+        let config = state
+            .backend
+            .configuration
+            .config
+            .lock()
+            .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?
+            .clone();
+        let account = config
+            .get("accounts")
+            .and_then(Value::as_array)
+            .and_then(|accounts| {
+                accounts
+                    .iter()
+                    .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
+            })
+            .ok_or_else(|| {
+                QuotaError::new(format!("unknown account: {account_id}"), "quota_error")
+            })?;
+        let path = account
             .get("auth_file")
             .and_then(Value::as_str)
             .filter(|path| !path.is_empty())
-            .and_then(|path| {
-                state
-                    .backend
-                    .configuration
-                    .vault
-                    .read_encrypted_json(Path::new(path))
-                    .ok()
-            });
-        let source = auth.as_ref().and_then(|auth| {
-            owners
-                .iter()
-                .find(|(_, seen)| same_account_auth(auth, seen))
-                .map(|(owner, _)| owner.clone())
-        });
-        if id == account_id {
-            return Ok(source.unwrap_or_else(|| id.to_owned()));
-        }
-        if source.is_none()
-            && let Some(auth) = auth
-        {
-            owners.push((id.to_owned(), auth));
-        }
+            .ok_or_else(|| {
+                QuotaError::new(
+                    "Subscription account authentication is unavailable",
+                    "quota_error",
+                )
+            })?;
+        state
+            .backend
+            .configuration
+            .vault
+            .read_encrypted_json(Path::new(path))
+            .ok()
     }
-    Ok(account_id.to_owned())
+    .ok_or_else(|| QuotaError::new("Account authentication is unavailable", "quota_error"))?;
+    let headers = account_auth_headers(&auth)
+        .ok_or_else(|| QuotaError::new("Account authentication is unavailable", "quota_error"))?;
+    let owner = emp_state::usage::account_owner(&headers);
+    if owner.is_empty() {
+        return Err(QuotaError::new(
+            "Account identity is unavailable",
+            "quota_error",
+        ));
+    }
+    Ok(owner)
 }
 
 pub(crate) fn notify_quota_update(state: &ServerState, account_id: &str, error: Option<&str>) {

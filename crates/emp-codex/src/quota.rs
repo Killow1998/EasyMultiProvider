@@ -13,7 +13,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
+#[cfg(all(unix, test))]
+use std::os::unix::fs::PermissionsExt;
 
 mod process;
 mod projection;

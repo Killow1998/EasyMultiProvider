@@ -10,6 +10,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::{delete_account_state, import_account_state, quota_owner_key};
+
 fn http_request(
     address: SocketAddr,
     method: &str,
@@ -217,4 +219,94 @@ for line in sys.stdin:
         "account deletion should succeed after quota refresh: {delete_response}"
     );
     assert_eq!(config["accounts"], json!([]));
+}
+
+#[test]
+fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
+    let directory = tempfile::tempdir().expect("quota history identity directory");
+    let root = directory
+        .path()
+        .canonicalize()
+        .expect("canonical quota history identity directory");
+    let config_path = root.join("config.json");
+    let account_root = root.join("state/accounts");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({"account_store_path":account_root}))
+            .expect("encode account configuration"),
+    )
+    .expect("write account configuration");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "/bin/false",
+        root.join("codex/auth.json"),
+    )
+    .expect("start quota history account state");
+
+    let import = |id: &str, upstream_id: &str, access_token: &str| {
+        import_account_state(
+            &server.state,
+            &json!({
+                "id": id,
+                "name": "Egg",
+                "prefix": id,
+                "auth_json": {
+                    "tokens": {
+                        "access_token": access_token,
+                        "account_id": upstream_id,
+                    }
+                },
+            }),
+        )
+        .expect("import account")
+    };
+
+    import("egg", "upstream-account-a", "token-before-delete");
+    let original_owner = quota_owner_key(&server.state, "egg").expect("original quota owner");
+    let quota = json!({
+        "rate_limits": {
+            "limitId": "codex",
+            "primary": {"usedPercent": 23, "windowDurationMins": 300},
+        },
+    });
+    server
+        .state
+        .backend
+        .accounts
+        .quota_history
+        .append_snapshot(&original_owner, &quota, 2_000_100)
+        .expect("record original quota sample");
+    delete_account_state(&server.state, "egg").expect("delete original account");
+
+    import("egg-restored", "upstream-account-a", "rotated-token");
+    assert_eq!(
+        quota_owner_key(&server.state, "egg-restored").expect("restored quota owner"),
+        original_owner
+    );
+    let restored = server
+        .state
+        .backend
+        .accounts
+        .quota_history
+        .query(&original_owner, "1h", 2_000_200)
+        .expect("query restored quota history");
+    assert_eq!(restored["series"][0]["points"].as_array().unwrap().len(), 1);
+    delete_account_state(&server.state, "egg-restored").expect("delete restored account");
+
+    import("egg", "upstream-account-b", "other-account-token");
+    let other_owner = quota_owner_key(&server.state, "egg").expect("other quota owner");
+    assert_ne!(other_owner, original_owner);
+    let other_history = server
+        .state
+        .backend
+        .accounts
+        .quota_history
+        .query(&other_owner, "1h", 2_000_200)
+        .expect("query other account history");
+    assert_eq!(other_history["series"], json!([]));
+    server
+        .shutdown()
+        .expect("shutdown quota history account state");
 }
