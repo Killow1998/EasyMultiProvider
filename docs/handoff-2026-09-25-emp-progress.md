@@ -1,3 +1,63 @@
+# ROLLOUT security repair — 2026-09-27 UTC
+
+## Active worker record
+
+- Worktree: `/home/fumo/codex_ws/agent_dev/emp-sec-rollout`, branch `sec/rollout`.
+- Effective task model verified from this task's local session record:
+  `gpt-6-luna`, reasoning effort `max`.
+- Starting commit: `2abc9fe Validate replacement_history_metadata like the Python reader`;
+  the worktree was clean before this record was added.
+- Scope: review that commit, then finish reverse/full history parity, bounded
+  `.jsonl.zst` replay, legitimate session-root lookup, and lineage depth/cycle
+  validation in `emp-codex/src/history.rs`, `history/**`, and focused contract
+  tests. Keep history logic cohesive and avoid the Python 4200 service.
+- Review of `2abc9fe`: it rejects non-array or wrong-length non-null
+  `replacement_history_metadata` and adds fast/full-path contract regressions;
+  implementation work has not started yet.
+- Use outcome/differential tests for changed behavior only, with serialized
+  shared Cargo:
+  `flock -x /home/fumo/codex_ws/agent_dev/.emp-security-cargo.lock env CARGO_TARGET_DIR=/home/fumo/codex_ws/agent_dev/.emp-rust-target-root CARGO_BUILD_JOBS=2 cargo ...`.
+- New local commits use GitHub author `h2q` and trailer
+  `Co-authored-by: Point <point@local.invalid>`. No push or CI run.
+- Next: map the existing walker, shared control-state scan, replay engine, and
+  focused test fixtures; update this record after each tested change.
+
+### Pause checkpoint — 2026-09-27 UTC
+
+- Changed file: this handoff only; no source or test files were modified.
+- Completed tests: none. The focused `history_contract` baseline command was
+  interrupted during dependency compilation at Xian's request (exit 130).
+- Next: resume with the focused contract suite, then implement and validate
+  bounded compressed replay, lineage validation/root lookup, and same-input
+  fast/full parity regressions.
+- Resume: Xian revoked the pause on 2026-09-27 UTC; work continues from
+  `2abc9fe` with the same scope and shared Cargo lock.
+- Baseline rerun passed: `flock -x /home/fumo/codex_ws/agent_dev/.emp-security-cargo.lock env CARGO_TARGET_DIR=/home/fumo/codex_ws/agent_dev/.emp-rust-target-root CARGO_BUILD_JOBS=2 cargo test --locked -p emp-codex --test history_contract` (19/19).
+- Shared source adapter now routes plain records through a resettable walker
+  and adds bounded Zstandard decoding for full replay; the same focused suite
+  passes 19/19 after the adapter and direct `zstd` dependency. Cargo.lock was
+  updated offline because `--locked` correctly rejected the new direct edge.
+- Lineage parsing now rejects malformed/oversized bounds, and ancestor lookup
+  is limited to exact `.jsonl`/`.jsonl.zst` names under `sessions` and
+  `archived_sessions`, without following symlinks or accepting first matches.
+  Existing focused contracts still pass 19/19; compressed, depth, ambiguity,
+  and frozen-prefix parity outcomes remain to be added and verified.
+- Prefix controls now use the same record scan before reverse-base replay,
+  including all prior ordinals, successes, models, response roles, identity,
+  and history modes. Test results: `cargo test --offline -p emp-codex
+  --test history_contract` 28/28; `cargo test --offline -p emp-codex --lib
+  zstd_source_enforces_the_uncompressed_byte_limit` 1/1. Coverage includes
+  same-input partial-window and nonzero plain/Zstd frozen-prefix parity,
+  compressed full replay/output bounds, invalid bounds, depth vs cycles,
+  session-root ambiguity/symlinks, and SQLite/session mode agreement.
+- Final review tightened SQLite-backed ancestor validation to reject a
+  symlinked directory component even when the resolved file remains inside a
+  legitimate session root. Invalid-bound coverage now includes a negative
+  ordinal, an over-limit uncompressed offset, an invalid parent ID, and a
+  missing ordinal. After those changes, `cargo fmt -p emp-codex` and
+  `cargo test --offline -p emp-codex --test history_contract` passed; the
+  contract suite is 29/29. `git diff --check` is also clean.
+
 # EMP Handoff — 2026-09-25
 
 ## Current branch and scope
