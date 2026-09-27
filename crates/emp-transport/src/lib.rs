@@ -108,6 +108,8 @@ impl std::error::Error for TransportError {}
 pub struct SseJsonParser {
     limit: usize,
     pending: Vec<u8>,
+    /// Prefix of `pending` already known to contain no newline.
+    pending_scanned: usize,
     data_lines: Vec<Vec<u8>>,
     data_bytes: usize,
 }
@@ -130,6 +132,7 @@ impl SseJsonParser {
         Ok(Self {
             limit,
             pending: Vec::new(),
+            pending_scanned: 0,
             data_lines: Vec::new(),
             data_bytes: 0,
         })
@@ -150,21 +153,21 @@ impl SseJsonParser {
         self.pending.extend_from_slice(chunk);
         let mut output = Vec::new();
         let mut consumed = 0;
-        while let Some(relative) = self.pending[consumed..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-        {
-            let end = consumed + relative;
+        let mut scan = self.pending_scanned.min(self.pending.len());
+        while let Some(relative) = self.pending[scan..].iter().position(|byte| *byte == b'\n') {
+            let end = scan + relative;
             if end - consumed > self.limit {
                 return Err(Self::too_large());
             }
             let line = self.pending[consumed..end].to_vec();
             consumed = end + 1;
+            scan = consumed;
             self.consume_line(&line, &mut output)?;
         }
         if consumed != 0 {
             self.pending.drain(..consumed);
         }
+        self.pending_scanned = self.pending.len();
         if self.pending.len() > self.limit {
             return Err(Self::too_large());
         }
