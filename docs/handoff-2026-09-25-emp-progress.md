@@ -43,6 +43,10 @@
   existing quota process validator. No Windows cross-compile was run here.
 - No quota tool is exposed in this worker. The latest coordinator snapshot was
   native remaining 58%/83% and egg 99%/84%, above the switch threshold.
+- CI implementation commit: `2289db2` (`Validate Codex runtime inventory
+  candidates`), authored by `h2q` with the Point co-author trailer. The branch
+  is local only; next is coordinator review/consolidation. No push or workflow
+  run was performed.
 - Runtime hardening now rejects Unix executables with group/world write or
   set-id bits. The first post-edit targeted run found an incorrect new test
   expectation: PATH discovery intentionally preserves the symlink path rather
