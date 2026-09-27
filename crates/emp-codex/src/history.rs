@@ -7,17 +7,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 mod records;
+mod source;
 mod visible;
 
 use records::*;
+use source::{FileRecordSource, RecordSource, WalkReport, ZstdRecordSource};
 use visible::*;
 
 const MAX_ROLLOUT_LINE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ROLLOUT_SCAN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const REVERSE_SCAN_WINDOW_CAP: u64 = 64 * 1024 * 1024;
+const MAX_LINEAGE_SEGMENTS: usize = 32;
+const MAX_SESSION_DIRECTORY_DEPTH: usize = 8;
 
 /// Replay wiring for one rollout read: lineage bounds, fork checkpoint, and
 /// the seed history.
@@ -52,6 +56,7 @@ struct Location {
 #[derive(Debug, Default)]
 struct RolloutScan {
     thread_ids: BTreeSet<String>,
+    history_modes: BTreeSet<String>,
     successful: BTreeMap<String, bool>,
     successful_models: Vec<(String, Option<String>)>,
     response_roles: BTreeSet<(Option<String>, String)>,
@@ -78,21 +83,14 @@ struct RolloutScan {
 struct ReverseBase {
     /// Records replayed instead of the full rollout prefix.
     replacement: Vec<Map<String, Value>>,
+    /// File offset of the compaction record, used to carry prefix controls.
+    record_start: u64,
     /// File offset of the first record after the compaction record.
     suffix_start: u64,
-    /// Turn owning the compaction record, carried from earlier records.
+    /// Explicit turn on the compaction record, if present.
     turn: Option<String>,
-    /// Ordinal of the compaction record; seeds the suffix scan's monotonic
-    /// check so a regression that straddles the base is still detected.
+    /// Ordinal of the compaction record; seeds suffix monotonicity.
     ordinal: Option<u64>,
-    /// Turn completion states observed before the compaction record; the
-    /// suffix-local scan cannot see them, but the failed-turn filter needs
-    /// them to match full-scan replay.
-    successful: BTreeMap<String, bool>,
-    /// (turn, model) contexts observed before the compaction record; the
-    /// suffix scan resolves its source model from these, matching full scan.
-    successful_models: Vec<(String, Option<String>)>,
-    response_roles: BTreeSet<(Option<String>, String)>,
 }
 
 /// One rollout segment of a paginated lineage, replayed oldest first.
@@ -179,19 +177,7 @@ fn locate_latest_compaction(
             .map_err(|_| HistoryError::new("source_unavailable"))?;
         let mut reader = BufReader::with_capacity(64 * 1024, file.by_ref().take(length as u64));
         let mut line = Vec::new();
-        let mut candidate: Option<(ReverseBase, u64)> = None;
-        let mut active_turn = None;
-        let mut successful: BTreeMap<String, bool> = BTreeMap::new();
-        let mut response_roles: BTreeSet<(Option<String>, String)> = BTreeSet::new();
-        // Turn ids whose `task_started` was observed inside this window. The
-        // probe sees a suffix of the file, so a compaction owner's turn
-        // context may predate `line_start`; only owners with a visible start
-        // have provably complete context.
-        // (turn, model) contexts observed inside the window; the base's
-        // pre-checkpoint model state seeds the suffix scan's source-model
-        // resolution exactly as the full scan observes it.
-        let mut successful_models: Vec<(String, Option<String>)> = Vec::new();
-        let mut started_turns: BTreeSet<String> = BTreeSet::new();
+        let mut candidate: Option<ReverseBase> = None;
         let mut offset = line_start;
         loop {
             let Some(terminated) = read_bounded_line(&mut reader, &mut line)? else {
@@ -201,9 +187,6 @@ fn locate_latest_compaction(
             offset += line.len() as u64;
             match rollout_json_line(&line, terminated) {
                 Ok(Some(record)) => {
-                    if let Some(turn) = record_turn_id(&record) {
-                        active_turn = Some(turn);
-                    }
                     if token(record.get("type")).as_str() == "compacted" {
                         // Scanning forward, so each later compaction replaces
                         // the earlier one: the newest encountered record is
@@ -232,76 +215,13 @@ fn locate_latest_compaction(
                         // suffix monotonicity check; the full scan owns it.
                         let has_seed_ordinal =
                             history_mode != "paginated" || base_ordinal.is_some();
-                        // The window is a suffix: an owner turn whose
-                        // `task_started` predates `line_start` has incomplete
-                        // context here, and the completion state the failed-
-                        // turn filter needs may sit outside the window. Only
-                        // an owner with a visible start (or no owner at all)
-                        // is provable; anything else falls back to a wider
-                        // window or the full scan.
-                        // `None` owner is only provable when the window
-                        // covers the file head: a mid-file window may have
-                        // skipped the owner's `task_started` (or an earlier
-                        // record that names the turn), so the real owner and
-                        // its completion state may sit outside the window.
-                        let owner_context_complete = match &active_turn {
-                            None => line_start == 0,
-                            Some(turn) => started_turns.contains(turn),
-                        };
-                        candidate =
-                            (eligible && has_seed_ordinal && owner_context_complete).then(|| {
-                                (
-                                    ReverseBase {
-                                        replacement: replacement.unwrap_or_default(),
-                                        suffix_start: offset,
-                                        turn: active_turn.clone(),
-                                        ordinal: base_ordinal,
-                                        successful: successful.clone(),
-                                        successful_models: successful_models.clone(),
-                                        response_roles: response_roles.clone(),
-                                    },
-                                    record_start,
-                                )
-                            });
-                    }
-                    let turn = record_turn_id(&record).or_else(|| active_turn.clone());
-                    if let Some(turn) = &turn {
-                        let payload = record.get("payload").and_then(Value::as_object);
-                        let payload_type = payload
-                            .map(|payload| token(payload.get("type")))
-                            .unwrap_or_default();
-                        if token(record.get("type")) == "event_msg" {
-                            if payload_type == "task_started" {
-                                started_turns.insert(turn.clone());
-                            } else if payload_type == "task_complete" {
-                                successful.insert(
-                                    turn.clone(),
-                                    payload
-                                        .and_then(|payload| payload.get("error"))
-                                        .is_none_or(Value::is_null),
-                                );
-                            }
-                        }
-                    }
-                    if token(record.get("type")) == "turn_context"
-                        && let Some(turn) = &turn
-                    {
-                        let payload = record
-                            .get("payload")
-                            .and_then(Value::as_object)
-                            .unwrap_or(&record);
-                        successful_models.push((
-                            turn.clone(),
-                            string_from(
-                                payload,
-                                &["model", "model_id", "modelId", "selected_model"],
-                            ),
-                        ));
-                    }
-                    if token(record.get("type")) == "response_item"
-                        && let Some(role) = message_role(&record)
-                    {
-                        response_roles.insert((turn, role));
+                        candidate = (eligible && has_seed_ordinal).then(|| ReverseBase {
+                            replacement: replacement.unwrap_or_default(),
+                            record_start,
+                            suffix_start: offset,
+                            turn: record_turn_id(&record),
+                            ordinal: base_ordinal,
+                        });
                     }
                 }
                 Ok(None) => {}
@@ -310,8 +230,8 @@ fn locate_latest_compaction(
                 Err(error) => return Err(error),
             }
         }
-        if let Some((base, _)) = candidate {
-            return Ok(Some(base));
+        if candidate.is_some() {
+            return Ok(candidate);
         }
         if start == 0 {
             // Whole file scanned without an eligible compaction base.
@@ -324,52 +244,41 @@ fn locate_latest_compaction(
     }
 }
 
-/// Read the first complete record to verify the rollout's thread identity.
-fn verify_session_thread(
-    file: &mut File,
-    captured_end: u64,
-    expected: Option<&str>,
-) -> Result<(), HistoryError> {
-    if captured_end == 0 {
-        return Err(HistoryError::new("session_meta_missing"));
-    }
-    let head = captured_end.min(MAX_ROLLOUT_LINE_BYTES as u64);
-    file.seek(SeekFrom::Start(0))
-        .map_err(|_| HistoryError::new("source_unavailable"))?;
-    let mut reader = BufReader::with_capacity(64 * 1024, file.by_ref().take(head));
-    let mut line = Vec::new();
-    while let Some(terminated) = read_bounded_line(&mut reader, &mut line)? {
-        if let Some(record) = rollout_json_line(&line, terminated)?
-            && matches!(
-                token(record.get("type")).as_str(),
-                "session_meta" | "sessionmeta"
-            )
-        {
-            let id = session_meta_id(&record)
-                .ok_or_else(|| HistoryError::new("session_meta_missing"))?;
-            return match expected {
-                Some(expected) if id != expected => Err(HistoryError::new("thread_mismatch")),
-                _ => Ok(()),
-            };
-        }
-    }
-    Err(HistoryError::new("session_meta_missing"))
-}
-
 /// Read the lineage pointer from the rollout's first session meta record.
 ///
 /// Returns `None` for rollouts without a `history_base`, which covers every
 /// rollout written before Codex paginated persistent forks.
-fn read_history_base(path: &Path) -> Result<Option<(String, u64, u64)>, HistoryError> {
+fn read_session_meta(path: &Path) -> Result<Option<Map<String, Value>>, HistoryError> {
     let mut file = File::open(path).map_err(|_| HistoryError::new("source_missing"))?;
-    let head = file
+    let captured_end = file
         .metadata()
         .map_err(|_| HistoryError::new("source_unavailable"))?
-        .len()
-        .min(MAX_ROLLOUT_LINE_BYTES as u64);
+        .len();
+    if is_compressed_rollout(path) {
+        if captured_end > MAX_ROLLOUT_SCAN_BYTES {
+            return Err(HistoryError::new("source_too_large"));
+        }
+        let compressed = file.by_ref().take(captured_end);
+        let decoder = zstd::stream::read::Decoder::new(compressed)
+            .map_err(|_| HistoryError::new("invalid_compressed_rollout"))?;
+        let mut reader = BufReader::with_capacity(
+            64 * 1024,
+            decoder.take((MAX_ROLLOUT_LINE_BYTES as u64).saturating_add(1)),
+        );
+        return read_session_meta_from(&mut reader, "invalid_compressed_rollout");
+    }
+    let head = captured_end.min((MAX_ROLLOUT_LINE_BYTES as u64).saturating_add(1));
     let mut reader = BufReader::with_capacity(64 * 1024, file.by_ref().take(head));
+    read_session_meta_from(&mut reader, "source_unavailable")
+}
+
+fn read_session_meta_from(
+    reader: &mut impl BufRead,
+    io_error_reason: &str,
+) -> Result<Option<Map<String, Value>>, HistoryError> {
     let mut line = Vec::new();
-    while let Some(terminated) = read_bounded_line(&mut reader, &mut line)? {
+    while let Some(terminated) = read_bounded_line_with_reason(reader, &mut line, io_error_reason)?
+    {
         let Some(record) = rollout_json_line(&line, terminated)? else {
             continue;
         };
@@ -377,10 +286,24 @@ fn read_history_base(path: &Path) -> Result<Option<(String, u64, u64)>, HistoryE
             token(record.get("type")).as_str(),
             "session_meta" | "sessionmeta"
         ) {
-            return Ok(session_meta_history_base(&record));
+            return Ok(Some(record));
         }
     }
     Ok(None)
+}
+
+fn read_history_base(path: &Path) -> Result<Option<HistoryBase>, HistoryError> {
+    read_session_meta(path)?
+        .as_ref()
+        .map(session_meta_history_base)
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn is_compressed_rollout(path: &Path) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.ends_with(".jsonl.zst"))
 }
 
 /// Track paginated ordinal monotonicity while scanning.
@@ -426,6 +349,8 @@ struct ReplayFrame {
     seed_models: Vec<(String, Option<String>)>,
     /// Response roles observed before `start`.
     seed_roles: BTreeSet<(Option<String>, String)>,
+    seed_thread_ids: BTreeSet<String>,
+    seed_history_modes: BTreeSet<String>,
 }
 
 impl ReplayFrame {
@@ -439,6 +364,8 @@ impl ReplayFrame {
             seed_successful: BTreeMap::new(),
             seed_models: Vec::new(),
             seed_roles: BTreeSet::new(),
+            seed_thread_ids: BTreeSet::new(),
+            seed_history_modes: BTreeSet::new(),
         }
     }
 }
@@ -455,19 +382,32 @@ fn scan_suffix(
     file: &mut File,
     frame: &ReplayFrame,
     anchor: &HistoryAnchor,
+    expected_mode: &str,
 ) -> Result<SuffixScan, HistoryError> {
-    file.seek(SeekFrom::Start(frame.start))
-        .map_err(|_| HistoryError::new("source_unavailable"))?;
+    let mut source = FileRecordSource::new(file, frame.start, frame.end);
     let mut scan = RolloutScan {
         last_ordinal: frame.seed_ordinal,
         saw_ordinal: frame.seed_ordinal.is_some(),
         successful_models: frame.seed_models.clone(),
         successful: frame.seed_successful.clone(),
+        thread_ids: frame.seed_thread_ids.clone(),
+        history_modes: frame.seed_history_modes.clone(),
         ..RolloutScan::default()
     };
     let mut active_turn = frame.seed_turn.clone();
     let mut index = 0usize;
-    walk_records(file, frame.end, |record| {
+    source.walk(&mut |record| {
+        if matches!(
+            token(record.get("type")).as_str(),
+            "session_meta" | "sessionmeta"
+        ) {
+            if let Some(id) = session_meta_id(&record) {
+                scan.thread_ids.insert(id);
+            }
+            if let Some(mode) = session_meta_history_mode(&record)? {
+                scan.history_modes.insert(mode);
+            }
+        }
         let explicit_turn = record_turn_id(&record);
         if explicit_turn.is_some() {
             active_turn = explicit_turn.clone();
@@ -497,6 +437,7 @@ fn scan_suffix(
         Ok(true)
     })?;
     scan.total_records = index;
+    validate_scan_thread(&scan, anchor.thread_id.as_deref(), expected_mode)?;
     let usable = if anchor.turn_id.is_some() {
         // Anchor turn predates the compaction base: full scan required.
         scan.anchor_boundary.is_some()
@@ -583,7 +524,7 @@ fn observe_scan_record(
 /// compaction records. Returns `None` when the boundary was hit and replay
 /// must stop.
 fn replay_records(
-    file: &mut File,
+    source: &mut impl RecordSource,
     frame: &ReplayFrame,
     scan: &RolloutScan,
     anchor: &HistoryAnchor,
@@ -602,11 +543,9 @@ fn replay_records(
     }
     let mut roles = frame.seed_roles.clone();
     roles.extend(scan.response_roles.iter().cloned());
-    file.seek(SeekFrom::Start(frame.start))
-        .map_err(|_| HistoryError::new("source_unavailable"))?;
     let mut active_turn = frame.seed_turn.clone();
     let mut index = 0usize;
-    walk_records(file, frame.end, |record| {
+    source.walk(&mut |record| {
         if index >= scan.boundary {
             return Ok(false);
         }
@@ -703,7 +642,8 @@ fn snapshot_from_base(
             source_model: None,
         });
     }
-    let items = replay_records(file, &frame, &scan, anchor, lineage_bound)?;
+    let mut source = FileRecordSource::new(file, frame.start, frame.end);
+    let items = replay_records(&mut source, &frame, &scan, anchor, lineage_bound)?;
     Ok(HistorySnapshot {
         thread_id: anchor.thread_id.clone().unwrap_or_default(),
         items,
@@ -817,14 +757,20 @@ impl CodexHomeHistoryReader {
             byte_offset: 0,
         }];
         let mut visited = vec![thread.to_owned()];
-        let mut base = read_history_base(path)?;
-        while let Some((parent_id, bound, byte_offset)) = base {
-            if visited.contains(&parent_id) || segments.len() >= 32 {
+        let mut next_base = read_history_base(path)?;
+        while let Some(base) = next_base {
+            if visited.contains(&base.thread_id) {
                 return Err(HistoryError::new("lineage_cycle"));
             }
+            if segments.len() >= MAX_LINEAGE_SEGMENTS {
+                return Err(HistoryError::new("lineage_depth_exceeded"));
+            }
+            let parent_id = base.thread_id;
+            let bound = base.end_ordinal_exclusive;
+            let byte_offset = base.end_byte_offset;
             visited.push(parent_id.clone());
             let parent_location = self.locate_parent(database, &parent_id)?;
-            base = read_history_base(&parent_location.path)?;
+            next_base = read_history_base(&parent_location.path)?;
             segments.push(LineageSegment {
                 thread: parent_id,
                 location: parent_location,
@@ -840,41 +786,148 @@ impl CodexHomeHistoryReader {
     /// Resolve a lineage ancestor either through the threads database or by
     /// scanning the sessions tree for the rollout file name.
     fn locate_parent(&self, database: &Path, rollout_id: &str) -> Result<Location, HistoryError> {
-        if let Ok(location) = locate(database, rollout_id) {
-            return Ok(location);
+        let roots = self.canonical_session_roots()?;
+        match locate(database, rollout_id) {
+            Ok(location) => {
+                if self.is_under_session_root(&location.path, &roots) {
+                    return Ok(location);
+                }
+                return Err(HistoryError::new("rollout_outside_session_root"));
+            }
+            Err(error) if error.reason() != "thread_missing" => return Err(error),
+            Err(_) => {}
         }
-        let suffix = format!("{rollout_id}.jsonl");
-        let mut found = None;
-        let mut stack = vec![self.home.clone()];
-        while let Some(directory) = stack.pop() {
-            let entries = match fs::read_dir(&directory) {
-                Ok(entries) => entries,
-                Err(_) => continue,
-            };
-            for entry in entries.filter_map(Result::ok) {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if path
-                    .file_name()
-                    .and_then(OsStr::to_str)
-                    .is_some_and(|name| name.ends_with(&suffix))
-                {
-                    found = Some(path);
-                    break;
+        let expected = [
+            format!("{rollout_id}.jsonl"),
+            format!("{rollout_id}.jsonl.zst"),
+        ];
+        let mut found = BTreeSet::new();
+        for root in &roots {
+            let mut stack = vec![(root.clone(), 0usize)];
+            while let Some((directory, depth)) = stack.pop() {
+                let metadata = match fs::symlink_metadata(&directory) {
+                    Ok(metadata) => metadata,
+                    Err(_) => continue,
+                };
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    continue;
+                }
+                let entries = match fs::read_dir(&directory) {
+                    Ok(entries) => entries,
+                    Err(_) => continue,
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let file_type = match entry.file_type() {
+                        Ok(file_type) => file_type,
+                        Err(_) => continue,
+                    };
+                    if file_type.is_symlink() {
+                        continue;
+                    }
+                    if file_type.is_dir() {
+                        if depth < MAX_SESSION_DIRECTORY_DEPTH {
+                            stack.push((path, depth + 1));
+                        }
+                        continue;
+                    }
+                    if file_type.is_file()
+                        && path
+                            .file_name()
+                            .and_then(OsStr::to_str)
+                            .is_some_and(|name| expected.iter().any(|candidate| candidate == name))
+                        && let Ok(canonical) = path.canonicalize()
+                        && canonical.starts_with(root)
+                    {
+                        found.insert(canonical);
+                    }
                 }
             }
-            if found.is_some() {
-                break;
+        }
+        match found.len() {
+            0 => Err(HistoryError::new("source_missing")),
+            1 => {
+                let path = found.into_iter().next().expect("one parent file");
+                let meta = read_session_meta(&path)?
+                    .ok_or_else(|| HistoryError::new("session_meta_missing"))?;
+                let id = session_meta_id(&meta)
+                    .ok_or_else(|| HistoryError::new("session_meta_missing"))?;
+                if id != rollout_id {
+                    return Err(HistoryError::new("thread_mismatch"));
+                }
+                let mode =
+                    session_meta_history_mode(&meta)?.unwrap_or_else(|| "paginated".to_owned());
+                Ok(Location {
+                    path,
+                    mode,
+                    source_model: None,
+                })
+            }
+            _ => Err(HistoryError::new("lineage_source_ambiguous")),
+        }
+    }
+
+    fn canonical_session_roots(&self) -> Result<Vec<PathBuf>, HistoryError> {
+        let home = self
+            .home
+            .canonicalize()
+            .map_err(|_| HistoryError::new("history_unavailable"))?;
+        let mut roots = Vec::new();
+        for name in ["sessions", "archived_sessions"] {
+            let path = home.join(name);
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                continue;
+            }
+            if let Ok(canonical) = path.canonicalize()
+                && canonical.starts_with(&home)
+            {
+                roots.push(canonical);
             }
         }
-        found
-            .map(|path| Location {
-                path,
-                mode: "paginated".to_owned(),
-                source_model: None,
-            })
-            .ok_or_else(|| HistoryError::new("source_missing"))
+        Ok(roots)
+    }
+
+    fn is_under_session_root(&self, path: &Path, roots: &[PathBuf]) -> bool {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            match std::env::current_dir() {
+                Ok(directory) => directory.join(path),
+                Err(_) => return false,
+            }
+        };
+        let Ok(canonical) = absolute.canonicalize() else {
+            return false;
+        };
+        if !canonical.is_file() {
+            return false;
+        }
+        roots.iter().any(|root| {
+            if !canonical.starts_with(root) {
+                return false;
+            }
+            let Ok(relative) = absolute.strip_prefix(root) else {
+                return false;
+            };
+            let mut current = root.clone();
+            for component in relative.components() {
+                let Component::Normal(name) = component else {
+                    return false;
+                };
+                current.push(name);
+                let Ok(metadata) = fs::symlink_metadata(&current) else {
+                    return false;
+                };
+                if metadata.file_type().is_symlink() {
+                    return false;
+                }
+            }
+            true
+        })
     }
 
     fn latest_state_database(&self) -> Result<PathBuf, HistoryError> {
@@ -933,6 +986,9 @@ impl CodexHomeHistoryReader {
         if captured_end > MAX_ROLLOUT_SCAN_BYTES {
             return Err(HistoryError::new("source_too_large"));
         }
+        if is_compressed_rollout(&path) {
+            return self.read_compressed_rollout(anchor, location, file, captured_end, replay);
+        }
         // A lineage ancestor's `history_base.end_byte_offset` freezes the
         // physical prefix the child forked from. A file shorter than that
         // offset was truncated or rewritten: the frozen prefix contract is
@@ -946,7 +1002,6 @@ impl CodexHomeHistoryReader {
             captured_end
         };
 
-        let expected_thread = anchor.thread_id.as_deref();
         // Reverse base applies only to paginated resumes: the newest
         // replacement-history compaction becomes the history base and replay
         // covers its suffix. Fork checkpoints (exact compaction) keep the full
@@ -962,27 +1017,57 @@ impl CodexHomeHistoryReader {
         } else {
             None
         };
-        if let Some(base) = reverse_base {
-            verify_session_thread(&mut file, captured_end, expected_thread)?;
+        if let Some(mut base) = reverse_base {
+            // A checkpoint only replaces visible items. Scan the complete
+            // prefix for control state so older turns, models, response-role
+            // deduplication, identity/mode, and ordinals survive the base.
+            let prefix_scan = {
+                let prefix_anchor = HistoryAnchor {
+                    thread_id: anchor.thread_id.clone(),
+                    ..HistoryAnchor::default()
+                };
+                let mut source = FileRecordSource::new(&mut file, 0, base.record_start);
+                scan_rollout(&mut source, &prefix_anchor, None, None, &location.mode)?
+            };
+            if location.mode == "paginated" {
+                if !prefix_scan.saw_ordinal || prefix_scan.ordinal_missing || base.ordinal.is_none()
+                {
+                    return Err(HistoryError::new("ordinal_missing"));
+                }
+                if prefix_scan.ordinal_regressed
+                    || prefix_scan
+                        .last_ordinal
+                        .is_some_and(|last| base.ordinal.is_some_and(|base| base < last))
+                {
+                    return Err(HistoryError::new("ordinal_not_monotonic"));
+                }
+            }
             let suffix_start = base.suffix_start;
+            let seed_turn = base.turn.clone().or(prefix_scan.last_turn.clone());
+            base.turn = seed_turn.clone();
             // Anchor inside the suffix and unchanged file: replay from base.
             // Anchor outside the suffix or malformed suffix: full scan.
             let frame = ReplayFrame {
                 start: suffix_start,
                 end: captured_end,
                 seed_visible: Vec::new(),
-                seed_turn: base.turn.clone(),
-                seed_ordinal: base.ordinal,
-                seed_successful: base.successful.clone(),
-                seed_models: base.successful_models.clone(),
-                seed_roles: base.response_roles.clone(),
+                seed_turn,
+                seed_ordinal: base.ordinal.or(prefix_scan.last_ordinal),
+                seed_successful: prefix_scan.successful,
+                seed_models: prefix_scan.successful_models,
+                seed_roles: prefix_scan.response_roles,
+                seed_thread_ids: prefix_scan.thread_ids,
+                seed_history_modes: prefix_scan.history_modes,
             };
             let unchanged = file
                 .metadata()
                 .map_err(|_| HistoryError::new("source_unavailable"))?
                 .len()
                 >= captured_end;
-            if unchanged && let SuffixScan::Usable(scan) = scan_suffix(&mut file, &frame, anchor)? {
+            if unchanged
+                && let SuffixScan::Usable(scan) =
+                    scan_suffix(&mut file, &frame, anchor, &location.mode)?
+            {
                 let snapshot = snapshot_from_base(
                     &mut file,
                     base,
@@ -1008,7 +1093,16 @@ impl CodexHomeHistoryReader {
         // Reverse probing may leave the handle mid-file; restart at the top.
         file.seek(SeekFrom::Start(0))
             .map_err(|_| HistoryError::new("source_unavailable"))?;
-        let scan = scan_rollout(&mut file, byte_cap, anchor, replay.exact_compaction)?;
+        let scan = {
+            let mut source = FileRecordSource::new(&mut file, 0, byte_cap);
+            scan_rollout(
+                &mut source,
+                anchor,
+                replay.exact_compaction,
+                replay.lineage_bound,
+                &location.mode,
+            )?
+        };
         if file
             .metadata()
             .map_err(|_| HistoryError::new("source_unavailable"))?
@@ -1018,8 +1112,6 @@ impl CodexHomeHistoryReader {
             return Err(HistoryError::new("source_changed"));
         }
 
-        file.seek(SeekFrom::Start(0))
-            .map_err(|_| HistoryError::new("source_unavailable"))?;
         let frame = ReplayFrame {
             end: byte_cap,
             seed_visible: replay.seed,
@@ -1031,7 +1123,8 @@ impl CodexHomeHistoryReader {
         {
             scan.successful.insert(turn, true);
         }
-        let visible = replay_records(&mut file, &frame, &scan, anchor, replay.lineage_bound)?;
+        let mut source = FileRecordSource::new(&mut file, 0, byte_cap);
+        let visible = replay_records(&mut source, &frame, &scan, anchor, replay.lineage_bound)?;
         if location.mode == "paginated" {
             if !scan.saw_ordinal {
                 return Err(HistoryError::new("ordinal_missing"));
@@ -1039,6 +1132,70 @@ impl CodexHomeHistoryReader {
             // Any parsed record without the ordinal Codex promises is
             // malformed pagination, even when other records carry ordinals.
             if scan.ordinal_missing {
+                return Err(HistoryError::new("ordinal_missing"));
+            }
+            if scan.ordinal_regressed {
+                return Err(HistoryError::new("ordinal_not_monotonic"));
+            }
+        }
+        Ok(HistorySnapshot {
+            thread_id: anchor.thread_id.clone().unwrap_or_default(),
+            items: visible,
+            source_model: scan.source_model().or_else(|| {
+                anchor
+                    .turn_id
+                    .is_none()
+                    .then(|| location.source_model.clone())
+                    .flatten()
+            }),
+        })
+    }
+
+    fn read_compressed_rollout(
+        &self,
+        anchor: &HistoryAnchor,
+        location: &Location,
+        mut file: File,
+        compressed_end: u64,
+        replay: ReplayContext<'_>,
+    ) -> Result<HistorySnapshot, HistoryError> {
+        let frozen_prefix = (replay.lineage_byte_offset > 0).then_some(replay.lineage_byte_offset);
+        let scan = {
+            let mut source = ZstdRecordSource::new(&mut file, compressed_end, frozen_prefix);
+            scan_rollout(
+                &mut source,
+                anchor,
+                replay.exact_compaction,
+                replay.lineage_bound,
+                &location.mode,
+            )?
+        };
+        if file
+            .metadata()
+            .map_err(|_| HistoryError::new("source_unavailable"))?
+            .len()
+            < compressed_end
+        {
+            return Err(HistoryError::new("source_changed"));
+        }
+        let byte_limit = frozen_prefix.unwrap_or_else(|| MAX_ROLLOUT_SCAN_BYTES.saturating_add(1));
+        let frame = ReplayFrame {
+            end: byte_limit,
+            seed_visible: replay.seed,
+            ..ReplayFrame::head(byte_limit)
+        };
+        let mut scan = scan;
+        if replay.exact_compaction.is_some()
+            && let Some(turn) = scan.last_turn.clone()
+        {
+            scan.successful.insert(turn, true);
+        }
+        let visible = {
+            let mut source = ZstdRecordSource::new(&mut file, compressed_end, frozen_prefix);
+            replay_records(&mut source, &frame, &scan, anchor, replay.lineage_bound)?
+        };
+        if location.mode == "paginated" {
+            if !scan.saw_ordinal || scan.ordinal_missing {
                 return Err(HistoryError::new("ordinal_missing"));
             }
             if scan.ordinal_regressed {
@@ -1076,10 +1233,11 @@ impl RolloutScan {
 }
 
 fn scan_rollout(
-    file: &mut File,
-    captured_end: u64,
+    source: &mut impl RecordSource,
     anchor: &HistoryAnchor,
     exact_compaction: Option<&Map<String, Value>>,
+    lineage_bound: Option<u64>,
+    expected_mode: &str,
 ) -> Result<RolloutScan, HistoryError> {
     let exact_encoded = exact_compaction
         .and_then(|compaction| compaction.get("encrypted_content"))
@@ -1091,12 +1249,16 @@ fn scan_rollout(
     let mut active_turn = None;
     let mut index = 0usize;
 
-    walk_records(file, captured_end, |record| {
+    let mut lineage_boundary = None;
+    source.walk(&mut |record| {
         let record_type = token(record.get("type"));
-        if matches!(record_type.as_str(), "session_meta" | "sessionmeta")
-            && let Some(id) = session_meta_id(&record)
-        {
-            scan.thread_ids.insert(id);
+        if matches!(record_type.as_str(), "session_meta" | "sessionmeta") {
+            if let Some(id) = session_meta_id(&record) {
+                scan.thread_ids.insert(id);
+            }
+            if let Some(mode) = session_meta_history_mode(&record)? {
+                scan.history_modes.insert(mode);
+            }
         }
 
         let explicit_turn = record_turn_id(&record);
@@ -1105,7 +1267,15 @@ fn scan_rollout(
         }
         let turn = explicit_turn.clone().or_else(|| active_turn.clone());
 
-        if !scan.history_closed {
+        let crosses_lineage_bound =
+            lineage_bound.is_some_and(|bound| ordinal(&record).is_some_and(|value| value >= bound));
+        if crosses_lineage_bound {
+            lineage_boundary.get_or_insert(index);
+        } else if lineage_boundary.is_none() {
+            track_ordinal(&mut scan, &record);
+        }
+
+        if !crosses_lineage_bound && lineage_boundary.is_none() && !scan.history_closed {
             if anchor_turn.is_some_and(|turn| record_turn_id(&record).as_deref() == Some(turn)) {
                 scan.anchor_boundary = Some(index);
                 scan.boundary = index;
@@ -1113,7 +1283,6 @@ fn scan_rollout(
             } else {
                 scan.last_turn = turn.clone();
                 observe_scan_record(&mut scan, &record, explicit_turn, turn);
-                track_ordinal(&mut scan, &record);
                 if exact_compaction.is_some()
                     && replacement_contains_encoded(&record, exact_encoded.unwrap_or_default())
                 {
@@ -1125,7 +1294,8 @@ fn scan_rollout(
                     }
                 }
             }
-        } else if exact_compaction.is_some()
+        } else if lineage_boundary.is_none()
+            && exact_compaction.is_some()
             && replacement_contains_encoded(&record, exact_encoded.unwrap_or_default())
         {
             scan.exact_matches += 1;
@@ -1136,7 +1306,7 @@ fn scan_rollout(
     })?;
 
     scan.total_records = index;
-    validate_scan_thread(&scan, expected_thread)?;
+    validate_scan_thread(&scan, expected_thread, expected_mode)?;
     scan.boundary = if exact_compaction.is_some() {
         match scan.exact_matches {
             1 => scan.exact_boundary,
@@ -1144,18 +1314,22 @@ fn scan_rollout(
             _ => return Err(HistoryError::new("compaction_identity_ambiguous")),
         }
     } else if anchor_turn.is_none() {
-        scan.total_records
+        lineage_boundary.unwrap_or(scan.total_records)
     } else if let Some(index) = scan.anchor_boundary {
         index
     } else if scan.explicit_turns.is_subset(&scan.terminal_turns) {
-        scan.total_records
+        lineage_boundary.unwrap_or(scan.total_records)
     } else {
         return Err(HistoryError::new("turn_not_found"));
     };
     Ok(scan)
 }
 
-fn validate_scan_thread(scan: &RolloutScan, expected: Option<&str>) -> Result<(), HistoryError> {
+fn validate_scan_thread(
+    scan: &RolloutScan,
+    expected: Option<&str>,
+    expected_mode: &str,
+) -> Result<(), HistoryError> {
     if scan.thread_ids.is_empty() {
         return Err(HistoryError::new("session_meta_missing"));
     }
@@ -1169,6 +1343,9 @@ fn validate_scan_thread(scan: &RolloutScan, expected: Option<&str>) -> Result<()
     if scan.thread_ids.len() != 1 {
         return Err(HistoryError::new("thread_identity_conflict"));
     }
+    if scan.history_modes.iter().any(|mode| mode != expected_mode) {
+        return Err(HistoryError::new("history_mode_mismatch"));
+    }
     Ok(())
 }
 
@@ -1178,7 +1355,7 @@ fn walk_records(
     file: &mut File,
     end: u64,
     mut visit: impl FnMut(Map<String, Value>) -> Result<bool, HistoryError>,
-) -> Result<(), HistoryError> {
+) -> Result<WalkReport, HistoryError> {
     let start = file
         .stream_position()
         .map_err(|_| HistoryError::new("source_unavailable"))?;
@@ -1186,26 +1363,55 @@ fn walk_records(
         return Err(HistoryError::new("invalid_replay_range"));
     }
     let mut reader = BufReader::with_capacity(64 * 1024, file.by_ref().take(end - start));
+    walk_bounded_reader(&mut reader, end - start, "source_unavailable", &mut visit)
+}
+
+fn walk_bounded_reader(
+    reader: &mut impl BufRead,
+    end: u64,
+    io_error_reason: &str,
+    mut visit: impl FnMut(Map<String, Value>) -> Result<bool, HistoryError>,
+) -> Result<WalkReport, HistoryError> {
     let mut line = Vec::new();
-    while let Some(terminated) = read_bounded_line(&mut reader, &mut line)? {
-        if let Some(record) = rollout_json_line(&line, terminated)?
-            && !visit(record)?
-        {
-            return Ok(());
+    let mut bytes_read = 0u64;
+    while let Some(terminated) = read_bounded_line_with_reason(reader, &mut line, io_error_reason)?
+    {
+        bytes_read = bytes_read.saturating_add(line.len() as u64);
+        if bytes_read > end {
+            return Err(HistoryError::new("invalid_replay_range"));
+        }
+        if let Some(record) = rollout_json_line(&line, terminated)? {
+            if !visit(record)? {
+                return Ok(WalkReport {
+                    bytes_read,
+                    stopped_early: true,
+                });
+            }
         }
     }
-    Ok(())
+    Ok(WalkReport {
+        bytes_read,
+        stopped_early: false,
+    })
 }
 
 fn read_bounded_line(
     reader: &mut impl BufRead,
     line: &mut Vec<u8>,
 ) -> Result<Option<bool>, HistoryError> {
+    read_bounded_line_with_reason(reader, line, "source_unavailable")
+}
+
+fn read_bounded_line_with_reason(
+    reader: &mut impl BufRead,
+    line: &mut Vec<u8>,
+    io_error_reason: &str,
+) -> Result<Option<bool>, HistoryError> {
     line.clear();
     loop {
         let available = reader
             .fill_buf()
-            .map_err(|_| HistoryError::new("source_unavailable"))?;
+            .map_err(|_| HistoryError::new(io_error_reason))?;
         if available.is_empty() {
             return Ok((!line.is_empty()).then_some(false));
         }

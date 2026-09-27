@@ -32,7 +32,40 @@ fn write_rollout(directory: &std::path::Path, records: &[Value]) -> std::path::P
     rollout
 }
 
+fn jsonl_bytes(records: &[Value]) -> Vec<u8> {
+    records
+        .iter()
+        .map(|record| format!("{record}\n"))
+        .collect::<String>()
+        .into_bytes()
+}
+
+fn write_records(path: &std::path::Path, records: &[Value]) -> std::path::PathBuf {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, jsonl_bytes(records)).unwrap();
+    path.to_path_buf()
+}
+
+fn write_zstd(path: &std::path::Path, bytes: &[u8]) -> std::path::PathBuf {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let compressed = zstd::stream::encode_all(bytes, 0).unwrap();
+    std::fs::write(path, compressed).unwrap();
+    path.to_path_buf()
+}
+
+fn session_meta(thread: &str, mode: &str) -> Value {
+    json!({"ordinal":0,"type":"session_meta","payload":{"id":thread,"history_mode":mode}})
+}
+
 fn state_database(directory: &std::path::Path, rollout: &std::path::Path) {
+    state_database_with_mode(directory, rollout, "paginated");
+}
+
+fn state_database_with_mode(
+    directory: &std::path::Path,
+    rollout: &std::path::Path,
+    history_mode: &str,
+) {
     let database = directory.join("state_5.sqlite");
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
@@ -43,8 +76,8 @@ fn state_database(directory: &std::path::Path, rollout: &std::path::Path) {
         .unwrap();
     connection
         .execute(
-            "INSERT INTO threads VALUES (?1, ?2, 'paginated', ?3)",
-            params![THREAD, rollout.to_str().unwrap(), MODEL],
+            "INSERT INTO threads VALUES (?1, ?2, ?3, ?4)",
+            params![THREAD, rollout.to_str().unwrap(), history_mode, MODEL],
         )
         .unwrap();
 }
@@ -484,17 +517,15 @@ fn frozen_lineage_byte_offset_is_enforced() {
     // An ancestor truncated below the frozen byte offset must fail closed.
     // The ancestor is named <thread-id>.jsonl so the reader's filename
     // fallback resolves it without a threads row.
-    std::fs::write(
-        directory
+    write_records(
+        &directory
             .path()
-            .join("01a00000-0000-7000-8000-000000000002.jsonl"),
-        format!(
-            "{}\n{}\n",
+            .join("sessions/2026/09/27/01a00000-0000-7000-8000-000000000002.jsonl"),
+        &[
             json!({"ordinal":0,"type":"session_meta","payload":{"id":"01a00000-0000-7000-8000-000000000002","history_mode":"paginated"}}),
-            user(1, "ancestor history")
-        ),
-    )
-    .unwrap();
+            user(1, "ancestor history"),
+        ],
+    );
     let child = write_rollout(
         directory.path(),
         &[
@@ -522,6 +553,391 @@ fn frozen_lineage_byte_offset_is_enforced() {
         .read_visible_history(&anchor())
         .unwrap_err();
     assert_eq!(error.reason(), "lineage_prefix_truncated");
+}
+
+#[test]
+fn invalid_history_base_bounds_are_rejected() {
+    let invalid_bases = [
+        json!({"thread_id":PARENT,"end_ordinal_exclusive":-1,"end_byte_offset":0}),
+        json!({"thread_id":PARENT,"end_ordinal_exclusive":1,"end_byte_offset":2_147_483_649u64}),
+        json!({"thread_id":"not-a-uuid","end_ordinal_exclusive":1,"end_byte_offset":0}),
+        json!({"thread_id":PARENT,"end_byte_offset":0}),
+    ];
+    for history_base in invalid_bases {
+        let directory = tempdir().unwrap();
+        let child = write_rollout(
+            directory.path(),
+            &[
+                json!({"ordinal":0,"type":"session_meta","payload":{"id":THREAD,"history_mode":"paginated",
+            "history_base":history_base}}),
+            ],
+        );
+        state_database(directory.path(), &child);
+        let error = CodexHomeHistoryReader::new(directory.path())
+            .read_visible_history(&HistoryAnchor {
+                thread_id: Some(THREAD.to_owned()),
+                ..HistoryAnchor::default()
+            })
+            .unwrap_err();
+        assert_eq!(error.reason(), "invalid_history_base");
+    }
+}
+
+#[test]
+fn lineage_depth_has_a_distinct_failure_from_cycles() {
+    let directory = tempdir().unwrap();
+    let id = |index: usize| format!("01a00000-0000-7000-8000-{index:012x}");
+    let child_parent = id(100);
+    let child_meta = json!({"ordinal":0,"type":"session_meta","payload":{"id":THREAD,"history_mode":"paginated",
+        "history_base":{"thread_id":child_parent,"end_ordinal_exclusive":10,"end_byte_offset":0}}});
+    let child = write_rollout(directory.path(), &[child_meta]);
+    state_database(directory.path(), &child);
+    for index in 100..131 {
+        let parent = id(index);
+        let next = id(index + 1);
+        write_records(
+            &directory
+                .path()
+                .join(format!("sessions/2026/09/27/{parent}.jsonl")),
+            &[
+                json!({"ordinal":0,"type":"session_meta","payload":{"id":parent,"history_mode":"paginated",
+                "history_base":{"thread_id":next,"end_ordinal_exclusive":10,"end_byte_offset":0}}}),
+            ],
+        );
+    }
+    let error = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history(&HistoryAnchor {
+            thread_id: Some(THREAD.to_owned()),
+            ..HistoryAnchor::default()
+        })
+        .unwrap_err();
+    assert_eq!(error.reason(), "lineage_depth_exceeded");
+}
+
+#[test]
+fn ancestor_lookup_rejects_ambiguous_session_files() {
+    let directory = tempdir().unwrap();
+    let child = write_rollout(
+        directory.path(),
+        &[
+            json!({"ordinal":0,"type":"session_meta","payload":{"id":THREAD,"history_mode":"paginated",
+            "history_base":{"thread_id":PARENT,"end_ordinal_exclusive":10,"end_byte_offset":0}}}),
+        ],
+    );
+    state_database(directory.path(), &child);
+    for root in ["sessions", "archived_sessions"] {
+        write_records(
+            &directory
+                .path()
+                .join(format!("{root}/2026/09/27/{PARENT}.jsonl")),
+            &[session_meta(PARENT, "paginated"), user(1, "parent")],
+        );
+    }
+    let error = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history(&HistoryAnchor {
+            thread_id: Some(THREAD.to_owned()),
+            ..HistoryAnchor::default()
+        })
+        .unwrap_err();
+    assert_eq!(error.reason(), "lineage_source_ambiguous");
+}
+
+#[cfg(unix)]
+#[test]
+fn ancestor_lookup_does_not_follow_session_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempdir().unwrap();
+    let child = write_rollout(
+        directory.path(),
+        &[
+            json!({"ordinal":0,"type":"session_meta","payload":{"id":THREAD,"history_mode":"paginated",
+            "history_base":{"thread_id":PARENT,"end_ordinal_exclusive":10,"end_byte_offset":0}}}),
+        ],
+    );
+    state_database(directory.path(), &child);
+    let outside = write_records(
+        &directory.path().join("outside.jsonl"),
+        &[session_meta(PARENT, "paginated"), user(1, "outside")],
+    );
+    let link = directory
+        .path()
+        .join(format!("sessions/2026/09/27/{PARENT}.jsonl"));
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    symlink(outside, link).unwrap();
+    let error = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history(&HistoryAnchor {
+            thread_id: Some(THREAD.to_owned()),
+            ..HistoryAnchor::default()
+        })
+        .unwrap_err();
+    assert_eq!(error.reason(), "source_missing");
+}
+
+#[cfg(unix)]
+#[test]
+fn ancestor_database_path_rejects_symlinked_session_directories() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempdir().unwrap();
+    let child = write_rollout(
+        directory.path(),
+        &[
+            json!({"ordinal":0,"type":"session_meta","payload":{"id":THREAD,"history_mode":"paginated",
+        "history_base":{"thread_id":PARENT,"end_ordinal_exclusive":10,"end_byte_offset":0}}}),
+        ],
+    );
+    state_database(directory.path(), &child);
+
+    let parent = write_records(
+        &directory
+            .path()
+            .join(format!("sessions/real/{PARENT}.jsonl")),
+        &[session_meta(PARENT, "paginated"), user(1, "parent")],
+    );
+    let alias = directory.path().join("sessions/alias");
+    symlink(parent.parent().unwrap(), &alias).unwrap();
+    let linked_path = alias.join(format!("{PARENT}.jsonl"));
+    let connection = rusqlite::Connection::open(directory.path().join("state_5.sqlite")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO threads VALUES (?1, ?2, 'paginated', ?3)",
+            params![PARENT, linked_path.to_str().unwrap(), MODEL],
+        )
+        .unwrap();
+
+    let error = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history(&HistoryAnchor {
+            thread_id: Some(THREAD.to_owned()),
+            ..HistoryAnchor::default()
+        })
+        .unwrap_err();
+    assert_eq!(error.reason(), "rollout_outside_session_root");
+}
+
+#[test]
+fn frozen_prefix_replay_matches_full_on_the_same_plain_and_zstd_inputs() {
+    let inherited_text = "inherited ".repeat(2_000);
+    let prefix_records = [
+        session_meta(PARENT, "paginated"),
+        started(1, "kept"),
+        json!({"ordinal":2,"type":"turn_context","turn_id":"kept","payload":{"model":"base-model"}}),
+        completed(3, "kept"),
+        user(4, &inherited_text),
+    ];
+    let parent_prefix = jsonl_bytes(&prefix_records);
+    let prefix_offset = parent_prefix.len() as u64;
+    let parent_records = [
+        prefix_records.as_slice(),
+        &[user(5, "future history"), started(6, "future"),
+            json!({"ordinal":7,"type":"turn_context","turn_id":"future","payload":{"model":"future-model"}}),
+            completed(8, "future")],
+    ]
+    .concat();
+    let parent_bytes = jsonl_bytes(&parent_records);
+
+    for compressed in [false, true] {
+        let directory = tempdir().unwrap();
+        let extension = if compressed { "jsonl.zst" } else { "jsonl" };
+        let parent_path = directory
+            .path()
+            .join(format!("sessions/2026/09/27/{PARENT}.{extension}"));
+        if compressed {
+            write_zstd(&parent_path, &parent_bytes);
+        } else {
+            std::fs::create_dir_all(parent_path.parent().unwrap()).unwrap();
+            std::fs::write(&parent_path, &parent_bytes).unwrap();
+        }
+        if compressed {
+            assert!((std::fs::metadata(&parent_path).unwrap().len()) < prefix_offset);
+        }
+        let child_meta = json!({"ordinal":0,"type":"session_meta","payload":{"id":THREAD,"history_mode":"paginated",
+            "history_base":{"thread_id":PARENT,"end_ordinal_exclusive":5,"end_byte_offset":prefix_offset}}});
+        let child = write_rollout(directory.path(), &[child_meta, started(990, TURN)]);
+        state_database(directory.path(), &child);
+
+        let reader = CodexHomeHistoryReader::new(directory.path());
+        let fast = reader
+            .read_visible_history_with_strategy(&anchor(), false)
+            .unwrap();
+        let full = reader
+            .read_visible_history_with_strategy(&anchor(), true)
+            .unwrap();
+        assert_eq!(fast.items, full.items, "compressed={compressed}");
+        assert_eq!(
+            fast.source_model, full.source_model,
+            "compressed={compressed}"
+        );
+        let text = visible_text(&fast);
+        assert!(
+            text.contains("inherited"),
+            "compressed={compressed}: {text}"
+        );
+        assert!(
+            !text.contains("future history"),
+            "compressed={compressed}: {text}"
+        );
+        assert_eq!(fast.source_model.as_deref(), Some("base-model"));
+    }
+}
+
+#[test]
+fn compressed_rollout_full_replay_matches_visible_history_contract() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("rollout.jsonl.zst");
+    let records = [meta(), user(1, "compressed item"), started(990, TURN)];
+    write_zstd(&path, &jsonl_bytes(&records));
+    state_database(directory.path(), &path);
+    let snapshot = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history(&anchor())
+        .unwrap();
+    assert!(visible_text(&snapshot).contains("compressed item"));
+}
+
+#[test]
+fn sqlite_and_session_history_modes_are_validated() {
+    let directory = tempdir().unwrap();
+    let path = write_rollout(
+        directory.path(),
+        &[
+            session_meta(THREAD, "legacy"),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"legacy item"}}),
+        ],
+    );
+    state_database_with_mode(directory.path(), &path, "legacy");
+    let legacy = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history(&HistoryAnchor {
+            thread_id: Some(THREAD.to_owned()),
+            ..HistoryAnchor::default()
+        })
+        .unwrap();
+    assert!(visible_text(&legacy).contains("legacy item"));
+
+    let directory = tempdir().unwrap();
+    let path = write_rollout(directory.path(), &[meta(), user(1, "mode mismatch")]);
+    state_database_with_mode(directory.path(), &path, "future-mode");
+    let error = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history(&HistoryAnchor {
+            thread_id: Some(THREAD.to_owned()),
+            ..HistoryAnchor::default()
+        })
+        .unwrap_err();
+    assert_eq!(error.reason(), "invalid_history_mode");
+
+    let directory = tempdir().unwrap();
+    let path = write_rollout(
+        directory.path(),
+        &[session_meta(THREAD, "legacy"), user(1, "mode mismatch")],
+    );
+    state_database_with_mode(directory.path(), &path, "paginated");
+    let error = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history(&HistoryAnchor {
+            thread_id: Some(THREAD.to_owned()),
+            ..HistoryAnchor::default()
+        })
+        .unwrap_err();
+    assert_eq!(error.reason(), "history_mode_mismatch");
+
+    let directory = tempdir().unwrap();
+    let path = write_rollout(
+        directory.path(),
+        &[
+            session_meta(THREAD, "future-mode"),
+            user(1, "bad session mode"),
+        ],
+    );
+    state_database(directory.path(), &path);
+    let error = CodexHomeHistoryReader::new(directory.path())
+        .read_visible_history(&HistoryAnchor {
+            thread_id: Some(THREAD.to_owned()),
+            ..HistoryAnchor::default()
+        })
+        .unwrap_err();
+    assert_eq!(error.reason(), "invalid_history_mode");
+}
+
+#[test]
+fn fast_and_full_validate_prefix_identity_mode_and_ordinals() {
+    let cases = [
+        (
+            "identity conflict before checkpoint",
+            vec![
+                meta(),
+                json!({"ordinal":1,"type":"session_meta","payload":{"id":PARENT,"history_mode":"paginated"}}),
+                checkpoint("base"),
+                started(990, TURN),
+            ],
+            "thread_mismatch",
+        ),
+        (
+            "mode mismatch before checkpoint",
+            vec![
+                meta(),
+                json!({"ordinal":1,"type":"session_meta","payload":{"id":THREAD,"history_mode":"legacy"}}),
+                checkpoint("base"),
+                started(990, TURN),
+            ],
+            "history_mode_mismatch",
+        ),
+        (
+            "ordinal regression before checkpoint",
+            vec![
+                meta(),
+                user(5, "later ordinal"),
+                user(4, "earlier ordinal"),
+                checkpoint("base"),
+                started(990, TURN),
+            ],
+            "ordinal_not_monotonic",
+        ),
+    ];
+    for (name, records, expected_reason) in cases {
+        let directory = build_home(&records);
+        let reader = CodexHomeHistoryReader::new(directory.path());
+        let fast = reader.read_visible_history_with_strategy(&anchor(), false);
+        let full = reader.read_visible_history_with_strategy(&anchor(), true);
+        assert_eq!(
+            fast.as_ref().unwrap_err().reason(),
+            expected_reason,
+            "{name}"
+        );
+        assert_eq!(
+            full.as_ref().unwrap_err().reason(),
+            expected_reason,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn reverse_base_preserves_prefix_model_and_role_dedup_past_initial_window() {
+    let huge = "x".repeat(17 * 1024 * 1024);
+    let records = [
+        meta(),
+        started(1, "A"),
+        json!({"ordinal":2,"type":"turn_context","turn_id":"A","payload":{"model":"gpt-prefix"}}),
+        json!({"ordinal":3,"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}],"turn_id":"A"}}),
+        completed(4, "A"),
+        json!({"ordinal":5,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":huge}],"turn_id":"A"}}),
+        checkpoint("self-contained base"),
+        json!({"ordinal":901,"type":"event_msg","payload":{"type":"assistant_message","message":"duplicate assistant"}}),
+        started(990, TURN),
+    ];
+    let directory = build_home(&records);
+    let reader = CodexHomeHistoryReader::new(directory.path());
+    let fast = reader
+        .read_visible_history_with_strategy(&anchor(), false)
+        .unwrap();
+    let full = reader
+        .read_visible_history_with_strategy(&anchor(), true)
+        .unwrap();
+    assert_eq!(fast.items, full.items);
+    assert_eq!(fast.source_model, full.source_model);
+    assert_eq!(fast.source_model.as_deref(), Some("gpt-prefix"));
+    let text = visible_text(&fast);
+    assert!(text.contains("self-contained base"), "{text}");
+    assert!(!text.contains("duplicate assistant"), "{text}");
+    assert!(!text.contains("old assistant"), "{text}");
 }
 
 #[test]
@@ -597,10 +1013,9 @@ fn interrupted_checkpoint_owner_forces_full() {
 
 #[test]
 fn reverse_window_missing_turn_start_forces_full() {
-    // A 17 MiB record pushes the 16 MiB reverse window past the checkpoint
-    // owner's task_started; the probe cannot prove the owner context, must
-    // widen the window (which then sees it), and the failed owner still
-    // forces the full scan. The end state matches full replay either way.
+    // A 17 MiB record pushes the initial reverse window past the checkpoint
+    // owner's task_started. The shared prefix control scan must recover that
+    // state and make the same decision as full replay on this exact file.
     let huge = "x".repeat(17 * 1024 * 1024);
     let records = [
         meta(),
@@ -612,10 +1027,17 @@ fn reverse_window_missing_turn_start_forces_full() {
         json!({"ordinal":901,"type":"event_msg","payload":{"type":"task_complete","turn_id":"turnB","error":{"code":"boom"}}}),
         started(990, TURN),
     ];
-    let snapshot = CodexHomeHistoryReader::new(build_home(&records).path())
-        .read_visible_history(&anchor())
+    let directory = build_home(&records);
+    let reader = CodexHomeHistoryReader::new(directory.path());
+    let fast = reader
+        .read_visible_history_with_strategy(&anchor(), false)
         .unwrap();
-    let text = visible_text(&snapshot);
+    let full = reader
+        .read_visible_history_with_strategy(&anchor(), true)
+        .unwrap();
+    assert_eq!(fast.items, full.items);
+    assert_eq!(fast.source_model, full.source_model);
+    let text = visible_text(&fast);
     assert!(text.contains("GOOD HISTORY"), "{text}");
     assert!(!text.contains("BAD CHECKPOINT"), "{text}");
 }
@@ -709,4 +1131,60 @@ fn ordinal_regression_reason_is_python_canonical() {
         .read_visible_history(&anchor())
         .unwrap_err();
     assert_eq!(error.reason(), "ordinal_not_monotonic");
+}
+
+// --- replacement_history_metadata must be a parallel array. ---
+
+fn assert_both_reject(records: &[Value], reason: &str) {
+    let directory = build_home(records);
+    for force_full in [false, true] {
+        let error = CodexHomeHistoryReader::new(directory.path())
+            .read_visible_history_with_strategy(&anchor(), force_full)
+            .unwrap_err();
+        assert_eq!(error.reason(), reason, "force_full={force_full}");
+    }
+}
+
+fn checkpoint_with_metadata(metadata: Value) -> Value {
+    json!({"ordinal":900,"type":"compacted","payload":{"message":"","window_number":1,
+        "replacement_history":[
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"a"}]},
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"b"}]}
+        ],
+        "replacement_history_metadata":metadata}})
+}
+
+#[test]
+fn replacement_history_metadata_must_be_array() {
+    assert_both_reject(
+        &[
+            meta(),
+            checkpoint_with_metadata(json!({"not":"a list"})),
+            started(990, TURN),
+        ],
+        "invalid_replacement_history_metadata",
+    );
+}
+
+#[test]
+fn replacement_history_metadata_length_must_match() {
+    assert_both_reject(
+        &[
+            meta(),
+            checkpoint_with_metadata(json!([{}])),
+            started(990, TURN),
+        ],
+        "invalid_replacement_history_metadata",
+    );
+    // A parallel array (and an explicit null) stays valid on both paths.
+    for metadata in [json!([{}, {}]), Value::Null] {
+        assert_fast_matches_full(
+            &[
+                meta(),
+                checkpoint_with_metadata(metadata),
+                started(990, TURN),
+            ],
+            "valid metadata",
+        );
+    }
 }

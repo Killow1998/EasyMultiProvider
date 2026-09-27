@@ -78,26 +78,73 @@ pub(super) fn session_meta_id(record: &Map<String, Value>) -> Option<String> {
     )
 }
 
+pub(super) fn session_meta_history_mode(
+    record: &Map<String, Value>,
+) -> Result<Option<String>, HistoryError> {
+    let payload = record.get("payload").and_then(Value::as_object);
+    let mode = payload.unwrap_or(record).get("history_mode");
+    match mode {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(mode)) if matches!(mode.as_str(), "legacy" | "paginated") => {
+            Ok(Some(mode.clone()))
+        }
+        Some(_) => Err(HistoryError::new("invalid_history_mode")),
+    }
+}
+
 /// Lineage pointer recorded on a paginated rollout's session meta.
 ///
 /// Returns `(parent rollout id, end_ordinal_exclusive, end_byte_offset)` when
 /// the child inherits a bounded prefix from another rollout. The byte offset
 /// freezes the physical prefix the child forked from; `0` (or absent) keeps
 /// the ordinal bound as the only cutoff.
-pub(super) fn session_meta_history_base(record: &Map<String, Value>) -> Option<(String, u64, u64)> {
-    let payload = record.get("payload").and_then(Value::as_object)?;
-    let base = payload.get("history_base")?.as_object()?;
-    let thread_id = string_from(base, &["thread_id", "threadId", "rollout_id", "rolloutId"])?;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct HistoryBase {
+    pub(super) thread_id: String,
+    pub(super) end_ordinal_exclusive: u64,
+    pub(super) end_byte_offset: u64,
+}
+
+pub(super) fn session_meta_history_base(
+    record: &Map<String, Value>,
+) -> Result<Option<HistoryBase>, HistoryError> {
+    let Some(payload) = record.get("payload").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    let Some(raw_base) = payload.get("history_base") else {
+        return Ok(None);
+    };
+    if raw_base.is_null() {
+        return Ok(None);
+    }
+    let base = raw_base
+        .as_object()
+        .ok_or_else(|| HistoryError::new("invalid_history_base"))?;
+    let thread_id = string_from(base, &["thread_id", "threadId", "rollout_id", "rolloutId"])
+        .filter(|value| uuid_shape(value))
+        .ok_or_else(|| HistoryError::new("invalid_history_base"))?;
     let end_ordinal_exclusive = base
         .get("end_ordinal_exclusive")
         .or_else(|| base.get("endOrdinalExclusive"))
-        .and_then(Value::as_u64)?;
-    let end_byte_offset = base
+        .and_then(Value::as_u64)
+        .ok_or_else(|| HistoryError::new("invalid_history_base"))?;
+    let end_byte_offset = match base
         .get("end_byte_offset")
         .or_else(|| base.get("endByteOffset"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    Some((thread_id, end_ordinal_exclusive, end_byte_offset))
+    {
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| HistoryError::new("invalid_history_base"))?,
+        None => 0,
+    };
+    if end_byte_offset > MAX_ROLLOUT_SCAN_BYTES {
+        return Err(HistoryError::new("invalid_history_base"));
+    }
+    Ok(Some(HistoryBase {
+        thread_id,
+        end_ordinal_exclusive,
+        end_byte_offset,
+    }))
 }
 
 pub(super) fn replacement_contains_encoded(record: &Map<String, Value>, encoded: &str) -> bool {
@@ -144,15 +191,26 @@ pub(super) fn replacement_history(
     let items = value
         .as_array()
         .ok_or_else(|| HistoryError::new("invalid_replacement_history"))?;
-    items
+    let items = items
         .iter()
         .map(|item| {
             item.as_object()
                 .cloned()
                 .ok_or_else(|| HistoryError::new("invalid_replacement_history"))
         })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+        .collect::<Result<Vec<_>, _>>()?;
+    // Per-item metadata is positional: anything other than a parallel array
+    // means the replacement cannot be trusted item for item.
+    if let Some(metadata) = payload
+        .get("replacement_history_metadata")
+        .filter(|value| !value.is_null())
+        && metadata
+            .as_array()
+            .is_none_or(|metadata| metadata.len() != items.len())
+    {
+        return Err(HistoryError::new("invalid_replacement_history_metadata"));
+    }
+    Ok(Some(items))
 }
 
 pub(super) fn replacement_entries(
