@@ -100,6 +100,77 @@ _REFRESH_COOLDOWN_SECONDS = 2.0
 _SERVER_AUTH_OID = "1.3.6.1.5.5.7.3.1"
 
 
+_PASSWD_ENUMERATION = threading.Lock()
+
+
+def _collect_entries(next_entry):
+    """Drain ``next_entry`` (None at the end, False for a skipped entry).
+
+    An error raised part-way discards everything, since a missed account
+    could share the group; an empty enumeration is a failure too. Matches the
+    Rust ``collect_entries``.
+    """
+    entries = []
+    try:
+        while True:
+            entry = next_entry()
+            if entry is None:
+                break
+            if entry is not False:
+                entries.append(entry)
+    except OSError:
+        return None
+    return entries or None
+
+
+def _enumerate_accounts():
+    """Every passwd account as (name, uid, gid), or None on a failed read.
+
+    ``pwd.getpwall`` stops at the first NULL from ``getpwent`` and so cannot
+    tell a read error from the end; errno can, through ctypes.
+    """
+    try:
+        import ctypes
+        import errno
+
+        # The symbols already loaded into this process, libc among them;
+        # ctypes.util.find_library would spawn a subprocess.
+        libc = ctypes.CDLL(None, use_errno=True)
+    except (ImportError, OSError):
+        return None
+
+    class Passwd(ctypes.Structure):
+        # The leading fields shared by glibc, musl and the BSDs.
+        _fields_ = [
+            ("pw_name", ctypes.c_char_p),
+            ("pw_passwd", ctypes.c_char_p),
+            ("pw_uid", ctypes.c_uint32),
+            ("pw_gid", ctypes.c_uint32),
+        ]
+
+    libc.getpwent.restype = ctypes.POINTER(Passwd)
+
+    def next_entry():
+        ctypes.set_errno(0)
+        entry = libc.getpwent()
+        if not entry:
+            code = ctypes.get_errno()
+            if code in (0, errno.ENOENT):
+                return None
+            raise OSError(code, "passwd enumeration failed")
+        entry = entry.contents
+        if entry.pw_name is None:
+            return False
+        return (os.fsdecode(entry.pw_name), entry.pw_uid, entry.pw_gid)
+
+    with _PASSWD_ENUMERATION:
+        libc.setpwent()
+        try:
+            return _collect_entries(next_entry)
+        finally:
+            libc.endpwent()
+
+
 def _private_groups(current_uid):
     """Groups whose write permission grants no other user access.
 
@@ -109,11 +180,9 @@ def _private_groups(current_uid):
     """
     try:
         import grp
-        import pwd
-
-        accounts = [(user.pw_name, user.pw_uid, user.pw_gid) for user in pwd.getpwall()]
-    except (ImportError, OSError):
+    except ImportError:
         return lambda _gid: False
+    accounts = _enumerate_accounts()
     if not accounts:
         return lambda _gid: False
     trusted = {0, current_uid}

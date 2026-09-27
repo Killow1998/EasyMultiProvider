@@ -1,6 +1,7 @@
 //! Account-scoped quota refresh, reset and history operations.
 
 use crate::app::ServerState;
+use crate::services::accounts::CredentialOperation;
 use crate::services::accounts::account_public_snapshot;
 use crate::services::accounts::native_account_snapshot;
 use crate::services::accounts::native_auth_document;
@@ -101,10 +102,19 @@ fn save_rotated_credential(
 struct AccountCredentials<'a> {
     state: &'a ServerState,
     auth_file: String,
+    /// Keeps shutdown from its final save until a rotation here is saved or
+    /// pending; `None` for the saves themselves.
+    _operation: Option<CredentialOperation<'a>>,
 }
 
 impl<'a> AccountCredentials<'a> {
     fn for_account(state: &'a ServerState, account_id: &str) -> Result<Self, QuotaError> {
+        let operation = state
+            .backend
+            .accounts
+            .credential_operations
+            .enter()
+            .ok_or_else(|| QuotaError::new("EMP is shutting down", "quota_error"))?;
         let target = state
             .backend
             .configuration
@@ -130,7 +140,11 @@ impl<'a> AccountCredentials<'a> {
                 QuotaError::new("account credentials are not configured", "quota_error")
             })?
             .to_owned();
-        Ok(Self { state, auth_file })
+        Ok(Self {
+            state,
+            auth_file,
+            _operation: Some(operation),
+        })
     }
 
     fn auth_path(&self) -> &Path {
@@ -234,7 +248,11 @@ pub(crate) fn flush_pending_rotations(state: &ServerState) -> usize {
             unsaved += 1;
             continue;
         };
-        let credentials = AccountCredentials { state, auth_file };
+        let credentials = AccountCredentials {
+            state,
+            auth_file,
+            _operation: None,
+        };
         let rotated = credentials
             .pending()
             .lock()

@@ -293,3 +293,113 @@ fn shutdown_reports_rotated_credentials_it_could_not_save() {
         "{result:?}"
     );
 }
+
+/// Request threads are not joined at shutdown. A quota check whose Codex
+/// already rotated the credential, but which has not saved it (or left it
+/// pending) yet, must still finish before the final save and exit.
+#[test]
+fn shutdown_waits_for_a_quota_check_that_is_rotating_a_credential() {
+    let directory = tempfile::tempdir().expect("drain temporary directory");
+    let root = canonical_root(&directory);
+    let account_root = root.join("state/accounts");
+    let auth_path = account_root.join("draining/auth.json.enc");
+    let config_path = root.join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({
+            "account_store_path": account_root,
+            "accounts": [{"id":"draining","name":"draining","prefix":"draining","auth_file":auth_path}],
+        }))
+        .expect("encode drain config"),
+    )
+    .expect("write drain config");
+    let executable_root = tempfile::Builder::new()
+        .prefix("emp-fake-draining-codex-")
+        .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+        .expect("crate-local fake Codex directory");
+    let executable = executable_root.path().join("fake-codex");
+    // Rotates the credential, announces it, then holds its reply until
+    // released, like a slow upstream after the refresh.
+    std::fs::write(
+        &executable,
+        r#"#!/usr/bin/env python3
+import json, os, pathlib, sys, time
+home = pathlib.Path(os.environ["CODEX_HOME"])
+me = pathlib.Path(sys.argv[0])
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "initialize":
+        print(json.dumps({"id":request["id"],"result":{}}), flush=True)
+    elif method == "account/read":
+        auth_path = home / "auth.json"
+        auth = json.loads(auth_path.read_text())
+        if auth["tokens"]["access_token"] == "original":
+            auth["tokens"]["access_token"] = "rotated"
+            auth_path.write_text(json.dumps(auth))
+            me.with_suffix(".rotated").touch()
+            while not me.with_suffix(".release").exists():
+                time.sleep(0.02)
+        print(json.dumps({"id":request["id"],"result":{"account":{"email":"xian@example.com","planType":"pro"}}}), flush=True)
+    elif method == "account/rateLimits/read":
+        print(json.dumps({"id":request["id"],"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":9,"windowDurationMins":300}}}}), flush=True)
+"#,
+    )
+    .expect("write fake Codex app-server");
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+        .expect("make fake Codex executable");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        executable.to_str().expect("fake Codex path is UTF-8"),
+        root.join("codex/auth.json"),
+    )
+    .expect("start quota service");
+    let state = std::sync::Arc::clone(&server.state);
+    state
+        .backend
+        .configuration
+        .vault
+        .write_encrypted_json(
+            &auth_path,
+            &json!({"tokens":{"access_token":"original","refresh_token":"original-refresh","account_id":"upstream"}}),
+        )
+        .expect("write original auth");
+    let session = session_header(&server);
+    // Send the check without waiting for its reply, which the held Codex
+    // delays past the shutdown call.
+    let mut client =
+        std::net::TcpStream::connect(server.local_addr()).expect("connect quota check");
+    std::io::Write::write_all(
+        &mut client,
+        format!(
+            "POST /api/accounts/draining/quota HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n{session}\r\nConnection: close\r\n\r\n{{}}",
+            server.local_addr().port()
+        )
+        .as_bytes(),
+    )
+    .expect("send quota check");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !executable.with_extension("rotated").exists() {
+        assert!(std::time::Instant::now() < deadline, "Codex never rotated");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let release = executable.with_extension("release");
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::fs::write(release, b"").expect("release fake Codex");
+    });
+    server
+        .shutdown()
+        .expect("shutdown after the rotation is saved");
+    let stored = state
+        .backend
+        .configuration
+        .vault
+        .read_encrypted_json(&auth_path)
+        .expect("read saved auth");
+    assert_eq!(stored["tokens"]["access_token"], "rotated");
+    releaser.join().expect("releaser");
+    drop(client);
+}

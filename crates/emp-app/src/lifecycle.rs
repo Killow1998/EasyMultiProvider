@@ -34,6 +34,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 const QUOTA_SAMPLE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+/// Longest a quota check can still rotate a credential: two 45 s Codex
+/// queries plus the save retries.
+const CREDENTIAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(100);
 
 pub(crate) struct ServerHandle {
     local_addr: SocketAddr,
@@ -393,6 +396,11 @@ impl ServerHandle {
             self.state.backend.integration.restore_owned()
         };
         self.state.shutdown.store(true, Ordering::Release);
+        // Request threads are not joined (streams may outlive shutdown), so
+        // quota checks that may rotate a credential are drained explicitly
+        // before the final save below.
+        let credential_operations = &self.state.backend.accounts.credential_operations;
+        let _ = credential_operations.close_and_drain(Duration::ZERO);
         let _ = TcpStream::connect_timeout(&self.local_addr, Duration::from_millis(100));
         self.state.backend.usage.stop();
         self.state.backend.accounts.quota_condition.notify_all();
@@ -413,7 +421,8 @@ impl ServerHandle {
         // Last chance to save credentials Codex rotated: the stored copies
         // may already be invalid upstream.
         // A shutdown that loses them is not a clean exit.
-        let unsaved = crate::services::quota::flush_pending_rotations(&self.state);
+        let unfinished = credential_operations.close_and_drain(CREDENTIAL_DRAIN_TIMEOUT);
+        let unsaved = unfinished + crate::services::quota::flush_pending_rotations(&self.state);
         drop(self._service_owner);
         if unsaved == 0 {
             return restoration;

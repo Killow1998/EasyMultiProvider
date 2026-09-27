@@ -188,8 +188,7 @@ pub(crate) fn management_migration_request(
     };
     // Same-identity accounts in the bundle replace stored credentials; keep
     // quota refreshes and rotated-credential flushes out while that happens.
-    let imported = crate::services::accounts::replacing_account_credentials(state, || {
-        let current = state.backend.configuration.config.lock().ok()?.clone();
+    let imported = crate::services::accounts::replacing_account_credentials(state, |current| {
         let imported = import_migration_bundle(
             &current,
             &bundle,

@@ -80,12 +80,11 @@ class QuotaTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "Unix path permission checks do not apply")
     def test_private_group_needs_every_member_trusted(self):
         import grp
-        import pwd
 
         accounts = [
-            pwd.struct_passwd(("me", "x", os.getuid(), 5000, "", "/", "/bin/sh")),
-            pwd.struct_passwd(("eve", "x", os.getuid() + 7919, 5000, "", "/", "/bin/sh")),
-            pwd.struct_passwd(("solo", "x", os.getuid(), 5001, "", "/", "/bin/sh")),
+            ("me", os.getuid(), 5000),
+            ("eve", os.getuid() + 7919, 5000),
+            ("solo", os.getuid(), 5001),
         ]
 
         def group(gid):
@@ -94,7 +93,9 @@ class QuotaTests(unittest.TestCase):
                 raise KeyError(gid)
             return grp.struct_group(("g%d" % gid, "x", gid, members[gid]))
 
-        with patch.object(pwd, "getpwall", return_value=accounts), patch.object(grp, "getgrgid", side_effect=group):
+        with patch.object(quota_module, "_enumerate_accounts", return_value=accounts), patch.object(
+            grp, "getgrgid", side_effect=group
+        ):
             private = quota_module._private_groups(os.getuid())
             # eve's primary group, though gr_mem is empty.
             self.assertFalse(private(5000))
@@ -102,6 +103,33 @@ class QuotaTests(unittest.TestCase):
             self.assertFalse(private(5002))
             self.assertTrue(private(5003))
             self.assertFalse(private(5999))
+        with patch.object(quota_module, "_enumerate_accounts", return_value=None):
+            self.assertFalse(quota_module._private_groups(os.getuid())(5001))
+
+    @unittest.skipIf(os.name == "nt", "Unix passwd enumeration does not apply")
+    def test_passwd_enumeration_that_fails_part_way_is_not_complete(self):
+        def run(steps):
+            steps = iter(steps)
+
+            def next_entry():
+                step = next(steps, None)
+                if isinstance(step, Exception):
+                    raise step
+                return step
+
+            return quota_module._collect_entries(next_entry)
+
+        self.assertEqual(run([("root", 0, 0), False, ("me", 1000, 1000)]), [("root", 0, 0), ("me", 1000, 1000)])
+        # getpwent NULL with errno set after some entries.
+        self.assertIsNone(run([("root", 0, 0), OSError(5, "EIO"), ("eve", 1002, 1000)]))
+        self.assertIsNone(run([]))
+        # The real database enumerates cleanly, matching pwd.
+        import pwd
+
+        self.assertEqual(
+            sorted(quota_module._enumerate_accounts()),
+            sorted((user.pw_name, user.pw_uid, user.pw_gid) for user in pwd.getpwall()),
+        )
 
     def test_slow_account_does_not_block_another_account(self):
         entered = threading.Event()

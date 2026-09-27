@@ -137,33 +137,58 @@ impl PrivateGroups {
     }
 }
 
-/// Every account the passwd database enumerates. `getpwent` keeps global
-/// cursor state, so enumerations are serialized.
+/// Every account the passwd database enumerates; `None` when the
+/// enumeration fails part-way, since a missed account could share the group.
+/// `getpwent` keeps global cursor state, so enumerations are serialized.
 #[cfg(unix)]
 fn enumerate_accounts() -> Option<Vec<(Vec<u8>, u32, u32)>> {
     static ENUMERATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = ENUMERATION.lock().ok()?;
-    let mut accounts = Vec::new();
     // SAFETY: setpwent/getpwent/endpwent are called under the lock above;
     // each returned entry is copied before the next call invalidates it.
     unsafe {
         libc::setpwent();
-        loop {
+        let accounts = collect_entries(|| {
+            // getpwent signals both the end and an error with NULL; only
+            // errno tells them apart.
+            *errno_location() = 0;
             let entry = libc::getpwent();
             if entry.is_null() {
-                break;
+                let errno = *errno_location();
+                return if errno == 0 || errno == libc::ENOENT {
+                    Ok(None)
+                } else {
+                    Err(())
+                };
             }
             let entry = &*entry;
             if entry.pw_name.is_null() {
-                continue;
+                return Ok(Some(None));
             }
             let name = std::ffi::CStr::from_ptr(entry.pw_name).to_bytes().to_vec();
-            accounts.push((name, entry.pw_uid, entry.pw_gid));
-        }
+            Ok(Some(Some((name, entry.pw_uid, entry.pw_gid))))
+        });
         libc::endpwent();
+        accounts
     }
-    (!accounts.is_empty()).then_some(accounts)
 }
+
+/// Drain `next` (`Ok(None)` at the end, `Ok(Some(None))` for a skipped
+/// entry). Any error discards everything: a partial list is not a complete
+/// one. An empty enumeration is treated as a failure too.
+#[cfg(unix)]
+fn collect_entries<T>(mut next: impl FnMut() -> Result<Option<Option<T>>, ()>) -> Option<Vec<T>> {
+    let mut entries = Vec::new();
+    while let Some(entry) = next().ok()? {
+        entries.extend(entry);
+    }
+    (!entries.is_empty()).then_some(entries)
+}
+
+#[cfg(target_os = "linux")]
+use libc::__errno_location as errno_location;
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+use libc::__error as errno_location;
 
 /// Supplementary members of `gid`; `None` when the group cannot be resolved.
 #[cfg(unix)]
@@ -250,6 +275,34 @@ mod tests {
             accounts: None,
         };
         assert!(!unknown.contains_with_members(1000, names(&[])));
+    }
+
+    #[test]
+    fn an_enumeration_that_fails_part_way_is_not_a_complete_one() {
+        let run = |steps: Vec<Result<Option<Option<u32>>, ()>>| {
+            let mut steps = steps.into_iter();
+            collect_entries(|| steps.next().unwrap_or(Ok(None)))
+        };
+        assert_eq!(
+            run(vec![
+                Ok(Some(Some(0))),
+                Ok(Some(None)),
+                Ok(Some(Some(1000)))
+            ]),
+            Some(vec![0, 1000])
+        );
+        // A read error after some entries (getpwent NULL with errno set)
+        // could hide another user sharing the group.
+        assert_eq!(
+            run(vec![Ok(Some(Some(0))), Err(()), Ok(Some(Some(1)))]),
+            None
+        );
+        assert_eq!(run(vec![]), None);
+        // The real database enumerates cleanly on this machine.
+        assert!(
+            enumerate_accounts()
+                .is_some_and(|accounts| { accounts.iter().any(|(_, uid, _)| *uid == 0) })
+        );
     }
 
     #[test]

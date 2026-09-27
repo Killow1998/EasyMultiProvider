@@ -366,57 +366,81 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
 }
 
 /// Run `replace`, which may rewrite configured accounts' stored credentials
-/// (migration import), under every account's refresh lock. Rotated
-/// credentials whose stored file it rewrote are dropped: the replacement is
-/// the user's explicit choice, and a flush must not overwrite it later.
+/// (migration import), under every configured account's refresh lock.
+/// `replace` receives the configuration snapshot taken while all of its
+/// accounts' locks are held. Rotated credentials whose stored file it
+/// rewrote are dropped: the replacement is the user's explicit choice, and a
+/// flush must not overwrite it later.
 pub(crate) fn replacing_account_credentials<T>(
     state: &ServerState,
-    replace: impl FnOnce() -> T,
+    replace: impl FnOnce(Value) -> T,
 ) -> Option<T> {
-    let mut account_ids = state
-        .backend
-        .configuration
-        .config
-        .lock()
-        .ok()?
-        .get("accounts")
-        .and_then(Value::as_array)
-        .map(|accounts| {
-            accounts
-                .iter()
-                .filter_map(|account| account.get("id")?.as_str().map(str::to_owned))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    account_ids.sort();
-    let locks = account_ids
-        .iter()
-        .map(|id| quota_refresh_lock(state, id))
-        .collect::<Option<Vec<_>>>()?;
-    let _guards = locks
-        .iter()
-        .map(|lock| lock.lock().ok())
-        .collect::<Option<Vec<_>>>()?;
-    let pending_files = state
-        .backend
-        .accounts
-        .pending_rotations
-        .lock()
-        .ok()?
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    let before = pending_files
-        .iter()
-        .map(|path| std::fs::read(path).ok())
-        .collect::<Vec<_>>();
-    let result = replace();
-    for (path, before) in pending_files.iter().zip(before) {
-        if std::fs::read(path).ok() != before {
-            forget_pending_rotation(state, Path::new(path));
+    let configured_ids = |config: &Value| {
+        let mut ids = config
+            .get("accounts")
+            .and_then(Value::as_array)
+            .map(|accounts| {
+                accounts
+                    .iter()
+                    .filter_map(|account| account.get("id")?.as_str().map(str::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+    let snapshot = || {
+        state
+            .backend
+            .configuration
+            .config
+            .lock()
+            .ok()
+            .map(|c| c.clone())
+    };
+    let mut account_ids = configured_ids(&snapshot()?);
+    let mut replace = Some(replace);
+    loop {
+        let locks = account_ids
+            .iter()
+            .map(|id| quota_refresh_lock(state, id))
+            .collect::<Option<Vec<_>>>()?;
+        let guards = locks
+            .iter()
+            .map(|lock| lock.lock().ok())
+            .collect::<Option<Vec<_>>>()?;
+        // An account added between listing and locking would run
+        // unprotected: lock again until the snapshot's accounts are all held.
+        let current = snapshot()?;
+        let current_ids = configured_ids(&current);
+        if !current_ids.iter().all(|id| account_ids.contains(id)) {
+            drop(guards);
+            account_ids = current_ids;
+            continue;
         }
+        let pending_files = state
+            .backend
+            .accounts
+            .pending_rotations
+            .lock()
+            .ok()?
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let before = pending_files
+            .iter()
+            .map(|path| std::fs::read(path).ok())
+            .collect::<Vec<_>>();
+        let result = (replace.take()?)(current);
+        for (path, before) in pending_files.iter().zip(before) {
+            if std::fs::read(path).ok() != before {
+                forget_pending_rotation(state, Path::new(path));
+            }
+        }
+        drop(guards);
+        return Some(result);
     }
-    Some(result)
 }
 
 /// Drop a rotated credential awaiting a durable save: the account's stored
@@ -444,6 +468,65 @@ pub(crate) struct AccountState {
     /// auth file. Codex may already have invalidated the stored refresh token,
     /// so the next quota check uses (and re-saves) this copy instead.
     pub(crate) pending_rotations: Mutex<BTreeMap<String, Value>>,
+    /// Quota checks and resets that may rotate a credential upstream.
+    /// Shutdown closes it and waits for them before the final save.
+    pub(crate) credential_operations: CredentialOperationGate,
+}
+
+/// Counts in-flight credential operations and refuses new ones once closed.
+#[derive(Default)]
+pub(crate) struct CredentialOperationGate {
+    state: Mutex<(usize, bool)>,
+    idle: Condvar,
+}
+
+/// Held while an operation may rotate a credential; see
+/// [`CredentialOperationGate`].
+pub(crate) struct CredentialOperation<'a>(&'a CredentialOperationGate);
+
+impl CredentialOperationGate {
+    /// `None` once the gate is closed for shutdown.
+    pub(crate) fn enter(&self) -> Option<CredentialOperation<'_>> {
+        let mut state = self.state.lock().ok()?;
+        if state.1 {
+            return None;
+        }
+        state.0 += 1;
+        Some(CredentialOperation(self))
+    }
+
+    /// Refuse new operations and wait up to `timeout` for running ones.
+    /// Returns how many are still running: a credential one of them rotated
+    /// may never be saved.
+    pub(crate) fn close_and_drain(&self, timeout: std::time::Duration) -> usize {
+        let Ok(mut state) = self.state.lock() else {
+            return 0;
+        };
+        state.1 = true;
+        let deadline = std::time::Instant::now() + timeout;
+        while state.0 > 0 {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            state = match self.idle.wait_timeout(state, remaining) {
+                Ok((state, _)) => state,
+                Err(_) => return 0,
+            };
+        }
+        state.0
+    }
+}
+
+impl Drop for CredentialOperation<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.0.state.lock() {
+            state.0 -= 1;
+            if state.0 == 0 {
+                self.0.idle.notify_all();
+            }
+        }
+    }
 }
 
 pub(crate) fn duplicate_accounts(

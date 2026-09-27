@@ -581,3 +581,60 @@ fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
     );
     server.shutdown().expect("shutdown settle failure state");
 }
+
+#[test]
+fn credential_replacement_also_locks_accounts_added_while_it_waited() {
+    let directory = tempfile::tempdir().expect("replacement lock directory");
+    let root = directory
+        .path()
+        .canonicalize()
+        .expect("canonical replacement root");
+    let config_path = root.join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({"account_store_path":root.join("state/accounts")})).unwrap(),
+    )
+    .expect("write replacement configuration");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "/bin/false",
+        root.join("codex/auth.json"),
+    )
+    .expect("start replacement lock state");
+    let body = |id: &str| {
+        json!({"id": id, "name": id, "prefix": id,
+            "auth_json": {"tokens": {"access_token": format!("{id}-token"), "account_id": format!("upstream-{id}")}}})
+    };
+    import_account_state(&server.state, &body("a")).expect("import a");
+    let lock_a = super::quota_refresh_lock(&server.state, "a").unwrap();
+    let guard_a = lock_a.lock().unwrap();
+    let (locked_tx, locked_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let seen = super::replacing_account_credentials(&server.state, |config| {
+                let held = ["a", "b"].map(|id| {
+                    super::quota_refresh_lock(&server.state, id)
+                        .unwrap()
+                        .try_lock()
+                        .is_err()
+                });
+                (config["accounts"].as_array().unwrap().len(), held)
+            })
+            .expect("replacement runs");
+            locked_tx.send(seen).unwrap();
+        });
+        // The replacement listed only `a` and now waits for its lock; `b`
+        // is added in the meantime.
+        thread::sleep(Duration::from_millis(100));
+        import_account_state(&server.state, &body("b")).expect("import b");
+        drop(guard_a);
+        let (accounts, held) = locked_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("replacement finishes");
+        assert_eq!(accounts, 2);
+        assert_eq!(held, [true, true], "every snapshot account is locked");
+    });
+    server.shutdown().expect("shutdown replacement lock state");
+}
