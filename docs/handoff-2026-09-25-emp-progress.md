@@ -14,9 +14,9 @@
   and record remaining trust/configuration prerequisites. No workflow,
   release, publish, push, environment change, or Python 4200 restart is
   authorized.
-- Use the shared Cargo lock and target directory from the coordinator
-  handoff. Next: final diff/status review, then commit the reviewed CI source
-  and handoff locally.
+- The shared Cargo lock and target directory from the coordinator handoff were
+  used. Final diff/status review and local commits are complete; next is
+  coordinator review and consolidation.
 - Baseline targeted checks passed: `cargo test --locked --offline -p emp-codex
   runtime_inventory` (7 unit tests; unrelated integration tests filtered) and
   `python3 -m unittest tests.test_release_packaging -v` (5 tests).
@@ -47,6 +47,7 @@
   candidates`), authored by `h2q` with the Point co-author trailer. The branch
   is local only; next is coordinator review/consolidation. No push or workflow
   run was performed.
+- Post-implementation handoff checkpoint commit: `092b5f1`.
 - Runtime hardening now rejects Unix executables with group/world write or
   set-id bits. The first post-edit targeted run found an incorrect new test
   expectation: PATH discovery intentionally preserves the symlink path rather
