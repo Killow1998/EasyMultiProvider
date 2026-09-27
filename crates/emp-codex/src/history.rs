@@ -78,6 +78,9 @@ struct ReverseBase {
     suffix_start: u64,
     /// Turn owning the compaction record, carried from earlier records.
     turn: Option<String>,
+    /// Ordinal of the compaction record; seeds the suffix scan's monotonic
+    /// check so a regression that straddles the base is still detected.
+    ordinal: Option<u64>,
     /// Turn completion states observed before the compaction record; the
     /// suffix-local scan cannot see them, but the failed-turn filter needs
     /// them to match full-scan replay.
@@ -208,12 +211,18 @@ fn locate_latest_compaction(
                                             .is_some_and(|value| !value.is_empty())
                                 })
                             });
-                        candidate = eligible.then(|| {
+                        let base_ordinal = ordinal(&record);
+                        // A paginated base without an ordinal cannot seed the
+                        // suffix monotonicity check; the full scan owns it.
+                        let has_seed_ordinal =
+                            history_mode != "paginated" || base_ordinal.is_some();
+                        candidate = (eligible && has_seed_ordinal).then(|| {
                             (
                                 ReverseBase {
                                     replacement: replacement.unwrap_or_default(),
                                     suffix_start: offset,
                                     turn: active_turn.clone(),
+                                    ordinal: base_ordinal,
                                     successful: successful.clone(),
                                     response_roles: response_roles.clone(),
                                 },
@@ -355,6 +364,8 @@ struct ReplayFrame {
     seed_visible: Vec<VisibleItem>,
     /// Turn owning the seed, carried into records without a turn id.
     seed_turn: Option<String>,
+    /// Highest ordinal before `start`; `None` starts ordinal tracking fresh.
+    seed_ordinal: Option<u64>,
     /// Turn completion states observed before `start`.
     seed_successful: BTreeMap<String, bool>,
     /// Response roles observed before `start`.
@@ -368,11 +379,13 @@ impl ReplayFrame {
             end,
             seed_visible: Vec::new(),
             seed_turn: None,
+            seed_ordinal: None,
             seed_successful: BTreeMap::new(),
             seed_roles: BTreeSet::new(),
         }
     }
 }
+
 /// A scan pass outcome: either the suffix fully determines the boundary or
 /// the caller must fall back to the full scan.
 enum SuffixScan {
@@ -388,7 +401,11 @@ fn scan_suffix(
 ) -> Result<SuffixScan, HistoryError> {
     file.seek(SeekFrom::Start(frame.start))
         .map_err(|_| HistoryError::new("source_unavailable"))?;
-    let mut scan = RolloutScan::default();
+    let mut scan = RolloutScan {
+        last_ordinal: frame.seed_ordinal,
+        saw_ordinal: frame.seed_ordinal.is_some(),
+        ..RolloutScan::default()
+    };
     let mut active_turn = frame.seed_turn.clone();
     let mut index = 0usize;
     walk_records(file, frame.end, |record| {
@@ -426,12 +443,26 @@ fn scan_suffix(
     if !usable {
         return Ok(SuffixScan::FallBack);
     }
-    scan.boundary = scan.anchor_boundary.unwrap_or(scan.total_records);
-    if scan.ordinal_regressed {
-        // Malformed pagination: treat like an unusable suffix and fall back
-        // to the full scan, which reports the same defect terminally.
+    // The full scan reports paginated ordinal defects terminally; the suffix
+    // scan only ever sees part of the file, so any defect it does see means
+    // the base cannot be trusted and the full scan must own the outcome.
+    if !scan.saw_ordinal || scan.ordinal_missing || scan.ordinal_regressed {
         return Ok(SuffixScan::FallBack);
     }
+    // A replacement committed by a turn that later failed is excluded from
+    // the history by the failed-turn filter; a base owned by such a turn
+    // would seed visible items the full replay would never produce.
+    if let Some(turn) = &frame.seed_turn {
+        if scan
+            .successful
+            .get(turn)
+            .or_else(|| frame.seed_successful.get(turn))
+            == Some(&false)
+        {
+            return Ok(SuffixScan::FallBack);
+        }
+    }
+    scan.boundary = scan.anchor_boundary.unwrap_or(scan.total_records);
     Ok(SuffixScan::Usable(Box::new(scan)))
 }
 
@@ -855,6 +886,7 @@ impl CodexHomeHistoryReader {
                 end: captured_end,
                 seed_visible: Vec::new(),
                 seed_turn: base.turn.clone(),
+                seed_ordinal: base.ordinal,
                 seed_successful: base.successful.clone(),
                 seed_roles: base.response_roles.clone(),
             };
@@ -1060,7 +1092,13 @@ fn walk_records(
     end: u64,
     mut visit: impl FnMut(Map<String, Value>) -> Result<bool, HistoryError>,
 ) -> Result<(), HistoryError> {
-    let mut reader = BufReader::with_capacity(64 * 1024, file.by_ref().take(end));
+    let start = file
+        .stream_position()
+        .map_err(|_| HistoryError::new("source_unavailable"))?;
+    if start > end {
+        return Err(HistoryError::new("invalid_replay_range"));
+    }
+    let mut reader = BufReader::with_capacity(64 * 1024, file.by_ref().take(end - start));
     let mut line = Vec::new();
     while let Some(terminated) = read_bounded_line(&mut reader, &mut line)? {
         if let Some(record) = rollout_json_line(&line, terminated)?

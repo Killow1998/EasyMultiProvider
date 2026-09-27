@@ -148,3 +148,49 @@ fn explicit_open_blocks_and_empty_suppressed_output_are_incomplete() {
         );
     }
 }
+
+#[test]
+fn redacted_thinking_blocks_suppress_output_and_never_consume_output_indexes() {
+    // Raw upstream indexes stay sparse once redacted thinking blocks are
+    // suppressed: no event may carry a suppressed raw index, output indexes
+    // remain contiguous over emitted items only, and suppressed content
+    // must never leak into the terminal response.
+    let mut stream = stream(&[]);
+    let mut events = vec![stream.start_event().unwrap()];
+    for event in [
+        json!({"type": "content_block_start", "index": 0, "content_block": {"type": "redacted_thinking", "data": "private-0"}}),
+        json!({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "leak-0"}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": "visible"}}),
+        json!({"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": " mid"}}),
+        json!({"type": "content_block_stop", "index": 1}),
+        json!({"type": "content_block_start", "index": 5, "content_block": {"type": "redacted_thinking", "data": "private-5"}}),
+        json!({"type": "content_block_stop", "index": 5}),
+        json!({"type": "content_block_start", "index": 7, "content_block": {"type": "text", "text": " after"}}),
+        json!({"type": "content_block_stop", "index": 7}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+        json!({"type": "message_stop"}),
+    ] {
+        events.extend(stream.push(&event).unwrap());
+    }
+    events.extend(stream.finish().unwrap());
+
+    let terminal = &events.last().unwrap().value["response"];
+    assert_eq!(terminal["output_text"], "visible mid after");
+    let output = terminal["output"].as_array().unwrap();
+    // Each text block emits one message item; suppressed blocks hold none.
+    assert_eq!(output.len(), 2);
+    assert_eq!(output[0]["type"], "message");
+    assert_eq!(output[1]["type"], "message");
+    // Every emitted event references an output_index within [0, output)
+    // and never the suppressed raw indexes.
+    for event in &events {
+        if let Some(index) = event.value.get("output_index") {
+            let index = index.as_u64().unwrap();
+            assert!(index < output.len() as u64, "event {event:?}");
+        }
+    }
+    assert!(!format!("{events:?}").contains("private"));
+    assert!(!format!("{events:?}").contains("leak"));
+    assert_eq!(events.last().unwrap().event, "response.completed");
+}
