@@ -15,8 +15,9 @@ use crate::http::response::unauthorized_response;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use emp_state::ExportGroups;
+use emp_state::apply_migration_import;
+use emp_state::decrypt_migration_bundle;
 use emp_state::export_migration_bundle_with_summary;
-use emp_state::import_migration_bundle;
 use serde_json::Value;
 use std::net::TcpStream;
 
@@ -186,22 +187,28 @@ pub(crate) fn management_migration_request(
             );
         }
     };
+    // Decrypting (scrypt) needs no configuration; keep it outside the locks.
+    let decrypted = match decrypt_migration_bundle(&bundle, password) {
+        Ok(decrypted) => decrypted,
+        Err(error) => {
+            return json_error_response(400, status_text(400), &error.to_string(), None, &[]);
+        }
+    };
     // Same-identity accounts in the bundle replace stored credentials; keep
-    // quota refreshes and rotated-credential flushes out while that happens.
-    let imported = crate::services::accounts::replacing_account_credentials(state, |current| {
-        let imported = import_migration_bundle(
-            &current,
-            &bundle,
-            password,
+    // quota refreshes, rotated-credential flushes and other configuration
+    // writers out while that happens.
+    let imported = crate::services::accounts::replacing_account_credentials(state, |config| {
+        let imported = apply_migration_import(
+            config,
+            decrypted,
             &state.backend.configuration.config_path,
             &state.backend.configuration.vault,
         );
         if let Ok((updated, _)) = &imported {
-            *state.backend.configuration.config.lock().ok()? = updated.clone();
+            *config = updated.clone();
         }
-        Some(imported)
-    })
-    .flatten();
+        imported
+    });
     let summary = match imported {
         Some(Ok((_, summary))) => summary,
         Some(Err(error)) => {

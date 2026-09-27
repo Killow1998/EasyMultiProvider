@@ -265,4 +265,6 @@ pub use export::{
     select_export_config,
 };
 use import::id_of;
-pub use import::import_migration_bundle;
+pub use import::{
+    DecryptedMigration, apply_migration_import, decrypt_migration_bundle, import_migration_bundle,
+};

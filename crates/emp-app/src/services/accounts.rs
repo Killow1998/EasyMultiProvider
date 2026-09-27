@@ -139,13 +139,47 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
     let _refresh_guard = refresh_lock
         .lock()
         .map_err(|_| "internal server error".to_owned())?;
-    let current = state
+    let configured = |config: &Value| {
+        config
+            .get("accounts")
+            .and_then(Value::as_array)
+            .is_some_and(|accounts| {
+                accounts
+                    .iter()
+                    .any(|item| item.get("id").and_then(Value::as_str) == Some(account_id))
+            })
+    };
+    let replacing = configured(
+        &*state
+            .backend
+            .configuration
+            .config
+            .lock()
+            .map_err(|_| "internal server error".to_owned())?,
+    );
+    if replacing {
+        // The id is about to name new credentials: its legacy rows must be
+        // attributed with the credentials that recorded them, or dropped.
+        // Settling reads the configuration, so it runs before the
+        // configuration lock below is taken.
+        crate::services::quota::settle_legacy_quota_history(state, account_id)
+            .map_err(|_| "quota history is unavailable; the account was not replaced".to_owned())?;
+    }
+    // Held from reading the configuration to storing the result, like every
+    // other configuration writer, so a concurrent writer's change is never
+    // overwritten with this older copy.
+    let mut config = state
         .backend
         .configuration
         .config
         .lock()
-        .map_err(|_| "internal server error".to_owned())?
-        .clone();
+        .map_err(|_| "internal server error".to_owned())?;
+    let current = config.clone();
+    // Only a migration import can add this id meanwhile (it does not hold
+    // this account's refresh lock when the id was not configured yet).
+    if configured(&current) != replacing {
+        return Err("accounts changed during import; try again".to_owned());
+    }
     let auth_path = emp_state::account_auth_path(
         &current,
         account_id,
@@ -177,15 +211,6 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
             && item.get("prefix").and_then(Value::as_str) == Some(prefix)
     }) {
         return Err(format!("account prefix is already in use: {prefix}"));
-    }
-    if existing
-        .iter()
-        .any(|item| item.get("id").and_then(Value::as_str) == Some(account_id))
-    {
-        // The id is about to name new credentials: its legacy rows must be
-        // attributed with the credentials that recorded them, or dropped.
-        crate::services::quota::settle_legacy_quota_history(state, account_id)
-            .map_err(|_| "quota history is unavailable; the account was not replaced".to_owned())?;
     }
     let mut accounts = existing
         .into_iter()
@@ -245,12 +270,8 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
             return Err(error);
         }
     };
-    *state
-        .backend
-        .configuration
-        .config
-        .lock()
-        .map_err(|_| "internal server error".to_owned())? = committed;
+    *config = committed;
+    drop(config);
     notify_quota_update(state, account_id, None);
     account_public_snapshot(state, account_id).ok_or_else(|| "account import failed".to_owned())
 }
@@ -265,13 +286,14 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
     // or be dropped, before the id becomes free for a different account.
     crate::services::quota::settle_legacy_quota_history(state, account_id)
         .map_err(|_| "quota history is unavailable; the account was not deleted".to_owned())?;
-    let current = state
+    // Held until the result is stored; see `import_account_state`.
+    let mut config = state
         .backend
         .configuration
         .config
         .lock()
-        .map_err(|_| "internal server error".to_owned())?
-        .clone();
+        .map_err(|_| "internal server error".to_owned())?;
+    let current = config.clone();
     let accounts = current
         .get("accounts")
         .and_then(Value::as_array)
@@ -355,25 +377,22 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
             return Err(error);
         }
     };
-    *state
-        .backend
-        .configuration
-        .config
-        .lock()
-        .map_err(|_| "internal server error".to_owned())? = committed;
+    *config = committed;
+    drop(config);
     notify_quota_update(state, account_id, None);
     Ok(())
 }
 
 /// Run `replace`, which may rewrite configured accounts' stored credentials
-/// (migration import), under every configured account's refresh lock.
-/// `replace` receives the configuration snapshot taken while all of its
-/// accounts' locks are held. Rotated credentials whose stored file it
-/// rewrote are dropped: the replacement is the user's explicit choice, and a
-/// flush must not overwrite it later.
+/// (migration import), under every configured account's refresh lock and
+/// the configuration lock. `replace` edits the configuration in place, so
+/// nothing another writer stored meanwhile is lost, and no account it sees
+/// is unlocked. Rotated credentials whose stored file it rewrote are
+/// dropped: the replacement is the user's explicit choice, and a flush must
+/// not overwrite it later.
 pub(crate) fn replacing_account_credentials<T>(
     state: &ServerState,
-    replace: impl FnOnce(Value) -> T,
+    replace: impl FnOnce(&mut Value) -> T,
 ) -> Option<T> {
     let configured_ids = |config: &Value| {
         let mut ids = config
@@ -390,18 +409,11 @@ pub(crate) fn replacing_account_credentials<T>(
         ids.dedup();
         ids
     };
-    let snapshot = || {
-        state
-            .backend
-            .configuration
-            .config
-            .lock()
-            .ok()
-            .map(|c| c.clone())
-    };
-    let mut account_ids = configured_ids(&snapshot()?);
-    let mut replace = Some(replace);
+    let configuration = &state.backend.configuration.config;
+    let mut account_ids = configured_ids(&*configuration.lock().ok()?);
     loop {
+        // Refresh locks before the configuration lock, the order quota
+        // refreshes use.
         let locks = account_ids
             .iter()
             .map(|id| quota_refresh_lock(state, id))
@@ -410,11 +422,12 @@ pub(crate) fn replacing_account_credentials<T>(
             .iter()
             .map(|lock| lock.lock().ok())
             .collect::<Option<Vec<_>>>()?;
+        let mut config = configuration.lock().ok()?;
         // An account added between listing and locking would run
-        // unprotected: lock again until the snapshot's accounts are all held.
-        let current = snapshot()?;
-        let current_ids = configured_ids(&current);
+        // unprotected: lock again until every configured account is held.
+        let current_ids = configured_ids(&config);
         if !current_ids.iter().all(|id| account_ids.contains(id)) {
+            drop(config);
             drop(guards);
             account_ids = current_ids;
             continue;
@@ -432,12 +445,13 @@ pub(crate) fn replacing_account_credentials<T>(
             .iter()
             .map(|path| std::fs::read(path).ok())
             .collect::<Vec<_>>();
-        let result = (replace.take()?)(current);
+        let result = replace(&mut config);
         for (path, before) in pending_files.iter().zip(before) {
             if std::fs::read(path).ok() != before {
                 forget_pending_rotation(state, Path::new(path));
             }
         }
+        drop(config);
         drop(guards);
         return Some(result);
     }

@@ -49,11 +49,12 @@ pub use filesystem::{
 };
 pub use lock::{IntegrationFileLock, LockError};
 pub use migration::{
-    ExportGroup, ExportGroups, MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES, MIGRATION_ENVELOPE_VERSION,
-    MIGRATION_MAGIC, MIGRATION_SCHEMA, MIGRATION_VERSION, MIN_IMPORT_PASSWORD_BYTES,
-    MIN_PASSWORD_BYTES, MigrationError, MigrationExportSummary, MigrationImportSummary,
-    MigrationParams, MigrationResult, SALT_BYTES, SCRYPT_N, SCRYPT_P, SCRYPT_R, SCRYPT_V2_N,
-    SCRYPT_V2_P, SCRYPT_V2_R, decode_migration, encode_migration, export_migration_bundle,
+    DecryptedMigration, ExportGroup, ExportGroups, MAX_BUNDLE_BYTES, MAX_PASSWORD_BYTES,
+    MIGRATION_ENVELOPE_VERSION, MIGRATION_MAGIC, MIGRATION_SCHEMA, MIGRATION_VERSION,
+    MIN_IMPORT_PASSWORD_BYTES, MIN_PASSWORD_BYTES, MigrationError, MigrationExportSummary,
+    MigrationImportSummary, MigrationParams, MigrationResult, SALT_BYTES, SCRYPT_N, SCRYPT_P,
+    SCRYPT_R, SCRYPT_V2_N, SCRYPT_V2_P, SCRYPT_V2_R, apply_migration_import, decode_migration,
+    decrypt_migration_bundle, encode_migration, export_migration_bundle,
     export_migration_bundle_with_summary, import_migration_bundle, parse_envelope,
     select_export_config,
 };

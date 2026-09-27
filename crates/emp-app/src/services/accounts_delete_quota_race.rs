@@ -638,3 +638,74 @@ fn credential_replacement_also_locks_accounts_added_while_it_waited() {
     });
     server.shutdown().expect("shutdown replacement lock state");
 }
+
+/// Migration import rewrites the whole configuration. An account imported
+/// while it runs must not be overwritten by the migration's older copy: the
+/// import waits for the migration and then applies on top of its result.
+#[test]
+fn account_import_during_credential_replacement_is_not_lost() {
+    let directory = tempfile::tempdir().expect("replacement race directory");
+    let root = directory
+        .path()
+        .canonicalize()
+        .expect("canonical race root");
+    let config_path = root.join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({"account_store_path":root.join("state/accounts")})).unwrap(),
+    )
+    .expect("write race configuration");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "/bin/false",
+        root.join("codex/auth.json"),
+    )
+    .expect("start race state");
+    let body = |id: &str| {
+        json!({"id": id, "name": id, "prefix": id,
+            "auth_json": {"tokens": {"access_token": format!("{id}-token"), "account_id": format!("upstream-{id}")}}})
+    };
+    import_account_state(&server.state, &body("a")).expect("import a");
+    let (imported_tx, imported_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        super::replacing_account_credentials(&server.state, |config| {
+            scope.spawn(|| {
+                imported_tx
+                    .send(import_account_state(&server.state, &body("b")).is_ok())
+                    .unwrap();
+            });
+            thread::sleep(Duration::from_millis(200));
+            assert!(
+                imported_rx.try_recv().is_err(),
+                "an import completed while the replacement held the configuration"
+            );
+            // The migration's own change to the configuration it was given.
+            config["accounts"][0]["name"] = json!("renamed-by-migration");
+        })
+        .expect("replacement runs");
+    });
+    assert!(
+        imported_rx.recv().unwrap(),
+        "import b succeeds after the replacement"
+    );
+    let config = server
+        .state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .unwrap()
+        .clone();
+    let accounts = config["accounts"].as_array().unwrap();
+    let names = accounts
+        .iter()
+        .map(|account| account["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["renamed-by-migration", "b"]);
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    assert_eq!(saved["accounts"].as_array().unwrap().len(), 2);
+    server.shutdown().expect("shutdown race state");
+}
