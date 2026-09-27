@@ -1,6 +1,9 @@
 use crate::http_policy::ProxyEnvironment;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::Read;
+#[cfg(any(windows, test))]
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -79,7 +82,11 @@ fn push_unique_no_proxy(environment: &mut ProxyEnvironment, host: String) {
     }
 }
 
-fn run_command(program: &str, arguments: &[&str], timeout: Duration) -> Option<String> {
+fn run_command(
+    program: impl AsRef<OsStr>,
+    arguments: &[&str],
+    timeout: Duration,
+) -> Option<String> {
     if timeout.is_zero() {
         return None;
     }
@@ -153,13 +160,22 @@ fn capture_macos() -> Result<Option<ProxyEnvironment>, ()> {
 
 #[cfg(windows)]
 fn capture_windows() -> Result<Option<ProxyEnvironment>, ()> {
+    let program = windows_registry_tool_path(std::env::var_os("SystemRoot").as_deref()).ok_or(())?;
     let output = run_command(
-        "reg",
+        &program,
         &["query", WINDOWS_INTERNET_SETTINGS_KEY],
         SYSTEM_PROXY_READ_TIMEOUT,
     )
     .ok_or(())?;
     Ok(parse_windows_proxy_settings(&output))
+}
+
+#[cfg(any(windows, test))]
+fn windows_registry_tool_path(system_root: Option<&OsStr>) -> Option<PathBuf> {
+    let root = system_root.filter(|root| !root.is_empty())?;
+    let root = PathBuf::from(root);
+    root.is_absolute()
+        .then(|| root.join("System32").join("reg.exe"))
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -533,6 +549,21 @@ mod tests {
         assert!(environment.no_proxy.contains(&"*.internal.test".to_owned()));
         assert!(environment.no_proxy.contains(&"localhost".to_owned()));
         assert!(parse_macos_proxy_settings("HTTPEnable : 1\nHTTPProxy : invalid\n").is_none());
+    }
+
+    #[test]
+    fn windows_registry_tool_uses_absolute_systemroot_path_with_spaces() {
+        let root = std::env::temp_dir().join("EMP Windows Root");
+        let tool = windows_registry_tool_path(Some(root.as_os_str())).expect("absolute root");
+        assert!(tool.starts_with(&root));
+        assert_eq!(
+            tool.parent().and_then(|path| path.file_name()),
+            Some(OsStr::new("System32"))
+        );
+        assert_eq!(tool.file_name(), Some(OsStr::new("reg.exe")));
+        assert!(windows_registry_tool_path(None).is_none());
+        let relative = PathBuf::from("relative-root");
+        assert!(windows_registry_tool_path(Some(relative.as_os_str())).is_none());
     }
 
     #[test]

@@ -80,3 +80,30 @@ fn many_small_events_in_one_chunk_do_not_share_a_limit() {
     assert_eq!(events.len(), 20);
     assert!(parser.finish().expect("empty finish").is_empty());
 }
+
+#[test]
+fn byte_at_a_time_feed_matches_single_chunk_parse() {
+    let wire = b": ping\r\ndata: {\"type\":\r\ndata: \"split\"}\r\n\r\ndata: [DONE]\n\ndata: {\"type\":\"tail\"}\n\n";
+    let mut whole = SseJsonParser::new();
+    let expected = whole.push_frames(wire).expect("whole");
+    let mut split = SseJsonParser::new();
+    let mut actual = Vec::new();
+    for byte in wire {
+        actual.extend(
+            split
+                .push_frames(std::slice::from_ref(byte))
+                .expect("byte chunk"),
+        );
+    }
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 3);
+}
+
+#[test]
+fn long_unterminated_line_across_chunks_still_hits_limit() {
+    let mut parser = SseJsonParser::with_limit(64).expect("limit");
+    for _ in 0..8 {
+        parser.push_frames(b"data: xx").expect("under limit");
+    }
+    assert!(parser.push_frames(b"x").is_err());
+}
