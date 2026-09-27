@@ -565,7 +565,8 @@ async function establishSession() {
     // bootstrap token and has no side effects.
     sessionToken = readStoredSessionToken();
     const response = await fetch('/api/session', {
-      method:'POST', credentials:'same-origin', cache:'no-store', redirect:'error',
+      method:'POST', headers:{'Content-Type':'application/json'}, body:'{}',
+      credentials:'same-origin', cache:'no-store', redirect:'error',
     });
     if (response.status === 404) {
       legacyCookieAuth = true;

@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import zstandard
 
@@ -319,21 +319,29 @@ class EmpProcess:
                         cookie = headers.get("set-cookie", "")
                         assert cookie.startswith("emp_session="), cookie
                         self.cookie = cookie.split(";", 1)[0]
+                        # The shared UI detects cookie-session servers by this
+                        # probe (sent with the page's cookie and no body).
+                        probe_status, _, raw = self.request("POST", "/api/session", {})
+                        assert probe_status == 404, (probe_status, raw)
                     else:
                         self.login_mode = "bootstrap-token"
                         assert url.path == "/" and url.query.startswith("bootstrap="), self.opened_url
-                        bare_status, bare_headers, _ = self.request("GET", "/", auth=False)
-                        assert bare_status == 401, bare_status
-                        assert "set-cookie" not in bare_headers, bare_headers
-                        target = url.path + "?" + url.query
-                        status, headers, _ = self.request("GET", target, auth=False)
-                        assert status == 303, status
-                        cookie = headers.get("set-cookie", "")
-                        assert cookie.startswith("emp_session="), cookie
-                        self.cookie = cookie.split(";", 1)[0]
-                        replay_status, replay_headers, _ = self.request("GET", target, auth=False)
+                        # The page carries no secrets; its script exchanges
+                        # the one-use token for a header session.
+                        bare_status, _, _ = self.request("GET", "/", auth=False)
+                        assert bare_status == 200, bare_status
+                        bootstrap = parse_qs(url.query)["bootstrap"][0]
+                        status, _, raw = self.request(
+                            "POST", "/api/session", b"", auth=False,
+                            headers={"X-EMP-Bootstrap": bootstrap},
+                        )
+                        assert status == 200, raw
+                        self.session = json.loads(raw)["session"]
+                        replay_status, _, _ = self.request(
+                            "POST", "/api/session", b"", auth=False,
+                            headers={"X-EMP-Bootstrap": bootstrap},
+                        )
                         assert replay_status == 401, replay_status
-                        assert "set-cookie" not in replay_headers, replay_headers
                     if self.runtime_kind == "python_oracle":
                         self.login_mode = "bare-root-cookie"
                     status, _, raw = self.request("GET", "/api/config")
@@ -359,7 +367,9 @@ class EmpProcess:
         outgoing = dict(headers or {})
         if auth and path.startswith("/v1/"):
             outgoing.setdefault("Authorization", "Bearer e2e-native-token")
-        if auth and hasattr(self, "cookie"):
+        if auth and hasattr(self, "session"):
+            outgoing.setdefault("X-EMP-Session", self.session)
+        elif auth and hasattr(self, "cookie"):
             outgoing["Cookie"] = self.cookie
         if body is not None and not isinstance(body, bytes):
             body = json.dumps(body).encode()

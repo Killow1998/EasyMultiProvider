@@ -1429,7 +1429,9 @@ class RustEndToEnd(unittest.TestCase):
                         f"GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{backend.port}\r\n"
                         "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
                         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-                        f"Cookie: {backend.cookie}\r\n\r\n").encode())
+                        + (f"X-EMP-Session: {backend.session}\r\n" if hasattr(backend, "session")
+                           else f"Cookie: {backend.cookie}\r\n")
+                        + "\r\n").encode())
                     self.assertIn(b" 101 ", reader.readline())
                     while reader.readline() not in (b"\r\n", b"\n", b""):
                         pass
