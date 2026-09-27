@@ -1,4 +1,185 @@
-# EMP Handoff — 2026-09-25
+# EMP Handoff
+
+## Active security repair handoff — 2026-09-27 UTC
+
+This section is the current resume point. The dated records below it are
+historical. Xian authorized Point to continue the interrupted review with
+Luna 6 **max** workers and to preserve enough progress for Opus to take over.
+Do not restart the Rust rewrite or discard the existing work.
+
+### Coordinator and recovery
+
+- Integration checkout: `EasyMultiProvider-rust`, branch `security-fixes`,
+  starting at `2c35c8f`. Point owns integration, review, and this active section.
+- Six existing `emp-sec-*` worktrees contain four completed local commits,
+  48 modified tracked files, and two untracked files. None was integrated at
+  handoff start. Preserve all of them, including partial implementation.
+- Baseline patches, HEADs, status, and untracked files were copied to ignored
+  `artifacts/security-recovery/20260927T052409Z/` in the integration checkout.
+  These are local recovery data; never publish credentials or private logs.
+- Each worker updates **its own worktree's copy of this existing handoff file**
+  before substantial work and after each tested change. Record exact commits,
+  commands/results, remaining work, and the next action. Point consolidates
+  the results here; do not concurrently edit the coordinator's copy.
+- New commits use the current GitHub author (`h2q`) and the exact trailer
+  `Co-authored-by: Point <point@local.invalid>`. Do not rewrite prior commits,
+  force-push, release, or start GitHub workflows from a worker.
+
+### Runtime, models, and quota policy
+
+- Python EMP is the control service on port **4200**. It must remain running.
+  Rust on **4201** is a separate test service. Point may stop/restart Rust as
+  needed; workers use their own temporary test listeners and never touch 4200.
+- Use the app-server task tools, with `gpt-6-luna` and effective effort `max`.
+  Do not substitute low/high, another model, or a `codex exec` worker.
+- When the current native account has about **10% or less remaining** in any
+  applicable finite quota window, change every Luna task to
+  `egg/gpt-6-luna`, still at `max`. Preserve task history and worktree state.
+  Keep this account choice for subsequent tasks; do not spend reset credits.
+- Coordinator checks quota before launch and periodically during supervision.
+  An unavailable/stale quota is not evidence of headroom. If the egg route is
+  unavailable, preserve progress and report the specific missing route rather
+  than silently using a different model or account.
+- Initial Python management API snapshot: native primary used 7%, secondary
+  used 12% (remaining 93% / 88%). Xian subsequently reimported egg; both its
+  credential-set flag and `egg/gpt-6-luna` catalog route are now present.
+  No quota reset was performed.
+
+### Work ownership and sequence
+
+At most three implementation workers run at once. Use the existing worktrees;
+do not create additional worktrees or new per-worktree Cargo caches.
+
+| Task | Worktree / branch | Starting state | Owner status |
+| --- | --- | --- | --- |
+| HTTP | `emp-sec-http` / `sec/http` | 29 changed files; header-auth backend, UI still on cookie/EventSource; not integrated | Running, Luna/max verified |
+| ROLLOUT | `emp-sec-rollout` / `sec/rollout` | `2abc9fe` metadata validation; other reader fixes incomplete | Running, Luna/max verified |
+| TRANSPORT | `emp-sec-transport` / `sec/transport` | `24d87f1`, `bda4092`; unfinished context classifier and undefined `may_carry_context_error` call | Running, Luna/max verified |
+| CONTEXT | `emp-sec-history-ctx` / `sec/history-ctx` | Compaction/calibration drafts plus `tests/tmp_baseline.rs` | After an initial worker finishes |
+| STATE | `emp-sec-state` / `sec/state` | Migration v2, origin-bound secrets, bounded filesystem drafts; quota persistence unfinished | After an initial worker finishes |
+| CI | `emp-sec-ci` / `sec/ci` | `d7ebcc0`; runtime inventory trust draft | After an initial worker finishes |
+
+**HTTP assignment:** Own `emp-app` HTTP/auth/web, request lifecycle, desktop
+launcher, the migration/quota management adapters, relevant app tests, and
+`easy_multi_provider/web/index.html`. Complete bootstrap/header authentication
+end-to-end, including all browser requests, downloads and quota events. Remove
+dynamic-data interpolation into executable inline handlers. Export confirmation
+must be session/operation-bound, short-lived and single-use; it is not a claim
+of independent reauthentication. Complete safe path parsing, common response
+headers, Host checks and total request read deadlines. Keep Codex caller auth
+working. Coordinate the export v2 minimum (12 UTF-8 bytes) with STATE while
+retaining legacy v1 imports (8 bytes). Do not redesign the UI or its layout.
+
+**ROLLOUT assignment:** Own `emp-codex/src/history.rs`, `history/**`, its
+contract tests and only necessary `emp-codex/Cargo.toml` dependency changes.
+Review `2abc9fe`, then converge reverse/full parity using the existing walker,
+shared control-state scan and replay engine. A checkpoint cannot discard
+earlier turn-success, model, role/dedup, identity/mode or ordinal information.
+Verify partial-window and non-zero frozen-prefix cases on identical inputs.
+Validate SQLite/session history modes. Restrict ancestor lookup to legitimate
+session roots without recursive symlink traversal or arbitrary first matches.
+Add bounded `.jsonl.zst` full replay using Codex's uncompressed byte-offset
+semantics. Reject invalid lineage bounds and distinguish depth from cycles.
+Keep modules cohesive; do not create another giant history implementation.
+
+**TRANSPORT assignment:** Own `emp-transport`, `emp-router`, `emp-protocol`,
+`emp-core` and their relevant tests. Review the two existing commits; finish
+the context-error draft and its incomplete call site. Bound error observation
+cost without losing normal context errors or changing terminal/retry truth.
+Check streaming order, compression handling, cancellation and pre-output-only
+retry. Prevent unknown/disabled account prefixes silently falling into a
+forward route; retain explicitly configured forwarding. Avoid forwarding
+credentials across unapproved origins or redirect downgrades. Finish Gemini
+metadata redirect handling and Windows registry tool path handling. Coordinate
+origin/credential configuration changes with STATE rather than both editing it.
+
+**CONTEXT assignment:** Own `emp-history/**` and app services
+`{context,history,compaction}.rs`. Review and finish incremental compaction
+estimation against the existing oracle, preserving retained items, tool pairs,
+summary requests and error results. Calibration must distinguish input/output
+budgets and actual deployment identity; repeated uncorroborated errors alone
+must not shrink every session's window. Preserve hot reload semantics. Convert
+useful existing baseline evidence into readable outcome tests, keeping recovery
+copies of scratch until its useful content is retained.
+
+**STATE assignment:** Own `emp-state/**`, except any explicitly coordinated
+provider routing edit, plus `emp-codex/src/quota{.rs,/process.rs}`, app services
+`{accounts,quota}.rs`, `emp-integration/src/lib.rs` and relevant tests. Review
+the existing migration v2, fixed KDF cost, origin comparison and bounded-file
+drafts. Preserve v1 import compatibility. Finish durable recovery when token
+rotation succeeds but saving fails, private temporary storage and atomic config
+writes. Avoid broad path checks that reject normal macOS/Windows installations.
+Clear/rebind secrets only on a meaningful origin change, not `/v1` cleanup.
+Record any intentional security contract changes instead of weakening the
+archived Python oracle to hide a difference.
+
+**New user-reported STATE priority — quota history retention:** Xian removed
+egg after OAuth expired, then reimported it and found the trend empty. Both
+Python `AppState._delete_account` and Rust `delete_account_state` call the
+history store's delete operation. The live store currently has only two new
+egg samples; a separate older local store has 406 egg samples. Point saved
+read-only SQLite snapshots under the ignored recovery directory before any
+recovery. Do not automatically clear historical usage when removing credentials.
+Reimporting the same upstream account should reconnect its history; reusing a
+display name for a different account must not attach the prior account's data.
+Use stable account ownership, keep history within its existing retention policy,
+and preserve explicit deletion semantics as a separate operation if needed.
+This fix includes the Python source in `EasyMultiProvider` and the Rust source,
+with focused removal/reimport and identity-separation tests. Do not restart the
+Python service. Point handles any live history restoration after identity review.
+
+**CI assignment:** Own `.github/**`, packaging scripts and
+`emp-codex/src/runtime_inventory/**` with their tests. Review `d7ebcc0`; finish
+runtime candidate validation without breaking supported installations. Verify
+release gates and provenance configuration locally. Do not start workflows,
+publish, change repository environments, or invent signing credentials.
+Provenance generation is separate from updater signature verification; record
+the remaining trust/configuration prerequisites explicitly.
+
+### Verification and integration rules
+
+- Review before editing. Preserve unrelated work. Only use local synthetic
+  fixtures for boundary/failure checks; no third-party security probing.
+- Run targeted tests for changed behavior. Do not run the full workspace per
+  worker or after every small change. Point runs final format, strict Clippy,
+  workspace and consumer E2E once the implementations are integrated.
+- Serialize Cargo work to control storage/RAM:
+  `flock -x /home/fumo/codex_ws/agent_dev/.emp-security-cargo.lock env CARGO_TARGET_DIR=/home/fumo/codex_ws/agent_dev/.emp-rust-target-root CARGO_BUILD_JOBS=2 cargo ...`
+- Python oracle: `EMP_PYTHON_ORACLE_ROOT=/home/fumo/codex_ws/agent_dev/EasyMultiProvider`
+  and `EMP_PYTHON_INTEROP=/home/fumo/codex_ws/agent_dev/EasyMultiProvider/.venv/bin/python`.
+  Use the pinned Python semantics for unchanged workflows; document deliberate
+  authentication/migration changes and use local Codex source for new history
+  forms that the archived Python does not support.
+- Workers commit reviewed source and their own progress record locally. Point
+  reviews and integrates; no worker merges into another worker's branch.
+- Earlier one-time Runtime/Package authorization was already used at
+  `5fa6a64` and both passed. Latest `main@041f000` Runtime passed, while Package
+  failed a Windows CRLF assertion; `685253a` fixes the assertion in this branch.
+  There is no CI evidence for these pending security fixes. Do not trigger a
+  new run without corresponding authorization.
+- Final acceptance includes the working browser, authenticated management,
+  history/compaction/model switching/subagent, cancellation, persistence,
+  package lifecycle and required cross-platform proof. Model canaries use
+  authorized accounts/providers and lowest reasoning for the *test* calls;
+  implementation workers remain Luna **max**.
+
+### Latest coordinator checkpoint
+
+- Baseline saved; HTTP, ROLLOUT and TRANSPORT app-server workers started.
+  Point verified all three in both thread metadata and actual `turn_context`:
+  `model=gpt-6-luna`, `effort=max`. Generic system wording "GPT-6" is not
+  contrary evidence. Local task IDs are in the ignored recovery manifest.
+- Python 4200 and Rust 4201 both observed running. Existing TCP connections
+  were to 4200, with none observed to 4201. Rust's old executable and temporary
+  cwd are marked deleted; recreate an isolated installation when restarting it.
+- Next: supervise targeted work, prioritize STATE/history retention as the next
+  available worker, and verify/restorably merge older quota samples if ownership
+  agrees. If Codex quota runs out, Opus resumes from this
+  section and the corresponding worktree progress without reverting drafts.
+
+---
+
+# Historical EMP Handoff — 2026-09-25
 
 ## Current branch and scope
 
