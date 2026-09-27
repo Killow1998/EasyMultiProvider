@@ -100,9 +100,14 @@ pub(super) fn observe(path: &Path) -> Value {
     })
 }
 fn observe_inner(path: &Path) -> std::io::Result<Value> {
+    // Never execute a candidate that fails the executable trust policy
+    // (relative path, foreign owner, or writable ancestor directory).
+    let Some(path) = super::trust::trusted_binary(path) else {
+        return Ok(public(None, "unknown"));
+    };
     let mut output = tempfile::tempfile()?;
     let mut errors = tempfile::tempfile()?;
-    let mut child = Command::new(path)
+    let mut child = Command::new(&path)
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
@@ -171,5 +176,36 @@ mod tests {
                 "classification for {output}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observe_never_runs_untrusted_candidates() {
+        use crate::runtime_inventory::trust::tests::{private_dir, script};
+        use std::os::unix::fs::PermissionsExt;
+        let dir = private_dir();
+        let marker = dir.path().join("ran");
+        let shared = dir.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let body = format!("touch '{}'\necho codex-cli 0.156.1", marker.display());
+        let candidate = script(&shared, "codex", &body, 0o755);
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(super::observe(&candidate)["status"], "unknown");
+        let relative = std::path::Path::new("codex");
+        assert_eq!(super::observe(relative)["status"], "unknown");
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!marker.exists(), "untrusted candidate was executed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observe_runs_trusted_candidates() {
+        use crate::runtime_inventory::trust::tests::{ancestors_are_private, private_dir, script};
+        let dir = private_dir();
+        if !ancestors_are_private(dir.path()) {
+            return;
+        }
+        let candidate = script(dir.path(), "codex", "echo codex-cli 0.156.1", 0o700);
+        assert_eq!(super::observe(&candidate)["status"], "recommended");
     }
 }
