@@ -1338,6 +1338,15 @@ class ServerAccountTests(unittest.TestCase):
             # Reimporting the id with different credentials attributes its
             # legacy rows with the credentials that recorded them first.
             history.append_snapshot("egg", sample(60), observed_at=int(time.time()) - 60)
+            # A reimport that is rejected leaves the rows alone.
+            import_account("hen", "upstream-hen")
+            with self.assertRaisesRegex(ConfigError, "prefix is already in use"):
+                state.import_account(
+                    {"id": "egg", "name": "egg", "prefix": "hen"},
+                    {"tokens": {"access_token": "egg-token", "account_id": "third-identity"}},
+                )
+            self.assertEqual(points("egg"), 1)
+            self.assertEqual(points(other), 0)
             import_account("egg", "third-identity")
             self.assertEqual(points(other), 1)
             self.assertEqual(points("egg"), 0)

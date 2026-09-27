@@ -149,15 +149,63 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
                     .any(|item| item.get("id").and_then(Value::as_str) == Some(account_id))
             })
     };
-    let replacing = configured(
-        &*state
-            .backend
-            .configuration
-            .config
-            .lock()
-            .map_err(|_| "internal server error".to_owned())?,
-    );
+    // Validates the import against `current` and builds the configuration to
+    // store; pure, so it runs both before settling and under the lock.
+    let prepare = |current: &Value| -> Result<(PathBuf, Value), String> {
+        let auth_path = emp_state::account_auth_path(
+            current,
+            account_id,
+            &state.backend.configuration.config_path,
+        )
+        .map_err(|error| error.to_string())?;
+        let raw = serde_json::json!({
+            "id":metadata.get("id").cloned().unwrap_or(Value::Null),
+            "name":metadata.get("name").cloned().unwrap_or_else(|| Value::String(account_id.to_owned())),
+            "prefix":metadata.get("prefix").cloned().unwrap_or(Value::Null),
+            "auth_file":auth_path.to_string_lossy(),
+            "credential_status":"unknown",
+            "enabled":metadata.get("enabled").cloned().unwrap_or(Value::Bool(true)),
+            "hidden_models":metadata.get("hidden_models").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
+            "model_context_windows":metadata.get("model_context_windows").cloned().unwrap_or_else(|| Value::Object(serde_json::Map::new())),
+        });
+        let account = normalize_account(&raw).map_err(|error| error.to_string())?;
+        let prefix = account
+            .get("prefix")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let existing = current
+            .get("accounts")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if existing.iter().any(|item| {
+            item.get("id").and_then(Value::as_str) != Some(account_id)
+                && item.get("prefix").and_then(Value::as_str) == Some(prefix)
+        }) {
+            return Err(format!("account prefix is already in use: {prefix}"));
+        }
+        let mut accounts = existing
+            .into_iter()
+            .filter(|item| item.get("id").and_then(Value::as_str) != Some(account_id))
+            .collect::<Vec<_>>();
+        accounts.push(account);
+        let mut updated = current.clone();
+        updated["accounts"] = Value::Array(accounts);
+        let updated = normalize_configuration(Some(&updated)).map_err(|error| error.to_string())?;
+        Ok((auth_path, updated))
+    };
+    let snapshot = state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .map_err(|_| "internal server error".to_owned())?
+        .clone();
+    let replacing = configured(&snapshot);
     if replacing {
+        // Settling changes history, so a request that would be rejected
+        // must fail before it.
+        prepare(&snapshot)?;
         // The id is about to name new credentials: its legacy rows must be
         // attributed with the credentials that recorded them, or dropped.
         // Settling reads the configuration, so it runs before the
@@ -174,52 +222,12 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
         .config
         .lock()
         .map_err(|_| "internal server error".to_owned())?;
-    let current = config.clone();
     // Only a migration import can add this id meanwhile (it does not hold
     // this account's refresh lock when the id was not configured yet).
-    if configured(&current) != replacing {
+    if configured(&config) != replacing {
         return Err("accounts changed during import; try again".to_owned());
     }
-    let auth_path = emp_state::account_auth_path(
-        &current,
-        account_id,
-        &state.backend.configuration.config_path,
-    )
-    .map_err(|error| error.to_string())?;
-    let raw = serde_json::json!({
-        "id":metadata.get("id").cloned().unwrap_or(Value::Null),
-        "name":metadata.get("name").cloned().unwrap_or_else(|| Value::String(account_id.to_owned())),
-        "prefix":metadata.get("prefix").cloned().unwrap_or(Value::Null),
-        "auth_file":auth_path.to_string_lossy(),
-        "credential_status":"unknown",
-        "enabled":metadata.get("enabled").cloned().unwrap_or(Value::Bool(true)),
-        "hidden_models":metadata.get("hidden_models").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
-        "model_context_windows":metadata.get("model_context_windows").cloned().unwrap_or_else(|| Value::Object(serde_json::Map::new())),
-    });
-    let account = normalize_account(&raw).map_err(|error| error.to_string())?;
-    let prefix = account
-        .get("prefix")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let existing = current
-        .get("accounts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    if existing.iter().any(|item| {
-        item.get("id").and_then(Value::as_str) != Some(account_id)
-            && item.get("prefix").and_then(Value::as_str) == Some(prefix)
-    }) {
-        return Err(format!("account prefix is already in use: {prefix}"));
-    }
-    let mut accounts = existing
-        .into_iter()
-        .filter(|item| item.get("id").and_then(Value::as_str) != Some(account_id))
-        .collect::<Vec<_>>();
-    accounts.push(account.clone());
-    let mut updated = current.clone();
-    updated["accounts"] = Value::Array(accounts);
-    let mut updated = normalize_configuration(Some(&updated)).map_err(|error| error.to_string())?;
+    let (auth_path, mut updated) = prepare(&config)?;
     let config_toml = auth_path
         .parent()
         .unwrap_or_else(|| Path::new("."))

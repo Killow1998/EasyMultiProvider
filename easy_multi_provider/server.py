@@ -2623,27 +2623,41 @@ class AppState:
             }
 
     def import_account(self, metadata: Dict[str, Any], auth_json: Dict[str, Any]) -> Dict[str, Any]:
+        def replaces():
+            return any(
+                item.get("id") == metadata.get("id")
+                for item in self.config.get("accounts", [])
+            )
+
+        def validate():
+            account = prepare_account_import(
+                self.config, metadata, self.path
+            )
+            validate_auth_json(auth_json)
+            for current in self.config.get("accounts", []):
+                if current.get("id") != account["id"] and current.get("prefix") == account["prefix"]:
+                    raise ConfigError("account prefix is already in use: %s" % account["prefix"])
+            return account
+
         with account_refresh_lock(metadata.get("id")):
             with self.lock:
-                replaces = any(
-                    item.get("id") == metadata.get("id")
-                    for item in self.config.get("accounts", [])
-                )
-            if replaces:
+                replacing = replaces()
+                if replacing:
+                    # Settling changes history, so a request that would be
+                    # rejected must fail before it.
+                    validate()
+            if replacing:
                 # The id is about to name new credentials: attribute its
                 # legacy rows with the credentials that recorded them, or drop.
                 self._settle_legacy_quota_history(metadata.get("id"))
             with self.lock:
-                account = prepare_account_import(
-                    self.config, metadata, self.path
-                )
-                validate_auth_json(auth_json)
+                # A migration import may add the id meanwhile; its rows
+                # were not settled.
+                if replaces() != replacing:
+                    raise ConfigError("accounts changed during import; try again")
+                account = validate()
                 account_id = account["id"]
-                prefix = account["prefix"]
                 current_accounts = self.config.get("accounts", [])
-                for current in current_accounts:
-                    if current.get("id") != account_id and current.get("prefix") == prefix:
-                        raise ConfigError("account prefix is already in use: %s" % prefix)
                 accounts = [item for item in current_accounts if item.get("id") != account["id"]]
                 accounts.append(account)
                 updated = dict(self.config)

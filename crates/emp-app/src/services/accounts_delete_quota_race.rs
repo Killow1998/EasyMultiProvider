@@ -406,6 +406,18 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     history
         .append_snapshot("egg", &sample(60), 2_000_800)
         .unwrap();
+    // A reimport that is rejected leaves the rows alone.
+    import("hen", "upstream-hen");
+    assert!(
+        import_account_state(
+            &server.state,
+            &json!({"id": "egg", "name": "egg", "prefix": "hen",
+                "auth_json": {"tokens": {"access_token": "egg-token", "account_id": "third-identity"}}}),
+        )
+        .is_err_and(|error| error.contains("prefix is already in use"))
+    );
+    assert_eq!(points("egg"), 1);
+    assert_eq!(points(&other), 0);
     import("egg", "third-identity");
     assert_eq!(points(&other), 1);
     assert_eq!(points("egg"), 0);
