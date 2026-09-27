@@ -282,7 +282,15 @@ pub(crate) fn adopt_legacy_quota_history(state: &ServerState, account_id: &str) 
     if account_id == "@native" {
         return false;
     }
-    quota_owner_key(state, account_id).is_ok_and(|owner| {
+    adopt_owned_legacy_quota_history(state, account_id, quota_owner_key(state, account_id))
+}
+
+fn adopt_owned_legacy_quota_history(
+    state: &ServerState,
+    account_id: &str,
+    owner: Result<String, QuotaError>,
+) -> bool {
+    owner.is_ok_and(|owner| {
         state
             .backend
             .accounts
@@ -295,12 +303,22 @@ pub(crate) fn adopt_legacy_quota_history(state: &ServerState, account_id: &str) 
 /// Settle an account id's legacy rows before the id is freed or reassigned
 /// to other credentials: adopt them into the current identity, or delete
 /// them as pre-identity EMP did, so a later account reusing the id cannot
-/// inherit them. Callers must not free or reassign the id on error.
+/// inherit them. Callers must not free or reassign the id on error, and run
+/// it under the configuration lock (`config` is the locked configuration)
+/// together with their final validation and commit, so a request rejected
+/// later cannot have settled the rows.
 pub(crate) fn settle_legacy_quota_history(
     state: &ServerState,
+    config: &Value,
     account_id: &str,
 ) -> Result<(), QuotaHistoryError> {
-    if account_id == "@native" || adopt_legacy_quota_history(state, account_id) {
+    if account_id == "@native"
+        || adopt_owned_legacy_quota_history(
+            state,
+            account_id,
+            crate::services::accounts::quota_owner_key_in(state, config, account_id),
+        )
+    {
         return Ok(());
     }
     state

@@ -150,7 +150,7 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
             })
     };
     // Validates the import against `current` and builds the configuration to
-    // store; pure, so it runs both before settling and under the lock.
+    // store.
     let prepare = |current: &Value| -> Result<(PathBuf, Value), String> {
         let auth_path = emp_state::account_auth_path(
             current,
@@ -194,40 +194,24 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
         let updated = normalize_configuration(Some(&updated)).map_err(|error| error.to_string())?;
         Ok((auth_path, updated))
     };
-    let snapshot = state
-        .backend
-        .configuration
-        .config
-        .lock()
-        .map_err(|_| "internal server error".to_owned())?
-        .clone();
-    let replacing = configured(&snapshot);
-    if replacing {
-        // Settling changes history, so a request that would be rejected
-        // must fail before it.
-        prepare(&snapshot)?;
-        // The id is about to name new credentials: its legacy rows must be
-        // attributed with the credentials that recorded them, or dropped.
-        // Settling reads the configuration, so it runs before the
-        // configuration lock below is taken.
-        crate::services::quota::settle_legacy_quota_history(state, account_id)
-            .map_err(|_| "quota history is unavailable; the account was not replaced".to_owned())?;
-    }
     // Held from reading the configuration to storing the result, like every
     // other configuration writer, so a concurrent writer's change is never
-    // overwritten with this older copy.
+    // overwritten with this older copy. Validation, settling legacy history
+    // and the commit all happen under it, so a request rejected by
+    // validation never settles history.
     let mut config = state
         .backend
         .configuration
         .config
         .lock()
         .map_err(|_| "internal server error".to_owned())?;
-    // Only a migration import can add this id meanwhile (it does not hold
-    // this account's refresh lock when the id was not configured yet).
-    if configured(&config) != replacing {
-        return Err("accounts changed during import; try again".to_owned());
-    }
     let (auth_path, mut updated) = prepare(&config)?;
+    if configured(&config) {
+        // The id is about to name new credentials: its legacy rows must be
+        // attributed with the credentials that recorded them, or dropped.
+        crate::services::quota::settle_legacy_quota_history(state, &config, account_id)
+            .map_err(|_| "quota history is unavailable; the account was not replaced".to_owned())?;
+    }
     let config_toml = auth_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
@@ -290,10 +274,6 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
     let _refresh_guard = refresh_lock
         .lock()
         .map_err(|_| "internal server error".to_owned())?;
-    // Legacy rows keyed by this id must reach the identity they belong to,
-    // or be dropped, before the id becomes free for a different account.
-    crate::services::quota::settle_legacy_quota_history(state, account_id)
-        .map_err(|_| "quota history is unavailable; the account was not deleted".to_owned())?;
     // Held until the result is stored; see `import_account_state`.
     let mut config = state
         .backend
@@ -325,6 +305,10 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
     if configured != expected {
         return Err("refusing to delete credentials outside the account store".to_owned());
     }
+    // Legacy rows keyed by this id must reach the identity they belong to,
+    // or be dropped, before the id becomes free for a different account.
+    crate::services::quota::settle_legacy_quota_history(state, &config, account_id)
+        .map_err(|_| "quota history is unavailable; the account was not deleted".to_owned())?;
     let mut updated = current.clone();
     updated["accounts"] = Value::Array(
         accounts
@@ -578,16 +562,29 @@ pub(crate) fn duplicate_accounts(
 }
 
 pub(crate) fn quota_owner_key(state: &ServerState, account_id: &str) -> Result<String, QuotaError> {
+    if account_id == "@native" {
+        return quota_owner_key_in(state, &Value::Null, account_id);
+    }
+    let config = state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?
+        .clone();
+    quota_owner_key_in(state, &config, account_id)
+}
+
+/// [`quota_owner_key`] against `config`, for callers already holding the
+/// configuration lock.
+pub(crate) fn quota_owner_key_in(
+    state: &ServerState,
+    config: &Value,
+    account_id: &str,
+) -> Result<String, QuotaError> {
     let auth = if account_id == "@native" {
         native_auth_document(&state.backend.accounts.native_auth_path)
     } else {
-        let config = state
-            .backend
-            .configuration
-            .config
-            .lock()
-            .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?
-            .clone();
         let account = config
             .get("accounts")
             .and_then(Value::as_array)

@@ -418,6 +418,23 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     );
     assert_eq!(points("egg"), 1);
     assert_eq!(points(&other), 0);
+    // Also when only full configuration validation rejects it: the prefix
+    // names an existing provider.
+    {
+        let mut config = server.state.backend.configuration.config.lock().unwrap();
+        config["providers"] = json!([{"id": "deepseek", "base_url": "https://example.test/v1"}]);
+        *config = emp_state::normalize_configuration(Some(&config)).unwrap();
+    }
+    assert!(
+        import_account_state(
+            &server.state,
+            &json!({"id": "egg", "name": "egg", "prefix": "deepseek",
+                "auth_json": {"tokens": {"access_token": "egg-token", "account_id": "third-identity"}}}),
+        )
+        .is_err_and(|error| error.contains("conflict"))
+    );
+    assert_eq!(points("egg"), 1);
+    assert_eq!(points(&other), 0);
     import("egg", "third-identity");
     assert_eq!(points(&other), 1);
     assert_eq!(points("egg"), 0);

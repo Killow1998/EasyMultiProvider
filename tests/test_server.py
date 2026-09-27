@@ -1347,6 +1347,19 @@ class ServerAccountTests(unittest.TestCase):
                 )
             self.assertEqual(points("egg"), 1)
             self.assertEqual(points(other), 0)
+            # Also when only full configuration validation rejects it: the
+            # prefix names an existing provider.
+            with state.lock:
+                state.config = normalize(
+                    dict(state.config, providers=[{"id": "deepseek", "base_url": "https://example.test/v1"}])
+                )
+            with self.assertRaisesRegex(ConfigError, "conflict with provider ids"):
+                state.import_account(
+                    {"id": "egg", "name": "egg", "prefix": "deepseek"},
+                    {"tokens": {"access_token": "egg-token", "account_id": "third-identity"}},
+                )
+            self.assertEqual(points("egg"), 1)
+            self.assertEqual(points(other), 0)
             import_account("egg", "third-identity")
             self.assertEqual(points(other), 1)
             self.assertEqual(points("egg"), 0)
