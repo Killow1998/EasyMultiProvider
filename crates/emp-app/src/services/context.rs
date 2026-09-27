@@ -69,6 +69,7 @@ pub(crate) fn record_payload(
         &mut observed,
         route.protocol.as_config_str(),
         estimate,
+        assessment.output_reserve,
         success,
         &emp_state::observed_at_now(),
     ) {
@@ -123,5 +124,28 @@ pub(crate) fn record_event(
 ) {
     if let Some(success) = outcome(event) {
         record(state, route, body, success);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_explicit_context_errors_produce_failure_observations() {
+        assert_eq!(
+            outcome(&serde_json::json!({
+                "type":"response.failed",
+                "response":{"error":{"code":"upstream_capacity","message":"retry later"}}
+            })),
+            None
+        );
+        assert_eq!(
+            outcome(&serde_json::json!({
+                "type":"error",
+                "error":{"code":"context_length_exceeded","message":"input too long"}
+            })),
+            Some(false)
+        );
     }
 }
