@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use super::{canonical_root, post, session_cookie_header};
+use super::{canonical_root, post, session_header};
 use crate::lifecycle::ServerHandle;
 use serde_json::{Value, json};
 use std::net::{IpAddr, Ipv4Addr};
@@ -85,7 +85,7 @@ for line in sys.stdin:
             &json!({"tokens":{"access_token":"original","refresh_token":"original-refresh","account_id":"upstream"}}),
         )
         .expect("write original auth");
-    let cookie = session_cookie_header(&server);
+    let session = session_header(&server);
     let fail_saves = |failing: bool| {
         *crate::services::quota::FAIL_ROTATION_SAVES_TO
             .lock()
@@ -98,7 +98,7 @@ for line in sys.stdin:
         &server,
         "/api/accounts/rotating/quota",
         b"{}",
-        &[&cookie],
+        &[&session],
     ));
     assert_ne!(status, "HTTP/1.1 200 OK", "{body}");
     assert_eq!(
@@ -123,7 +123,7 @@ for line in sys.stdin:
         &server,
         "/api/accounts/rotating/quota",
         b"{}",
-        &[&cookie],
+        &[&session],
     ));
     assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
     assert!(
@@ -143,7 +143,7 @@ for line in sys.stdin:
         &server,
         "/api/accounts/rotating/quota",
         b"{}",
-        &[&cookie],
+        &[&session],
     ));
     assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
     let stored = vault

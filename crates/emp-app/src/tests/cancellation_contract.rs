@@ -32,12 +32,7 @@ fn downstream_disconnect_cancels_external_open_before_upstream_headers() {
         "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
     }))
     .expect("request JSON");
-    let downstream = open_post_stream(
-        &server,
-        "/v1/responses",
-        &body,
-        &[&session_cookie_header(&server)],
-    );
+    let downstream = open_post_stream(&server, "/v1/responses", &body, &[&session_header(&server)]);
     request_received
         .recv_timeout(Duration::from_secs(2))
         .expect("upstream request reached pending open");

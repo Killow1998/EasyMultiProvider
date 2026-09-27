@@ -5,9 +5,11 @@ use crate::http::auth::same_origin;
 use crate::http::request::Request;
 use crate::http::request::percent_decode;
 use crate::http::request::read_json_body;
+use crate::http::response::SECURITY_HEADERS;
 use crate::http::response::body_error_response;
 use crate::http::response::cross_origin_response;
 use crate::http::response::json_error_response;
+use crate::http::response::not_found_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::http::response::unauthorized_response;
@@ -58,8 +60,8 @@ pub(crate) fn serve_quota_events(
         let _ = stream.flush();
         return;
     }
-    let cookie = request.session_cookie();
-    if !state.sessions.contains(cookie.as_deref(), now) {
+    let session = request.session_token();
+    if !state.sessions.contains(session.as_deref(), now) {
         let _ = stream.write_all(&unauthorized_response());
         let _ = stream.flush();
         return;
@@ -76,14 +78,13 @@ pub(crate) fn serve_quota_events(
         let _ = stream.flush();
         return;
     };
+    let mut head = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\n".to_vec();
+    head.extend_from_slice(SECURITY_HEADERS);
+    head.extend_from_slice(b"Connection: close\r\n\r\n");
     if stream
         .set_write_timeout(Some(Duration::from_secs(5)))
         .is_err()
-        || stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\nConnection: close\r\n\r\n",
-            )
-            .is_err()
+        || stream.write_all(&head).is_err()
         || stream.flush().is_err()
     {
         return;
@@ -108,7 +109,7 @@ pub(crate) fn serve_quota_events(
         let current = *revision;
         drop(revision);
         if state.shutdown.load(Ordering::Acquire)
-            || !state.sessions.contains(cookie.as_deref(), system_now())
+            || !state.sessions.contains(session.as_deref(), system_now())
         {
             break;
         }
@@ -134,19 +135,26 @@ pub(crate) fn management_quota_request(
     if !same_origin(request, state.port) {
         return cross_origin_response("management session is required");
     }
-    let supplied_cookie = request.session_cookie();
-    if !state.sessions.contains(supplied_cookie.as_deref(), now) {
+    let supplied_session = request.session_token();
+    if !state.sessions.contains(supplied_session.as_deref(), now) {
         return unauthorized_response();
     }
+    let path = request.raw_path();
+    let reset = path.ends_with("/quota-reset");
+    let suffix = if reset { "/quota-reset" } else { "/quota" };
+    let Some(raw_account) = path
+        .strip_prefix("/api/accounts/")
+        .and_then(|rest| rest.strip_suffix(suffix))
+        .map(|raw| raw.trim_end_matches('/'))
+        .filter(|raw| !raw.is_empty())
+    else {
+        return not_found_response();
+    };
     let body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
-    let path = request.raw_path();
-    let reset = path.ends_with("/quota-reset");
-    let suffix = if reset { "/quota-reset" } else { "/quota" };
-    let raw_account = &path["/api/accounts/".len()..path.len() - suffix.len()];
-    let account = percent_decode(raw_account.trim_end_matches('/'), false);
+    let account = percent_decode(raw_account, false);
     let known_account = account == "@native"
         || state
             .backend

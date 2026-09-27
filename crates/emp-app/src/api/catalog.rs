@@ -53,8 +53,8 @@ pub(crate) fn management_request(
     if !same_origin(request, state.port) {
         return cross_origin_response("management session is required");
     }
-    let cookie = request.session_cookie();
-    if !state.sessions.contains(cookie.as_deref(), now) {
+    let session = request.session_token();
+    if !state.sessions.contains(session.as_deref(), now) {
         return unauthorized_response();
     }
     let body = match read_json_body(stream, request, body_prefix, state) {

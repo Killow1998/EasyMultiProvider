@@ -1,7 +1,7 @@
 //! HTTP request parsing, decoding and admission.
 
 use crate::app::ServerState;
-use crate::http::auth::parse_session_cookie;
+use crate::http::auth::session_header_value;
 use emp_transport::ContentDecodeError;
 use emp_transport::MEMORY_RESERVATION_FACTOR;
 use emp_transport::MIN_MEMORY_HEADROOM_BYTES;
@@ -15,8 +15,18 @@ use emp_transport::decode_content;
 use serde_json::Value;
 use std::io::Read;
 use std::net::TcpStream;
+use std::time::Duration;
+use std::time::Instant;
 
 const MAX_HEADER_BYTES: usize = 8 * 1024;
+
+/// Idle limit for any single read while a request is being received.
+pub(crate) const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
+/// Overall limit for receiving the request line and headers.
+pub(crate) const REQUEST_HEAD_DEADLINE: Duration = Duration::from_secs(30);
+/// Overall limit for receiving a request body, extended for large uploads.
+const REQUEST_BODY_DEADLINE: Duration = Duration::from_secs(120);
+const REQUEST_BODY_GRACE_BYTES_PER_SECOND: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RequestMethod {
@@ -44,14 +54,25 @@ impl<'a> Request<'a> {
         })
     }
 
+    pub(crate) fn header_count(&self, name: &str) -> usize {
+        self.headers
+            .lines()
+            .skip(1)
+            .filter_map(|line| line.split_once(':'))
+            .filter(|(header_name, _)| header_name.trim().eq_ignore_ascii_case(name))
+            .count()
+    }
+
     pub(crate) fn raw_path(&self) -> &'a str {
         self.target
             .split_once('?')
             .map_or(self.target, |(path, _)| path)
     }
 
-    pub(crate) fn session_cookie(&self) -> Option<String> {
-        parse_session_cookie(self.header("Cookie")?)
+    /// The management session presented in the `X-EMP-Session` header.
+    /// Cookies are never consulted: browsers share them across local ports.
+    pub(crate) fn session_token(&self) -> Option<String> {
+        session_header_value(*self)
     }
 }
 
@@ -60,15 +81,73 @@ pub(crate) struct RequestHead {
     pub(crate) body_prefix: Vec<u8>,
 }
 
+/// Deadline for a request body of `length` bytes, starting now.
+pub(crate) fn request_body_deadline(length: usize) -> Instant {
+    let grace = (length / REQUEST_BODY_GRACE_BYTES_PER_SECOND) as u64;
+    Instant::now() + REQUEST_BODY_DEADLINE + Duration::from_secs(grace)
+}
+
+/// Read once, bounded by both the per-read idle timeout and `deadline`, so a
+/// peer trickling bytes cannot hold the request thread indefinitely.
+pub(crate) fn read_before(
+    stream: &mut TcpStream,
+    buffer: &mut [u8],
+    deadline: Instant,
+) -> std::io::Result<usize> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        stream.set_read_timeout(Some(remaining.min(REQUEST_READ_TIMEOUT)))?;
+        match stream.read(buffer) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err(std::io::ErrorKind::TimedOut.into());
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Restore the idle timeout used after a request has been fully received.
+pub(crate) fn restore_read_timeout(stream: &TcpStream) {
+    let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
+}
+
+pub(crate) fn read_exact_before(
+    stream: &mut TcpStream,
+    body: &mut Vec<u8>,
+    length: usize,
+    deadline: Instant,
+) -> std::io::Result<()> {
+    while body.len() < length {
+        let remaining = length - body.len();
+        let mut chunk = [0_u8; 64 * 1024];
+        let read_length = remaining.min(chunk.len());
+        let count = read_before(stream, &mut chunk[..read_length], deadline)?;
+        if count == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        body.extend_from_slice(&chunk[..count]);
+    }
+    Ok(())
+}
+
 pub(crate) fn read_request_head(stream: &mut TcpStream) -> Option<RequestHead> {
+    let head = read_request_head_before(stream, Instant::now() + REQUEST_HEAD_DEADLINE);
+    restore_read_timeout(stream);
+    head
+}
+
+pub(crate) fn read_request_head_before(
+    stream: &mut TcpStream,
+    deadline: Instant,
+) -> Option<RequestHead> {
     let mut buffer = [0_u8; 1024];
     let mut request = Vec::new();
     loop {
-        let count = match stream.read(&mut buffer) {
-            Ok(count) => count,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => return None,
-        };
+        let count = read_before(stream, &mut buffer, deadline).ok()?;
         if count == 0 {
             break;
         }
@@ -159,6 +238,7 @@ pub(crate) fn query_values(target: &str, name: &str) -> Vec<String> {
 
 pub(crate) enum BodyError {
     Invalid(String),
+    Timeout,
     Capacity(RequestCapacityError),
     Decode(ContentDecodeError),
 }
@@ -223,6 +303,11 @@ pub(crate) fn read_json_body(
             "Content-Type must be application/json".to_owned(),
         ));
     }
+    if request.header_count("Content-Length") > 1 || request.header_count("Transfer-Encoding") > 0 {
+        return Err(BodyError::Invalid(
+            "duplicate Content-Length or unsupported Transfer-Encoding".to_owned(),
+        ));
+    }
     let raw_length = request.header("Content-Length").unwrap_or("0");
     if raw_length.starts_with('-') {
         if raw_length.parse::<i128>().is_ok_and(|value| value < 0) {
@@ -262,18 +347,16 @@ pub(crate) fn read_json_body(
     if reserve_body_capacity(&mut body, length).is_err() {
         return Err(allocation_capacity_error(length));
     }
-    while body.len() < length {
-        let remaining = length - body.len();
-        let mut chunk = [0_u8; 64 * 1024];
-        let read_length = remaining.min(chunk.len());
-        let count = stream
-            .read(&mut chunk[..read_length])
-            .map_err(|_| BodyError::Invalid("request body is incomplete".to_owned()))?;
-        if count == 0 {
-            return Err(BodyError::Invalid("request body is incomplete".to_owned()));
-        }
-        body.extend_from_slice(&chunk[..count]);
+    let deadline = request_body_deadline(length);
+    if let Err(error) = read_exact_before(stream, &mut body, length, deadline) {
+        restore_read_timeout(stream);
+        return if error.kind() == std::io::ErrorKind::TimedOut {
+            Err(BodyError::Timeout)
+        } else {
+            Err(BodyError::Invalid("request body is incomplete".to_owned()))
+        };
     }
+    restore_read_timeout(stream);
     let body = decode_content(
         body,
         request.header("Content-Encoding").unwrap_or_default(),

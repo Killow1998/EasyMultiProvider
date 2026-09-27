@@ -1,6 +1,6 @@
 //! Native upstream HTTP call creation and response validation.
 
-use super::multipart::read_realtime_call;
+use super::multipart::read_realtime_call_from_socket;
 use super::{
     MAX_REALTIME_RESPONSE_BYTES, REALTIME_TIMEOUT, RealtimeError, RealtimeResponse, header,
     valid_call_id,
@@ -45,9 +45,25 @@ pub(crate) fn serve_realtime_call(
         )
         .wire_response();
     }
+    if [
+        "Content-Length",
+        "Transfer-Encoding",
+        "Content-Type",
+        "Content-Encoding",
+    ]
+    .iter()
+    .any(|name| request.header_count(name) > 1)
+    {
+        return RealtimeError::new(
+            400,
+            "realtime_invalid_request",
+            "Realtime request contains duplicate framing or media-type headers",
+        )
+        .closing()
+        .wire_response();
+    }
     let incoming = incoming_headers(request);
-    let mut body_stream = stream;
-    let call = match read_realtime_call(&incoming, body_prefix, &mut body_stream) {
+    let call = match read_realtime_call_from_socket(&incoming, body_prefix, stream) {
         Ok(call) => call,
         Err(error) => return error.wire_response(),
     };

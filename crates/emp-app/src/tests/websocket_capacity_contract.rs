@@ -33,7 +33,7 @@ fn websocket(server: &ServerHandle) -> TcpStream {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .expect("set websocket timeout");
-    let cookie = session_cookie_header(server);
+    let cookie = session_header(server);
     write!(
         stream,
         "GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{cookie}\r\n\r\n",

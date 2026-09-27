@@ -381,7 +381,7 @@ fn catalog_http_contract_matches_live_python_handler() {
         .as_array_mut()
         .expect("providers")
         .push(json!({"id":"disabled","base_url":"https://example.invalid/v1","enabled":false}));
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let cases = json!([
         {"path":"/v1/models"},
         {"path":"/v1/models?client_version="},
@@ -549,7 +549,7 @@ fn model_metadata_http_response_matches_python_route_and_upstream_request() {
         &server,
         "/api/models/metadata",
         &serde_json::to_vec(&body).expect("metadata request JSON"),
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     let status: u16 = wire
         .split_whitespace()
@@ -637,7 +637,7 @@ fn model_metadata_upstream_errors_match_python_route_over_http() {
             &server,
             "/api/models/metadata",
             &serde_json::to_vec(&body).expect("metadata request JSON"),
-            &[&session_cookie_header(&server)],
+            &[&session_header(&server)],
         );
         let status: u16 = wire
             .split_whitespace()
@@ -686,7 +686,7 @@ fn model_metadata_timeout_matches_python_status_and_message() {
         &server,
         "/api/models/metadata",
         &serde_json::to_vec(&body).expect("metadata request JSON"),
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     let status: u16 = wire
         .split_whitespace()
@@ -712,7 +712,7 @@ fn model_metadata_http_authentication_and_body_errors_are_enforced() {
         unauthenticated.starts_with("HTTP/1.1 401"),
         "{unauthenticated}"
     );
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let cross_origin = post(
         &server,
         "/api/models/metadata",
@@ -798,7 +798,7 @@ json.dump(cases, sys.stdout)
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .expect("timeout");
-        write!(stream,"POST /api/catalog/refresh HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nContent-Encoding: {}\r\n{}\r\nConnection: close\r\n\r\n",server.local_addr(),case["length"].as_str().expect("length"),case["encoding"].as_str().expect("encoding"),session_cookie_header(&server)).expect("request headers");
+        write!(stream,"POST /api/catalog/refresh HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nContent-Encoding: {}\r\n{}\r\nConnection: close\r\n\r\n",server.local_addr(),case["length"].as_str().expect("length"),case["encoding"].as_str().expect("encoding"),session_header(&server)).expect("request headers");
         stream.write_all(&data).expect("request body");
         stream.shutdown(Shutdown::Write).expect("finish request");
         let mut wire = String::new();
@@ -827,7 +827,7 @@ fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
     let root = canonical_root(&directory);
     let config_path = root.join("config.json");
     let original = std::fs::read(&config_path).expect("config bytes");
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let preview = post(
         &server,
         "/api/providers/discover",
@@ -938,7 +938,7 @@ fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
 fn discovery_authentication_precedes_body_and_invalid_selection_does_not_write() {
     let upstream = CatalogUpstream::start(200);
     let (_directory, server) = catalog_server(&upstream);
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let unauthenticated = post(&server, "/api/providers/discover", b"not json", &[]);
     assert!(unauthenticated.starts_with("HTTP/1.1 401"));
     let cross_origin = post(
@@ -978,7 +978,7 @@ fn discovery_upstream_failure_keeps_status_and_never_leaks_body() {
         &server,
         "/api/providers/discover",
         br#"{"provider":"demo"}"#,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(result.starts_with("HTTP/1.1 503"), "{result}");
     assert!(!result.contains("private upstream diagnostic"));
@@ -1004,7 +1004,7 @@ fn selection_rolls_back_config_and_keys_if_catalog_destination_is_unsafe() {
         &server,
         "/api/providers/discover",
         br#"{"provider":"demo","selected":["new"]}"#,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     assert!(result.starts_with("HTTP/1.1 500"), "{result}");
     upstream.observed();

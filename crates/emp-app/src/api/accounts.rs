@@ -25,7 +25,7 @@ pub(crate) fn management_account_request(
     }
     if !state
         .sessions
-        .contains(request.session_cookie().as_deref(), now)
+        .contains(request.session_token().as_deref(), now)
     {
         return unauthorized_response();
     }
