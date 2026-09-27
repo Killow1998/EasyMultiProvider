@@ -144,15 +144,26 @@ pub(super) fn replacement_history(
     let items = value
         .as_array()
         .ok_or_else(|| HistoryError::new("invalid_replacement_history"))?;
-    items
+    let items = items
         .iter()
         .map(|item| {
             item.as_object()
                 .cloned()
                 .ok_or_else(|| HistoryError::new("invalid_replacement_history"))
         })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+        .collect::<Result<Vec<_>, _>>()?;
+    // Per-item metadata is positional: anything other than a parallel array
+    // means the replacement cannot be trusted item for item.
+    if let Some(metadata) = payload
+        .get("replacement_history_metadata")
+        .filter(|value| !value.is_null())
+        && metadata
+            .as_array()
+            .is_none_or(|metadata| metadata.len() != items.len())
+    {
+        return Err(HistoryError::new("invalid_replacement_history_metadata"));
+    }
+    Ok(Some(items))
 }
 
 pub(super) fn replacement_entries(

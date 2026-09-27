@@ -710,3 +710,59 @@ fn ordinal_regression_reason_is_python_canonical() {
         .unwrap_err();
     assert_eq!(error.reason(), "ordinal_not_monotonic");
 }
+
+// --- replacement_history_metadata must be a parallel array. ---
+
+fn assert_both_reject(records: &[Value], reason: &str) {
+    let directory = build_home(records);
+    for force_full in [false, true] {
+        let error = CodexHomeHistoryReader::new(directory.path())
+            .read_visible_history_with_strategy(&anchor(), force_full)
+            .unwrap_err();
+        assert_eq!(error.reason(), reason, "force_full={force_full}");
+    }
+}
+
+fn checkpoint_with_metadata(metadata: Value) -> Value {
+    json!({"ordinal":900,"type":"compacted","payload":{"message":"","window_number":1,
+        "replacement_history":[
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"a"}]},
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"b"}]}
+        ],
+        "replacement_history_metadata":metadata}})
+}
+
+#[test]
+fn replacement_history_metadata_must_be_array() {
+    assert_both_reject(
+        &[
+            meta(),
+            checkpoint_with_metadata(json!({"not":"a list"})),
+            started(990, TURN),
+        ],
+        "invalid_replacement_history_metadata",
+    );
+}
+
+#[test]
+fn replacement_history_metadata_length_must_match() {
+    assert_both_reject(
+        &[
+            meta(),
+            checkpoint_with_metadata(json!([{}])),
+            started(990, TURN),
+        ],
+        "invalid_replacement_history_metadata",
+    );
+    // A parallel array (and an explicit null) stays valid on both paths.
+    for metadata in [json!([{}, {}]), Value::Null] {
+        assert_fast_matches_full(
+            &[
+                meta(),
+                checkpoint_with_metadata(metadata),
+                started(990, TURN),
+            ],
+            "valid metadata",
+        );
+    }
+}
