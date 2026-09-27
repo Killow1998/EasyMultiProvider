@@ -165,6 +165,13 @@ the remaining trust/configuration prerequisites explicitly.
 
 ### Latest coordinator checkpoint
 
+- Latest Xian clarification: only the root Point thread should stop active
+  implementation. Luna workers continue. Root is limited to analysis, dispatch
+  and review. Prior pause messages were explicitly revoked. Worker queues are
+  HTTP → STATE (including Python/Rust trend retention), ROLLOUT → CONTEXT,
+  TRANSPORT → CI. Workers check quota and switch to egg Luna/max at <=10%.
+  Root leaves the workers running and reviews their completed results later.
+
 - Baseline saved; HTTP, ROLLOUT and TRANSPORT app-server workers started.
   Point verified all three in both thread metadata and actual `turn_context`:
   `model=gpt-6-luna`, `effort=max`. Generic system wording "GPT-6" is not
