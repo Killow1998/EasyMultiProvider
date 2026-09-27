@@ -112,6 +112,10 @@ was changed, so no STATE edit was needed.
   `aws-lc-sys` attempted to use GNU `cc` for an MSVC target and failed on
   `pthread_rwlock_t`. The Windows path helper unit test passed on Linux, but
   Windows compilation still needs an MSVC-capable environment.
+- Local transport commit: `85ed7b2` (`Finish transport security hardening`),
+  authored by `h2q` with the required Point co-author trailer. The source and
+  validated checkpoint are committed; nothing was pushed and no workflow ran.
+- Next: continue the newly authorized CI assignment in `/home/fumo/codex_ws/agent_dev/emp-sec-ci`.
 
 ### Pause checkpoint — 2026-09-26
 
