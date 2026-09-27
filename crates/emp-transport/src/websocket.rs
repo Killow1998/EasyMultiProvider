@@ -1,7 +1,7 @@
 use crate::MAX_PROXY_REQUEST_BYTES;
 use crate::websocket_pump::{FrameDecodeError, FrameDecoder, FramePoll, WebSocketPoll};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress};
+use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
 use ring::digest::{SHA1_FOR_LEGACY_USE_ONLY, digest};
 use serde_json::Value;
 use std::fmt;
@@ -607,10 +607,13 @@ impl PerMessageDeflate {
                     .try_reserve_exact(wanted - spare)
                     .map_err(|_| DecompressionError::TooLarge)?;
             }
-            let consumed = usize::try_from(self.decompressor.total_in() - before_in)
+            let total_in_before = self.decompressor.total_in();
+            let output_before = output.len();
+            let consumed = usize::try_from(total_in_before - before_in)
                 .unwrap_or(encoded.len())
                 .min(encoded.len());
-            self.decompressor
+            let status = self
+                .decompressor
                 .decompress_vec(&encoded[consumed..], &mut output, FlushDecompress::Sync)
                 .map_err(|_| DecompressionError::Invalid)?;
             if output.len() > max_message_bytes {
@@ -618,8 +621,22 @@ impl PerMessageDeflate {
             }
             let consumed =
                 usize::try_from(self.decompressor.total_in() - before_in).unwrap_or(encoded.len());
+            if status == Status::StreamEnd {
+                // The peer finished the DEFLATE stream with a BFINAL block
+                // (RFC 7692 section 7.2.3.4). Only the synthetic empty-block
+                // tail may remain; any real payload bytes after the end of the
+                // stream are malformed. The next message starts a new stream.
+                self.decompressor.reset(false);
+                if consumed < payload.len() {
+                    return Err(DecompressionError::Invalid);
+                }
+                return Ok(output);
+            }
             if consumed >= encoded.len() {
                 break;
+            }
+            if self.decompressor.total_in() == total_in_before && output.len() == output_before {
+                return Err(DecompressionError::Invalid);
             }
         }
         if self.server_no_context_takeover {
@@ -838,6 +855,49 @@ mod tests {
         let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
         assert_eq!(
             deflate.decompress(&[0xff], 4 * 1024 * 1024),
+            Err(DecompressionError::Invalid)
+        );
+    }
+
+    fn finished_deflate(input: &[u8]) -> Vec<u8> {
+        let mut compressor = Compress::new(Compression::fast(), false);
+        let mut compressed = Vec::with_capacity(input.len() + 64);
+        compressor
+            .compress_vec(input, &mut compressed, FlushCompress::Finish)
+            .unwrap();
+        compressed
+    }
+
+    #[test]
+    fn deflate_stream_end_terminates_instead_of_spinning() {
+        let message = br#"{"type":"response.completed"}"#;
+        let finished = finished_deflate(message);
+
+        let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
+        assert_eq!(
+            deflate.decompress(&finished, 4 * 1024 * 1024).as_deref(),
+            Ok(&message[..])
+        );
+        // The decompressor restarts for the next message after BFINAL.
+        let again = finished_deflate(message);
+        assert_eq!(
+            deflate.decompress(&again, 4 * 1024 * 1024).as_deref(),
+            Ok(&message[..])
+        );
+
+        let mut trailing = finished_deflate(message);
+        trailing.extend_from_slice(&[0, 0, 255, 255]);
+        let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
+        assert_eq!(
+            deflate.decompress(&trailing, 4 * 1024 * 1024),
+            Err(DecompressionError::Invalid)
+        );
+
+        let mut garbage = finished_deflate(message);
+        garbage.extend_from_slice(b"leftover");
+        let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
+        assert_eq!(
+            deflate.decompress(&garbage, 4 * 1024 * 1024),
             Err(DecompressionError::Invalid)
         );
     }
