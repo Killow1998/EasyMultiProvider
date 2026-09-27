@@ -5,6 +5,19 @@
 Latest first. "Committed" is not "accepted"; final acceptance runs after
 integration. Commit trailer per Xian: `Co-authored-by: coz <coz@local.invalid>`.
 
+### INCIDENT — native Codex login overwritten by tests (2026-09-27)
+
+- `tests/test_server.py` writes `state.codex_home / "auth.json"`; with no
+  integration manager `codex_home` resolves to the real `~/.codex`. coz ran
+  those tests at 07:42 UTC (after `d232e38`) and 09:00 UTC (acceptance), so
+  the real `~/.codex/auth.json` became the fixture (`native-secret`, no
+  refresh token). Python 4200 kept running but every native request got
+  upstream 401 from 07:42 UTC. No plaintext backup existed; Xian must run
+  `codex login` again. Imported accounts (vault, e.g. `egg`) were unaffected.
+- Fix: `tests/__init__.py` forces a temporary `CODEX_HOME` for the whole
+  Python suite; full suite rerun 1442 OK with the real auth.json mtime
+  unchanged. Never run the Python suite without this guard.
+
 ### Integration and acceptance — 2026-09-27 (security-fixes @ `60cd0be`)
 
 State: all six branches integrated into `security-fixes`; full acceptance
