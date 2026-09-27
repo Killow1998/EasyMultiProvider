@@ -5,6 +5,80 @@
 Latest first. "Committed" is not "accepted"; final acceptance runs after
 integration. Commit trailer per Xian: `Co-authored-by: coz <coz@local.invalid>`.
 
+### Integration and acceptance — 2026-09-27 (security-fixes @ `60cd0be`)
+
+State: all six branches integrated into `security-fixes`; full acceptance
+passed except one check that needs the Python mirror (below). Nothing pushed,
+no CI triggered, Python 4200 untouched (pid 2413880 still running).
+
+- CONTEXT committed `7326389` on `sec/history-ctx` (scratch
+  `tmp_baseline.rs` converted into the 216-case Python oracle test; original
+  kept in `artifacts/security-recovery/drafts-history-ctx/` with the worker's
+  doc notes).
+- Trailer rewrite (trees verified identical, author h2q unchanged):
+  rollout `2abc9fe`->`40a08be`, `b1c9b22`->`5958bd6`; transport
+  `24d87f1`->`6c98831`, `bda4092`->`1991e25`, `85ed7b2`->`825e6ec`,
+  `001d299`->`39b3af6`; ci `d7ebcc0`->`db8b382`, `2289db2`->`11d3f86`,
+  `092b5f1`->`0ab30e7`, `f7ae1ce`->`e36ba06`. No Anthropic trailer remains.
+- Merges: `6d85f19` state, `cfa0810` history-ctx, `0dfaca0` http (migration
+  HTTP test resolved to header auth + confirmation + 12-byte password; STATE
+  rotation test moved to `X-EMP-Session`), `cf42d31` rollout, `d667c59`
+  transport, `6fb4103` ci. Handoff doc kept as coordinator version; each
+  branch's copy saved in `artifacts/security-recovery/branch-handoff-docs/`.
+- Independent review of HTTP/ROLLOUT/TRANSPORT/CI found nothing blocking;
+  fixed on top: `6af1338` rollout (symlinked CODEX_HOME rejected every DB
+  parent; child rollout opened before containment/FIFO check), `787c6be`
+  transport (RFC 7692 0x00 padding after BFINAL, untyped `{"error":..}`
+  context errors, IPv6 same-origin redirects, real cap test), `e30ab57` http
+  (legacy UI detection with stored token, legacy quota events, failure-safe
+  session rotation, update test on header sessions), `05432e7`
+  `persist-credentials: false`, `11052a5` web contract tests for the new
+  bootstrap, `b66c4bf` Python 12-byte test password.
+- Acceptance found regressions vs baseline `2c35c8f` (baseline E2E 34/34
+  OK, built from `git archive` in `.emp-baseline-2c35c8f`), fixed:
+  `24de43c` calibration back to the Python contract (failure estimate is an
+  input estimate; the branch subtracted reserves again, giving 865 instead
+  of 1249 for Python-written calibration) and runtime trust (real umask-002
+  npm Codex 0775 and sticky `/tmp` fixtures were rejected); `60cd0be` UI
+  probe sends JSON (real Python answers a body-less POST with 400, so legacy
+  detection never worked; harness mocked 404) and E2E harness moved to
+  header sessions.
+- Final evidence on `60cd0be` (per-worktree target, oracle env set):
+  `cargo fmt --check` ok; strict workspace Clippy clean; workspace tests 502
+  passed, 1 failed = `embedded_index_matches_current_python_release_bytes`
+  (compares with the unmirrored live checkout); Python `unittest discover`
+  1442 OK (75 skipped); `tests.test_rust_e2e` with release binary against a
+  mirrored oracle copy (`.emp-oracle-mirror` = `python_archive` + the four
+  reviewed Python files) 34/34 OK, covering browser bootstrap, HTTP, SSE,
+  WebSocket, history, calibration and migration.
+
+Unfinished / next:
+
+1. Needs Xian's go-ahead: mirror `migration.py`, `quota_history.py`,
+   `server.py`, `web/index.html` from `security-fixes` into the live
+   `python_archive` checkout. index.html is read per request, so 4200's UI
+   changes immediately (verified legacy-cookie path against the oracle); the
+   `.py` files load only on the next 4200 restart, when the adoption
+   migration moves the `egg` rows to the upstream identity. Then the byte
+   test passes, and CI's pinned oracle ref (`3bcf72a`) must be updated after
+   `python_archive` is pushed.
+2. Rust 4201 (pid 2043811) still runs a deleted binary with a deleted config
+   dir; its logs are saved in `artifacts/security-recovery/rust-4201-before-e2e/`.
+   Acceptance used isolated processes instead. Replace it only with a fresh
+   config (the old config exists only in its memory).
+3. Not code-fixable here: release signing/Authenticode/notarization keys,
+   GitHub `release` environment protection and attestation settings, Windows
+   build verification.
+4. Accepted residuals from review: zstd decompressed cap equals the 2 GiB
+   plain cap (Python 128 MiB); only one pending export confirmation per
+   session; `/healthz` and `/v1/models` now require a same-origin Host;
+   session token lives in localStorage (no `script-src` CSP); Rust mode
+   validation stricter than Python for later `session_meta`; failed session
+   rotation restore path untested (cannot simulate without root).
+5. Worktrees may be removed after Xian accepts the mirror decision; the
+   `.emp-cargo.sh` wrapper now uses `flock -o` so panicking tests' orphaned
+   `EMP serve` children cannot hold the cargo lock.
+
 ### Build-cache hazard (affects earlier worker evidence)
 
 Worktrees sharing one `CARGO_TARGET_DIR` reuse each other's workspace-crate
