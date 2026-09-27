@@ -667,3 +667,15 @@ Parity gaps, cheapest first:
    ordering push) was caught by the anthropic python oracle and fixed in the
    same commit — the oracle suites are the load-bearing contract.
    Workspace 415 green, clippy clean, fmt applied.
+
+## STATE worker progress (2026-09-26)
+
+- Point is taking over the existing `/home/fumo/codex_ws/agent_dev/emp-sec-state`
+  worktree on `sec/state` after HTTP commit `6cdbae7`; that separate commit has
+  not been integrated here.
+- Preserving the existing migration v2, origin-bound secret, and bounded-file
+  drafts. Read-only review is in progress; no STATE tests or data operations
+  have run in this worktree yet. Python port 4200 remains untouched.
+- Next: trace Python and Rust quota-history ownership across credential delete
+  and reimport, inspect the live-store identity evidence read-only, then add
+  focused retention and identity-separation behavior before changing data.

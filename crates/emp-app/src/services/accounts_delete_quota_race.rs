@@ -10,6 +10,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::{delete_account_state, import_account_state, quota_owner_key};
+
 fn http_request(
     address: SocketAddr,
     method: &str,
@@ -217,4 +219,191 @@ for line in sys.stdin:
         "account deletion should succeed after quota refresh: {delete_response}"
     );
     assert_eq!(config["accounts"], json!([]));
+}
+
+#[test]
+fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
+    let directory = tempfile::tempdir().expect("quota history identity directory");
+    let root = directory
+        .path()
+        .canonicalize()
+        .expect("canonical quota history identity directory");
+    let config_path = root.join("config.json");
+    let account_root = root.join("state/accounts");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({"account_store_path":account_root}))
+            .expect("encode account configuration"),
+    )
+    .expect("write account configuration");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "/bin/false",
+        root.join("codex/auth.json"),
+    )
+    .expect("start quota history account state");
+
+    let import = |id: &str, upstream_id: &str, access_token: &str| {
+        import_account_state(
+            &server.state,
+            &json!({
+                "id": id,
+                "name": "Egg",
+                "prefix": id,
+                "auth_json": {
+                    "tokens": {
+                        "access_token": access_token,
+                        "account_id": upstream_id,
+                    }
+                },
+            }),
+        )
+        .expect("import account")
+    };
+
+    import("egg", "upstream-account-a", "token-before-delete");
+    let original_owner = quota_owner_key(&server.state, "egg").expect("original quota owner");
+    let quota = json!({
+        "rate_limits": {
+            "limitId": "codex",
+            "primary": {"usedPercent": 23, "windowDurationMins": 300},
+        },
+    });
+    server
+        .state
+        .backend
+        .accounts
+        .quota_history
+        .append_snapshot(&original_owner, &quota, 2_000_100)
+        .expect("record original quota sample");
+    delete_account_state(&server.state, "egg").expect("delete original account");
+
+    import("egg-restored", "upstream-account-a", "rotated-token");
+    assert_eq!(
+        quota_owner_key(&server.state, "egg-restored").expect("restored quota owner"),
+        original_owner
+    );
+    let restored = server
+        .state
+        .backend
+        .accounts
+        .quota_history
+        .query(&original_owner, "1h", 2_000_200)
+        .expect("query restored quota history");
+    assert_eq!(restored["series"][0]["points"].as_array().unwrap().len(), 1);
+    delete_account_state(&server.state, "egg-restored").expect("delete restored account");
+
+    import("egg", "upstream-account-b", "other-account-token");
+    let other_owner = quota_owner_key(&server.state, "egg").expect("other quota owner");
+    assert_ne!(other_owner, original_owner);
+    let other_history = server
+        .state
+        .backend
+        .accounts
+        .quota_history
+        .query(&other_owner, "1h", 2_000_200)
+        .expect("query other account history");
+    assert_eq!(other_history["series"], json!([]));
+    server
+        .shutdown()
+        .expect("shutdown quota history account state");
+}
+
+#[test]
+fn legacy_local_key_history_moves_to_the_verified_identity_once() {
+    let directory = tempfile::tempdir().expect("legacy quota history directory");
+    let root = directory
+        .path()
+        .canonicalize()
+        .expect("canonical legacy quota history directory");
+    let config_path = root.join("config.json");
+    let native_auth_path = root.join("codex/auth.json");
+    std::fs::create_dir_all(native_auth_path.parent().unwrap()).expect("native auth directory");
+    std::fs::write(
+        &native_auth_path,
+        serde_json::to_vec(
+            &json!({"tokens":{"access_token":"native","account_id":"upstream-native"}}),
+        )
+        .unwrap(),
+    )
+    .expect("write native auth");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({"account_store_path":root.join("state/accounts")})).unwrap(),
+    )
+    .expect("write account configuration");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "/bin/false",
+        native_auth_path,
+    )
+    .expect("start legacy quota history state");
+    let import = |id: &str, upstream_id: &str| {
+        import_account_state(
+            &server.state,
+            &json!({"id": id, "name": id, "prefix": id,
+                "auth_json": {"tokens": {"access_token": format!("{id}-token"), "account_id": upstream_id}}}),
+        )
+        .expect("import account")
+    };
+    let history = &server.state.backend.accounts.quota_history;
+    let sample = |used: u64| json!({"rate_limits":{"limitId":"codex","primary":{"usedPercent":used,"windowDurationMins":300}}});
+    let points = |owner: &str| {
+        history
+            .query(owner, "1h", 2_000_900)
+            .expect("query history")["series"]
+            .as_array()
+            .map_or(0, |series| {
+                series
+                    .iter()
+                    .map(|s| s["points"].as_array().unwrap().len())
+                    .sum()
+            })
+    };
+
+    import("egg", "upstream-egg");
+    // Rows written by the previous release under local keys.
+    history
+        .append_snapshot("egg", &sample(10), 2_000_100)
+        .unwrap();
+    history
+        .append_snapshot("egg", &sample(20), 2_000_400)
+        .unwrap();
+    history
+        .append_snapshot("@native", &sample(30), 2_000_100)
+        .unwrap();
+    history
+        .append_snapshot("ghost", &sample(40), 2_000_100)
+        .unwrap();
+
+    crate::services::quota::migrate_legacy_quota_history(&server.state);
+    crate::services::quota::migrate_legacy_quota_history(&server.state);
+    let egg = quota_owner_key(&server.state, "egg").unwrap();
+    let native = quota_owner_key(&server.state, "@native").unwrap();
+    assert_eq!(points(&egg), 2);
+    assert_eq!(points(&native), 1);
+    assert_eq!(points("egg"), 0);
+    assert_eq!(points("@native"), 0);
+    // No configured account can vouch for "ghost": its rows stay untouched.
+    assert_eq!(points("ghost"), 1);
+
+    // A legacy row written after startup is adopted before the id is freed,
+    // so a different account reusing the id never inherits it.
+    history
+        .append_snapshot("egg", &sample(50), 2_000_700)
+        .unwrap();
+    delete_account_state(&server.state, "egg").expect("delete egg");
+    assert_eq!(points(&egg), 3);
+    import("egg", "someone-else");
+    let other = quota_owner_key(&server.state, "egg").unwrap();
+    assert_ne!(other, egg);
+    crate::services::quota::migrate_legacy_quota_history(&server.state);
+    assert_eq!(points(&other), 0);
+    server
+        .shutdown()
+        .expect("shutdown legacy quota history state");
 }

@@ -18,7 +18,7 @@ impl SearchFeatureManager {
     }
     fn read_config(&self) -> Result<(String, DocumentMut), IntegrationError> {
         reject_link(&self.config)?;
-        let raw = match std::fs::read_to_string(&self.config) {
+        let raw = match crate::read_text_limited(&self.config, crate::MAX_CODEX_CONFIG_BYTES) {
             Ok(raw) => raw,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(_) => return Err(IntegrationError("unable to parse Codex TOML config")),
@@ -36,7 +36,7 @@ impl SearchFeatureManager {
     }
     fn read_lease(&self) -> Result<Option<Value>, IntegrationError> {
         reject_link(&self.lease)?;
-        let raw = match std::fs::read(&self.lease) {
+        let raw = match emp_state::read_file_limited(&self.lease, crate::MAX_LEASE_BYTES) {
             Ok(raw) => raw,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(IntegrationError("unable to read search integration lease")),

@@ -246,9 +246,14 @@ class MigrationTests(unittest.TestCase):
             "accounts": [],
             "provider_keys": {"legacy": "legacy-provider-secret"},
         }
-        encrypted = migration_module._fernet(password, salt).encrypt(
-            migration_module._json_bytes(payload)
-        )
+        # A v0.9.0 bundle is a v1 envelope: derive its key with the legacy
+        # fixed scrypt cost, not the stronger default used by new exports.
+        encrypted = migration_module._fernet(
+            password,
+            salt,
+            envelope_version=1,
+            minimum_password_bytes=migration_module.MIN_IMPORT_PASSWORD_BYTES,
+        ).encrypt(migration_module._json_bytes(payload))
         envelope = {
             "schema": migration_module.SCHEMA,
             "version": 1,
@@ -290,6 +295,50 @@ class MigrationTests(unittest.TestCase):
                 )
                 self.assertEqual(imported["catalog_family_presentations"], {})
                 self.assertEqual(imported["native_hidden_models"], [])
+
+    def test_new_exports_use_v2_fixed_kdf_and_legacy_v1_short_passwords_still_import(self):
+        config = normalize({})
+        bundle = export_bundle(config, Path("config.json"), "twelve-bytes", ["external"])
+        envelope = json.loads(bundle[len(migration_module.MAGIC):].decode("utf-8"))
+        self.assertEqual(envelope["version"], 2)
+        self.assertEqual(envelope["scrypt"], {"n": 2**17, "r": 8, "p": 1})
+        self.assertIsInstance(read_bundle(bundle, " twelve-bytes "), dict)
+        with self.assertRaisesRegex(MigrationError, "at least 12 bytes"):
+            export_bundle(config, Path("config.json"), "elevenbytes", ["external"])
+
+        salt = b"\x07" * 16
+        payload = read_bundle(bundle, "twelve-bytes")
+        plaintext = migration_module._fernet(
+            "twelve-bytes", migration_module._unb64(envelope["salt"], "salt")
+        ).decrypt(migration_module._unb64(envelope["payload"], "payload"))
+        legacy_token = migration_module._fernet(
+            "12345678", salt, envelope_version=1, minimum_password_bytes=8
+        ).encrypt(plaintext)
+
+        def legacy(version, scrypt):
+            envelope = {
+                "schema": migration_module.SCHEMA,
+                "version": version,
+                "kdf": "scrypt",
+                "scrypt": scrypt,
+                "salt": migration_module._b64(salt),
+                "payload": migration_module._b64(legacy_token),
+            }
+            return migration_module.MAGIC + json.dumps(envelope).encode("utf-8") + b"\n"
+
+        self.assertEqual(read_bundle(legacy(1, {"n": 2**14, "r": 8, "p": 1}), "12345678"), payload)
+        with self.assertRaisesRegex(MigrationError, "at least 8 bytes"):
+            read_bundle(legacy(1, {"n": 2**14, "r": 8, "p": 1}), "1234567")
+        # KDF cost is fixed per envelope version and never taken from the file.
+        for version, scrypt in (
+            (1, {"n": 2**17, "r": 8, "p": 1}),
+            (2, {"n": 2**14, "r": 8, "p": 1}),
+            (1, {"n": 2**10, "r": 8, "p": 1}),
+        ):
+            with self.assertRaisesRegex(MigrationError, "unsupported migration encryption"):
+                read_bundle(legacy(version, scrypt), "12345678")
+        with self.assertRaisesRegex(MigrationError, "unsupported migration bundle"):
+            read_bundle(legacy(3, {"n": 2**14, "r": 8, "p": 1}), "12345678")
 
     def test_bundle_is_encrypted_and_round_trips_to_a_new_machine(self):
         with tempfile.TemporaryDirectory() as directory:

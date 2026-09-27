@@ -130,3 +130,120 @@ json.dump({
     });
     assert_eq!(actual, oracle);
 }
+
+fn provider_current(api_key: &str, api_key_file: &str) -> Value {
+    normalize_configuration(Some(&json!({
+        "secret_store_path": "/managed/secrets",
+        "providers": [{
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "protocol": "chat_completions",
+            "api_key": api_key,
+            "api_key_file": api_key_file,
+        }],
+    })))
+    .expect("valid current configuration")
+}
+
+fn provider_update(base_url: &str, api_key: Option<&str>) -> Value {
+    let mut provider = json!({
+        "id": "deepseek",
+        "name": "DeepSeek",
+        "base_url": base_url,
+        "protocol": "chat_completions",
+    });
+    if let Some(api_key) = api_key {
+        provider["api_key"] = Value::from(api_key);
+    }
+    json!({"providers": [provider]})
+}
+
+const MASK: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}";
+const AT: &str = "2026-08-22T00:00:00+00:00";
+
+#[test]
+fn changing_provider_origin_does_not_carry_over_a_stored_key() {
+    for base_url in [
+        "https://attacker.example/v1",
+        "https://api.deepseek.com:8443/v1",
+        "http://127.0.0.1:8080/v1",
+    ] {
+        for api_key in [None, Some(MASK)] {
+            let current = provider_current("secret-value", "");
+            let merged =
+                merge_web_update_with_time(&current, &provider_update(base_url, api_key), AT)
+                    .expect("valid Web update");
+            assert_eq!(
+                merged["providers"][0]["api_key"], "",
+                "{base_url} {api_key:?}"
+            );
+            assert_eq!(merged["providers"][0]["api_key_file"], "", "{base_url}");
+
+            let current = provider_current("", "/managed/secrets/deepseek.key.enc");
+            let merged =
+                merge_web_update_with_time(&current, &provider_update(base_url, api_key), AT)
+                    .expect("valid Web update");
+            assert_eq!(merged["providers"][0]["api_key"], "", "{base_url}");
+            assert_eq!(
+                merged["providers"][0]["api_key_file"], "",
+                "managed secret must not follow {base_url}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rejected_provider_urls_never_reach_the_key_carry_over() {
+    // Plain HTTP to a remote host and URLs with userinfo are refused outright,
+    // so the stored key cannot follow them either.
+    for base_url in [
+        "http://api.deepseek.com/v1",
+        "https://user@attacker.example/v1",
+    ] {
+        for api_key in [None, Some(MASK)] {
+            let current = provider_current("secret-value", "");
+            merge_web_update_with_time(&current, &provider_update(base_url, api_key), AT)
+                .expect_err(base_url);
+        }
+    }
+}
+
+#[test]
+fn changing_provider_origin_accepts_an_explicit_new_key() {
+    let current = provider_current("", "/managed/secrets/deepseek.key.enc");
+    let merged = merge_web_update_with_time(
+        &current,
+        &provider_update("https://other.example/v1", Some("new-secret")),
+        AT,
+    )
+    .expect("valid Web update");
+    assert_eq!(merged["providers"][0]["api_key"], "new-secret");
+    assert_eq!(merged["providers"][0]["api_key_file"], "");
+}
+
+#[test]
+fn same_origin_edits_keep_the_stored_key() {
+    for base_url in [
+        "https://api.deepseek.com/v2",
+        "https://API.DeepSeek.com:443/v1",
+        "https://api.deepseek.com/v1/",
+    ] {
+        let current = provider_current("secret-value", "");
+        let merged =
+            merge_web_update_with_time(&current, &provider_update(base_url, Some(MASK)), AT)
+                .expect("valid Web update");
+        assert_eq!(
+            merged["providers"][0]["api_key"], "secret-value",
+            "{base_url}"
+        );
+
+        let current = provider_current("", "/managed/secrets/deepseek.key.enc");
+        let merged = merge_web_update_with_time(&current, &provider_update(base_url, None), AT)
+            .expect("valid Web update");
+        assert_eq!(
+            merged["providers"][0]["api_key_file"], "/managed/secrets/deepseek.key.enc",
+            "{base_url}"
+        );
+    }
+}

@@ -314,12 +314,9 @@ fn load_native_catalog(config: &Value) -> Value {
     } else {
         crate::config::expand_home(Path::new(configured))
     };
-    let Ok(value) = fs::read(&path) else {
+    let Ok(value) = read_file_limited(&path, MAX_NATIVE_CATALOG_BYTES) else {
         return serde_json::json!({"models": []});
     };
-    if value.len() > MAX_NATIVE_CATALOG_BYTES {
-        return serde_json::json!({"models": []});
-    }
     let parsed: Value = match serde_json::from_slice(&value) {
         Ok(value) => value,
         Err(_) => return serde_json::json!({"models": []}),
@@ -339,7 +336,7 @@ fn load_native_catalog(config: &Value) -> Value {
             .unwrap_or_else(|| Path::new("."))
             .join("easy-multi-provider")
             .join("native-catalog.json");
-        let redirected = fs::read(&redirected)
+        let redirected = read_file_limited(&redirected, MAX_NATIVE_CATALOG_BYTES)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             .filter(|value| value.get("models").is_some_and(Value::is_array));
@@ -426,7 +423,8 @@ fn native_auth(path: &Path) -> MigrationResult<Option<Value>> {
     if !metadata.is_file() || metadata.len() > MAX_NATIVE_AUTH_BYTES as u64 {
         return Err(MigrationError::NativeCredentialsUnavailable);
     }
-    let raw = fs::read(path).map_err(|_| MigrationError::NativeCredentialsUnavailable)?;
+    let raw = read_file_limited(path, MAX_NATIVE_AUTH_BYTES)
+        .map_err(|_| MigrationError::NativeCredentialsUnavailable)?;
     let raw = raw.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&raw);
     let auth: Value =
         serde_json::from_slice(raw).map_err(|_| MigrationError::NativeCredentialsUnavailable)?;

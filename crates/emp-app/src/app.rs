@@ -173,6 +173,7 @@ impl BackendState {
                 quota_event_slots: AtomicUsize::new(0),
                 quota_sampler_wait: Mutex::new(()),
                 quota_sampler_condition: Condvar::new(),
+                pending_rotations: Mutex::new(BTreeMap::new()),
             },
             integration: IntegrationState::new(integration, codex_home, codex_binary),
         })

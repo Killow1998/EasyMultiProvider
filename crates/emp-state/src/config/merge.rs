@@ -1,5 +1,6 @@
 //! Config mutation for protocol observations and browser edits.
 
+use super::provider_url::{hostname, parse_provider_url};
 use super::{
     ConfigError, ConfigResult, MODEL_BOOLEAN_CAPABILITIES, Map, TOP_LEVEL_PROVENANCE_FIELDS, Value,
     deployment_identity, endpoint_fingerprint, json_truthy, normalize_configuration,
@@ -180,6 +181,49 @@ fn unknown_provenance() -> Value {
     })
 }
 
+/// Scheme, lowercase host and effective port of a provider base URL.
+type UrlOrigin = (String, String, Option<u16>);
+
+fn base_url_origin(raw: &str) -> Option<UrlOrigin> {
+    let parsed = parse_provider_url(raw.trim())?;
+    let host = hostname(parsed.netloc)?.to_ascii_lowercase();
+    let host_port = parsed
+        .netloc
+        .rsplit_once('@')
+        .map_or(parsed.netloc, |(_, host_port)| host_port);
+    let port_text = match host_port.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']')?.1.strip_prefix(':'),
+        None => host_port.rsplit_once(':').map(|(_, port)| port),
+    }
+    .filter(|port| !port.is_empty());
+    let port = match port_text {
+        Some(port) => Some(port.parse::<u16>().ok()?),
+        None => match parsed.scheme.as_str() {
+            "http" => Some(80),
+            "https" => Some(443),
+            _ => None,
+        },
+    };
+    Some((parsed.scheme, host, port))
+}
+
+/// Whether a browser edit moves a Provider to a different origin. A stored
+/// credential must never follow the Provider to a new scheme, host or port
+/// unless the same request supplies a new credential explicitly.
+fn provider_origin_changed(incoming: &Map<String, Value>, old: &Value) -> bool {
+    let Some(incoming_url) = incoming.get("base_url") else {
+        return false;
+    };
+    let old_url = old.get("base_url").and_then(Value::as_str).unwrap_or("");
+    let Some(incoming_url) = incoming_url.as_str() else {
+        return true;
+    };
+    match (base_url_origin(incoming_url), base_url_origin(old_url)) {
+        (Some(incoming), Some(old)) => incoming != old,
+        _ => incoming_url.trim() != old_url.trim(),
+    }
+}
+
 fn merge_web_update_at_time(
     current: &Value,
     incoming: &Value,
@@ -218,13 +262,15 @@ fn merge_web_update_at_time(
                 .get("id")
                 .and_then(Value::as_str)
                 .and_then(|id| old_providers.get(id));
+            let origin_changed = old.is_some_and(|old| provider_origin_changed(provider, old));
             let masked = provider
                 .get("api_key")
                 .is_some_and(|value| value == "••••••••");
             if !provider.contains_key("api_key") || masked {
                 provider.insert(
                     "api_key".to_owned(),
-                    old.and_then(|value| value.get("api_key"))
+                    old.filter(|_| !origin_changed)
+                        .and_then(|value| value.get("api_key"))
                         .cloned()
                         .unwrap_or_else(|| Value::String(String::new())),
                 );
@@ -234,7 +280,11 @@ fn merge_web_update_at_time(
             if incoming_file.is_some_and(json_truthy) && incoming_file != old_file {
                 return Err(ConfigError::new("provider.api_key_file is managed by EMP"));
             }
-            if old_file.is_some_and(json_truthy) {
+            if origin_changed {
+                // The managed secret belongs to the previous origin. Saving an
+                // explicit new key recreates it; otherwise it is removed.
+                provider.insert("api_key_file".to_owned(), Value::String(String::new()));
+            } else if old_file.is_some_and(json_truthy) {
                 provider.insert(
                     "api_key_file".to_owned(),
                     old_file.expect("truthy old file").clone(),

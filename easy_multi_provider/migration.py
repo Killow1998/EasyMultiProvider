@@ -27,15 +27,28 @@ from .vault import file_transaction, write_encrypted_json
 MAGIC = b"EMP-MIGRATION\x01\n"
 SCHEMA = "easy-multi-provider-migration"
 VERSION = 1
+ENVELOPE_VERSION = 2
 EXPORT_GROUPS = frozenset({"native", "subscriptions", "external"})
 MAX_BUNDLE_BYTES = 32 * 1024 * 1024
-MIN_PASSWORD_BYTES = 8
+MIN_PASSWORD_BYTES = 12
+MIN_IMPORT_PASSWORD_BYTES = 8
 MAX_PASSWORD_BYTES = 4096
 MAX_MIGRATION_REQUEST_BYTES = 4 * ((MAX_BUNDLE_BYTES + 2) // 3) + 64 * 1024
 _SALT_BYTES = 16
-_SCRYPT_N = 2**14
-_SCRYPT_R = 8
-_SCRYPT_P = 1
+_SCRYPT_V1_N = 2**14
+_SCRYPT_V1_R = 8
+_SCRYPT_V1_P = 1
+_SCRYPT_V2_N = 2**17
+_SCRYPT_V2_R = 8
+_SCRYPT_V2_P = 1
+# Keep the legacy names for fixture and compatibility code that describes v1.
+_SCRYPT_N = _SCRYPT_V1_N
+_SCRYPT_R = _SCRYPT_V1_R
+_SCRYPT_P = _SCRYPT_V1_P
+_ENVELOPE_SCRYPT = {
+    VERSION: {"n": _SCRYPT_V1_N, "r": _SCRYPT_V1_R, "p": _SCRYPT_V1_P},
+    ENVELOPE_VERSION: {"n": _SCRYPT_V2_N, "r": _SCRYPT_V2_R, "p": _SCRYPT_V2_P},
+}
 _MODEL_CAPABILITY_FIELDS = (
     "input_modalities",
     "output_modalities",
@@ -54,26 +67,36 @@ def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
-def _password_bytes(password: Any) -> bytes:
+def _password_bytes(password: Any, minimum: int = MIN_PASSWORD_BYTES) -> bytes:
     if not isinstance(password, str):
         raise MigrationError("migration password is required")
     value = password.strip()
     encoded = value.encode("utf-8")
-    if len(encoded) < MIN_PASSWORD_BYTES:
-        raise MigrationError("migration password must contain at least 8 bytes")
+    if len(encoded) < minimum:
+        raise MigrationError(
+            "migration password must contain at least %d bytes" % minimum
+        )
     if len(encoded) > MAX_PASSWORD_BYTES:
         raise MigrationError("migration password is too long")
     return encoded
 
 
-def _fernet(password: Any, salt: bytes) -> Fernet:
+def _fernet(
+    password: Any,
+    salt: bytes,
+    envelope_version: int = ENVELOPE_VERSION,
+    minimum_password_bytes: int = MIN_PASSWORD_BYTES,
+) -> Fernet:
+    scrypt = _ENVELOPE_SCRYPT.get(envelope_version)
+    if scrypt is None:
+        raise MigrationError("unsupported migration encryption")
     key = Scrypt(
         salt=salt,
         length=32,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
-    ).derive(_password_bytes(password))
+        n=scrypt["n"],
+        r=scrypt["r"],
+        p=scrypt["p"],
+    ).derive(_password_bytes(password, minimum_password_bytes))
     return Fernet(base64.urlsafe_b64encode(key))
 
 
@@ -260,9 +283,9 @@ def export_bundle_with_summary(config: Dict[str, Any], config_path: Path, passwo
     encrypted = _fernet(password, salt).encrypt(plaintext)
     envelope = {
         "schema": SCHEMA,
-        "version": VERSION,
+        "version": ENVELOPE_VERSION,
         "kdf": "scrypt",
-        "scrypt": {"n": _SCRYPT_N, "r": _SCRYPT_R, "p": _SCRYPT_P},
+        "scrypt": _ENVELOPE_SCRYPT[ENVELOPE_VERSION],
         "salt": _b64(salt),
         "payload": _b64(encrypted),
     }
@@ -331,15 +354,30 @@ def read_bundle(bundle: bytes, password: Any) -> Dict[str, Any]:
         envelope = json.loads(bundle[len(MAGIC):].decode("utf-8"))
         if not isinstance(envelope, dict):
             raise MigrationError("migration envelope is invalid")
-        if envelope.get("schema") != SCHEMA or envelope.get("version") != VERSION:
+        version = envelope.get("version")
+        if envelope.get("schema") != SCHEMA or type(version) is not int:
+            raise MigrationError("unsupported migration bundle")
+        scrypt = _ENVELOPE_SCRYPT.get(version)
+        if scrypt is None:
             raise MigrationError("unsupported migration bundle")
         if envelope.get("kdf") != "scrypt":
+            raise MigrationError("unsupported migration encryption")
+        supplied_scrypt = envelope.get("scrypt")
+        if not isinstance(supplied_scrypt, dict) or any(
+            supplied_scrypt.get(field) != value
+            for field, value in scrypt.items()
+        ):
             raise MigrationError("unsupported migration encryption")
         salt = _unb64(envelope.get("salt"), "salt")
         if len(salt) != _SALT_BYTES:
             raise MigrationError("migration salt is invalid")
         encrypted = _unb64(envelope.get("payload"), "payload")
-        plaintext = _fernet(password, salt).decrypt(encrypted)
+        plaintext = _fernet(
+            password,
+            salt,
+            envelope_version=version,
+            minimum_password_bytes=MIN_IMPORT_PASSWORD_BYTES,
+        ).decrypt(encrypted)
         payload = json.loads(plaintext.decode("utf-8"))
     except MigrationError:
         raise

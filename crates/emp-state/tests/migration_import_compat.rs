@@ -127,6 +127,11 @@ fn import_merges_without_deleting_local_entries_and_reencrypts_provider_keys() {
             .as_str(),
         "synthetic provider credential"
     );
+    assert!(summary.overwritten_providers.is_empty());
+
+    let (_, summary) = import_migration_bundle(&imported, &migration, PASSWORD, &path, &vault)
+        .expect("re-import migration");
+    assert_eq!(summary.overwritten_providers, ["deepseek"]);
 }
 
 #[test]
