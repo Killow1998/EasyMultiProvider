@@ -541,7 +541,9 @@ async function establishSession() {
   if (bootstrapTokens.length === 1) {
     const response = await fetch('/api/session', {
       method:'POST',
-      headers:{'X-EMP-Bootstrap':bootstrapTokens[0]},
+      // Same JSON shape as the probe below: cookie-session Python servers
+      // answer it with 404 instead of rejecting the body.
+      headers:{'X-EMP-Bootstrap':bootstrapTokens[0],'Content-Type':'application/json'}, body:'{}',
       credentials:'same-origin',
       cache:'no-store',
       redirect:'error',

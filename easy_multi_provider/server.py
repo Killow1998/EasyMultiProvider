@@ -2625,6 +2625,15 @@ class AppState:
     def import_account(self, metadata: Dict[str, Any], auth_json: Dict[str, Any]) -> Dict[str, Any]:
         with account_refresh_lock(metadata.get("id")):
             with self.lock:
+                replaces = any(
+                    item.get("id") == metadata.get("id")
+                    for item in self.config.get("accounts", [])
+                )
+            if replaces:
+                # The id is about to name new credentials: attribute its
+                # legacy rows with the credentials that recorded them, or drop.
+                self._settle_legacy_quota_history(metadata.get("id"))
+            with self.lock:
                 account = prepare_account_import(
                     self.config, metadata, self.path
                 )
@@ -2897,18 +2906,39 @@ class AppState:
         while not self._quota_sampler_stop.wait(SAMPLE_INTERVAL_SECONDS):
             self.sample_quotas_once()
 
-    def _adopt_legacy_quota_history(self, account_id: str) -> None:
-        """Attach rows under a legacy local key to the account's identity.
+    def _adopt_legacy_quota_history(self, account_id: str) -> bool:
+        """Attach rows under an account's legacy id key to its identity.
 
         Before identity keys, EMP deleted an account's history with the
-        account and renamed reimports of a different identity, so rows under a
-        local key were recorded from that entry's current credentials.
-        Accounts whose identity cannot be derived keep their legacy rows.
+        account and recorded an import duplicating another account under that
+        account's key, so rows under an imported account's id were recorded
+        from that entry's current credentials. Returns whether the rows now
+        belong to an identity (or there were none to move).
+
+        ``@native`` rows are never adopted: they were recorded from whichever
+        login Codex held at the time, and the current login cannot prove it
+        recorded them, so they stay under their legacy key.
         """
+        if account_id == NATIVE_ACCOUNT_ID:
+            return False
         try:
             owner = self._quota_owner_key(account_id)
             self.quota_history.adopt_legacy_key(account_id, owner)
         except (OSError, QuotaError, QuotaHistoryError):
+            return False
+        return True
+
+    def _settle_legacy_quota_history(self, account_id: str) -> None:
+        """Adopt or drop an id's legacy rows before the id is freed or reused.
+
+        Rows that cannot be attributed are deleted, as pre-identity EMP did,
+        so a later account reusing the id cannot inherit them.
+        """
+        if account_id == NATIVE_ACCOUNT_ID or self._adopt_legacy_quota_history(account_id):
+            return
+        try:
+            self.quota_history.delete_account(account_id)
+        except (OSError, QuotaHistoryError):
             pass
 
     def migrate_legacy_quota_history(self) -> None:
@@ -2918,7 +2948,7 @@ class AppState:
                 for item in self.config.get("accounts", [])
                 if isinstance(item.get("id"), str)
             ]
-        for account_id in [NATIVE_ACCOUNT_ID, *account_ids]:
+        for account_id in account_ids:
             self._adopt_legacy_quota_history(account_id)
 
     def start_quota_sampler(self) -> None:
@@ -2948,8 +2978,8 @@ class AppState:
                 raise ConfigError("unknown account: %s" % account_id)
         with account_refresh_lock(account_id):
             # Legacy rows keyed by this id must reach the identity they belong
-            # to before the id becomes free for a different account.
-            self._adopt_legacy_quota_history(account_id)
+            # to, or be dropped, before the id becomes free for another account.
+            self._settle_legacy_quota_history(account_id)
             self._delete_account(account_id)
             clear_account_quota_cache(account_id)
             self.notify_quota_update(account_id)

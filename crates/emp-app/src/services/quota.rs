@@ -94,23 +94,202 @@ fn save_rotated_credential(
     vault.write_encrypted_json(auth_path, auth).map_err(|_| ())
 }
 
-/// Attach history recorded under an account's legacy local key (its id, or
-/// `@native`) to the upstream identity of its current credentials. Before
-/// identity keys, EMP deleted an account's history with the account and
-/// renamed reimports of a different identity, so rows under a local key were
-/// always recorded from that entry's current credentials. Accounts whose
-/// identity cannot be derived keep their legacy rows untouched.
-pub(crate) fn adopt_legacy_quota_history(state: &ServerState, account_id: &str) {
-    if let Ok(owner) = quota_owner_key(state, account_id) {
-        let _ = state
+/// The stored credentials of one imported account, as quota refresh and
+/// reset both read and rotate them.
+struct AccountCredentials<'a> {
+    state: &'a ServerState,
+    auth_file: String,
+}
+
+impl<'a> AccountCredentials<'a> {
+    fn for_account(state: &'a ServerState, account_id: &str) -> Result<Self, QuotaError> {
+        let target = state
             .backend
-            .accounts
-            .quota_history
-            .adopt_legacy_key(account_id, &owner);
+            .configuration
+            .config
+            .lock()
+            .ok()
+            .and_then(|config| {
+                config
+                    .get("accounts")?
+                    .as_array()?
+                    .iter()
+                    .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
+                    .cloned()
+            })
+            .ok_or_else(|| {
+                QuotaError::new(format!("unknown account: {account_id}"), "quota_error")
+            })?;
+        let auth_file = target
+            .get("auth_file")
+            .and_then(Value::as_str)
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| {
+                QuotaError::new("account credentials are not configured", "quota_error")
+            })?
+            .to_owned();
+        Ok(Self { state, auth_file })
+    }
+
+    fn auth_path(&self) -> &Path {
+        Path::new(&self.auth_file)
+    }
+
+    fn vault(&self) -> &emp_state::VaultStore {
+        &self.state.backend.configuration.vault
+    }
+
+    fn pending(&self) -> &Mutex<std::collections::BTreeMap<String, Value>> {
+        &self.state.backend.accounts.pending_rotations
+    }
+
+    /// Current credential: a rotated credential whose save failed supersedes
+    /// the stored copy, whose refresh token Codex may already have
+    /// invalidated upstream.
+    fn read(&self) -> Result<Value, QuotaError> {
+        let rotated = self
+            .pending()
+            .lock()
+            .ok()
+            .and_then(|pending| pending.get(&self.auth_file).cloned());
+        if let Some(rotated) = rotated {
+            if save_rotated_credential(self.vault(), self.auth_path(), &rotated).is_ok()
+                && let Ok(mut pending) = self.pending().lock()
+            {
+                pending.remove(&self.auth_file);
+            }
+            return Ok(rotated);
+        }
+        self.vault()
+            .read_encrypted_json(self.auth_path())
+            .map_err(|_| QuotaError::new("stored encrypted auth.json is invalid", "quota_error"))
+    }
+
+    /// Durably save a credential Codex rotated. On failure the credential is
+    /// kept in memory: the next check uses it, and the quota sampler and
+    /// shutdown retry the save ([`flush_pending_rotations`]).
+    fn persist(&self, refreshed: &Value) -> Result<(), ()> {
+        for attempt in 0..PERSIST_ROTATION_ATTEMPTS {
+            if save_rotated_credential(self.vault(), self.auth_path(), refreshed).is_ok() {
+                if let Ok(mut pending) = self.pending().lock() {
+                    pending.remove(&self.auth_file);
+                }
+                return Ok(());
+            }
+            if attempt + 1 < PERSIST_ROTATION_ATTEMPTS {
+                std::thread::sleep(Duration::from_millis(100 << attempt));
+            }
+        }
+        if let Ok(mut pending) = self.pending().lock() {
+            pending.insert(self.auth_file.clone(), refreshed.clone());
+        }
+        Err(())
     }
 }
 
-/// Run [`adopt_legacy_quota_history`] for the native login and every account.
+/// Retry the durable save of every rotated credential still held in memory.
+/// Each save runs under its account's refresh lock, so it cannot overwrite a
+/// newer rotation a concurrent check persisted. Credentials of accounts that
+/// are gone are dropped. Returns the number still unsaved.
+pub(crate) fn flush_pending_rotations(state: &ServerState) -> usize {
+    let pending_files = state
+        .backend
+        .accounts
+        .pending_rotations
+        .lock()
+        .map(|pending| pending.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    if pending_files.is_empty() {
+        return 0;
+    }
+    let owners = state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .ok()
+        .and_then(|config| config.get("accounts").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|account| {
+            Some((
+                account.get("auth_file")?.as_str()?.to_owned(),
+                account.get("id")?.as_str()?.to_owned(),
+            ))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut unsaved = 0;
+    for auth_file in pending_files {
+        let Some(account_id) = owners.get(&auth_file) else {
+            crate::services::accounts::forget_pending_rotation(state, Path::new(&auth_file));
+            continue;
+        };
+        let Some(lock) = quota_refresh_lock(state, account_id) else {
+            unsaved += 1;
+            continue;
+        };
+        let Ok(_guard) = lock.lock() else {
+            unsaved += 1;
+            continue;
+        };
+        let credentials = AccountCredentials { state, auth_file };
+        let rotated = credentials
+            .pending()
+            .lock()
+            .ok()
+            .and_then(|pending| pending.get(&credentials.auth_file).cloned());
+        if let Some(rotated) = rotated
+            && credentials.persist(&rotated).is_err()
+        {
+            unsaved += 1;
+        }
+    }
+    unsaved
+}
+
+/// Attach history recorded under an account's legacy local id key to the
+/// upstream identity of its current credentials. Before identity keys, EMP
+/// deleted an account's history with the account and recorded an import that
+/// duplicated another account under that account's key, so rows under an
+/// imported account's id were recorded from that entry's current
+/// credentials. Returns whether the rows now belong to an identity (or there
+/// were none to move).
+///
+/// `@native` rows are never adopted: they were recorded from whichever login
+/// Codex held at the time, and the current login cannot prove it recorded
+/// them, so they stay under their legacy key.
+pub(crate) fn adopt_legacy_quota_history(state: &ServerState, account_id: &str) -> bool {
+    if account_id == "@native" {
+        return false;
+    }
+    quota_owner_key(state, account_id).is_ok_and(|owner| {
+        state
+            .backend
+            .accounts
+            .quota_history
+            .adopt_legacy_key(account_id, &owner)
+            .is_ok()
+    })
+}
+
+/// Settle an account id's legacy rows before the id is freed or reassigned
+/// to other credentials: adopt them into the current identity, or delete
+/// them as pre-identity EMP did, so a later account reusing the id cannot
+/// inherit them.
+pub(crate) fn settle_legacy_quota_history(state: &ServerState, account_id: &str) {
+    if account_id == "@native" || adopt_legacy_quota_history(state, account_id) {
+        return;
+    }
+    let _ = state
+        .backend
+        .accounts
+        .quota_history
+        .delete_account(account_id);
+}
+
+/// Run [`adopt_legacy_quota_history`] for every imported account. Accounts
+/// whose identity cannot be derived yet keep their rows until they can, or
+/// until [`settle_legacy_quota_history`] runs for them.
 pub(crate) fn migrate_legacy_quota_history(state: &ServerState) {
     let accounts = state
         .backend
@@ -120,7 +299,6 @@ pub(crate) fn migrate_legacy_quota_history(state: &ServerState) {
         .ok()
         .and_then(|config| config.get("accounts").and_then(Value::as_array).cloned())
         .unwrap_or_default();
-    adopt_legacy_quota_history(state, "@native");
     for account in accounts {
         if let Some(id) = account.get("id").and_then(Value::as_str) {
             adopt_legacy_quota_history(state, id);
@@ -140,74 +318,16 @@ fn record_quota_snapshot(state: &ServerState, account_id: &str, quota: &Value) {
 }
 
 fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Value, QuotaError> {
-    let target = state
-        .backend
-        .configuration
-        .config
-        .lock()
-        .ok()
-        .and_then(|config| {
-            config
-                .get("accounts")?
-                .as_array()?
-                .iter()
-                .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
-                .cloned()
-        })
-        .ok_or_else(|| QuotaError::new(format!("unknown account: {account_id}"), "quota_error"))?;
-    let auth_file = target
-        .get("auth_file")
-        .and_then(Value::as_str)
-        .filter(|path| !path.is_empty())
-        .ok_or_else(|| QuotaError::new("account credentials are not configured", "quota_error"))?
-        .to_owned();
-    let auth_path = Path::new(&auth_file);
-    let vault = &state.backend.configuration.vault;
-    let pending = &state.backend.accounts.pending_rotations;
-    let read_auth = || {
-        // A rotated credential whose save failed supersedes the stored copy,
-        // whose refresh token Codex may already have invalidated upstream.
-        let rotated = pending
-            .lock()
-            .ok()
-            .and_then(|pending| pending.get(&auth_file).cloned());
-        if let Some(rotated) = rotated {
-            if save_rotated_credential(vault, auth_path, &rotated).is_ok()
-                && let Ok(mut pending) = pending.lock()
-            {
-                pending.remove(&auth_file);
-            }
-            return Ok(rotated);
-        }
-        vault
-            .read_encrypted_json(auth_path)
-            .map_err(|_| QuotaError::new("stored encrypted auth.json is invalid", "quota_error"))
-    };
+    let credentials = AccountCredentials::for_account(state, account_id)?;
+    let auth_file = credentials.auth_file.clone();
+    let read_auth = || credentials.read();
     let query = |auth: &Value, allow_refresh: bool| {
         run_quota_query_persisting(
             auth,
             &crate::services::runtime::helper_binary(state),
             Duration::from_secs(45),
             allow_refresh,
-            |refreshed| {
-                for attempt in 0..PERSIST_ROTATION_ATTEMPTS {
-                    if save_rotated_credential(vault, auth_path, refreshed).is_ok() {
-                        if let Ok(mut pending) = pending.lock() {
-                            pending.remove(&auth_file);
-                        }
-                        return Ok(());
-                    }
-                    if attempt + 1 < PERSIST_ROTATION_ATTEMPTS {
-                        std::thread::sleep(Duration::from_millis(100 << attempt));
-                    }
-                }
-                // Keep the only valid credential in memory; the next check
-                // uses it and retries the durable save.
-                if let Ok(mut pending) = pending.lock() {
-                    pending.insert(auth_file.clone(), refreshed.clone());
-                }
-                Err(())
-            },
+            |refreshed| credentials.persist(refreshed),
         )
     };
     let auth = read_auth()?;
@@ -334,49 +454,8 @@ pub(crate) fn consume_quota_reset_for_account(
             credit_id,
         );
     }
-    let target = state
-        .backend
-        .configuration
-        .config
-        .lock()
-        .ok()
-        .and_then(|config| {
-            config
-                .get("accounts")?
-                .as_array()?
-                .iter()
-                .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
-                .cloned()
-        })
-        .ok_or_else(|| QuotaError::new(format!("unknown account: {account_id}"), "quota_error"))?;
-    let auth_file = target
-        .get("auth_file")
-        .and_then(Value::as_str)
-        .filter(|path| !path.is_empty())
-        .ok_or_else(|| QuotaError::new("account credentials are not configured", "quota_error"))?
-        .to_owned();
-    let auth_path = Path::new(&auth_file);
-    let vault = &state.backend.configuration.vault;
-    let pending = &state.backend.accounts.pending_rotations;
-    let read_auth = || {
-        // A rotated credential whose save failed supersedes the stored copy,
-        // whose refresh token Codex may already have invalidated upstream.
-        let rotated = pending
-            .lock()
-            .ok()
-            .and_then(|pending| pending.get(&auth_file).cloned());
-        if let Some(rotated) = rotated {
-            if save_rotated_credential(vault, auth_path, &rotated).is_ok()
-                && let Ok(mut pending) = pending.lock()
-            {
-                pending.remove(&auth_file);
-            }
-            return Ok(rotated);
-        }
-        vault
-            .read_encrypted_json(auth_path)
-            .map_err(|_| QuotaError::new("stored encrypted auth.json is invalid", "quota_error"))
-    };
+    let credentials = AccountCredentials::for_account(state, account_id)?;
+    let read_auth = || credentials.read();
     let auth = read_auth()?;
     if native_auth_document(&state.backend.accounts.native_auth_path)
         .is_some_and(|native| same_account_auth(&auth, &native))
@@ -397,25 +476,7 @@ pub(crate) fn consume_quota_reset_for_account(
             allow_refresh,
             idempotency_key,
             credit_id,
-            |refreshed| {
-                for attempt in 0..PERSIST_ROTATION_ATTEMPTS {
-                    if save_rotated_credential(vault, auth_path, refreshed).is_ok() {
-                        if let Ok(mut pending) = pending.lock() {
-                            pending.remove(&auth_file);
-                        }
-                        return Ok(());
-                    }
-                    if attempt + 1 < PERSIST_ROTATION_ATTEMPTS {
-                        std::thread::sleep(Duration::from_millis(100 << attempt));
-                    }
-                }
-                // Keep the only valid credential in memory; the next check
-                // uses it and retries the durable save.
-                if let Ok(mut pending) = pending.lock() {
-                    pending.insert(auth_file.clone(), refreshed.clone());
-                }
-                Err(())
-            },
+            |refreshed| credentials.persist(refreshed),
         )
     };
     match query(&auth, false) {

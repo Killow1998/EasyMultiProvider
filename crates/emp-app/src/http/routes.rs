@@ -492,6 +492,7 @@ fn bootstrap_session(request: Request<'_>, state: &ServerState, now: f64) -> Vec
         return unauthorized_response();
     }
     let Some((token, expires_in)) = state.sessions.rotate(now) else {
+        state.bootstrap.release();
         return json_error_response(500, status_text(500), "internal server error", None, &[]);
     };
     let body = serde_json::to_vec(&serde_json::json!({

@@ -275,6 +275,8 @@ async function sessionBootstrapBehavior() {
   assert.strictEqual(requests[0].path, "/api/session");
   assert.strictEqual(requests[0].options.headers['X-EMP-Bootstrap'], "one-use-secret");
   assert.strictEqual(requests[0].options.credentials, "same-origin");
+  assert.strictEqual(requests[0].options.headers['Content-Type'], "application/json");
+  assert.strictEqual(requests[0].options.body, "{}");
   assert.strictEqual(browserWindow.history.replaced, "/");
   assert.strictEqual(run("sessionToken"), "rust-session");
   assert.strictEqual(storage.getItem(run("SESSION_STORAGE_KEY")), "rust-session");
@@ -302,6 +304,18 @@ async function sessionBootstrapBehavior() {
   const legacyRequest = requests.at(-1);
   assert.strictEqual(legacyRequest.options.credentials, "same-origin");
   assert.strictEqual(new Headers(legacyRequest.options.headers).has("X-EMP-Session"), false);
+
+  // A stale bootstrap link opened against a cookie-session Python server:
+  // Python rejects a POST without a JSON body (400) and 404s a JSON one.
+  browserWindow.location.href = "http://127.0.0.1:4200/?bootstrap=rust-bookmark";
+  context.fetch = async (path, options = {}) => {
+    requests.push({path, options});
+    const json = options.headers?.['Content-Type'] === "application/json" && options.body === "{}";
+    return {ok:false, status:json ? 404 : 400, json:async()=>({})};
+  };
+  run("sessionToken=''; legacyCookieAuth=false");
+  await run("establishSession()");
+  assert.strictEqual(run("legacyCookieAuth"), true, "bootstrap links still detect a legacy server");
 
   // A token left on this origin by a Rust EMP must not hide a Python server.
   storage.setItem(run("SESSION_STORAGE_KEY"), "stale-rust-session");

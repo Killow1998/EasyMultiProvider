@@ -1,14 +1,7 @@
 //! Executable trust checks applied before any inventory candidate is run.
 //!
-//! Mirrors the quota app-server binary validation (`quota::process`): the
-//! candidate must be an absolute path to a regular file and, on Unix, must be
-//! executable, owned by root or the current user, not world-writable and not
-//! set-id, and every ancestor directory must be neither world-writable nor
-//! group-writable by a foreign owner, unless it is sticky and the entry
-//! below it belongs to root or the current user.
-use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
+//! The rule is shared with quota app-server processes; see
+//! [`crate::executable_trust`].
 use std::path::{Path, PathBuf};
 
 /// Return the canonical path of `path` if it may be executed for probing.
@@ -17,49 +10,9 @@ pub(super) fn trusted_binary(path: &Path) -> Option<PathBuf> {
         return None;
     }
     let canonical = path.canonicalize().ok()?;
-    validate_binary_path(&canonical).then_some(canonical)
-}
-
-fn validate_binary_path(path: &Path) -> bool {
-    let Ok(metadata) = fs::metadata(path) else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        // SAFETY: getuid has no preconditions and cannot fail.
-        let current_uid = unsafe { libc::getuid() };
-        // Group write is accepted on the user's own file, as for ancestor
-        // directories: default umask 002 installs (npm, nvm) are 0775.
-        if metadata.mode() & 0o111 == 0
-            || metadata.mode() & 0o002 != 0
-            || metadata.mode() & 0o6000 != 0
-            || (metadata.uid() != 0 && metadata.uid() != current_uid)
-        {
-            return false;
-        }
-        // Owner of the entry directly below the ancestor being checked.
-        let mut entry_uid = metadata.uid();
-        for parent in path.ancestors().skip(1) {
-            let Ok(info) = fs::metadata(parent) else {
-                return false;
-            };
-            let foreign_writable = info.mode() & 0o002 != 0
-                || (info.mode() & 0o020 != 0 && info.uid() != 0 && info.uid() != current_uid);
-            // A sticky directory such as /tmp stops other users renaming or
-            // removing entries they do not own, so an entry owned by root or
-            // the current user below it cannot be swapped.
-            let sticky_protects_entry =
-                info.mode() & 0o1000 != 0 && (entry_uid == 0 || entry_uid == current_uid);
-            if foreign_writable && !sticky_protects_entry {
-                return false;
-            }
-            entry_uid = info.uid();
-        }
-    }
-    true
+    crate::executable_trust::validate_executable(&canonical)
+        .is_ok()
+        .then_some(canonical)
 }
 
 #[cfg(all(test, unix))]

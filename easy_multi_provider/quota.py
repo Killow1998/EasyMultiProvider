@@ -100,6 +100,36 @@ _REFRESH_COOLDOWN_SECONDS = 2.0
 _SERVER_AUTH_OID = "1.3.6.1.5.5.7.3.1"
 
 
+def _private_groups(current_uid):
+    """Groups whose write permission grants no other user access.
+
+    The root group or the current user's primary group, with no
+    supplementary member other than the current user (user-private groups
+    from umask 002 npm/nvm installs). Matches the Rust executable trust rule.
+    """
+    try:
+        import grp
+        import pwd
+    except ImportError:
+        return lambda _gid: False
+    try:
+        user = pwd.getpwuid(current_uid)
+        name, primary = user.pw_name, user.pw_gid
+    except KeyError:
+        name, primary = None, None
+
+    def contains(gid):
+        if gid != 0 and (current_uid == 0 or gid != primary):
+            return False
+        try:
+            members = grp.getgrgid(gid).gr_mem
+        except KeyError:
+            return False
+        return all(member == name for member in members)
+
+    return contains
+
+
 def _trusted_codex_binary(codex_binary: str):
     binary_path = shutil.which(codex_binary) if not os.path.isabs(codex_binary) else codex_binary
     if not binary_path:
@@ -115,15 +145,32 @@ def _trusted_codex_binary(codex_binary: str):
         not stat.S_ISREG(target.st_mode)
         or not os.access(str(binary), os.X_OK)
         or target.st_uid not in allowed_owners
+        or (os.name != "nt" and target.st_mode & (stat.S_ISUID | stat.S_ISGID))
     ):
         raise QuotaError("Codex executable is not trusted")
     if os.name != "nt":
+        private_group = _private_groups(current_uid)
+        # Owner of the entry directly below the ancestor being checked; None
+        # for the executable itself.
+        entry_uid = None
         for parent in (binary, *binary.parents):
-            info = parent.stat()
-            if info.st_mode & stat.S_IWOTH:
+            try:
+                info = parent.stat()
+            except OSError as exc:
+                raise QuotaError("Codex executable is unavailable") from exc
+            # A sticky directory such as /tmp stops other users renaming or
+            # removing an entry owned by root or the current user.
+            sticky_protects_entry = (
+                entry_uid in allowed_owners
+                and stat.S_ISDIR(info.st_mode)
+                and info.st_mode & stat.S_ISVTX
+            )
+            group_foreign = info.st_mode & stat.S_IWGRP and not (
+                info.st_uid in allowed_owners and private_group(info.st_gid)
+            )
+            if (info.st_mode & stat.S_IWOTH or group_foreign) and not sticky_protects_entry:
                 raise QuotaError("Codex executable path is writable")
-            if info.st_mode & stat.S_IWGRP and info.st_uid not in allowed_owners:
-                raise QuotaError("Codex executable path is not owner-managed")
+            entry_uid = info.st_uid
     return binary, (target.st_dev, target.st_ino)
 
 

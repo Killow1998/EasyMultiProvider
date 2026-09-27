@@ -307,7 +307,7 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
 }
 
 #[test]
-fn legacy_local_key_history_moves_to_the_verified_identity_once() {
+fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() {
     let directory = tempfile::tempdir().expect("legacy quota history directory");
     let root = directory
         .path()
@@ -380,9 +380,11 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once() {
     let egg = quota_owner_key(&server.state, "egg").unwrap();
     let native = quota_owner_key(&server.state, "@native").unwrap();
     assert_eq!(points(&egg), 2);
-    assert_eq!(points(&native), 1);
     assert_eq!(points("egg"), 0);
-    assert_eq!(points("@native"), 0);
+    // `@native` rows may come from any earlier login: the current one
+    // cannot claim them.
+    assert_eq!(points(&native), 0);
+    assert_eq!(points("@native"), 1);
     // No configured account can vouch for "ghost": its rows stay untouched.
     assert_eq!(points("ghost"), 1);
 
@@ -398,6 +400,42 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once() {
     assert_ne!(other, egg);
     crate::services::quota::migrate_legacy_quota_history(&server.state);
     assert_eq!(points(&other), 0);
+
+    // Reimporting the id with different credentials attributes its legacy
+    // rows with the credentials that recorded them first.
+    history
+        .append_snapshot("egg", &sample(60), 2_000_800)
+        .unwrap();
+    import("egg", "third-identity");
+    assert_eq!(points(&other), 1);
+    assert_eq!(points("egg"), 0);
+
+    // When the recording credentials are unreadable the rows cannot be
+    // attributed; deleting the account drops them instead of leaving them
+    // for the next account that reuses the id.
+    history
+        .append_snapshot("egg", &sample(70), 2_000_850)
+        .unwrap();
+    let egg_auth = emp_state::account_auth_path(
+        &server
+            .state
+            .backend
+            .configuration
+            .config
+            .lock()
+            .unwrap()
+            .clone(),
+        "egg",
+        &server.state.backend.configuration.config_path,
+    )
+    .unwrap();
+    std::fs::write(&egg_auth, b"not a vault document").unwrap();
+    delete_account_state(&server.state, "egg").expect("delete unreadable egg");
+    assert_eq!(points("egg"), 0);
+    import("egg", "fourth-identity");
+    let fourth = quota_owner_key(&server.state, "egg").unwrap();
+    crate::services::quota::migrate_legacy_quota_history(&server.state);
+    assert_eq!(points(&fourth), 0);
     server
         .shutdown()
         .expect("shutdown legacy quota history state");

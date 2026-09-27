@@ -47,6 +47,36 @@ class QuotaTests(unittest.TestCase):
             self.assertEqual(trusted, binary.resolve())
             self.assertEqual(identity, (binary.stat().st_dev, binary.stat().st_ino))
 
+    @unittest.skipIf(os.name == "nt", "Unix path permission checks do not apply")
+    def test_codex_trust_matches_the_shared_executable_rule(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            binary = root / "codex"
+            binary.write_text("#!/bin/sh\n", encoding="utf-8")
+            binary.chmod(0o4755)
+            with self.assertRaisesRegex(quota_module.QuotaError, "not trusted"):
+                _trusted_codex_binary(str(binary))
+
+            sticky = root / "sticky"
+            sticky.mkdir()
+            owned = sticky / "codex"
+            owned.write_text("#!/bin/sh\n", encoding="utf-8")
+            owned.chmod(0o755)
+            sticky.chmod(0o1777)
+            try:
+                self.assertEqual(_trusted_codex_binary(str(owned))[0], owned.resolve())
+            finally:
+                sticky.chmod(0o700)
+
+            private = quota_module._private_groups(os.getuid())
+            shared = next((gid for gid in os.getgroups() if not private(gid)), None)
+            if shared is not None:
+                owned.chmod(0o775)
+                os.chown(owned, -1, shared)
+                with self.assertRaisesRegex(quota_module.QuotaError, "path is writable"):
+                    _trusted_codex_binary(str(owned))
+
     def test_slow_account_does_not_block_another_account(self):
         entered = threading.Event()
         release = threading.Event()

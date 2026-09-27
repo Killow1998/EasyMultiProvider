@@ -562,3 +562,48 @@ fn responses_authentication_precedes_request_body_reads() {
     assert!(response.contains("proxy caller authentication is required"));
     server.shutdown().expect("shutdown");
 }
+
+#[cfg(unix)]
+#[test]
+fn failed_session_save_leaves_the_bootstrap_link_retryable() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_directory, server) = test_server();
+    let token = server.state.bootstrap.token.clone();
+    let session_directory = server
+        .state
+        .sessions
+        .path
+        .parent()
+        .expect("session directory")
+        .to_path_buf();
+    let original = std::fs::metadata(&session_directory)
+        .expect("session directory metadata")
+        .permissions();
+    std::fs::set_permissions(&session_directory, std::fs::Permissions::from_mode(0o500))
+        .expect("make session directory read-only");
+    // JSON body as the shared UI sends it; the exchange ignores the body.
+    let failed = post(
+        &server,
+        "/api/session",
+        b"{}",
+        &[
+            &format!("X-EMP-Bootstrap: {token}"),
+            "Content-Type: application/json",
+        ],
+    );
+    std::fs::set_permissions(&session_directory, original).expect("restore permissions");
+    assert!(
+        failed.starts_with("HTTP/1.1 500 Internal Server Error\r\n"),
+        "{failed}"
+    );
+    assert!(!server.state.bootstrap.used.load(Ordering::Acquire));
+
+    let session = exchanged_session(&bootstrap_exchange(&server, &token, &[]));
+    assert!(!session.is_empty());
+    let reused = bootstrap_exchange(&server, &token, &[]);
+    assert!(
+        reused.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
+        "{reused}"
+    );
+    server.shutdown().expect("shutdown");
+}

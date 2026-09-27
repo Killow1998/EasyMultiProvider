@@ -170,6 +170,14 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
     }) {
         return Err(format!("account prefix is already in use: {prefix}"));
     }
+    if existing
+        .iter()
+        .any(|item| item.get("id").and_then(Value::as_str) == Some(account_id))
+    {
+        // The id is about to name new credentials: its legacy rows must be
+        // attributed with the credentials that recorded them, or dropped.
+        crate::services::quota::settle_legacy_quota_history(state, account_id);
+    }
     let mut accounts = existing
         .into_iter()
         .filter(|item| item.get("id").and_then(Value::as_str) != Some(account_id))
@@ -244,9 +252,9 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
     let _refresh_guard = refresh_lock
         .lock()
         .map_err(|_| "internal server error".to_owned())?;
-    // Legacy rows keyed by this id must reach the identity they belong to
-    // before the id becomes free for a different account.
-    crate::services::quota::adopt_legacy_quota_history(state, account_id);
+    // Legacy rows keyed by this id must reach the identity they belong to,
+    // or be dropped, before the id becomes free for a different account.
+    crate::services::quota::settle_legacy_quota_history(state, account_id);
     let current = state
         .backend
         .configuration

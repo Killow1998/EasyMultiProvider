@@ -137,6 +137,12 @@ for line in sys.stdin:
             .contains_key(auth_path.to_str().unwrap())
     );
 
+    // Nothing flushes while saving still fails.
+    assert_eq!(
+        crate::services::quota::flush_pending_rotations(&server.state),
+        1
+    );
+
     // Writable again: the pending credential reaches disk and is cleared.
     fail_saves(false);
     let (status, body) = status_and_body(post(
@@ -169,4 +175,62 @@ for line in sys.stdin:
         ["original", "rotated", "rotated"]
     );
     server.shutdown().expect("shutdown quota service");
+}
+
+/// A rotated credential whose save failed must reach disk at shutdown even
+/// if no further quota check runs, and a pending credential for an account
+/// that no longer exists is dropped rather than written.
+#[test]
+fn shutdown_flushes_pending_rotations_of_configured_accounts_only() {
+    let directory = tempfile::tempdir().expect("flush temporary directory");
+    let root = canonical_root(&directory);
+    let account_root = root.join("state/accounts");
+    let auth_path = account_root.join("kept/auth.json.enc");
+    let gone_path = account_root.join("gone/auth.json.enc");
+    let config_path = root.join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({
+            "account_store_path": account_root,
+            "accounts": [{"id":"kept","name":"kept","prefix":"kept","auth_file":auth_path}],
+        }))
+        .expect("encode flush config"),
+    )
+    .expect("write flush config");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "codex-not-needed",
+        root.join("codex/auth.json"),
+    )
+    .expect("start quota service");
+    let state = std::sync::Arc::clone(&server.state);
+    let vault = &state.backend.configuration.vault;
+    vault
+        .write_encrypted_json(&auth_path, &json!({"tokens":{"access_token":"stale"}}))
+        .expect("write stale auth");
+    {
+        let mut pending = server
+            .state
+            .backend
+            .accounts
+            .pending_rotations
+            .lock()
+            .unwrap();
+        pending.insert(
+            auth_path.to_str().unwrap().to_owned(),
+            json!({"tokens":{"access_token":"rotated"}}),
+        );
+        pending.insert(
+            gone_path.to_str().unwrap().to_owned(),
+            json!({"tokens":{"access_token":"orphan"}}),
+        );
+    }
+    server.shutdown().expect("shutdown quota service");
+    let stored = vault
+        .read_encrypted_json(&auth_path)
+        .expect("read flushed auth");
+    assert_eq!(stored["tokens"]["access_token"], "rotated");
+    assert!(!gone_path.exists());
 }

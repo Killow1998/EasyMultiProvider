@@ -81,36 +81,16 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
 }
 
 fn validate_binary_path(path: &Path) -> Result<(), QuotaError> {
-    let metadata = fs::metadata(path).map_err(|_| binary_unavailable())?;
-    if !metadata.is_file() {
-        return Err(QuotaError::new(
-            "Codex executable is not trusted",
-            "quota_error",
-        ));
-    }
-    #[cfg(unix)]
-    {
-        let current_uid = unsafe { libc::getuid() };
-        if metadata.mode() & 0o111 == 0 || (metadata.uid() != 0 && metadata.uid() != current_uid) {
-            return Err(QuotaError::new(
-                "Codex executable is not trusted",
-                "quota_error",
-            ));
+    use crate::executable_trust::{TrustFailure, validate_executable};
+    validate_executable(path).map_err(|failure| match failure {
+        TrustFailure::Unavailable => binary_unavailable(),
+        TrustFailure::NotTrusted => {
+            QuotaError::new("Codex executable is not trusted", "quota_error")
         }
-        for parent in path.ancestors() {
-            let info = fs::metadata(parent)
-                .map_err(|_| QuotaError::new("Codex executable is not trusted", "quota_error"))?;
-            if info.mode() & 0o002 != 0
-                || (info.mode() & 0o020 != 0 && info.uid() != 0 && info.uid() != current_uid)
-            {
-                return Err(QuotaError::new(
-                    "Codex executable path is writable",
-                    "quota_error",
-                ));
-            }
+        TrustFailure::Writable => {
+            QuotaError::new("Codex executable path is writable", "quota_error")
         }
-    }
-    Ok(())
+    })
 }
 
 fn binary_identity(path: &Path) -> Result<BinaryIdentity, QuotaError> {

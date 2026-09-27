@@ -342,6 +342,9 @@ impl ServerHandle {
                     drop(wait);
                     if !state.shutdown.load(Ordering::Acquire) {
                         sample_quotas_once(&state);
+                        // Disabled or duplicate accounts are not sampled;
+                        // their rotated credentials still need saving.
+                        crate::services::quota::flush_pending_rotations(&state);
                     }
                 }
             })
@@ -406,6 +409,14 @@ impl ServerHandle {
             workers.into_inner().map_err(|_| AppError::ServerStopped)?;
         for worker in workers {
             let _: () = worker.join().map_err(|_| AppError::ServerStopped)?;
+        }
+        // Last chance to save credentials Codex rotated: the stored copies
+        // may already be invalid upstream.
+        let unsaved = crate::services::quota::flush_pending_rotations(&self.state);
+        if unsaved > 0 {
+            eprintln!(
+                "EMP could not save {unsaved} rotated Codex account credential(s); re-import the affected accounts if their quota checks fail after restart"
+            );
         }
         drop(self._service_owner);
         restoration

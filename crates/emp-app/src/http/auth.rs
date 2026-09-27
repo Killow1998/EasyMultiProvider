@@ -48,6 +48,12 @@ impl BootstrapToken {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
+
+    /// Return a consumed token whose session could not be established, so
+    /// the same sign-in link can be retried once the fault clears.
+    pub(crate) fn release(&self) {
+        self.used.store(false, Ordering::Release);
+    }
 }
 
 struct ExportConfirmation {

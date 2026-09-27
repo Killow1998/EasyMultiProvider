@@ -620,15 +620,12 @@ fn replay_records(
 }
 
 /// Rebuild visible history from a reverse-located compaction base.
-#[allow(clippy::too_many_arguments)]
 fn snapshot_from_base(
     file: &mut File,
     base: ReverseBase,
     scan: RolloutScan,
     frame: ReplayFrame,
     anchor: &HistoryAnchor,
-    exact_compaction: bool,
-    lineage_bound: Option<u64>,
 ) -> Result<HistorySnapshot, HistoryError> {
     let mut frame = frame;
     frame.seed_visible = replacement_entries(
@@ -636,17 +633,10 @@ fn snapshot_from_base(
         &Vec::<VisibleItem>::new(),
         base.turn.clone(),
     )?;
-    if exact_compaction {
-        // Inherited checkpoints capture the parent prefix through the
-        // compaction record; newer parent records stay excluded.
-        return Ok(HistorySnapshot {
-            thread_id: anchor.thread_id.clone().unwrap_or_default(),
-            items: frame.seed_visible,
-            source_model: None,
-        });
-    }
     let mut source = FileRecordSource::new(file, frame.start, frame.end);
-    let items = replay_records(&mut source, &frame, &scan, anchor, lineage_bound)?;
+    // The reverse base never serves a lineage-bounded or fork-checkpoint
+    // replay, so the suffix replays unbounded.
+    let items = replay_records(&mut source, &frame, &scan, anchor, None)?;
     Ok(HistorySnapshot {
         thread_id: anchor.thread_id.clone().unwrap_or_default(),
         items,
@@ -1029,6 +1019,9 @@ impl CodexHomeHistoryReader {
             // A byte-capped ancestor never resumes from a reverse base: the
             // frozen prefix is a bounded replay, not a live resume.
             && byte_cap == captured_end
+            // Neither does an ordinal-bounded ancestor: the newest checkpoint
+            // may postdate the fork and would seed history the bound excludes.
+            && replay.lineage_bound.is_none()
         {
             locate_latest_compaction(&mut file, captured_end, &location.mode)?
         } else {
@@ -1085,15 +1078,7 @@ impl CodexHomeHistoryReader {
                 && let SuffixScan::Usable(scan) =
                     scan_suffix(&mut file, &frame, anchor, &location.mode)?
             {
-                let snapshot = snapshot_from_base(
-                    &mut file,
-                    base,
-                    *scan,
-                    frame,
-                    anchor,
-                    replay.exact_compaction.is_some(),
-                    replay.lineage_bound,
-                )?;
+                let snapshot = snapshot_from_base(&mut file, base, *scan, frame, anchor)?;
                 return Ok(HistorySnapshot {
                     source_model: snapshot.source_model.or_else(|| {
                         anchor

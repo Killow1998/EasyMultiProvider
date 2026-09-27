@@ -1280,7 +1280,7 @@ class ServerAccountTests(unittest.TestCase):
             self.assertNotEqual(state._quota_owner_key("egg"), original_owner)
             self.assertEqual(state.quota_history_snapshot("egg", "all")["series"], [])
 
-    def test_legacy_local_key_history_moves_to_the_verified_identity_once(self):
+    def test_legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "config.json"
@@ -1319,9 +1319,11 @@ class ServerAccountTests(unittest.TestCase):
             egg = state._quota_owner_key("egg")
             native = state._quota_owner_key("@native")
             self.assertEqual(points(egg), 2)
-            self.assertEqual(points(native), 1)
             self.assertEqual(points("egg"), 0)
-            self.assertEqual(points("@native"), 0)
+            # @native rows may come from any earlier login: the current one
+            # cannot claim them.
+            self.assertEqual(points(native), 0)
+            self.assertEqual(points("@native"), 1)
             self.assertEqual(points("ghost"), 1)
 
             history.append_snapshot("egg", sample(50), observed_at=int(time.time()))
@@ -1332,6 +1334,26 @@ class ServerAccountTests(unittest.TestCase):
             self.assertNotEqual(other, egg)
             state.migrate_legacy_quota_history()
             self.assertEqual(points(other), 0)
+
+            # Reimporting the id with different credentials attributes its
+            # legacy rows with the credentials that recorded them first.
+            history.append_snapshot("egg", sample(60), observed_at=int(time.time()) - 60)
+            import_account("egg", "third-identity")
+            self.assertEqual(points(other), 1)
+            self.assertEqual(points("egg"), 0)
+
+            # Unreadable recording credentials: deleting the account drops the
+            # rows instead of leaving them for the next account reusing the id.
+            history.append_snapshot("egg", sample(70), observed_at=int(time.time()) - 30)
+            egg_auth = next(
+                item["auth_file"] for item in state.config["accounts"] if item["id"] == "egg"
+            )
+            Path(egg_auth).write_bytes(b"not a vault document")
+            state.delete_account("egg")
+            self.assertEqual(points("egg"), 0)
+            import_account("egg", "fourth-identity")
+            state.migrate_legacy_quota_history()
+            self.assertEqual(points(state._quota_owner_key("egg")), 0)
 
     def test_web_config_update_keeps_api_key_out_of_config(self):
         with tempfile.TemporaryDirectory() as directory:
