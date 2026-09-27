@@ -44,10 +44,17 @@ impl RedirectOrigin {
     }
 
     fn matches(&self, url: &Url) -> bool {
+        // `Url::host_str` brackets IPv6 literals; the route host may not.
+        let unbracketed = |host: &str| {
+            host.strip_prefix('[')
+                .and_then(|host| host.strip_suffix(']'))
+                .unwrap_or(host)
+                .to_owned()
+        };
         self.scheme == url.scheme()
-            && url
-                .host_str()
-                .is_some_and(|host| host.eq_ignore_ascii_case(&self.host))
+            && url.host_str().is_some_and(|host| {
+                unbracketed(host).eq_ignore_ascii_case(&unbracketed(&self.host))
+            })
             && url.port_or_known_default() == Some(self.port)
     }
 
@@ -651,6 +658,14 @@ mod tests {
         assert!(!origin.matches(&Url::parse("https://other.example.test/next").unwrap()));
         assert!(!origin.matches(&Url::parse("https://api.example.test:444/next").unwrap()));
         assert!(!origin.matches(&Url::parse("http://api.example.test/next").unwrap()));
+
+        let ipv6 = RedirectOrigin {
+            scheme: "http".to_owned(),
+            host: "::1".to_owned(),
+            port: 8080,
+        };
+        assert!(ipv6.matches(&Url::parse("http://[::1]:8080/next").unwrap()));
+        assert!(!ipv6.matches(&Url::parse("http://[::2]:8080/next").unwrap()));
     }
 
     #[test]

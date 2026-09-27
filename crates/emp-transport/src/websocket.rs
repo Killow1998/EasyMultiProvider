@@ -624,10 +624,12 @@ impl PerMessageDeflate {
             if status == Status::StreamEnd {
                 // The peer finished the DEFLATE stream with a BFINAL block
                 // (RFC 7692 section 7.2.3.4). Only the synthetic empty-block
-                // tail may remain; any real payload bytes after the end of the
+                // tail may remain, optionally after the single 0x00 octet the
+                // RFC's own example sends (an empty non-final stored-block
+                // header); any other payload bytes after the end of the
                 // stream are malformed. The next message starts a new stream.
                 self.decompressor.reset(false);
-                if consumed < payload.len() {
+                if !matches!(payload.get(consumed..), Some([] | [0x00])) {
                     return Err(DecompressionError::Invalid);
                 }
                 return Ok(output);
@@ -891,6 +893,16 @@ mod tests {
         assert_eq!(
             deflate.decompress(&trailing, 4 * 1024 * 1024),
             Err(DecompressionError::Invalid)
+        );
+
+        // RFC 7692 section 7.2.3.4: "Hello" in a BFINAL block followed by
+        // one 0x00 padding octet.
+        let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
+        assert_eq!(
+            deflate
+                .decompress(&[0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00, 0x00], 1024)
+                .as_deref(),
+            Ok(&b"Hello"[..])
         );
 
         let mut garbage = finished_deflate(message);

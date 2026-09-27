@@ -3,10 +3,12 @@
 use super::*;
 
 fn may_carry_context_error(event: &Value) -> bool {
+    // OpenAI-compatible gateways also stream bare `{"error":{...}}` events
+    // without a `type`; ordinary content events never carry an error object.
     matches!(
         event.get("type").and_then(Value::as_str),
         Some("error" | "response.failed" | "response.incomplete")
-    )
+    ) || event.get("error").is_some_and(|error| !error.is_null())
 }
 
 impl NativeStream {
@@ -369,18 +371,42 @@ mod tests {
             .consume_chunk(frame.as_bytes())
             .expect_err("terminal context error is classified");
         assert_eq!(error.status(), 413);
+
+        let untyped = json!({"error": {"code": "context_length_exceeded"}});
+        let frame = format!("data: {untyped}\n\n");
+        let error = detached_stream()
+            .consume_chunk(frame.as_bytes())
+            .expect_err("untyped gateway context error is classified");
+        assert_eq!(error.status(), 413);
     }
 
     #[test]
     fn context_error_observation_cost_has_body_and_node_caps() {
+        // Evidence beyond the body cap is not inspected: the event passes
+        // through as an ordinary terminal instead of being classified.
         let mut stream = detached_stream();
         let failed = json!({
             "type": "response.failed",
-            "response": {"error": {"details": vec![Value::Null; 5_000]}},
+            "response": {
+                "output": "x".repeat(80 * 1024),
+                "error": {"code": "context_length_exceeded"},
+            },
         });
         let frame = format!("data: {failed}\n\n");
         stream.consume_chunk(frame.as_bytes()).unwrap();
         assert_eq!(stream.pending.len(), 1);
+        assert!(stream.saw_terminal);
+
+        let mut stream = detached_stream();
+        let failed = json!({
+            "type": "response.failed",
+            "response": {
+                "details": vec![Value::Null; 5_000],
+                "error": {"code": "context_length_exceeded"},
+            },
+        });
+        let frame = format!("data: {failed}\n\n");
+        stream.consume_chunk(frame.as_bytes()).unwrap();
         assert!(stream.saw_terminal);
     }
 }
