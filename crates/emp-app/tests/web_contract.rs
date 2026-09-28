@@ -210,7 +210,10 @@ fn version_output_reports_the_running_release() {
         .expect("run EMP --version");
     assert!(output.status.success());
     let line_ending = if cfg!(windows) { "\r\n" } else { "\n" };
-    assert_eq!(output.stdout, format!("EMP {}{line_ending}", env!("CARGO_PKG_VERSION")).as_bytes());
+    assert_eq!(
+        output.stdout,
+        format!("EMP {}{line_ending}", env!("CARGO_PKG_VERSION")).as_bytes()
+    );
     assert!(output.stderr.is_empty());
 }
 

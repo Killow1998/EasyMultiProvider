@@ -41,9 +41,13 @@ the final PE resources back to verify them.
 `--emp-apply-update` worker twice: once to replace it and once with a broken
 candidate that must roll back. On macOS it installs from the real `.dmg`. On
 Linux it also installs the archive with `install-user.sh` into an isolated
-desktop-user home. The repository has no Python code; the Linux bootstrap
-installer (`EMP-linux-x86_64-install.sh`) still uses the user's `python3` for
-release metadata, archive checks and configuration migration.
+desktop-user home. Neither the repository nor any shipped script uses Python.
+The Linux bootstrap installer (`EMP-linux-x86_64-install.sh`) needs only
+`curl`, `tar`, `gzip` and `sha256sum`: it resolves the latest stable tag from
+the `releases/latest` redirect, verifies the archive against the published
+`EMP-linux-x86_64.tar.gz.sha256`, checks every archive entry, and lets the
+verified binary migrate an older configuration with
+`EMP --emp-migrate-config SOURCE TARGET`.
 
 The Rust Web UI embeds the existing HTML at compile time. Linux tarballs retain
 the updater-compatible `EMP/EMP` path and also include `EMP/install-user.sh`,
@@ -61,11 +65,12 @@ certificates while accepting a configured root.
 
 The **Package** workflow builds on all four native runners, merges the outputs,
 checks the exact 22-file manifest and each SHA-256 sidecar with
-`cargo xtask validate-release`, and publishes five
+`cargo xtask validate-release`, and publishes six
 user-facing assets:
 
 - `EMP.exe`
 - `EMP-linux-x86_64.tar.gz`
+- `EMP-linux-x86_64.tar.gz.sha256` (read by the Linux installer)
 - `EMP-linux-x86_64-install.sh`
 - `EMP-macos-x86_64.dmg`
 - `EMP-macos-arm64.dmg`

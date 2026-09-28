@@ -199,8 +199,8 @@ jobs:
         shell: bash
         run: |
           mapfile -t public_assets < public-release-assets.txt
-          if [ "${#public_assets[@]}" -ne 5 ]; then
-            echo "Expected 5 user-facing release assets." >&2
+          if [ "${#public_assets[@]}" -ne 6 ]; then
+            echo "Expected 6 user-facing release assets." >&2
             exit 1
           fi
           for asset in "${public_assets[@]}"; do

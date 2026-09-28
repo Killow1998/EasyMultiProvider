@@ -22,6 +22,9 @@
 - `EMP --emp-migrate-config SOURCE TARGET` copies an older configuration, its
   state and the files it references into the desktop configuration directory,
   backing up anything it replaces.
+- The Linux installer no longer needs Python: it uses `curl`, `tar`, `gzip`
+  and `sha256sum`, reads the newly published
+  `EMP-linux-x86_64.tar.gz.sha256`, and migrates configurations with EMP.
 
 ## 0.12.1 (2026-09-25)
 
