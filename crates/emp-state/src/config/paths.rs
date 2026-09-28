@@ -4,7 +4,7 @@ use super::{CONFIG_PATH_ENV, ConfigError, ConfigResult, Value, default_native_ca
 use std::env;
 use std::path::{Path, PathBuf, absolute};
 
-/// Stable generated catalog location, matching Python's expanded, resolved Codex home.
+/// Stable generated catalog location inside the expanded, resolved Codex home.
 pub fn generated_catalog_path(codex_home: Option<&Path>) -> PathBuf {
     let home = codex_home.map(Path::to_path_buf).unwrap_or_else(|| {
         env::var("CODEX_HOME")
@@ -23,7 +23,7 @@ pub fn generated_catalog_path(codex_home: Option<&Path>) -> PathBuf {
         .join("catalog.json")
 }
 
-/// Resolve a user-selected path as Python's expanduser().resolve() does,
+/// Resolve a user-selected path as an expanded, fully resolved absolute path,
 /// including nonexistent final components.
 pub fn resolve_user_path(path: &Path) -> PathBuf {
     path_python_resolve(&expand_user(path))
@@ -83,7 +83,7 @@ pub(crate) fn expand_home(path: &Path) -> PathBuf {
     expand_user(path)
 }
 
-/// Return the Python-native catalog fallback, expanded in the caller's home.
+/// Return the default native catalog fallback, expanded in the caller's home.
 pub(crate) fn expand_home_default_native_catalog_path() -> PathBuf {
     expand_user(Path::new(&default_native_catalog_path()))
 }
@@ -180,10 +180,9 @@ fn canonical_account_paths(config: &mut Value, config_path: &Path) -> Result<(),
 
 /// Canonicalize configured account credentials against the derived account root.
 ///
-/// This is the public Rust compatibility slice for Python
-/// `canonicalize_account_paths`. Account path errors are represented as
-/// `ConfigError` because Python's `_canonicalize_private_paths` catches the
-/// original `AccountError` and re-raises it as a `ConfigError`.
+/// Canonicalization is part of the public error surface: account path errors
+/// surface as `ConfigError`, matching the documented behavior users observe
+/// when a stored account ID would escape the managed root.
 pub fn canonicalize_account_paths(config: &mut Value, config_path: &Path) -> ConfigResult<()> {
     canonical_account_paths(config, config_path)
 }
@@ -265,8 +264,7 @@ fn canonical_secret_paths(config: &mut Value, config_path: &Path) -> Result<(), 
 
 /// Canonicalize managed private paths for already normalized configuration.
 ///
-/// This is the public Rust compatibility slice for Python
-/// `_canonicalize_private_paths`. Relative store paths and relative managed
+/// Relative store paths and relative managed
 /// files are based on `config_path.parent`, `~` is expanded, missing path
 /// components are retained, existing links are followed, and the final managed
 /// input path must itself not be a symlink.

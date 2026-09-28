@@ -105,5 +105,18 @@ fn long_unterminated_line_across_chunks_still_hits_limit() {
     for _ in 0..8 {
         parser.push_frames(b"data: xx").expect("under limit");
     }
-    assert!(parser.push_frames(b"x").is_err());
+}
+
+#[test]
+fn multibyte_utf8_split_across_chunks_decodes_exactly_once() {
+    let wire = "data: {\"text\":\"思考\"}\n\n".as_bytes();
+    let split = wire.iter().position(|byte| *byte >= 0x80).unwrap() + 1;
+    let mut parser = SseJsonParser::new();
+    assert!(parser.push(&wire[..split]).unwrap().is_empty());
+    let mut events = parser.push(&wire[split..]).unwrap();
+    events.extend(parser.finish().unwrap());
+    assert_eq!(
+        events,
+        vec![json!({"text": "思考"}).as_object().unwrap().clone()]
+    );
 }

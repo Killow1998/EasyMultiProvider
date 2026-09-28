@@ -39,7 +39,7 @@ fn candidate_version_probe_accepts_only_successful_exact_output() {
 
 #[cfg(unix)]
 #[test]
-fn candidate_version_probe_maps_spawn_failures_like_python() {
+fn candidate_version_probe_maps_spawn_failures_to_update_errors() {
     let root = tempfile::TempDir::new().unwrap();
     assert_eq!(
         probe_candidate_version(

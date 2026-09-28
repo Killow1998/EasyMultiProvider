@@ -106,8 +106,8 @@ def main(argv=None):
             suites = ["tests.test_codex_cli_demo", "tests.test_codex_metadata_cli"]
             if env.get("EMP_RUST_BINARY"):
                 # Rust uses real processes/sockets, never Python implementation mocks.
+                # Its user journeys run under `cargo test -p emp-app --test user_journeys`.
                 env["EMP_RUST_BINARY"] = str(Path(env["EMP_RUST_BINARY"]).resolve(strict=True))
-                suites.append("tests.test_rust_e2e")
             else:
                 suites.extend(["tests.test_codex_live_catalog", "tests.test_codex_retry_cli"])
         exit_code = subprocess.call(

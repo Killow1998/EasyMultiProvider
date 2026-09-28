@@ -1,9 +1,10 @@
-# EMP cross-language contracts
+# EMP frozen behavior contracts
 
-These fixtures freeze observable EMP behavior while the backend moves from
-Python to Rust. Each case identifies the Python test or documented boundary it
-came from, the baseline revision, the transport and dialect, permitted
-normalization, and expected side effects.
+These fixtures freeze observable EMP behavior for the Rust backend. Each case
+identifies the Rust test or documented boundary that enforces it, the baseline
+revision, the transport and dialect, permitted normalization, and expected side
+effects. The Python backend is frozen and its behavior lives on only in these
+fixture files, which use the historical `python-` file-name prefix.
 
 Contract levels are independent:
 
@@ -12,12 +13,12 @@ Contract levels are independent:
 - `api`: HTTP/WebSocket methods, status, headers, JSON and state transitions;
 - `state`: compatible files, databases, locks, permissions and rollback.
 
-The differential driver has three roles. `python` invokes the frozen reference
-implementation, `rust` invokes the replacement, and `consumer` validates the
-result independently with the unchanged browser, a raw protocol client, or the
-pinned Codex CLI. Fixtures use local deterministic upstreams and synthetic
-credentials. They must not call real generation, refresh credentials, consume a
-quota reset, or install an update.
+Rust tests load the frozen fixtures directly; nothing at test time spawns a
+Python process or reads a live Python checkout. A `consumer` role still
+validates observable results independently with the unchanged browser, a raw
+protocol client, or the pinned Codex CLI. Fixtures use local deterministic
+upstreams and synthetic credentials. They must not call real generation,
+refresh credentials, consume a quota reset, or install an update.
 
 Exact equality is not required for TCP/TLS segmentation, fresh ciphertext,
 compressed bytes, timestamps, or random identifiers. A case that normalizes a
