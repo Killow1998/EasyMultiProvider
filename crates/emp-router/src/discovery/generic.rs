@@ -45,6 +45,13 @@ pub async fn discover_generic_models(
         .unwrap_or(base);
     let headers = bearer_discovery_headers(key);
     let mut budget = DiscoveryBudget::new();
+    // OpenRouter lists models without checking the key, so ask about the key first.
+    let host = Url::parse(base)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned));
+    if host.as_deref() == Some("openrouter.ai") {
+        get_json(client, &format!("{base}/key"), headers.clone(), &mut budget).await?;
+    }
     let value = get_json(client, &format!("{base}/models"), headers, &mut budget).await?;
     project_generic_models(&value).map(|models| enrich_discovered_models(provider, models))
 }

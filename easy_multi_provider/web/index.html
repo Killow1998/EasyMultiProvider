@@ -257,6 +257,7 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .period-presets button.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
 .period-custom{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px}
 .period-custom label{display:grid;gap:3px;margin:0;font-size:12px}
+#notification{align-items:center;padding:6px 6px 6px 14px}#status{flex:1;line-height:1.45}#notification .notification-close{width:28px;height:28px;min-height:28px;font-size:20px}
 .usage-filters :is(select,input,button){height:32px;min-height:32px;padding-top:0;padding-bottom:0}
 .period-custom input{width:auto;min-width:190px;height:30px;padding:3px 8px}
 .period-custom button{margin:0;height:30px;min-height:30px}
@@ -655,6 +656,27 @@ function renderUsage() {
     <details class="usage-notice"><summary>${tr('计价说明与价格更新时间','Pricing basis & updates')}</summary><p>${tr('按请求完成时的本地 API 价目估算，缺价时在价格补齐后计价，已计价历史不再改写。包含缓存折扣和可确认的长上下文、服务档位费率。并非订阅账单，不含工具调用费、缓存存储费、税费或转售加价。缺少缓存明细时无法精确计价。','Uses local API rates at request completion, or the first available rate if initially missing. Priced history is frozen. Includes cache discounts and known context/service tiers. Not a subscription bill; excludes tool fees, cache storage, tax and reseller markups. Missing cache details prevent a precise estimate.')}</p><p><a href="${esc(price.url)}" target="_blank" rel="noopener noreferrer">LiteLLM</a> · ${tr('每 24 小时后台更新','Updated in the background every 24 hours')} · ${price.fetched_at ? esc(new Date(price.fetched_at*1000).toLocaleString()) : tr('尚未获取价格','Prices not downloaded')}</p>${price.stale || price.error ? `<p class="usage-warning">${tr('价格尚未更新，暂用已有价目；没有价目的模型保留为未计价。','Prices are not up to date. Saved rates are used where available; other models remain unpriced.')}</p>` : ''}</details>`;
 }
 
+const SESSION_ERRORS = ['management session is required', 'proxy caller authentication is required'];
+const UPSTREAM_ERROR_GROUPS = [
+  [['auth'], ['API Key 无效或已过期，请检查后重新填写。','The API key is invalid or expired. Check it and enter it again.']],
+  [['payment_required'], ['上游账户余额不足或需要付费。','The provider account is out of credit or requires payment.']],
+  [['rate_limit'], ['请求过于频繁，请稍后重试。','Too many requests. Try again later.']],
+  [['network','dns_failure','tls_failure','connect_timeout','proxy_unavailable','proxy_reset'], ['连不上模型服务，请检查网络、代理和 Base URL。','Cannot reach the model service. Check the network, proxy and Base URL.']],
+  [['timeout','upstream_504','first_event_timeout','first_output_timeout','idle_after_output','local_deadline'], ['模型服务响应超时，请稍后重试。','The model service timed out. Try again later.']],
+  [['upstream_5xx','upstream_capacity'], ['模型服务暂时不可用，请稍后重试。','The model service is temporarily unavailable. Try again later.']],
+  [['protocol_rejection'], ['模型服务拒绝了这个请求，可能不支持该模型或参数。','The model service rejected the request; it may not support this model or its parameters.']],
+  [['protocol_error','malformed_terminal','stream_error','stream_incomplete'], ['模型服务返回了无法识别的内容。','The model service returned something EMP could not read.']],
+  [['context_length_exceeded'], ['内容超过了模型的上下文上限。','The input exceeds the model context window.']],
+  [['content_filter'], ['内容被模型服务的安全策略拦截。','The model service blocked the content.']],
+];
+// Turns an api() failure into a sentence that says whether the key, the network or the service is at fault.
+function upstreamErrorText(error, fallback = '') {
+  if (error?.session) return error.message;
+  const detail = error?.payload?.error || {};
+  if (detail.message === 'provider API key is not configured') return tr('还没有填写 API Key。','No API key has been entered yet.');
+  const group = UPSTREAM_ERROR_GROUPS.find(([types]) => types.includes(detail.type));
+  return group ? tr(...group[1]) : error?.message || fallback;
+}
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (!headers.has('Content-Type')) headers.set('Content-Type','application/json');
@@ -663,8 +685,11 @@ async function api(path, options = {}) {
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {error:{message:text || tr('服务器返回了无效响应', 'The server returned an invalid response')}}; }
   if (!response.ok) {
-    if (response.status === 401) clearSessionToken();
-    const error = new Error(data.error?.message || response.statusText || `HTTP ${response.status}`);
+    // Upstream failures carry error.type; EMP's own 401s mean this page lost its session.
+    const session = response.status === 401 && SESSION_ERRORS.includes(data.error?.message);
+    if (session) clearSessionToken();
+    const error = new Error(session ? tr('管理页登录已失效（EMP 可能已重启）。请从 EMP 重新打开管理页。','This page is no longer signed in (EMP may have restarted). Reopen the management page from EMP.') : data.error?.message || response.statusText || `HTTP ${response.status}`);
+    error.session = session;
     error.payload = data;
     error.status = response.status;
     throw error;
@@ -1822,7 +1847,7 @@ function renderModels() {
   }).join('');
 }
 function toggleModelGroup(provider) { if (expandedModelGroups.has(provider)) expandedModelGroups.delete(provider); else expandedModelGroups.add(provider); renderModels(); }
-function providerDiscoveryError(error) { const status = Number(error?.status || error?.payload?.error?.status || 0); if ([400,401,403].includes(status)) return tr('API Key 无效或没有读取模型列表的权限。','The API key is invalid or cannot read the model list.'); if (status === 429) return tr('请求过于频繁，请稍后重试。','Too many requests. Try again later.'); if (status >= 500) return tr('模型服务暂时不可用，请稍后重试。','The model service is temporarily unavailable. Try again later.'); return error?.message || tr('无法读取模型列表。','Could not read the model list.'); }
+function providerDiscoveryError(error) { return upstreamErrorText(error, tr('无法读取模型列表。','Could not read the model list.')); }
 async function discoverProvider(id) { try { notice(tr(`正在拉取 ${id} 的模型列表 …`,`Fetching models from ${id}…`)); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider:id})}); openModelImportModal(id, result.models || []); } catch (error) { notice(providerDiscoveryError(error), true); } }
 function openModelImportModal(provider, models) {
   const sorted = [...models].sort(modelSort);
@@ -1847,7 +1872,7 @@ function openManualModelModal(modelId = '') {
 function manualModelRoute() { const provider = $('modal_model_provider')?.value || ''; const entered = $('modal_model_upstream')?.value.trim() || ''; const prefix = provider + '/'; return provider && entered ? prefix + (entered.startsWith(prefix) ? entered.slice(prefix.length) : entered) : ''; }
 function updateManualModelRoute() { const route = manualModelRoute(); if ($('modal_model_route')) $('modal_model_route').textContent = route || tr('保存后生成','Generated after save'); }
 function previewModalContext() { const value = Number($('modal_model_context').value) || 0; $('modal_model_context_usable').textContent = value ? tr(`Codex 可用 ${compactContext(usableContext({context_window:value}))}`,`Codex uses ${compactContext(usableContext({context_window:value}))}`) : ''; }
-async function inspectModalModel() { const provider = $('modal_model_provider').value; const upstream = $('modal_model_upstream').value.trim(); if (!provider || !upstream) return notice(tr('请填写 Provider 和上游模型名','Enter a Provider and upstream model name'), true); try { const result = await api('/api/models/metadata', {method:'POST', body:JSON.stringify({provider, model:upstream})}); $('modal_model_context').value = result.context_window; modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : []; modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null; modalReasoningSummarySupport = typeof result.supports_reasoning_summaries === 'boolean' ? result.supports_reasoning_summaries : null; updateManualModelRoute(); notice(tr(`已获取上限：输入 ${Number(result.input_token_limit).toLocaleString()} · 输出 ${Number(result.output_token_limit).toLocaleString()}`,`Limits fetched: input ${Number(result.input_token_limit).toLocaleString()} · output ${Number(result.output_token_limit).toLocaleString()}`)); } catch (error) { notice(tr('获取失败：','Fetch failed: ') + error.message, true); } }
+async function inspectModalModel() { const provider = $('modal_model_provider').value; const upstream = $('modal_model_upstream').value.trim(); if (!provider || !upstream) return notice(tr('请填写 Provider 和上游模型名','Enter a Provider and upstream model name'), true); try { const result = await api('/api/models/metadata', {method:'POST', body:JSON.stringify({provider, model:upstream})}); $('modal_model_context').value = result.context_window; modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : []; modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null; modalReasoningSummarySupport = typeof result.supports_reasoning_summaries === 'boolean' ? result.supports_reasoning_summaries : null; updateManualModelRoute(); notice(tr(`已获取上限：输入 ${Number(result.input_token_limit).toLocaleString()} · 输出 ${Number(result.output_token_limit).toLocaleString()}`,`Limits fetched: input ${Number(result.input_token_limit).toLocaleString()} · output ${Number(result.output_token_limit).toLocaleString()}`)); } catch (error) { notice(tr('获取失败：','Fetch failed: ') + upstreamErrorText(error), true); } }
 async function saveManualModel() {
   const provider = $('modal_model_provider').value;
   const entered = $('modal_model_upstream').value.trim();
@@ -1908,7 +1933,7 @@ async function testModelVision(id) {
     if (!answer) throw new Error(tr('模型没有返回图像描述','The model returned no image description'));
     notice(tr('图像测试收到回复（仅为本次兼容性观察，非官方能力保证）：','Image test received a reply (observed compatibility, not an official guarantee): ') + answer.slice(0, 240));
     return true;
-  } catch (error) { notice(tr('图像测试未通过：','Image test did not succeed: ') + error.message, true); return false; }
+  } catch (error) { notice(tr('图像测试未通过：','Image test did not succeed: ') + upstreamErrorText(error), true); return false; }
 }
 
 // Sends one second of stereo speech: "Front left" on the left channel, then "Front right" on the right.
@@ -1922,7 +1947,7 @@ async function testModelAudio(id) {
     if (!answer) throw new Error(tr('模型没有返回音频内容','The model returned nothing about the audio'));
     notice(tr('音频测试收到回复（应听到左声道 “Front left”、右声道 “Front right”）：','Audio test reply (expect “Front left” on the left, “Front right” on the right): ') + answer.slice(0, 240));
     return true;
-  } catch (error) { notice(tr('音频测试未通过：','Audio test did not succeed: ') + error.message, true); return false; }
+  } catch (error) { notice(tr('音频测试未通过：','Audio test did not succeed: ') + upstreamErrorText(error), true); return false; }
 }
 
 function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryLoading = false; quotaHistoryRequest++; }
