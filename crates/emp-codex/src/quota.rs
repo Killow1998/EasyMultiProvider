@@ -558,7 +558,7 @@ for line in sys.stdin:
         auth = json.loads((home / "auth.json").read_text())
         auth["tokens"]["access_token"] = "rotated-token"
         (home / "auth.json").write_text(json.dumps(auth))
-        print(json.dumps({"id": request["id"], "result": {"account": {"email": "xian@example.com", "planType": "pro"}}}), flush=True)
+        print(json.dumps({"id": request["id"], "result": {"account": {"email": "user@example.com", "planType": "pro"}}}), flush=True)
     elif method == "account/rateLimits/read":
         assert request["params"] is None
         print(json.dumps({"id": request["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 7}}}}), flush=True)

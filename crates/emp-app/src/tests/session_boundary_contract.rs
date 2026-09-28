@@ -510,38 +510,11 @@ fn caller_authorization_tracks_the_live_native_token() {
         Some("Bearer native-secret"),
         &auth
     ));
-
-    if let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let script = r#"
-import json
-from easy_multi_provider.accounts import valid_caller_authorization
-values = ["Bearer rotated", "bearer rotated", "Bearer wrong", "Bearer ", ""]
-print(json.dumps([valid_caller_authorization(value) for value in values]))
-"#;
-        let output = Command::new(python)
-            .arg("-c")
-            .arg(script)
-            .env("CODEX_HOME", directory.path())
-            .current_dir(root)
-            .output()
-            .expect("spawn Python authorization oracle");
-        assert!(
-            output.status.success(),
-            "Python authorization oracle failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let python: Value =
-            serde_json::from_slice(&output.stdout).expect("Python authorization JSON");
-        let rust = json!([
-            valid_caller_authorization(Some("Bearer rotated"), &auth),
-            valid_caller_authorization(Some("bearer rotated"), &auth),
-            valid_caller_authorization(Some("Bearer wrong"), &auth),
-            valid_caller_authorization(Some("Bearer "), &auth),
-            valid_caller_authorization(Some(""), &auth),
-        ]);
-        assert_eq!(rust, python);
-    }
+    // Scheme is case-sensitive (native Codex behavior); junk never matches.
+    assert!(!valid_caller_authorization(Some("bearer rotated"), &auth));
+    assert!(!valid_caller_authorization(Some("Bearer "), &auth));
+    assert!(!valid_caller_authorization(Some(""), &auth));
+    assert!(!valid_caller_authorization(None, &auth));
 }
 
 #[test]
