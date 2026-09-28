@@ -3,27 +3,21 @@ name: Runtime compatibility
 on:
   pull_request:
     paths:
-      - "easy_multi_provider/**"
-      - "tests/**"
-      - "tools/test_codex_runtime.py"
-      - "pyproject.toml"
-      - "uv.lock"
       - "Cargo.toml"
       - "Cargo.lock"
+      - ".cargo/**"
       - "crates/**"
+      - "xtask/**"
       - "contracts/**"
       - ".github/workflows/runtime-compatibility.yml"
   push:
     branches: [main]
     paths:
-      - "easy_multi_provider/**"
-      - "tests/**"
-      - "tools/test_codex_runtime.py"
-      - "pyproject.toml"
-      - "uv.lock"
       - "Cargo.toml"
       - "Cargo.lock"
+      - ".cargo/**"
       - "crates/**"
+      - "xtask/**"
       - "contracts/**"
       - ".github/workflows/runtime-compatibility.yml"
   workflow_dispatch:
@@ -47,107 +41,12 @@ jobs:
           toolchain: 1.93.1
           components: rustfmt, clippy
       - name: Use a real temporary directory
-        shell: python
+        shell: bash
         run: |
-          import os
-          from pathlib import Path
-          path = Path(os.environ["RUNNER_TEMP"]).resolve() / "emp-rust-contract"
-          path.mkdir(exist_ok=True)
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              for name in ("TMPDIR", "TMP", "TEMP"):
-                  env.write(f"{name}={path}\n")
+          path="$(cd "$RUNNER_TEMP" && pwd -P)/emp-rust-contract"
+          if [ "$RUNNER_OS" = Windows ]; then path="$(cygpath -w "$path")"; fi
+          mkdir -p "$path"
+          printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\n' "$path" "$path" "$path" >> "$GITHUB_ENV"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace --all-targets
-
-  full-unit-suite:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.11"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-      - run: uv sync --frozen
-      - name: Run complete unit suite
-        run: uv run --frozen python -m unittest discover -s tests -t . -q
-
-  protocol:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, windows-2025, macos-15]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.11"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-      - run: uv sync --frozen
-      - name: Use a real temporary directory
-        shell: python
-        run: |
-          import os
-          from pathlib import Path
-          path = Path(os.environ["RUNNER_TEMP"]).resolve() / "emp-contract"
-          path.mkdir(exist_ok=True)
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              for name in ("TMPDIR", "TMP", "TEMP"):
-                  env.write(f"{name}={path}\n")
-      - name: Protocol regression tests
-        run: >-
-          uv run --frozen python -m unittest -q
-          tests.test_tool_bridge tests.test_review_boundaries tests.test_catalog tests.test_v06_dialects
-          tests.test_codex_history tests.test_history_continuity
-          tests.test_transport_continuity tests.test_native_websocket
-          tests.test_native_model_boundary tests.test_native_route_owner tests.test_native_stream_fidelity
-          tests.test_chat_projection_regressions
-          tests.test_http_pool tests.test_http_pool_tls tests.test_provider_replay
-          tests.test_migration
-          tests.test_user_install
-          tests.test_subscription_context
-          tests.test_usage_ledger tests.test_usage_history
-          tests.test_server.ServerAccountTests.test_migration_endpoints_export_and_import_emp_bundle
-          tests.test_server.ServerAccountTests.test_migration_upload_accepts_base64_expansion_and_rejects_oversized_files
-          tests.test_server.ContinuityAppStateTests
-      - name: Install fixed official runtime
-        run: npm install --prefix runtime-fixture --no-audit --no-fund --ignore-scripts @openai/codex@0.155.0
-      - name: Official runtime contracts with local fixtures
-        shell: python
-        run: |
-          import os
-          from pathlib import Path
-          import subprocess
-          names = {"codex.exe"} if os.name == "nt" else {"codex"}
-          binaries = [p for p in Path("runtime-fixture/node_modules/@openai").rglob("*")
-                      if p.is_file() and p.name in names and "vendor" in p.parts]
-          if len(binaries) != 1:
-              raise RuntimeError("expected one native Codex test binary")
-          subprocess.run(["uv", "run", "--frozen", "python", "tools/test_codex_runtime.py",
-                          str(binaries[0]), "--require-version", "0.155.0"], check=True)
-      - name: Install recommended official runtime
-        run: npm install --prefix runtime-fixture-1561 --no-audit --no-fund --ignore-scripts @openai/codex@0.156.1
-      - name: Strict contracts for recommended runtime
-        shell: python
-        run: |
-          import os
-          from pathlib import Path
-          import subprocess
-
-          names = {"codex.exe"} if os.name == "nt" else {"codex"}
-          binaries = [
-              path for path in Path("runtime-fixture-1561/node_modules/@openai").rglob("*")
-              if path.is_file() and path.name in names and "vendor" in path.parts
-          ]
-          if len(binaries) != 1:
-              raise RuntimeError("expected one native recommended Codex test binary")
-          subprocess.run(
-              ["uv", "run", "--frozen", "python", "tools/test_codex_runtime.py",
-               str(binaries[0]), "--require-version", "0.156.1"],
-              check=True,
-          )

@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
-pub(super) fn extract_candidate(package: &Path, job: &Path, _relative: &str) -> Result<PathBuf> {
+pub fn extract_candidate(package: &Path, job: &Path, _relative: &str) -> Result<PathBuf> {
     if package
         .extension()
         .is_some_and(|extension| extension == "exe")

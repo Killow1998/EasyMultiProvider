@@ -10,10 +10,11 @@ members = [
     "crates/emp-router",
     "crates/emp-state",
     "crates/emp-transport",
+    "xtask",
 ]
 
 [workspace.package]
-version = "0.12.1"
+version = "0.12.2"
 edition = "2024"
 license = "MIT"
 

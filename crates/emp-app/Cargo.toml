@@ -23,6 +23,7 @@ getrandom = "0.2.17"
 libc = "0.2.189"
 serde_json = { workspace = true }
 shlex = "2.0.1"
+tempfile = "3.27"
 time = { version = "0.3.55", features = ["formatting"] }
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 
@@ -33,4 +34,3 @@ path = "src/lib.rs"
 flate2 = "1.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha2 = "0.10.9"
-tempfile = "3.27"

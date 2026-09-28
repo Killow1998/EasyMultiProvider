@@ -3,7 +3,7 @@
 set -eu
 
 REPOSITORY=Killow1998/EasyMultiProvider
-RELEASE_API=https://api.github.com/repos/$REPOSITORY/releases/latest
+LATEST_URL=https://github.com/$REPOSITORY/releases/latest
 ARCHIVE_NAME=EMP-linux-x86_64.tar.gz
 TTY=/dev/tty
 
@@ -57,7 +57,7 @@ esac
 if [ "$LANGUAGE" = zh ]; then
     TITLE='EMP Linux 安裝程式'
     INTRO='安裝到你的使用者目錄；之後可在 EMP 網頁中更新。'
-    NEEDS='需要 curl、Python 3、tar 與 sha256sum。'
+    NEEDS='需要 curl、tar、gzip 與 sha256sum。'
     PKG_FOUND='偵測到系統安裝的 Debian 套件'
     REMOVE_ASK='要移除舊的系統套件嗎？設定檔會保留。 [y/N] '
     REMOVE_LATER='保留系統套件；之後請從應用程式選單選擇 EMP (User)。'
@@ -82,7 +82,7 @@ if [ "$LANGUAGE" = zh ]; then
 else
     TITLE='EMP Linux Installer'
     INTRO='Install for your user. Future updates are available from the EMP Web UI.'
-    NEEDS='Requires curl, Python 3, tar, and sha256sum.'
+    NEEDS='Requires curl, tar, gzip, and sha256sum.'
     PKG_FOUND='A system-managed Debian package was detected'
     REMOVE_ASK='Remove the old system package? Its configuration is kept. [y/N] '
     REMOVE_LATER='The system package stays installed. Choose EMP (User) from the app menu.'
@@ -178,7 +178,7 @@ if command -v dpkg-query >/dev/null 2>&1; then
     fi
 fi
 
-for tool in curl python3 tar sha256sum; do
+for tool in curl tar gzip sha256sum; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         printf 'Missing required command: %s\n' "$tool" >&2
         exit 1
@@ -204,82 +204,67 @@ show_step() {
 }
 
 show_step 1 "$FETCH"
-if ! curl --fail --location --silent --show-error --retry 3 \
-    -H 'Accept: application/vnd.github+json' "$RELEASE_API" \
-    --output "$work_dir/release.json"; then
+# The latest stable release redirects to /releases/tag/vX.Y.Z; drafts and
+# prereleases are never "latest".
+if ! latest=$(curl --fail --location --silent --show-error --retry 3 --head \
+    --output /dev/null --write-out '%{url_effective}' "$LATEST_URL"); then
     echo "$ERROR" >&2
     exit 1
 fi
-python3 - "$work_dir/release.json" "$work_dir/release-meta" <<'PY'
-import json
-import re
-import sys
-
-release_path, output_path = sys.argv[1:]
-with open(release_path, encoding="utf-8") as stream:
-    release = json.load(stream)
-tag = release.get("tag_name", "")
-if release.get("draft") or release.get("prerelease") or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
-    raise SystemExit("The latest stable release metadata is invalid.")
-matches = [asset for asset in release.get("assets", [])
-           if asset.get("name") == "EMP-linux-x86_64.tar.gz"]
-if len(matches) != 1:
-    raise SystemExit("The Linux release archive is missing or ambiguous.")
-asset = matches[0]
-digest = asset.get("digest", "")
-size = asset.get("size", 0)
-if not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
-    raise SystemExit("The Linux release archive has no valid SHA-256 digest.")
-if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= 512 * 1024 * 1024:
-    raise SystemExit("The Linux release archive size is invalid.")
-with open(output_path, "w", encoding="ascii") as stream:
-    stream.write(tag + "\n" + digest[7:] + "\n" + str(size) + "\n")
-PY
-release_tag=$(sed -n '1p' "$work_dir/release-meta")
-release_digest=$(sed -n '2p' "$work_dir/release-meta")
-release_size=$(sed -n '3p' "$work_dir/release-meta")
+release_tag=${latest##*/releases/tag/}
+if [ "$release_tag" = "$latest" ] || ! printf '%s\n' "$release_tag" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+'; then
+    echo 'The latest stable release metadata is invalid.' >&2
+    exit 1
+fi
 release_version=${release_tag#v}
 archive_url=https://github.com/$REPOSITORY/releases/download/$release_tag/$ARCHIVE_NAME
+if ! curl --fail --location --silent --show-error --retry 3 --max-filesize 1024 \
+    "$archive_url.sha256" --output "$work_dir/$ARCHIVE_NAME.sha256"; then
+    echo "$ERROR" >&2
+    exit 1
+fi
+read -r release_digest checksum_name < "$work_dir/$ARCHIVE_NAME.sha256" || true
+if [ "${checksum_name:-}" != "$ARCHIVE_NAME" ] || ! printf '%s\n' "${release_digest:-}" | grep -Eqx '[a-f0-9]{64}'; then
+    echo 'The Linux release archive has no valid SHA-256 digest.' >&2
+    exit 1
+fi
 printf '%s  v%s\n' "$GREEN" "$release_version"
 
 show_step 2 "$DOWNLOAD"
-if ! curl --fail --location --retry 3 --progress-bar "$archive_url" \
+if ! curl --fail --location --retry 3 --progress-bar --max-filesize 536870912 "$archive_url" \
     --output "$work_dir/$ARCHIVE_NAME"; then
     echo "$ERROR" >&2
     exit 1
 fi
 
 show_step 3 "$VERIFY"
-actual_size=$(wc -c < "$work_dir/$ARCHIVE_NAME" | tr -d ' ')
 actual_digest=$(sha256sum "$work_dir/$ARCHIVE_NAME" | awk '{print $1}')
-if [ "$actual_size" != "$release_size" ] || [ "$actual_digest" != "$release_digest" ]; then
+if [ "$actual_digest" != "$release_digest" ]; then
     echo 'Release archive verification failed.' >&2
     exit 1
 fi
-python3 - "$work_dir/$ARCHIVE_NAME" <<'PY'
-import sys
-import tarfile
-from pathlib import PurePosixPath
-
-required = {"EMP/EMP", "EMP/install-user.sh", "EMP/easy-multi-provider.svg"}
-seen = set()
-total_size = 0
-with tarfile.open(sys.argv[1], "r:gz") as archive:
-    for member in archive:
-        path = PurePosixPath(member.name)
-        if (path.is_absolute() or ".." in path.parts or not path.parts
-                or path.parts[0] != "EMP" or member.name in seen
-                or not (member.isfile() or member.isdir())):
-            raise SystemExit("The release archive contains an unsafe entry.")
-        seen.add(member.name)
-        total_size += member.size
-        if total_size > 1024 * 1024 * 1024:
-            raise SystemExit("The release archive expands beyond the size limit.")
-        if member.name in required and not member.isfile():
-            raise SystemExit("A required release file is not regular.")
-if not required <= seen:
-    raise SystemExit("The release archive is missing required files.")
-PY
+# Only regular files and directories under EMP/, no duplicates or escapes,
+# and at most 1 GiB once expanded.
+if ! expanded_size=$(gzip -dc "$work_dir/$ARCHIVE_NAME" | wc -c | tr -d ' ') ||
+    [ "$expanded_size" -gt 1073741824 ] ||
+    ! tar -tzf "$work_dir/$ARCHIVE_NAME" > "$work_dir/archive-names" ||
+    ! tar -tzvf "$work_dir/$ARCHIVE_NAME" > "$work_dir/archive-listing"; then
+    echo 'The release archive could not be read.' >&2
+    exit 1
+fi
+if ! awk '{ name = $0; sub(/\/$/, "", name)
+        if (name ~ /^\// || name ~ /(^|\/)\.\.(\/|$)/ || (name != "EMP" && name !~ /^EMP\//) || seen[name]++) bad = 1 }
+        END { exit bad || NR == 0 }' "$work_dir/archive-names" ||
+    ! awk '{ kind = substr($1, 1, 1); if (kind != "-" && kind != "d") bad = 1 } END { exit bad }' "$work_dir/archive-listing"; then
+    echo 'The release archive contains an unsafe entry.' >&2
+    exit 1
+fi
+for required in EMP/EMP EMP/install-user.sh EMP/easy-multi-provider.svg; do
+    if ! awk -v want="$required" 'substr($1, 1, 1) == "-" && $NF == want { found = 1 } END { exit !found }' "$work_dir/archive-listing"; then
+        echo 'The release archive is missing required files.' >&2
+        exit 1
+    fi
+done
 mkdir "$work_dir/extracted"
 tar -xzf "$work_dir/$ARCHIVE_NAME" -C "$work_dir/extracted"
 
@@ -295,118 +280,16 @@ fi
 
 if [ -n "$migrate_config" ]; then
     mkdir -p -- "$config_dir"
-    if ! python3 - "$selected_source" "$target_config" "$work_dir/migration-backup" <<'PY'
-import json
-import os
-import shutil
-import sys
-import tempfile
-from pathlib import Path
-
-source_config = Path(sys.argv[1])
-target_config = Path(sys.argv[2])
-if source_config.is_symlink() or not source_config.is_file():
-    raise SystemExit("The selected source configuration is not a regular file.")
-source_root = source_config.parent.resolve()
-if target_config.parent.is_symlink():
-    raise SystemExit("The destination configuration directory is a symbolic link.")
-target_root = target_config.parent.resolve()
-if source_root == target_root:
-    raise SystemExit("The selected configuration is already in the destination.")
-with source_config.open(encoding="utf-8") as stream:
-    config = json.load(stream)
-stage = Path(tempfile.mkdtemp(prefix=".emp-migration-", dir=str(target_root)))
-published = []
-backed_up = []
-backup_root = None
-
-def under_source(path):
-    try:
-        return path.resolve().relative_to(source_root)
-    except (OSError, ValueError):
-        return None
-
-def copy_reference(value):
-    if not isinstance(value, str) or not value.strip():
-        return value
-    raw = Path(value).expanduser()
-    source_path = raw if raw.is_absolute() else source_root / raw
-    relative = under_source(source_path)
-    if relative is None or relative == Path("."):
-        return value
-    if source_path.exists():
-        staged_path = stage / relative
-        if not staged_path.exists():
-            staged_path.parent.mkdir(parents=True, exist_ok=True)
-            if source_path.is_dir():
-                shutil.copytree(source_path, staged_path, symlinks=True)
-            else:
-                shutil.copy2(source_path, staged_path, follow_symlinks=False)
-    destination = target_root / relative
-    return str(destination) if raw.is_absolute() else value
-
-try:
-    shutil.copy2(source_config, stage / "config.json")
-    state_source = source_root / "state"
-    if state_source.is_symlink():
-        raise RuntimeError("The source state directory is a symbolic link.")
-    if state_source.is_dir() and not (stage / "state").exists():
-        shutil.copytree(state_source, stage / "state", symlinks=True)
-    for field in ("account_store_path", "secret_store_path", "native_catalog_path"):
-        if field in config:
-            config[field] = copy_reference(config[field])
-    for account in config.get("accounts", []):
-        if isinstance(account, dict) and "auth_file" in account:
-            account["auth_file"] = copy_reference(account["auth_file"])
-    for provider in config.get("providers", []):
-        if isinstance(provider, dict) and "api_key_file" in provider:
-            provider["api_key_file"] = copy_reference(provider["api_key_file"])
-    with (stage / "config.json").open("w", encoding="utf-8") as stream:
-        json.dump(config, stream, indent=2, ensure_ascii=False)
-        stream.write("\n")
-    os.chmod(stage / "config.json", 0o600)
-    content = [path for path in stage.iterdir() if path.name != "config.json"]
-    backup_root = Path(tempfile.mkdtemp(
-        prefix="easy-multi-provider-backup-", dir=str(target_root.parent)
-    ))
-    for destination in [target_config, *(target_root / path.name for path in content)]:
-        if destination.exists() or destination.is_symlink():
-            stored = backup_root / destination.name
-            os.rename(destination, stored)
-            backed_up.append((destination, stored))
-    for path in content:
-        destination = target_root / path.name
-        os.rename(path, destination)
-        published.append(destination)
-    descriptor = os.open(target_config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    published.append(target_config)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        with (stage / "config.json").open(encoding="utf-8") as source:
-            shutil.copyfileobj(source, stream)
-    if backed_up:
-        Path(sys.argv[3]).write_text(str(backup_root), encoding="utf-8")
-except BaseException:
-    for path in reversed(published):
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
-        else:
-            path.unlink(missing_ok=True)
-    for destination, stored in reversed(backed_up):
-        os.rename(stored, destination)
-    backed_up.clear()
-    raise
-finally:
-    shutil.rmtree(stage, ignore_errors=True)
-    if backup_root is not None and not backed_up:
-        backup_root.rmdir()
-PY
+    # The verified EMP binary copies the configuration, its state and the
+    # files it references, and prints the backup of anything it replaced.
+    if ! backup_dir=$("$work_dir/extracted/EMP/EMP" --emp-migrate-config "$selected_source" "$target_config")
     then
         printf '%s\n' "$ERROR" >&2
         exit 1
     fi
     printf '%s\n' "$CONFIG_DONE"
-    if [ -f "$work_dir/migration-backup" ]; then
-        printf '%s %s\n' "$CONFIG_BACKUP" "$(cat "$work_dir/migration-backup")"
+    if [ -n "$backup_dir" ]; then
+        printf '%s %s\n' "$CONFIG_BACKUP" "$backup_dir"
     fi
 fi
 

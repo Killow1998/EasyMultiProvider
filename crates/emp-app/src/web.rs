@@ -5,7 +5,7 @@ use crate::http::response::response;
 
 /// Embedded directly from the existing Python package so Web UI bytes cannot
 /// drift during the rewrite.
-pub const WEB_INDEX_BYTES: &[u8] = include_bytes!("../../../easy_multi_provider/web/index.html");
+pub const WEB_INDEX_BYTES: &[u8] = include_bytes!("../web/index.html");
 
 /// Serve the UI without authentication. It contains no secrets: the script
 /// exchanges the single-use bootstrap token for a session kept in origin-scoped
@@ -23,9 +23,7 @@ pub(crate) fn ui_response() -> Vec<u8> {
     )
 }
 
-pub(crate) const VISION_TEST_IMAGE_BYTES: &[u8] =
-    include_bytes!("../../../easy_multi_provider/web/vision-test-icon.png");
+pub(crate) const VISION_TEST_IMAGE_BYTES: &[u8] = include_bytes!("../web/vision-test-icon.png");
 
 /// One second of stereo speech: "Front left" on the left channel, then "Front right" on the right.
-pub(crate) const AUDIO_TEST_WAV_BYTES: &[u8] =
-    include_bytes!("../../../easy_multi_provider/web/audio-test-channels.wav");
+pub(crate) const AUDIO_TEST_WAV_BYTES: &[u8] = include_bytes!("../web/audio-test-channels.wav");

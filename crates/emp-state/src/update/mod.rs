@@ -1,6 +1,6 @@
 //! Native update lifecycle with fixed public errors and recoverable installation state.
 mod download;
-mod extract;
+pub mod extract;
 #[cfg(target_os = "linux")]
 mod linux;
 pub mod manager;

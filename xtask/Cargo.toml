@@ -1,0 +1,15 @@
+[package]
+publish = false
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native packaging, package smoke tests and release checks for EMP."
+
+[dependencies]
+emp-state = { path = "../crates/emp-state" }
+flate2 = "1.1"
+serde_json = { workspace = true }
+sha2 = "0.10.9"
+tar = "0.4"
+tempfile = "3.27"

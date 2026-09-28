@@ -163,7 +163,7 @@ External Provider models use the same 95% rule, so a 256,000-token window shows 
 
 ## Codex compatibility
 
-The current source version is **v0.12.1**.
+The current source version is **v0.12.2**.
 
 EMP works with Codex **0.149.0 and newer**. There is no client to choose: EMP only edits the shared `config.toml`, which every Codex client reads. If an older Codex sends a request, EMP answers with an error telling you to update Codex.
 
