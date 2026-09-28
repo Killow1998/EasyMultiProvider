@@ -224,7 +224,7 @@ input,select,textarea{border-radius:6px;border-color:var(--border-strong)}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:none;color:var(--muted);font-size:12px;font-weight:500}
 .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--muted)}
 .integration-card{padding:0;border:0;border-radius:0;background:none}
-.integration-card[data-state="emp_applied"] .pill::before{background:var(--success)}
+.integration-card[data-state="emp_applied"] .pill::before{background:var(--success)}.integration-card[data-state="emp_applied"]:not([data-runtime="emp_loaded"],[data-runtime="stopped_waiting_for_start"]) .pill::before{background:var(--warning)}
 .integration-card:is([data-state="conflict"],[data-state="prepared"],[data-state="unavailable"]){border-left:0}
 .integration-card:is([data-state="conflict"],[data-state="prepared"],[data-state="unavailable"]) .pill::before{background:var(--danger)}
 .integration-card-header{gap:10px}
@@ -257,6 +257,10 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .period-presets button.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
 .period-custom{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px}
 .period-custom label{display:grid;gap:3px;margin:0;font-size:12px}
+.dot-logo{display:block;height:24px;width:auto;overflow:visible}.dot-logo circle{fill:var(--text);opacity:.1;transition:opacity .18s,fill .3s}.dot-logo circle.on{opacity:1}.dot-logo circle.hot{fill:var(--accent);opacity:1;filter:drop-shadow(0 0 2px var(--accent))}.dot-logo.emp-live circle.on{fill:var(--success)}.brand-title{align-items:center}
+.toast{position:fixed;top:18px;left:50%;z-index:30;width:min(420px,calc(100vw - 32px));transform:translateX(-50%);padding:14px 16px 16px;background:var(--panel);border:1px solid var(--accent);border-radius:6px;box-shadow:0 10px 32px rgba(0,0,0,.28);cursor:pointer;overflow:hidden;animation:toast-in .22s ease-out both}.toast strong{display:block;font-size:15px;margin-bottom:3px}.toast p{margin:0;color:var(--text)}.toast::after{content:"";position:absolute;left:0;bottom:0;height:3px;width:100%;background:var(--accent);transform-origin:left;animation:toast-timer var(--toast-ms) linear both}.toast.leaving{animation:toast-out .2s ease-in both}
+@keyframes toast-in{from{opacity:0;transform:translate(-50%,-10px)}}@keyframes toast-out{to{opacity:0;transform:translate(-50%,-10px)}}@keyframes toast-timer{to{transform:scaleX(0)}}
+@media(prefers-reduced-motion:reduce){.toast,.toast.leaving{animation:none}}
 #notification{align-items:center;padding:6px 6px 6px 14px}#status{flex:1;line-height:1.45}#notification .notification-close{width:28px;height:28px;min-height:28px;font-size:20px}
 .usage-filters :is(select,input,button){height:32px;min-height:32px;padding-top:0;padding-bottom:0}
 .period-custom input{width:auto;min-width:190px;height:30px;padding:3px 8px}
@@ -274,7 +278,7 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 <body>
 <main>
 <header class="page-header">
-  <div class="page-brand"><div class="brand-title"><h1>EMP</h1><span id="emp_version" class="brand-version"></span></div><p data-i18n="subtitle">管理 Codex 的账号和模型。</p></div>
+  <div class="page-brand"><div class="brand-title"><h1 aria-label="EMP"><svg id="emp_logo" class="dot-logo" aria-hidden="true"></svg></h1><span id="emp_version" class="brand-version"></span></div><p data-i18n="subtitle">管理 Codex 的账号和模型。</p></div>
   <div class="page-header-controls">
     <div class="header-group">
       <button type="button" class="secondary" data-icon="upload" onclick="selectMigrationFile()" data-i18n="import_emp">导入数据</button>
@@ -900,10 +904,10 @@ async function saveSubscriptionSearch() {
   await persistState(tr('设置已保存，请重启 Codex。','Settings saved. Restart Codex.'), candidate);
 }
 function fill() {
-  applyTranslations(); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
+  drawLogo(); applyTranslations(); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
 }
 async function load() {
-  applyPreferences();
+  applyPreferences(); drawLogo();
   try {
     state = await api('/api/config');
     const integration = loadIntegration();
@@ -930,31 +934,125 @@ function renderIntegrationToggle() {
   button.classList.toggle('secondary', restore);
   button.disabled = integrationBusy || (!restore && mode !== 'native');
 }
+// 5x7 dot-matrix glyphs for the header logo, drawn like a small OLED panel.
+const LOGO_GLYPHS = {E:['11111','10000','10000','11110','10000','10000','11111'], M:['10001','11011','10101','10101','10001','10001','10001'], P:['11110','10001','10001','11110','10000','10000','10000']};
+function drawLogo() {
+  const svg = $('emp_logo'); if (!svg || svg.childElementCount) return;
+  const pitch = 3.4, dots = [];
+  [...'EMP'].forEach((letter, index) => LOGO_GLYPHS[letter].forEach((row, y) => [...row].forEach((bit, x) => {
+    const column = index * 6 + x;
+    dots.push(`<circle cx="${(column * pitch + pitch / 2).toFixed(1)}" cy="${(y * pitch + pitch / 2).toFixed(1)}" r="1.25" data-column="${column}"${bit === '1' ? ' class="on" data-lit="1"' : ''}/>`);
+  })));
+  svg.setAttribute('viewBox', `0 0 ${(17 * pitch).toFixed(1)} ${(7 * pitch).toFixed(1)}`);
+  svg.innerHTML = dots.join('');
+}
+let logoAnimation = null;
+function animateLogo() {
+  const svg = $('emp_logo'); if (!svg) return;
+  drawLogo();
+  const dots = [...svg.querySelectorAll('circle')];
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  clearInterval(logoAnimation);
+  dots.forEach(dot => dot.classList.remove('on', 'hot'));
+  // Sweep a bright column across the panel, leaving the letters lit behind it, then flicker once.
+  let column = -1, flicker = 0;
+  logoAnimation = setInterval(() => {
+    column++;
+    if (column <= 17) {
+      dots.forEach(dot => {
+        const at = Number(dot.dataset.column);
+        dot.classList.toggle('hot', at === column);
+        if (at < column && dot.dataset.lit) dot.classList.add('on');
+      });
+      return;
+    }
+    flicker++;
+    dots.forEach(dot => dot.classList.toggle('on', Boolean(dot.dataset.lit) && flicker % 2 === 0));
+    if (flicker >= 4) { clearInterval(logoAnimation); logoAnimation = null; }
+  }, 45);
+}
+function renderLogoState(live) { drawLogo(); $('emp_logo')?.classList.toggle('emp-live', live); }
+function toast(title, body, ms = 7000) {
+  document.querySelector('.toast')?.remove();
+  const box = document.createElement('div');
+  box.className = 'toast'; box.setAttribute('role', 'status'); box.style.setProperty('--toast-ms', `${ms}ms`);
+  box.innerHTML = `<strong>${esc(title)}</strong><p>${esc(body)}</p>`;
+  const close = () => { box.classList.add('leaving'); setTimeout(() => box.remove(), 200); };
+  box.addEventListener('click', close);
+  document.body.appendChild(box);
+  setTimeout(close, ms);
+}
+// What the running Codex actually loaded, as seen through its app-server model list.
+function runtimeView(runtime) {
+  const views = {
+    emp_loaded: ['EMP', 'Codex 正在使用 EMP。', 'Codex is using EMP.'],
+    stopped_waiting_for_start: ['EMP', 'Codex 未运行，下次打开 Codex 就会使用 EMP。', 'Codex is not running. It will use EMP the next time it opens.'],
+    reload_required: ['待重启', '请重启 Codex，Codex 还在使用旧的模型列表。', 'Restart Codex. It is still using the old model list.', 'Restart'],
+    not_checked: ['待重启', '请重启 Codex，让它加载 EMP。', 'Restart Codex so it loads EMP.', 'Restart'],
+    catalog_unverified: ['待重启', '请重启 Codex，让它加载 EMP。', 'Restart Codex so it loads EMP.', 'Restart'],
+  };
+  const view = views[runtime.state] || ['待重启', '请重启 Codex，让它加载 EMP。', 'Restart Codex so it loads EMP.', 'Restart'];
+  return [language === 'en' ? (view[3] || view[0]) : view[0], tr(view[1], view[2])];
+}
+function conflictView(configuration) {
+  const conflicts = configuration.conflicts || [];
+  if (conflicts.includes('listener_mismatch') || conflicts.includes('catalog_mismatch')) {
+    return [tr('其他 EMP','Other EMP'), tr('Codex 正在使用另一个 EMP。要改用这个 EMP，请先恢复原生 Codex，再启动 EMP。','Codex is using another EMP. To switch to this one, restore Native Codex first, then start EMP.')];
+  }
+  return [tr('需要处理','Needs attention'), tr('Codex 的 config.toml 被其他程序改过。请恢复原生 Codex，再重新启动 EMP。','Another program changed Codex config.toml. Restore Native Codex, then start EMP again.')];
+}
+let codexMinimum = '0.149.0';
 function renderIntegration(info) {
   const configuration = info.configuration || {};
   const compatibility = info.codex_compatibility || {};
-  const english = language === 'en';
-  const views = english ? {
-    native: ['Native', 'Native Codex is active.'], emp_applied: ['EMP', 'EMP is ready. Restart Codex.'], prepared: ['Needs recovery', 'EMP setup is incomplete. Restore and try again.'], restoring: ['Restoring', 'Restoring Native Codex…'], conflict: ['Needs attention', 'Codex settings changed. Apply EMP again or restore Native Codex.'], unavailable: ['Unavailable', 'EMP status is unavailable. Try again.']
-  } : {
-    native: ['Native', '当前使用原生 Codex。'], emp_applied: ['EMP', 'EMP已启动，请重启Codex'], prepared: ['需要恢复', 'EMP 设置未完成，请恢复后重试。'], restoring: ['正在恢复', '正在恢复原生 Codex…'], conflict: ['需要处理', 'Codex 设置已变化，请重新应用 EMP 或恢复原生 Codex。'], unavailable: ['不可用', '暂时无法读取 EMP 状态，请重试。']
+  const views = {
+    native: ['Native', tr('当前使用原生 Codex。','Native Codex is active.')],
+    prepared: [tr('需要恢复','Needs recovery'), tr('EMP 设置未完成，请恢复后重试。','EMP setup is incomplete. Restore and try again.')],
+    restoring: [tr('正在恢复','Restoring'), tr('正在恢复原生 Codex…','Restoring Native Codex…')],
+    unavailable: [tr('不可用','Unavailable'), tr('暂时无法读取 EMP 状态，请重试。','EMP status is unavailable. Try again.')],
   };
-  const view = views[configuration.state] || views.unavailable;
+  const view = configuration.state === 'emp_applied' ? runtimeView(info.runtime || {})
+    : configuration.state === 'conflict' ? conflictView(configuration)
+    : views[configuration.state] || views.unavailable;
   $('integration_summary').textContent = view[1];
   // Every Codex from the minimum on reads the same config.toml; only an older one needs attention.
-  const minimum = compatibility.minimum || '0.149.0';
+  const unsupported = compatibility.status === 'unsupported';
+  const minimum = codexMinimum = compatibility.minimum || codexMinimum;
   const installed = compatibility.installed ? ` ${compatibility.installed}` : '';
-  const compatibilityMessage = compatibility.status === 'unsupported'
-    ? tr(`Codex${installed} 版本过旧，EMP 需要 ${minimum} 或更新版本，请升级 Codex。`, `Codex${installed} is too old. EMP needs ${minimum} or newer; please update Codex.`)
-    : tr(`支持 Codex ${minimum} 及以上版本。`, `Works with Codex ${minimum} and newer.`);
-  $('codex_compatibility').textContent = compatibilityMessage;
-  $('codex_compatibility').hidden = false;
+  $('codex_compatibility').textContent = unsupported ? tr(`Codex${installed} 版本过旧，EMP 需要 ${minimum} 或更新版本，请升级 Codex。`, `Codex${installed} is too old. EMP needs ${minimum} or newer; please update Codex.`) : '';
+  $('codex_compatibility').hidden = !unsupported;
   $('codex_compatibility').dataset.state = compatibility.status || 'unknown';
   $('integration').dataset.state = configuration.state || 'unknown';
+  $('integration').dataset.runtime = (info.runtime || {}).state || 'not_checked';
+  renderLogoState(configuration.state === 'emp_applied' && info.runtime?.state === 'emp_loaded');
   $('integration_badge').textContent = view[0];
   $('integration_title').textContent = t('integration_status');
   renderIntegrationToggle();
+  scheduleRuntimeCheck(info);
 }
+// Codex only reloads its catalog when it restarts, so keep asking it until it has EMP's models.
+let runtimeCheckTimer = null;
+function scheduleRuntimeCheck(info) {
+  clearTimeout(runtimeCheckTimer); runtimeCheckTimer = null;
+  const configuration = info.configuration || {}, runtime = info.runtime || {};
+  if (configuration.state !== 'emp_applied' || runtime.state === 'emp_loaded') return;
+  runtimeCheckTimer = setTimeout(checkRuntime, 5000);
+}
+async function checkRuntime() {
+  runtimeCheckTimer = null;
+  if (integrationBusy) return;
+  if (document.visibilityState === 'hidden') { runtimeCheckTimer = setTimeout(checkRuntime, 5000); return; }
+  const before = $('integration').dataset.runtime;
+  try {
+    const info = await api('/api/integration/verify', {method:'POST', body:'{}'});
+    renderIntegration(info);
+    if (before !== 'emp_loaded' && info.runtime?.state === 'emp_loaded') {
+      toast(tr('Codex 已加载 EMP','Codex loaded EMP'), tr('现在可以在 Codex 里选择 EMP 的模型了。','EMP models are now available in Codex.'));
+      animateLogo();
+    }
+  } catch (_) { runtimeCheckTimer = setTimeout(checkRuntime, 15000); }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && runtimeCheckTimer) { clearTimeout(runtimeCheckTimer); checkRuntime(); } });
 async function loadIntegration() {
   const started = Date.now();
   try {
@@ -962,7 +1060,7 @@ async function loadIntegration() {
     const configuration = info.configuration || {};
     const runtime = info.runtime || {};
     const verifyKey = `${configuration.state || ''}:${runtime.state || ''}:${runtime.target || ''}`;
-    const passivelyVerifiable = configuration.state === 'emp_applied' && runtime.target === 'emp' && ['stop_failed','verification_failed','stopped_waiting_for_start'].includes(runtime.state);
+    const passivelyVerifiable = configuration.state === 'emp_applied' && runtime.state !== 'emp_loaded';
     if (passivelyVerifiable && !integrationVerificationAttempts.has(verifyKey)) {
       integrationVerificationAttempts.add(verifyKey);
       try { info = await api('/api/integration/verify', {method:'POST', body:'{}'}); }
@@ -1096,16 +1194,21 @@ function supportDetailLabel(value) {
   };
   return labels[value] || esc(value || 'unknown');
 }
+function runtimeLabel(value) {
+  return {emp_loaded:tr('正在使用 EMP','using EMP'), stopped_waiting_for_start:tr('未运行','not running')}[value] || tr('等待重启 Codex','waiting for Codex restart');
+}
 function renderSupportReport(report) {
   const box = $('support_report'); if (!box) return;
   const config = report.configuration || {}, codex = report.codex || {}, network = report.network || {}, accounts = report.accounts || {};
   const imported = Array.isArray(accounts.imported) ? accounts.imported : [];
   const accountLines = imported.map(account => `${tr('导入账号','Imported account')} ${Number(account.index) || 0}: ${supportStatusLabel(account.quota_status)}`);
-  box.innerHTML = `<p><strong>${tr('配置','Config')}</strong> ${esc(config.path || '—')} · ${config.exists ? tr('存在','present') : tr('不存在','missing')} · ${tr('写入权限提示','write permission hint')}: ${supportDetailLabel(config.write_access_hint)}</p>
-    <p><strong>Codex</strong> ${esc(codex.version || '—')} · ${supportDetailLabel(codex.source)} · ${supportDetailLabel(codex.state)}</p>
+  const configNotes = [!config.exists && tr('文件不存在','file missing'), config.write_access_hint === 'denied' && tr('没有写入权限','not writable')].filter(Boolean);
+  const minimum = codexMinimum;
+  const codexNotes = [codex.compatibility === 'unsupported' ? tr(`版本过旧，需要 ${minimum} 或更新`, `too old, needs ${minimum} or newer`) : tr(`支持（需 ${minimum} 及以上）`, `supported (${minimum} or newer)`), codex.target === 'emp' && runtimeLabel(codex.state)].filter(Boolean);
+  box.innerHTML = `<p><strong>${tr('配置','Config')}</strong> ${esc(config.path || '—')}${configNotes.map(note => ' · ' + esc(note)).join('')}</p>
+    <p><strong>Codex</strong> ${esc(codex.version || tr('未找到','not found'))} · ${codexNotes.map(esc).join(' · ')}</p>
     <p><strong>${tr('代理','Proxy')}</strong> ${supportDetailLabel(network.source_at_startup)} · ${supportDetailLabel(network.chatgpt_route)}${network.proxy_scheme ? ' (' + esc(network.proxy_scheme) + ')' : ''}</p>
-    <p><strong>${tr('账号','Accounts')}</strong> Native: ${supportStatusLabel(accounts.native?.quota_status)}${accountLines.length ? ' · ' + accountLines.map(esc).join(' · ') : ''}</p>
-    <small>${tr('账号状态来自保存的状态及本次运行的错误；此报告不会探测网络或刷新额度。','Account status comes from saved state and errors observed in this run; this report does not probe the network or refresh quota.')}</small>`;
+    <p><strong>${tr('账号','Accounts')}</strong> Native: ${supportStatusLabel(accounts.native?.quota_status)}${accountLines.length ? ' · ' + accountLines.map(esc).join(' · ') : ''}</p>`;
 }
 async function loadSupportReport() {
   const request = ++supportReportRequest;
@@ -1177,7 +1280,10 @@ async function submitIntegrationAction(action) {
     const message = integrationOutcomeMessage(refreshed, action);
     $('modal_status').textContent = message;
     closeModal();
-    notice(message);
+    if (action === 'enable' && refreshed.runtime?.state !== 'emp_loaded') {
+      toast(tr('EMP 已启动','EMP is on'), tr('请重启 Codex。Codex 重启后，这里会自动显示“正在使用 EMP”。','Restart Codex. This page shows “Codex is using EMP” once it has restarted.'), 9000);
+      animateLogo();
+    } else notice(message);
   } catch (error) {
     if (error.payload && error.payload.configuration && error.payload.runtime) renderIntegration(error.payload);
     if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；可在账户的“编辑”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Restore visibility under the account Edit action, or add a model.');
