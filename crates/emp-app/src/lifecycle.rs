@@ -33,7 +33,11 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
-const QUOTA_SAMPLE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+#[cfg(not(test))]
+const QUOTA_SAMPLE_INTERVAL: Duration = Duration::from_secs(44);
+/// Unit tests drive `sample_quotas_once` themselves; keep the background sampler out of the way.
+#[cfg(test)]
+const QUOTA_SAMPLE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// Longest a quota check can still rotate a credential: two 45 s Codex
 /// queries plus the save retries.
 const CREDENTIAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(100);
@@ -318,8 +322,13 @@ impl ServerHandle {
             .name("emp-quota-sampler".to_owned())
             .spawn(move || {
                 crate::services::quota::migrate_legacy_quota_history(&state);
+                // Sample right away so quota is ready when the page first opens.
+                let mut deadline = if cfg!(test) {
+                    Instant::now() + QUOTA_SAMPLE_INTERVAL
+                } else {
+                    Instant::now()
+                };
                 while !state.shutdown.load(Ordering::Acquire) {
-                    let deadline = Instant::now() + QUOTA_SAMPLE_INTERVAL;
                     let mut wait = match state.backend.accounts.quota_sampler_wait.lock() {
                         Ok(wait) => wait,
                         Err(_) => return,
@@ -343,6 +352,7 @@ impl ServerHandle {
                         }
                     }
                     drop(wait);
+                    deadline = Instant::now() + QUOTA_SAMPLE_INTERVAL;
                     if !state.shutdown.load(Ordering::Acquire) {
                         sample_quotas_once(&state);
                         // Disabled or duplicate accounts are not sampled;

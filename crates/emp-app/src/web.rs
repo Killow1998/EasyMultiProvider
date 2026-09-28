@@ -25,3 +25,7 @@ pub(crate) fn ui_response() -> Vec<u8> {
 
 pub(crate) const VISION_TEST_IMAGE_BYTES: &[u8] =
     include_bytes!("../../../easy_multi_provider/web/vision-test-icon.png");
+
+/// One second of stereo speech: "Front left" on the left channel, then "Front right" on the right.
+pub(crate) const AUDIO_TEST_WAV_BYTES: &[u8] =
+    include_bytes!("../../../easy_multi_provider/web/audio-test-channels.wav");

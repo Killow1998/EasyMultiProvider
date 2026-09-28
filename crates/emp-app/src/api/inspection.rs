@@ -2,7 +2,7 @@
 use crate::app::ServerState;
 use crate::http::request::Request;
 use crate::http::response::{json_error_response, response, status_text};
-use crate::web::VISION_TEST_IMAGE_BYTES;
+use crate::web::{AUDIO_TEST_WAV_BYTES, VISION_TEST_IMAGE_BYTES};
 use base64::Engine as _;
 use serde_json::json;
 
@@ -10,6 +10,10 @@ pub(crate) fn read_request(request: Request<'_>, state: &ServerState) -> Vec<u8>
     let (payload, headers) = match request.raw_path() {
         "/api/models/vision-test-image" => (
             json!({"data_url":format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(VISION_TEST_IMAGE_BYTES))}),
+            vec![("Cache-Control", "no-store")],
+        ),
+        "/api/models/audio-test-sound" => (
+            json!({"format":"wav","data":base64::engine::general_purpose::STANDARD.encode(AUDIO_TEST_WAV_BYTES)}),
             vec![("Cache-Control", "no-store")],
         ),
         "/api/capabilities" => {

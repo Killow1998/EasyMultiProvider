@@ -412,7 +412,10 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             if request.method == RequestMethod::Get
                 && matches!(
                     path,
-                    "/api/models/vision-test-image" | "/api/request-limits" | "/api/capabilities"
+                    "/api/models/vision-test-image"
+                        | "/api/models/audio-test-sound"
+                        | "/api/request-limits"
+                        | "/api/capabilities"
                 )
             {
                 return inspection::read_request(request, state);
@@ -453,8 +456,22 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
                     .into_iter()
                     .find(|value| !value.is_empty())
                     .unwrap_or_else(|| "1d".to_owned());
-                return match quota_history_response(state, &account_id, &range, now.trunc() as i64)
-                {
+                // An explicit start/end (Unix seconds, like /api/usage) overrides `range`.
+                let bound = |name| {
+                    query_values(request.target, name)
+                        .into_iter()
+                        .find_map(|value| value.parse::<f64>().ok())
+                        .filter(|value| value.is_finite())
+                        .map(|value| value.trunc() as i64)
+                };
+                let period = bound("start").zip(bound("end"));
+                return match quota_history_response(
+                    state,
+                    &account_id,
+                    &range,
+                    period,
+                    now.trunc() as i64,
+                ) {
                     Ok(payload) => {
                         let body = serde_json::to_vec(&payload)
                             .expect("quota history snapshot is serializable");

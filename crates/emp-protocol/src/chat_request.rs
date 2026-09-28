@@ -58,6 +58,20 @@ fn request_text(
     }
 }
 
+/// Base64 audio with its container format, as both Responses and Chat Completions carry it.
+pub(crate) fn input_audio(part: &Map<String, Value>) -> Option<Value> {
+    let audio = part.get("input_audio").and_then(Value::as_object)?;
+    let data = audio
+        .get("data")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())?;
+    let format = audio
+        .get("format")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())?;
+    Some(serde_json::json!({"data": data, "format": format}))
+}
+
 fn chat_content(value: Option<&Value>) -> Result<Value, ProtocolError> {
     match value {
         Some(Value::String(value)) => return Ok(Value::String(value.clone())),
@@ -113,6 +127,12 @@ fn chat_content(value: Option<&Value>) -> Result<Value, ProtocolError> {
                     image["detail"] = Value::String(detail.to_owned());
                 }
                 projected.push(serde_json::json!({"type": "image_url", "image_url": image}));
+                has_nontext = true;
+            }
+            Some("input_audio") => {
+                let audio = input_audio(part)
+                    .ok_or_else(|| request_error("request projection failed: invalid audio"))?;
+                projected.push(serde_json::json!({"type": "input_audio", "input_audio": audio}));
                 has_nontext = true;
             }
             _ => {
@@ -642,4 +662,24 @@ pub fn responses_to_chat(body: &Value, upstream_model: &str) -> Result<Value, Pr
         payload["response_format"] = format;
     }
     Ok(payload)
+}
+
+#[cfg(test)]
+mod audio_tests {
+    use super::responses_to_chat;
+    use serde_json::json;
+
+    #[test]
+    fn audio_input_reaches_chat_completions() {
+        let body = json!({"model":"demo","input":[{"role":"user","content":[
+            {"type":"input_text","text":"What do you hear?"},
+            {"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}
+        ]}]});
+        let chat = responses_to_chat(&body, "demo").expect("projected");
+        let content = &chat["messages"].as_array().unwrap().last().unwrap()["content"];
+        assert_eq!(
+            content[1],
+            json!({"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}})
+        );
+    }
 }

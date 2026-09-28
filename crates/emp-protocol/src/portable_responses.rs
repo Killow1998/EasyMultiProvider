@@ -222,6 +222,12 @@ fn project_content(value: Option<&Value>, index: usize) -> Result<Value, Portabl
                         continue;
                     }
                 }
+                if kind == Some("input_audio")
+                    && let Some(audio) = crate::chat_request::input_audio(part)
+                {
+                    projected.push(json!({"type": "input_audio", "input_audio": audio}));
+                    continue;
+                }
                 return Err(PortableProjectionError::new(
                     index,
                     "message",
@@ -772,6 +778,18 @@ mod request_projection_tests {
                 "stream":false
             })
         );
+    }
+
+    #[test]
+    fn audio_input_is_forwarded_to_responses_providers() {
+        let provider = Map::from_iter([
+            ("protocol".to_owned(), Value::String("responses".to_owned())),
+            ("auth_mode".to_owned(), Value::String("api_key".to_owned())),
+        ]);
+        let audio = json!({"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}});
+        let body = json!({"model":"demo","input":[{"role":"user","content":[audio]}]});
+        let projected = project_request(&provider, &body, false).expect("portable projection");
+        assert_eq!(projected["input"][0]["content"][0], audio);
     }
 }
 

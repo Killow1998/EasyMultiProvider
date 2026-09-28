@@ -99,7 +99,7 @@ fn quota_history_has_a_standalone_storage_contract() {
     assert_eq!(result["counts"], json!([2, 2, 3]));
     assert_eq!(result["invalid"], "unsupported quota history range");
     let all = &result["queries"]["all"];
-    assert_eq!(all["sample_interval_seconds"], 300);
+    assert_eq!(all["sample_interval_seconds"], 44);
     assert_eq!(all["retention_days"], 15);
     assert_eq!(all["plans"][1]["plan_type"], "pro_lite");
     assert!(
