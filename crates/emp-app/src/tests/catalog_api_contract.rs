@@ -592,9 +592,12 @@ fn management_body_limits_reject_oversized_plain_and_gzip_bodies() {
             length
         };
         write!(stream,"POST /api/catalog/refresh HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nContent-Encoding: {}\r\n{}\r\nConnection: close\r\n\r\n",server.local_addr(),length,encoding,session_header(&server)).expect("request headers");
-        // The server may reject on the declared length and close before the
-        // whole body arrives; a broken pipe there is the expected rejection.
-        let _ = stream.write_all(&data);
+        // A declared length over the limit is rejected from the headers
+        // alone. Sending that body anyway races the server's close, and some
+        // platforms turn the race into a reset that drops the 413 response.
+        if data.len() <= limit {
+            stream.write_all(&data).expect("request body");
+        }
         let _ = stream.shutdown(Shutdown::Write);
         let mut wire = String::new();
         stream.read_to_string(&mut wire).expect("response");

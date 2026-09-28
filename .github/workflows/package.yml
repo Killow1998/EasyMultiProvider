@@ -79,12 +79,15 @@ jobs:
         with:
           persist-credentials: false
 
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c # 1.93.1
         with:
           toolchain: 1.93.1
 
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -92,10 +95,19 @@ jobs:
       - name: Install locked packaging environment
         run: uv sync --frozen --group package
 
+      - name: Use a real temporary directory
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]).resolve() / "emp-package"
+          path.mkdir(exist_ok=True)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              for name in ("TMPDIR", "TMP", "TEMP"):
+                  env.write(f"{name}={path}\n")
 
       - name: Build and smoke-test native package
         run: uv run --frozen --group package python packaging/build.py
-
 
       - name: Verify Windows executable resources
         if: runner.os == 'Windows'

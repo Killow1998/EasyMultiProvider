@@ -46,6 +46,16 @@ jobs:
         with:
           toolchain: 1.93.1
           components: rustfmt, clippy
+      - name: Use a real temporary directory
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]).resolve() / "emp-rust-contract"
+          path.mkdir(exist_ok=True)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              for name in ("TMPDIR", "TMP", "TEMP"):
+                  env.write(f"{name}={path}\n")
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace --all-targets
@@ -79,6 +89,16 @@ jobs:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - run: uv sync --frozen
+      - name: Use a real temporary directory
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]).resolve() / "emp-contract"
+          path.mkdir(exist_ok=True)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              for name in ("TMPDIR", "TMP", "TEMP"):
+                  env.write(f"{name}={path}\n")
       - name: Protocol regression tests
         run: >-
           uv run --frozen python -m unittest -q

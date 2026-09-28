@@ -1,5 +1,6 @@
 //! Real server contract tests.
 use super::*;
+#[cfg(unix)]
 use std::sync::Mutex;
 
 #[test]
@@ -289,7 +290,9 @@ fn fake_codex_backend(home: &Path, models: Arc<Mutex<Vec<Value>>>) {
 #[cfg(unix)]
 #[test]
 fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
-    let directory = tempfile::tempdir().unwrap();
+    // The Codex control socket lives under this directory, and Unix socket
+    // paths are short (104 bytes on macOS), so stay out of the long TMPDIR.
+    let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let root = canonical_root(&directory);
     let config = root.join("emp-config.json");
     std::fs::write(&config, serde_json::to_vec(&json!({
