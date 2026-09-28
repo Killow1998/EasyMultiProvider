@@ -135,7 +135,12 @@ class _UnixModelListServer:
                     if not page.get("nextCursor"):
                         break
                 websocket.close()
-                writer.close()
+                # The probe may hang up as soon as it has the final page; the
+                # closing handshake is best-effort, as in production.
+                try:
+                    writer.close()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 reader.close()
         except BaseException as exc:  # surfaced by __exit__ in the test thread
             self.error = exc
