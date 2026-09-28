@@ -21,7 +21,8 @@ fn external_catalog_keeps_coding_template_without_native_entitlements() {
         .find(|entry| entry["slug"] == "demo/model")
         .expect("external");
     assert_eq!(external["base_instructions"], "coding");
-    assert_eq!(external["display_name"], "[ 256K]  demo/model");
+    // Codex keeps 95% of the window for input, so 256000 shows as 243K.
+    assert_eq!(external["display_name"], "[ 243K]  demo/model");
     assert!(external.get("available_access_programs").is_none());
     assert_eq!(external["multi_agent_version"], Value::Null);
     assert_eq!(external["model_messages"], json!({"tools":"safe"}));

@@ -2,7 +2,7 @@
   "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config.merge_web_update(path=None)",
   "status": "implemented",
   "implementation": "crates/emp-state/src/config.rs",
-  "test": "crates/emp-state/tests/web_update_merge_compat.rs",
+  "test": "crates/emp-state/tests/web_update_merge.rs",
   "fixed_observed_at": "2026-09-21T20:00:00+00:00",
   "limitations": [
     "filesystem path canonicalization is a separate state transition"
@@ -19,9 +19,9 @@
         ],
         "accounts": [
           {
-            "id": "egg",
-            "prefix": "egg",
-            "auth_file": "/managed/accounts/egg/auth.json.enc"
+            "id": "demo",
+            "prefix": "demo",
+            "auth_file": "/managed/accounts/demo/auth.json.enc"
           }
         ],
         "providers": [
@@ -43,8 +43,8 @@
         ],
         "accounts": [
           {
-            "id": "egg",
-            "prefix": "egg"
+            "id": "demo",
+            "prefix": "demo"
           }
         ],
         "providers": [
@@ -73,7 +73,7 @@
         "/native_catalog_path": "/managed/models.json",
         "/account_store_path": "/managed/accounts",
         "/secret_store_path": "/managed/secrets",
-        "/accounts/0/auth_file": "/managed/accounts/egg/auth.json.enc",
+        "/accounts/0/auth_file": "/managed/accounts/demo/auth.json.enc",
         "/providers/0/api_key": "secret-value"
       }
     },
@@ -646,17 +646,17 @@
       "current": {
         "accounts": [
           {
-            "id": "egg",
-            "prefix": "egg",
-            "auth_file": "/managed/accounts/egg/auth.json.enc"
+            "id": "demo",
+            "prefix": "demo",
+            "auth_file": "/managed/accounts/demo/auth.json.enc"
           }
         ]
       },
       "incoming": {
         "accounts": [
           {
-            "id": "egg",
-            "prefix": "egg",
+            "id": "demo",
+            "prefix": "demo",
             "auth_file": "/tmp/stolen.enc"
           }
         ],

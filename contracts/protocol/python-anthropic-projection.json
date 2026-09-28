@@ -7,8 +7,7 @@
     "tests/test_v06_final_review.py"
   ],
   "rust_evidence": [
-    "crates/emp-protocol/tests/anthropic_projection.rs",
-    "crates/emp-protocol/tests/anthropic_python_oracle.rs"
+    "crates/emp-protocol/tests/anthropic_projection.rs"
   ],
   "covered_cases": [
     "instructions, images, structured output, reasoning effort and generation controls",
@@ -18,5 +17,7 @@
     "invalid or lossy request content fails before transport with content-free diagnostics",
     "malformed or unsupported upstream content fails without entering Codex history"
   ],
-  "side_effects": ["none; identifiers are injected by the caller"]
+  "side_effects": [
+    "none; identifiers are injected by the caller"
+  ]
 }

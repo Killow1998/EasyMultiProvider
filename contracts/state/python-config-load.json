@@ -2,7 +2,7 @@
   "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config.config_path + load",
   "status": "implemented",
   "implementation": "crates/emp-state/src/config.rs",
-  "test": "crates/emp-state/tests/config_load_compat.rs",
+  "test": "crates/emp-state/tests/config_load.rs",
   "limitations": [
     "JSON parser diagnostic wording and positions differ; both implementations expose ConfigError and reject the same bounded fixture classes.",
     "I/O messages are stable and secret-free in Rust while Python retains platform-native path-carrying messages.",

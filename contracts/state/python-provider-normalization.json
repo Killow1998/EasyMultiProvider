@@ -2,7 +2,7 @@
   "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config._normalize_provider",
   "status": "implemented",
   "implementation": "crates/emp-state/src/config.rs",
-  "test": "crates/emp-state/tests/provider_config_compat.rs",
+  "test": "crates/emp-state/tests/provider_normalization.rs",
   "valid": [
     {
       "input": {

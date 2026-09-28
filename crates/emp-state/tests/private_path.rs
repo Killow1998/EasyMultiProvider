@@ -128,8 +128,8 @@ fn account_auth_path_uses_config_parent_and_rejects_unsafe_ids() {
     let config_path = root.join("configuration/config.json");
     let config = json!({"account_store_path": "managed/accounts"});
     assert_eq!(
-        account_auth_path(&config, "egg", &config_path).expect("managed account path"),
-        root.join("configuration/managed/accounts/egg/auth.json.enc")
+        account_auth_path(&config, "demo", &config_path).expect("managed account path"),
+        root.join("configuration/managed/accounts/demo/auth.json.enc")
     );
     assert_eq!(
         account_auth_path(&config, "../escape", &config_path)

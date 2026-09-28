@@ -5,8 +5,7 @@
     "tests/test_adaptive_request_limits.py"
   ],
   "rust_evidence": [
-    "crates/emp-transport/tests/request_admission.rs",
-    "crates/emp-transport/tests/python_oracle.rs:request_admission_matches_live_python_oracle_when_configured"
+    "crates/emp-transport/tests/request_admission.rs"
   ],
   "limits": {
     "baseline_bytes": 67108864,

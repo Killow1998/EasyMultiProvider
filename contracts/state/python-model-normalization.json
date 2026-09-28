@@ -2,7 +2,7 @@
   "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config._normalize_model",
   "status": "implemented",
   "implementation": "crates/emp-state/src/config.rs",
-  "test": "crates/emp-state/tests/model_normalization_compat.rs",
+  "test": "crates/emp-state/tests/model_normalization.rs",
   "limitations": [
     "serde_json preserves JSON integers only through the u64/i64 input boundary and cannot represent Python's arbitrary-size integers beyond it.",
     "serde_json rejects nonfinite JSON numbers, so Python's OverflowError for int(float('1e400')) is outside this frozen JSON fixture."

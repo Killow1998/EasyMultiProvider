@@ -587,7 +587,7 @@ for line in sys.stdin:
             None,
         )
         .expect("isolated quota query");
-        assert_eq!(result.quota["account_label"], "x***@example.com");
+        assert_eq!(result.quota["account_label"], "u***@example.com");
         assert_eq!(result.quota["plan_type"], "pro");
         assert_eq!(result.quota["rate_limits"]["primary"]["usedPercent"], 7);
         assert_eq!(

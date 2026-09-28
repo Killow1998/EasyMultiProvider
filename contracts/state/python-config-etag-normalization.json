@@ -2,7 +2,7 @@
   "source": "Python 3.11 standard library and EasyMultiProvider 0.11.6",
   "status": "implemented",
   "implementation": "crates/emp-state/src/config.rs",
-  "test": "crates/emp-state/tests/config_compat.rs",
+  "test": "crates/emp-state/tests/config_normalization_units.rs",
   "presentations": {
     "input": {
       " route/x:y.-_ ": {

@@ -6,9 +6,9 @@ use std::path::Path;
 fn normalized_fixture(secret_file: &Path) -> Value {
     let mut config = normalize_configuration(Some(&json!({
         "accounts": [{
-            "id": "egg",
-            "name": "Egg",
-            "prefix": "egg",
+            "id": "demo",
+            "name": "Demo",
+            "prefix": "demo",
             "auth_file": "/missing/account-auth.json.enc",
             "credential_status": "valid",
             "hidden_models": ["gpt-hidden"],
@@ -49,7 +49,7 @@ fn browser_projection_redacts_credentials_and_preserves_safe_state() {
     let secret_file = root.join("managed.key");
     std::fs::write(&secret_file, b"never expose this").expect("secret fixture");
     let config = normalized_fixture(&secret_file);
-    let duplicates = BTreeMap::from([("egg".to_owned(), "当前 Codex 登录".to_owned())]);
+    let duplicates = BTreeMap::from([("demo".to_owned(), "当前 Codex 登录".to_owned())]);
 
     let public = public_configuration_with_file_status(&config, &duplicates, regular_file)
         .expect("public configuration");
