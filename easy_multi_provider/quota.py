@@ -100,6 +100,106 @@ _REFRESH_COOLDOWN_SECONDS = 2.0
 _SERVER_AUTH_OID = "1.3.6.1.5.5.7.3.1"
 
 
+_PASSWD_ENUMERATION = threading.Lock()
+
+
+def _collect_entries(next_entry):
+    """Drain ``next_entry`` (None at the end, False for a skipped entry).
+
+    An error raised part-way discards everything, since a missed account
+    could share the group; an empty enumeration is a failure too. Matches the
+    Rust ``collect_entries``.
+    """
+    entries = []
+    try:
+        while True:
+            entry = next_entry()
+            if entry is None:
+                break
+            if entry is not False:
+                entries.append(entry)
+    except OSError:
+        return None
+    return entries or None
+
+
+def _enumerate_accounts():
+    """Every passwd account as (name, uid, gid), or None on a failed read.
+
+    ``pwd.getpwall`` stops at the first NULL from ``getpwent`` and so cannot
+    tell a read error from the end; errno can, through ctypes.
+    """
+    try:
+        import ctypes
+        import errno
+
+        # The symbols already loaded into this process, libc among them;
+        # ctypes.util.find_library would spawn a subprocess.
+        libc = ctypes.CDLL(None, use_errno=True)
+    except (ImportError, OSError):
+        return None
+
+    class Passwd(ctypes.Structure):
+        # The leading fields shared by glibc, musl and the BSDs.
+        _fields_ = [
+            ("pw_name", ctypes.c_char_p),
+            ("pw_passwd", ctypes.c_char_p),
+            ("pw_uid", ctypes.c_uint32),
+            ("pw_gid", ctypes.c_uint32),
+        ]
+
+    libc.getpwent.restype = ctypes.POINTER(Passwd)
+
+    def next_entry():
+        ctypes.set_errno(0)
+        entry = libc.getpwent()
+        if not entry:
+            code = ctypes.get_errno()
+            if code in (0, errno.ENOENT):
+                return None
+            raise OSError(code, "passwd enumeration failed")
+        entry = entry.contents
+        if entry.pw_name is None:
+            return False
+        return (os.fsdecode(entry.pw_name), entry.pw_uid, entry.pw_gid)
+
+    with _PASSWD_ENUMERATION:
+        libc.setpwent()
+        try:
+            return _collect_entries(next_entry)
+        finally:
+            libc.endpwent()
+
+
+def _private_groups(current_uid):
+    """Groups whose write permission grants no other user access.
+
+    Every member, both users whose primary group it is and its supplementary
+    members, must be root or the current user (user-private groups from
+    umask 002 npm/nvm installs). Matches the Rust executable trust rule.
+    """
+    try:
+        import grp
+    except ImportError:
+        return lambda _gid: False
+    accounts = _enumerate_accounts()
+    if not accounts:
+        return lambda _gid: False
+    trusted = {0, current_uid}
+    uids = {name: uid for name, uid, _ in accounts}
+
+    def contains(gid):
+        if any(primary == gid and uid not in trusted for _, uid, primary in accounts):
+            return False
+        try:
+            members = grp.getgrgid(gid).gr_mem
+        except KeyError:
+            return False
+        return all(uids.get(member) in trusted for member in members)
+
+    return contains
+
+
 def _trusted_codex_binary(codex_binary: str):
     binary_path = shutil.which(codex_binary) if not os.path.isabs(codex_binary) else codex_binary
     if not binary_path:
@@ -115,15 +215,33 @@ def _trusted_codex_binary(codex_binary: str):
         not stat.S_ISREG(target.st_mode)
         or not os.access(str(binary), os.X_OK)
         or target.st_uid not in allowed_owners
+        or (os.name != "nt" and target.st_mode & (stat.S_ISUID | stat.S_ISGID))
     ):
         raise QuotaError("Codex executable is not trusted")
     if os.name != "nt":
+        private_group = _private_groups(current_uid)
+        # Owner of the entry directly below the ancestor being checked; None
+        # for the executable itself.
+        entry_uid = None
         for parent in (binary, *binary.parents):
-            info = parent.stat()
-            if info.st_mode & stat.S_IWOTH:
+            try:
+                info = parent.stat()
+            except OSError as exc:
+                raise QuotaError("Codex executable is unavailable") from exc
+            # An owner can always change its entry's permissions.
+            if info.st_uid not in allowed_owners:
                 raise QuotaError("Codex executable path is writable")
-            if info.st_mode & stat.S_IWGRP and info.st_uid not in allowed_owners:
-                raise QuotaError("Codex executable path is not owner-managed")
+            # A sticky directory such as /tmp stops other users renaming or
+            # removing an entry owned by root or the current user.
+            sticky_protects_entry = (
+                entry_uid in allowed_owners
+                and stat.S_ISDIR(info.st_mode)
+                and info.st_mode & stat.S_ISVTX
+            )
+            group_foreign = info.st_mode & stat.S_IWGRP and not private_group(info.st_gid)
+            if (info.st_mode & stat.S_IWOTH or group_foreign) and not sticky_protects_entry:
+                raise QuotaError("Codex executable path is writable")
+            entry_uid = info.st_uid
     return binary, (target.st_dev, target.st_ino)
 
 

@@ -406,10 +406,10 @@ class SubscriptionContextTests(unittest.TestCase):
             path, config, _ = self.fixture(source)
             config["native_model_context_windows"] = {"gpt-current": 1000000}
             native_auth = source / "auth.json"; native_auth.write_text(json.dumps({"tokens": {"access_token": "native", "account_id": "native"}}))
-            bundle = export_bundle(config, path, "password", ["native"], native_auth)
+            bundle = export_bundle(config, path, "password-1234", ["native"], native_auth)
             target = root / "target/config.json"
             destination = normalize({"native_model_context_windows": {"destination-model": 100000}})
-            result, _ = import_bundle(destination, bundle, "password", target)
+            result, _ = import_bundle(destination, bundle, "password-1234", target)
             self.assertEqual(result["native_model_context_windows"], {"destination-model": 100000})
             self.assertEqual(result["accounts"][0]["model_context_windows"], {"gpt-current": 1000000})
 

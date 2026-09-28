@@ -817,7 +817,18 @@ class ServerAccountTests(unittest.TestCase):
             root = Path(directory)
             codex_home = root / "codex-home"
             codex_home.mkdir()
-            (codex_home / "auth.json").write_text("{}", encoding="utf-8")
+            (codex_home / "auth.json").write_text(
+                json.dumps(
+                    {
+                        "auth_mode": "chatgpt",
+                        "tokens": {
+                            "access_token": "native-secret",
+                            "account_id": "upstream-native",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
             manager = IntegrationManager(
                 codex_home / "config.toml",
                 codex_home / "easy-multi-provider" / "integration" / "lease.json",
@@ -1224,6 +1235,230 @@ class ServerAccountTests(unittest.TestCase):
             self.assertFalse(auth_path.parent.exists())
             self.assertEqual(state.config["accounts"], [])
             self.assertTrue(config_path.exists())
+
+    def test_quota_history_follows_upstream_identity_across_delete_and_reimport(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(
+                normalize({"account_store_path": str(root / "state" / "accounts")}),
+                config_path,
+            )
+            state = AppState(config_path)
+
+            def import_account(account_id, upstream_id, access_token):
+                return state.import_account(
+                    {"id": account_id, "name": "Egg", "prefix": account_id},
+                    {
+                        "auth_mode": "chatgpt",
+                        "tokens": {
+                            "access_token": access_token,
+                            "account_id": upstream_id,
+                        },
+                    },
+                )
+
+            quota = {
+                "rate_limits": {
+                    "limitId": "codex",
+                    "primary": {"usedPercent": 23, "windowDurationMins": 300},
+                }
+            }
+            import_account("egg", "upstream-account-a", "token-before-delete")
+            original_owner = state._quota_owner_key("egg")
+            self.assertTrue(state._record_quota_snapshot("egg", quota))
+            state.delete_account("egg")
+
+            import_account("egg-restored", "upstream-account-a", "rotated-token")
+            self.assertEqual(state._quota_owner_key("egg-restored"), original_owner)
+            restored = state.quota_history_snapshot("egg-restored", "all")
+            self.assertEqual(len(restored["series"]), 1)
+            self.assertEqual(restored["series"][0]["points"][0]["remaining_percent"], 77.0)
+            state.delete_account("egg-restored")
+
+            import_account("egg", "upstream-account-b", "other-account-token")
+            self.assertNotEqual(state._quota_owner_key("egg"), original_owner)
+            self.assertEqual(state.quota_history_snapshot("egg", "all")["series"], [])
+
+    def test_legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(
+                normalize({"account_store_path": str(root / "state" / "accounts")}),
+                config_path,
+            )
+            state = AppState(config_path)
+            state.codex_home.mkdir(parents=True, exist_ok=True)
+            (state.codex_home / "auth.json").write_text(
+                json.dumps({"tokens": {"access_token": "native", "account_id": "upstream-native"}}),
+                encoding="utf-8",
+            )
+
+            def import_account(account_id, upstream_id):
+                state.import_account(
+                    {"id": account_id, "name": account_id, "prefix": account_id},
+                    {"tokens": {"access_token": account_id + "-token", "account_id": upstream_id}},
+                )
+
+            def sample(used):
+                return {"rate_limits": {"limitId": "codex", "primary": {"usedPercent": used, "windowDurationMins": 300}}}
+
+            def points(owner):
+                return sum(len(series["points"]) for series in state.quota_history.query(owner, "all")["series"])
+
+            import_account("egg", "upstream-egg")
+            history = state.quota_history
+            history.append_snapshot("egg", sample(10), observed_at=int(time.time()) - 900)
+            history.append_snapshot("egg", sample(20), observed_at=int(time.time()) - 300)
+            history.append_snapshot("@native", sample(30), observed_at=int(time.time()) - 900)
+            history.append_snapshot("ghost", sample(40), observed_at=int(time.time()) - 900)
+
+            state.migrate_legacy_quota_history()
+            state.migrate_legacy_quota_history()
+            egg = state._quota_owner_key("egg")
+            native = state._quota_owner_key("@native")
+            self.assertEqual(points(egg), 2)
+            self.assertEqual(points("egg"), 0)
+            # @native rows may come from any earlier login: the current one
+            # cannot claim them.
+            self.assertEqual(points(native), 0)
+            self.assertEqual(points("@native"), 1)
+            self.assertEqual(points("ghost"), 1)
+
+            history.append_snapshot("egg", sample(50), observed_at=int(time.time()))
+            state.delete_account("egg")
+            self.assertEqual(points(egg), 3)
+            import_account("egg", "someone-else")
+            other = state._quota_owner_key("egg")
+            self.assertNotEqual(other, egg)
+            state.migrate_legacy_quota_history()
+            self.assertEqual(points(other), 0)
+
+            # Reimporting the id with different credentials attributes its
+            # legacy rows with the credentials that recorded them first.
+            history.append_snapshot("egg", sample(60), observed_at=int(time.time()) - 60)
+            # A reimport that is rejected leaves the rows alone.
+            import_account("hen", "upstream-hen")
+            with self.assertRaisesRegex(ConfigError, "prefix is already in use"):
+                state.import_account(
+                    {"id": "egg", "name": "egg", "prefix": "hen"},
+                    {"tokens": {"access_token": "egg-token", "account_id": "third-identity"}},
+                )
+            self.assertEqual(points("egg"), 1)
+            self.assertEqual(points(other), 0)
+            # Also when only full configuration validation rejects it: the
+            # prefix names an existing provider.
+            with state.lock:
+                state.config = normalize(
+                    dict(state.config, providers=[{"id": "deepseek", "base_url": "https://example.test/v1"}])
+                )
+            with self.assertRaisesRegex(ConfigError, "conflict with provider ids"):
+                state.import_account(
+                    {"id": "egg", "name": "egg", "prefix": "deepseek"},
+                    {"tokens": {"access_token": "egg-token", "account_id": "third-identity"}},
+                )
+            self.assertEqual(points("egg"), 1)
+            self.assertEqual(points(other), 0)
+            import_account("egg", "third-identity")
+            self.assertEqual(points(other), 1)
+            self.assertEqual(points("egg"), 0)
+
+            # Unreadable recording credentials: deleting the account drops the
+            # rows instead of leaving them for the next account reusing the id.
+            history.append_snapshot("egg", sample(70), observed_at=int(time.time()) - 30)
+            egg_auth = next(
+                item["auth_file"] for item in state.config["accounts"] if item["id"] == "egg"
+            )
+            Path(egg_auth).write_bytes(b"not a vault document")
+            state.delete_account("egg")
+            self.assertEqual(points("egg"), 0)
+            import_account("egg", "fourth-identity")
+            state.migrate_legacy_quota_history()
+            self.assertEqual(points(state._quota_owner_key("egg")), 0)
+
+    def test_concurrent_prefix_change_cannot_reject_a_reimport_after_settling(self):
+        # Settling is part of the reimport's validated commit: while it runs
+        # (paused by an exclusive SQLite lock), an import taking the same
+        # prefix must wait and then be rejected.
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(normalize({"account_store_path": str(root / "state" / "accounts")}), config_path)
+            state = AppState(config_path)
+
+            def import_account(account_id, prefix, upstream_id):
+                return state.import_account(
+                    {"id": account_id, "name": account_id, "prefix": prefix},
+                    {"tokens": {"access_token": account_id + "-token", "account_id": upstream_id}},
+                )
+
+            import_account("egg", "egg", "upstream-egg")
+            state.quota_history.append_snapshot(
+                "egg",
+                {"rate_limits": {"limitId": "codex", "primary": {"usedPercent": 10, "windowDurationMins": 300}}},
+                observed_at=int(time.time()) - 60,
+            )
+            blocker = sqlite3.connect(str(state.quota_history.path), timeout=5, isolation_level=None)
+            blocker.execute("BEGIN EXCLUSIVE")
+            results = {}
+
+            def run(name, *args):
+                try:
+                    results[name] = import_account(*args)
+                except ConfigError as exc:
+                    results[name] = exc
+
+            reimport = threading.Thread(target=run, args=("reimport", "egg", "yolk", "upstream-egg-2"))
+            reimport.start()
+            # Wait until the reimport holds the configuration lock (it is
+            # then settling, blocked on the history database).
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if not state.lock.acquire(blocking=False):
+                    break
+                state.lock.release()
+                time.sleep(0.005)
+            rival = threading.Thread(target=run, args=("rival", "hen", "yolk", "upstream-hen"))
+            rival.start()
+            time.sleep(0.2)
+            blocker.execute("COMMIT")
+            blocker.close()
+            reimport.join(10)
+            rival.join(10)
+            self.assertNotIsInstance(results["reimport"], ConfigError)
+            self.assertIsInstance(results["rival"], ConfigError)
+            self.assertIn("prefix is already in use", str(results["rival"]))
+            self.assertEqual([item["prefix"] for item in state.config["accounts"]], ["yolk"])
+
+    def test_account_id_is_not_freed_while_its_legacy_history_cannot_be_settled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(
+                normalize({"account_store_path": str(root / "state" / "accounts")}),
+                config_path,
+            )
+            state = AppState(config_path)
+
+            def import_account(upstream_id):
+                state.import_account(
+                    {"id": "egg", "name": "egg", "prefix": "egg"},
+                    {"tokens": {"access_token": "token", "account_id": upstream_id}},
+                )
+
+            import_account("upstream-egg")
+            # Legacy rows exist, but neither adoption nor deletion can reach them.
+            state.quota_history.path.parent.mkdir(parents=True, exist_ok=True)
+            state.quota_history.path.write_bytes(b"not a sqlite database")
+
+            with self.assertRaises(ConfigError):
+                state.delete_account("egg")
+            with self.assertRaises(ConfigError):
+                import_account("someone-else")
+            self.assertTrue(any(item["id"] == "egg" for item in state.config["accounts"]))
 
     def test_web_config_update_keeps_api_key_out_of_config(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3747,7 +3982,20 @@ class ServerAccountTests(unittest.TestCase):
             state = AppState(config_path)
             state.import_account(
                 {"id": "primary", "name": "Primary", "prefix": "primary"},
-                {"auth_mode": "chatgpt", "tokens": {"access_token": "account-secret"}},
+                {
+                    "auth_mode": "chatgpt",
+                    "tokens": {"access_token": "account-secret", "account_id": "upstream-shared"},
+                },
+            )
+            state.codex_home.mkdir(parents=True, exist_ok=True)
+            (state.codex_home / "auth.json").write_text(
+                json.dumps(
+                    {
+                        "auth_mode": "chatgpt",
+                        "tokens": {"access_token": "native-secret", "account_id": "upstream-shared"},
+                    }
+                ),
+                encoding="utf-8",
             )
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -3789,7 +4037,12 @@ class ServerAccountTests(unittest.TestCase):
                     auth_path=state.codex_home / "auth.json",
                 )
                 dup_check.assert_called()
-                self.assertTrue(state.quota_history.query("@native", "all")["series"])
+                # Both logins are the same upstream account: one shared history
+                # keyed by upstream identity, never by the local display id.
+                owner = state._quota_owner_key("primary")
+                self.assertEqual(owner, state._quota_owner_key("@native"))
+                self.assertTrue(state.quota_history.query(owner, "all")["series"])
+                self.assertFalse(state.quota_history.query("@native", "all")["series"])
                 self.assertFalse(state.quota_history.query("primary", "all")["series"])
             finally:
                 server.shutdown()
