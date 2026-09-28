@@ -8,6 +8,7 @@ use std::process::ExitCode;
 mod control;
 pub(crate) mod desktop;
 mod help;
+mod migrate;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Cli {
@@ -15,6 +16,10 @@ pub(crate) enum Cli {
     Help(Option<String>),
     Control(control::Control),
     ApplyUpdate(PathBuf),
+    MigrateConfig {
+        source: PathBuf,
+        target: PathBuf,
+    },
     Serve {
         config: Option<PathBuf>,
         host: Option<String>,
@@ -47,6 +52,19 @@ where
             return Err("--emp-apply-update requires one plan".into());
         }
         return Ok(Cli::ApplyUpdate(PathBuf::from(path)));
+    }
+    if command == "--emp-migrate-config" {
+        let (Some(source), Some(target), None) =
+            (arguments.next(), arguments.next(), arguments.next())
+        else {
+            return Err(
+                "--emp-migrate-config requires SOURCE and TARGET configuration paths".into(),
+            );
+        };
+        return Ok(Cli::MigrateConfig {
+            source: PathBuf::from(source),
+            target: PathBuf::from(target),
+        });
     }
     if matches!(command.as_str(), "--help" | "-h") {
         return Ok(Cli::Help(None));
@@ -165,6 +183,14 @@ pub(crate) fn run() -> Result<ExitCode, String> {
             return emp_state::update::worker::run(&path)
                 .map(ExitCode::from)
                 .map_err(|error| error.to_string());
+        }
+        Cli::MigrateConfig { source, target } => {
+            // The installer reports the backup directory printed here.
+            let backup = migrate::migrate(&source, &target)
+                .map_err(|error| format!("configuration migration failed: {error}"))?;
+            if let Some(backup) = backup {
+                println!("{}", backup.display());
+            }
         }
         Cli::Serve {
             config,
