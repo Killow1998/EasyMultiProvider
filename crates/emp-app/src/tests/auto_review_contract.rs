@@ -1,6 +1,6 @@
 use super::canonical_root;
 #[cfg(unix)]
-use super::{OneShotUpstream, post, session_cookie_header};
+use super::{OneShotUpstream, post, session_header};
 use crate::http::request::{parse_request, read_request_head};
 use crate::lifecycle::ServerHandle;
 use crate::services::accounts::account_catalog_headers;
@@ -22,7 +22,7 @@ import json, os, sys
 root = os.environ["EMP_PYTHON_ORACLE_ROOT"]
 sys.path.insert(0, root)
 import easy_multi_provider
-assert easy_multi_provider.__version__ == "0.11.10", easy_multi_provider.__version__
+assert easy_multi_provider.__version__ == "0.11.11", easy_multi_provider.__version__
 from easy_multi_provider.auto_review import automatic_review_candidates
 from easy_multi_provider.route_plan import resolve_route
 payload = json.load(sys.stdin)
@@ -54,7 +54,7 @@ json.dump({"version": easy_multi_provider.__version__, "results": results}, sys.
 
 fn run_python_oracle(cases: &[Value]) -> Value {
     let python = std::env::var("EMP_PYTHON_INTEROP")
-        .expect("EMP_PYTHON_INTEROP must point at the official 0.11.10 venv");
+        .expect("EMP_PYTHON_INTEROP must point at the official 0.11.11 venv");
     let root = std::env::var("EMP_PYTHON_ORACLE_ROOT")
         .expect("EMP_PYTHON_ORACLE_ROOT must point at the official oracle");
     assert!(
@@ -299,7 +299,7 @@ fn selector_and_route_match_live_python_01110() {
         json!({"config":{"native_catalog_path":base_config["native_catalog_path"],"providers":base_config["providers"],"models":[{"id":"codex-auto-review","provider":"fallback","upstream_id":"ordinary-review","enabled":true}],"accounts":[]},"native_available":false,"cooldowns":{},"requested_model":"codex-auto-review"}),
     ];
     let oracle = run_python_oracle(&cases);
-    assert_eq!(oracle["version"], "0.11.10");
+    assert_eq!(oracle["version"], "0.11.11");
 
     for (index, case) in cases.iter().enumerate() {
         let case_config = case["config"].clone();
@@ -392,7 +392,7 @@ fn http_auto_review_skips_symlink_native_and_missing_account_catalog_without_lea
         &server,
         "/v1/responses",
         br#"{"model":"stale-prefix/codex-auto-review","input":"review"}"#,
-        &[&session_cookie_header(&server)],
+        &[&session_header(&server)],
     );
     let (path, headers, body) = upstream.observed();
     assert_eq!(body["model"], "codex-auto-review");
@@ -523,9 +523,9 @@ fn websocket_auto_review_uses_the_shared_imported_account_route() {
         make_review_server(&upstream.base_url(), &accounts, Some("symlink"));
     let url = format!("ws://{}/v1/responses", server.local_addr());
     let headers = BTreeMap::from([(
-        "cookie".to_owned(),
-        session_cookie_header(&server)
-            .trim_start_matches("Cookie: ")
+        "x-emp-session".to_owned(),
+        session_header(&server)
+            .trim_start_matches("X-EMP-Session: ")
             .to_owned(),
     )]);
     let mut socket =

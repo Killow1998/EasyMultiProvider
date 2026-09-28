@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "emp-integration"
 version.workspace = true
 edition.workspace = true

@@ -16,8 +16,10 @@ use crate::api::responses::responses_request;
 use crate::api::search::native_search_request;
 use crate::api::websocket::serve_responses_websocket;
 use crate::app::ServerState;
-use crate::http::auth::bootstrap_value;
+use crate::http::auth::BOOTSTRAP_HEADER;
+use crate::http::auth::CLEAR_LEGACY_SESSION_COOKIE;
 use crate::http::auth::same_origin;
+use crate::http::request::REQUEST_READ_TIMEOUT;
 use crate::http::request::Request;
 use crate::http::request::RequestMethod;
 use crate::http::request::parse_request;
@@ -37,21 +39,16 @@ use crate::services::accounts::delete_account_state;
 use crate::services::quota::QuotaHistoryResponseError;
 use crate::services::quota::quota_history_response;
 use crate::util::system_now;
-use crate::web::login_response;
-use crate::web::redirect_response;
 use crate::web::ui_response;
 use std::io::Write;
 use std::net::Shutdown;
 use std::net::TcpStream;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     if stream.set_nonblocking(false).is_err()
         || stream.set_nodelay(true).is_err()
-        || stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .is_err()
+        || stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT)).is_err()
     {
         return;
     }
@@ -255,7 +252,9 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
                 if request.method == RequestMethod::Post
                     && matches!(
                         request.raw_path(),
-                        "/api/migration/export" | "/api/migration/import"
+                        "/api/migration/export"
+                            | "/api/migration/export/confirm"
+                            | "/api/migration/import"
                     ) =>
             {
                 Some(management_migration_request(
@@ -347,51 +346,47 @@ fn route_request(request: Request<'_>, state: &ServerState) -> Vec<u8> {
 
 pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f64) -> Vec<u8> {
     let path = request.raw_path();
+    let same_origin = same_origin(request, state.port);
     if request.method == RequestMethod::Get
         && (path == "/v1/models" || path.starts_with("/v1/models/"))
     {
+        if !same_origin {
+            return cross_origin_response("cross-origin model catalog request rejected");
+        }
         return catalog::models_request(request, state);
     }
     if path == "/healthz" {
+        if !same_origin {
+            return cross_origin_response("cross-origin health request rejected");
+        }
         return health_response();
     }
     if request.method == RequestMethod::Get && path == "/api/updates" {
         return crate::api::updates::read(request, state, now);
     }
 
-    let same_origin = same_origin(request, state.port);
     if path == "/" || path == "/index.html" {
         if !same_origin {
             return cross_origin_response("cross-origin Web UI request rejected");
         }
-        let supplied_cookie = request.session_cookie();
-        if state.sessions.contains(supplied_cookie.as_deref(), now) {
-            let Some(cookie) = state.sessions.refresh_header(now) else {
-                return login_response();
-            };
-            return ui_response(&cookie);
+        // The page carries no secrets; its script exchanges the bootstrap
+        // token for an origin-scoped session sent as a request header.
+        return ui_response();
+    }
+
+    if request.method == RequestMethod::Post && path == "/api/session" {
+        if !same_origin {
+            return cross_origin_response("management session is required");
         }
-        let Some(supplied) = bootstrap_value(request.target) else {
-            return login_response();
-        };
-        if !state.bootstrap.matches(&supplied) {
-            return login_response();
-        }
-        let Some(cookie) = state.sessions.refresh_or_rotate_header(now) else {
-            return login_response();
-        };
-        if !state.bootstrap.consume() {
-            return login_response();
-        }
-        return redirect_response(&cookie);
+        return bootstrap_session(request, state, now);
     }
 
     if path.starts_with("/api/") {
         if !same_origin {
             return cross_origin_response("management session is required");
         }
-        let supplied_cookie = request.session_cookie();
-        if state.sessions.contains(supplied_cookie.as_deref(), now) {
+        let supplied_session = request.session_token();
+        if state.sessions.contains(supplied_session.as_deref(), now) {
             if request.method == RequestMethod::Get && path == "/api/support-report" {
                 return crate::api::support_report::read(state);
             }
@@ -433,11 +428,13 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
                 return read_integration_request(state);
             }
             if request.method == RequestMethod::Get
-                && path.starts_with("/api/accounts/")
-                && path.ends_with("/quota-history")
+                && let Some(raw_account) = path
+                    .strip_prefix("/api/accounts/")
+                    .and_then(|rest| rest.strip_suffix("/quota-history"))
             {
-                let raw_account =
-                    &path["/api/accounts/".len()..path.len() - "/quota-history".len()];
+                if raw_account.is_empty() {
+                    return not_found_response();
+                }
                 let account_id = percent_decode(raw_account, false);
                 let range = query_values(request.target, "range")
                     .into_iter()
@@ -458,9 +455,14 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
                     }
                 };
             }
-            if request.method == RequestMethod::Delete && path.starts_with("/api/accounts/") {
-                let account_id =
-                    percent_decode(path["/api/accounts/".len()..].trim_end_matches('/'), false);
+            if request.method == RequestMethod::Delete
+                && let Some(raw_account) = path.strip_prefix("/api/accounts/")
+            {
+                let raw_account = raw_account.trim_end_matches('/');
+                if raw_account.is_empty() {
+                    return not_found_response();
+                }
+                let account_id = percent_decode(raw_account, false);
                 return match delete_account_state(state, &account_id) {
                     Ok(()) => {
                         let body = serde_json::to_vec(&serde_json::json!({"status":"ok"})).unwrap();
@@ -475,4 +477,33 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
     }
 
     not_found_response()
+}
+
+/// Exchange the single-use bootstrap token for the management session.
+fn bootstrap_session(request: Request<'_>, state: &ServerState, now: f64) -> Vec<u8> {
+    let Some(supplied) = (request.header_count(BOOTSTRAP_HEADER) == 1)
+        .then(|| request.header(BOOTSTRAP_HEADER))
+        .flatten()
+        .filter(|value| !value.is_empty() && value.is_ascii())
+    else {
+        return unauthorized_response();
+    };
+    if !state.bootstrap.matches(supplied, now) || !state.bootstrap.consume() {
+        return unauthorized_response();
+    }
+    let Some((token, expires_in)) = state.sessions.rotate(now) else {
+        state.bootstrap.release();
+        return json_error_response(500, status_text(500), "internal server error", None, &[]);
+    };
+    let body = serde_json::to_vec(&serde_json::json!({
+        "session": token,
+        "expires_in": expires_in,
+    }))
+    .expect("session response is JSON serializable");
+    response(
+        "HTTP/1.1 200 OK",
+        "application/json",
+        &body,
+        &[("Set-Cookie", CLEAR_LEGACY_SESSION_COOKIE)],
+    )
 }

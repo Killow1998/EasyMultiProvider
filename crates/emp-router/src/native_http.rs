@@ -72,6 +72,8 @@ pub struct NativeStream {
     plaintext_collaboration: bool,
     declared_sse: bool,
     line_buffer: Vec<u8>,
+    /// Prefix of `line_buffer` already known to contain no newline.
+    line_scanned: usize,
     pending_wire: Vec<u8>,
     pending_data: Vec<Vec<u8>>,
     pending: VecDeque<NativeStreamEvent>,
@@ -552,6 +554,7 @@ impl<'a> NativeRouter<'a> {
             plaintext_collaboration,
             declared_sse,
             line_buffer: Vec::new(),
+            line_scanned: 0,
             pending_wire: Vec::new(),
             pending_data: Vec::new(),
             pending: VecDeque::new(),

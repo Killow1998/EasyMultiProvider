@@ -303,12 +303,17 @@ where
             .and_then(Value::as_str)
             .map(|prefix| format!("{prefix}/"))
             .unwrap_or_else(|| "/".to_owned());
-        if !enabled(account) || prefix == "/" || !model_id.starts_with(&prefix) {
+        if prefix == "/" || !model_id.starts_with(&prefix) {
             continue;
+        }
+        if !enabled(account) {
+            return Err(RouteResolutionError::ProviderUnavailable(
+                model_id.to_owned(),
+            ));
         }
         let upstream = &model_id[prefix.len()..];
         if upstream.is_empty() {
-            break;
+            return Err(RouteResolutionError::UnknownModel(model_id.to_owned()));
         }
         let account_id = account
             .get("id")
@@ -343,6 +348,14 @@ where
             model,
             RouteSource::SubscriptionAccount,
         );
+    }
+
+    // A single native forward provider is a fallback for an unqualified model
+    // name. Slash-qualified IDs belong to an explicit model or account route;
+    // refusing the fallback prevents stale and unknown account prefixes from
+    // being silently sent with the caller's forwarded credentials.
+    if model_id.contains('/') {
+        return Err(RouteResolutionError::UnknownModel(model_id.to_owned()));
     }
 
     let forward = providers

@@ -4,14 +4,47 @@ use super::{
     MAX_REALTIME_PART_BYTES, MAX_REALTIME_PART_HEADER_BYTES, MAX_REALTIME_REQUEST_BYTES,
     RealtimeCall, RealtimeError,
 };
+use crate::http::request::read_before;
+use crate::http::request::request_body_deadline;
+use crate::http::request::restore_read_timeout;
 use serde_json::Value;
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::io::Read;
+use std::net::TcpStream;
+use std::time::Instant;
 
+#[cfg(test)]
 pub(crate) fn read_realtime_call<R: Read>(
     headers: &BTreeMap<String, String>,
-    mut prefix: Vec<u8>,
+    prefix: Vec<u8>,
     stream: &mut R,
+) -> Result<RealtimeCall, RealtimeError> {
+    read_realtime_call_with_reader(headers, prefix, |buffer, deadline| {
+        let count = stream.read(buffer)?;
+        if Instant::now() >= deadline {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        Ok(count)
+    })
+}
+
+pub(crate) fn read_realtime_call_from_socket(
+    headers: &BTreeMap<String, String>,
+    prefix: Vec<u8>,
+    stream: &mut TcpStream,
+) -> Result<RealtimeCall, RealtimeError> {
+    let result = read_realtime_call_with_reader(headers, prefix, |buffer, deadline| {
+        read_before(stream, buffer, deadline)
+    });
+    restore_read_timeout(stream);
+    result
+}
+
+fn read_realtime_call_with_reader(
+    headers: &BTreeMap<String, String>,
+    mut prefix: Vec<u8>,
+    mut read: impl FnMut(&mut [u8], Instant) -> std::io::Result<usize>,
 ) -> Result<RealtimeCall, RealtimeError> {
     let content_encoding = header(headers, "content-encoding").unwrap_or("identity");
     if !content_encoding.trim().eq_ignore_ascii_case("identity") {
@@ -102,17 +135,37 @@ pub(crate) fn read_realtime_call<R: Read>(
             )
             .closing()
         })?;
+    // Each read is idle-bounded by the socket timeout; the deadline bounds a
+    // peer that keeps trickling bytes.
+    let deadline = request_body_deadline(length);
     while prefix.len() < length {
+        if Instant::now() >= deadline {
+            return Err(RealtimeError::new(
+                408,
+                "realtime_request_timeout",
+                "Realtime request body was not received in time",
+            )
+            .closing());
+        }
         let remaining = length - prefix.len();
         let mut chunk = [0u8; 32 * 1024];
         let chunk_length = remaining.min(chunk.len());
-        let count = stream.read(&mut chunk[..chunk_length]).map_err(|_| {
-            RealtimeError::new(
-                400,
-                "realtime_invalid_request",
-                "Realtime request body is incomplete",
-            )
-            .closing()
+        let count = read(&mut chunk[..chunk_length], deadline).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::TimedOut {
+                RealtimeError::new(
+                    408,
+                    "realtime_request_timeout",
+                    "Realtime request body was not received in time",
+                )
+                .closing()
+            } else {
+                RealtimeError::new(
+                    400,
+                    "realtime_invalid_request",
+                    "Realtime request body is incomplete",
+                )
+                .closing()
+            }
         })?;
         if count == 0 {
             return Err(RealtimeError::new(

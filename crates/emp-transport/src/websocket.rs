@@ -1,7 +1,7 @@
 use crate::MAX_PROXY_REQUEST_BYTES;
 use crate::websocket_pump::{FrameDecodeError, FrameDecoder, FramePoll, WebSocketPoll};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress};
+use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
 use ring::digest::{SHA1_FOR_LEGACY_USE_ONLY, digest};
 use serde_json::Value;
 use std::fmt;
@@ -27,6 +27,21 @@ impl WebSocketError {
     }
     pub const fn close_code(self) -> u16 {
         self.code
+    }
+}
+
+/// RFC 6455 payload length prefix: 7-bit inline, 126 + u16, or 127 + u64.
+fn frame_length_prefix(length: usize) -> Vec<u8> {
+    if length < 126 {
+        vec![length as u8]
+    } else if length <= u16::MAX as usize {
+        let mut bytes = vec![126];
+        bytes.extend_from_slice(&(length as u16).to_be_bytes());
+        bytes
+    } else {
+        let mut bytes = vec![127];
+        bytes.extend_from_slice(&(length as u64).to_be_bytes());
+        bytes
     }
 }
 
@@ -88,17 +103,7 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
         }
         let mut header = Vec::with_capacity(10);
         header.push(0x80 | opcode);
-        match payload.len() {
-            length if length < 126 => header.push(length as u8),
-            length if length <= u16::MAX as usize => {
-                header.push(126);
-                header.extend_from_slice(&(length as u16).to_be_bytes());
-            }
-            length => {
-                header.push(127);
-                header.extend_from_slice(&(length as u64).to_be_bytes());
-            }
-        }
+        header.extend(&frame_length_prefix(payload.len()));
         self.stream
             .write_all(&header)
             .and_then(|_| self.stream.write_all(payload))
@@ -205,15 +210,7 @@ impl WebSocketConnection<'_, TcpStream> {
     }
 }
 
-impl<S> Drop for WebSocketConnection<'_, S> {
-    fn drop(&mut self) {
-        if !self.closed {
-            self.closed = true;
-        }
-    }
-}
-
-trait ReadWrite: Read + Write + Send {
+pub(crate) trait ReadWrite: Read + Write + Send {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
 }
 type OpenedWebSocketTransport = (Box<dyn ReadWrite>, bool, Option<String>);
@@ -291,7 +288,7 @@ fn tls_stream(
     Ok(Box::new(rustls::StreamOwned::new(connection, stream)))
 }
 
-fn read_http_head(stream: &mut dyn ReadWrite) -> Result<Vec<u8>, ClientWebSocketError> {
+pub(crate) fn read_http_head(stream: &mut dyn ReadWrite) -> Result<Vec<u8>, ClientWebSocketError> {
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
         if head.len() >= 64 * 1024 {
@@ -326,17 +323,16 @@ fn socks_connect(
     host: &str,
     port: u16,
 ) -> Result<(), ClientWebSocketError> {
+    let proxy_io = || ClientWebSocketError::new(503, "native websocket proxy failed");
     let credential = (!proxy.username().is_empty() || proxy.password().is_some())
         .then(|| (proxy.username(), proxy.password().unwrap_or_default()));
     let methods: &[u8] = if credential.is_some() { &[0, 2] } else { &[0] };
     stream
         .write_all(&[&[5, methods.len() as u8], methods].concat())
         .and_then(|_| stream.flush())
-        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+        .map_err(|_| proxy_io())?;
     let mut selected = [0_u8; 2];
-    stream
-        .read_exact(&mut selected)
-        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+    stream.read_exact(&mut selected).map_err(|_| proxy_io())?;
     if selected[0] != 5 || selected[1] == 255 {
         return Err(ClientWebSocketError::new(
             503,
@@ -360,11 +356,9 @@ fn socks_connect(
         stream
             .write_all(&request)
             .and_then(|_| stream.flush())
-            .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+            .map_err(|_| proxy_io())?;
         let mut response = [0_u8; 2];
-        stream
-            .read_exact(&mut response)
-            .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+        stream.read_exact(&mut response).map_err(|_| proxy_io())?;
         if response != [1, 0] {
             return Err(ClientWebSocketError::new(
                 503,
@@ -389,11 +383,9 @@ fn socks_connect(
     stream
         .write_all(&request)
         .and_then(|_| stream.flush())
-        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+        .map_err(|_| proxy_io())?;
     let mut response = [0_u8; 4];
-    stream
-        .read_exact(&mut response)
-        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+    stream.read_exact(&mut response).map_err(|_| proxy_io())?;
     if response[0] != 5 || response[1] != 0 {
         return Err(ClientWebSocketError::new(
             503,
@@ -405,9 +397,7 @@ fn socks_connect(
         4 => 16,
         3 => {
             let mut length = [0_u8; 1];
-            stream
-                .read_exact(&mut length)
-                .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))?;
+            stream.read_exact(&mut length).map_err(|_| proxy_io())?;
             usize::from(length[0])
         }
         _ => {
@@ -418,9 +408,7 @@ fn socks_connect(
         }
     };
     let mut ignored = vec![0_u8; address_bytes + 2];
-    stream
-        .read_exact(&mut ignored)
-        .map_err(|_| ClientWebSocketError::new(503, "native websocket proxy failed"))
+    stream.read_exact(&mut ignored).map_err(|_| proxy_io())
 }
 
 fn websocket_connection(
@@ -619,10 +607,13 @@ impl PerMessageDeflate {
                     .try_reserve_exact(wanted - spare)
                     .map_err(|_| DecompressionError::TooLarge)?;
             }
-            let consumed = usize::try_from(self.decompressor.total_in() - before_in)
+            let total_in_before = self.decompressor.total_in();
+            let output_before = output.len();
+            let consumed = usize::try_from(total_in_before - before_in)
                 .unwrap_or(encoded.len())
                 .min(encoded.len());
-            self.decompressor
+            let status = self
+                .decompressor
                 .decompress_vec(&encoded[consumed..], &mut output, FlushDecompress::Sync)
                 .map_err(|_| DecompressionError::Invalid)?;
             if output.len() > max_message_bytes {
@@ -630,8 +621,24 @@ impl PerMessageDeflate {
             }
             let consumed =
                 usize::try_from(self.decompressor.total_in() - before_in).unwrap_or(encoded.len());
+            if status == Status::StreamEnd {
+                // The peer finished the DEFLATE stream with a BFINAL block
+                // (RFC 7692 section 7.2.3.4). Only the synthetic empty-block
+                // tail may remain, optionally after the single 0x00 octet the
+                // RFC's own example sends (an empty non-final stored-block
+                // header); any other payload bytes after the end of the
+                // stream are malformed. The next message starts a new stream.
+                self.decompressor.reset(false);
+                if !matches!(payload.get(consumed..), Some([] | [0x00])) {
+                    return Err(DecompressionError::Invalid);
+                }
+                return Ok(output);
+            }
             if consumed >= encoded.len() {
                 break;
+            }
+            if self.decompressor.total_in() == total_in_before && output.len() == output_before {
+                return Err(DecompressionError::Invalid);
             }
         }
         if self.server_no_context_takeover {
@@ -850,6 +857,59 @@ mod tests {
         let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
         assert_eq!(
             deflate.decompress(&[0xff], 4 * 1024 * 1024),
+            Err(DecompressionError::Invalid)
+        );
+    }
+
+    fn finished_deflate(input: &[u8]) -> Vec<u8> {
+        let mut compressor = Compress::new(Compression::fast(), false);
+        let mut compressed = Vec::with_capacity(input.len() + 64);
+        compressor
+            .compress_vec(input, &mut compressed, FlushCompress::Finish)
+            .unwrap();
+        compressed
+    }
+
+    #[test]
+    fn deflate_stream_end_terminates_instead_of_spinning() {
+        let message = br#"{"type":"response.completed"}"#;
+        let finished = finished_deflate(message);
+
+        let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
+        assert_eq!(
+            deflate.decompress(&finished, 4 * 1024 * 1024).as_deref(),
+            Ok(&message[..])
+        );
+        // The decompressor restarts for the next message after BFINAL.
+        let again = finished_deflate(message);
+        assert_eq!(
+            deflate.decompress(&again, 4 * 1024 * 1024).as_deref(),
+            Ok(&message[..])
+        );
+
+        let mut trailing = finished_deflate(message);
+        trailing.extend_from_slice(&[0, 0, 255, 255]);
+        let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
+        assert_eq!(
+            deflate.decompress(&trailing, 4 * 1024 * 1024),
+            Err(DecompressionError::Invalid)
+        );
+
+        // RFC 7692 section 7.2.3.4: "Hello" in a BFINAL block followed by
+        // one 0x00 padding octet.
+        let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
+        assert_eq!(
+            deflate
+                .decompress(&[0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00, 0x00], 1024)
+                .as_deref(),
+            Ok(&b"Hello"[..])
+        );
+
+        let mut garbage = finished_deflate(message);
+        garbage.extend_from_slice(b"leftover");
+        let mut deflate = PerMessageDeflate::negotiated("permessage-deflate").unwrap();
+        assert_eq!(
+            deflate.decompress(&garbage, 4 * 1024 * 1024),
             Err(DecompressionError::Invalid)
         );
     }

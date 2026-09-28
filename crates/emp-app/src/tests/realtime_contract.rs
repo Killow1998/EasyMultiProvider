@@ -301,7 +301,7 @@ print(json.dumps({{"status":result.status,"content_type":result.content_type,
     });
     let (_app_directory, server) = app_server_for(&rust_upstream, &native_auth);
     let body = multipart_offer();
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let response = post(
         &server,
         "/v1/live",
@@ -365,7 +365,7 @@ fn live_call_preserves_non_success_redirect_without_retry() {
         body: b"retry elsewhere",
     });
     let (_app_directory, server) = app_server_for(&upstream, &native_auth);
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let response = post(
         &server,
         "/v1/live",
@@ -426,7 +426,7 @@ fn live_call_preserves_upstream_auth_error_and_clarifies_empty_unsupported_error
         .expect("write native auth");
         let upstream = RealtimeUpstream::start(response_spec);
         let (_app_directory, server) = app_server_for(&upstream, &native_auth);
-        let cookie = session_cookie_header(&server);
+        let cookie = session_header(&server);
         let response = post(
             &server,
             "/v1/live",
@@ -467,7 +467,7 @@ fn live_success_requires_location_before_sideband_can_start() {
         body: b"v=answer\r\n",
     });
     let (_app_directory, server) = app_server_for(&upstream, &native_auth);
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let response = post(
         &server,
         "/v1/live",
@@ -531,6 +531,49 @@ fn live_caller_auth_is_checked_before_upstream_connect() {
 }
 
 #[test]
+fn live_call_rejects_duplicate_framing_and_media_headers() {
+    let directory = tempfile::tempdir().expect("fixture root");
+    let native_auth = canonical_root(&directory).join("codex/auth.json");
+    std::fs::create_dir_all(native_auth.parent().unwrap()).expect("native auth directory");
+    std::fs::write(
+        &native_auth,
+        br#"{"tokens":{"access_token":"native-secret","account_id":"acct-native"}}"#,
+    )
+    .expect("write native auth");
+    let upstream = RealtimeUpstream::start(UpstreamResponse {
+        status: 200,
+        reason: "OK",
+        content_type: "application/sdp",
+        location: Some("/v1/live/rtc_never_called"),
+        body: b"v=answer",
+    });
+    let (_app_directory, server) = app_server_for(&upstream, &native_auth);
+    let session = session_header(&server);
+    for duplicate in [
+        "Content-Length: 0",
+        "Content-Type: multipart/form-data; boundary=VoiceFixtureBoundary",
+    ] {
+        let response = post(
+            &server,
+            "/v1/live",
+            &multipart_offer(),
+            &[
+                &session,
+                "Content-Type: multipart/form-data; boundary=VoiceFixtureBoundary",
+                duplicate,
+            ],
+        );
+        assert_eq!(response_parts(&response).0, 400, "{response}");
+        assert_eq!(error_code(&response), "realtime_invalid_request");
+    }
+    assert!(matches!(
+        upstream.request.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    server.shutdown().expect("shutdown realtime fixture server");
+}
+
+#[test]
 fn live_reports_missing_native_auth_after_caller_authentication() {
     let directory = tempfile::tempdir().expect("fixture root");
     let native_auth = canonical_root(&directory).join("codex/auth.json");
@@ -543,7 +586,7 @@ fn live_reports_missing_native_auth_after_caller_authentication() {
         body: b"v=answer",
     });
     let (_app_directory, server) = app_server_for(&upstream, &native_auth);
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let response = post(
         &server,
         "/v1/live",

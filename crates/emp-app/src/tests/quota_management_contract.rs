@@ -49,7 +49,7 @@ fn native_catalog_model_reaches_the_native_transport_boundary() {
         "/v1/responses",
         &body,
         &[
-            &session_cookie_header(&server),
+            &session_header(&server),
             "Authorization: Bearer native-fixture",
         ],
     );
@@ -72,7 +72,7 @@ fn quota_events_are_bounded_authenticated_and_revision_driven() {
     std::fs::write(&config, b"{}").expect("write config");
     let server = ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config)
         .expect("start quota event server");
-    let cookie = session_cookie_header(&server);
+    let session = session_header(&server);
 
     let denied = request(&server, "/api/accounts/events", &[]);
     assert!(
@@ -82,7 +82,7 @@ fn quota_events_are_bounded_authenticated_and_revision_driven() {
     let cross_origin = request(
         &server,
         "/api/accounts/events",
-        &[&cookie, "Origin: https://example.invalid"],
+        &[&session, "Origin: https://example.invalid"],
     );
     assert!(
         cross_origin.starts_with("HTTP/1.1 403 Forbidden\r\n"),
@@ -90,9 +90,9 @@ fn quota_events_are_bounded_authenticated_and_revision_driven() {
     );
 
     let mut streams = (0..QUOTA_EVENT_SLOT_LIMIT)
-        .map(|_| open_quota_events(&server, &cookie))
+        .map(|_| open_quota_events(&server, &session))
         .collect::<Vec<_>>();
-    let excess = request(&server, "/api/accounts/events", &[&cookie]);
+    let excess = request(&server, "/api/accounts/events", &[&session]);
     assert!(
         excess.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
         "{excess}"
@@ -104,7 +104,7 @@ fn quota_events_are_bounded_authenticated_and_revision_driven() {
         read_sse_frame(&mut streams[0]),
         "event: quota-updated\ndata: {}\n"
     );
-    let accounts = request(&server, "/api/accounts", &[&cookie]);
+    let accounts = request(&server, "/api/accounts", &[&session]);
     assert!(accounts.starts_with("HTTP/1.1 200 OK\r\n"), "{accounts}");
     let accounts: Value = serde_json::from_str(
         accounts
@@ -263,8 +263,8 @@ for line in sys.stdin:
             }),
         )
         .expect("write duplicate auth");
-    let cookie = session_cookie_header(&server);
-    let before = request(&server, "/api/accounts", &[&cookie]);
+    let session = session_header(&server);
+    let before = request(&server, "/api/accounts", &[&session]);
     assert!(before.starts_with("HTTP/1.1 200 OK\r\n"), "{before}");
     let before: Value =
         serde_json::from_str(before.split_once("\r\n\r\n").expect("response separator").1)
@@ -277,7 +277,7 @@ for line in sys.stdin:
         unauthorized.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
         "{unauthorized}"
     );
-    let unknown = post(&server, "/api/accounts/missing/quota", b"{}", &[&cookie]);
+    let unknown = post(&server, "/api/accounts/missing/quota", b"{}", &[&session]);
     assert!(
         unknown.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
         "{unknown}"
@@ -294,7 +294,7 @@ for line in sys.stdin:
         json!({"error":{"code":"quota_error","message":"unknown account: missing"}})
     );
 
-    let refreshed = post(&server, "/api/accounts/%40native/quota", b"{}", &[&cookie]);
+    let refreshed = post(&server, "/api/accounts/%40native/quota", b"{}", &[&session]);
     assert!(refreshed.starts_with("HTTP/1.1 200 OK\r\n"), "{refreshed}");
     let refreshed: Value = serde_json::from_str(
         refreshed
@@ -339,7 +339,7 @@ for line in sys.stdin:
         &server,
         "/api/accounts/%40native/quota-reset",
         &reset_body,
-        &[&cookie],
+        &[&session],
     );
     assert!(reset.starts_with("HTTP/1.1 200 OK\r\n"), "{reset}");
     let reset: Value =
@@ -361,7 +361,7 @@ for line in sys.stdin:
         &server,
         "/api/accounts/%40native/quota-reset",
         br#"{"idempotency_key":"retry-me"}"#,
-        &[&cookie],
+        &[&session],
     );
     assert!(
         invalid_reset.starts_with("HTTP/1.1 400 Bad Request\r\n"),
@@ -379,7 +379,7 @@ for line in sys.stdin:
             &server,
             "/api/accounts/%40native/quota-reset",
             &invalid_body,
-            &[&cookie],
+            &[&session],
         );
         assert!(
             invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"),
@@ -388,7 +388,7 @@ for line in sys.stdin:
         assert!(invalid.contains("quota_reset_invalid_request"));
     }
 
-    let imported = post(&server, "/api/accounts/egg/quota", b"{}", &[&cookie]);
+    let imported = post(&server, "/api/accounts/egg/quota", b"{}", &[&session]);
     assert!(imported.starts_with("HTTP/1.1 200 OK\r\n"), "{imported}");
     let imported: Value = serde_json::from_str(
         imported
@@ -427,7 +427,7 @@ for line in sys.stdin:
         &server,
         "/api/accounts/egg/quota-reset",
         br#"{"idempotency_key":"12345678-1234-4123-8123-123456789ABC"}"#,
-        &[&cookie],
+        &[&session],
     );
     assert!(
         imported_reset.starts_with("HTTP/1.1 200 OK\r\n"),
@@ -452,7 +452,7 @@ for line in sys.stdin:
         &server,
         "/api/accounts/native-copy/quota",
         b"{}",
-        &[&cookie],
+        &[&session],
     );
     assert!(duplicate.starts_with("HTTP/1.1 200 OK\r\n"), "{duplicate}");
     let duplicate: Value = serde_json::from_str(
@@ -481,7 +481,7 @@ for line in sys.stdin:
     let native_history = request(
         &server,
         "/api/accounts/%40native/quota-history?range=all",
-        &[&cookie],
+        &[&session],
     );
     assert!(
         native_history.starts_with("HTTP/1.1 200 OK\r\n"),
@@ -504,7 +504,7 @@ for line in sys.stdin:
     let duplicate_history = request(
         &server,
         "/api/accounts/native-copy/quota-history?range=all",
-        &[&cookie],
+        &[&session],
     );
     let duplicate_history: Value = serde_json::from_str(
         duplicate_history
@@ -519,7 +519,7 @@ for line in sys.stdin:
     let imported_history = request(
         &server,
         "/api/accounts/egg/quota-history?range=all",
-        &[&cookie],
+        &[&session],
     );
     let imported_history: Value = serde_json::from_str(
         imported_history
@@ -536,7 +536,7 @@ for line in sys.stdin:
     let invalid_history = request(
         &server,
         "/api/accounts/egg/quota-history?range=forever",
-        &[&cookie],
+        &[&session],
     );
     assert!(
         invalid_history.starts_with("HTTP/1.1 400 Bad Request\r\n"),
@@ -545,7 +545,7 @@ for line in sys.stdin:
     let missing_history = request(
         &server,
         "/api/accounts/missing/quota-history?range=all",
-        &[&cookie],
+        &[&session],
     );
     assert!(
         missing_history.starts_with("HTTP/1.1 404 Not Found\r\n"),
@@ -637,12 +637,12 @@ for line in sys.stdin:
         )
         .expect("write rate-limited auth");
 
-    let cookie = session_cookie_header(&server);
+    let session = session_header(&server);
     let response = post(
         &server,
         "/api/accounts/rate-limited/quota",
         b"{}",
-        &[&cookie],
+        &[&session],
     );
     assert!(
         response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),

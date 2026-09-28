@@ -1,6 +1,8 @@
 //! Api migration.
 
 use crate::app::ServerState;
+use crate::http::auth::EXPORT_CONFIRMATION_LIFETIME_SECONDS;
+use crate::http::auth::EXPORT_CONFIRMATION_OPERATION;
 use crate::http::auth::same_origin;
 use crate::http::request::Request;
 use crate::http::request::read_json_body;
@@ -13,10 +15,13 @@ use crate::http::response::unauthorized_response;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use emp_state::ExportGroups;
+use emp_state::apply_migration_import;
+use emp_state::decrypt_migration_bundle;
 use emp_state::export_migration_bundle_with_summary;
-use emp_state::import_migration_bundle;
 use serde_json::Value;
 use std::net::TcpStream;
+
+const MIN_EXPORT_PASSWORD_UTF8_BYTES: usize = 12;
 
 pub(crate) fn management_migration_request(
     stream: &mut TcpStream,
@@ -30,7 +35,7 @@ pub(crate) fn management_migration_request(
     }
     if !state
         .sessions
-        .contains(request.session_cookie().as_deref(), now)
+        .contains(request.session_token().as_deref(), now)
     {
         return unauthorized_response();
     }
@@ -38,11 +43,53 @@ pub(crate) fn management_migration_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
+    if request.raw_path() == "/api/migration/export/confirm" {
+        let Some(confirmation) = state
+            .sessions
+            .issue_export_confirmation(EXPORT_CONFIRMATION_OPERATION, now)
+        else {
+            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        };
+        let body = serde_json::to_vec(&serde_json::json!({
+            "confirmation": confirmation,
+            "expires_in": EXPORT_CONFIRMATION_LIFETIME_SECONDS as u64,
+        }))
+        .expect("export confirmation is JSON serializable");
+        return response("HTTP/1.1 200 OK", "application/json", &body, &[]);
+    }
     let password = body
         .get("password")
         .and_then(Value::as_str)
         .unwrap_or_default();
     if request.raw_path() == "/api/migration/export" {
+        // Exports carry every credential, so each one needs a fresh
+        // confirmation issued by a separate request just before it.
+        let confirmation = body
+            .get("confirmation")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !state.sessions.consume_export_confirmation(
+            confirmation,
+            EXPORT_CONFIRMATION_OPERATION,
+            now,
+        ) {
+            return json_error_response(
+                403,
+                status_text(403),
+                "export confirmation is missing or expired; confirm the export again",
+                Some("export_confirmation_required"),
+                &[],
+            );
+        }
+        if password.len() < MIN_EXPORT_PASSWORD_UTF8_BYTES {
+            return json_error_response(
+                400,
+                status_text(400),
+                "migration export password must contain at least 12 UTF-8 bytes",
+                Some("migration_password_too_short"),
+                &[],
+            );
+        }
         let group_values = body.get("groups").and_then(Value::as_array);
         let groups = match group_values {
             Some(values) => {
@@ -140,30 +187,37 @@ pub(crate) fn management_migration_request(
             );
         }
     };
-    let current = match state.backend.configuration.config.lock() {
-        Ok(config) => config.clone(),
-        Err(_) => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
-        }
-    };
-    let (updated, summary) = match import_migration_bundle(
-        &current,
-        &bundle,
-        password,
-        &state.backend.configuration.config_path,
-        &state.backend.configuration.vault,
-    ) {
-        Ok(result) => result,
+    // Decrypting (scrypt) needs no configuration; keep it outside the locks.
+    let decrypted = match decrypt_migration_bundle(&bundle, password) {
+        Ok(decrypted) => decrypted,
         Err(error) => {
             return json_error_response(400, status_text(400), &error.to_string(), None, &[]);
         }
     };
-    match state.backend.configuration.config.lock() {
-        Ok(mut config) => *config = updated,
-        Err(_) => {
+    // Same-identity accounts in the bundle replace stored credentials; keep
+    // quota refreshes, rotated-credential flushes and other configuration
+    // writers out while that happens.
+    let imported = crate::services::accounts::replacing_account_credentials(state, |config| {
+        let imported = apply_migration_import(
+            config,
+            decrypted,
+            &state.backend.configuration.config_path,
+            &state.backend.configuration.vault,
+        );
+        if let Ok((updated, _)) = &imported {
+            *config = updated.clone();
+        }
+        imported
+    });
+    let summary = match imported {
+        Some(Ok((_, summary))) => summary,
+        Some(Err(error)) => {
+            return json_error_response(400, status_text(400), &error.to_string(), None, &[]);
+        }
+        None => {
             return json_error_response(500, status_text(500), "internal server error", None, &[]);
         }
-    }
+    };
     let (catalog_path, _) = match crate::services::catalog::refresh_catalog(state) {
         Ok(result) => result,
         Err(()) => {

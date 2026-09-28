@@ -1,6 +1,9 @@
 use crate::http_policy::ProxyEnvironment;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::Read;
+#[cfg(any(windows, test))]
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -23,13 +26,8 @@ pub(crate) fn capture() -> Option<ProxyEnvironment> {
 
 #[derive(Default)]
 struct SystemProxyCache {
-    state: Mutex<SystemProxyCacheState>,
-}
-
-#[derive(Default)]
-struct SystemProxyCacheState {
-    value: Option<ProxyEnvironment>,
-    last_attempt: Option<Instant>,
+    value: Mutex<Option<ProxyEnvironment>>,
+    last_attempt: Mutex<Option<Instant>>,
 }
 
 impl SystemProxyCache {
@@ -38,23 +36,26 @@ impl SystemProxyCache {
         C: Fn() -> Instant,
         R: FnOnce() -> Result<Option<ProxyEnvironment>, ()>,
     {
-        let mut state = self
-            .state
+        let mut value = self
+            .value
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut last_attempt = self
+            .last_attempt
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = clock();
-        let is_fresh = state
-            .last_attempt
+        let is_fresh = last_attempt
             .and_then(|last| now.checked_duration_since(last))
             .is_some_and(|elapsed| elapsed < SYSTEM_PROXY_CACHE_TTL);
         if !force && is_fresh {
-            return state.value.clone();
+            return value.clone();
         }
-        if let Ok(value) = reader() {
-            state.value = value;
+        if let Ok(entry) = reader() {
+            *value = entry;
         }
-        state.last_attempt = Some(clock());
-        state.value.clone()
+        *last_attempt = Some(clock());
+        value.clone()
     }
 }
 
@@ -75,7 +76,17 @@ fn read_system_proxy() -> Result<Option<ProxyEnvironment>, ()> {
     Ok(None)
 }
 
-fn run_command(program: &str, arguments: &[&str], timeout: Duration) -> Option<String> {
+fn push_unique_no_proxy(environment: &mut ProxyEnvironment, host: String) {
+    if !environment.no_proxy.contains(&host) {
+        environment.no_proxy.push(host);
+    }
+}
+
+fn run_command(
+    program: impl AsRef<OsStr>,
+    arguments: &[&str],
+    timeout: Duration,
+) -> Option<String> {
     if timeout.is_zero() {
         return None;
     }
@@ -95,15 +106,10 @@ fn run_command(program: &str, arguments: &[&str], timeout: Duration) -> Option<S
                 return Some(output);
             }
             Ok(Some(_)) => return None,
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
             Ok(None) if Instant::now() < deadline => {
                 thread::sleep(Duration::from_millis(10));
             }
-            Ok(None) => {
+            Ok(None) | Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return None;
@@ -154,13 +160,22 @@ fn capture_macos() -> Result<Option<ProxyEnvironment>, ()> {
 
 #[cfg(windows)]
 fn capture_windows() -> Result<Option<ProxyEnvironment>, ()> {
+    let program = windows_registry_tool_path(std::env::var_os("SystemRoot").as_deref()).ok_or(())?;
     let output = run_command(
-        "reg",
+        &program,
         &["query", WINDOWS_INTERNET_SETTINGS_KEY],
         SYSTEM_PROXY_READ_TIMEOUT,
     )
     .ok_or(())?;
     Ok(parse_windows_proxy_settings(&output))
+}
+
+#[cfg(any(windows, test))]
+fn windows_registry_tool_path(system_root: Option<&OsStr>) -> Option<PathBuf> {
+    let root = system_root.filter(|root| !root.is_empty())?;
+    let root = PathBuf::from(root);
+    root.is_absolute()
+        .then(|| root.join("System32").join("reg.exe"))
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -216,9 +231,7 @@ fn parse_gnome_proxy_settings(
     };
     if let Some(ignored) = values.get("ignore_hosts") {
         for host in gsettings_list(ignored) {
-            if !environment.no_proxy.contains(&host) {
-                environment.no_proxy.push(host);
-            }
+            push_unique_no_proxy(&mut environment, host);
         }
     }
     environment.has_proxy().then_some(environment)
@@ -262,9 +275,7 @@ fn parse_macos_proxy_settings(output: &str) -> Option<ProxyEnvironment> {
         ..ProxyEnvironment::default()
     };
     for host in exceptions {
-        if !environment.no_proxy.contains(&host) {
-            environment.no_proxy.push(host);
-        }
+        push_unique_no_proxy(&mut environment, host);
     }
     environment.has_proxy().then_some(environment)
 }
@@ -361,9 +372,7 @@ fn parse_windows_proxy_settings(output: &str) -> Option<ProxyEnvironment> {
             .map(str::trim)
             .filter(|host| !host.is_empty())
         {
-            if !environment.no_proxy.contains(&host.to_owned()) {
-                environment.no_proxy.push(host.to_owned());
-            }
+            push_unique_no_proxy(&mut environment, host.to_owned());
         }
     }
     environment.has_proxy().then_some(environment)
@@ -540,6 +549,21 @@ mod tests {
         assert!(environment.no_proxy.contains(&"*.internal.test".to_owned()));
         assert!(environment.no_proxy.contains(&"localhost".to_owned()));
         assert!(parse_macos_proxy_settings("HTTPEnable : 1\nHTTPProxy : invalid\n").is_none());
+    }
+
+    #[test]
+    fn windows_registry_tool_uses_absolute_systemroot_path_with_spaces() {
+        let root = std::env::temp_dir().join("EMP Windows Root");
+        let tool = windows_registry_tool_path(Some(root.as_os_str())).expect("absolute root");
+        assert!(tool.starts_with(&root));
+        assert_eq!(
+            tool.parent().and_then(|path| path.file_name()),
+            Some(OsStr::new("System32"))
+        );
+        assert_eq!(tool.file_name(), Some(OsStr::new("reg.exe")));
+        assert!(windows_registry_tool_path(None).is_none());
+        let relative = PathBuf::from("relative-root");
+        assert!(windows_registry_tool_path(Some(relative.as_os_str())).is_none());
     }
 
     #[test]

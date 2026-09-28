@@ -219,7 +219,7 @@ def _load_official_fixtures(python_root: Path):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python-root", type=Path, required=True,
-                        help="official Python EMP v0.11.10 checkout")
+                        help="official Python EMP v0.11.11 checkout")
     parser.add_argument("--python", type=Path, default=Path(sys.executable),
                         help="the venv interpreter used to run Python EMP")
     parser.add_argument("--rust-binary", type=Path, required=True)
@@ -365,8 +365,8 @@ def main(argv: list[str] | None = None) -> int:
             raise BenchmarkError("python_must_match_harness_interpreter")
         sys.path.insert(0, str(python_root))
         import easy_multi_provider
-        if easy_multi_provider.__version__ != "0.11.10":
-            raise BenchmarkError("official_python_emp_must_be_0.11.10")
+        if easy_multi_provider.__version__ != "0.11.11":
+            raise BenchmarkError("official_python_emp_must_be_0.11.11")
         fixtures = _load_official_fixtures(python_root)
         fixture_dir = args.fixture_dir.resolve()
         fixture_dir.mkdir(parents=True, exist_ok=True)

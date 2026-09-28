@@ -2,6 +2,15 @@
 
 use super::*;
 
+fn may_carry_context_error(event: &Value) -> bool {
+    // OpenAI-compatible gateways also stream bare `{"error":{...}}` events
+    // without a `type`; ordinary content events never carry an error object.
+    matches!(
+        event.get("type").and_then(Value::as_str),
+        Some("error" | "response.failed" | "response.incomplete")
+    ) || event.get("error").is_some_and(|error| !error.is_null())
+}
+
 impl NativeStream {
     pub async fn next_event(&mut self) -> Result<Option<NativeStreamEvent>, RouterError> {
         if let Some(event) = self.pending.pop_front() {
@@ -80,13 +89,25 @@ impl NativeStream {
             self.raw_body.extend_from_slice(chunk);
         }
         self.line_buffer.extend_from_slice(chunk);
-        while let Some(position) = self.line_buffer.iter().position(|byte| *byte == b'\n') {
-            let wire = self.line_buffer.drain(..=position).collect::<Vec<_>>();
-            self.consume_line(&wire[..wire.len() - 1], &wire)?;
+        // Scan each byte once: lines are consumed through a moving offset and
+        // the buffer is compacted a single time per chunk. Bytes left over
+        // from previous chunks are already known to contain no newline.
+        let buffer = std::mem::take(&mut self.line_buffer);
+        let mut start = 0;
+        let mut scan = self.line_scanned.min(buffer.len());
+        while let Some(relative) = buffer[scan..].iter().position(|byte| *byte == b'\n') {
+            let end = scan + relative;
+            let wire = &buffer[start..=end];
+            self.consume_line(&wire[..wire.len() - 1], wire)?;
             if self.saw_data {
                 self.raw_body.clear();
             }
+            start = end + 1;
+            scan = start;
         }
+        self.line_buffer = buffer;
+        self.line_buffer.drain(..start);
+        self.line_scanned = self.line_buffer.len();
         if self.line_buffer.len() + self.pending_wire.len() > MAX_SSE_FRAME_BYTES {
             return Err(native_stream_error(
                 502,
@@ -101,6 +122,7 @@ impl NativeStream {
     fn consume_eof(&mut self) -> Result<(), RouterError> {
         if !self.line_buffer.is_empty() {
             let line = std::mem::take(&mut self.line_buffer);
+            self.line_scanned = 0;
             self.consume_line(&line, &line)?;
         }
         if !self.pending_data.is_empty() {
@@ -184,7 +206,9 @@ impl NativeStream {
         if !event.is_object() {
             return Ok(());
         }
-        if is_explicit_context_error(400, "application/json", &data) {
+        if may_carry_context_error(&event)
+            && is_explicit_context_error(400, "application/json", &data)
+        {
             return Err(native_stream_error(
                 413,
                 FailureClass::ContextLengthExceeded,
@@ -257,5 +281,132 @@ impl NativeStream {
             frame,
         });
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn detached_stream() -> NativeStream {
+        NativeStream {
+            request_started: std::time::Instant::now(),
+            usage_owner: None,
+            response: None,
+            requested_model: "gpt-test".to_owned(),
+            upstream_model: "gpt-test".to_owned(),
+            plaintext_collaboration: false,
+            declared_sse: true,
+            line_buffer: Vec::new(),
+            line_scanned: 0,
+            pending_wire: Vec::new(),
+            pending_data: Vec::new(),
+            pending: VecDeque::new(),
+            raw_body: Vec::new(),
+            stream_bytes: 0,
+            saw_data: false,
+            saw_terminal: false,
+            finished: false,
+            failure: None,
+            ids: ProjectionIds::new("resp_test", "msg_test", "rs_test", "rs_late_test"),
+            headers: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn sse_lines_split_across_every_byte_keep_frames_and_scan_offset() {
+        let wire = b": keepalive\r\n\r\ndata: {\"type\":\"response.output_text.delta\",\r\ndata: \"delta\":\"hi\"}\r\n\r\ndata: {\"type\":\"response.in_progress\"}\n\n";
+        let mut whole = detached_stream();
+        whole.consume_chunk(wire).unwrap();
+        let mut split = detached_stream();
+        for byte in wire {
+            split.consume_chunk(std::slice::from_ref(byte)).unwrap();
+            assert!(split.line_scanned <= split.line_buffer.len());
+            assert!(!split.line_buffer.contains(&b'\n'));
+        }
+        let frames = |stream: &NativeStream| {
+            stream
+                .pending
+                .iter()
+                .map(|event| (event.event.clone(), event.frame.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(frames(&whole), frames(&split));
+        assert_eq!(whole.pending.len(), 2);
+        assert_eq!(
+            whole.pending[0].frame,
+            b"data: {\"type\":\"response.output_text.delta\",\r\ndata: \"delta\":\"hi\"}\r\n\r\n"
+        );
+        assert!(split.line_buffer.is_empty());
+        assert_eq!(split.line_scanned, 0);
+
+        let mut partial = detached_stream();
+        partial.consume_chunk(b"data: {\"type\"").unwrap();
+        assert_eq!(partial.line_scanned, partial.line_buffer.len());
+        partial
+            .consume_chunk(b":\"response.in_progress\"}\n\n")
+            .unwrap();
+        assert_eq!(partial.pending.len(), 1);
+        assert_eq!(partial.line_scanned, 0);
+    }
+
+    #[test]
+    fn context_errors_are_observed_only_on_error_events() {
+        let ordinary = json!({
+            "type": "response.output_text.delta",
+            "delta": "context_length_exceeded",
+        });
+        let mut stream = detached_stream();
+        let frame = format!("data: {ordinary}\n\n");
+        stream.consume_chunk(frame.as_bytes()).unwrap();
+        assert_eq!(stream.pending.len(), 1);
+        assert!(!stream.saw_terminal);
+
+        let failed = json!({
+            "type": "response.failed",
+            "response": {"error": {"code": "context_length_exceeded"}},
+        });
+        let frame = format!("data: {failed}\n\n");
+        let error = stream
+            .consume_chunk(frame.as_bytes())
+            .expect_err("terminal context error is classified");
+        assert_eq!(error.status(), 413);
+
+        let untyped = json!({"error": {"code": "context_length_exceeded"}});
+        let frame = format!("data: {untyped}\n\n");
+        let error = detached_stream()
+            .consume_chunk(frame.as_bytes())
+            .expect_err("untyped gateway context error is classified");
+        assert_eq!(error.status(), 413);
+    }
+
+    #[test]
+    fn context_error_observation_cost_has_body_and_node_caps() {
+        // Evidence beyond the body cap is not inspected: the event passes
+        // through as an ordinary terminal instead of being classified.
+        let mut stream = detached_stream();
+        let failed = json!({
+            "type": "response.failed",
+            "response": {
+                "output": "x".repeat(80 * 1024),
+                "error": {"code": "context_length_exceeded"},
+            },
+        });
+        let frame = format!("data: {failed}\n\n");
+        stream.consume_chunk(frame.as_bytes()).unwrap();
+        assert_eq!(stream.pending.len(), 1);
+        assert!(stream.saw_terminal);
+
+        let mut stream = detached_stream();
+        let failed = json!({
+            "type": "response.failed",
+            "response": {
+                "details": vec![Value::Null; 5_000],
+                "error": {"code": "context_length_exceeded"},
+            },
+        });
+        let frame = format!("data: {failed}\n\n");
+        stream.consume_chunk(frame.as_bytes()).unwrap();
+        assert!(stream.saw_terminal);
     }
 }

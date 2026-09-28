@@ -188,6 +188,7 @@ fn merge_import(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let mut overwritten_providers = BTreeSet::new();
     for raw in source
         .get("providers")
         .and_then(Value::as_array)
@@ -196,6 +197,9 @@ fn merge_import(
     {
         let mut provider = raw.clone();
         let id = id_of(&provider).to_owned();
+        if providers.iter().any(|existing| id_of(existing) == id) {
+            overwritten_providers.insert(id.clone());
+        }
         let key = provider_keys.get(&id).and_then(Value::as_str).unwrap_or("");
         set_string(&mut provider, "api_key", key);
         set_string(&mut provider, "api_key_file", "");
@@ -408,8 +412,25 @@ fn merge_import(
         providers: source_provider_count,
         models: source_model_count,
         renamed_accounts,
+        overwritten_providers: overwritten_providers.into_iter().collect(),
     };
     Ok((target, imported_auth, summary))
+}
+
+/// A decrypted, validated `.emp` bundle, ready for [`apply_migration_import`].
+pub struct DecryptedMigration(ValidatedImport);
+
+/// Decrypt and validate a Python-compatible `.emp` bundle. This is the slow
+/// (scrypt) half of an import and needs no configuration, so callers can run
+/// it before taking their configuration lock.
+pub fn decrypt_migration_bundle(
+    bundle: &[u8],
+    password: &str,
+) -> MigrationResult<DecryptedMigration> {
+    let plaintext = decode_migration(password, bundle)?;
+    let payload: Value =
+        serde_json::from_slice(&plaintext).map_err(|_| MigrationError::DecryptFailed)?;
+    validate_import_payload(&payload).map(DecryptedMigration)
 }
 
 /// Decrypt, validate, merge and durably import a Python-compatible `.emp` bundle.
@@ -420,11 +441,18 @@ pub fn import_migration_bundle(
     config_path: &Path,
     vault: &VaultStore,
 ) -> MigrationResult<(Value, MigrationImportSummary)> {
-    let plaintext = decode_migration(password, bundle)?;
-    let payload: Value =
-        serde_json::from_slice(&plaintext).map_err(|_| MigrationError::DecryptFailed)?;
-    let payload = validate_import_payload(&payload)?;
-    let (target, imported_auth, summary) = merge_import(current, payload, config_path, vault)?;
+    let decrypted = decrypt_migration_bundle(bundle, password)?;
+    apply_migration_import(current, decrypted, config_path, vault)
+}
+
+/// Merge a decrypted bundle into `current` and durably write the result.
+pub fn apply_migration_import(
+    current: &Value,
+    decrypted: DecryptedMigration,
+    config_path: &Path,
+    vault: &VaultStore,
+) -> MigrationResult<(Value, MigrationImportSummary)> {
+    let (target, imported_auth, summary) = merge_import(current, decrypted.0, config_path, vault)?;
 
     let result = with_file_transaction(|transaction| {
         for (account_id, auth) in &imported_auth {

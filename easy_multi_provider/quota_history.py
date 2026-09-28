@@ -272,6 +272,36 @@ class QuotaHistoryStore:
             ],
         }
 
+    def adopt_legacy_key(self, legacy_key: str, owner: str) -> int:
+        """Move samples from a legacy local key to a verified upstream owner.
+
+        Idempotent: a slot the owner already has keeps its own sample and the
+        legacy duplicate is dropped. Returns the number of samples moved.
+        """
+        if not legacy_key or not owner or legacy_key == owner or not self.path.exists():
+            return 0
+        with self._lock:
+            if self.path.is_symlink():
+                raise QuotaHistoryError("quota history path must not be a symlink")
+            try:
+                connection = sqlite3.connect(str(self.path), timeout=5)
+            except sqlite3.Error as exc:
+                raise QuotaHistoryError("quota history is unavailable") from exc
+            try:
+                moved = connection.execute(
+                    "UPDATE OR IGNORE quota_samples SET account_key = ? WHERE account_key = ?",
+                    (owner, legacy_key),
+                ).rowcount
+                connection.execute(
+                    "DELETE FROM quota_samples WHERE account_key = ?", (legacy_key,)
+                )
+                connection.commit()
+                return moved
+            except sqlite3.Error as exc:
+                raise QuotaHistoryError("quota history is unavailable") from exc
+            finally:
+                connection.close()
+
     def delete_account(self, account_key: str) -> None:
         if not self.path.exists():
             return

@@ -79,7 +79,7 @@ fn sideband_rejects_caller_before_call_id_or_upstream() {
 #[test]
 fn sideband_validates_call_id_and_upgrade_before_admission() {
     let (_fixture, _app_directory, upstream, server) = server_fixture(true);
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let headers = upgrade_headers(&cookie);
     let (status, payload) = status_and_body(&request_with_owned_headers(
         &server,
@@ -128,7 +128,7 @@ fn sideband_capacity_is_reserved_after_upgrade_validation_before_native_connect(
         })
         .collect::<Vec<_>>();
     assert_eq!(server.state.connection_admission.active_websockets(), 224);
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let headers = upgrade_headers(&cookie);
     let wire = request_with_owned_headers(&server, "/v1/live/rtc_capacity_test", &headers);
     let (status, payload) = status_and_body(&wire);
@@ -136,12 +136,8 @@ fn sideband_capacity_is_reserved_after_upgrade_validation_before_native_connect(
     assert_eq!(payload["error"]["code"], "realtime_capacity_unavailable");
     assert!(wire.lines().any(|line| line == "Retry-After: 2"));
     assert!(
-        request(
-            &server,
-            "/api/request-limits",
-            &[&session_cookie_header(&server)]
-        )
-        .starts_with("HTTP/1.1 200 OK\r\n")
+        request(&server, "/api/request-limits", &[&session_header(&server)])
+            .starts_with("HTTP/1.1 200 OK\r\n")
     );
     assert!(upstream.no_request());
     drop(permits);
@@ -152,7 +148,7 @@ fn sideband_capacity_is_reserved_after_upgrade_validation_before_native_connect(
 #[test]
 fn sideband_target_uses_native_credentials_allowlisted_headers_proxy_and_message_cap() {
     let (_fixture, _app_directory, upstream, server) = server_fixture(true);
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let raw = format!(
         "GET /v1/live/rtc_voice_proxy HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{}\r\nAuthorization: Bearer caller-secret\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nOpenAI-Alpha: quicksilver=v2\r\nSession-Id: session-voice\r\nX-Ignored-Secret: do-not-forward\r\n\r\n",
         server.local_addr().port(),
@@ -205,7 +201,7 @@ fn sideband_target_uses_native_credentials_allowlisted_headers_proxy_and_message
 #[test]
 fn sideband_without_native_subscription_is_rejected_after_caller_auth() {
     let (_fixture, _app_directory, upstream, server) = server_fixture(false);
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let headers = upgrade_headers(&cookie);
     let (status, payload) = status_and_body(&request_with_owned_headers(
         &server,
@@ -226,7 +222,7 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind direct handler");
     let address = listener.local_addr().unwrap();
     let state = Arc::clone(&server.state);
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let fake_url = fake.url.clone();
     let app = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept downstream sideband");
@@ -524,7 +520,7 @@ fn direct_sideband_request(server: &ServerHandle, call_id: &str, fake_url: &str)
             },
         );
     });
-    let cookie = session_cookie_header(server);
+    let cookie = session_header(server);
     let raw = format!(
         "GET /v1/live/{call_id} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{cookie}\r\nAuthorization: Bearer caller-secret\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
         server.local_addr().port()

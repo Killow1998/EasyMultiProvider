@@ -1,6 +1,11 @@
 # Rust backend remake plan
 
-Status: in progress on remake4rust; verified state updated on 2026-09-25.
+Status: security repair and integration remain in progress on `security-fixes`.
+For the current 2026-09-27 Opus takeover, branch commits, uncommitted drafts,
+known failures and next actions, read the active section of
+[the maintained handoff](handoff-2026-09-25-emp-progress.md).
+The verified-state tables below are the historical 2026-09-25 baseline;
+they do not establish acceptance of the later security repairs.
 
 CI-pinned Python reference: `3bcf72a5481a951cf9713f7d92784a6872970e1e`
 (EMP 0.11.10). Local differential runs use the same formal Python `main`.

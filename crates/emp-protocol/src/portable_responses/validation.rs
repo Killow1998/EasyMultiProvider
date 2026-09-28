@@ -2,17 +2,13 @@
 
 use super::*;
 
-fn validation_error(
-    kind: ResponsesValidationErrorKind,
-    message: &'static str,
-) -> ResponsesValidationError {
-    ResponsesValidationError::new(kind, message)
+fn validation_error(message: &'static str) -> ResponsesValidationError {
+    ResponsesValidationError::new(message)
 }
 
 fn required_response_string(
     item: &Map<String, Value>,
     field: &str,
-    kind: ResponsesValidationErrorKind,
     message: &'static str,
 ) -> Result<(), ResponsesValidationError> {
     if item
@@ -22,7 +18,7 @@ fn required_response_string(
     {
         Ok(())
     } else {
-        Err(validation_error(kind, message))
+        Err(validation_error(message))
     }
 }
 
@@ -30,7 +26,6 @@ fn validate_output_item(item: &Map<String, Value>) -> Result<(), ResponsesValida
     const INVALID_ITEM: &str = "upstream Responses JSON contains an invalid output item";
     let Some(kind) = item.get("type").and_then(Value::as_str) else {
         return Err(validation_error(
-            ResponsesValidationErrorKind::UnsupportedOutputItem,
             "upstream Responses JSON contains an unsupported output item",
         ));
     };
@@ -44,7 +39,6 @@ fn validate_output_item(item: &Map<String, Value>) -> Result<(), ResponsesValida
             | "compaction"
     ) {
         return Err(validation_error(
-            ResponsesValidationErrorKind::UnsupportedOutputItem,
             "upstream Responses JSON contains an unsupported output item",
         ));
     }
@@ -52,20 +46,17 @@ fn validate_output_item(item: &Map<String, Value>) -> Result<(), ResponsesValida
         "message" => {
             let Some(content) = item.get("content").and_then(Value::as_array) else {
                 return Err(validation_error(
-                    ResponsesValidationErrorKind::InvalidMessage,
                     "upstream Responses JSON contains an invalid message item",
                 ));
             };
             if item.get("role").and_then(Value::as_str) != Some("assistant") {
                 return Err(validation_error(
-                    ResponsesValidationErrorKind::InvalidMessage,
                     "upstream Responses JSON contains an invalid message item",
                 ));
             }
             for raw in content {
                 let Some(part) = object(raw) else {
                     return Err(validation_error(
-                        ResponsesValidationErrorKind::InvalidMessageContent,
                         "upstream Responses JSON contains invalid message content",
                     ));
                 };
@@ -79,13 +70,11 @@ fn validate_output_item(item: &Map<String, Value>) -> Result<(), ResponsesValida
                     Some("refusal") if part.get("refusal").is_some_and(Value::is_string) => {}
                     Some("output_text" | "refusal") => {
                         return Err(validation_error(
-                            ResponsesValidationErrorKind::InvalidMessageContent,
                             "upstream Responses JSON contains invalid message content",
                         ));
                     }
                     _ => {
                         return Err(validation_error(
-                            ResponsesValidationErrorKind::UnsupportedMessageContent,
                             "upstream Responses JSON contains unsupported message content",
                         ));
                     }
@@ -93,18 +82,8 @@ fn validate_output_item(item: &Map<String, Value>) -> Result<(), ResponsesValida
             }
         }
         "function_call" => {
-            required_response_string(
-                item,
-                "call_id",
-                ResponsesValidationErrorKind::InvalidOutputItem,
-                INVALID_ITEM,
-            )?;
-            required_response_string(
-                item,
-                "name",
-                ResponsesValidationErrorKind::InvalidOutputItem,
-                INVALID_ITEM,
-            )?;
+            required_response_string(item, "call_id", INVALID_ITEM)?;
+            required_response_string(item, "name", INVALID_ITEM)?;
             let valid_arguments = item
                 .get("arguments")
                 .and_then(Value::as_str)
@@ -112,33 +91,21 @@ fn validate_output_item(item: &Map<String, Value>) -> Result<(), ResponsesValida
                 .is_some_and(|value| value.is_object());
             if !valid_arguments {
                 return Err(validation_error(
-                    ResponsesValidationErrorKind::InvalidToolCall,
                     "Responses upstream returned invalid tool arguments",
                 ));
             }
         }
         "custom_tool_call" => {
             for field in ["call_id", "name", "input"] {
-                required_response_string(
-                    item,
-                    field,
-                    ResponsesValidationErrorKind::InvalidOutputItem,
-                    INVALID_ITEM,
-                )?;
+                required_response_string(item, field, INVALID_ITEM)?;
             }
         }
         "tool_search_call" => {
-            required_response_string(
-                item,
-                "call_id",
-                ResponsesValidationErrorKind::InvalidOutputItem,
-                INVALID_ITEM,
-            )?;
+            required_response_string(item, "call_id", INVALID_ITEM)?;
             if item.get("execution").and_then(Value::as_str) != Some("client")
                 || !item.get("arguments").is_some_and(Value::is_object)
             {
                 return Err(validation_error(
-                    ResponsesValidationErrorKind::InvalidToolSearch,
                     "upstream Responses JSON contains invalid tool search",
                 ));
             }
@@ -160,18 +127,12 @@ fn validate_output_item(item: &Map<String, Value>) -> Result<(), ResponsesValida
             );
             if !valid_summary || !valid_opaque {
                 return Err(validation_error(
-                    ResponsesValidationErrorKind::InvalidReasoning,
                     "upstream Responses JSON contains invalid reasoning output",
                 ));
             }
         }
         "compaction" => {
-            required_response_string(
-                item,
-                "encrypted_content",
-                ResponsesValidationErrorKind::InvalidOpaqueOutput,
-                INVALID_ITEM,
-            )?;
+            required_response_string(item, "encrypted_content", INVALID_ITEM)?;
         }
         _ => unreachable!("output kind was checked above"),
     }
@@ -183,40 +144,25 @@ pub fn validate_responses_body(
     validate_output_items: bool,
 ) -> Result<(), ResponsesValidationError> {
     let Some(response) = object(value) else {
-        return Err(validation_error(
-            ResponsesValidationErrorKind::NotObject,
-            "upstream Responses JSON is not an object",
-        ));
+        return Err(validation_error("upstream Responses JSON is not an object"));
     };
     let status = response
         .get("status")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            validation_error(
-                ResponsesValidationErrorKind::MissingStatus,
-                "upstream Responses JSON has no response status",
-            )
-        })?;
+        .ok_or_else(|| validation_error("upstream Responses JSON has no response status"))?;
     if !matches!(status, "completed" | "incomplete" | "failed") {
         return Err(validation_error(
-            ResponsesValidationErrorKind::UnknownStatus,
             "upstream Responses JSON has an unknown response status",
         ));
     }
     let output = response
         .get("output")
         .and_then(Value::as_array)
-        .ok_or_else(|| {
-            validation_error(
-                ResponsesValidationErrorKind::InvalidOutput,
-                "upstream Responses JSON has no valid output",
-            )
-        })?;
+        .ok_or_else(|| validation_error("upstream Responses JSON has no valid output"))?;
     for raw in output {
         let Some(item) = object(raw) else {
             return Err(validation_error(
-                ResponsesValidationErrorKind::InvalidOutputItem,
                 "upstream Responses JSON contains an invalid output item",
             ));
         };
@@ -228,7 +174,6 @@ pub fn validate_responses_body(
         && !response.get("output_text").is_some_and(Value::is_string)
     {
         return Err(validation_error(
-            ResponsesValidationErrorKind::InvalidOutputText,
             "upstream Responses JSON has invalid output text",
         ));
     }
@@ -239,7 +184,6 @@ pub fn validate_responses_body(
             .is_none_or(Map::is_empty)
         {
             return Err(validation_error(
-                ResponsesValidationErrorKind::MissingFailure,
                 "upstream Responses JSON has a failed status without an error",
             ));
         }
@@ -247,7 +191,6 @@ pub fn validate_responses_body(
         && !upstream_error.is_some_and(|value| value.as_object().is_some_and(Map::is_empty))
     {
         return Err(validation_error(
-            ResponsesValidationErrorKind::ContradictoryFailure,
             "upstream Responses JSON has a contradictory error",
         ));
     }
@@ -255,7 +198,6 @@ pub fn validate_responses_body(
     if status == "incomplete" {
         if !matches!(incomplete, None | Some(Value::Null | Value::Object(_))) {
             return Err(validation_error(
-                ResponsesValidationErrorKind::InvalidIncompleteDetails,
                 "upstream Responses JSON has invalid incomplete details",
             ));
         }
@@ -263,7 +205,6 @@ pub fn validate_responses_body(
         && !incomplete.is_some_and(|value| value.as_object().is_some_and(Map::is_empty))
     {
         return Err(validation_error(
-            ResponsesValidationErrorKind::ContradictoryIncompleteDetails,
             "upstream Responses JSON has contradictory incomplete details",
         ));
     }

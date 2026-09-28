@@ -277,6 +277,48 @@ impl AnthropicStream {
         }
     }
 
+    /// Register a block. Only blocks with an output index participate in the
+    /// ordered output stream; suppressed reasoning is stored but not ordered.
+    fn insert_block_state(
+        &mut self,
+        raw_index: usize,
+        output_index: Option<usize>,
+        kind: AnthropicBlockKind,
+    ) {
+        self.blocks.insert(
+            raw_index,
+            AnthropicBlockState {
+                output_index,
+                closed: false,
+                item: None,
+                kind,
+            },
+        );
+        if output_index.is_some() {
+            self.ordered_blocks.push(raw_index);
+        }
+    }
+
+    fn open_text_events(&mut self, id: &str, output_index: usize) -> Vec<crate::StreamEvent> {
+        vec![
+            self.event(
+                "response.output_item.added",
+                json!({
+                    "type": "response.output_item.added", "output_index": output_index,
+                    "item": {"id": id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}
+                }),
+            ),
+            self.event(
+                "response.content_part.added",
+                json!({
+                    "type": "response.content_part.added", "item_id": id,
+                    "output_index": output_index, "content_index": 0,
+                    "part": {"type": "output_text", "text": "", "annotations": []}
+                }),
+            ),
+        ]
+    }
+
     fn start_block(
         &mut self,
         event: &Map<String, Value>,
@@ -303,37 +345,16 @@ impl AnthropicStream {
                     }
                 };
                 let id = self.ids.next_message();
-                self.blocks.insert(
+                self.insert_block_state(
                     raw_index,
-                    AnthropicBlockState {
-                        output_index: Some(output_index),
-                        closed: false,
-                        item: None,
-                        kind: AnthropicBlockKind::Text {
-                            id: id.clone(),
-                            parts: Vec::new(),
-                            explicit: true,
-                        },
+                    Some(output_index),
+                    AnthropicBlockKind::Text {
+                        id: id.clone(),
+                        parts: Vec::new(),
+                        explicit: true,
                     },
                 );
-                self.ordered_blocks.push(raw_index);
-                let mut events = vec![
-                    self.event(
-                        "response.output_item.added",
-                        json!({
-                            "type": "response.output_item.added", "output_index": output_index,
-                            "item": {"id": id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}
-                        }),
-                    ),
-                    self.event(
-                        "response.content_part.added",
-                        json!({
-                            "type": "response.content_part.added", "item_id": id,
-                            "output_index": output_index, "content_index": 0,
-                            "part": {"type": "output_text", "text": "", "annotations": []}
-                        }),
-                    ),
-                ];
+                let mut events = self.open_text_events(&id, output_index);
                 if let Some(initial) = initial.filter(|text| !text.is_empty()) {
                     events.extend(self.push_text(raw_index, &initial)?);
                 }
@@ -368,44 +389,34 @@ impl AnthropicStream {
                 } else {
                     raw_id.to_owned()
                 };
-                self.blocks.insert(
+                self.insert_block_state(
                     raw_index,
-                    AnthropicBlockState {
-                        output_index: Some(output_index),
-                        closed: false,
-                        item: None,
-                        kind: AnthropicBlockKind::Tool {
-                            id: id.clone(),
-                            call_id: raw_id.to_owned(),
-                            name: name.to_owned(),
-                            custom,
-                            initial_input,
-                            json_parts: Vec::new(),
-                            json_bytes: 0,
-                        },
+                    Some(output_index),
+                    AnthropicBlockKind::Tool {
+                        id: id.clone(),
+                        call_id: raw_id.to_owned(),
+                        name: name.to_owned(),
+                        custom,
+                        initial_input,
+                        json_parts: Vec::new(),
+                        json_bytes: 0,
                     },
                 );
-                self.ordered_blocks.push(raw_index);
-                let mut item = json!({
-                    "id": id, "type": if custom { "custom_tool_call" } else { "function_call" },
-                    "status": "in_progress", "call_id": raw_id, "name": name
-                });
-                item[if custom { "input" } else { "arguments" }] = Value::String(String::new());
+                let item = tool_item(
+                    &id,
+                    custom,
+                    raw_id,
+                    name,
+                    "in_progress",
+                    Value::String(String::new()),
+                );
                 Ok(vec![self.event(
                     "response.output_item.added",
                     json!({"type": "response.output_item.added", "output_index": output_index, "item": item}),
                 )])
             }
             "thinking" | "redacted_thinking" => {
-                self.blocks.insert(
-                    raw_index,
-                    AnthropicBlockState {
-                        output_index: None,
-                        closed: false,
-                        item: None,
-                        kind: AnthropicBlockKind::SuppressedReasoning,
-                    },
-                );
+                self.insert_block_state(raw_index, None, AnthropicBlockKind::SuppressedReasoning);
                 Ok(Vec::new())
             }
             _ => Err(upstream_error(
@@ -426,37 +437,16 @@ impl AnthropicStream {
         if !self.blocks.contains_key(&raw_index) && delta_type == "text_delta" {
             let output_index = self.ordered_blocks.len();
             let id = self.ids.next_message();
-            self.blocks.insert(
+            self.insert_block_state(
                 raw_index,
-                AnthropicBlockState {
-                    output_index: Some(output_index),
-                    closed: false,
-                    item: None,
-                    kind: AnthropicBlockKind::Text {
-                        id: id.clone(),
-                        parts: Vec::new(),
-                        explicit: false,
-                    },
+                Some(output_index),
+                AnthropicBlockKind::Text {
+                    id: id.clone(),
+                    parts: Vec::new(),
+                    explicit: false,
                 },
             );
-            self.ordered_blocks.push(raw_index);
-            let mut events = vec![
-                self.event(
-                    "response.output_item.added",
-                    json!({
-                        "type": "response.output_item.added", "output_index": output_index,
-                        "item": {"id": id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}
-                    }),
-                ),
-                self.event(
-                    "response.content_part.added",
-                    json!({
-                        "type": "response.content_part.added", "item_id": id,
-                        "output_index": output_index, "content_index": 0,
-                        "part": {"type": "output_text", "text": "", "annotations": []}
-                    }),
-                ),
-            ];
+            let mut events = self.open_text_events(&id, output_index);
             if let Some(piece) = delta.get("text").and_then(Value::as_str) {
                 if !piece.is_empty() {
                     events.extend(self.push_text(raw_index, piece)?);
@@ -593,7 +583,7 @@ impl AnthropicStream {
     }
 
     fn close_text(&mut self, raw_index: usize) -> Result<Vec<crate::StreamEvent>, AnthropicError> {
-        let (id, output_index, text) = {
+        let (id, output_index, text, item) = {
             let state = self.blocks.get_mut(&raw_index).expect("text block exists");
             let AnthropicBlockKind::Text { id, parts, .. } = &state.kind else {
                 unreachable!()
@@ -602,11 +592,10 @@ impl AnthropicStream {
             let text = parts.concat();
             let output_index = state.output_index.expect("text output index");
             let item = output_message(&id, &text);
-            state.item = Some(item);
+            state.item = Some(item.clone());
             state.closed = true;
-            (id, output_index, text)
+            (id, output_index, text, item)
         };
-        let item = self.blocks[&raw_index].item.clone().expect("text item");
         Ok(vec![
             self.event(
                 "response.output_text.done",
@@ -677,11 +666,14 @@ impl AnthropicStream {
         } else {
             arguments.clone()
         };
-        let mut item = json!({
-            "id": id, "type": if custom { "custom_tool_call" } else { "function_call" },
-            "status": "completed", "call_id": call_id, "name": name
-        });
-        item[if custom { "input" } else { "arguments" }] = Value::String(projected.clone());
+        let item = tool_item(
+            &id,
+            custom,
+            &call_id,
+            &name,
+            "completed",
+            Value::String(projected.clone()),
+        );
         {
             let state = self.blocks.get_mut(&raw_index).expect("tool block exists");
             state.item = Some(item.clone());
@@ -719,4 +711,19 @@ impl AnthropicStream {
         }
         crate::StreamEvent { event, value }
     }
+}
+fn tool_item(
+    id: &str,
+    custom: bool,
+    call_id: &str,
+    name: &str,
+    status: &'static str,
+    payload: Value,
+) -> Value {
+    let mut item = json!({
+        "id": id, "type": if custom { "custom_tool_call" } else { "function_call" },
+        "status": status, "call_id": call_id, "name": name
+    });
+    item[if custom { "input" } else { "arguments" }] = payload;
+    item
 }

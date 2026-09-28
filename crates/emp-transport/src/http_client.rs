@@ -3,12 +3,14 @@ use crate::http_policy::{
     TimeoutPolicy,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::redirect::Policy;
 use reqwest::{Certificate, Client, Method, Proxy, StatusCode};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::Instant;
+use url::Url;
 
 const DEFAULT_MAX_PROXY_POOLS: usize = 4;
 const CLEANUP_BYTE_LIMIT: usize = 64 * 1024;
@@ -18,6 +20,59 @@ enum RedirectMode {
     Reject,
     PreserveStatus,
     Follow,
+}
+
+#[derive(Clone)]
+struct RedirectOrigin {
+    scheme: String,
+    host: String,
+    port: u16,
+}
+
+impl RedirectOrigin {
+    fn from_plan(plan: &RequestPlan) -> Self {
+        let route = &plan.route;
+        let port = route.port.unwrap_or(match route.scheme.as_str() {
+            "https" => 443,
+            _ => 80,
+        });
+        Self {
+            scheme: route.scheme.clone(),
+            host: route.host.clone(),
+            port,
+        }
+    }
+
+    fn matches(&self, url: &Url) -> bool {
+        // `Url::host_str` brackets IPv6 literals; the route host may not.
+        let unbracketed = |host: &str| {
+            host.strip_prefix('[')
+                .and_then(|host| host.strip_suffix(']'))
+                .unwrap_or(host)
+                .to_owned()
+        };
+        self.scheme == url.scheme()
+            && url.host_str().is_some_and(|host| {
+                unbracketed(host).eq_ignore_ascii_case(&unbracketed(&self.host))
+            })
+            && url.port_or_known_default() == Some(self.port)
+    }
+
+    fn cache_key(&self) -> String {
+        format!("{}://{}:{}", self.scheme, self.host, self.port)
+    }
+
+    fn policy(self) -> Policy {
+        Policy::custom(move |attempt| {
+            if attempt.previous().len() >= 10 || !self.matches(attempt.url()) {
+                // Returning the redirect response leaves the caller in control
+                // and ensures request credentials never reach another origin.
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,10 +305,12 @@ impl HttpClient {
         .await
     }
 
-    /// Open a request using the standard bounded HTTP redirect policy.
+    /// Follow bounded redirects only while they remain on the initial origin.
     ///
-    /// Redirects remain disabled for the default [`Self::open`] path. Callers
-    /// should opt in only when their source behavior follows redirects.
+    /// Scheme, host, and effective port must all match the initial URL. This
+    /// prevents caller credentials, including provider-specific API-key
+    /// headers, from being forwarded to another origin or across a downgrade.
+    /// Redirects remain disabled for the default [`Self::open`] path.
     pub async fn open_following_redirects(
         &self,
         method: HttpMethod,
@@ -276,8 +333,7 @@ impl HttpClient {
         redirect_mode: RedirectMode,
     ) -> Result<HttpResponse, HttpTransportError> {
         let plan = self.policy.plan(method, url, headers, stream)?;
-        let follow_redirects = redirect_mode == RedirectMode::Follow;
-        let client = self.client_for(&plan, follow_redirects)?;
+        let client = self.client_for(&plan, redirect_mode)?;
         let started_at = Instant::now();
         let mut request = client.request(to_reqwest_method(method), plan.route.route_url());
         let headers = to_header_map(&plan.headers)?;
@@ -306,10 +362,20 @@ impl HttpClient {
     fn client_for(
         &self,
         plan: &RequestPlan,
-        follow_redirects: bool,
+        redirect_mode: RedirectMode,
     ) -> Result<Client, HttpTransportError> {
+        let redirect_identity = match redirect_mode {
+            RedirectMode::Reject => "reject".to_owned(),
+            RedirectMode::PreserveStatus => "preserve".to_owned(),
+            RedirectMode::Follow => {
+                format!(
+                    "same-origin:{}",
+                    RedirectOrigin::from_plan(plan).cache_key()
+                )
+            }
+        };
         let identity = format!(
-            "{}|follow_redirects={follow_redirects}",
+            "{}|redirect={redirect_identity}",
             plan.route.proxy_origin.pool_token()
         );
         let mut clients = self
@@ -322,13 +388,13 @@ impl HttpClient {
             clients.push_back(entry);
             return Ok(client);
         }
+        let redirect_policy = match redirect_mode {
+            RedirectMode::Reject | RedirectMode::PreserveStatus => Policy::none(),
+            RedirectMode::Follow => RedirectOrigin::from_plan(plan).policy(),
+        };
         let mut builder = Client::builder()
             .no_proxy()
-            .redirect(if follow_redirects {
-                reqwest::redirect::Policy::limited(10)
-            } else {
-                reqwest::redirect::Policy::none()
-            })
+            .redirect(redirect_policy)
             .retry(reqwest::retry::never())
             .connect_timeout(plan.timeout_policy.connect)
             .pool_idle_timeout(self.config.pool.idle_timeout)
@@ -582,6 +648,27 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
+    fn redirect_origin_rejects_host_port_and_scheme_changes() {
+        let origin = RedirectOrigin {
+            scheme: "https".to_owned(),
+            host: "api.example.test".to_owned(),
+            port: 443,
+        };
+        assert!(origin.matches(&Url::parse("https://api.example.test/next").unwrap()));
+        assert!(!origin.matches(&Url::parse("https://other.example.test/next").unwrap()));
+        assert!(!origin.matches(&Url::parse("https://api.example.test:444/next").unwrap()));
+        assert!(!origin.matches(&Url::parse("http://api.example.test/next").unwrap()));
+
+        let ipv6 = RedirectOrigin {
+            scheme: "http".to_owned(),
+            host: "::1".to_owned(),
+            port: 8080,
+        };
+        assert!(ipv6.matches(&Url::parse("http://[::1]:8080/next").unwrap()));
+        assert!(!ipv6.matches(&Url::parse("http://[::2]:8080/next").unwrap()));
+    }
+
+    #[test]
     fn new_requests_and_websockets_resolve_proxy_again_and_pool_is_bounded() {
         let settings = Arc::new(Mutex::new(ProxyEnvironment::default()));
         let resolver_settings = Arc::clone(&settings);
@@ -625,12 +712,12 @@ mod tests {
                     "an existing plan retains its selected proxy"
                 );
                 client
-                    .client_for(&plan, false)
+                    .client_for(&plan, RedirectMode::Reject)
                     .expect("client uses the plan's selected proxy");
                 continue;
             }
             client
-                .client_for(&plan, false)
+                .client_for(&plan, RedirectMode::Reject)
                 .expect("client uses current proxy");
         }
 

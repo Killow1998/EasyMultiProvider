@@ -640,20 +640,11 @@ pub(crate) fn serve_responses_websocket(
                 crate::services::disconnect::DisconnectMonitor::start(probe).ok()
             });
             loop {
-                let polled = match monitor.as_mut() {
-                    Some(monitor) => state
-                        .backend
-                        .transport
-                        .runtime
-                        .block_on(monitor.race(upstream.next_event())),
-                    None => DisconnectRace::Ready(
-                        state
-                            .backend
-                            .transport
-                            .runtime
-                            .block_on(upstream.next_event()),
-                    ),
-                };
+                let polled = crate::services::disconnect::raced(
+                    &state.backend.transport.runtime,
+                    monitor.as_mut(),
+                    upstream.next_event(),
+                );
                 match polled {
                     DisconnectRace::Disconnected => {
                         usage.disconnected();
@@ -730,20 +721,11 @@ pub(crate) fn serve_responses_websocket(
                 crate::services::disconnect::DisconnectMonitor::start(probe).ok()
             });
             loop {
-                let polled = match monitor.as_mut() {
-                    Some(monitor) => state
-                        .backend
-                        .transport
-                        .runtime
-                        .block_on(monitor.race(upstream.next_event())),
-                    None => DisconnectRace::Ready(
-                        state
-                            .backend
-                            .transport
-                            .runtime
-                            .block_on(upstream.next_event()),
-                    ),
-                };
+                let polled = crate::services::disconnect::raced(
+                    &state.backend.transport.runtime,
+                    monitor.as_mut(),
+                    upstream.next_event(),
+                );
                 match polled {
                     DisconnectRace::Disconnected => {
                         usage.disconnected();

@@ -14,7 +14,7 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState, now: f64) -> Vec<u
     }
     if !state
         .sessions
-        .contains(request.session_cookie().as_deref(), now)
+        .contains(request.session_token().as_deref(), now)
     {
         return unauthorized_response();
     }
@@ -34,7 +34,7 @@ pub(crate) fn start(
     }
     if !state
         .sessions
-        .contains(request.session_cookie().as_deref(), now)
+        .contains(request.session_token().as_deref(), now)
     {
         return unauthorized_response();
     }

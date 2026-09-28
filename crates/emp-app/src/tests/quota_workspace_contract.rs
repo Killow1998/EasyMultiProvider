@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use super::{canonical_root, post, request, session_cookie_header};
+use super::{canonical_root, post, request, session_header};
 use crate::lifecycle::ServerHandle;
 use serde_json::{Value, json};
 use std::net::{IpAddr, Ipv4Addr};
@@ -107,7 +107,7 @@ for line in sys.stdin:
             )
             .expect("write imported auth");
     }
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
 
     let native = post(&server, "/api/accounts/%40native/quota", b"{}", &[&cookie]);
     assert!(

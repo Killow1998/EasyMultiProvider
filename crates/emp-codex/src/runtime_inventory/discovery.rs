@@ -38,20 +38,29 @@ fn runtime_file(path: &Path) -> Option<PathBuf> {
     path.canonicalize().ok()
 }
 pub(super) fn path_cli() -> Option<PathBuf> {
+    path_cli_in(&std::env::var_os("PATH")?)
+}
+/// Search `path_var` for a trusted `codex`. Empty and relative entries are
+/// skipped so a PATH such as `:/usr/bin` or `.:bin` never resolves against the
+/// current working directory.
+fn path_cli_in(path_var: &std::ffi::OsStr) -> Option<PathBuf> {
     #[cfg(windows)]
     let names = std::env::var("PATHEXT")
         .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
         .split(';')
+        .filter(|ext| !ext.is_empty())
         .map(|ext| format!("codex{ext}"))
         .collect::<Vec<_>>();
     #[cfg(not(windows))]
     let names = ["codex".to_owned()];
-    std::env::split_paths(&std::env::var_os("PATH")?).find_map(|root| {
-        names
-            .iter()
-            .map(|name| root.join(name))
-            .find(|path| executable(path))
-    })
+    std::env::split_paths(path_var)
+        .filter(|root| !root.as_os_str().is_empty() && root.is_absolute())
+        .find_map(|root| {
+            names
+                .iter()
+                .map(|name| root.join(name))
+                .find(|path| executable(path) && super::trust::trusted_binary(path).is_some())
+        })
 }
 fn newest(paths: impl Iterator<Item = PathBuf>) -> Option<PathBuf> {
     paths
@@ -216,4 +225,68 @@ pub(super) fn discover(
         add("path_cli", "PATH Codex CLI", path);
     }
     result
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::path_cli_in;
+    use crate::runtime_inventory::trust::tests::{ancestors_are_private, private_dir, script};
+    use std::ffi::OsString;
+    use std::path::{Component, Path, PathBuf};
+
+    fn relative_to_cwd(target: &Path) -> PathBuf {
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let target = target.canonicalize().unwrap();
+        let mut relative = PathBuf::new();
+        for component in cwd.components() {
+            if matches!(component, Component::Normal(_)) {
+                relative.push("..");
+            }
+        }
+        relative.join(target.strip_prefix("/").unwrap())
+    }
+
+    #[test]
+    fn path_cli_skips_empty_and_relative_entries() {
+        let dir = private_dir();
+        script(dir.path(), "codex", "exit 0", 0o755);
+        let relative = relative_to_cwd(dir.path());
+        assert!(relative.is_relative() && relative.join("codex").is_file());
+        let path_var =
+            std::env::join_paths([PathBuf::new(), relative, PathBuf::from(".")]).unwrap();
+        assert_eq!(path_cli_in(&path_var), None);
+        assert_eq!(path_cli_in(&OsString::new()), None);
+    }
+
+    #[test]
+    fn path_cli_skips_untrusted_directories() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = private_dir();
+        let shared = dir.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        script(&shared, "codex", "exit 0", 0o755);
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let path_var = std::env::join_paths([shared.clone()]).unwrap();
+        assert_eq!(path_cli_in(&path_var), None);
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_cli_accepts_a_trusted_symlinked_installation() {
+        use std::os::unix::fs::symlink;
+        let dir = private_dir();
+        if !ancestors_are_private(dir.path()) {
+            return;
+        }
+        let install = dir.path().join("package");
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&install).unwrap();
+        std::fs::create_dir(&bin).unwrap();
+        let target = script(&install, "codex", "echo codex-cli 0.156.1", 0o755);
+        let link = bin.join("codex");
+        symlink(&target, &link).unwrap();
+        let path_var = std::env::join_paths([bin]).unwrap();
+        assert_eq!(path_cli_in(&path_var), Some(link));
+    }
 }

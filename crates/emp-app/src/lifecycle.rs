@@ -4,11 +4,10 @@ use crate::app::BackendState;
 use crate::app::ServerState;
 use crate::cli::is_loopback;
 use crate::error::AppError;
+use crate::http::auth::BOOTSTRAP_LIFETIME_SECONDS;
 use crate::http::auth::BootstrapToken;
 use crate::http::auth::SessionStore;
 use crate::http::auth::codex_auth_path;
-#[cfg(test)]
-use crate::http::auth::session_cookie;
 use crate::http::routes::handle_connection;
 use crate::services::connection_admission::{ConnectionAdmission, ConnectionAdmissionConfig};
 use crate::services::quota::sample_quotas_once;
@@ -35,6 +34,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 const QUOTA_SAMPLE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+/// Longest a quota check can still rotate a credential: two 45 s Codex
+/// queries plus the save retries.
+const CREDENTIAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(100);
 
 pub(crate) struct ServerHandle {
     local_addr: SocketAddr,
@@ -232,10 +234,7 @@ impl ServerHandle {
         let listener = TcpListener::bind((host, port))?;
         let local_addr = listener.local_addr()?;
         let shutdown = Arc::new(AtomicBool::new(false));
-        let sessions = Arc::new(SessionStore {
-            session: Mutex::new(session),
-            path: session_path,
-        });
+        let sessions = Arc::new(SessionStore::new(session, session_path));
         let mut random = [0_u8; WEB_SESSION_TOKEN_BYTES];
         getrandom::getrandom(&mut random).map_err(|_| AppError::RandomUnavailable)?;
         let updates = crate::services::updates::UpdateState::new(
@@ -253,6 +252,7 @@ impl ServerHandle {
             bootstrap: BootstrapToken {
                 token: URL_SAFE_NO_PAD.encode(random),
                 used: AtomicBool::new(false),
+                expires_at: system_now() + BOOTSTRAP_LIFETIME_SECONDS,
             },
             backend,
             port: local_addr.port(),
@@ -317,6 +317,7 @@ impl ServerHandle {
         let worker = thread::Builder::new()
             .name("emp-quota-sampler".to_owned())
             .spawn(move || {
+                crate::services::quota::migrate_legacy_quota_history(&state);
                 while !state.shutdown.load(Ordering::Acquire) {
                     let deadline = Instant::now() + QUOTA_SAMPLE_INTERVAL;
                     let mut wait = match state.backend.accounts.quota_sampler_wait.lock() {
@@ -344,6 +345,9 @@ impl ServerHandle {
                     drop(wait);
                     if !state.shutdown.load(Ordering::Acquire) {
                         sample_quotas_once(&state);
+                        // Disabled or duplicate accounts are not sampled;
+                        // their rotated credentials still need saving.
+                        crate::services::quota::flush_pending_rotations(&state);
                     }
                 }
             })
@@ -366,14 +370,14 @@ impl ServerHandle {
     }
 
     #[cfg(test)]
-    pub fn session_cookie(&self) -> String {
+    pub fn session_token(&self) -> String {
         let session = self
             .state
             .sessions
             .session
             .lock()
             .expect("session lock is not poisoned");
-        session_cookie(session.token(), session.remaining_seconds_at(system_now()))
+        session.token().to_owned()
     }
 
     fn reconcile_startup(&self) {
@@ -392,6 +396,11 @@ impl ServerHandle {
             self.state.backend.integration.restore_owned()
         };
         self.state.shutdown.store(true, Ordering::Release);
+        // Request threads are not joined (streams may outlive shutdown), so
+        // quota checks that may rotate a credential are drained explicitly
+        // before the final save below.
+        let credential_operations = &self.state.backend.accounts.credential_operations;
+        let _ = credential_operations.close_and_drain(Duration::ZERO);
         let _ = TcpStream::connect_timeout(&self.local_addr, Duration::from_millis(100));
         self.state.backend.usage.stop();
         self.state.backend.accounts.quota_condition.notify_all();
@@ -409,8 +418,24 @@ impl ServerHandle {
         for worker in workers {
             let _: () = worker.join().map_err(|_| AppError::ServerStopped)?;
         }
+        // Last chance to save credentials Codex rotated: the stored copies
+        // may already be invalid upstream.
+        // A shutdown that loses them is not a clean exit.
+        let unfinished = credential_operations.close_and_drain(CREDENTIAL_DRAIN_TIMEOUT);
+        let unsaved = unfinished + crate::services::quota::flush_pending_rotations(&self.state);
         drop(self._service_owner);
-        restoration
+        if unsaved == 0 {
+            return restoration;
+        }
+        let unsaved = AppError::CredentialsUnsaved(unsaved);
+        match restoration {
+            Ok(()) => Err(unsaved),
+            Err(error) => {
+                // Only one error is returned; do not let it hide this one.
+                eprintln!("{unsaved}");
+                Err(error)
+            }
+        }
     }
 }
 
@@ -476,7 +501,7 @@ pub(crate) fn run_server(
                 .backend
                 .transport
                 .support_network
-                .source_at_startup()
+                .source_at_startup
         );
         let bootstrap_url = server.bootstrap_url();
         println!("Open in browser: {bootstrap_url}");

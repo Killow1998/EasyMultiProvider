@@ -37,6 +37,55 @@ fn launch(arguments: &[String]) -> bool {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+/// Absolute rundll32 path. A bare name would be searched in the application
+/// directory first, letting a planted `rundll32.exe` beside EMP run instead.
+fn windows_rundll32() -> String {
+    windows_system_directory()
+        .join("rundll32.exe")
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[cfg(windows)]
+fn windows_system_directory() -> std::path::PathBuf {
+    use std::os::windows::ffi::OsStringExt;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;
+    }
+    let mut buffer = [0_u16; 1024];
+    // SAFETY: the buffer is valid for `buffer.len()` UTF-16 units and the API
+    // writes at most that many, returning the length without the terminator.
+    let length = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+    let length = length as usize;
+    if length > 0 && length < buffer.len() {
+        return std::ffi::OsString::from_wide(&buffer[..length]).into();
+    }
+    system_directory_from_root(std::env::var_os("SystemRoot"))
+}
+
+#[cfg(not(windows))]
+fn windows_system_directory() -> std::path::PathBuf {
+    system_directory_from_root(std::env::var_os("SystemRoot"))
+}
+
+fn system_directory_from_root(root: Option<std::ffi::OsString>) -> std::path::PathBuf {
+    let root = root
+        .map(std::path::PathBuf::from)
+        .filter(|root| {
+            let value = root.as_os_str().to_string_lossy();
+            let bytes = value.as_bytes();
+            root.is_absolute()
+                || (bytes.len() >= 3
+                    && bytes[0].is_ascii_alphabetic()
+                    && bytes[1] == b':'
+                    && matches!(bytes[2], b'\\' | b'/'))
+                || value.starts_with(r"\\")
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+    root.join("System32")
+}
+
 pub(crate) fn open_browser(url: &str) -> bool {
     if let Some(configured) = variable("BROWSER") {
         for command in configured.split(if cfg!(windows) { ';' } else { ':' }) {
@@ -57,14 +106,41 @@ pub(crate) fn open_browser(url: &str) -> bool {
     }
     let arguments = if cfg!(windows) {
         vec![
-            "rundll32".to_owned(),
+            windows_rundll32(),
             "url.dll,FileProtocolHandler".to_owned(),
             url.to_owned(),
         ]
     } else if cfg!(target_os = "macos") {
-        vec!["open".to_owned(), url.to_owned()]
+        vec!["/usr/bin/open".to_owned(), url.to_owned()]
     } else {
-        vec!["xdg-open".to_owned(), url.to_owned()]
+        vec![xdg_open_path().to_owned(), url.to_owned()]
     };
     launch(&arguments)
+}
+
+fn xdg_open_path() -> &'static str {
+    for path in ["/usr/bin/xdg-open", "/usr/local/bin/xdg-open"] {
+        if std::path::Path::new(path).is_file() {
+            return path;
+        }
+    }
+    "/usr/bin/xdg-open"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::system_directory_from_root;
+
+    #[test]
+    fn system_directory_falls_back_to_the_default_windows_root() {
+        let fallback = system_directory_from_root(None);
+        assert!(fallback.starts_with(r"C:\Windows"));
+        assert!(fallback.ends_with("System32"));
+        let relative = system_directory_from_root(Some("Windows".into()));
+        assert!(relative.starts_with(r"C:\Windows"));
+        let drive_relative = system_directory_from_root(Some(r"D:relative".into()));
+        assert!(drive_relative.starts_with(r"C:\Windows"));
+        let configured = system_directory_from_root(Some(r"D:\Win".into()));
+        assert!(configured.starts_with(r"D:\Win"));
+    }
 }

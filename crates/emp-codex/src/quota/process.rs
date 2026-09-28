@@ -81,36 +81,16 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
 }
 
 fn validate_binary_path(path: &Path) -> Result<(), QuotaError> {
-    let metadata = fs::metadata(path).map_err(|_| binary_unavailable())?;
-    if !metadata.is_file() {
-        return Err(QuotaError::new(
-            "Codex executable is not trusted",
-            "quota_error",
-        ));
-    }
-    #[cfg(unix)]
-    {
-        let current_uid = unsafe { libc::getuid() };
-        if metadata.mode() & 0o111 == 0 || (metadata.uid() != 0 && metadata.uid() != current_uid) {
-            return Err(QuotaError::new(
-                "Codex executable is not trusted",
-                "quota_error",
-            ));
+    use crate::executable_trust::{TrustFailure, validate_executable};
+    validate_executable(path).map_err(|failure| match failure {
+        TrustFailure::Unavailable => binary_unavailable(),
+        TrustFailure::NotTrusted => {
+            QuotaError::new("Codex executable is not trusted", "quota_error")
         }
-        for parent in path.ancestors() {
-            let info = fs::metadata(parent)
-                .map_err(|_| QuotaError::new("Codex executable is not trusted", "quota_error"))?;
-            if info.mode() & 0o002 != 0
-                || (info.mode() & 0o020 != 0 && info.uid() != 0 && info.uid() != current_uid)
-            {
-                return Err(QuotaError::new(
-                    "Codex executable path is writable",
-                    "quota_error",
-                ));
-            }
+        TrustFailure::Writable => {
+            QuotaError::new("Codex executable path is writable", "quota_error")
         }
-    }
-    Ok(())
+    })
 }
 
 fn binary_identity(path: &Path) -> Result<BinaryIdentity, QuotaError> {
@@ -162,8 +142,9 @@ pub(super) fn run_isolated_quota_process(
     reset_credit_id: Option<&str>,
     mut persist_rotation: Option<PersistRotation<'_>>,
 ) -> Result<QuotaProcessResult, QuotaError> {
+    sweep_stale_credential_directories(&env::temp_dir(), SystemTime::now());
     let directory = tempfile::Builder::new()
-        .prefix("easy-mp-codex-account-")
+        .prefix(CREDENTIAL_DIRECTORY_PREFIX)
         .tempdir()
         .map_err(|_| quota_check_failed())?;
     set_private_directory(directory.path())?;
@@ -236,23 +217,57 @@ fn home_dir() -> PathBuf {
         .unwrap_or_default()
 }
 
-fn set_private_directory(path: &Path) -> Result<(), QuotaError> {
-    #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .map_err(|_| quota_check_failed())?;
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
+/// Temporary `CODEX_HOME` directories hold a decrypted `auth.json` while one
+/// quota check runs.
+const CREDENTIAL_DIRECTORY_PREFIX: &str = "easy-mp-codex-account-";
+/// A quota check is bounded well below this age; older directories are
+/// leftovers of a crashed or killed EMP process and still hold live tokens.
+const STALE_CREDENTIAL_DIRECTORY_AGE: Duration = Duration::from_secs(60 * 60);
+
+/// Remove this user's stale credential directories left behind by an abnormal
+/// exit. Links, other users' entries and recent directories are left alone.
+fn sweep_stale_credential_directories(temp_root: &Path, now: SystemTime) {
+    let Ok(entries) = fs::read_dir(temp_root) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        if !entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(CREDENTIAL_DIRECTORY_PREFIX))
+        {
+            continue;
+        }
+        // DirEntry metadata does not follow links.
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            continue;
+        }
+        #[cfg(unix)]
+        if metadata.uid() != unsafe { libc::getuid() } {
+            continue;
+        }
+        let stale = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= STALE_CREDENTIAL_DIRECTORY_AGE);
+        if stale {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
+fn set_private_directory(path: &Path) -> Result<(), QuotaError> {
+    emp_state::create_private_directory(path).map_err(|_| quota_check_failed())
+}
+
+/// Create a new private file without following links: mode 0600 on Unix and
+/// a current-user-only DACL on Windows.
 fn write_private(path: &Path, value: &[u8]) -> Result<(), QuotaError> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(path).map_err(|_| quota_check_failed())?;
-    file.write_all(value).map_err(|_| quota_check_failed())?;
-    file.flush().map_err(|_| quota_check_failed())
+    emp_state::write_new_private_file(path, value).map_err(|_| quota_check_failed())
 }
 
 enum ProcessLine {
@@ -484,4 +499,76 @@ pub(super) fn rpc_http_status(message: &str) -> Option<u16> {
         }
     }
     None
+}
+
+#[cfg(all(test, unix))]
+mod credential_directory_tests {
+    use super::*;
+
+    #[test]
+    fn stale_credential_directories_are_swept_but_recent_and_foreign_entries_stay() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let stale = root
+            .path()
+            .join(format!("{CREDENTIAL_DIRECTORY_PREFIX}stale"));
+        let recent = root
+            .path()
+            .join(format!("{CREDENTIAL_DIRECTORY_PREFIX}recent"));
+        let unrelated = root.path().join("unrelated-stale");
+        let target = root.path().join("link-target");
+        for directory in [&stale, &recent, &unrelated, &target] {
+            fs::create_dir(directory).expect("create directory");
+        }
+        fs::write(stale.join("auth.json"), b"{}").expect("stale credential");
+        let link = root
+            .path()
+            .join(format!("{CREDENTIAL_DIRECTORY_PREFIX}link"));
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+        // Everything created just now is two hours old from `now`'s view,
+        // except `recent`, which is judged against its own modification time.
+        let later = SystemTime::now() + Duration::from_secs(2 * 60 * 60);
+        sweep_stale_credential_directories(root.path(), SystemTime::now());
+        assert!(stale.exists() && recent.exists(), "fresh directories stay");
+        sweep_stale_credential_directories(root.path(), later);
+        assert!(!stale.exists(), "stale credential directory removed");
+        assert!(
+            !recent.exists(),
+            "an old enough prefixed directory is stale too"
+        );
+        assert!(unrelated.exists(), "unrelated directories stay");
+        assert!(
+            link.symlink_metadata().is_ok() && target.exists(),
+            "links are not followed"
+        );
+    }
+
+    #[test]
+    fn credential_files_are_private_and_never_replace_existing_paths() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let directory = root.path().join("home");
+        fs::create_dir(&directory).expect("create directory");
+        set_private_directory(&directory).expect("private directory");
+        assert_eq!(
+            fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let auth = directory.join("auth.json");
+        write_private(&auth, b"{}").expect("private file");
+        assert_eq!(
+            fs::metadata(&auth).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(
+            write_private(&auth, b"{}").is_err(),
+            "existing file is not replaced"
+        );
+        let link = directory.join("link.json");
+        std::os::unix::fs::symlink(root.path().join("elsewhere"), &link).expect("symlink");
+        assert!(
+            write_private(&link, b"{}").is_err(),
+            "links are not followed"
+        );
+        assert!(!root.path().join("elsewhere").exists());
+    }
 }

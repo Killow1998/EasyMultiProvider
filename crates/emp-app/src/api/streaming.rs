@@ -1,6 +1,7 @@
 //! Downstream SSE delivery and cancellation.
 
 use crate::app::ServerState;
+use crate::http::response::SECURITY_HEADERS;
 use crate::http::response::json_error_response;
 use crate::http::response::status_text;
 use crate::services::disconnect::DisconnectMonitor;
@@ -18,6 +19,7 @@ use crate::util::random_hex;
 use emp_core::ResolvedRoute;
 use emp_router::ExternalStream;
 use emp_router::ProjectionIds;
+use emp_router::RouterError;
 use emp_router::native_http::NativeStream;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -39,10 +41,17 @@ fn write_stream_head_with_headers(
     stream.write_all(
         b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n",
     )?;
+    stream.write_all(SECURITY_HEADERS)?;
     for (name, value) in headers {
         if matches!(
             name.to_ascii_lowercase().as_str(),
-            "content-type" | "content-length" | "connection" | "cache-control"
+            "content-type"
+                | "content-length"
+                | "connection"
+                | "cache-control"
+                | "x-frame-options"
+                | "content-security-policy"
+                | "x-content-type-options"
         ) {
             continue;
         }
@@ -168,181 +177,160 @@ pub(crate) fn serve_native_stream(
     relay_native_stream(downstream, state, route, body, incoming, upstream, monitor).map(|_| ())
 }
 
-fn relay_native_stream(
-    downstream: &mut TcpStream,
-    state: &ServerState,
-    route: &ResolvedRoute,
-    body: &Value,
-    incoming: &BTreeMap<String, String>,
-    mut upstream: NativeStream,
-    monitor: Option<DisconnectMonitor>,
-) -> Result<bool, Vec<u8>> {
-    let mut usage = crate::services::observation::Observation::new(
-        state,
-        route,
-        body,
-        incoming,
-        upstream.usage_owner.as_deref(),
-        "responses",
-    )
-    .started_at(upstream.request_started);
-    let response_headers = upstream.headers.clone();
-    let mut monitor = monitor.or_else(|| DisconnectMonitor::start(downstream).ok());
-    let mut pending = Vec::<Vec<u8>>::new();
-    let mut pending_bytes = 0_usize;
-    let mut started = false;
-    loop {
-        let polled = match monitor.as_mut() {
-            Some(monitor) => state
-                .backend
-                .transport
-                .runtime
-                .block_on(monitor.race(upstream.next_event())),
-            None => DisconnectRace::Ready(
-                state
-                    .backend
-                    .transport
-                    .runtime
-                    .block_on(upstream.next_event()),
-            ),
-        };
-        let event = match polled {
-            DisconnectRace::Disconnected => {
-                usage.disconnected();
-                return Ok(false);
-            }
-            DisconnectRace::Ready(Ok(Some(event))) => event,
-            DisconnectRace::Ready(Ok(None)) => {
-                usage.status(502, "stream_incomplete");
-                return Ok(false);
-            }
-            DisconnectRace::Ready(Err(error)) if !started => {
-                usage.router_error(&error);
-                return Err(pre_output_router_error_response(&error));
-            }
-            DisconnectRace::Ready(Err(error)) => {
-                usage.router_error(&error);
-                let response_id = match random_hex(16) {
-                    Ok(value) => format!("resp_{value}"),
-                    Err(_) => return Ok(false),
-                };
-                let failure = stream_failure_value(&error, &response_id);
-                if let Ok(frame) = sse_frame("response.failed", &failure) {
-                    let _ = write_stream_frames(downstream, &[frame]);
-                }
-                return Ok(false);
-            }
-        };
-        usage.observe(&event.body);
-        crate::services::context::record_event(state, route, body, &event.body);
-        let terminal = terminal_stream_event(&event.body);
-        let completed = event.event == "response.completed";
-        let failed = matches!(event.event.as_str(), "response.failed" | "error");
-        let frame = event.frame;
-        if started {
-            if write_stream_frames(downstream, &[frame]).is_err() {
-                return Ok(false);
-            }
-            if terminal {
-                state.backend.transport.runtime.block_on(upstream.finish());
-                return Ok(completed);
-            }
-            continue;
+/// One relay state machine for every upstream flavor.
+///
+/// The two upstream types differ only in how a decoded event becomes an SSE
+/// frame and whether the upstream wants a drain call on terminal; everything
+/// else — disconnect racing, pre-output buffering, failure conversion,
+/// header emission — is shared.
+enum RelayEvent {
+    /// End of stream without a terminal event.
+    Incomplete,
+    /// Downstream peer vanished mid-relay.
+    Disconnected,
+    /// Upstream failure before or after output flowed.
+    Failure(RouterError),
+    /// An SSE frame could not be produced for an event.
+    SerializationFailure,
+    /// A decodable upstream event with its wire frame.
+    Event { frame: Vec<u8>, body: Value },
+}
+
+/// Decode the next upstream event for one relay turn.
+trait RelaySource {
+    fn next(
+        &mut self,
+        runtime: &tokio::runtime::Runtime,
+        monitor: Option<&mut DisconnectMonitor>,
+    ) -> RelayEvent;
+    /// Drain the upstream on a terminal event (native only).
+    fn finish(self, runtime: &tokio::runtime::Runtime);
+}
+
+fn relay_terminal(event: &RelayEvent) -> bool {
+    let RelayEvent::Event { body, .. } = event else {
+        return false;
+    };
+    terminal_stream_event(body)
+}
+
+struct NativeRelay {
+    upstream: NativeStream,
+}
+
+impl RelaySource for NativeRelay {
+    fn next(
+        &mut self,
+        runtime: &tokio::runtime::Runtime,
+        monitor: Option<&mut DisconnectMonitor>,
+    ) -> RelayEvent {
+        match crate::services::disconnect::raced(runtime, monitor, self.upstream.next_event()) {
+            DisconnectRace::Disconnected => RelayEvent::Disconnected,
+            DisconnectRace::Ready(Ok(Some(event))) => RelayEvent::Event {
+                frame: event.frame,
+                body: event.body,
+            },
+            DisconnectRace::Ready(Ok(None)) => RelayEvent::Incomplete,
+            DisconnectRace::Ready(Err(error)) => RelayEvent::Failure(error),
         }
-        if failed {
-            if let Some(response) = pre_output_failure_response(&event.body) {
-                return Err(response);
-            }
-            if write_stream_head_with_headers(downstream, &response_headers).is_err()
-                || write_stream_frames(downstream, &[frame]).is_err()
-            {
-                return Ok(false);
-            }
-            return Ok(false);
-        }
-        let (output_emitted, tool_activity) = stream_event_activity(&event.body);
-        pending_bytes = pending_bytes.saturating_add(frame.len());
-        pending.push(frame);
-        if pending.len() > MAX_PRE_OUTPUT_BUFFER_EVENTS
-            || pending_bytes > MAX_PRE_OUTPUT_BUFFER_BYTES
-        {
-            return Err(json_error_response(
-                502,
-                status_text(502),
-                "EMP could not parse the upstream response stream.",
-                Some("pre_output_buffer_limit"),
-                &[],
-            ));
-        }
-        if output_emitted || tool_activity || terminal {
-            if write_stream_head_with_headers(downstream, &response_headers).is_err()
-                || write_stream_frames(downstream, &pending).is_err()
-            {
-                return Ok(false);
-            }
-            started = true;
-            pending.clear();
-            if terminal {
-                state.backend.transport.runtime.block_on(upstream.finish());
-                return Ok(completed);
-            }
-        }
+    }
+
+    fn finish(self, runtime: &tokio::runtime::Runtime) {
+        runtime.block_on(self.upstream.finish());
     }
 }
 
-fn relay_external_stream(
-    downstream: &mut TcpStream,
-    state: &ServerState,
-    route: &ResolvedRoute,
-    body: &Value,
-    incoming: &BTreeMap<String, String>,
-    mut upstream: ExternalStream,
+struct ExternalRelay {
+    upstream: ExternalStream,
+}
+
+impl RelaySource for ExternalRelay {
+    fn next(
+        &mut self,
+        runtime: &tokio::runtime::Runtime,
+        monitor: Option<&mut DisconnectMonitor>,
+    ) -> RelayEvent {
+        match crate::services::disconnect::raced(runtime, monitor, self.upstream.next_event()) {
+            DisconnectRace::Disconnected => RelayEvent::Disconnected,
+            DisconnectRace::Ready(Ok(Some(event))) => match sse_frame(&event.event, &event.body) {
+                Ok(frame) => RelayEvent::Event {
+                    frame,
+                    body: event.body,
+                },
+                Err(_) => RelayEvent::SerializationFailure,
+            },
+            DisconnectRace::Ready(Ok(None)) => RelayEvent::Incomplete,
+            DisconnectRace::Ready(Err(error)) => RelayEvent::Failure(error),
+        }
+    }
+    fn finish(self, _runtime: &tokio::runtime::Runtime) {}
+}
+
+/// Shared relay inputs that do not change per upstream flavor.
+struct RelayContext<'a> {
+    downstream: &'a mut TcpStream,
+    state: &'a ServerState,
+    route: &'a ResolvedRoute,
+    body: &'a Value,
+    incoming: &'a BTreeMap<String, String>,
+    response_headers: &'a BTreeMap<String, String>,
+    usage_owner: Option<&'a str>,
+    started_at: std::time::Instant,
+}
+
+fn relay_stream(
+    context: RelayContext<'_>,
+    mut source: impl RelaySource,
     monitor: Option<DisconnectMonitor>,
 ) -> Result<bool, Vec<u8>> {
+    let RelayContext {
+        downstream,
+        state,
+        route,
+        body,
+        incoming,
+        response_headers,
+        usage_owner,
+        started_at,
+    } = context;
     let mut usage = crate::services::observation::Observation::new(
         state,
         route,
         body,
         incoming,
-        None,
+        usage_owner,
         "responses",
     )
-    .started_at(upstream.request_started);
+    .started_at(started_at);
     let mut monitor = monitor.or_else(|| DisconnectMonitor::start(downstream).ok());
+    let runtime = &state.backend.transport.runtime;
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;
     let mut started = false;
     loop {
-        let polled = match monitor.as_mut() {
-            Some(monitor) => state
-                .backend
-                .transport
-                .runtime
-                .block_on(monitor.race(upstream.next_event())),
-            None => DisconnectRace::Ready(
-                state
-                    .backend
-                    .transport
-                    .runtime
-                    .block_on(upstream.next_event()),
-            ),
-        };
-        let event = match polled {
-            DisconnectRace::Disconnected => {
+        let event = source.next(runtime, monitor.as_mut());
+        let terminal = relay_terminal(&event);
+        let completed = terminal
+            && match &event {
+                RelayEvent::Event { body, .. } => {
+                    body.get("type").and_then(Value::as_str) == Some("response.completed")
+                }
+                _ => false,
+            };
+        match event {
+            RelayEvent::Disconnected => {
                 usage.disconnected();
                 return Ok(false);
             }
-            DisconnectRace::Ready(Ok(Some(event))) => event,
-            DisconnectRace::Ready(Ok(None)) => {
+            RelayEvent::Incomplete => {
                 usage.status(502, "stream_incomplete");
                 return Ok(false);
             }
-            DisconnectRace::Ready(Err(error)) if !started => {
+            RelayEvent::Failure(error) => {
                 usage.router_error(&error);
-                return Err(pre_output_router_error_response(&error));
-            }
-            DisconnectRace::Ready(Err(error)) => {
-                usage.router_error(&error);
+                if !started {
+                    return Err(pre_output_router_error_response(&error));
+                }
                 let response_id = match random_hex(16) {
                     Ok(value) => format!("resp_{value}"),
                     Err(_) => return Ok(false),
@@ -353,19 +341,8 @@ fn relay_external_stream(
                 }
                 return Ok(false);
             }
-        };
-        usage.observe(&event.body);
-        crate::services::context::record_event(state, route, body, &event.body);
-        let terminal = terminal_stream_event(&event.body);
-        let completed =
-            event.body.get("type").and_then(Value::as_str) == Some("response.completed");
-        let failed = matches!(
-            event.body.get("type").and_then(Value::as_str),
-            Some("response.failed" | "error")
-        );
-        let frame = match sse_frame(&event.event, &event.body) {
-            Ok(frame) => frame,
-            Err(_) if !started => {
+            RelayEvent::SerializationFailure => {
+                usage.status(500, "stream_error");
                 return Err(json_error_response(
                     500,
                     status_text(500),
@@ -374,53 +351,114 @@ fn relay_external_stream(
                     &[],
                 ));
             }
-            Err(_) => return Ok(false),
-        };
-        if started {
-            if write_stream_frames(downstream, &[frame]).is_err() {
-                return Ok(false);
-            }
-            if terminal {
-                return Ok(completed);
-            }
-            continue;
-        }
-        if failed {
-            if let Some(response) = pre_output_failure_response(&event.body) {
-                return Err(response);
-            }
-            if write_stream_head(downstream).is_err()
-                || write_stream_frames(downstream, &[frame]).is_err()
-            {
-                return Ok(false);
-            }
-            return Ok(false);
-        }
-        let (output_emitted, tool_activity) = stream_event_activity(&event.body);
-        pending_bytes = pending_bytes.saturating_add(frame.len());
-        pending.push(frame);
-        if pending.len() > MAX_PRE_OUTPUT_BUFFER_EVENTS
-            || pending_bytes > MAX_PRE_OUTPUT_BUFFER_BYTES
-        {
-            return Err(json_error_response(
-                502,
-                status_text(502),
-                "EMP could not parse the upstream response stream.",
-                Some("pre_output_buffer_limit"),
-                &[],
-            ));
-        }
-        if output_emitted || tool_activity || terminal {
-            if write_stream_head(downstream).is_err()
-                || write_stream_frames(downstream, &pending).is_err()
-            {
-                return Ok(false);
-            }
-            started = true;
-            pending.clear();
-            if terminal {
-                return Ok(completed);
+            RelayEvent::Event {
+                frame,
+                body: event_body,
+            } => {
+                usage.observe(&event_body);
+                crate::services::context::record_event(state, route, body, &event_body);
+                let failed = matches!(
+                    event_body.get("type").and_then(Value::as_str),
+                    Some("response.failed" | "error")
+                );
+                if started {
+                    if write_stream_frames(downstream, &[frame]).is_err() {
+                        return Ok(false);
+                    }
+                    if terminal {
+                        source.finish(runtime);
+                        return Ok(completed);
+                    }
+                    continue;
+                }
+                if failed && let Some(response) = pre_output_failure_response(&event_body) {
+                    return Err(response);
+                }
+                let (output_emitted, tool_activity) = stream_event_activity(&event_body);
+                pending_bytes = pending_bytes.saturating_add(frame.len());
+                pending.push(frame);
+                if pending.len() > MAX_PRE_OUTPUT_BUFFER_EVENTS
+                    || pending_bytes > MAX_PRE_OUTPUT_BUFFER_BYTES
+                {
+                    return Err(json_error_response(
+                        502,
+                        status_text(502),
+                        "EMP could not parse the upstream response stream.",
+                        Some("pre_output_buffer_limit"),
+                        &[],
+                    ));
+                }
+                if output_emitted || tool_activity || terminal {
+                    let head_ok = if response_headers.is_empty() {
+                        write_stream_head(downstream).is_ok()
+                    } else {
+                        write_stream_head_with_headers(downstream, response_headers).is_ok()
+                    };
+                    if !head_ok || write_stream_frames(downstream, &pending).is_err() {
+                        return Ok(false);
+                    }
+                    started = true;
+                    pending.clear();
+                    if terminal {
+                        source.finish(runtime);
+                        return Ok(completed);
+                    }
+                }
             }
         }
     }
+}
+
+fn relay_native_stream(
+    downstream: &mut TcpStream,
+    state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+    upstream: NativeStream,
+    monitor: Option<DisconnectMonitor>,
+) -> Result<bool, Vec<u8>> {
+    let response_headers = upstream.headers.clone();
+    let started_at = upstream.request_started;
+    let owner = upstream.usage_owner.clone();
+    relay_stream(
+        RelayContext {
+            downstream,
+            state,
+            route,
+            body,
+            incoming,
+            response_headers: &response_headers,
+            usage_owner: owner.as_deref(),
+            started_at,
+        },
+        NativeRelay { upstream },
+        monitor,
+    )
+}
+
+fn relay_external_stream(
+    downstream: &mut TcpStream,
+    state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+    upstream: ExternalStream,
+    monitor: Option<DisconnectMonitor>,
+) -> Result<bool, Vec<u8>> {
+    let started_at = upstream.request_started;
+    relay_stream(
+        RelayContext {
+            downstream,
+            state,
+            route,
+            body,
+            incoming,
+            response_headers: &BTreeMap::new(),
+            usage_owner: None,
+            started_at,
+        },
+        ExternalRelay { upstream },
+        monitor,
+    )
 }

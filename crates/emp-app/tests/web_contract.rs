@@ -64,6 +64,10 @@ fn complete_response(stream: &mut TcpStream) -> Vec<u8> {
 }
 
 fn request(port: u16, target: &str, headers: &[&str]) -> Vec<u8> {
+    request_with_method(port, "GET", target, headers)
+}
+
+fn request_with_method(port: u16, method: &str, target: &str, headers: &[&str]) -> Vec<u8> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to EMP");
     let host = if headers.iter().any(|header| {
         header
@@ -81,7 +85,7 @@ fn request(port: u16, target: &str, headers: &[&str]) -> Vec<u8> {
     };
     write!(
         stream,
-        "GET {target} HTTP/1.1\r\n{host}{headers}Connection: close\r\n\r\n"
+        "{method} {target} HTTP/1.1\r\n{host}{headers}Connection: close\r\n\r\n"
     )
     .expect("write HTTP request");
     complete_response(&mut stream)
@@ -103,11 +107,24 @@ fn header_text(response: &[u8]) -> String {
     String::from_utf8_lossy(&response[..separator]).into_owned()
 }
 
-fn cookie_from(response: &[u8]) -> String {
-    header_text(response)
-        .lines()
-        .find_map(|line| line.strip_prefix("Set-Cookie: "))
-        .expect("Set-Cookie header")
+/// Exchange a bootstrap token for a session through `POST /api/session`.
+fn bootstrap_session(port: u16, bootstrap: &str) -> Vec<u8> {
+    request_with_method(
+        port,
+        "POST",
+        "/api/session",
+        &[
+            &format!("X-EMP-Bootstrap: {bootstrap}"),
+            "Content-Length: 0",
+        ],
+    )
+}
+
+fn session_from(response: &[u8]) -> String {
+    let value: serde_json::Value = serde_json::from_slice(body(response)).expect("session JSON");
+    value["session"]
+        .as_str()
+        .expect("session token")
         .to_string()
 }
 
@@ -215,10 +232,11 @@ fn management_bootstrap_contract_is_python_compatible() {
     assert!(health.starts_with(b"HTTP/1.1 200 OK\r\n"));
     assert_eq!(body(&health), b"{\"status\":\"ok\"}");
 
-    let unauthenticated = request(port, "/", &[]);
-    assert!(unauthenticated.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));
-    let login = String::from_utf8_lossy(body(&unauthenticated));
-    assert!(login.contains("请从 EMP 打开管理页"));
+    // The page carries no secrets; its script exchanges the bootstrap token.
+    let page = request(port, "/", &[]);
+    assert!(page.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    let expected = std::fs::read(repository_index_path()).expect("read source Web UI");
+    assert_eq!(body(&page), expected.as_slice());
 
     let wrong_host = request(port, "/", &["Host: 127.0.0.2"]);
     assert!(wrong_host.starts_with(b"HTTP/1.1 403 Forbidden\r\n"));
@@ -229,26 +247,34 @@ fn management_bootstrap_contract_is_python_compatible() {
     );
     assert!(cross_origin.starts_with(b"HTTP/1.1 403 Forbidden\r\n"));
 
-    let login_redirect = request(port, &format!("/?bootstrap={token}"), &[]);
-    assert!(login_redirect.starts_with(b"HTTP/1.1 303 See Other\r\n"));
-    let cookie = cookie_from(&login_redirect);
-    assert!(cookie.starts_with("emp_session="));
-    assert!(cookie.contains("; HttpOnly; SameSite=Strict; Path=/; Max-Age="));
-    assert!(cookie.contains("; Max-Age="));
+    // The legacy query-string login neither sets a session nor spends the
+    // bootstrap token; only the script's POST below exchanges it.
+    let query_login = request(port, &format!("/?bootstrap={token}"), &[]);
+    assert!(query_login.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    assert!(
+        header_text(&query_login)
+            .lines()
+            .filter_map(|line| line.strip_prefix("Set-Cookie: "))
+            .all(|cookie| cookie.starts_with("emp_session=;") && cookie.ends_with("Max-Age=0"))
+    );
 
-    let reused_bootstrap = request(port, &format!("/?bootstrap={token}"), &[]);
+    let login = bootstrap_session(port, &token);
+    assert!(login.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    let session = session_from(&login);
+    assert_eq!(session.len(), 43);
+
+    let reused_bootstrap = bootstrap_session(port, &token);
     assert!(reused_bootstrap.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));
-
-    let cookie_pair = cookie.split(';').next().expect("session cookie pair");
-    let authenticated = request(port, "/", &[&format!("Cookie: {cookie_pair}")]);
-    assert!(authenticated.starts_with(b"HTTP/1.1 200 OK\r\n"));
-    let expected = std::fs::read(repository_index_path()).expect("read source Web UI");
-    assert_eq!(body(&authenticated), expected.as_slice());
-    assert!(cookie_from(&authenticated).starts_with("emp_session="));
 
     let api_unauthorized = request(port, "/api/config", &[]);
     assert!(api_unauthorized.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));
-    let api_authorized = request(port, "/api/config", &[&format!("Cookie: {cookie_pair}")]);
+    let cookie_only = request(
+        port,
+        "/api/config",
+        &[&format!("Cookie: emp_session={session}")],
+    );
+    assert!(cookie_only.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));
+    let api_authorized = request(port, "/api/config", &[&format!("X-EMP-Session: {session}")]);
     assert!(api_authorized.starts_with(b"HTTP/1.1 200 OK\r\n"));
 
     child.kill().expect("stop test EMP");
@@ -267,25 +293,22 @@ fn rejects_malformed_percent_escapes_and_non_ascii_bootstrap() {
         .map(|(_, token)| token.to_string())
         .expect("bootstrap token");
 
-    for target in [
-        "/?bootstrap=%2",
-        "/?bootstrap=%GG",
-        "/?bootstrap=%FF",
-        &format!("/?bootstrap={}中", token),
-    ] {
-        let response = request(port, target, &[]);
+    for supplied in ["%2", "%GG", "%FF", &format!("{token}中"), ""] {
+        let response = bootstrap_session(port, supplied);
         assert!(
             response.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"),
-            "{target}"
+            "{supplied}"
         );
     }
+    // Rejected attempts do not spend the real token.
+    assert!(bootstrap_session(port, &token).starts_with(b"HTTP/1.1 200 OK\r\n"));
 
     child.kill().expect("stop test EMP");
     child.wait().expect("reap test EMP");
 }
 
 #[test]
-fn valid_session_cookie_persists_across_restart() {
+fn valid_session_persists_across_restart() {
     let directory = TempDir::new().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     let (port, mut child, bootstrap_line) = spawn_emp(&config);
@@ -295,28 +318,13 @@ fn valid_session_cookie_persists_across_restart() {
         .rsplit_once("bootstrap=")
         .map(|(_, token)| token.to_string())
         .expect("bootstrap token");
-    let login = request(port, &format!("/?bootstrap={token}"), &[]);
-    let cookie = cookie_from(&login);
-    let session_value = cookie
-        .split(';')
-        .next()
-        .and_then(|pair| pair.split_once('='))
-        .map(|(_, value)| value.to_string())
-        .expect("session cookie value");
+    let session = session_from(&bootstrap_session(port, &token));
     child.kill().expect("stop first EMP");
     child.wait().expect("reap first EMP");
 
     let (port, mut child, _) = spawn_emp(&config);
-    let restored = request(
-        port,
-        "/",
-        &[&format!("Cookie: emp_session={session_value}")],
-    );
+    let restored = request(port, "/api/config", &[&format!("X-EMP-Session: {session}")]);
     assert!(restored.starts_with(b"HTTP/1.1 200 OK\r\n"));
-    assert_eq!(
-        body(&restored),
-        std::fs::read(repository_index_path()).expect("source UI")
-    );
     child.kill().expect("stop restarted EMP");
     child.wait().expect("reap restarted EMP");
 }

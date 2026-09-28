@@ -80,10 +80,6 @@ fn stream_error(message: &'static str) -> AnthropicError {
     }
 }
 
-pub fn anthropic_error_kind(error: &AnthropicError) -> AnthropicErrorKind {
-    error.kind
-}
-
 fn object(value: &Value) -> Option<&Map<String, Value>> {
     value.as_object()
 }
@@ -332,12 +328,11 @@ fn anthropic_content(value: Option<&Value>) -> Result<Vec<Value>, AnthropicError
             result.push(serde_json::json!({"type": "text", "text": refusal}));
             continue;
         }
-        if let Some(kind) = part_type.filter(|kind| TEXT_PART_TYPES.contains(kind)) {
+        if TEXT_PART_TYPES.contains(&part_type.unwrap_or("")) {
             let text = part.get("text").and_then(Value::as_str).ok_or_else(|| {
                 request_error("request projection failed: invalid Anthropic content")
             })?;
             result.push(serde_json::json!({"type": "text", "text": text}));
-            let _ = kind;
             continue;
         }
         if part_type != Some("input_image") {
@@ -573,21 +568,16 @@ fn json_schema_format(body: &Map<String, Value>) -> Result<Option<Value>, Anthro
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty());
     let schema = format.get("schema").filter(|schema| schema.is_object());
-    let strict = match format.get("strict") {
-        None | Some(Value::Null) => None,
-        Some(Value::Bool(value)) => Some(*value),
-        Some(_) => {
-            return Err(request_error(
-                "request projection failed: invalid structured output format",
-            ));
-        }
-    };
+    if matches!(format.get("strict"), Some(value) if !value.is_boolean() && !value.is_null()) {
+        return Err(request_error(
+            "request projection failed: invalid structured output format",
+        ));
+    }
     let (Some(_), Some(schema)) = (name, schema) else {
         return Err(request_error(
             "request projection failed: invalid structured output format",
         ));
     };
-    let _ = strict;
     Ok(Some(
         serde_json::json!({"type": "json_schema", "schema": schema.clone()}),
     ))

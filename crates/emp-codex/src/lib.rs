@@ -11,6 +11,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod executable_trust;
 pub mod history;
 pub mod management_views;
 pub mod merged_catalog;

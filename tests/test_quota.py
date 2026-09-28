@@ -47,6 +47,90 @@ class QuotaTests(unittest.TestCase):
             self.assertEqual(trusted, binary.resolve())
             self.assertEqual(identity, (binary.stat().st_dev, binary.stat().st_ino))
 
+    @unittest.skipIf(os.name == "nt", "Unix path permission checks do not apply")
+    def test_codex_trust_matches_the_shared_executable_rule(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            binary = root / "codex"
+            binary.write_text("#!/bin/sh\n", encoding="utf-8")
+            binary.chmod(0o4755)
+            with self.assertRaisesRegex(quota_module.QuotaError, "not trusted"):
+                _trusted_codex_binary(str(binary))
+
+            sticky = root / "sticky"
+            sticky.mkdir()
+            owned = sticky / "codex"
+            owned.write_text("#!/bin/sh\n", encoding="utf-8")
+            owned.chmod(0o755)
+            sticky.chmod(0o1777)
+            try:
+                self.assertEqual(_trusted_codex_binary(str(owned))[0], owned.resolve())
+            finally:
+                sticky.chmod(0o700)
+
+            private = quota_module._private_groups(os.getuid())
+            shared = next((gid for gid in os.getgroups() if not private(gid)), None)
+            if shared is not None:
+                owned.chmod(0o775)
+                os.chown(owned, -1, shared)
+                with self.assertRaisesRegex(quota_module.QuotaError, "path is writable"):
+                    _trusted_codex_binary(str(owned))
+
+    @unittest.skipIf(os.name == "nt", "Unix path permission checks do not apply")
+    def test_private_group_needs_every_member_trusted(self):
+        import grp
+
+        accounts = [
+            ("me", os.getuid(), 5000),
+            ("eve", os.getuid() + 7919, 5000),
+            ("solo", os.getuid(), 5001),
+        ]
+
+        def group(gid):
+            members = {5000: [], 5001: [], 5002: ["eve"], 5003: ["me"]}
+            if gid not in members:
+                raise KeyError(gid)
+            return grp.struct_group(("g%d" % gid, "x", gid, members[gid]))
+
+        with patch.object(quota_module, "_enumerate_accounts", return_value=accounts), patch.object(
+            grp, "getgrgid", side_effect=group
+        ):
+            private = quota_module._private_groups(os.getuid())
+            # eve's primary group, though gr_mem is empty.
+            self.assertFalse(private(5000))
+            self.assertTrue(private(5001))
+            self.assertFalse(private(5002))
+            self.assertTrue(private(5003))
+            self.assertFalse(private(5999))
+        with patch.object(quota_module, "_enumerate_accounts", return_value=None):
+            self.assertFalse(quota_module._private_groups(os.getuid())(5001))
+
+    @unittest.skipIf(os.name == "nt", "Unix passwd enumeration does not apply")
+    def test_passwd_enumeration_that_fails_part_way_is_not_complete(self):
+        def run(steps):
+            steps = iter(steps)
+
+            def next_entry():
+                step = next(steps, None)
+                if isinstance(step, Exception):
+                    raise step
+                return step
+
+            return quota_module._collect_entries(next_entry)
+
+        self.assertEqual(run([("root", 0, 0), False, ("me", 1000, 1000)]), [("root", 0, 0), ("me", 1000, 1000)])
+        # getpwent NULL with errno set after some entries.
+        self.assertIsNone(run([("root", 0, 0), OSError(5, "EIO"), ("eve", 1002, 1000)]))
+        self.assertIsNone(run([]))
+        # The real database enumerates cleanly, matching pwd.
+        import pwd
+
+        self.assertEqual(
+            sorted(quota_module._enumerate_accounts()),
+            sorted((user.pw_name, user.pw_uid, user.pw_gid) for user in pwd.getpwall()),
+        )
+
     def test_slow_account_does_not_block_another_account(self):
         entered = threading.Event()
         release = threading.Event()

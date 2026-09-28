@@ -2,7 +2,8 @@
 
 use crate::app::ServerState;
 use crate::http::request::Request;
-use crate::http::request::query_values;
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use emp_state::WebSession;
 use emp_state::load_or_create_web_session;
 use serde_json::Value;
@@ -12,14 +13,34 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+/// Single-use bootstrap tokens expire if the printed URL is never opened.
+pub(crate) const BOOTSTRAP_LIFETIME_SECONDS: f64 = 10.0 * 60.0;
+
+/// Export confirmations are issued immediately before a secret-bearing export.
+pub(crate) const EXPORT_CONFIRMATION_LIFETIME_SECONDS: f64 = 60.0;
+pub(crate) const EXPORT_CONFIRMATION_OPERATION: &str = "/api/migration/export";
+
+/// Management requests carry the origin-scoped session token in this header.
+pub(crate) const SESSION_HEADER: &str = "X-EMP-Session";
+
+/// The Web UI presents the single-use bootstrap token in this header.
+pub(crate) const BOOTSTRAP_HEADER: &str = "X-EMP-Bootstrap";
+
+/// Browsers send cookies to every port on the same host, so management no
+/// longer uses one. Responses that serve the UI expire any legacy cookie.
+pub(crate) const CLEAR_LEGACY_SESSION_COOKIE: &str =
+    "emp_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
+
 pub(crate) struct BootstrapToken {
     pub(crate) token: String,
     pub(crate) used: AtomicBool,
+    pub(crate) expires_at: f64,
 }
 
 impl BootstrapToken {
-    pub(crate) fn matches(&self, supplied: &str) -> bool {
-        constant_time_eq(supplied.as_bytes(), self.token.as_bytes())
+    pub(crate) fn matches(&self, supplied: &str, now: f64) -> bool {
+        let matched = constant_time_eq(supplied.as_bytes(), self.token.as_bytes());
+        matched && now.is_finite() && now < self.expires_at
     }
 
     pub(crate) fn consume(&self) -> bool {
@@ -27,14 +48,36 @@ impl BootstrapToken {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
+
+    /// Return a consumed token whose session could not be established, so
+    /// the same sign-in link can be retried once the fault clears.
+    pub(crate) fn release(&self) {
+        self.used.store(false, Ordering::Release);
+    }
+}
+
+struct ExportConfirmation {
+    token: String,
+    session_token: String,
+    operation: &'static str,
+    expires_at: f64,
 }
 
 pub(crate) struct SessionStore {
     pub(crate) session: Mutex<WebSession>,
     pub(crate) path: PathBuf,
+    export_confirmation: Mutex<Option<ExportConfirmation>>,
 }
 
 impl SessionStore {
+    pub(crate) fn new(session: WebSession, path: PathBuf) -> Self {
+        Self {
+            session: Mutex::new(session),
+            path,
+            export_confirmation: Mutex::new(None),
+        }
+    }
+
     pub(crate) fn contains(&self, supplied: Option<&str>, now: f64) -> bool {
         let Some(supplied) = supplied else {
             return false;
@@ -45,60 +88,106 @@ impl SessionStore {
         session.matches_at(supplied, now)
     }
 
-    pub(crate) fn refresh_header(&self, now: f64) -> Option<String> {
+    /// Replace the persisted session after a successful bootstrap, so every
+    /// browser login receives a fresh token and earlier ones stop working.
+    pub(crate) fn rotate(&self, now: f64) -> Option<(String, u64)> {
+        let mut session = self.session.lock().ok()?;
+        // Keep the previous session aside until the new one is persisted, so
+        // a failed rotation (disk full, permissions) leaves existing browsers
+        // signed in instead of deleting the only valid session.
+        let backup = self.path.with_extension("rotating");
+        let had_previous = match std::fs::rename(&self.path, &backup) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(_) => return None,
+        };
+        let rotated = match load_or_create_web_session(&self.path, now) {
+            Ok(rotated) if rotated.is_active_at(now) => rotated,
+            _ => {
+                if had_previous {
+                    let _ = std::fs::rename(&backup, &self.path);
+                }
+                return None;
+            }
+        };
+        if had_previous {
+            let _ = std::fs::remove_file(&backup);
+        }
+        *session = rotated;
+        if let Ok(mut confirmation) = self.export_confirmation.lock() {
+            *confirmation = None;
+        }
+        Some((
+            session.token().to_owned(),
+            session.remaining_seconds_at(now),
+        ))
+    }
+
+    pub(crate) fn issue_export_confirmation(
+        &self,
+        operation: &'static str,
+        now: f64,
+    ) -> Option<String> {
+        if !now.is_finite() {
+            return None;
+        }
         let session = self.session.lock().ok()?;
         if !session.is_active_at(now) {
             return None;
         }
-        Some(session_cookie(
-            session.token(),
-            session.remaining_seconds_at(now),
-        ))
+        let mut random = [0_u8; 32];
+        getrandom::getrandom(&mut random).ok()?;
+        let token = URL_SAFE_NO_PAD.encode(random);
+        let mut confirmation = self.export_confirmation.lock().ok()?;
+        *confirmation = Some(ExportConfirmation {
+            token: token.clone(),
+            session_token: session.token().to_owned(),
+            operation,
+            expires_at: now + EXPORT_CONFIRMATION_LIFETIME_SECONDS,
+        });
+        Some(token)
     }
 
-    pub(crate) fn refresh_or_rotate_header(&self, now: f64) -> Option<String> {
-        let mut session = self.session.lock().ok()?;
-        if !session.is_active_at(now) {
-            *session = load_or_create_web_session(&self.path, now).ok()?;
+    /// Consume the pending confirmation. Any presented value, correct or not,
+    /// spends it so a guessed or replayed value never gets a second attempt.
+    pub(crate) fn consume_export_confirmation(
+        &self,
+        supplied: &str,
+        operation: &str,
+        now: f64,
+    ) -> bool {
+        if !now.is_finite() {
+            return false;
         }
-        Some(session_cookie(
-            session.token(),
-            session.remaining_seconds_at(now),
-        ))
-    }
-}
-
-pub(crate) fn parse_session_cookie(header: &str) -> Option<String> {
-    let mut result = None;
-    for pair in header.split(';') {
-        let (name, raw_value) = pair.trim().split_once('=')?;
-        if name.is_empty()
-            || !name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
-        {
-            return None;
-        }
-        let raw_value = raw_value.trim();
-        let value = if raw_value.starts_with('"') || raw_value.ends_with('"') {
-            raw_value
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))?
-        } else {
-            raw_value
+        let Ok(session) = self.session.lock() else {
+            return false;
         };
-        if value.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
-            return None;
+        if !session.is_active_at(now) {
+            return false;
         }
-        if name.eq_ignore_ascii_case("emp_session") {
-            result = Some(value.to_owned());
-        }
+        let Ok(mut confirmation) = self.export_confirmation.lock() else {
+            return false;
+        };
+        let Some(pending) = confirmation.take() else {
+            return false;
+        };
+        let token_matches = constant_time_eq(supplied.as_bytes(), pending.token.as_bytes());
+        let session_matches =
+            constant_time_eq(session.token().as_bytes(), pending.session_token.as_bytes());
+        token_matches
+            && session_matches
+            && operation == pending.operation
+            && now < pending.expires_at
     }
-    result
 }
 
-pub(crate) fn session_cookie(token: &str, max_age: u64) -> String {
-    format!("emp_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}")
+pub(crate) fn session_header_value(request: Request<'_>) -> Option<String> {
+    if request.header_count(SESSION_HEADER) != 1 {
+        return None;
+    }
+    let value = request.header(SESSION_HEADER)?;
+    (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_graphic()))
+        .then(|| value.to_owned())
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -112,13 +201,11 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     difference == 0
 }
 
-pub(crate) fn bootstrap_value(target: &str) -> Option<String> {
-    let values = query_values(target, "bootstrap");
-    (values.len() == 1 && values[0].is_ascii()).then(|| values[0].clone())
-}
-
 pub(crate) fn same_origin(request: Request<'_>, port: u16) -> bool {
     let allowed_hosts = [format!("127.0.0.1:{port}"), format!("localhost:{port}")];
+    if request.header_count("Host") != 1 || request.header_count("Origin") > 1 {
+        return false;
+    }
     let Some(host) = request.header("Host") else {
         return false;
     };
@@ -211,8 +298,11 @@ pub(crate) fn proxy_allowed(request: Request<'_>, state: &ServerState, now: f64)
     if !same_origin(request, state.port) {
         return false;
     }
-    let supplied_cookie = request.session_cookie();
-    state.sessions.contains(supplied_cookie.as_deref(), now)
+    if request.header_count("Authorization") > 1 {
+        return false;
+    }
+    let supplied_session = request.session_token();
+    state.sessions.contains(supplied_session.as_deref(), now)
         || valid_caller_authorization(
             request.header("Authorization"),
             &state.backend.accounts.native_auth_path,

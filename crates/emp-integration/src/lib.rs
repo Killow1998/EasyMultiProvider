@@ -473,7 +473,7 @@ impl IntegrationManager {
     }
 
     fn read_config(&self) -> Result<(String, bool), IntegrationError> {
-        match fs::read_to_string(&self.config_path) {
+        match read_text_limited(&self.config_path, MAX_CODEX_CONFIG_BYTES) {
             Ok(value) => {
                 states(&value)?;
                 Ok((value, true))
@@ -489,37 +489,31 @@ impl IntegrationManager {
         &self,
         current: &BTreeMap<String, FieldState>,
     ) -> Result<Option<LeaseRecord>, IntegrationError> {
-        let raw = match fs::read(&self.lease_path) {
+        let raw = match emp_state::read_file_limited(&self.lease_path, MAX_LEASE_BYTES) {
             Ok(raw) => raw,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(IntegrationError("unable to read integration lease")),
         };
-        let lease: LeaseRecord = serde_json::from_slice(&raw)
+        let mut lease: LeaseRecord = serde_json::from_slice(&raw)
             .map_err(|_| IntegrationError("unable to read integration lease"))?;
-        if lease.schema != LEASE_SCHEMA
-            || !matches!(lease.version, LEGACY_LEASE_VERSION | LEASE_VERSION)
-            || lease.config_path != absolute(&self.config_path)?.to_string_lossy()
-            || !matches!(
+        let lease_fields: &[&str] = if lease.version == LEGACY_LEASE_VERSION {
+            &LEGACY_MANAGED_FIELDS
+        } else {
+            &MANAGED_FIELDS
+        };
+        let known_shape = lease.schema == LEASE_SCHEMA
+            && matches!(lease.version, LEGACY_LEASE_VERSION | LEASE_VERSION)
+            && lease.config_path == absolute(&self.config_path)?.to_string_lossy()
+            && matches!(
                 lease.status.as_str(),
                 "prepared" | "active" | "restoring" | "restored"
-            )
-            || lease.fields.len()
-                != if lease.version == LEGACY_LEASE_VERSION {
-                    LEGACY_MANAGED_FIELDS.len()
-                } else {
-                    MANAGED_FIELDS.len()
-                }
-            || (if lease.version == LEGACY_LEASE_VERSION {
-                LEGACY_MANAGED_FIELDS.as_slice()
-            } else {
-                MANAGED_FIELDS.as_slice()
-            })
+            );
+        let managed_fields_complete = lease_fields
             .iter()
-            .any(|name| !lease.fields.contains_key(*name))
-        {
+            .all(|name| lease.fields.contains_key(*name));
+        if !known_shape || lease.fields.len() != lease_fields.len() || !managed_fields_complete {
             return Err(IntegrationError("unsupported integration lease"));
         }
-        let mut lease = lease;
         if lease.version == LEGACY_LEASE_VERSION {
             let sideband = current[REALTIME_SIDEBAND_FIELD].clone();
             lease.fields.insert(
@@ -764,6 +758,17 @@ fn random_hex(bytes: usize) -> String {
 }
 fn absolute(path: &Path) -> Result<PathBuf, IntegrationError> {
     std::path::absolute(path).map_err(|_| IntegrationError("integration path is invalid"))
+}
+
+/// Codex `config.toml` files are small; refuse to load anything absurd.
+pub(crate) const MAX_CODEX_CONFIG_BYTES: usize = 4 * 1024 * 1024;
+/// EMP-written lease and recovery records are a few KiB.
+pub(crate) const MAX_LEASE_BYTES: usize = 1024 * 1024;
+
+/// Read a UTF-8 text file of at most `limit` bytes.
+pub(crate) fn read_text_limited(path: &Path, limit: usize) -> std::io::Result<String> {
+    String::from_utf8(emp_state::read_file_limited(path, limit)?)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), IntegrationError> {

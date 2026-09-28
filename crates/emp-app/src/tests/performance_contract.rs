@@ -1,4 +1,4 @@
-use super::{canonical_root, request, session_cookie_header};
+use super::{canonical_root, request, session_header};
 use crate::lifecycle::ServerHandle;
 use crate::services::observation::request_tokens_per_second;
 use serde_json::{Value, json};
@@ -13,7 +13,7 @@ import json, os, sys
 root = os.environ["EMP_PYTHON_ORACLE_ROOT"]
 sys.path.insert(0, root)
 import easy_multi_provider
-assert easy_multi_provider.__version__ == "0.11.10", easy_multi_provider.__version__
+assert easy_multi_provider.__version__ == "0.11.11", easy_multi_provider.__version__
 from easy_multi_provider.performance import request_tokens_per_second
 cases = json.load(sys.stdin)
 json.dump([request_tokens_per_second(case["output_tokens"], case["duration_ms"]) for case in cases], sys.stdout)
@@ -188,7 +188,7 @@ fn responses_endpoint_records_schema3_full_request_tps_and_preserves_stream_timi
         native_auth_path,
     )
     .expect("start performance EMP");
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let body = serde_json::to_vec(&json!({
         "model":"gpt-6-luna",
         "input":"hello",

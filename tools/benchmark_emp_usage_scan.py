@@ -520,7 +520,7 @@ def run_runtime(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python-root", type=Path, required=True,
-                        help="explicit official Python EMP v0.11.10 checkout")
+                        help="explicit official Python EMP v0.11.11 checkout")
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--rust-binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -653,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
             "results": results,
             "versions": {
                 "python_root": str(python_root),
-                "python_emp": "0.11.10",
+                "python_emp": "0.11.11",
                 "rust_binary": str(rust_binary),
             },
         }

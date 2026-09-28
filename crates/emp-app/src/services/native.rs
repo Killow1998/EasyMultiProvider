@@ -197,10 +197,8 @@ fn open_stream_result_with_monitor(
             Ok(headers)
         },
     );
-    let result = match monitor {
-        Some(monitor) => state.backend.transport.runtime.block_on(monitor.race(open)),
-        None => DisconnectRace::Ready(state.backend.transport.runtime.block_on(open)),
-    };
+    let result =
+        crate::services::disconnect::raced(&state.backend.transport.runtime, monitor, open);
     let result = match result {
         DisconnectRace::Ready(result) => result,
         DisconnectRace::Disconnected => return Ok(CancellableNativeStreamOpen::Disconnected),

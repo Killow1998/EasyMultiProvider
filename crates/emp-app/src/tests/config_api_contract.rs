@@ -34,7 +34,7 @@ fn settings_save_matches_python_state_and_preserves_credentials_across_restart()
         .lock()
         .expect("config")
         .clone();
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let mut valid = parsed_body(&request(&server, "/api/config", &[&cookie]));
     valid["native_model_context_windows"] = json!({"native":150000});
     valid["providers"][0]["name"] = json!("Edited provider");
@@ -227,7 +227,7 @@ fn startup_and_save_move_duplicate_visibility_to_native_without_touching_auth() 
         native_path.clone(),
     )
     .expect("restart");
-    let cookie = session_cookie_header(&restarted);
+    let cookie = session_header(&restarted);
     let mut public = parsed_body(&request(&restarted, "/api/config", &[&cookie]));
     assert_eq!(public["native_hidden_models"], json!(["native"]));
     assert_eq!(public["accounts"][0]["hidden_models"], json!([]));
@@ -300,7 +300,7 @@ fn failed_config_commit_restores_provider_secret_and_keeps_memory_snapshot() {
             .expect("encrypted key path"),
     );
     let encrypted = std::fs::read(key_path).expect("old encrypted key");
-    let cookie = session_cookie_header(&server);
+    let cookie = session_header(&server);
     let mut incoming = parsed_body(&request(&server, "/api/config", &[&cookie]));
     incoming["providers"][0]["api_key"] = json!("replacement-fixture-key");
     let protected = root.join("protected.txt");

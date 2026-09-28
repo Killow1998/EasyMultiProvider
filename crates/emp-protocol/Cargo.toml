@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "emp-protocol"
 version.workspace = true
 edition.workspace = true
@@ -9,4 +10,5 @@ base64 = "0.22"
 ring = "0.17.14"
 serde_json.workspace = true
 sha2 = "0.10.9"
+regex = "1.13.1"
 url = "2.5.7"

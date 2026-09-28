@@ -447,6 +447,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "time",
+ "zstd",
 ]
 
 [[package]]
@@ -488,6 +489,7 @@ name = "emp-protocol"
 version = "0.12.1"
 dependencies = [
  "base64 0.22.1",
+ "regex",
  "ring",
  "serde_json",
  "sha2 0.10.9",
