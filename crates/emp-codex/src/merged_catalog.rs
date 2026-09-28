@@ -316,7 +316,11 @@ fn external_entry(model: &Value, template: &Value, provider: &Value) -> Value {
         // labels and the management UI show what Codex will actually use.
         entry["effective_context_window_percent"] = model
             .get("effective_context_window_percent")
-            .filter(|value| value.as_f64().is_some_and(|value| value > 0.0 && value <= 100.0))
+            .filter(|value| {
+                value
+                    .as_f64()
+                    .is_some_and(|value| value > 0.0 && value <= 100.0)
+            })
             .cloned()
             .unwrap_or(json!(DEFAULT_EFFECTIVE_CONTEXT_PERCENT));
     }

@@ -11,14 +11,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-const COMPATIBILITY: &[&str] = &[
-    "recommended",
-    "supported",
-    "unverified",
-    "unsupported",
-    "unavailable",
-    "unknown",
-];
+const COMPATIBILITY: &[&str] = &["supported", "unsupported", "unavailable", "unknown"];
 const RUNTIME_SOURCES: &[&str] = &[
     "configured",
     "codex_app",
@@ -381,7 +374,6 @@ fn runtime_report(state: &ServerState) -> Value {
                 "compatibility": choice(object.get("status").and_then(Value::as_str), COMPATIBILITY),
                 "source": choice(object.get("source").and_then(Value::as_str), RUNTIME_SOURCES),
                 "selected": object.get("helper").and_then(Value::as_bool) == Some(true),
-                "targeted": object.get("targeted").and_then(Value::as_bool) == Some(true),
             }))
         })
         .collect::<Vec<_>>();
@@ -510,7 +502,7 @@ mod tests {
 
     #[test]
     fn support_report_allowlists_reject_unknown_values() {
-        assert_eq!(choice(Some("recommended"), COMPATIBILITY), "recommended");
+        assert_eq!(choice(Some("supported"), COMPATIBILITY), "supported");
         assert_eq!(choice(Some("secret-path"), COMPATIBILITY), "unknown");
         assert_eq!(choice(Some("invalid"), CREDENTIAL_STATES), "invalid");
         assert_eq!(choice(None, CREDENTIAL_STATES), "unknown");

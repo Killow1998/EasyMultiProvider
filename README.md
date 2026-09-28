@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/Killow1998/EasyMultiProvider/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/Killow1998/EasyMultiProvider"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/Killow1998/EasyMultiProvider"></a>
-  <img alt="Codex CLI 0.149.x–0.156.x" src="https://img.shields.io/badge/Codex%20CLI-0.149.x--0.156.x-blue">
+  <img alt="Codex 0.149.0+" src="https://img.shields.io/badge/Codex-0.149.0%2B-blue">
   <img alt="Windows Linux macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey">
 </p>
 
@@ -93,7 +93,7 @@ For an API Provider, pull the upstream model list, choose the models you want, a
 
 Click **Apply EMP to Codex**.
 
-EMP scans known Codex runtimes, shows their versions, and lets you select compatible clients. Multiple selected clients and workspaces can run concurrently.
+EMP writes its settings to the shared `~/.codex/config.toml`, so every Codex client (CLI, App, IDE extensions) picks them up. Multiple clients and workspaces can run concurrently.
 
 ### 5. Select a model normally
 
@@ -156,17 +156,15 @@ The catalog display and EMP request checks use the same effective window.
 
 The current source version is **v0.11.10**.
 
-EMP supports Codex CLI **0.149.x through 0.156.x**; **0.156.1 is recommended**.
+EMP works with Codex **0.149.0 and newer**. There is no client to choose: EMP only edits the shared `config.toml`, which every Codex client reads. If an older Codex sends a request, EMP answers with an error telling you to update Codex.
 
-On the first integration-status load, EMP performs a bounded scan of known locations for:
+To query account quota, EMP runs a supported Codex it finds in these locations (a configured binary wins):
 
 - the Codex App runtime,
 - the active `.codex` managed runtime,
 - OpenAI's VS Code / Cursor extension runtime,
 - a standalone `codex` on `PATH`,
 - and, on Linux, `$CODEX_HOME/plugins/.plugin-appserver/codex`.
-
-Detected runtimes are deduplicated. Unsupported or unreadable runtimes remain visible but cannot be selected; eligible pre-release or newer versions are shown as unverified.
 
 EMP treats a persistent Codex App Server as externally owned. Enabling, restoring, refreshing, or checking integration files does **not** stop, start, or restart Codex.
 

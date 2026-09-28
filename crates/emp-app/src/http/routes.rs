@@ -77,7 +77,23 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     } else {
         None
     };
-    let response = if gated_mutation && permit.is_none() {
+    let outdated_codex = path
+        .starts_with("/v1/")
+        .then(|| request.header("User-Agent"))
+        .flatten()
+        .and_then(emp_codex::runtime_inventory::outdated_codex_client);
+    let response = if let Some(version) = outdated_codex {
+        let minimum = emp_codex::runtime_inventory::minimum_codex();
+        Some(json_error_response(
+            426,
+            status_text(426),
+            &format!(
+                "EMP does not support Codex {version}. Please update Codex to {minimum} or newer."
+            ),
+            Some("unsupported_codex_version"),
+            &[],
+        ))
+    } else if gated_mutation && permit.is_none() {
         Some(json_error_response(
             503,
             status_text(503),
@@ -141,10 +157,7 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
             }
             Some(request)
                 if request.method == RequestMethod::Post
-                    && matches!(
-                        request.raw_path(),
-                        "/api/runtime/scan" | "/api/runtime/select"
-                    ) =>
+                    && request.raw_path() == "/api/runtime/scan" =>
             {
                 Some(crate::api::runtime::management_request(
                     &mut stream,

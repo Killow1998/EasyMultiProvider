@@ -249,10 +249,7 @@ button[data-icon]{display:inline-flex}
   <div class="integration-card-header"><span id="integration_badge" class="pill" data-i18n="loading">加载中</span><h3 id="integration_title" data-i18n="integration_status">Codex 状态</h3></div>
   <p id="integration_summary" class="muted" data-i18n="integration_loading">正在读取状态…</p>
   <p id="codex_compatibility" class="muted" hidden></p>
-  <div id="codex_runtimes" class="runtime-list"></div>
-  <p id="codex_runtime_dirty" class="muted" hidden></p>
   <div class="integration-actions">
-    <div class="action-group"><span class="action-group-label" data-i18n="client_scope">客户端</span><div class="runtime-controls"><button id="codex_runtime_save" class="secondary" data-icon="save" onclick="saveCodexRuntimeSelection()" data-i18n="save_runtimes">保存选择</button><button class="secondary" data-icon="check" onclick="useAutomaticCodexRuntimes()" data-i18n="automatic_runtimes">选择全部</button><button id="codex_runtime_scan" class="secondary" data-icon="refresh" onclick="scanCodexRuntimes()" data-i18n="rescan_runtimes">重新扫描</button></div></div>
     <div class="action-group"><span class="action-group-label" data-i18n="emp_scope">EMP</span><div class="toolbar"><button id="integration_toggle" data-icon="check" data-action="enable" onclick="confirmIntegrationAction(this.dataset.action)" data-i18n="enable_codex" disabled>启用 EMP</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">性能</button><button class="secondary" data-icon="usage" onclick="openUsage()" data-i18n="usage">用量与估算</button></div></div>
     <div class="action-group search-toggle"><span class="action-group-label" data-i18n="search_scope">工具</span><label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="saveSubscriptionSearch()"><span data-i18n="enable_subscription_search">联网搜索</span></label></div>
   </div>
@@ -328,7 +325,6 @@ let quotaUpdateRunning = false;
 let diagnosticsTimer = null;
 let diagnosticsRequest = 0;
 let supportReportRequest = 0;
-let runtimeSelectionDraft = null;
 const expandedModelGroups = new Set();
 const refreshErrors = {};
 const refreshingAccounts = new Set();
@@ -772,74 +768,19 @@ function renderIntegration(info) {
   };
   const view = views[configuration.state] || views.unavailable;
   $('integration_summary').textContent = view[1];
-  const runtimes = Array.isArray(compatibility.runtimes) ? compatibility.runtimes : [];
-  const recommended = compatibility.recommended || '0.154.0';
+  // Every Codex from the minimum on reads the same config.toml; only an older one needs attention.
+  const minimum = compatibility.minimum || '0.149.0';
   const installed = compatibility.installed ? ` ${compatibility.installed}` : '';
   const compatibilityMessage = compatibility.status === 'unsupported'
-    ? tr(`Codex${installed} 版本过旧，请升级到 ${recommended}。`, `Codex${installed} is too old. Update to ${recommended}.`)
-    : compatibility.status === 'unverified'
-      ? tr(`Codex${installed} 尚未验证，建议使用 ${recommended}。`, `Codex${installed} is unverified. ${recommended} is recommended.`)
-      : compatibility.status === 'unavailable' && !runtimes.length
-        ? tr('未找到 Codex，请重新扫描。', 'Codex was not found. Rescan.')
-        : '';
+    ? tr(`Codex${installed} 版本过旧，EMP 需要 ${minimum} 或更新版本，请升级 Codex。`, `Codex${installed} is too old. EMP needs ${minimum} or newer; please update Codex.`)
+    : tr(`支持 Codex ${minimum} 及以上版本。`, `Works with Codex ${minimum} and newer.`);
   $('codex_compatibility').textContent = compatibilityMessage;
-  $('codex_compatibility').hidden = !compatibilityMessage;
-  renderCodexRuntimes(compatibility);
+  $('codex_compatibility').hidden = false;
   $('codex_compatibility').dataset.state = compatibility.status || 'unknown';
   $('integration').dataset.state = configuration.state || 'unknown';
   $('integration_badge').textContent = view[0];
   $('integration_title').textContent = t('integration_status');
   renderIntegrationToggle();
-}
-function runtimeSourceLabel(source) {
-  return ({codex_app:tr('ChatGPT App（Codex）','ChatGPT App (Codex)'),managed:tr('Codex 托管 runtime','Managed Codex runtime'),vscode:tr('VS Code Codex 插件','VS Code Codex plugin'),vscode_insiders:tr('VS Code Insiders Codex 插件','VS Code Insiders Codex plugin'),cursor:tr('Cursor Codex 插件','Cursor Codex plugin'),configured:tr('指定 Codex','Configured Codex'),path_cli:'Codex CLI'}[source] || tr('Codex runtime','Codex runtime'));
-}
-function renderCodexRuntimes(compatibility) {
-  const runtimes = Array.isArray(compatibility.runtimes) ? compatibility.runtimes : [];
-  if (Array.isArray(compatibility.preferences) && compatibility.preferences.length) state.codex_runtime_sources = [...compatibility.preferences];
-  const preferences = state.codex_runtime_sources || ['auto'];
-  const automatic = preferences.includes('auto');
-  $('codex_runtimes').innerHTML = runtimes.length ? runtimes.map(runtime => {
-    const checked = runtime.selectable && (runtimeSelectionDraft !== null ? runtimeSelectionDraft.includes(runtime.source) : automatic || preferences.includes(runtime.source));
-    const version = runtime.installed ? `v${runtime.installed}` : tr('版本未知','Unknown version');
-    const status = ({recommended:tr('推荐版本','Recommended'),supported:tr('兼容版本','Supported'),unverified:tr('未验证版本','Unverified version'),unsupported:tr('版本过旧，不兼容；请升级此客户端','Too old; update this client'),unavailable:tr('程序不可用；请重新扫描','Executable unavailable; rescan'),unknown:tr('无法启动或读取版本；请检查此客户端','Could not launch or read version; check this client')}[runtime.status] || tr('状态未知','Unknown status'));
-    return `<label class="runtime-row" data-selectable="${runtime.selectable ? 'true' : 'false'}"><input type="checkbox" data-runtime-source value="${esc(runtime.source)}" ${checked ? 'checked' : ''} ${runtime.selectable ? '' : 'disabled'} onchange="stageCodexRuntimeSelection()"><span class="runtime-name" title="${esc(runtime.path || '')}"><strong>${esc(runtimeSourceLabel(runtime.source))}</strong> ${esc(version)} · ${esc(status)}</span></label>`;
-  }).join('') : `<p class="muted">${tr('未找到 Codex，请重新扫描。','Codex was not found. Rescan.')}</p>`;
-  renderRuntimeDraftHint();
-}
-function renderRuntimeDraftHint() {
-  $('codex_runtime_dirty').hidden = runtimeSelectionDraft === null;
-  $('codex_runtime_dirty').textContent = tr('选择尚未保存。','Selection not saved.');
-}
-function stageCodexRuntimeSelection() {
-  runtimeSelectionDraft = [...document.querySelectorAll('[data-runtime-source]:checked')].filter(input => !input.disabled).map(input => input.value);
-  renderRuntimeDraftHint();
-}
-async function selectCodexRuntimes(sources) {
-  const submittedDraft = runtimeSelectionDraft;
-  try {
-    const compatibility = await api('/api/runtime/select', {method:'POST', body:JSON.stringify({sources})});
-    state.codex_runtime_sources = [...(compatibility.preferences || sources)];
-    if (runtimeSelectionDraft === submittedDraft) runtimeSelectionDraft = null;
-    await loadIntegration();
-    notice(tr('Codex 客户端选择已保存','Codex client selection saved')); return true;
-  }
-  catch (error) { await loadIntegration(); notice(error.message, true); }
-  return false;
-}
-async function saveCodexRuntimeSelection() {
-  const sources = [...document.querySelectorAll('[data-runtime-source]:checked')].map(input => input.value);
-  if (!sources.length) { notice(tr('至少选择一个兼容的 Codex runtime','Select at least one compatible Codex runtime'), true); return false; }
-  return selectCodexRuntimes(sources);
-}
-async function useAutomaticCodexRuntimes() {
-  return selectCodexRuntimes(['auto']);
-}
-async function scanCodexRuntimes() {
-  $('codex_runtime_scan').disabled = true;
-  try { await api('/api/runtime/scan', {method:'POST', body:'{}'}); await loadIntegration(); notice(tr('Codex runtime 扫描完成','Codex runtime scan complete')); }
-  catch (error) { notice(error.message, true); }
-  finally { $('codex_runtime_scan').disabled = false; }
 }
 async function loadIntegration() {
   const started = Date.now();

@@ -165,23 +165,8 @@ pub(crate) fn sync_runtime(
     Ok(result)
 }
 
-pub(crate) fn runtime_preferences(state: &ServerState) -> Value {
-    state
-        .backend
-        .configuration
-        .config
-        .lock()
-        .ok()
-        .and_then(|config| config.get("codex_runtime_sources").cloned())
-        .unwrap_or(json!(["auto"]))
-}
-
 pub(crate) fn compatibility_snapshot(state: &ServerState, refresh: bool) -> Value {
-    state
-        .backend
-        .integration
-        .inventory
-        .snapshot(&runtime_preferences(state), refresh)
+    state.backend.integration.inventory.snapshot(refresh)
 }
 
 pub(crate) fn helper_binary(state: &ServerState) -> String {
@@ -189,11 +174,7 @@ pub(crate) fn helper_binary(state: &ServerState) -> String {
     if state.backend.accounts.codex_binary != "codex" {
         return state.backend.accounts.codex_binary.clone();
     }
-    state
-        .backend
-        .integration
-        .inventory
-        .executable(&runtime_preferences(state))
+    state.backend.integration.inventory.executable()
 }
 
 pub(crate) fn mark_pending(state: &ServerState, target: &str, detail: &str) -> Result<(), ()> {

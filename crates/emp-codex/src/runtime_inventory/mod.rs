@@ -6,10 +6,10 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+pub use version::{MINIMUM_CODEX, minimum_codex, outdated_codex_client};
 
 struct Cached {
     checked: Instant,
-    preferences: Value,
     value: Value,
 }
 pub struct RuntimeInventory {
@@ -33,11 +33,13 @@ impl RuntimeInventory {
             cache: Mutex::new(None),
         }
     }
-    pub fn snapshot(&self, preferences: &Value, refresh: bool) -> Value {
+    /// Every supported installation reads the same `config.toml`, so there is
+    /// nothing to choose: the helper is the configured binary, else the first
+    /// supported one found.
+    pub fn snapshot(&self, refresh: bool) -> Value {
         let mut cache = self.cache.lock().expect("runtime inventory");
         if !refresh
             && let Some(cached) = cache.as_ref()
-            && cached.preferences == *preferences
             && cached.checked.elapsed() < Duration::from_secs(60)
         {
             return cached.value.clone();
@@ -69,46 +71,19 @@ impl RuntimeInventory {
                     .collect::<Vec<_>>()
             });
             for (candidate, mut item) in chunk.iter().zip(observed) {
-                let selectable = matches!(
-                    item["status"].as_str(),
-                    Some("recommended" | "supported" | "unverified")
-                );
-                let automatic = preferences == &json!(["auto"]);
+                let supported = item["status"] == "supported";
                 item["source"] = json!(candidate.source);
                 item["name"] = json!(candidate.name);
                 item["path"] = json!(candidate.path);
-                item["selectable"] = json!(selectable);
+                item["supported"] = json!(supported);
                 item["helper"] = json!(false);
-                item["targeted"] = json!(
-                    selectable
-                        && (automatic
-                            || preferences
-                                .as_array()
-                                .is_some_and(|items| items.contains(&json!(candidate.source))))
-                );
                 runtimes.push(item);
             }
         }
         let chosen = runtimes
             .iter()
-            .position(|item| item["selectable"] == true && item["source"] == "configured")
-            .or_else(|| {
-                runtimes
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, item)| item["selectable"] == true)
-                    .min_by_key(|(index, item)| {
-                        (
-                            match item["status"].as_str() {
-                                Some("recommended") => 0,
-                                Some("supported") => 1,
-                                _ => 2,
-                            },
-                            *index,
-                        )
-                    })
-                    .map(|(index, _)| index)
-            });
+            .position(|item| item["supported"] == true && item["source"] == "configured")
+            .or_else(|| runtimes.iter().position(|item| item["supported"] == true));
         let mut value = if let Some(index) = chosen {
             runtimes[index]["helper"] = json!(true);
             runtimes[index].clone()
@@ -118,29 +93,25 @@ impl RuntimeInventory {
                 .cloned()
                 .unwrap_or_else(|| version::public(None, "unavailable"))
         };
-        value.as_object_mut().unwrap().retain(|key, _| {
-            matches!(
-                key.as_str(),
-                "installed" | "status" | "supported_range" | "recommended" | "source"
-            )
-        });
+        value
+            .as_object_mut()
+            .unwrap()
+            .retain(|key, _| matches!(key.as_str(), "installed" | "status" | "minimum" | "source"));
         if value.get("source").is_none() {
             value["source"] = json!("path_cli");
         }
         value["helper_source"] = chosen
             .map(|index| runtimes[index]["source"].clone())
             .unwrap_or(Value::Null);
-        value["preferences"] = preferences.clone();
         value["runtimes"] = json!(runtimes);
         *cache = Some(Cached {
             checked: Instant::now(),
-            preferences: preferences.clone(),
             value: value.clone(),
         });
         value
     }
-    pub fn executable(&self, preferences: &Value) -> String {
-        let value = self.snapshot(preferences, false);
+    pub fn executable(&self) -> String {
+        let value = self.snapshot(false);
         value["runtimes"]
             .as_array()
             .into_iter()
