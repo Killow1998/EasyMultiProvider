@@ -312,6 +312,13 @@ fn external_entry(model: &Value, template: &Value, provider: &Value) -> Value {
         entry["context_window"] = json!(context);
         entry["max_context_window"] = json!(context);
         entry["auto_compact_token_limit"] = json!(context * 4 / 5);
+        // Codex applies this share of the window to every model; state it so
+        // labels and the management UI show what Codex will actually use.
+        entry["effective_context_window_percent"] = model
+            .get("effective_context_window_percent")
+            .filter(|value| value.as_f64().is_some_and(|value| value > 0.0 && value <= 100.0))
+            .cloned()
+            .unwrap_or(json!(DEFAULT_EFFECTIVE_CONTEXT_PERCENT));
     }
     // The Python entry is first decorated without user overrides, then again
     // during family/route presentation. Preserve both passes for exact labels.
@@ -482,6 +489,8 @@ fn context_number(token: &str) -> bool {
     }
     parts.next().is_none()
 }
+/// Codex's own default when a catalog entry omits the percentage.
+pub(crate) const DEFAULT_EFFECTIVE_CONTEXT_PERCENT: i64 = 95;
 pub(crate) fn usable_context(model: &Value) -> i64 {
     let context = integer(model.get("context_window"));
     if context <= 0 {
@@ -495,7 +504,7 @@ pub(crate) fn usable_context(model: &Value) -> i64 {
                 .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
         })
         .filter(|value| *value != 0.0)
-        .unwrap_or(100.0);
+        .unwrap_or(DEFAULT_EFFECTIVE_CONTEXT_PERCENT as f64);
     if percentage > 0.0 && percentage <= 100.0 {
         ((context as f64 * percentage / 100.0).round_ties_even() as i64).max(1)
     } else {
