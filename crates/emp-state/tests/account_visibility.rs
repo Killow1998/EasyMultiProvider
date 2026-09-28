@@ -1,10 +1,10 @@
 use emp_state::{duplicate_account_status, migrate_duplicate_native_visibility, same_account_auth};
 use serde_json::{Value, json};
-use std::path::Path;
-use std::process::{Command, Stdio};
 
+/// A duplicate native login is detected by account_id overlap and its hidden
+/// models migrate into the native list exactly once (idempotent on re-run).
 #[test]
-fn duplicate_visibility_uses_python_identity_overlap_and_is_idempotent() {
+fn duplicate_visibility_uses_identity_overlap_and_is_idempotent() {
     let fixture = json!({
         "native":{"tokens":{"access_token":"native-token","account_id":"native-owner"}},
         "auths":{
@@ -46,31 +46,15 @@ fn duplicate_visibility_uses_python_identity_overlap_and_is_idempotent() {
         migrated["native_hidden_models"],
         json!(["already", "native-a", "native-b"])
     );
-    if let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") {
-        let mut child=Command::new(python).args(["-c",r#"
-import json,sys
-from unittest.mock import patch
-from easy_multi_provider import accounts
-fixture=json.load(sys.stdin)
-with patch.object(accounts,'_auth_file_identities',return_value=accounts._auth_identities(accounts._validate_auth(fixture['native']))), \
-     patch.object(accounts,'load_auth',side_effect=lambda account:accounts._validate_auth(fixture['auths'][account['id']])):
-    duplicates=accounts.duplicate_account_status(fixture['config']['accounts'])
-    migrated,changed=accounts.migrate_duplicate_native_visibility(fixture['config'],duplicates)
-    again,second_changed=accounts.migrate_duplicate_native_visibility(migrated,duplicates)
-json.dump({'duplicates':duplicates,'migrated':migrated,'changed':changed,'again':again,'second_changed':second_changed},sys.stdout)
-"#]).current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("Python visibility oracle");
-        serde_json::to_writer(child.stdin.take().expect("stdin"), &fixture).expect("fixture");
-        let output = child.wait_with_output().expect("oracle output");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let expected: Value = serde_json::from_slice(&output.stdout).expect("oracle JSON");
-        assert_eq!(
-            json!({"duplicates":duplicates,"migrated":migrated,"changed":changed,"again":again,"second_changed":second_changed}),
-            expected
-        );
-    }
+    // Untouched configuration sections and independent accounts are preserved.
+    assert_eq!(migrated["untouched"], fixture["config"]["untouched"]);
+    let hidden: Vec<&Value> = migrated["accounts"]
+        .as_array()
+        .expect("accounts")
+        .iter()
+        .map(|account| &account["hidden_models"])
+        .collect();
+    assert_eq!(hidden[2], &json!(["other-hidden"]));
+    assert_eq!(hidden[3], &json!(["leave-other"]));
+    assert_eq!(hidden[4], &json!(["invalid-hidden"]));
 }

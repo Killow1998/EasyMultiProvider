@@ -10,14 +10,13 @@ use emp_state::{
 };
 use serde::Deserialize;
 use serde_json::Value;
-use std::process::Command;
 
-/// New exports require a 12-byte password; the frozen Python fixture uses the
+/// New exports require a 12-byte password; the frozen vault fixture uses the
 /// legacy 8-byte minimum and still has to decrypt.
 const EXPORT_PASSWORD: &str = " synthetic-export-password ";
 
 #[derive(Deserialize)]
-struct PythonFixture {
+struct CryptoFixture {
     key: String,
     vault_plaintext_base64: String,
     vault_file_base64: String,
@@ -27,11 +26,11 @@ struct PythonFixture {
     migration_bundle_base64: String,
 }
 
-fn fixture() -> PythonFixture {
+fn fixture() -> CryptoFixture {
     serde_json::from_str(include_str!(
         "../../../contracts/state/python-crypto-interop.json"
     ))
-    .expect("valid Python fixture")
+    .expect("valid crypto fixture")
 }
 
 fn b64(value: &str) -> Vec<u8> {
@@ -39,7 +38,7 @@ fn b64(value: &str) -> Vec<u8> {
 }
 
 #[test]
-fn python_vault_and_migration_files_decrypt_in_rust() {
+fn frozen_vault_and_migration_files_decrypt_in_rust() {
     let fixture = fixture();
     let key = FernetKey::from_encoded(&fixture.key).expect("fixture key");
 
@@ -48,7 +47,7 @@ fn python_vault_and_migration_files_decrypt_in_rust() {
     assert_eq!(&vault_file[..VAULT_MAGIC.len()], VAULT_MAGIC);
     assert_eq!(
         decode_vault(&key, &vault_file)
-            .expect("Python vault decrypts")
+            .expect("frozen vault decrypts")
             .as_slice(),
         vault_plaintext
     );
@@ -61,14 +60,14 @@ fn python_vault_and_migration_files_decrypt_in_rust() {
     assert_eq!(fixture.migration_password.trim().len(), 8);
     assert_eq!(
         decode_migration(&fixture.migration_password, &migration_bundle)
-            .expect("Python migration bundle decrypts")
+            .expect("frozen migration bundle decrypts")
             .as_slice(),
         migration_plaintext
     );
 }
 
 #[test]
-fn rust_outputs_round_trip_and_keep_the_python_envelope_contract() {
+fn rust_outputs_round_trip_and_keep_the_envelope_contract() {
     let fixture = fixture();
     let key = FernetKey::from_encoded(&fixture.key).expect("fixture key");
     let plaintext = "synthetic Rust vault value \0 測試".as_bytes();
@@ -193,117 +192,4 @@ fn authentication_and_envelope_failures_are_bounded_and_secret_free() {
         assert!(!error.contains(&fixture.key));
         assert!(!error.contains(&fixture.migration_password));
     }
-}
-
-#[test]
-fn rust_ciphertext_can_be_checked_by_the_python_oracle_when_configured() {
-    let Some(python) = std::env::var_os("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let fixture = fixture();
-    let key = FernetKey::from_encoded(&fixture.key).expect("fixture key");
-    let plaintext = "Rust to Python synthetic payload \0 測試".as_bytes();
-    let vault = encode_vault(&key, plaintext);
-    let salt: [u8; 16] = b64(&fixture.migration_salt_base64)
-        .try_into()
-        .expect("16-byte salt");
-    let migration = encode_migration(EXPORT_PASSWORD, &salt, plaintext).expect("migration encode");
-
-    let script = r#"
-import base64, json, sys
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-key, vault_b64, bundle_b64, password, expected_b64 = sys.argv[1:]
-expected = base64.b64decode(expected_b64)
-vault = base64.b64decode(vault_b64)
-assert vault.startswith(b'easy-multi-provider-v1\n')
-assert Fernet(key.encode()).decrypt(vault.split(b'\n', 1)[1]) == expected
-bundle = base64.b64decode(bundle_b64)
-magic = b'EMP-MIGRATION\x01\n'
-assert bundle.startswith(magic)
-envelope = json.loads(bundle[len(magic):].decode())
-salt = base64.b64decode(envelope['salt'], altchars=b'-_', validate=True)
-assert envelope['version'] == 2 and envelope['scrypt'] == {'n': 2**17, 'r': 8, 'p': 1}
-derived = Scrypt(salt=salt, length=32, n=2**17, r=8, p=1).derive(password.strip().encode())
-token = base64.b64decode(envelope['payload'], altchars=b'-_', validate=True)
-assert Fernet(base64.urlsafe_b64encode(derived)).decrypt(token) == expected
-"#;
-    let status = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .arg(&fixture.key)
-        .arg(STANDARD.encode(vault))
-        .arg(STANDARD.encode(migration))
-        .arg(EXPORT_PASSWORD)
-        .arg(STANDARD.encode(plaintext))
-        .status()
-        .expect("start Python compatibility oracle");
-    assert!(status.success(), "Python rejected Rust ciphertext");
-}
-
-/// End-to-end importer interop for v2 bundles: the real Rust exporter's output
-/// must pass the in-tree Python `read_bundle`, and the in-tree Python exporter's
-/// output must pass the Rust decoder, including provider credentials.
-#[test]
-fn real_exporters_and_importers_interoperate_on_v2_bundles_when_configured() {
-    let Some(python) = std::env::var_os("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let vault = emp_state::VaultStore::from_sources(
-        Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),
-        &directory.path().join("unused.key"),
-    )
-    .expect("vault store");
-    let config = emp_state::normalize_configuration(Some(&serde_json::json!({
-        "providers": [{"id": "deepseek", "base_url": "https://api.deepseek.com/v1",
-            "api_key": "synthetic-provider-key"}],
-        "models": [{"id": "deepseek/chat", "provider": "deepseek"}],
-    })))
-    .expect("configuration");
-    let groups = emp_state::ExportGroups::from_list(&["external"]).expect("export groups");
-    let rust_bundle =
-        emp_state::export_migration_bundle(&config, EXPORT_PASSWORD, &vault, Some(&groups), None)
-            .expect("Rust export");
-    let rust_path = directory.path().join("rust.emp");
-    let python_path = directory.path().join("python.emp");
-    std::fs::write(&rust_path, &rust_bundle).expect("write Rust bundle");
-
-    let script = r#"
-import sys
-from pathlib import Path
-from easy_multi_provider.config import normalize
-from easy_multi_provider.migration import export_bundle, read_bundle
-rust_path, python_path, password = sys.argv[1:]
-payload = read_bundle(Path(rust_path).read_bytes(), password)
-assert payload["provider_keys"] == {"deepseek": "synthetic-provider-key"}, payload["provider_keys"]
-config = normalize({
-    "providers": [{"id": "deepseek", "base_url": "https://api.deepseek.com/v1",
-        "api_key": "synthetic-python-key"}],
-    "models": [{"id": "deepseek/chat", "provider": "deepseek"}],
-})
-Path(python_path).write_bytes(export_bundle(config, Path("config.json"), password, ["external"]))
-"#;
-    let status = Command::new(python)
-        .current_dir(&repository)
-        .env("PYTHONPATH", &repository)
-        .arg("-c")
-        .arg(script)
-        .arg(&rust_path)
-        .arg(&python_path)
-        .arg(EXPORT_PASSWORD)
-        .status()
-        .expect("start Python importer");
-    assert!(
-        status.success(),
-        "Python importer rejected the Rust v2 bundle"
-    );
-
-    let python_bundle = std::fs::read(&python_path).expect("Python bundle");
-    let envelope = parse_envelope(&python_bundle).expect("Python envelope");
-    assert_eq!(envelope["version"], MIGRATION_ENVELOPE_VERSION);
-    let plaintext = decode_migration(EXPORT_PASSWORD, &python_bundle).expect("Rust decodes v2");
-    let payload: Value = serde_json::from_slice(&plaintext).expect("payload JSON");
-    assert_eq!(payload["provider_keys"]["deepseek"], "synthetic-python-key");
 }

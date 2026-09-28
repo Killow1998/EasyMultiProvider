@@ -1,24 +1,15 @@
 use emp_state::{normalize_account, normalize_context_windows, normalize_hidden_models};
 use serde_json::{Value, json};
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!(
         "../../../contracts/state/python-account-normalization.json"
     ))
-    .expect("valid synthetic Python account fixture")
-}
-
-fn outcome(result: Result<Value, emp_state::AccountError>) -> Value {
-    match result {
-        Ok(value) => json!({"expected": value}),
-        Err(error) => json!({"error": error.to_string()}),
-    }
+    .expect("valid synthetic account fixture")
 }
 
 #[test]
-fn account_normalization_matches_frozen_python_fixture() {
+fn account_normalization_matches_frozen_fixture() {
     let fixture = fixture();
     for case in fixture["hidden_models"]["valid"]
         .as_array()
@@ -161,103 +152,5 @@ fn quota_is_cloned_without_retaining_input_references() {
         normalize_account(&json!({"id": "none", "prefix": "none", "quota": []}))
             .expect("valid account")["quota"]
             .is_null()
-    );
-}
-
-#[test]
-fn account_normalization_matches_live_python_oracle_when_configured() {
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let fixture = fixture();
-    let script = r#"
-import json, sys
-from easy_multi_provider.accounts import (
-    normalize_account,
-    normalize_context_windows,
-    normalize_hidden_models,
-)
-fixture = json.load(sys.stdin)
-def outcome(function, case):
-    try:
-        return {"expected": function(case["input"], case["field"]) if "field" in case else function(case["input"])}
-    except Exception as exc:
-        return {"error": str(exc)}
-def account_outcome(case):
-    try:
-        return {"expected": normalize_account(case["input"])}
-    except Exception as exc:
-        return {"error": str(exc)}
-def hidden_outcome(case):
-    return outcome(lambda value, field="account.hidden_models": normalize_hidden_models(value, field), case)
-json.dump({
-    "hidden_models": [hidden_outcome(case) for case in fixture["hidden_models"]["valid"] + fixture["hidden_models"]["invalid"]],
-    "context_windows": [outcome(normalize_context_windows, case) for case in fixture["context_windows"]["valid"] + fixture["context_windows"]["invalid"]],
-    "accounts": [account_outcome(case) for case in fixture["accounts"]["valid"] + fixture["accounts"]["invalid"]],
-}, sys.stdout, ensure_ascii=False, separators=(",", ":"))
-"#;
-    let rust = json!({
-        "hidden_models": fixture["hidden_models"]["valid"]
-            .as_array()
-            .expect("valid hidden cases")
-            .iter()
-            .chain(fixture["hidden_models"]["invalid"].as_array().expect("invalid hidden cases"))
-            .map(|case| {
-                let result = normalize_hidden_models(case.get("input"), "account.hidden_models")
-                    .map(Value::from);
-                outcome(result)
-            })
-            .collect::<Vec<_>>(),
-        "context_windows": fixture["context_windows"]["valid"]
-            .as_array()
-            .expect("valid context cases")
-            .iter()
-            .chain(fixture["context_windows"]["invalid"].as_array().expect("invalid context cases"))
-            .map(|case| {
-                outcome(
-                    normalize_context_windows(case.get("input")).map(Value::Object),
-                )
-            })
-            .collect::<Vec<_>>(),
-        "accounts": fixture["accounts"]["valid"]
-            .as_array()
-            .expect("valid accounts")
-            .iter()
-            .chain(fixture["accounts"]["invalid"].as_array().expect("invalid accounts"))
-            .map(|case| outcome(normalize_account(&case["input"])))
-            .collect::<Vec<_>>(),
-    });
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut child = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .current_dir(root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn configured Python account oracle");
-    child
-        .stdin
-        .take()
-        .expect("Python stdin")
-        .write_all(
-            serde_json::to_string(&fixture)
-                .expect("fixture JSON")
-                .as_bytes(),
-        )
-        .expect("write Python account fixture");
-    let output = child
-        .wait_with_output()
-        .expect("wait for Python account oracle");
-    assert!(
-        output.status.success(),
-        "Python account oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let oracle: Value = serde_json::from_slice(&output.stdout).expect("Python account oracle JSON");
-    assert_eq!(
-        json!({"hidden_models": rust["hidden_models"], "context_windows": rust["context_windows"], "accounts": rust["accounts"]}),
-        oracle
     );
 }

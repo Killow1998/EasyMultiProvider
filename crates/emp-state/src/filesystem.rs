@@ -1,6 +1,8 @@
 //! Private master-key storage, encrypted vault files and bounded rollback.
 //!
-//! The format remains compatible with easy_multi_provider.vault. Runtime
+//! The on-disk format is the historical easy-multi-provider vault layout
+//! (`easy-multi-provider-v1` magic, Fernet tokens) that users already have on
+//! disk. Runtime
 //! composition constructs one VaultStore and passes it explicitly, avoiding
 //! process-global key-path state and environment races.
 

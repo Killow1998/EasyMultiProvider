@@ -1,4 +1,3 @@
-use base64::{Engine, engine::general_purpose::STANDARD};
 use emp_state::{
     MigrationError, VaultStore, account_auth_path, encode_migration, import_migration_bundle,
     load_configuration, normalize_configuration, save_configuration,
@@ -6,7 +5,6 @@ use emp_state::{
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tempfile::tempdir;
 
 const TEST_KEY: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
@@ -37,22 +35,6 @@ fn payload(config: Value, accounts: Value, provider_keys: Value) -> Value {
 
 fn vault(root: &Path) -> VaultStore {
     VaultStore::from_sources(Some(TEST_KEY), &root.join("unused.key")).expect("vault store")
-}
-
-fn normalize_secret_path(config: &mut Value) -> String {
-    let provider = &mut config["providers"][1];
-    let path = PathBuf::from(
-        provider["api_key_file"]
-            .as_str()
-            .expect("provider secret path"),
-    );
-    provider["api_key_file"] = Value::String(
-        path.file_name()
-            .expect("provider secret filename")
-            .to_string_lossy()
-            .into_owned(),
-    );
-    path.to_string_lossy().into_owned()
 }
 
 #[test]
@@ -298,154 +280,4 @@ fn failed_import_rolls_back_new_account_and_provider_credentials() {
         !root.join("target/state/secrets/deepseek.key.enc").exists(),
         "provider credential must roll back"
     );
-}
-
-#[test]
-fn migration_import_matches_live_python_oracle_when_configured() {
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let directory = tempdir().expect("temporary directory");
-    let root = root(&directory);
-    let python_path = root.join("python/config.json");
-    let rust_path = root.join("rust/config.json");
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("repository root")
-        .to_path_buf();
-    let script = r#"
-import base64
-import json
-import sys
-from pathlib import Path
-from easy_multi_provider.accounts import import_account, load_auth
-from easy_multi_provider.config import api_key, load, normalize, save
-from easy_multi_provider.migration import export_bundle, import_bundle
-
-path = Path(sys.argv[1])
-source_path = path.parent / "source.json"
-source = normalize({
-    "providers": [{"id": "deepseek", "base_url": "https://api.deepseek.com/v1", "api_key": "synthetic provider credential"}],
-    "models": [{"id": "deepseek/chat", "provider": "deepseek"}],
-    "catalog_presentations": {"deepseek/chat": {"catalog_alias": "Imported"}},
-    "native_hidden_models": ["native-imported"],
-})
-save(source, source_path)
-source = load(source_path)
-source["accounts"] = [import_account(
-    source,
-    {"id": "shared", "prefix": "route", "name": "Imported account"},
-    {"tokens": {"account_id": "same-account", "access_token": "NEW"}},
-    source_path,
-)]
-save(source, source_path)
-bundle = export_bundle(load(source_path), source_path, "migration-pass")
-target = normalize({
-    "port": 4299,
-    "providers": [{"id": "local", "base_url": "https://local.test/v1"}],
-    "models": [{"id": "local/model", "provider": "local"}],
-    "accounts": [{"id": "shared", "prefix": "current-account", "name": "Local account"}],
-    "catalog_presentations": {"current-account/model": {"catalog_alias": "Local"}},
-    "native_hidden_models": ["native-local"],
-})
-save(target, path)
-target = load(path)
-target["accounts"] = [import_account(
-    target,
-    {"id": "shared", "prefix": "current-account", "name": "Local account"},
-    {"tokens": {"account_id": "same-account", "access_token": "OLD"}},
-    path,
-)]
-save(target, path)
-result, summary = import_bundle(load(path), bundle, "migration-pass", path)
-secret = Path(result["providers"][1]["api_key_file"])
-secret_value = api_key(result["providers"][1])
-account_secret = load_auth(result["accounts"][0])["tokens"]["access_token"]
-account_path = Path(result["accounts"][0]["auth_file"])
-result["providers"][1]["api_key_file"] = secret.name
-result["accounts"][0]["auth_file"] = account_path.parent.name + "/" + account_path.name
-print(json.dumps({"bundle": base64.b64encode(bundle).decode(), "config": result,
-                  "secret": secret_value, "account_secret": account_secret,
-                  "summary": summary}, ensure_ascii=False))
-"#;
-    let output = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .arg(&python_path)
-        .current_dir(repository)
-        .env("EASY_MULTI_PROVIDER_MASTER_KEY", TEST_KEY)
-        .output()
-        .expect("run Python migration oracle");
-    assert!(
-        output.status.success(),
-        "Python oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let oracle: Value = serde_json::from_slice(&output.stdout).expect("Python oracle JSON");
-    let bundle = STANDARD
-        .decode(oracle["bundle"].as_str().expect("oracle bundle"))
-        .expect("oracle bundle base64");
-
-    let vault = vault(&root);
-    let mut current = normalize_configuration(Some(&json!({
-        "port": 4299,
-        "providers": [{"id": "local", "base_url": "https://local.test/v1"}],
-        "models": [{"id": "local/model", "provider": "local"}],
-        "accounts": [{"id": "shared", "prefix": "current-account", "name": "Local account"}],
-        "catalog_presentations": {"current-account/model": {"catalog_alias": "Local"}},
-        "native_hidden_models": ["native-local"]
-    })))
-    .expect("Rust current configuration");
-    let current_auth_path =
-        account_auth_path(&current, "shared", &rust_path).expect("Rust current auth path");
-    current["accounts"][0]["auth_file"] =
-        Value::String(current_auth_path.to_string_lossy().into_owned());
-    vault
-        .write_encrypted_json(
-            &current_auth_path,
-            &json!({"tokens": {"account_id": "same-account", "access_token": "OLD"}}),
-        )
-        .expect("write Rust current account");
-    save_configuration(&current, Some(&rust_path), &vault).expect("save Rust target");
-    let current = load_configuration(Some(&rust_path)).expect("load Rust target");
-    let (mut imported, summary) =
-        import_migration_bundle(&current, &bundle, PASSWORD, &rust_path, &vault)
-            .expect("Rust migration import");
-    let secret_path = normalize_secret_path(&mut imported);
-    let imported_auth_path = PathBuf::from(
-        imported["accounts"][0]["auth_file"]
-            .as_str()
-            .expect("Rust imported auth path"),
-    );
-    imported["accounts"][0]["auth_file"] = Value::String(format!(
-        "{}/{}",
-        imported_auth_path
-            .parent()
-            .and_then(Path::file_name)
-            .expect("Rust account directory")
-            .to_string_lossy(),
-        imported_auth_path
-            .file_name()
-            .expect("Rust auth filename")
-            .to_string_lossy()
-    ));
-    let rust_projection = json!({
-        "config": imported,
-        "secret": vault
-            .read_encrypted_text(Path::new(&secret_path))
-            .expect("Rust imported secret")
-            .as_str(),
-        "account_secret": vault
-            .read_encrypted_json(&imported_auth_path)
-            .expect("Rust imported account auth")["tokens"]["access_token"],
-        "summary": {
-            "accounts": summary.accounts,
-            "providers": summary.providers,
-            "models": summary.models
-        }
-    });
-    assert_eq!(rust_projection["config"], oracle["config"]);
-    assert_eq!(rust_projection["secret"], oracle["secret"]);
-    assert_eq!(rust_projection["summary"], oracle["summary"]);
 }

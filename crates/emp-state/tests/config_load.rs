@@ -47,7 +47,7 @@ fn error_suffix(error: &emp_state::ConfigError) -> String {
 }
 
 #[test]
-fn config_load_matches_frozen_python_fixture() {
+fn config_load_matches_frozen_fixture() {
     let _lock = ENV_LOCK.lock().expect("environment lock");
     let fixture = fixture();
     for case in fixture["invalid_json_cases"]
@@ -100,72 +100,6 @@ fn config_load_matches_frozen_python_fixture() {
 }
 
 #[test]
-fn config_load_matches_live_python_oracle_when_configured() {
-    let _lock = ENV_LOCK.lock().expect("environment lock");
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let directory = tempdir().expect("temporary oracle directory");
-    let root = temp_path(&directory);
-    let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let script = r#"
-import json, sys
-from pathlib import Path
-from easy_multi_provider.config import load
-try:
-    result = {"expected": load(Path(sys.argv[1]))}
-except Exception as exc:
-    result = {"error_type": type(exc).__name__}
-json.dump(result, sys.stdout, ensure_ascii=False, separators=(",", ":"))
-"#;
-    let cases = [
-        ("missing", None),
-        (
-            "valid",
-            Some(
-                serde_json::to_vec(&json!({
-                    "port": 5100,
-                    "secret_store_path": "secrets",
-                    "providers": [{
-                        "id": "example",
-                        "base_url": "https://example.com/v1",
-                        "api_key_file": "secrets/example.key.enc"
-                    }]
-                }))
-                .expect("valid configuration JSON"),
-            ),
-        ),
-        ("invalid-json", Some(b"{".to_vec())),
-        ("invalid-utf8", Some(vec![0xff])),
-    ];
-    for (name, contents) in cases {
-        let path = root.join(format!("{name}.json"));
-        if let Some(contents) = contents {
-            fs::write(&path, contents).expect("write oracle configuration");
-        }
-        let output = std::process::Command::new(&python)
-            .arg("-c")
-            .arg(script)
-            .arg(&path)
-            .current_dir(&project)
-            .output()
-            .expect("run Python load oracle");
-        assert!(
-            output.status.success(),
-            "Python load oracle failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let oracle: Value =
-            serde_json::from_slice(&output.stdout).expect("Python load oracle JSON");
-        let actual = match load_configuration(Some(&path)) {
-            Ok(value) => json!({"expected": value}),
-            Err(error) => json!({"error_type": error.python_type()}),
-        };
-        assert_eq!(actual, oracle, "case: {name}");
-    }
-}
-
-#[test]
 fn valid_json_is_normalized_and_private_paths_are_canonicalized() {
     let _lock = ENV_LOCK.lock().expect("environment lock");
     let directory = tempdir().expect("temporary directory");
@@ -204,7 +138,7 @@ fn valid_json_is_normalized_and_private_paths_are_canonicalized() {
 }
 
 #[test]
-fn config_path_and_default_load_follow_python_environment() {
+fn config_path_and_default_load_follow_environment_precedence() {
     let _lock = ENV_LOCK.lock().expect("environment lock");
     let directory = tempdir().expect("temporary directory");
     let root = temp_path(&directory);

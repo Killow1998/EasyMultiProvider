@@ -1,9 +1,7 @@
 use emp_state::{normalize_configuration, public_configuration_with_file_status};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::Path;
 
 fn normalized_fixture(secret_file: &Path) -> Value {
     let mut config = normalize_configuration(Some(&json!({
@@ -94,53 +92,4 @@ fn browser_projection_does_not_count_a_symlink_as_a_managed_secret() {
     let public = public_configuration_with_file_status(&config, &BTreeMap::new(), regular_file)
         .expect("public configuration");
     assert_eq!(public["providers"][1]["api_key_set"], false);
-}
-
-#[test]
-fn public_configuration_matches_live_python_oracle_when_configured() {
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let root = directory.path().canonicalize().expect("canonical root");
-    let secret_file = root.join("managed.key");
-    std::fs::write(&secret_file, b"synthetic-secret").expect("secret fixture");
-    let config = normalized_fixture(&secret_file);
-    let script = r#"
-import json, sys
-from easy_multi_provider.config import public_config
-json.dump(public_config(json.load(sys.stdin)), sys.stdout,
-          ensure_ascii=False, separators=(",", ":"))
-"#;
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut child = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .current_dir(repository)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn Python public-config oracle");
-    child
-        .stdin
-        .take()
-        .expect("Python stdin")
-        .write_all(
-            serde_json::to_string(&config)
-                .expect("fixture JSON")
-                .as_bytes(),
-        )
-        .expect("write fixture");
-    let output = child.wait_with_output().expect("wait for Python oracle");
-    assert!(
-        output.status.success(),
-        "Python public-config oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let oracle: Value = serde_json::from_slice(&output.stdout).expect("Python oracle JSON");
-    let rust =
-        public_configuration_with_file_status(&config, &BTreeMap::new(), |path| path.is_file())
-            .expect("Rust public configuration");
-    assert_eq!(rust, oracle);
 }

@@ -5,7 +5,6 @@ use emp_state::{
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use tempfile::tempdir;
 
@@ -267,95 +266,4 @@ fn save_uses_config_path_environment_without_reloading_vault() {
         }
     }
     assert!(configured.is_file());
-}
-
-#[test]
-fn config_save_matches_live_python_oracle_when_configured() {
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let directory = tempdir().expect("temporary directory");
-    let root = root(&directory);
-    let rust_path = root.join("rust/config.json");
-    let python_path = root.join("python/config.json");
-    let vault =
-        VaultStore::from_sources(Some(TEST_KEY), &root.join("unused.key")).expect("vault store");
-    let input = json!({
-        "port": 5100,
-        "secret_store_path": "secrets",
-        "providers": [{
-            "id": "deepseek",
-            "base_url": "https://api.deepseek.com/v1/chat/completions",
-            "api_key": "synthetic ünicode credential"
-        }]
-    });
-    save_configuration(&input, Some(&rust_path), &vault).expect("Rust save");
-
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("repository root")
-        .to_path_buf();
-    let script = r#"
-import json
-import sys
-from pathlib import Path
-from easy_multi_provider.config import save
-from easy_multi_provider.vault import read_encrypted_text
-
-path = Path(sys.argv[1])
-value = {
-    "port": 5100,
-    "secret_store_path": "secrets",
-    "providers": [{
-        "id": "deepseek",
-        "base_url": "https://api.deepseek.com/v1/chat/completions",
-        "api_key": "synthetic ünicode credential",
-    }],
-}
-save(value, path)
-saved = json.loads(path.read_text(encoding="utf-8"))
-secret = Path(saved["providers"][0]["api_key_file"])
-saved["providers"][0]["api_key_file"] = secret.name
-print(json.dumps({"config": saved, "secret": read_encrypted_text(secret)}, ensure_ascii=False))
-"#;
-    let output = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .arg(&python_path)
-        .current_dir(repository)
-        .env("EASY_MULTI_PROVIDER_MASTER_KEY", TEST_KEY)
-        .output()
-        .expect("run Python save oracle");
-    assert!(
-        output.status.success(),
-        "Python oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let python_projection: Value =
-        serde_json::from_slice(&output.stdout).expect("Python oracle JSON");
-
-    let mut rust_config: Value =
-        serde_json::from_slice(&fs::read(&rust_path).expect("Rust config bytes"))
-            .expect("Rust config JSON");
-    let rust_secret = PathBuf::from(
-        rust_config["providers"][0]["api_key_file"]
-            .as_str()
-            .expect("Rust secret path"),
-    );
-    rust_config["providers"][0]["api_key_file"] = Value::String(
-        rust_secret
-            .file_name()
-            .expect("Rust secret filename")
-            .to_string_lossy()
-            .into_owned(),
-    );
-    let rust_projection = json!({
-        "config": rust_config,
-        "secret": vault
-            .read_encrypted_text(&rust_secret)
-            .expect("Rust secret plaintext")
-            .as_str()
-    });
-    assert_eq!(rust_projection, python_projection);
 }

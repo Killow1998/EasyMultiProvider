@@ -1,9 +1,7 @@
 use emp_state::{account_auth_path, canonicalize_private_paths, normalize_configuration};
 use serde_json::{Value, json};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use tempfile::tempdir;
 
 #[cfg(unix)]
@@ -68,7 +66,7 @@ fn home_path() -> PathBuf {
 }
 
 #[test]
-fn private_paths_match_frozen_python_fixture() {
+fn private_paths_match_frozen_fixture() {
     let fixture = fixture();
     for case in fixture["cases"].as_array().expect("private-path cases") {
         if case["platform"] == "unix" && cfg!(not(unix)) {
@@ -139,71 +137,4 @@ fn account_auth_path_uses_config_parent_and_rejects_unsafe_ids() {
             .to_string(),
         "account.id must be a safe single path segment"
     );
-}
-
-#[test]
-fn private_paths_match_live_python_oracle_when_configured() {
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let fixture = fixture();
-    let script = r#"
-import json, sys
-from pathlib import Path
-from easy_multi_provider.config import _canonicalize_private_paths, normalize
-payload = json.load(sys.stdin)
-try:
-    config = _canonicalize_private_paths(normalize(payload["config"]), Path(payload["config_path"]))
-    outcome = {
-        "account_auth_file": config["accounts"][0]["auth_file"] if config["accounts"] else None,
-        "provider_api_key_file": config["providers"][0]["api_key_file"] if config["providers"] else None,
-    }
-except Exception as exc:
-    outcome = {"error_type": type(exc).__name__, "error": str(exc)}
-json.dump(outcome, sys.stdout, ensure_ascii=False, separators=(",", ":"))
-"#;
-    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for case in fixture["cases"].as_array().expect("private-path cases") {
-        if case["platform"] == "unix" && cfg!(not(unix)) {
-            continue;
-        }
-        let directory = tempdir().expect("temporary case directory");
-        let root = canonical_temp_path(&directory);
-        let config_path = create_case(&root, case);
-        let payload = json!({"config": case["config"], "config_path": config_path});
-        let mut child = Command::new(&python)
-            .arg("-c")
-            .arg(script)
-            .current_dir(&project)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn Python private-path oracle");
-        child
-            .stdin
-            .take()
-            .expect("Python stdin")
-            .write_all(
-                serde_json::to_string(&payload)
-                    .expect("private-path payload")
-                    .as_bytes(),
-            )
-            .expect("write private-path payload");
-        let output = child.wait_with_output().expect("wait for Python oracle");
-        assert!(
-            output.status.success(),
-            "Python private-path oracle failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let oracle: Value = serde_json::from_slice(&output.stdout).expect("Python oracle JSON");
-        let mut config = normalize_configuration(Some(&case["config"]))
-            .expect("valid private-path configuration");
-        assert_eq!(
-            outcome(&mut config, &config_path),
-            oracle,
-            "case: {}",
-            case["name"]
-        );
-    }
 }

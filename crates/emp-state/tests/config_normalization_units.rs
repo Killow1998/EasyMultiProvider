@@ -4,18 +4,16 @@ use emp_state::{
     normalize_subscription_search,
 };
 use serde_json::{Value, json};
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!(
         "../../../contracts/state/python-config-etag-normalization.json"
     ))
-    .expect("valid synthetic Python config/ETag fixture")
+    .expect("valid synthetic config/ETag fixture")
 }
 
 #[test]
-fn presentation_normalization_matches_python_fixture() {
+fn presentation_normalization_matches_fixture() {
     let fixture = fixture();
     let case = &fixture["presentations"];
     assert_eq!(
@@ -25,7 +23,7 @@ fn presentation_normalization_matches_python_fixture() {
 }
 
 #[test]
-fn search_and_runtime_selection_match_python_fixture() {
+fn search_and_runtime_selection_match_fixture() {
     let fixture = fixture();
     let search = &fixture["subscription_search"];
     assert_eq!(
@@ -48,7 +46,7 @@ fn search_and_runtime_selection_match_python_fixture() {
 }
 
 #[test]
-fn provider_identifiers_and_urls_match_python_fixture() {
+fn provider_identifiers_and_urls_match_fixture() {
     let fixture = fixture();
     for case in fixture["provider_ids"]["valid"]
         .as_array()
@@ -71,7 +69,7 @@ fn provider_identifiers_and_urls_match_python_fixture() {
 }
 
 #[test]
-fn configuration_failures_match_python_messages() {
+fn configuration_failures_are_bounded_and_specific() {
     let cases = [
         (
             normalize_catalog_presentations(Some(&json!([]))).unwrap_err(),
@@ -160,7 +158,7 @@ fn configuration_failures_match_python_messages() {
 }
 
 #[test]
-fn canonical_json_and_catalog_etag_match_python_bytes() {
+fn canonical_json_and_catalog_etag_are_stable_bytes() {
     let fixture = fixture();
     let case = &fixture["canonical_etag"];
     let canonical = canonical_catalog_json(&case["input"]).expect("canonical encoding");
@@ -172,116 +170,4 @@ fn canonical_json_and_catalog_etag_match_python_bytes() {
         catalog_etag(&case["input"]).expect("catalog ETag"),
         case["etag"].as_str().expect("ETag fixture")
     );
-}
-
-#[test]
-fn python_config_helpers_match_live_oracle_when_configured() {
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let fixture = fixture();
-    let script = r#"
-import hashlib, json, sys
-from easy_multi_provider.config import (
-    _normalize_catalog_presentations,
-    _normalize_subscription_search,
-    _normalize_codex_runtime_sources,
-    _validate_provider_base_url,
-    _validate_provider_id,
-)
-value = json.load(sys.stdin)
-catalog = value["canonical_etag"]["input"]
-canonical = json.dumps(catalog, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-def error_of(function, case):
-    try:
-        function(case["input"])
-    except Exception as exc:
-        return str(exc)
-    raise AssertionError("fixture expected an error")
-json.dump({
-    "presentations": _normalize_catalog_presentations(value["presentations"]["input"]),
-    "subscription_search": _normalize_subscription_search(value["subscription_search"]["input"], set()),
-    "runtime_sources": _normalize_codex_runtime_sources(value["runtime_sources"]["input"]),
-    "provider_ids": [_validate_provider_id(case["input"]) for case in value["provider_ids"]["valid"]],
-    "provider_id_errors": [error_of(_validate_provider_id, case) for case in value["provider_ids"]["invalid"]],
-    "provider_base_urls": [_validate_provider_base_url(case["input"]) for case in value["provider_base_urls"]["valid"]],
-    "provider_base_url_errors": [error_of(_validate_provider_base_url, case) for case in value["provider_base_urls"]["invalid"]],
-    "canonical_json": canonical,
-    "etag": '"emp-' + hashlib.sha256(canonical.encode("utf-8")).hexdigest() + '"',
-}, sys.stdout, ensure_ascii=False, separators=(",", ":"))
-"#;
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut child = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .current_dir(root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn configured Python oracle");
-    child
-        .stdin
-        .take()
-        .expect("Python stdin")
-        .write_all(
-            serde_json::to_string(&fixture)
-                .expect("fixture JSON")
-                .as_bytes(),
-        )
-        .expect("write Python fixture");
-    let output = child.wait_with_output().expect("wait for Python oracle");
-    assert!(
-        output.status.success(),
-        "Python oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let oracle: Value = serde_json::from_slice(&output.stdout).expect("Python oracle JSON");
-    let input = &fixture["canonical_etag"]["input"];
-    let rust = json!({
-        "presentations": normalize_catalog_presentations(Some(&fixture["presentations"]["input"]))
-            .expect("Rust presentations"),
-        "subscription_search": normalize_subscription_search(Some(
-            &fixture["subscription_search"]["input"]
-        ))
-        .expect("Rust subscription search"),
-        "runtime_sources": normalize_codex_runtime_sources(Some(
-            &fixture["runtime_sources"]["input"]
-        ))
-        .expect("Rust runtime sources"),
-        "provider_ids": fixture["provider_ids"]["valid"]
-            .as_array()
-            .expect("provider ID cases")
-            .iter()
-            .map(|case| normalize_provider_id(Some(&case["input"])).expect("Rust provider ID"))
-            .collect::<Vec<_>>(),
-        "provider_id_errors": fixture["provider_ids"]["invalid"]
-            .as_array()
-            .expect("invalid provider ID cases")
-            .iter()
-            .map(|case| normalize_provider_id(Some(&case["input"]))
-                .expect_err("Rust invalid provider ID")
-                .to_string())
-            .collect::<Vec<_>>(),
-        "provider_base_urls": fixture["provider_base_urls"]["valid"]
-            .as_array()
-            .expect("provider URL cases")
-            .iter()
-            .map(|case| normalize_provider_base_url(Some(&case["input"])).expect("Rust provider URL"))
-            .collect::<Vec<_>>(),
-        "provider_base_url_errors": fixture["provider_base_urls"]["invalid"]
-            .as_array()
-            .expect("invalid provider URL cases")
-            .iter()
-            .map(|case| normalize_provider_base_url(Some(&case["input"]))
-                .expect_err("Rust invalid provider URL")
-                .to_string())
-            .collect::<Vec<_>>(),
-        "canonical_json": String::from_utf8(
-            canonical_catalog_json(input).expect("Rust canonical JSON")
-        )
-        .expect("UTF-8 Rust canonical JSON"),
-        "etag": catalog_etag(input).expect("Rust ETag"),
-    });
-    assert_eq!(rust, oracle);
 }

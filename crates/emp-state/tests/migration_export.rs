@@ -6,7 +6,6 @@ use emp_state::{
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tempfile::tempdir;
 
 const TEST_KEY: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
@@ -272,105 +271,4 @@ fn omitted_categories_do_not_read_unselected_credentials() {
     assert_eq!(payload["provider_keys"], json!({}));
     assert_eq!(summary.groups, ["native"]);
     assert!(summary.native_login_missing);
-}
-
-#[test]
-fn migration_export_matches_live_python_oracle_when_configured() {
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let directory = tempdir().expect("temporary directory");
-    let root = root(&directory);
-    let python_path = root.join("python/config.json");
-    let rust_path = root.join("rust/config.json");
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("repository root")
-        .to_path_buf();
-    let script = r#"
-import json
-import base64
-import sys
-from pathlib import Path
-from easy_multi_provider.accounts import import_account
-from easy_multi_provider.config import load, normalize, save
-from easy_multi_provider import migration as migration_module
-from easy_multi_provider.migration import export_bundle_with_summary
-
-path = Path(sys.argv[1])
-config = normalize({
-    "providers": [{"id": "deepseek", "base_url": "https://api.deepseek.com/v1", "api_key": "synthetic provider secret"}],
-    "models": [{"id": "deepseek/chat", "provider": "deepseek", "family_id": "deepseek"}],
-    "accounts": [{"id": "subscription", "prefix": "subscription"}],
-    "catalog_presentations": {"deepseek/chat": {"catalog_alias": "DeepSeek"}, "subscription/gpt": {"catalog_alias": "Subscription"}},
-    "catalog_family_presentations": {"deepseek": {"show_context": False}, "gpt": {"show_context": True}},
-})
-save(config, path)
-config = load(path)
-config["accounts"] = [import_account(
-    config,
-    {"id": "subscription", "prefix": "subscription"},
-    {"tokens": {"access_token": "synthetic account secret"}},
-    path,
-)]
-save(config, path)
-bundle, summary = export_bundle_with_summary(load(path), path, "migration-pass", ["subscriptions", "external"])
-envelope = json.loads(bundle[len(migration_module.MAGIC):].decode("utf-8"))
-salt = base64.urlsafe_b64decode(envelope["salt"])
-ciphertext = base64.urlsafe_b64decode(envelope["payload"])
-payload = json.loads(migration_module._fernet("migration-pass", salt).decrypt(ciphertext).decode("utf-8"))
-print(json.dumps({"payload": payload, "summary": summary}, ensure_ascii=False))
-"#;
-    let output = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .arg(&python_path)
-        .current_dir(repository)
-        .env("EASY_MULTI_PROVIDER_MASTER_KEY", TEST_KEY)
-        .output()
-        .expect("run Python export oracle");
-    assert!(
-        output.status.success(),
-        "Python oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let oracle: Value = serde_json::from_slice(&output.stdout).expect("Python oracle JSON");
-
-    let vault = vault(&root);
-    let mut config = normalize_configuration(Some(&json!({
-        "providers": [{"id": "deepseek", "base_url": "https://api.deepseek.com/v1", "api_key": "synthetic provider secret"}],
-        "models": [{"id": "deepseek/chat", "provider": "deepseek", "family_id": "deepseek"}],
-        "accounts": [{"id": "subscription", "prefix": "subscription"}],
-        "catalog_presentations": {"deepseek/chat": {"catalog_alias": "DeepSeek"}, "subscription/gpt": {"catalog_alias": "Subscription"}},
-        "catalog_family_presentations": {"deepseek": {"show_context": false}, "gpt": {"show_context": true}}
-    })))
-    .expect("normalized Rust export config");
-    let auth_path = account_auth_path(&config, "subscription", &rust_path).expect("Rust auth path");
-    config["accounts"][0]["auth_file"] = Value::String(auth_path.to_string_lossy().into_owned());
-    vault
-        .write_encrypted_json(
-            &auth_path,
-            &json!({"tokens": {"access_token": "synthetic account secret"}}),
-        )
-        .expect("write Rust account auth");
-    save_configuration(&config, Some(&rust_path), &vault).expect("save Rust export config");
-    let config = load_configuration(Some(&rust_path)).expect("load Rust export config");
-    let groups = selected(&["subscriptions", "external"]);
-    let (bundle, summary) =
-        export_migration_bundle_with_summary(&config, PASSWORD, &vault, Some(&groups), None)
-            .expect("Rust migration export");
-    let payload: Value =
-        serde_json::from_slice(&decode_migration(PASSWORD, &bundle).expect("decrypt Rust export"))
-            .expect("Rust export payload");
-    let summary = json!({
-        "accounts": summary.accounts,
-        "providers": summary.providers,
-        "models": summary.models,
-        "groups": summary.groups,
-        "native_login_included": summary.native_login_included,
-        "native_login_missing": summary.native_login_missing
-    });
-    assert_eq!(payload, oracle["payload"]);
-    assert_eq!(summary, oracle["summary"]);
 }
