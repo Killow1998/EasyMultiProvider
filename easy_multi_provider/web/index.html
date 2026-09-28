@@ -666,6 +666,7 @@ const UPSTREAM_ERROR_GROUPS = [
   [['upstream_5xx','upstream_capacity'], ['模型服务暂时不可用，请稍后重试。','The model service is temporarily unavailable. Try again later.']],
   [['protocol_rejection'], ['模型服务拒绝了这个请求，可能不支持该模型或参数。','The model service rejected the request; it may not support this model or its parameters.']],
   [['protocol_error','malformed_terminal','stream_error','stream_incomplete'], ['模型服务返回了无法识别的内容。','The model service returned something EMP could not read.']],
+  [['output_limit'], ['模型输出超过了上限。','The model output hit its limit.']],
   [['context_length_exceeded'], ['内容超过了模型的上下文上限。','The input exceeds the model context window.']],
   [['content_filter'], ['内容被模型服务的安全策略拦截。','The model service blocked the content.']],
 ];
@@ -692,6 +693,8 @@ async function api(path, options = {}) {
     error.session = session;
     error.payload = data;
     error.status = response.status;
+    // Every caller shows error.message, so give upstream failures their readable text here.
+    error.message = upstreamErrorText(error, error.message);
     throw error;
   }
   return data;
