@@ -1377,6 +1377,62 @@ class ServerAccountTests(unittest.TestCase):
             state.migrate_legacy_quota_history()
             self.assertEqual(points(state._quota_owner_key("egg")), 0)
 
+    def test_concurrent_prefix_change_cannot_reject_a_reimport_after_settling(self):
+        # Settling is part of the reimport's validated commit: while it runs
+        # (paused by an exclusive SQLite lock), an import taking the same
+        # prefix must wait and then be rejected.
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            save(normalize({"account_store_path": str(root / "state" / "accounts")}), config_path)
+            state = AppState(config_path)
+
+            def import_account(account_id, prefix, upstream_id):
+                return state.import_account(
+                    {"id": account_id, "name": account_id, "prefix": prefix},
+                    {"tokens": {"access_token": account_id + "-token", "account_id": upstream_id}},
+                )
+
+            import_account("egg", "egg", "upstream-egg")
+            state.quota_history.append_snapshot(
+                "egg",
+                {"rate_limits": {"limitId": "codex", "primary": {"usedPercent": 10, "windowDurationMins": 300}}},
+                observed_at=int(time.time()) - 60,
+            )
+            blocker = sqlite3.connect(str(state.quota_history.path), timeout=5, isolation_level=None)
+            blocker.execute("BEGIN EXCLUSIVE")
+            results = {}
+
+            def run(name, *args):
+                try:
+                    results[name] = import_account(*args)
+                except ConfigError as exc:
+                    results[name] = exc
+
+            reimport = threading.Thread(target=run, args=("reimport", "egg", "yolk", "upstream-egg-2"))
+            reimport.start()
+            # Wait until the reimport holds the configuration lock (it is
+            # then settling, blocked on the history database).
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if not state.lock.acquire(blocking=False):
+                    break
+                state.lock.release()
+                time.sleep(0.005)
+            rival = threading.Thread(target=run, args=("rival", "hen", "yolk", "upstream-hen"))
+            rival.start()
+            time.sleep(0.2)
+            blocker.execute("COMMIT")
+            blocker.close()
+            reimport.join(10)
+            rival.join(10)
+            self.assertNotIsInstance(results["reimport"], ConfigError)
+            self.assertIsInstance(results["rival"], ConfigError)
+            self.assertIn("prefix is already in use", str(results["rival"]))
+            self.assertEqual([item["prefix"] for item in state.config["accounts"]], ["yolk"])
+
     def test_account_id_is_not_freed_while_its_legacy_history_cannot_be_settled(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

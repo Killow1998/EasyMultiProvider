@@ -738,3 +738,75 @@ fn account_import_during_credential_replacement_is_not_lost() {
     assert_eq!(saved["accounts"].as_array().unwrap().len(), 2);
     server.shutdown().expect("shutdown race state");
 }
+
+/// Settling an id's legacy history is part of the reimport's validated
+/// commit: while it runs (paused here by an exclusive SQLite lock), a
+/// concurrent import taking the same prefix must wait and then be rejected,
+/// rather than invalidate the reimport after its history was settled.
+#[test]
+fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_settled() {
+    let directory = tempfile::tempdir().expect("settle race directory");
+    let root = directory
+        .path()
+        .canonicalize()
+        .expect("canonical settle race root");
+    let config_path = root.join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({"account_store_path":root.join("state/accounts")})).unwrap(),
+    )
+    .expect("write settle race configuration");
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config_path,
+        "/bin/false",
+        root.join("codex/auth.json"),
+    )
+    .expect("start settle race state");
+    let body = |id: &str, prefix: &str, upstream: &str| {
+        json!({"id": id, "name": id, "prefix": prefix,
+            "auth_json": {"tokens": {"access_token": format!("{id}-token"), "account_id": upstream}}})
+    };
+    import_account_state(&server.state, &body("egg", "egg", "upstream-egg")).expect("import egg");
+    let history = &server.state.backend.accounts.quota_history;
+    history
+        .append_snapshot(
+            "egg",
+            &json!({"rate_limits":{"limitId":"codex","primary":{"usedPercent":10,"windowDurationMins":300}}}),
+            2_000_100,
+        )
+        .unwrap();
+    let blocker = rusqlite::Connection::open(root.join("state/quota_history.sqlite3"))
+        .expect("open quota history");
+    blocker
+        .execute_batch("BEGIN EXCLUSIVE")
+        .expect("pause history writes");
+    let configuration = &server.state.backend.configuration.config;
+    let (reimport, rival) = thread::scope(|scope| {
+        let reimport = scope
+            .spawn(|| import_account_state(&server.state, &body("egg", "yolk", "upstream-egg-2")));
+        // Wait until the reimport holds the configuration (it is then
+        // settling, blocked on the history database).
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while configuration.try_lock().is_ok() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let rival = scope
+            .spawn(|| import_account_state(&server.state, &body("hen", "yolk", "upstream-hen")));
+        thread::sleep(Duration::from_millis(200));
+        blocker
+            .execute_batch("COMMIT")
+            .expect("resume history writes");
+        (reimport.join().unwrap(), rival.join().unwrap())
+    });
+    reimport.expect("the settled reimport commits");
+    assert!(
+        rival.is_err_and(|error| error.contains("prefix is already in use")),
+        "the rival import waits for the reimport and is rejected"
+    );
+    let config = configuration.lock().unwrap().clone();
+    assert_eq!(config["accounts"].as_array().unwrap().len(), 1);
+    assert_eq!(config["accounts"][0]["prefix"], "yolk");
+    server.shutdown().expect("shutdown settle race state");
+}
