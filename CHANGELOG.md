@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.2 (2026-09-28)
 
 - Show what the running Codex actually loaded: the integration card reads
   `model/list` from Codex when Codex reaches EMP and reports "Codex is using
@@ -15,6 +15,13 @@
   per-modality model tests; a shared quota period picker.
 - The test suite is Rust-only: live Python-oracle comparisons are removed and
   the Python E2E driver is replaced by Rust user-journey tests.
+- The repository is Rust-only: the Python service, its tests and tools are
+  removed (they remain on the `python_archive` branch). Packaging, package
+  smoke tests and release checks run with `cargo xtask`, and CI no longer
+  installs Python.
+- `EMP --emp-migrate-config SOURCE TARGET` copies an older configuration, its
+  state and the files it references into the desktop configuration directory,
+  backing up anything it replaces.
 
 ## 0.12.1 (2026-09-25)
 
