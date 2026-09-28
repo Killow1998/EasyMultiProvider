@@ -1242,7 +1242,7 @@ function confirmIntegrationAction(action) {
   openModal(selected[0], `<p>${esc(selected[1])}</p>`, selected[0], () => submitIntegrationAction(action));
 }
 function integrationOutcomeMessage(info, action) {
-  if (action === 'enable') return tr('EMP已启动，请重启Codex','EMP is ready. Restart Codex.');
+  if (action === 'enable') return info.runtime?.state === 'emp_loaded' ? tr('Codex 正在使用 EMP。','Codex is using EMP.') : tr('请重启 Codex，让它加载 EMP。','Restart Codex so it loads EMP.');
   if (action === 'restore') return tr('已恢复原生 Codex，请重启 Codex。','Native Codex restored. Restart Codex.');
   return tr('检查完成。','Check complete.');
 }
