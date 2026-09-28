@@ -235,6 +235,10 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<TcpStrea
         read_sse_frame(&mut reader),
         "event: quota-updated\ndata: {}\n"
     );
+    assert_eq!(
+        read_sse_frame(&mut reader),
+        "event: integration-updated\ndata: {}\n"
+    );
     reader
 }
 

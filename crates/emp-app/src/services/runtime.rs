@@ -5,7 +5,9 @@ use emp_codex::runtime_probe::{RuntimeSyncResult, observe};
 use emp_integration::runtime::{RuntimeStore, offline_snapshot};
 use serde_json::{Value, json};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 struct RuntimeData {
     snapshot: Value,
@@ -236,5 +238,98 @@ pub(crate) fn mark_active_pending(state: &ServerState, detail: &str) {
         .is_ok_and(|status| status.state == "active")
     {
         let _ = mark_pending(state, "emp", detail);
+    }
+}
+
+/// Codex asks for the model list before it swaps the new one in.
+const CODEX_SETTLE: Duration = Duration::from_secs(2);
+/// A Codex still on an old catalog keeps sending requests; check it at most this often.
+const CODEX_RECHECK_GAP: Duration = Duration::from_secs(30);
+
+/// Wakes the runtime watcher when Codex talks to EMP; the page hears the outcome
+/// through its event stream instead of asking on a timer.
+#[derive(Default)]
+pub(crate) struct RuntimeWatch {
+    pending: Mutex<bool>,
+    wake: Condvar,
+    pub(crate) revision: AtomicU64,
+}
+
+/// Codex just reached EMP, so it may have restarted with EMP's settings.
+pub(crate) fn codex_contacted(state: &ServerState) {
+    let watch = &state.backend.integration.watch;
+    if let Ok(mut pending) = watch.pending.lock() {
+        *pending = true;
+        watch.wake.notify_one();
+    }
+}
+
+pub(crate) fn stop_watch(state: &ServerState) {
+    let watch = &state.backend.integration.watch;
+    if let Ok(_pending) = watch.pending.lock() {
+        watch.wake.notify_all();
+    }
+}
+
+fn awaiting_codex(state: &ServerState) -> bool {
+    let integration = &state.backend.integration;
+    let applied = integration
+        .manager
+        .status()
+        .is_ok_and(|status| status.state == "active" && status.relation == "applied");
+    let unconflicted = integration
+        .startup_conflicts
+        .lock()
+        .is_ok_and(|conflicts| conflicts.is_empty());
+    applied && unconflicted && integration.runtime.snapshot()["state"] != "emp_loaded"
+}
+
+pub(crate) fn watch_runtime(state: &ServerState) {
+    let watch = &state.backend.integration.watch;
+    let mut last_check: Option<Instant> = None;
+    loop {
+        let Ok(mut pending) = watch.pending.lock() else {
+            return;
+        };
+        while !*pending && !state.shutdown.load(Ordering::Acquire) {
+            pending = match watch.wake.wait(pending) {
+                Ok(pending) => pending,
+                Err(_) => return,
+            };
+        }
+        let gap = last_check.map_or(Duration::ZERO, |at| {
+            CODEX_RECHECK_GAP.saturating_sub(at.elapsed())
+        });
+        let deadline = Instant::now() + CODEX_SETTLE.max(gap);
+        loop {
+            if state.shutdown.load(Ordering::Acquire) {
+                return;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            pending = match watch.wake.wait_timeout(pending, deadline - now) {
+                Ok((pending, _)) => pending,
+                Err(_) => return,
+            };
+        }
+        *pending = false;
+        drop(pending);
+        if !awaiting_codex(state) {
+            continue;
+        }
+        let before = state.backend.integration.runtime.snapshot()["state"].clone();
+        let checked = match state.backend.integration.manager.operation_lock() {
+            Ok(_operation) => sync_runtime(state, None, false, true, false).ok(),
+            Err(_) => None,
+        };
+        last_check = Some(Instant::now());
+        if checked.is_some_and(|result| before != result.state) {
+            watch.revision.fetch_add(1, Ordering::AcqRel);
+            if let Ok(_revision) = state.backend.accounts.quota_revision.lock() {
+                state.backend.accounts.quota_condition.notify_all();
+            }
+        }
     }
 }

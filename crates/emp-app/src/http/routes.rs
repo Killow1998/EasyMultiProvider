@@ -69,6 +69,12 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
         return;
     };
     let path = request.raw_path();
+    // The management page carries a session; Codex does not.
+    if (path.starts_with("/v1/models") || path.starts_with("/v1/responses"))
+        && request.session_token().is_none()
+    {
+        crate::services::runtime::codex_contacted(state);
+    }
     let update_request = path.starts_with("/api/updates/");
     let gated_mutation = (request.method == RequestMethod::Post && !update_request)
         || request.method == RequestMethod::Delete;

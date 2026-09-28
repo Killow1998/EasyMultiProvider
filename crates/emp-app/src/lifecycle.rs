@@ -273,6 +273,7 @@ impl ServerHandle {
         };
         handle.add_worker(listener)?;
         handle.add_quota_sampler()?;
+        handle.add_runtime_watch()?;
         Ok(handle)
     }
 
@@ -309,6 +310,18 @@ impl ServerHandle {
                     }
                 }
             })
+            .map_err(AppError::Io)?;
+        if let Ok(mut workers) = self.workers.lock() {
+            workers.push(worker);
+        }
+        Ok(())
+    }
+
+    fn add_runtime_watch(&self) -> Result<(), AppError> {
+        let state = Arc::clone(&self.state);
+        let worker = thread::Builder::new()
+            .name("emp-runtime-watch".to_owned())
+            .spawn(move || crate::services::runtime::watch_runtime(&state))
             .map_err(AppError::Io)?;
         if let Ok(mut workers) = self.workers.lock() {
             workers.push(worker);
@@ -419,6 +432,7 @@ impl ServerHandle {
             .accounts
             .quota_sampler_condition
             .notify_all();
+        crate::services::runtime::stop_watch(&self.state);
         let workers = match Arc::try_unwrap(self.workers) {
             Ok(workers) => workers,
             Err(_) => return Err(AppError::ServerStopped),

@@ -1028,31 +1028,19 @@ function renderIntegration(info) {
   $('integration_badge').textContent = view[0];
   $('integration_title').textContent = t('integration_status');
   renderIntegrationToggle();
-  scheduleRuntimeCheck(info);
 }
-// Codex only reloads its catalog when it restarts, so keep asking it until it has EMP's models.
-let runtimeCheckTimer = null;
-function scheduleRuntimeCheck(info) {
-  clearTimeout(runtimeCheckTimer); runtimeCheckTimer = null;
-  const configuration = info.configuration || {}, runtime = info.runtime || {};
-  if (configuration.state !== 'emp_applied' || runtime.state === 'emp_loaded') return;
-  runtimeCheckTimer = setTimeout(checkRuntime, 5000);
-}
-async function checkRuntime() {
-  runtimeCheckTimer = null;
-  if (integrationBusy) return;
-  if (document.visibilityState === 'hidden') { runtimeCheckTimer = setTimeout(checkRuntime, 5000); return; }
+// EMP checks Codex whenever Codex reaches it and says so on the event stream.
+async function integrationUpdated() {
   const before = $('integration').dataset.runtime;
   try {
-    const info = await api('/api/integration/verify', {method:'POST', body:'{}'});
+    const info = await api('/api/integration');
     renderIntegration(info);
-    if (before !== 'emp_loaded' && info.runtime?.state === 'emp_loaded') {
+    if (before && before !== 'emp_loaded' && info.configuration?.state === 'emp_applied' && info.runtime?.state === 'emp_loaded') {
       toast(tr('Codex 已加载 EMP','Codex loaded EMP'), tr('现在可以在 Codex 里选择 EMP 的模型了。','EMP models are now available in Codex.'));
       animateLogo();
     }
-  } catch (_) { runtimeCheckTimer = setTimeout(checkRuntime, 15000); }
+  } catch (_) {}
 }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && runtimeCheckTimer) { clearTimeout(runtimeCheckTimer); checkRuntime(); } });
 async function loadIntegration() {
   const started = Date.now();
   try {
@@ -1442,7 +1430,9 @@ async function consumeQuotaEventStream(response, signal) {
       while ((boundary = buffer.indexOf('\n\n')) >= 0) {
         const frame = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
-        if (frame.split('\n').some(line => line.startsWith('event:') && line.slice(6).trim() === 'quota-updated')) requestQuotaSync();
+        const events = frame.split('\n').filter(line => line.startsWith('event:')).map(line => line.slice(6).trim());
+        if (events.includes('quota-updated')) requestQuotaSync();
+        if (events.includes('integration-updated')) integrationUpdated();
       }
     }
   } finally {
