@@ -16,7 +16,7 @@ h1{margin:0 0 2px;font-size:23px;letter-spacing:-.01em}h2{font-size:16px;margin:
 .page-header-controls{display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:10px 12px}
 .header-group{display:flex;align-items:center;gap:6px;flex:none;padding-right:12px;border-right:1px solid var(--border)}
 .page-header-controls :is(button,select,a){height:34px;margin:0;white-space:nowrap;font-family:inherit;font-size:13px;line-height:1.3;font-weight:400}
-.page-header-controls select{width:auto;min-width:98px;padding:6px 28px 6px 8px}
+.page-header-controls select{width:auto;min-width:98px;padding:0 28px 0 8px}
 .repo-link{display:inline-flex;align-items:center;padding:6px 10px;border:1px solid var(--border-strong);border-radius:4px;color:var(--text);text-decoration:none;font-size:13px}.repo-link:hover{background:var(--secondary-hover)}
 .update-progress{width:100%;height:8px;accent-color:var(--accent);margin-top:12px}
 section{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:16px;margin:12px 0}
@@ -190,7 +190,8 @@ button[data-icon]{display:inline-flex}
 .section-tools .spacer{display:none}
 .section-tools>button:last-child{justify-self:end}
 .modal-actions{flex-wrap:wrap}
-.choice{display:block;min-height:0;white-space:normal}
+.choice{display:block;height:auto;min-height:0;padding:10px 12px;white-space:normal;line-height:1.35}
+.choice small{overflow-wrap:anywhere}
 @media(max-width:760px){main{padding:18px 12px 32px}section{padding:15px}.page-header{flex-direction:column;align-items:stretch}.account-card{grid-template-columns:1fr;grid-template-rows:auto auto auto;padding:10px}.account-card .entity-card-main{grid-column:1;grid-row:1}.account-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1;grid-row:2;width:100%;padding-top:8px;border-top:1px solid var(--border)}.account-card .entity-card-actions button{width:100%}.account-card .entity-card-quota{grid-column:1;grid-row:3}.entity-card{padding:13px}.provider-card{grid-template-columns:minmax(0,1fr);padding:10px}.provider-card .entity-card-main{grid-column:1;grid-row:1}.provider-card .entity-card-meta{grid-column:1;grid-row:2}.provider-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1;grid-row:3;width:100%;padding-top:8px;border-top:1px solid var(--border)}.provider-card .entity-card-actions button{width:100%}.model-card{grid-template-columns:minmax(0,1fr) auto;padding:10px}.model-card .entity-card-main{grid-column:1;grid-row:1}.model-card .visibility{grid-column:2;grid-row:1}.model-card .entity-card-meta{grid-column:1/-1;grid-row:2}.model-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1/-1;grid-row:3;width:100%;padding-top:8px;border-top:1px solid var(--border)}.model-card .entity-card-actions button{width:100%}.action-group{grid-template-columns:1fr;gap:4px}.action-group-label{padding-top:0}.display-row{grid-template-columns:minmax(0,1fr) auto auto}}
 /* EMP design: flat panels, hairlines, one accent. Layout scales with the viewport. */
 :root{color-scheme:light;--bg:#f5f5f3;--panel:#fff;--panel-soft:#fafaf8;--input:#fff;--text:#1f1f1c;--muted:#6f6e69;--border:#e5e4df;--border-strong:#cfcec8;--accent:#2957c7;--accent-hover:#2149ad;--accent-soft:#e8eefa;--secondary-hover:#efeeea;--danger:#c43d38;--danger-soft:#fbecea;--danger-text:#b23a35;--warning:#a8701d;--warning-soft:#fbf3e3;--success:#2f7a4f;--code:#2951a8}
@@ -205,7 +206,7 @@ h2{font-size:14px;font-weight:600;margin:0}
 .page-header-controls{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px 14px}
 .page-header-controls :is(button,select,a){height:30px;min-height:30px;font-size:13px}
 .header-group{gap:6px;padding-right:14px;border-right:1px solid var(--border)}
-.header-group>span{color:var(--muted);font-size:12px}
+.header-group>span{display:inline-flex;align-items:center;align-self:stretch;color:var(--muted);font-size:12px;line-height:1}
 .workspace-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,34%);gap:clamp(16px,1.6vw,28px);align-items:start}
 .workspace-column>section,.workspace-side>section{margin:0 0 clamp(16px,1.6vw,28px)}
 .workspace-side{position:sticky;top:64px;max-height:calc(100vh - 80px);overflow:auto}
@@ -244,8 +245,9 @@ input,select,textarea{border-radius:6px;border-color:var(--border-strong)}
 .modality-options{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .modality-option{display:inline-flex;align-items:center;gap:8px;margin:0;padding:0 4px 0 10px;height:32px;border:1px solid var(--border-strong);border-radius:6px;color:var(--text);font-size:13px;cursor:pointer}
 .modality-option:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}input[type=number]{-moz-appearance:textfield;appearance:textfield}
+.input-action{display:flex;align-items:stretch;gap:6px}.input-action input{flex:1;min-width:0}.input-action button{flex:none;height:auto;min-height:0;white-space:nowrap}
 .modality-option label{display:inline-flex;align-items:center;gap:6px;margin:0;color:var(--text);font-size:13px;cursor:pointer}.modality-option input{width:auto;margin:0}.modality-option .modality-test{height:24px;min-height:24px;padding:0 8px;font-size:12px}.modality-option:not(:has(.modality-test)){padding-right:10px}
-.modality-custom{width:150px;height:30px}
 @media(max-width:1100px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}.page-header{position:static;flex-direction:column;align-items:stretch}.page-header-controls{justify-content:flex-start}}
 @media(max-width:760px){section{padding:12px}.header-group{padding-right:0;border-right:0}section>h2+.toolbar{grid-column:1/-1;justify-content:flex-start}}
 .period-picker{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 16px;margin:0 0 14px;padding-bottom:14px;border-bottom:1px solid var(--border)}
@@ -255,6 +257,7 @@ input,select,textarea{border-radius:6px;border-color:var(--border-strong)}
 .period-presets button.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
 .period-custom{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px}
 .period-custom label{display:grid;gap:3px;margin:0;font-size:12px}
+.usage-filters :is(select,input,button){height:32px;min-height:32px;padding-top:0;padding-bottom:0}
 .period-custom input{width:auto;min-width:190px;height:30px;padding:3px 8px}
 .period-custom button{margin:0;height:30px;min-height:30px}
 .period-sep{color:var(--muted);padding-bottom:6px}
@@ -439,32 +442,26 @@ function confirmedField(model, field) {
   if (!confirmedCapabilitySources.has(source)) return null;
   return model[field] ?? null;
 }
-const COMMON_MODALITIES = ['text', 'image', 'audio', 'video'];
+// Codex only sends text and images; other stored modalities are kept but not offered.
+const COMMON_MODALITIES = ['text', 'image'];
 // Modalities with a test the edit panel can run against the saved model.
-const MODALITY_TESTS = {image: () => testModalVision(), audio: () => testModalAudio()};
+const MODALITY_TESTS = {image: () => testModalVision()};
 let modalVisionStatus = 'unknown';
 function modalityOption(value, checked, testable = false) {
   const test = testable && MODALITY_TESTS[value] ? `<button type="button" class="secondary modality-test" data-ui-action="modality-test" data-id="${esc(value)}">${tr('测试','Test')}</button>` : '';
   return `<span class="modality-option"><label><input type="checkbox" data-modality value="${esc(value)}" ${checked ? 'checked' : ''} onchange="if(this.value==='image')modalVisionStatus=this.checked?'supported':'unsupported'">${esc(modalityLabel(value))}</label>${test}</span>`;
 }
 function modalityOptions(selected, vision, testable) {
-  const extra = selected.filter(value => !COMMON_MODALITIES.includes(value));
-  return [...COMMON_MODALITIES, ...extra].map(value => modalityOption(value, selected.includes(value), testable)).join('');
+  const audio = testable ? `<button type="button" class="secondary modality-test" onclick="testModalAudio()">${tr('测试音频','Test audio')}</button>` : '';
+  return COMMON_MODALITIES.map(value => modalityOption(value, selected.includes(value), testable)).join('') + audio;
 }
 async function testModalAudio() {
   if (!editingModelId) return notice(tr('请先保存模型再测试','Save the model before testing'), true);
-  if (await testModelAudio(editingModelId)) { const box = document.querySelector('[data-modality][value="audio"]'); if (box) box.checked = true; }
+  await testModelAudio(editingModelId);
 }
 async function testModalVision() {
   if (!editingModelId) return notice(tr('请先保存模型再测试','Save the model before testing'), true);
   if (await testModelVision(editingModelId)) { const box = document.querySelector('[data-modality][value="image"]'); if (box) box.checked = true; modalVisionStatus = 'supported'; }
-}
-function addCustomModality() {
-  const input = $('modal_model_modality_custom'); const value = input.value.trim().toLowerCase(); if (!value) return;
-  if (!/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(value) || value === 'image') return notice(tr('输入模态无效；图像请使用上方选项','Invalid input modality; use the vision selector for images'), true);
-  const existing = document.querySelector(`[data-modality][value="${CSS.escape(value)}"]`);
-  if (existing) existing.checked = true; else input.insertAdjacentHTML('beforebegin', modalityOption(value, true));
-  input.value = '';
 }
 function modalityLabel(value) {
   const labels = language === 'en' ? {text:'text',image:'image',audio:'audio',video:'video'} : {text:'文本',image:'图像',audio:'音频',video:'视频'}; return labels[value] || value;
@@ -600,8 +597,10 @@ function usagePeriods() {
 function zoomUsage(start,end) {
   setPeriod('usage', {preset:'', start:Math.max(start,usagePayload.start), end:Math.min(end,usagePayload.end)}, {user:true});
 }
+// History rows only know the route they were recorded under, so that route is the source.
+const usageRowSource = row => row.category === 'unknown' && row.owner.startsWith('history:') ? tr('历史路由','Historical route') : usageSource(row.category);
 function usageOwner(row) {
-  if (row.owner.startsWith('history:')) return tr('历史路由 · ','Historical route · ') + row.owner.slice(8);
+  if (row.owner.startsWith('history:')) return row.category === 'unknown' ? row.owner.slice(8) : tr('历史路由 · ','Historical route · ') + row.owner.slice(8);
   if (row.category === 'external') return row.owner_name || row.owner;
   if (row.owner.startsWith('account:')) return row.owner_name || tr('账号 · ','Account · ') + row.owner.slice(8,16);
   if (row.owner.startsWith('credential:')) return (row.owner_name || row.owner.slice(11,19)) + tr(' · 身份未确认',' · identity unconfirmed');
@@ -641,7 +640,7 @@ function renderUsage() {
     const label = new Date(row.start*1000).toLocaleString() + ' · ' + usageNumber(tokens) + ' tokens · ' + cost(row);
     return `<rect x="${x}" y="${150-h}" width="${w}" height="${Math.max(1,h)}" rx="2" tabindex="0" role="button" aria-label="${esc(label)}" data-ui-action="usage-zoom" data-start="${Number(row.start)}" data-end="${Number(row.end)}"><title>${esc(label)}</title></rect>`;
   }).join('');
-  const rows = data.groups.sort((a,b)=>(b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)).map(row => `<tr><td>${esc(usageSource(row.category))}<small>${esc(usageOwner(row))}</small></td><td>${esc(row.model)}<small>${row.service_tier === 'default' ? tr('普通','Standard') : esc(row.service_tier)}</small></td><td>${row.input_reports ? usageNumber(row.input_tokens) : '—'}<small>${tr('缓存 ','Cached ')}${row.cache_reports ? usageNumber(row.cached_input_tokens) : '—'}${row.cache_write_tokens ? ' · '+tr('写入 ','Write ')+usageNumber(row.cache_write_tokens) : ''}</small></td><td>${row.output_reports ? usageNumber(row.output_tokens) : '—'}<small>${tr('推理 ','Reasoning ')}${row.reasoning_reports ? usageNumber(row.reasoning_tokens) : '—'}</small></td><td>${cost(row)}</td><td>${usageNumber(row.requests)}</td></tr>`).join('');
+  const rows = data.groups.sort((a,b)=>(b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)).map(row => `<tr><td>${esc(usageRowSource(row))}<small>${esc(usageOwner(row))}</small></td><td>${esc(row.model)}<small>${row.service_tier === 'default' ? tr('普通','Standard') : esc(row.service_tier)}</small></td><td>${row.input_reports ? usageNumber(row.input_tokens) : '—'}<small>${tr('缓存 ','Cached ')}${row.cache_reports ? usageNumber(row.cached_input_tokens) : '—'}${row.cache_write_tokens ? ' · '+tr('写入 ','Write ')+usageNumber(row.cache_write_tokens) : ''}</small></td><td>${row.output_reports ? usageNumber(row.output_tokens) : '—'}<small>${tr('推理 ','Reasoning ')}${row.reasoning_reports ? usageNumber(row.reasoning_tokens) : '—'}</small></td><td>${cost(row)}</td><td>${usageNumber(row.requests)}</td></tr>`).join('');
   const history = data.history || {}, historical = data.sources?.find(row => row.origin === 'history')?.requests || 0;
   box.innerHTML = `<p class="usage-notice">${history.running || history.queued ? tr('正在后台扫描历史…','Scanning history in the background…') : history.last_scan_at ? tr('历史已扫描 · ','History scanned · ') + usageNumber(history.files) + tr(' 个文件',' files') : tr('等待历史扫描','Waiting for history scan')}${history.errors ? ' · ' + tr('部分文件读取失败','Some files could not be read') : ''}</p>
     <div class="usage-totals"><div class="usage-total"><span>Tokens</span><strong>${totals.input_reports || totals.output_reports ? usageNumber(totals.input_tokens+totals.output_tokens) : '—'}</strong><span>${usageNumber(totals.reported_requests)} / ${usageNumber(totals.requests)} ${tr('次请求有完整用量','requests reported usage')}</span></div><div class="usage-total"><span>${tr('API 等价估算 · USD','API equivalent · USD')}</span><strong>${cost(totals)}</strong><span>${usageNumber(totals.priced_requests)} / ${usageNumber(totals.requests)} ${tr('次请求已计价','requests priced')}</span></div></div>
@@ -653,7 +652,7 @@ function renderUsage() {
     ${usagePricingEditor(data)}
     ${price.stale || price.error ? `<p class="usage-notice usage-warning">${tr('价格未更新，已有费率仅供参考。','Prices are not up to date; saved rates are for reference.')}</p>` : ''}
     ${data.write_error ? `<p class="usage-notice usage-warning">${tr('用量写入失败，当前统计可能不完整。请查看 EMP 日志。','Usage could not be saved; totals may be incomplete. Check the EMP log.')}</p>` : ''}
-    <details class="usage-notice"><summary>${tr('计价说明与价格更新时间','Pricing basis & updates')}</summary><p>${tr('按请求完成时的本地 API 价目估算，缺价时在价格补齐后计价，已计价历史不再改写。包含缓存折扣和可确认的长上下文、服务档位费率。并非订阅账单，不含工具调用费、缓存存储费、税费或转售加价。缺少缓存明细时无法精确计价。','Uses local API rates at request completion, or the first available rate if initially missing. Priced history is frozen. Includes cache discounts and known context/service tiers. Not a subscription bill; excludes tool fees, cache storage, tax and reseller markups. Missing cache details prevent a precise estimate.')}</p><p><a href="${esc(price.url)}" target="_blank" rel="noopener noreferrer">LiteLLM</a> · ${tr('每 24 小时后台更新','Updated in the background every 24 hours')} · ${price.fetched_at ? esc(new Date(price.fetched_at*1000).toLocaleString()) : tr('尚未获取价格','Prices not downloaded')}</p>${price.stale || price.error ? `<p class="usage-warning">${tr('价格尚未更新，暂用已有价目；没有价目的模型保留为未计价。','Prices are not up to date. Saved rates are used where available; other models remain unpriced.')}</p>` : ''}${data.first_record_at ? `<p>${tr('最早记录：','First record: ')}${esc(new Date(data.first_record_at*1000).toLocaleString())}</p>` : ''}</details>`;
+    <details class="usage-notice"><summary>${tr('计价说明与价格更新时间','Pricing basis & updates')}</summary><p>${tr('按请求完成时的本地 API 价目估算，缺价时在价格补齐后计价，已计价历史不再改写。包含缓存折扣和可确认的长上下文、服务档位费率。并非订阅账单，不含工具调用费、缓存存储费、税费或转售加价。缺少缓存明细时无法精确计价。','Uses local API rates at request completion, or the first available rate if initially missing. Priced history is frozen. Includes cache discounts and known context/service tiers. Not a subscription bill; excludes tool fees, cache storage, tax and reseller markups. Missing cache details prevent a precise estimate.')}</p><p><a href="${esc(price.url)}" target="_blank" rel="noopener noreferrer">LiteLLM</a> · ${tr('每 24 小时后台更新','Updated in the background every 24 hours')} · ${price.fetched_at ? esc(new Date(price.fetched_at*1000).toLocaleString()) : tr('尚未获取价格','Prices not downloaded')}</p>${price.stale || price.error ? `<p class="usage-warning">${tr('价格尚未更新，暂用已有价目；没有价目的模型保留为未计价。','Prices are not up to date. Saved rates are used where available; other models remain unpriced.')}</p>` : ''}</details>`;
 }
 
 async function api(path, options = {}) {
@@ -1425,7 +1424,7 @@ function openResetCredits(accountId) {
   const entries = resetCreditEntries(account);
   const selectable = entries.filter(item => item.status === 'available' && typeof item.id === 'string' && item.id.length > 0);
   const prior = resetAttempts.get(accountId);
-  const selectedIndex = prior ? selectable.findIndex(item => item.id === prior.creditId) : 0;
+  const selectedIndex = Math.max(0, prior ? selectable.findIndex(item => item.id === prior.creditId) : 0);
   const cards = entries.map((item,index) => {
     const expires = utcDateTimeText(item.expires_at), remaining = resetCountdownText(item.expires_at), granted = utcDateTimeText(item.granted_at);
     const title = item.title || tr(`重置机会 ${index + 1}`,`Reset opportunity ${index + 1}`);
@@ -1434,13 +1433,12 @@ function openResetCredits(accountId) {
     const choice = choiceIndex >= 0 ? `<label class="reset-credit-choice"><input type="radio" name="reset_credit_choice" value="${choiceIndex}"${choiceIndex === selectedIndex ? ' checked' : ''}><strong>${esc(title)}</strong></label>` : `<strong>${esc(title)}</strong>`;
     return `<article class="reset-credit-card"><header>${choice}${status}</header>${item.description ? `<p>${esc(item.description)}</p>` : ''}${granted ? `<div class="reset-credit-time"><time>${tr('获得','Granted')} · ${esc(granted)}</time></div>` : ''}<div class="reset-credit-time"><time>${expires ? `${tr('到期','Expires')} · ${esc(expires)}` : tr('未提供到期时间','No expiry provided')}</time>${remaining ? `<strong data-reset-countdown="${esc(item.expires_at)}">${esc(remaining)}</strong>` : ''}</div></article>`;
   }).join('');
-  const automatic = selectable.length ? `<article class="reset-credit-card"><label class="reset-credit-choice"><input type="radio" name="reset_credit_choice" value="auto"${prior && prior.creditId === null ? ' checked' : ''}><strong>${tr('由 OpenAI 选择下一个可用机会','Let OpenAI choose the next available opportunity')}</strong></label></article>` : '';
   const fallback = !selectable.length ? `<p class="muted">${entries.length ? tr('没有可选择的机会明细；OpenAI 会选择下一个可用机会。','No selectable credit details were returned; OpenAI will choose the next available opportunity.') : tr('OpenAI 只返回了可用次数，未返回每次机会的到期明细；OpenAI 会选择下一个可用机会。','OpenAI returned only the available count; it will choose the next available opportunity.')}</p>` : '';
-  const body = `<div class="reset-credit-note"><p><strong>${tr('使用后会发生什么','What happens after use')}</strong><br>${tr('使用一次重置机会会重置符合资格的 Codex 额度周期；新的额度与下一次刷新时间由 OpenAI 返回，EMP 会在使用后重新读取。','Using one opportunity resets the eligible Codex quota windows. OpenAI returns the new quota and next refresh time, which EMP must read again after use.')}</p></div><div class="reset-credit-summary">${tr('可用机会','Available opportunities')} <strong>${esc(resetCreditCount(account))}</strong></div><div class="reset-credit-list">${cards}${automatic}</div>${fallback}`;
+  const body = `<div class="reset-credit-note"><p><strong>${tr('使用后会发生什么','What happens after use')}</strong><br>${tr('使用一次重置机会会重置符合资格的 Codex 额度周期；新的额度与下一次刷新时间由 OpenAI 返回，EMP 会在使用后重新读取。','Using one opportunity resets the eligible Codex quota windows. OpenAI returns the new quota and next refresh time, which EMP must read again after use.')}</p></div><div class="reset-credit-summary">${tr('可用机会','Available opportunities')} <strong>${esc(resetCreditCount(account))}</strong></div><div class="reset-credit-list">${cards}</div>${fallback}`;
   openModal(tr('重置额度详情','Reset quota details'),body,tr('继续确认','Continue to confirmation'),async () => {
     const selected = document.querySelectorAll('input[name="reset_credit_choice"]:checked')[0];
     if (selectable.length && !selected) throw new Error(tr('请选择要使用的重置机会。','Choose a reset opportunity to use.'));
-    const credit = selected?.value === 'auto' ? null : selectable[Number(selected?.value)] || null;
+    const credit = selectable[Number(selected?.value)] || null;
     const creditId = credit?.id || null;
     resetAttemptKey(accountId,creditId);
     confirmResetCredit(account,credit);
@@ -1770,7 +1768,7 @@ async function toggleProviderModels(id, enabled) {
   catch (error) { notice(error.message, true); }
 }
 function openProviderChooser() {
-  openModal(tr('添加 Provider','Add Provider'), `<p class="muted">${tr('官方 Provider 使用固定的 Base URL、协议和认证方式。自建 Provider 可选择自动检测。','Official Providers use fixed endpoints, protocols, and authentication. Custom Providers may use automatic protocol detection.')}</p><div class="choice-grid">` + Object.entries(officialProviders).map(([key,p]) => `<button class="choice" data-ui-action="official-provider-choose" data-provider="${esc(key)}"><strong>${esc(p.name)}</strong><small>${esc(key === 'chatgpt' ? tr('转发当前 Codex 登录态，不需要 API Key','Forward the active Codex login; no API Key required') : p.hint)}</small></button>`).join('') + `<button class="choice" onclick="openCustomProviderForm()"><strong>${tr('自建 Provider','Custom Provider')}</strong><small>${tr('填写 Base URL、API Key 和协议','Enter a Base URL, API Key, and protocol')}</small></button></div>`, '', null);
+  openModal(tr('添加 Provider','Add Provider'), `<p class="muted">${tr('官方 Provider 使用固定的 Base URL、协议和认证方式。自建 Provider 可选择自动检测。','Official Providers use fixed endpoints, protocols, and authentication. Custom Providers may use automatic protocol detection.')}</p><div class="choice-grid">` + Object.entries(officialProviders).filter(([key]) => key !== 'chatgpt').map(([key,p]) => `<button class="choice" data-ui-action="official-provider-choose" data-provider="${esc(key)}"><strong>${esc(p.name)}</strong><small>${esc(p.hint)}</small></button>`).join('') + `<button class="choice" onclick="openCustomProviderForm()"><strong>${tr('自建 Provider','Custom Provider')}</strong><small>${tr('填写 Base URL、API Key 和协议','Enter a Base URL, API Key, and protocol')}</small></button></div>`, '', null);
   $('modal_submit').style.display = 'none';
 }
 function chooseOfficialProvider(key) {
@@ -1842,7 +1840,7 @@ function openManualModelModal(modelId = '') {
   const vision = visionStatus(existing);
   const inputModalities = (Array.isArray(existing.input_modalities) ? existing.input_modalities : ['text']).filter(value => value !== 'image').concat(vision === 'supported' ? ['image'] : []);
   modalVisionStatus = vision;
-  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label>${tr('上游模型名','Upstream model name')}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${tr('例如 glm','for example glm')}" oninput="updateManualModelRoute()"></div><div><label>${tr('最大上下文窗口（可选）','Maximum context window (optional)')}</label><input id="modal_model_context" type="number" min="0" value="${Number(existing.context_window || 0)}" oninput="previewModalContext()"><small class="muted" id="modal_model_context_usable">${existing.context_window ? tr(`Codex 可用 ${compactContext(usableContext(existing))}`,`Codex uses ${compactContext(usableContext(existing))}`) : ''}</small></div><div><label>${tr('自动获取','Fetch metadata')}</label><button class="secondary" onclick="inspectModalModel()">${tr('获取上游最大值','Fetch upstream maximum')}</button></div><div class="wide"><label>${tr('输入模态','Input modalities')}</label><div id="modal_model_modalities" class="modality-options">${modalityOptions(inputModalities, vision, Boolean(modelId))}<input id="modal_model_modality_custom" class="modality-custom" placeholder="${tr('其他，回车添加','Other, press Enter')}" onkeydown="if(event.key==='Enter'){event.preventDefault();addCustomModality()}"></div><small class="muted">${tr('Codex 目前使用文本和图像。图像未勾选且从未确认时，不会向 Codex 声明图像能力；可用“测试”发送一张图片确认。','Codex currently uses text and images. Image stays undeclared until confirmed; use Test to send a picture.')}</small></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
+  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label>${tr('上游模型名','Upstream model name')}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${tr('例如 glm','for example glm')}" oninput="updateManualModelRoute()"></div><div class="wide"><label>${tr('最大上下文窗口（可选）','Maximum context window (optional)')}</label><div class="input-action"><input id="modal_model_context" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.context_window || 0)}" oninput="this.value=this.value.replace(/\\D/g,'');previewModalContext()"><button type="button" class="secondary" onclick="inspectModalModel()">${tr('获取上游最大值','Fetch upstream maximum')}</button></div><small class="muted" id="modal_model_context_usable">${existing.context_window ? tr(`Codex 可用 ${compactContext(usableContext(existing))}`,`Codex uses ${compactContext(usableContext(existing))}`) : ''}</small></div><div class="wide"><label>${tr('输入模态','Input modalities')}</label><div id="modal_model_modalities" class="modality-options">${modalityOptions(inputModalities, vision, Boolean(modelId))}</div></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
   if (existing.provider) $('modal_model_provider').value = existing.provider;
   updateManualModelRoute();
 }
@@ -1863,7 +1861,8 @@ async function saveManualModel() {
   const imageChecked = Boolean(document.querySelector('[data-modality][value="image"]:checked'));
   // Unchecked image keeps "unknown" until the user or a test has confirmed it either way.
   const vision = imageChecked ? 'supported' : (modalVisionStatus === 'unknown' ? 'unknown' : 'unsupported');
-  const modalities = [...new Set([...document.querySelectorAll('[data-modality]:checked')].map(input => input.value))].filter(value => value !== 'image');
+  const kept = (previous?.input_modalities || []).filter(value => !COMMON_MODALITIES.includes(value));
+  const modalities = [...new Set([...document.querySelectorAll('[data-modality]:checked')].map(input => input.value).concat(kept))].filter(value => value !== 'image');
   if (modalities.length > 16 || modalities.some(value => !/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(value) || value === 'image')) {
     throw new Error(tr('输入模态无效；图像请使用上方选项','Invalid input modality; use the vision selector for images'));
   }
