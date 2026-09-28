@@ -26,6 +26,7 @@ pub(crate) enum TrustFailure {
     /// The target itself is not an acceptable executable.
     NotTrusted,
     /// The target or an ancestor can be modified by another user.
+    #[cfg_attr(not(unix), allow(dead_code))]
     Writable,
 }
 
@@ -193,7 +194,9 @@ use libc::__error as errno_location;
 /// Supplementary members of `gid`; `None` when the group cannot be resolved.
 #[cfg(unix)]
 fn group_members(gid: u32) -> Option<Vec<Vec<u8>>> {
-    let mut buffer = vec![0 as libc::c_char; 64 * 1024];
+    // getgrgid_r places the gr_mem pointer array inside `buffer`; macOS does
+    // not realign it, so allocate words and still read members unaligned.
+    let mut buffer = vec![0u64; 64 * 1024 / std::mem::size_of::<u64>()];
     // SAFETY: an all-zero group is a valid out-parameter for getgrgid_r.
     let mut entry: libc::group = unsafe { std::mem::zeroed() };
     let mut result = std::ptr::null_mut();
@@ -203,8 +206,8 @@ fn group_members(gid: u32) -> Option<Vec<Vec<u8>>> {
         libc::getgrgid_r(
             gid,
             &mut entry,
-            buffer.as_mut_ptr(),
-            buffer.len(),
+            buffer.as_mut_ptr().cast::<libc::c_char>(),
+            buffer.len() * std::mem::size_of::<u64>(),
             &mut result,
         )
     };
@@ -219,8 +222,12 @@ fn group_members(gid: u32) -> Option<Vec<Vec<u8>>> {
     // SAFETY: gr_mem is a NULL-terminated array of NUL-terminated strings
     // inside `buffer`.
     unsafe {
-        while !(*cursor).is_null() {
-            members.push(std::ffi::CStr::from_ptr(*cursor).to_bytes().to_vec());
+        loop {
+            let member = cursor.read_unaligned();
+            if member.is_null() {
+                break;
+            }
+            members.push(std::ffi::CStr::from_ptr(member).to_bytes().to_vec());
             cursor = cursor.add(1);
         }
     }

@@ -18,7 +18,7 @@ import tarfile
 import tempfile
 import time
 import tomllib
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -448,7 +448,6 @@ def _smoke_executable(executable: Path, version: str, target: Target) -> None:
                 deadline = time.monotonic() + 20.0
                 last_error: Optional[BaseException] = None
                 request_target: Optional[str] = None
-                session_cookie: Optional[str] = None
                 while time.monotonic() < deadline:
                     if process.poll() is not None:
                         output_handle.flush()
@@ -480,15 +479,9 @@ def _smoke_executable(executable: Path, version: str, target: Target) -> None:
                         if response.status == 200:
                             connection.close()
                             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
-                            connection.request("GET", request_target)
-                            response = connection.getresponse()
-                            response.read()
-                            session_cookie = response.getheader("Set-Cookie", "").split(";", 1)[0]
-                            if response.status != 303 or not session_cookie.startswith("emp_session="):
-                                raise RuntimeError("packaged service bootstrap did not establish a session")
-                            connection.close()
-                            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
-                            connection.request("GET", "/", headers={"Cookie": session_cookie})
+                            # The page carries no secrets; its script exchanges
+                            # the one-use bootstrap token for a header session.
+                            connection.request("GET", "/")
                             response = connection.getresponse()
                             body = response.read()
                             if response.status != 200:
@@ -496,6 +489,25 @@ def _smoke_executable(executable: Path, version: str, target: Target) -> None:
                             expected_ui = (PROJECT_ROOT / "easy_multi_provider" / "web" / "index.html").read_bytes()
                             if body != expected_ui:
                                 raise RuntimeError("packaged service did not serve the source Web UI bytes")
+                            bootstrap = parse_qs(urlsplit(request_target).query).get("bootstrap", [""])[0]
+                            connection.close()
+                            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+                            connection.request(
+                                "POST", "/api/session", body=b"",
+                                headers={"X-EMP-Bootstrap": bootstrap},
+                            )
+                            response = connection.getresponse()
+                            raw = response.read()
+                            session = json.loads(raw).get("session", "") if response.status == 200 else ""
+                            if not bootstrap or not session:
+                                raise RuntimeError("packaged service bootstrap did not establish a session")
+                            connection.close()
+                            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+                            connection.request("GET", "/api/config", headers={"X-EMP-Session": session})
+                            response = connection.getresponse()
+                            response.read()
+                            if response.status != 200:
+                                raise RuntimeError("packaged session was rejected with HTTP %s" % response.status)
                             break
                         last_error = RuntimeError(
                             "packaged health check returned HTTP %s" % response.status
