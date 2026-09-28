@@ -1,12 +1,15 @@
+//! External streaming behavior users see in Codex: answers arrive as
+//! Responses events, provider reasoning is never echoed into the answer
+//! text, non-stream replies are re-framed as a single completed event, and a
+//! truncated stream fails with a stable error instead of a silent success.
+
 use emp_core::{Dialect, Protocol, ResolvedRoute, RouteSource};
-use emp_router::{ExternalRouter, ProjectionIds, StreamResponseEvent};
-use emp_transport::{HttpClient, HttpClientPolicy};
+use emp_router::{ExternalRouter, ProjectionIds};
+use emp_transport::{FailureClass, HttpClient, HttpClientPolicy};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -21,7 +24,6 @@ struct RecordedRequest {
 
 struct StreamServer {
     address: SocketAddr,
-    fixtures: Arc<Value>,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
     shutdown: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
@@ -37,7 +39,7 @@ impl StreamServer {
         let fixtures = Arc::new(fixtures);
         let requests = Arc::new(Mutex::new(Vec::new()));
         let shutdown = Arc::new(AtomicBool::new(false));
-        let thread = {
+        let worker = {
             let fixtures = Arc::clone(&fixtures);
             let requests = Arc::clone(&requests);
             let shutdown = Arc::clone(&shutdown);
@@ -65,10 +67,9 @@ impl StreamServer {
         };
         Self {
             address,
-            fixtures,
             requests,
             shutdown,
-            thread: Some(thread),
+            thread: Some(worker),
         }
     }
 
@@ -91,7 +92,6 @@ impl Drop for StreamServer {
         if let Some(thread) = self.thread.take() {
             thread.join().expect("join stream upstream");
         }
-        assert!(self.fixtures.is_object());
     }
 }
 
@@ -202,6 +202,8 @@ fn frame(value: Value) -> String {
 }
 
 fn split_wire(wire: String) -> Vec<Value> {
+    // Deliver the SSE wire in awkward chunk sizes so no event depends on
+    // arriving inside one TCP chunk.
     let bytes = wire.into_bytes();
     let mut result = Vec::new();
     let mut start = 0;
@@ -290,7 +292,7 @@ fn stream_fixtures() -> Value {
 
 fn provider(base_url: &str, protocol: Protocol) -> Map<String, Value> {
     let (wire_protocol, auth_mode) = match protocol {
-        Protocol::Auto => panic!("oracle fixture requires a concrete protocol"),
+        Protocol::Auto => panic!("fixture requires a concrete protocol"),
         Protocol::ChatCompletions => ("chat_completions", "api_key"),
         Protocol::AnthropicMessages => ("anthropic_messages", "anthropic_api_key"),
         Protocol::Responses => ("responses", "api_key"),
@@ -306,7 +308,7 @@ fn provider(base_url: &str, protocol: Protocol) -> Map<String, Value> {
 
 fn route(base_url: &str, protocol: Protocol, upstream_model: &str) -> ResolvedRoute {
     let dialect = match protocol {
-        Protocol::Auto => panic!("oracle fixture requires a concrete protocol"),
+        Protocol::Auto => panic!("fixture requires a concrete protocol"),
         Protocol::ChatCompletions => Dialect::ChatCompletions,
         Protocol::AnthropicMessages => Dialect::AnthropicMessages,
         Protocol::Responses => Dialect::PortableResponses,
@@ -341,162 +343,47 @@ fn ids() -> ProjectionIds {
     ProjectionIds::new("resp_rust", "msg_rust", "rs_rust", "rs_late_rust")
 }
 
-async fn collect(router: &ExternalRouter<'_>, route: &ResolvedRoute) -> Vec<StreamResponseEvent> {
+async fn collect(router: &ExternalRouter<'_>, route: &ResolvedRoute) -> Vec<Value> {
     let mut stream = router
         .open_stream(route, &body(), &BTreeMap::new(), &ids())
         .await
         .expect("open external stream");
-    let mut events = Vec::new();
+    let mut bodies = Vec::new();
     while let Some(event) = stream.next_event().await.expect("stream event") {
-        events.push(event);
+        bodies.push(event.body);
     }
     assert!(stream.is_finished());
-    events
+    bodies
 }
 
 async fn collect_failure(
     router: &ExternalRouter<'_>,
     route: &ResolvedRoute,
-) -> (Vec<StreamResponseEvent>, emp_router::RouterError) {
+) -> emp_router::RouterError {
     let mut stream = router
         .open_stream(route, &body(), &BTreeMap::new(), &ids())
         .await
         .expect("open failing external stream");
-    let mut events = Vec::new();
+    let mut saw_partial = false;
     loop {
         match stream.next_event().await {
-            Ok(Some(event)) => events.push(event),
+            Ok(Some(_event)) => saw_partial = true,
             Ok(None) => panic!("incomplete stream unexpectedly succeeded"),
-            Err(error) => return (events, error),
+            Err(error) => {
+                assert!(saw_partial, "the answer delta must arrive before the error");
+                return error;
+            }
         }
     }
 }
 
-fn normalize_ids(value: &mut Value) {
-    fn walk(value: &mut Value, ids: &mut BTreeMap<String, String>, counts: &mut [usize; 3]) {
-        match value {
-            Value::Array(items) => {
-                for item in items {
-                    walk(item, ids, counts);
-                }
-            }
-            Value::Object(items) => {
-                for item in items.values_mut() {
-                    walk(item, ids, counts);
-                }
-            }
-            Value::String(text) => {
-                for (index, prefix) in ["resp_", "msg_", "rs_"].iter().enumerate() {
-                    if text.starts_with(prefix) {
-                        let replacement = ids.entry(text.clone()).or_insert_with(|| {
-                            counts[index] += 1;
-                            format!("{prefix}normalized_{}", counts[index])
-                        });
-                        *text = replacement.clone();
-                        break;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    if let Some(protocols) = value.as_object_mut() {
-        for events in protocols.values_mut() {
-            walk(events, &mut BTreeMap::new(), &mut [0, 0, 0]);
-        }
-    } else {
-        walk(value, &mut BTreeMap::new(), &mut [0, 0, 0]);
-    }
-}
-
-fn python_oracle(fixtures: &Value) -> Value {
-    let python = std::env::var("EMP_PYTHON_INTEROP").expect("configured Python oracle");
-    let script = r#"
-import json, sys
-from unittest.mock import patch
-from easy_multi_provider import router
-from easy_multi_provider.transport import sse_json_events
-
-fixtures = json.load(sys.stdin)
-body = {
-    "model":"demo/model", "stream":True,
-    "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
-    "reasoning":{"effort":"low"}, "max_output_tokens":64,
-}
-
-class Upstream:
-    status = 200
-    def __init__(self, chunks, content_type="text/event-stream"):
-        self.chunks = [chunk.encode() for chunk in chunks]
-        self.headers = {"Content-Type":content_type,
-                        "Content-Length":str(sum(map(len, self.chunks)))}
-    def __iter__(self):
-        return iter(self.chunks)
-    def close(self):
-        pass
-    def finish(self):
-        pass
-
-def provider(protocol, auth):
-    return {"id":"demo","base_url":"https://example.invalid/v1","protocol":protocol,
-            "auth_mode":auth,"api_key":"test-key","anthropic_version":"2023-06-01"}
-
-result = {}
-cases = [
-    ("chat", router.stream_chat_completion, provider("chat_completions", "api_key")),
-    ("anthropic", router.stream_anthropic_completion, provider("anthropic_messages", "anthropic_api_key")),
-]
-for name, function, config in cases:
-    with patch.object(router, "_request", return_value=Upstream(fixtures[name])):
-        result[name] = list(sse_json_events(function(config, body, {}, {}, upstream_model="upstream")))
-with patch.object(router, "_request", return_value=Upstream(fixtures["responses"])):
-    result["responses"] = list(sse_json_events(router.forward_responses_stream(
-        provider("responses", "api_key"), body, {}, {}, upstream_model="upstream")))
-with patch.object(router, "_request", return_value=Upstream(fixtures["chat_ordinary"], "application/json")):
-    result["chat_ordinary"] = list(sse_json_events(router.stream_chat_completion(
-        provider("chat_completions", "api_key"), body, {}, {}, upstream_model="ordinary")))
-with patch.object(router, "_request", return_value=Upstream(fixtures["chat_incomplete"])):
-    incomplete = list(sse_json_events(router.stream_chat_completion(
-        provider("chat_completions", "api_key"), body, {}, {}, upstream_model="incomplete")))
-    error = incomplete[-1]["response"]["error"]
-    result["chat_incomplete"] = {"status":error["status"], "error_class":error["error_class"]}
-json.dump(result, sys.stdout, ensure_ascii=False, separators=(",", ":"))
-"#;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut child = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .current_dir(root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn Python streaming Router oracle");
-    child
-        .stdin
-        .take()
-        .expect("Python oracle stdin")
-        .write_all(
-            serde_json::to_string(fixtures)
-                .expect("fixture JSON")
-                .as_bytes(),
-        )
-        .expect("write streaming fixtures");
-    let output = child.wait_with_output().expect("wait for Python oracle");
-    assert!(
-        output.status.success(),
-        "Python streaming Router oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("Python streaming oracle JSON")
+fn final_event(bodies: &[Value]) -> &Value {
+    bodies.last().expect("stream produced events")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-async fn external_streams_match_live_python_and_socket_contract() {
+async fn every_stream_protocol_ends_with_one_completed_response() {
     let fixtures = stream_fixtures();
-    let oracle = std::env::var("EMP_PYTHON_INTEROP")
-        .ok()
-        .map(|_| python_oracle(&fixtures));
     let server = StreamServer::start(fixtures);
     let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
     let router = ExternalRouter::new(&client);
@@ -515,75 +402,90 @@ async fn external_streams_match_live_python_and_socket_contract() {
         &route(&server.base_url(), Protocol::Responses, "upstream"),
     )
     .await;
-    let ordinary = collect(
-        &router,
-        &route(&server.base_url(), Protocol::ChatCompletions, "ordinary"),
-    )
-    .await;
-    let (_partial, incomplete) = collect_failure(
-        &router,
-        &route(&server.base_url(), Protocol::ChatCompletions, "incomplete"),
-    )
-    .await;
-    let mut rust = json!({
-        "chat": chat.into_iter().map(|event| event.body).collect::<Vec<_>>(),
-        "anthropic": anthropic.into_iter().map(|event| event.body).collect::<Vec<_>>(),
-        "responses": responses.into_iter().map(|event| event.body).collect::<Vec<_>>(),
-        "chat_ordinary": ordinary.into_iter().map(|event| event.body).collect::<Vec<_>>(),
-        "chat_incomplete": {
-            "status": incomplete.status(),
-            "error_class": incomplete.error_class().as_str(),
-        },
-    });
-    normalize_ids(&mut rust);
-    if let Some(mut oracle) = oracle {
-        normalize_ids(&mut oracle);
-        assert_eq!(rust, oracle);
+    for bodies in [&chat, &anthropic, &responses] {
+        assert_eq!(
+            final_event(bodies)["type"],
+            "response.completed",
+            "the projected stream always terminates with a completed event"
+        );
     }
-    assert_eq!(
-        rust["chat"].as_array().unwrap().last().unwrap()["type"],
-        "response.completed"
-    );
-    assert_eq!(
-        rust["anthropic"].as_array().unwrap().last().unwrap()["type"],
-        "response.completed"
-    );
-    assert_eq!(
-        rust["responses"].as_array().unwrap().last().unwrap()["type"],
-        "response.completed"
-    );
-    assert!(rust["responses"].as_array().unwrap().iter().all(|event| {
-        !event["type"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("reasoning_text")
-    }));
-
+    // Provider reasoning is visible as reasoning events but never echoed into
+    // the answer text: the answer text only carries the content deltas.
+    for bodies in [&chat, &anthropic] {
+        assert!(
+            bodies
+                .iter()
+                .any(|event| event["type"] == "response.output_text.delta"),
+            "the answer text still streams to the client"
+        );
+        let answer: String = bodies
+            .iter()
+            .filter(|event| event["type"] == "response.output_text.delta")
+            .filter_map(|event| event["delta"].as_str())
+            .collect();
+        assert_eq!(answer, "answer");
+    }
     let requests = server.requests();
-    assert_eq!(requests.len(), 5);
     assert_eq!(
         requests
             .iter()
             .map(|request| request.path.as_str())
             .collect::<Vec<_>>(),
-        [
-            "/v1/chat/completions",
-            "/v1/messages",
-            "/v1/responses",
-            "/v1/chat/completions",
-            "/v1/chat/completions"
-        ]
+        ["/v1/chat/completions", "/v1/messages", "/v1/responses"]
     );
     assert!(requests.iter().all(|request| {
         request.body["stream"] == true
             && request.headers.get("accept").map(String::as_str) == Some("text/event-stream")
     }));
     assert_eq!(
-        requests
-            .iter()
-            .map(|request| request.body["model"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["upstream", "upstream", "upstream", "ordinary", "incomplete"]
+        requests[0].body["stream_options"]["include_usage"], true,
+        "usage is requested so the completed event can carry token counts"
     );
-    assert_eq!(requests[0].body["stream_options"]["include_usage"], true);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn a_plain_json_reply_is_reframed_as_the_standard_response_event_sequence() {
+    let fixtures = stream_fixtures();
+    let server = StreamServer::start(fixtures);
+    let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
+    let router = ExternalRouter::new(&client);
+    let ordinary = collect(
+        &router,
+        &route(&server.base_url(), Protocol::ChatCompletions, "ordinary"),
+    )
+    .await;
+    let types: Vec<&str> = ordinary
+        .iter()
+        .filter_map(|event| event["type"].as_str())
+        .collect();
+    assert_eq!(
+        types,
+        [
+            "response.created",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.completed",
+        ],
+        "a plain JSON reply is re-framed as the standard Responses event sequence"
+    );
+    assert_eq!(final_event(&ordinary)["response"]["output_text"], "answer");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn a_truncated_stream_fails_instead_of_succeeding_silently() {
+    let fixtures = stream_fixtures();
+    let server = StreamServer::start(fixtures);
+    let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
+    let router = ExternalRouter::new(&client);
+    let error = collect_failure(
+        &router,
+        &route(&server.base_url(), Protocol::ChatCompletions, "incomplete"),
+    )
+    .await;
+    assert_eq!(error.error_class(), FailureClass::StreamIncomplete);
+    assert_eq!(error.status(), 502);
 }

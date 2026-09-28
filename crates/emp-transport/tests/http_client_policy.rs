@@ -87,7 +87,7 @@ fn credentials_are_never_reused_or_exposed() {
 }
 
 #[test]
-fn loopback_never_uses_proxy_and_environment_order_matches_python() {
+fn loopback_never_uses_a_proxy_and_scheme_order_is_deterministic() {
     let environment = ProxyEnvironment {
         https: Some("http://192.0.2.10:8118".to_owned()),
         ..ProxyEnvironment::default()
@@ -310,5 +310,66 @@ fn pool_key_and_idle_pool_are_route_scoped() {
     assert_eq!(
         invalid.validate(),
         Err(HttpClientPolicyError::InvalidPoolKey)
+    );
+}
+
+#[test]
+fn scheme_specific_proxies_bypass_lists_and_credentials_route_the_pool() {
+    let plan_proxy = |environment: ProxyEnvironment, url: &str| {
+        let policy = HttpClientPolicy::new(
+            ProxyPolicy::from_environment(environment),
+            TimeoutPolicy::default(),
+        );
+        let plan = policy
+            .plan(HttpMethod::Get, url, BTreeMap::new(), false)
+            .expect("proxy plan");
+        plan.route.proxy_origin.pool_token().to_owned()
+    };
+    let https_only = ProxyEnvironment {
+        https: Some("http://https-proxy.example:8082".to_owned()),
+        ..ProxyEnvironment::default()
+    };
+    let wss = ProxyEnvironment {
+        wss: Some("http://wss-proxy.example:8081".to_owned()),
+        ..https_only.clone()
+    };
+    assert_ne!(
+        plan_proxy(wss, "https://upstream.example/v1"),
+        plan_proxy(https_only, "https://upstream.example/v1"),
+        "wss takes precedence over https for TLS endpoints"
+    );
+
+    // A per-scheme http setting never proxies HTTPS traffic, and a shared
+    // all-scheme proxy with credentials still yields one stable identity.
+    let http_only = ProxyEnvironment {
+        http: Some("http://http-only.example:8081".to_owned()),
+        ..ProxyEnvironment::default()
+    };
+    let direct = plan_proxy(http_only, "https://upstream.example/v1");
+    assert_eq!(
+        direct,
+        plan_proxy(ProxyEnvironment::default(), "https://upstream.example/v1"),
+        "the https endpoint is direct when only http is configured"
+    );
+    let all = ProxyEnvironment {
+        all: Some("http://user:pass@fallback.example:3128".to_owned()),
+        ..ProxyEnvironment::default()
+    };
+    assert_eq!(
+        plan_proxy(all.clone(), "https://upstream.example/v1"),
+        plan_proxy(all, "https://other.example/v1"),
+        "the shared proxy identity is stable across origins"
+    );
+
+    // no_proxy suffixes bypass both exact hosts and subdomains.
+    let bypass = ProxyEnvironment {
+        all: Some("http://fallback.example:3128".to_owned()),
+        no_proxy: vec![".example.test".to_owned()],
+        ..ProxyEnvironment::default()
+    };
+    assert_eq!(
+        plan_proxy(bypass, "https://api.example.test/v1"),
+        plan_proxy(ProxyEnvironment::default(), "https://api.example.test/v1"),
+        "no_proxy suffix matches subdomains"
     );
 }
