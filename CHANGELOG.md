@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+## 0.11.11 (2026-09-27)
+
+Security:
+
+- Protect the management UI and API with a one-time bootstrap link and
+  per-browser sessions. Existing cookie-session pages keep working, and a
+  failed session rotation no longer consumes the login link.
+- Encrypt new `.emp` migration bundles with stronger key derivation
+  (envelope v2) and require export passwords of at least 12 bytes. Earlier
+  bundles and 8-byte passwords still import; EMP 0.11.10 and older cannot
+  import v2 bundles.
+- Record quota history by upstream account identity. History saved under an
+  account's local id is attributed with the credentials that recorded it, or
+  dropped, before the id is deleted or reused; history recorded under the
+  native login is never assigned to whoever is signed in now.
+- Trust a Codex executable only when every entry on its path is owned by root
+  or the current user, set-id binaries are rejected, and group-writable
+  entries belong to groups with no other members.
+
+Changes:
+
+- Route Codex Voice through EMP, fix the Voice subscription handshake, and
+  migrate the native Voice sideband on restart.
+- Add a redacted support report to diagnostics.
+- Use one per-user configuration path for every EMP launch.
+- Add selectable quota reset credits with confirmation, showing ISO-dated
+  expiry times in the picker.
+- Avoid a reverse DNS lookup when binding the local EMP listener.
+- Keep server-side web search out of external tool schemas.
+
 ## 0.11.10 (2026-09-23)
 
 - Calculate model TPS from all reported output tokens over the complete request
