@@ -69,6 +69,12 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
         return;
     };
     let path = request.raw_path();
+    // The management page carries a session; Codex does not.
+    if (path.starts_with("/v1/models") || path.starts_with("/v1/responses"))
+        && request.session_token().is_none()
+    {
+        crate::services::runtime::codex_contacted(state);
+    }
     let update_request = path.starts_with("/api/updates/");
     let gated_mutation = (request.method == RequestMethod::Post && !update_request)
         || request.method == RequestMethod::Delete;
@@ -77,7 +83,23 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
     } else {
         None
     };
-    let response = if gated_mutation && permit.is_none() {
+    let outdated_codex = path
+        .starts_with("/v1/")
+        .then(|| request.header("User-Agent"))
+        .flatten()
+        .and_then(emp_codex::runtime_inventory::outdated_codex_client);
+    let response = if let Some(version) = outdated_codex {
+        let minimum = emp_codex::runtime_inventory::minimum_codex();
+        Some(json_error_response(
+            426,
+            status_text(426),
+            &format!(
+                "EMP does not support Codex {version}. Please update Codex to {minimum} or newer."
+            ),
+            Some("unsupported_codex_version"),
+            &[],
+        ))
+    } else if gated_mutation && permit.is_none() {
         Some(json_error_response(
             503,
             status_text(503),
@@ -141,10 +163,7 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
             }
             Some(request)
                 if request.method == RequestMethod::Post
-                    && matches!(
-                        request.raw_path(),
-                        "/api/runtime/scan" | "/api/runtime/select"
-                    ) =>
+                    && request.raw_path() == "/api/runtime/scan" =>
             {
                 Some(crate::api::runtime::management_request(
                     &mut stream,
@@ -399,7 +418,10 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             if request.method == RequestMethod::Get
                 && matches!(
                     path,
-                    "/api/models/vision-test-image" | "/api/request-limits" | "/api/capabilities"
+                    "/api/models/vision-test-image"
+                        | "/api/models/audio-test-sound"
+                        | "/api/request-limits"
+                        | "/api/capabilities"
                 )
             {
                 return inspection::read_request(request, state);
@@ -440,8 +462,22 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
                     .into_iter()
                     .find(|value| !value.is_empty())
                     .unwrap_or_else(|| "1d".to_owned());
-                return match quota_history_response(state, &account_id, &range, now.trunc() as i64)
-                {
+                // An explicit start/end (Unix seconds, like /api/usage) overrides `range`.
+                let bound = |name| {
+                    query_values(request.target, name)
+                        .into_iter()
+                        .find_map(|value| value.parse::<f64>().ok())
+                        .filter(|value| value.is_finite())
+                        .map(|value| value.trunc() as i64)
+                };
+                let period = bound("start").zip(bound("end"));
+                return match quota_history_response(
+                    state,
+                    &account_id,
+                    &range,
+                    period,
+                    now.trunc() as i64,
+                ) {
                     Ok(payload) => {
                         let body = serde_json::to_vec(&payload)
                             .expect("quota history snapshot is serializable");

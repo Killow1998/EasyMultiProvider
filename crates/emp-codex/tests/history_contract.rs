@@ -1,9 +1,8 @@
 //! Reader-level history contracts.
 //!
-//! These tests own the semantics the deleted whitebox module used to pin:
-//! the reverse-base fast path and the full scan must stay observationally
-//! identical over the same durable rollout, and the reader's error reasons
-//! must match the Python oracle (`ordinal_missing`,
+//! These tests own the reader semantics: the reverse-base fast path and the
+//! full scan must stay observationally identical over the same durable
+//! rollout, and failures must use stable reasons (`ordinal_missing`,
 //! `ordinal_not_monotonic`, `compaction_identity_ambiguous`,
 //! `lineage_cycle`, `lineage_prefix_truncated`).
 
@@ -1157,9 +1156,7 @@ fn suffix_rollback_after_checkpoint_matches_full() {
 }
 
 #[test]
-fn ordinal_regression_reason_is_python_canonical() {
-    // The Python oracle raises HistoryAmbiguousError("ordinal_not_monotonic");
-    // the Rust reason must match byte for byte.
+fn ordinal_regression_reason_is_stable() {
     let records = [
         meta(),
         user(5, "later"),

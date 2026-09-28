@@ -563,6 +563,9 @@ fn start_authenticated_emp_with_api(
             "name":"Update fixture",
             "prefix":"fixture",
             "auth_file":account_auth,
+            // What EMP's startup quota sample records for this token, so the
+            // sample leaves the config bytes as written.
+            "credential_status":"invalid",
         }],
     }))
     .unwrap();

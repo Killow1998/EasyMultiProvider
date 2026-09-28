@@ -2,7 +2,7 @@
   "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config._canonicalize_private_paths",
   "status": "implemented",
   "implementation": "crates/emp-state/src/config.rs and crates/emp-state/src/accounts.rs",
-  "test": "crates/emp-state/tests/private_path_compat.rs",
+  "test": "crates/emp-state/tests/private_path.rs",
   "limitations": [
     "symlink cases run only on platforms where the test creates POSIX links"
   ],
@@ -16,9 +16,9 @@
         "secret_store_path": "secrets",
         "accounts": [
           {
-            "id": "egg",
+            "id": "demo",
             "prefix": "sub",
-            "auth_file": "accounts/egg/auth.json.enc"
+            "auth_file": "accounts/demo/auth.json.enc"
           }
         ],
         "providers": [
@@ -30,7 +30,7 @@
         ]
       },
       "expected": {
-        "account_root_relative": "nested/accounts/egg/auth.json.enc",
+        "account_root_relative": "nested/accounts/demo/auth.json.enc",
         "provider_root_relative": "nested/secrets/deepseek.key.enc"
       }
     },
@@ -43,9 +43,9 @@
         "secret_store_path": "~/.emp-rust-contract/secrets",
         "accounts": [
           {
-            "id": "egg",
+            "id": "demo",
             "prefix": "sub",
-            "auth_file": "~/.emp-rust-contract/accounts/egg/auth.json.enc"
+            "auth_file": "~/.emp-rust-contract/accounts/demo/auth.json.enc"
           }
         ],
         "providers": [
@@ -57,7 +57,7 @@
         ]
       },
       "expected": {
-        "account_home_relative": ".emp-rust-contract/accounts/egg/auth.json.enc",
+        "account_home_relative": ".emp-rust-contract/accounts/demo/auth.json.enc",
         "provider_home_relative": ".emp-rust-contract/secrets/deepseek.key.enc"
       }
     },
@@ -69,7 +69,7 @@
         "account_store_path": "accounts",
         "accounts": [
           {
-            "id": "egg",
+            "id": "demo",
             "prefix": "sub",
             "auth_file": "../outside/auth.json.enc"
           }
@@ -107,14 +107,14 @@
         "account_store_path": "accounts",
         "accounts": [
           {
-            "id": "egg",
+            "id": "demo",
             "prefix": "sub",
-            "auth_file": "accounts/egg/auth.json.enc"
+            "auth_file": "accounts/demo/auth.json.enc"
           }
         ]
       },
       "symlink": {
-        "link": "nested/accounts/egg/auth.json.enc",
+        "link": "nested/accounts/demo/auth.json.enc",
         "target": "outside/auth.json.enc"
       },
       "expected": {

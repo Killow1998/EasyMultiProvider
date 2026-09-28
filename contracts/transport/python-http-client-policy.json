@@ -7,8 +7,7 @@
     "tests/test_router.py:test_stream_request_uses_idle_timeout_without_total_deadline"
   ],
   "rust_evidence": [
-    "crates/emp-transport/tests/http_client_policy.rs",
-    "crates/emp-transport/tests/python_oracle.rs:http_proxy_selection_matches_live_python_oracle_when_configured"
+    "crates/emp-transport/tests/http_client_policy.rs"
   ],
   "covered_cases": [
     "loopback and NO_PROXY destinations bypass proxies",
@@ -24,5 +23,7 @@
     "bind the policy to the native socket/TLS client",
     "prove connection reuse, cancellation discard, redirect rejection and certificate validation with local endpoints"
   ],
-  "side_effects": ["none; this is a pure planning and ownership slice"]
+  "side_effects": [
+    "none; this is a pure planning and ownership slice"
+  ]
 }

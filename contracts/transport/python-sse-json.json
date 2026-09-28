@@ -6,8 +6,7 @@
     "tests/test_sse_failure_reasons.py"
   ],
   "rust_evidence": [
-    "crates/emp-transport/tests/sse_parser.rs",
-    "crates/emp-transport/tests/python_oracle.rs"
+    "crates/emp-transport/tests/sse_parser.rs"
   ],
   "covered_cases": [
     "arbitrary network splits including inside multibyte UTF-8 retain the same JSON objects",
@@ -18,5 +17,7 @@
     "each event has an independent 1 MiB aggregate data limit",
     "invalid JSON and non-object JSON have stable content-free failure reasons"
   ],
-  "side_effects": ["none; the parser retains bytes only until the current bounded event finishes"]
+  "side_effects": [
+    "none; the parser retains bytes only until the current bounded event finishes"
+  ]
 }

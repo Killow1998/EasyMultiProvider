@@ -441,11 +441,19 @@ class BoundedConcurrencyTests(unittest.TestCase):
         self.assertLess(elapsed, 4.0)
         self.assertTrue(all(status == 200 for _, status, _ in results))
         self.assertEqual(len(upstream_requests), 6)
-        records = [
-            record
-            for record in state.diagnostics.snapshot()["records"]
-            if record["status"] is not None or record["terminal_event_observed"]
-        ]
+        def finished_records():
+            return [
+                record
+                for record in state.diagnostics.snapshot()["records"]
+                if record["status"] is not None or record["terminal_event_observed"]
+            ]
+
+        # Each record is finalized just after its response is sent.
+        deadline = time.monotonic() + 2.0
+        records = finished_records()
+        while len(records) < 6 and time.monotonic() < deadline:
+            time.sleep(0.01)
+            records = finished_records()
         self.assertEqual(len(records), 6)
         self.assertEqual(
             Counter(record["model_id"] for record in records),

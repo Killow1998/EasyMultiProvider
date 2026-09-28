@@ -2,7 +2,6 @@
   "schema_version": 1,
   "id": "protocol.portable-responses-stream.python-rust",
   "python_oracle": "easy_multi_provider.dialects.project_stream_event",
-  "rust_test": "crates/emp-protocol/tests/portable_stream_python_oracle.rs",
   "same_stream_cases": [
     "reasoning item and plaintext delta suppression",
     "visible message and output-text preservation",

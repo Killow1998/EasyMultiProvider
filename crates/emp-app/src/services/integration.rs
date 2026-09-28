@@ -89,6 +89,7 @@ pub(crate) struct IntegrationState {
     pub(crate) owned: AtomicBool,
     pub(crate) startup_conflicts: std::sync::Mutex<Vec<String>>,
     pub(crate) runtime: RuntimeState,
+    pub(crate) watch: crate::services::runtime::RuntimeWatch,
     pub(crate) inventory: emp_codex::runtime_inventory::RuntimeInventory,
 }
 
@@ -108,6 +109,7 @@ impl IntegrationState {
             owned: AtomicBool::new(false),
             startup_conflicts: std::sync::Mutex::new(Vec::new()),
             runtime,
+            watch: Default::default(),
             inventory: emp_codex::runtime_inventory::RuntimeInventory::new(
                 codex_home,
                 (codex_binary != "codex").then(|| codex_binary.into()),

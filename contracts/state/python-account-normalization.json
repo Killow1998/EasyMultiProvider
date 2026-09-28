@@ -2,7 +2,7 @@
   "source": "EasyMultiProvider 0.11.6 easy_multi_provider/accounts.py",
   "status": "implemented",
   "implementation": "crates/emp-state/src/accounts.rs",
-  "test": "crates/emp-state/tests/account_compat.rs",
+  "test": "crates/emp-state/tests/account_normalization.rs",
   "hidden_models": {
     "valid": [
       {

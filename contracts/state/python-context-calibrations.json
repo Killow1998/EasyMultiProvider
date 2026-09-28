@@ -2,7 +2,7 @@
   "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config._normalize_context_calibrations",
   "status": "implemented",
   "implementation": "crates/emp-state/src/config.rs",
-  "test": "crates/emp-state/tests/context_calibration_compat.rs",
+  "test": "crates/emp-state/tests/context_calibration.rs",
   "valid": [
     {
       "name": "complete-observed-record",

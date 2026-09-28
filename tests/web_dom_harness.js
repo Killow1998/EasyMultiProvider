@@ -18,18 +18,21 @@ let catalogAliases = [];
 let catalogContexts = [];
 let catalogPreviews = [];
 let subscriptionModelInputs = [];
-let runtimeInputs = [];
 let quotaControls = [];
 let quotaRangeButtons = [];
 let resetCreditInputs = [];
+let modalityInputs = [];
 
 class Element {
-  constructor(id = "") {
+  constructor(id = "", tagName = "") {
     this.id = id;
+    this.tagName = tagName;
     this.textContent = "";
     this.className = "";
     this.dataset = {};
-    this.style = {};
+    this.style = {setProperty(name, value) { this[name] = String(value); }};
+    this.listeners = {};
+    this.parentNode = null;
     this.hidden = false;
     this.disabled = false;
     this.checked = false;
@@ -43,10 +46,9 @@ class Element {
   set innerHTML(value) {
     this._innerHTML = String(value);
     this.innerHTMLWrites++;
-    if (this.id === "modal_body") { parseDiscoveredOptions(this._innerHTML); parseSubscriptionOptions(this._innerHTML); parseResetCreditOptions(this._innerHTML); quotaRangeButtons = parseQuotaButtons(this._innerHTML); }
+    if (this.id === "modal_body") { parseDiscoveredOptions(this._innerHTML); parseSubscriptionOptions(this._innerHTML); parseResetCreditOptions(this._innerHTML); parseModalityInputs(this._innerHTML); quotaRangeButtons = parseQuotaButtons(this._innerHTML); }
     if (this.id === "subscription_model_list") parseSubscriptionOptions(this._innerHTML);
     if (this.id === "catalog_display_models") parseCatalogDisplay(this._innerHTML);
-    if (this.id === "codex_runtimes") parseRuntimeInputs(this._innerHTML);
     if (this.id === "quota_history_controls") quotaControls = parseQuotaButtons(this._innerHTML);
     if (this.id === "quota_history_content") for (const match of this._innerHTML.matchAll(/\bid="([^"]+)"/g)) elements.set(match[1], new Element(match[1]));
   }
@@ -56,11 +58,35 @@ class Element {
     if (selector.startsWith('#') && this._innerHTML.includes(`id="${selector.slice(1)}"`)) return getElement(selector.slice(1));
     return null;
   }
-  querySelectorAll(selector) { return selector === '[data-limit-id], [data-window]' ? quotaControls : []; }
+  querySelectorAll(selector) {
+    if (selector === "circle") return parseCircles(this._innerHTML);
+    return selector === '[data-limit-id], [data-window]' ? quotaControls : [];
+  }
+  get childElementCount() { return (this._innerHTML.match(/<[a-zA-Z]/g) || []).length; }
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }
-  click() { if (this.onclick) return this.onclick(); }
-  remove() {}
+  addEventListener(type, listener) { (this.listeners[type] ||= []).push(listener); }
+  click() {
+    for (const listener of this.listeners.click || []) listener();
+    if (this.onclick) return this.onclick();
+  }
+  remove() {
+    if (!this.parentNode) return;
+    const index = this.parentNode.children.indexOf(this);
+    if (index >= 0) this.parentNode.children.splice(index, 1);
+    this.parentNode = null;
+  }
+}
+
+function parseCircles(html) {
+  return [...html.matchAll(/<circle ([^>]*)\/>/g)].map(match => {
+    const circle = new Element("", "circle");
+    const column = match[1].match(/data-column="([^"]*)"/);
+    if (column) circle.dataset.column = column[1];
+    if (/data-lit="1"/.test(match[1])) circle.dataset.lit = "1";
+    if (/class="on"/.test(match[1])) circle.classList.add("on");
+    return circle;
+  });
 }
 
 function parseQuotaButtons(html) {
@@ -120,14 +146,10 @@ function parseResetCreditOptions(html) {
   }
 }
 
-function parseRuntimeInputs(html) {
-  runtimeInputs = [];
-  for (const match of html.matchAll(/<input type="checkbox" data-runtime-source value="([^"]*)"([^>]*)>/g)) {
-    const input = new Element();
-    input.value = unescapeHtml(match[1]);
-    input.checked = /\schecked(?:\s|$)/.test(match[2]);
-    input.disabled = /\sdisabled(?:\s|$)/.test(match[2]);
-    runtimeInputs.push(input);
+function parseModalityInputs(html) {
+  modalityInputs = [];
+  for (const match of html.matchAll(/<input type="checkbox" data-modality value="([^"]*)"([^>]*)>/g)) {
+    const input = new Element(); input.value = unescapeHtml(match[1]); input.checked = /\schecked(?:\s|$)/.test(match[2]); modalityInputs.push(input);
   }
 }
 
@@ -154,21 +176,55 @@ const document = {
     if (selector === "[data-catalog-alias]") return catalogAliases;
     if (selector === "[data-catalog-context]") return catalogContexts;
     if (selector === "[data-catalog-preview]") return catalogPreviews;
-    if (selector === "[data-runtime-source]") return runtimeInputs;
-    if (selector === "[data-runtime-source]:checked") return runtimeInputs.filter(input => input.checked);
+    if (selector === "[data-modality]") return modalityInputs;
+    if (selector === "[data-modality]:checked") return modalityInputs.filter(input => input.checked);
     return [];
+  },
+  querySelector(selector) {
+    if (selector === '[data-modality][value="image"]') return modalityInputs.find(input => input.value === "image") || null;
+    if (selector === '[data-modality][value="image"]:checked') return modalityInputs.find(input => input.value === "image" && input.checked) || null;
+    if (selector === ".toast") return document.body.children.find(child => child.className.split(/\s+/).includes("toast")) || null;
+    return null;
   },
   documentElement: {lang: "", dataset: {}},
   addEventListener() {},
-  createElement: () => new Element(),
-  body: {appendChild() {}},
+  createElement: tagName => new Element("", tagName),
+  createElementNS: (_namespace, tagName) => new Element("", tagName),
+  body: {
+    children: [],
+    appendChild(child) { child.remove?.(); child.parentNode = this; this.children.push(child); return child; },
+  },
 };
+
+// Timers of a second or more (toasts, notices, retry and poll delays) never fire on
+// their own, so the harness neither waits for them nor races them; tests flush them.
+const deferredTimers = new Map();
+let nextDeferredTimer = 1_000_000;
+function harnessSetTimeout(callback, delay = 0, ...args) {
+  if (Number(delay) < 1000) return setTimeout(callback, delay, ...args);
+  const id = nextDeferredTimer++;
+  deferredTimers.set(id, {callback, delay: Number(delay), args});
+  return id;
+}
+function harnessClearTimeout(id) {
+  if (deferredTimers.delete(id)) return;
+  clearTimeout(id);
+}
+function flushDeferredTimers(filter = () => true) {
+  for (const [id, timer] of [...deferredTimers]) {
+    if (!filter(timer)) continue;
+    deferredTimers.delete(id);
+    timer.callback(...timer.args);
+  }
+}
+const intervals = new Map();
+let nextInterval = 1;
 
 for (const id of [
   "status", "modal_backdrop", "modal_title", "modal_body", "modal_status",
   "modal_submit", "integration", "integration_badge", "integration_title",
-  "integration_summary", "integration_toggle", "codex_compatibility", "codex_runtime_save",
-  "codex_runtime_scan", "codex_runtimes", "language_select", "theme_select",
+  "integration_summary", "integration_toggle", "codex_compatibility", "codex_runtimes",
+  "emp_logo", "language_select", "theme_select",
   "catalog_display_search", "catalog_display_models",
   "diagnostics_summary", "performance_records", "diagnostics_records", "accounts", "providers", "models",
 ]) getElement(id);
@@ -235,6 +291,8 @@ const script = match[1].replace(/\nestablishSession\(\)\.then\(load\)\.catch\(er
 const browserWindow = {
   location: {origin:"http://127.0.0.1:4200", href:"http://127.0.0.1:4200/"},
   history: {state:null, replaced:null, replaceState(state, _title, url) { this.state = state; this.replaced = url; }},
+  reducedMotion: false,
+  matchMedia(query) { return {media: query, matches: query === "(prefers-reduced-motion: reduce)" && this.reducedMotion, addEventListener() {}, removeEventListener() {}}; },
 };
 const context = vm.createContext({
   console,
@@ -242,20 +300,23 @@ const context = vm.createContext({
   window: browserWindow,
   localStorage: {values:new Map(), getItem(key) { return this.values.get(key) || null; }, setItem(key, value) { this.values.set(key, String(value)); }},
   URL,
+  URLSearchParams,
   Headers,
   TextEncoder,
   TextDecoder,
   Uint8Array,
   AbortController,
-  setTimeout,
-  clearTimeout,
-  setInterval: () => 1,
-  clearInterval: () => {},
+  setTimeout: harnessSetTimeout,
+  clearTimeout: harnessClearTimeout,
+  setInterval: (callback, delay) => { const id = nextInterval++; intervals.set(id, {callback, delay}); return id; },
+  clearInterval: id => { intervals.delete(id); },
   confirm: () => true,
   fetch: async () => { throw new Error("unexpected fetch"); },
   btoa: value => Buffer.from(value, "binary").toString("base64"),
 });
 vm.runInContext(script, context, {filename: "index.html"});
+// Behaviors swap api() for stubs; keep the page's own client for tests of its error handling.
+vm.runInContext("var __realApi = api;", context);
 
 function run(source) { return vm.runInContext(source, context); }
 
@@ -374,33 +435,114 @@ async function integrationBehavior() {
   assert(enable, "enable endpoint was not called");
   assert.deepStrictEqual(JSON.parse(enable.options.body), {confirm_reload: true});
   assert(!calls.some(call => call.path === "/api/integration/sync"), "obsolete second sync was called");
-  assert.match(getElement("status").textContent, /EMP已启动，请重启Codex/);
   assert(getElement("modal_backdrop").classList.contains("hidden"), "successful modal must close");
+  assert.strictEqual(getElement("integration").dataset.state, "emp_applied");
+  assert.strictEqual(getElement("integration").dataset.runtime, "stopped_waiting_for_start");
+  assert.strictEqual(getElement("integration_badge").textContent, "EMP");
+  assert.strictEqual(getElement("integration_summary").textContent, "Codex 未运行，下次打开 Codex 就会使用 EMP。");
+  assert.doesNotMatch(getElement("status").textContent, /EMP已启动，请重启Codex/, "the old restart notice is gone");
+  // Starting EMP while Codex has not loaded it yet shows a self-dismissing popup instead of a notice.
+  assert.strictEqual(document.body.children.length, 1, "exactly one toast is shown");
+  const enableToast = document.querySelector(".toast");
+  assert(enableToast, "starting EMP must show a toast");
+  assert.strictEqual(enableToast.getAttribute("role"), "status");
+  assert.strictEqual(enableToast.style["--toast-ms"], "9000ms");
+  assert.strictEqual(enableToast.innerHTML, "<strong>EMP 已启动</strong><p>请重启 Codex。Codex 重启后，这里会自动显示“正在使用 EMP”。</p>");
+  assert([...deferredTimers.values()].some(timer => timer.delay === 9000), "the toast dismisses itself after 9 seconds");
+  flushDeferredTimers(timer => timer.delay === 9000);
+  assert(enableToast.classList.contains("leaving"), "an expiring toast animates out");
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.strictEqual(document.querySelector(".toast"), null, "an expired toast is removed");
+  // The dot-matrix logo is drawn once and swept by a finite animation.
+  const logo = getElement("emp_logo");
+  const logoDots = logo.querySelectorAll("circle");
+  assert.strictEqual(logoDots.length, 3 * 5 * 7, "the EMP logo draws three 5x7 dot-matrix glyphs");
+  assert.strictEqual(logoDots.filter(dot => dot.dataset.lit).length, 51, "E, M and P light their glyph dots");
+  assert.strictEqual(logo.getAttribute("viewBox"), "0 0 57.8 23.8");
+  assert.strictEqual(intervals.size, 1, "starting EMP sweeps the logo");
+  const [[logoTimer, logoSweep]] = [...intervals];
+  assert.strictEqual(logoSweep.delay, 45);
+  for (let step = 0; step < 40 && intervals.has(logoTimer); step++) logoSweep.callback();
+  assert.strictEqual(intervals.has(logoTimer), false, "the logo animation stops on its own");
 
   run("renderIntegration({codex_compatibility:{installed:'0.152.1',status:'recommended',source:'managed',helper_source:'managed',preferences:['auto'],runtimes:[{source:'managed',path:'/managed/codex',installed:'0.152.1',status:'recommended',selectable:true,targeted:true,helper:true},{source:'cursor',path:'/cursor/codex',installed:'0.150.1',status:'supported',selectable:true,targeted:true,helper:false},{source:'path_cli',path:'/old/codex',installed:'0.146.0',status:'unsupported',selectable:false,targeted:false,helper:false}],supported_range:'0.149.x–0.152.x',recommended:'0.152.x'},configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'emp_loaded',target:'emp',verified:true,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
-  assert.strictEqual(getElement("integration_summary").textContent, "EMP已启动，请重启Codex");
+  assert.strictEqual(getElement("integration_badge").textContent, "EMP");
+  assert.strictEqual(getElement("integration_summary").textContent, "Codex 正在使用 EMP。");
+  assert.strictEqual(getElement("integration").dataset.runtime, "emp_loaded");
+  assert(getElement("emp_logo").classList.contains("emp-live"), "the logo turns live once Codex uses EMP");
   assert.strictEqual(getElement("codex_compatibility").textContent, "");
   assert.strictEqual(getElement("codex_compatibility").hidden, true);
   assert.strictEqual(getElement("codex_compatibility").dataset.state, "recommended");
-  assert.match(getElement("codex_runtimes").innerHTML, /title="\/managed\/codex"/);
-  assert.match(getElement("codex_runtimes").innerHTML, /Codex CLI<\/strong> v0\.146\.0/);
-  assert.doesNotMatch(getElement("codex_runtimes").innerHTML, /<code>/);
-  assert.match(getElement("codex_runtimes").innerHTML, /data-runtime-source/, "compatible runtimes must be independently selectable");
-  assert.deepStrictEqual(runtimeInputs.map(input => input.checked), [true, true, false]);
-  assert.deepStrictEqual(runtimeInputs.map(input => input.disabled), [false, false, true]);
-  await run("saveCodexRuntimeSelection()");
-  const manualRuntimeSelection = calls.find(call => call.path === "/api/runtime/select");
-  assert.deepStrictEqual(JSON.parse(manualRuntimeSelection.options.body), {sources:['managed','cursor']});
-  await run("useAutomaticCodexRuntimes()");
-  await run("scanCodexRuntimes()");
-  assert(calls.some(call => call.path === "/api/runtime/select" && call.options.body.includes('auto')));
-  assert(calls.some(call => call.path === "/api/runtime/scan"));
+  // Every Codex from the minimum on reads the same config.toml, so there is no client selector.
+  assert.strictEqual(getElement("codex_runtimes").innerHTML, "", "rendering the status must not draw a runtime selector");
+  assert.doesNotMatch(html, /id="codex_runtimes"|data-runtime-source|\/api\/runtime\/(?:select|scan)/, "the Codex runtime selector was removed");
+  assert.strictEqual(run("typeof saveCodexRuntimeSelection"), "undefined");
+  assert(!calls.some(call => call.path.startsWith("/api/runtime/")), "no runtime selection requests are made");
 
   run("renderIntegration({codex_compatibility:{installed:'0.152.0-alpha.7.2',status:'unverified',source:'codex_app',helper_source:'codex_app',preferences:['codex_app'],runtimes:[{source:'codex_app',path:'C:/OpenAI/Codex/codex.exe',installed:'0.152.0-alpha.7.2',status:'unverified',selectable:true,targeted:true,helper:true}],supported_range:'0.149.x–0.152.x',recommended:'0.152.x'},configuration:{state:'native',relation:'original',conflicts:[]},runtime:{state:'not_checked',target:'native',verified:false,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
-  assert.match(getElement("codex_compatibility").textContent, /0\.152\.0-alpha\.7\.2.*尚未验证.*0\.152\.x/);
+  assert.strictEqual(getElement("codex_compatibility").textContent, "", "the version note is only shown for an unsupported Codex");
+  assert.strictEqual(getElement("codex_compatibility").hidden, true);
+  assert.strictEqual(getElement("codex_compatibility").dataset.state, "unverified");
+  assert.strictEqual(getElement("integration_summary").textContent, "当前使用原生 Codex。");
+  assert.strictEqual(getElement("emp_logo").classList.contains("emp-live"), false);
+  run("renderIntegration({codex_compatibility:{installed:'0.146.0',status:'unsupported',minimum:'0.149.0'},configuration:{state:'native',relation:'original',conflicts:[]},runtime:{state:'not_checked'}})");
+  assert.strictEqual(getElement("codex_compatibility").textContent, "Codex 0.146.0 版本过旧，EMP 需要 0.149.0 或更新版本，请升级 Codex。");
   assert.strictEqual(getElement("codex_compatibility").hidden, false);
+  assert.strictEqual(getElement("codex_compatibility").dataset.state, "unsupported");
+  const timersBeforeRender = deferredTimers.size;
   run("renderIntegration({configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'stopped_waiting_for_start',target:'emp',verified:false,action_required:false,detail:''},service_health:'ready',next_action:'none'})");
-  assert.strictEqual(getElement("integration_summary").textContent, "EMP已启动，请重启Codex");
+  assert.strictEqual(getElement("integration_badge").textContent, "EMP");
+  assert.strictEqual(getElement("integration_summary").textContent, "Codex 未运行，下次打开 Codex 就会使用 EMP。");
+  run("renderIntegration({configuration:{state:'emp_applied',relation:'applied',conflicts:[]},runtime:{state:'reload_required',target:'emp'}})");
+  assert.strictEqual(getElement("integration_badge").textContent, "待重启");
+  assert.strictEqual(getElement("integration_summary").textContent, "请重启 Codex，Codex 还在使用旧的模型列表。");
+  assert.strictEqual(getElement("integration").dataset.runtime, "reload_required");
+  run("renderIntegration({configuration:{state:'emp_applied',relation:'applied',conflicts:[]}})");
+  assert.strictEqual(getElement("integration_badge").textContent, "待重启");
+  assert.strictEqual(getElement("integration_summary").textContent, "请重启 Codex，让它加载 EMP。");
+  assert.strictEqual(getElement("integration").dataset.runtime, "not_checked");
+  assert.strictEqual(deferredTimers.size, timersBeforeRender, "rendering a waiting state must not start polling");
+  run("renderIntegration({configuration:{state:'conflict',conflicts:['listener_mismatch']},runtime:{state:'not_checked'}})");
+  assert.strictEqual(getElement("integration_badge").textContent, "其他 EMP");
+  assert.strictEqual(getElement("integration_summary").textContent, "Codex 正在使用另一个 EMP。要改用这个 EMP，请先恢复原生 Codex，再启动 EMP。");
+  run("renderIntegration({configuration:{state:'conflict',conflicts:['config_changed']},runtime:{state:'not_checked'}})");
+  assert.strictEqual(getElement("integration_badge").textContent, "需要处理");
+  assert.strictEqual(getElement("integration_summary").textContent, "Codex 的 config.toml 被其他程序改过。请恢复原生 Codex，再重新启动 EMP。");
+
+  // Codex reaching EMP pushes integration-updated on the event stream; the page re-reads
+  // /api/integration once (no verify, no timer) and announces the switch to EMP.
+  const eventCalls = [];
+  let eventIntegration = {configuration:{state:'emp_applied',relation:'applied',conflicts:[]}, runtime:{state:'stopped_waiting_for_start',target:'emp'}};
+  context.__eventApi = async path => {
+    eventCalls.push(path);
+    if (path === "/api/integration") return eventIntegration;
+    throw new Error("unexpected API " + path);
+  };
+  run("api = __eventApi; renderIntegration({configuration:{state:'emp_applied',relation:'applied',conflicts:[]}, runtime:{state:'stopped_waiting_for_start',target:'emp'}})");
+  eventIntegration = {configuration:{state:'emp_applied',relation:'applied',conflicts:[]}, runtime:{state:'emp_loaded',target:'emp',verified:true}};
+  const sseFrames = ['event: integration-updated\ndata: {}\n\n'];
+  context.__eventResponse = {ok:true, body:{getReader:() => ({
+    read: async () => sseFrames.length ? {done:false, value:new TextEncoder().encode(sseFrames.shift())} : {done:true},
+    cancel: async () => {},
+  })}};
+  await run("consumeQuotaEventStream(__eventResponse, new AbortController().signal)");
+  for (let tick = 0; tick < 5; tick++) await new Promise(resolve => setImmediate(resolve));
+  assert.deepStrictEqual(eventCalls, ["/api/integration"], "an integration-updated event re-reads the status once");
+  assert.strictEqual(getElement("integration_summary").textContent, "Codex 正在使用 EMP。");
+  assert(getElement("emp_logo").classList.contains("emp-live"));
+  const loadedToast = document.querySelector(".toast");
+  assert(loadedToast, "Codex loading EMP must be announced");
+  assert.strictEqual(loadedToast.innerHTML, "<strong>Codex 已加载 EMP</strong><p>现在可以在 Codex 里选择 EMP 的模型了。</p>");
+  assert.strictEqual(loadedToast.style["--toast-ms"], "7000ms");
+  loadedToast.click();
+  assert(loadedToast.classList.contains("leaving"), "clicking a toast dismisses it");
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.strictEqual(document.querySelector(".toast"), null);
+  for (const [id] of [...intervals]) intervals.delete(id);
+  // A repeated event while Codex already uses EMP refreshes quietly.
+  await run("integrationUpdated()");
+  assert.deepStrictEqual(eventCalls, ["/api/integration", "/api/integration"]);
+  assert.strictEqual(document.querySelector(".toast"), null, "no toast when Codex was already using EMP");
 
   let passiveVerifyCalls = 0;
   context.__apiStub = async (path) => {
@@ -424,7 +566,7 @@ async function integrationBehavior() {
   run("api = __apiStub");
   await run("loadIntegration()");
   assert.strictEqual(passiveVerifyCalls, 1);
-  assert.strictEqual(getElement("integration_summary").textContent, "EMP已启动，请重启Codex");
+  assert.strictEqual(getElement("integration_summary").textContent, "Codex 正在使用 EMP。", "a passive verify shows what Codex actually loaded");
   assert.strictEqual(getElement("integration_toggle").dataset.action, "restore");
 
   context.__apiStub = async (path, options = {}) => {
@@ -469,8 +611,8 @@ async function integrationBehavior() {
   };
   run("api = __apiStub; state = {native_catalog_path:'', accounts:[], providers:[], models:[]}; confirmIntegrationAction('enable')");
   await getElement("modal_submit").click();
-  assert.strictEqual(getElement("integration_badge").textContent, "EMP");
-  assert.strictEqual(getElement("integration_summary").textContent, "EMP已启动，请重启Codex");
+  assert.strictEqual(getElement("integration_badge").textContent, "待重启");
+  assert.strictEqual(getElement("integration_summary").textContent, "请重启 Codex，让它加载 EMP。");
   assert.doesNotMatch(getElement("integration_summary").textContent, /只读|未验证|无法确认|共享后端/);
   assert.strictEqual(getElement("integration_toggle").dataset.action, "restore");
 }
@@ -538,103 +680,109 @@ function quotaHistoryHtml() {
 }
 
 function quotaHistoryBehavior() {
-  run("renderQuotaHistory({series:[]}, '1d')");
-  assert.match(quotaHistoryHtml(), /暂无额度记录/);
-  context.__quotaPayload = {plans:[{observed_at:900,plan_type:'plus'},{observed_at:1150,plan_type:'pro_lite'},{observed_at:1250,plan_type:'pro'}],series:[{limit_id:'codex',window_kind:'primary',window_minutes:10080,points:[{observed_at:1000,remaining_percent:80},{observed_at:1300,remaining_percent:75}]}]};
-  run("renderQuotaHistory(__quotaPayload, '1h')");
+  run("delete periodPickers.quota_history; renderQuotaHistory({series:[]})");
+  assert.match(quotaHistoryHtml(), /<div class="quota-empty">此时间段无数据记录。<\/div>/);
+  context.__quotaPayload = {start_at:600,end_at:1600,interval_seconds:120,plans:[{observed_at:900,plan_type:'plus'},{observed_at:1150,plan_type:'pro_lite'},{observed_at:1250,plan_type:'pro'}],series:[{limit_id:'codex',window_kind:'primary',window_minutes:10080,points:[{observed_at:1000,remaining_percent:80},{observed_at:1300,remaining_percent:75}]}]};
+  run("renderQuotaHistory(__quotaPayload)");
   const html = quotaHistoryHtml();
   assert.match(html, /<svg/);
-  assert.match(html, /7d/);
-  assert.match(html, /75%/);
-  assert.match(html, /data-quota-point/);
+  assert.match(html, />7d<strong>75%<\/strong>/, "the legend shows the latest sample of the window");
+  assert.match(html, /class="quota-chart-marker"/);
   assert.match(html, /quota-hover-target/);
   assert.match(html, /quota-chart-tooltip/);
   assert.match(html, /quota-plan-history/);
   assert.match(html, /Plus/);
   assert.match(html, /Pro Lite/);
   assert.match(html, /--plan-color:#f2b705/);
+  assert.match(html, /<text class="quota-gap-label"[^>]*>无数据记录<\/text>/, "periods without samples are labelled");
   assert.doesNotMatch(html, /每 5 分钟|自动采样|保留 15 天/);
 
-  context.__recentQuotaPayload = {end_at:200000,series:[
+  context.__recentQuotaPayload = {start_at:0,end_at:200000,series:[
     {limit_id:'codex',window_kind:'primary',window_minutes:300,points:[{observed_at:1000,remaining_percent:50}]},
     {limit_id:'codex',window_kind:'secondary',window_minutes:10080,points:[{observed_at:2000,remaining_percent:60}]},
     {limit_id:'codex',window_kind:'primary',window_minutes:43200,points:[{observed_at:199900,remaining_percent:88}]},
   ]};
-  run("activeQuotaWindow=''; renderQuotaHistory(__recentQuotaPayload,'1d')");
-  assert.strictEqual(run('activeQuotaWindow'), '43200', 'the default window must have records in the selected range');
-  assert.match(quotaHistoryHtml(), /data-label="30d"/);
-  assert.doesNotMatch(quotaHistoryHtml(), /data-label="5h"|data-label="7d"/);
+  run("activeQuotaWindow=''; renderQuotaHistory(__recentQuotaPayload)");
+  assert.strictEqual(run('activeQuotaWindow'), '300', 'the shortest window is shown first');
+  const windowControls = getElement('quota_history_controls').innerHTML;
+  for (const label of ['5h','7d','30d']) assert.match(windowControls, new RegExp(`data-window="\\d+"[^>]*>${label}</button>`));
+  assert.match(getElement('quota_history_legend').innerHTML, />5h<strong>50%<\/strong>/);
+  assert.doesNotMatch(getElement('quota_history_legend').innerHTML, />7d<|>30d</);
 
-  for (const [seriesValues, expectedMin, expectedMax] of [
-    [[[72,74],[80]], 71, 81],
-    [[[74.1,74.2]], 73, 76],
-    [[[50,50]], 49, 51],
-    [[[0]], 0, 1],
-    [[[100]], 99, 100],
-    [[[0,100]], 0, 100],
-  ]) {
+  for (const seriesValues of [[[72,74],[80]], [[74.1,74.2]], [[50,50]], [[0]], [[100]], [[0,100]]]) {
     context.__axisSeries = seriesValues.map(values => ({points:values.map((value, index) => ({observed_at:1000 + index * 300, remaining_percent:value}))}));
-    const svg = run("quotaChartSvg(__axisSeries)");
+    const svg = run("quotaChartSvg(__axisSeries, {start:900, end:2000}, 180)");
     const ticks = [...svg.matchAll(/>([\d.]+)%<\/text>/g)].map(match => Number(match[1]));
-    assert.strictEqual(ticks.length, 5);
-    assert.strictEqual(ticks[0], expectedMin);
-    assert.strictEqual(ticks[4], expectedMax);
+    const values = seriesValues.flat();
+    assert(ticks.length >= 2 && ticks.length <= 6, `percent axis must have a few gridlines: ${ticks}`);
+    assert(ticks[0] >= 0 && ticks.at(-1) <= 100, `percent axis stays within 0-100: ${ticks}`);
+    assert(ticks[0] <= Math.min(...values) && ticks.at(-1) >= Math.max(...values), `percent axis covers every sample: ${ticks}`);
+    const step = ticks[1] - ticks[0];
+    assert([5,10,20,25].includes(step) && ticks.every((tick, index) => tick === ticks[0] + index * step), `percent gridlines use a round step: ${ticks}`);
     assert.doesNotMatch(svg, /NaN|Infinity/);
   }
-  assert.strictEqual(run("quotaChartSvg([])"), "");
+  assert.strictEqual(run("quotaChartSvg([], {start:900, end:2000}, 180)"), "");
+  assert.strictEqual(run("quotaChartSvg([{points:[{observed_at:1000,remaining_percent:50}]}], {start:2000, end:3000}, 180)"), "", "samples outside the period are not drawn");
+  assert.strictEqual(run('quotaChartSvg([{points:[{observed_at:1000,remaining_percent:null}]}], {start:900, end:2000}, 180)'), '');
   context.__resetSeries = [{limit_id:'codex',window_minutes:300,points:[
     {observed_at:1000,remaining_percent:5,resets_at:1200},
     {observed_at:1300,remaining_percent:100,resets_at:19200},
     {observed_at:1600,remaining_percent:95,resets_at:19200},
     {observed_at:5000,remaining_percent:90,resets_at:19200},
   ]}];
-  const resetSvg = run('quotaChartSvg(__resetSeries)');
+  const resetSvg = run('quotaChartSvg(__resetSeries, {start:900, end:5100}, 3600)');
   const resetPath = resetSvg.match(/<path d="([^"]+)"/)[1];
-  assert.strictEqual((resetPath.match(/M/g) || []).length, 3);
-  assert.strictEqual((resetPath.match(/L/g) || []).length, 1);
-  assert.match(resetSvg, /data-label="5h"/);
-  assert.match(resetSvg, /data-break="新的额度周期"/);
-  assert.match(resetSvg, /data-reset="19200"/);
-  assert.strictEqual(run('quotaChartSvg([{points:[{observed_at:10,remaining_percent:null}]}])'), '');
+  assert.strictEqual((resetPath.match(/M/g) || []).length, 2, "a new quota period starts a new line");
+  assert.strictEqual((resetPath.match(/L/g) || []).length, 2);
+  assert.match(resetSvg, /<line class="quota-period-divider" x1="[\d.]+"/, "the reset deadline is marked");
+  const brokenSvg = run('quotaChartSvg(__resetSeries, {start:900, end:5100}, 180)');
+  assert.strictEqual((brokenSvg.match(/<path d="([^"]+)"/)[1].match(/M/g) || []).length, 4, "samples further apart than the gap limit break the line");
 
-  const first = {dataset:{x:'90',y:'80',time:'1000',value:'80',label:'主窗口'},radius:'',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
-  const second = {dataset:{x:'90.1',y:'100',time:'1000',value:'60',label:'次窗口'},radius:'',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
-  const distant = {dataset:{x:'300',y:'120',time:'1300',value:'50',label:'主窗口'},radius:'1.8',setAttribute(name,value) { if (name === 'r') this.radius = value; }};
+  run('quotaChartSvg(__resetSeries, {start:900, end:5100}, 3600)');
+  const chartPoints = JSON.parse(JSON.stringify(run('quotaChartData.points')));
+  assert.deepStrictEqual(chartPoints.map(point => point.note), ['', '新的额度周期', '', '']);
+  const marker = {attributes:{hidden:''}, dataset:{series:'0'}, setAttribute(name,value) { this.attributes[name] = String(value); }, removeAttribute(name) { delete this.attributes[name]; }};
   const guide = {values:{hidden:''},setAttribute(name,value) { this.values[name] = value; },removeAttribute(name) { delete this.values[name]; }};
   const tooltip = {hidden:true,style:{},innerHTML:''};
   context.__quotaHoverSvg = {
+    viewBox: {baseVal: {width: 628}},
     getBoundingClientRect: () => ({left:0,width:628}),
-    querySelectorAll: selector => selector === '[data-quota-point]' ? [first,second,distant] : [],
+    querySelectorAll: selector => selector === '.quota-chart-marker' ? [marker] : [],
     querySelector: selector => selector === '.quota-chart-guide' ? guide : null,
     parentElement: {querySelector: selector => selector === '.quota-chart-tooltip' ? tooltip : null},
   };
   context.__quotaHoverTarget = {ownerSVGElement:context.__quotaHoverSvg};
-  run("quotaChartHover({currentTarget:__quotaHoverTarget,clientX:95})");
+  run(`quotaChartHover({currentTarget:__quotaHoverTarget,clientX:${chartPoints[1].x + 2}})`);
   assert.strictEqual('hidden' in guide.values, false);
-  assert.strictEqual(first.radius, '4');
-  assert.strictEqual(second.radius, '4');
-  assert.strictEqual(distant.radius, '1.8');
+  assert.strictEqual(Number(guide.values.x1), chartPoints[1].x, 'the guide snaps to the nearest sample');
+  assert.strictEqual('hidden' in marker.attributes, false);
+  assert.strictEqual(marker.attributes.cx, chartPoints[1].x.toFixed(1));
   assert.strictEqual(tooltip.hidden, false);
-  assert.match(tooltip.innerHTML, /主窗口 · 80%/);
-  assert.match(tooltip.innerHTML, /次窗口 · 60%/);
+  assert.match(tooltip.innerHTML, /5h · 100% · 新的额度周期<br>重置时间：/);
+  run('quotaChartSvg(__resetSeries, {start:900, end:5100}, 180)');
+  const gap = JSON.parse(JSON.stringify(run('quotaChartData.gaps'))).find(item => item.start === 1600 && item.end === 5000);
+  assert(gap, 'the unsampled period is recorded as a gap');
+  run(`quotaChartHover({currentTarget:__quotaHoverTarget,clientX:${(gap.x1 + gap.x2) / 2}})`);
+  assert.match(tooltip.innerHTML, /^<strong>无数据记录<\/strong><br>/);
+  assert.strictEqual(marker.attributes.hidden, '', 'no marker is shown inside a gap');
   run("quotaChartLeave({currentTarget:__quotaHoverTarget})");
   assert.strictEqual('hidden' in guide.values, true);
   assert.strictEqual(tooltip.hidden, true);
 
-  context.__groupedQuota = {series: ['codex','codex_bengalfox'].flatMap(limit_id => [300,10080].map(window_minutes => ({limit_id,window_minutes,points:[{observed_at:1000,remaining_percent:window_minutes === 300 ? 42 : 88}]})))};
-  run("activeQuotaLimit='codex'; activeQuotaWindow='300'; renderQuotaHistory(__groupedQuota,'1d')");
-  let grouped = quotaHistoryHtml();
-  assert.match(grouped, />Codex Spark<\/button>/);
-  assert.match(grouped, /data-label="5h"/);
-  assert.doesNotMatch(grouped, /data-label="7d"|data-label="Codex Spark/);
+  context.__groupedQuota = {start_at:0,end_at:2000,series: ['codex','codex_bengalfox'].flatMap(limit_id => [300,10080].map(window_minutes => ({limit_id,window_minutes,points:[{observed_at:1000,remaining_percent:window_minutes === 300 ? 42 : 88}]})))};
+  run("activeQuotaLimit='codex'; activeQuotaWindow='300'; renderQuotaHistory(__groupedQuota)");
+  assert.match(getElement('quota_history_controls').innerHTML, />Codex Spark<\/button>/);
+  assert.match(getElement('quota_history_legend').innerHTML, />5h<strong>42%<\/strong>/);
+  assert.doesNotMatch(getElement('quota_history_legend').innerHTML, />7d</);
   run("selectQuotaHistoryWindow('10080')");
-  grouped = quotaHistoryHtml();
-  assert.match(grouped, /data-label="7d"/);
-  assert.doesNotMatch(grouped, /data-label="5h"/);
+  assert.match(getElement('quota_history_legend').innerHTML, />7d<strong>88%<\/strong>/);
+  assert.doesNotMatch(getElement('quota_history_legend').innerHTML, />5h</);
   run("selectQuotaHistoryGroup('codex_bengalfox')");
-  grouped = quotaHistoryHtml();
-  assert.match(grouped, /data-label="Codex Spark · 7d"/);
-  assert.doesNotMatch(grouped, />codex_bengalfox|data-label="7d"/);
+  assert.strictEqual(run('activeQuotaLimit'), 'codex_bengalfox');
+  assert.strictEqual(run('activeQuotaWindow'), '10080', 'switching group keeps the selected window');
+  assert(quotaControls.find(button => button.dataset.limitId === 'codex_bengalfox').classList.contains('active'));
+  assert(!quotaControls.find(button => button.dataset.limitId === 'codex').classList.contains('active'));
+  assert.strictEqual(run("quotaSeriesLabel({limit_id:'codex_bengalfox',window_minutes:10080})"), 'Codex Spark · 7d');
   assert.strictEqual(run("quotaLimitLabel('unrecognized')"), 'unrecognized');
 }
 
@@ -667,9 +815,11 @@ function quotaHistoryPeriodsBehavior() {
   } finally { if (previousTimezone === undefined) delete process.env.TZ; else process.env.TZ = previousTimezone; }
 }
 
+async function settle() { for (let tick = 0; tick < 5; tick++) await new Promise(resolve => setImmediate(resolve)); }
+
 async function quotaHistorySwitchingBehavior() {
   const end = Date.parse('2026-09-12T12:00:00Z')/1000, start = end-86400;
-  context.__switchPayload = {end_at:end,series:[
+  context.__switchPayload = {start_at:start,end_at:end,series:[
     {limit_id:'codex',window_minutes:300,points:[
       {observed_at:start-300,remaining_percent:80,resets_at:start+7200},
       {observed_at:start+7500,remaining_percent:100,resets_at:start+25200},
@@ -682,77 +832,93 @@ async function quotaHistorySwitchingBehavior() {
       {observed_at:end-300,remaining_percent:90,resets_at:start+634800},
     ]},
   ]};
-  run("quotaHistoryZoom=[]; activeQuotaLimit='codex'; activeQuotaWindow='300'; renderQuotaHistory(__switchPayload,'1d')");
-  const frame = getElement('quota_history_content'), controls = getElement('quota_history_controls'), plot = getElement('quota_history_plot');
-  const frameWrites = frame.innerHTMLWrites, controlsWrites = controls.innerHTMLWrites, plotWrites = plot.innerHTMLWrites;
-  run("renderQuotaHistory(__switchPayload,'1d')");
-  assert.strictEqual(plot.innerHTMLWrites, plotWrites, 'an unchanged refresh must not replace the SVG or hover state');
-  assert.match(plot.innerHTML, new RegExp(`data-end="${start+7200}"`));
-  run("selectQuotaHistoryWindow('10080')");
-  assert.match(plot.innerHTML, new RegExp(`data-end="${start+30000}"`));
-  assert.doesNotMatch(plot.innerHTML, new RegExp(`data-end="${start+7200}"`));
-  assert.strictEqual(controls.innerHTMLWrites, controlsWrites, 'window switches must preserve the focused controls');
-  assert(quotaControls.find(button => button.dataset.window === '10080').classList.contains('active'));
-
   const waiting = [], calls = [];
   context.__switchApi = path => { calls.push(path); return new Promise((resolve,reject) => waiting.push({resolve,reject})); };
   run('__savedSwitchApi=api; __savedSwitchSync=refreshQuotaState; api=__switchApi; refreshQuotaState=async () => {}');
   try {
+    run("openQuotaHistory('test')");
+    assert.strictEqual(calls.length, 1, 'opening the chart loads the default period once');
+    const query = new URLSearchParams(calls[0].split('?')[1]);
+    assert(calls[0].startsWith('/api/accounts/test/quota-history?'));
+    assert.strictEqual(Number(query.get('end')) - Number(query.get('start')), 86400, 'the chart opens on the last day');
+    assert.strictEqual(getElement('quota_history_loading').hidden, false, 'a period the user opened shows the loading hint');
+    assert.strictEqual(intervals.size >= 1, true, 'the open chart refreshes itself periodically');
+    waiting[0].resolve(context.__switchPayload); await settle();
+    assert.strictEqual(getElement('quota_history_loading').hidden, true);
+    assert.strictEqual(run('activeQuotaWindow'), '300');
+
+    const frame = getElement('quota_history_content'), controls = getElement('quota_history_controls'), plot = getElement('quota_history_plot');
+    const frameWrites = frame.innerHTMLWrites, controlsWrites = controls.innerHTMLWrites, plotWrites = plot.innerHTMLWrites;
+    run("renderQuotaHistory(__switchPayload)");
+    assert.strictEqual(plot.innerHTMLWrites, plotWrites, 'an unchanged refresh must not replace the SVG or hover state');
+    assert.match(plot.innerHTML, new RegExp(`data-end="${start+7200}"`), 'the 5h reset deadline splits the chart');
+    run("selectQuotaHistoryWindow('10080')");
+    assert.match(plot.innerHTML, new RegExp(`data-end="${start+30000}"`));
+    assert.doesNotMatch(plot.innerHTML, new RegExp(`data-end="${start+7200}"`));
+    assert.strictEqual(controls.innerHTMLWrites, controlsWrites, 'window switches must preserve the focused controls');
+    assert(quotaControls.find(button => button.dataset.window === '10080').classList.contains('active'));
+    run("selectQuotaHistoryWindow('300')");
+
     const beforeRefresh = plot.innerHTML;
-    const pending = run("loadQuotaHistory('test','1d')");
+    run("refreshPeriod('quota_history', false)");
+    assert.strictEqual(calls.length, 2);
     assert.strictEqual(plot.innerHTML, beforeRefresh, 'a pending fetch must leave the chart visible');
-    for (const range of ['1h','1d','1w','all']) run(`selectQuotaHistoryRange('${range}')`);
-    assert.strictEqual(calls.length, 1, 'range switches must reuse the loaded 15-day snapshot');
-    assert(calls[0].endsWith('range=all'));
-    waiting[0].resolve(context.__switchPayload); await pending;
-    assert.strictEqual(run('activeQuotaRange'), 'all', 'a late fetch must not undo the latest selected range');
-    run("selectQuotaHistoryRange('1d'); selectQuotaHistoryWindow('300')");
-    const segment = plot.innerHTML.match(/data-start="([^"]+)" data-end="([^"]+)" data-mode="([^"]+)"[^>]*role="button"/);
+    assert.strictEqual(getElement('quota_history_loading').hidden, true, 'background refreshes stay silent');
+    waiting[1].resolve(context.__switchPayload); await settle();
+    assert.strictEqual(plot.innerHTML, beforeRefresh);
+
+    const segment = plot.innerHTML.match(/data-start="([^"]+)" data-end="([^"]+)"[^>]*role="button"/);
     assert(segment, 'reset regions must offer click/keyboard drill-down');
-    context.__zoomTarget = {dataset:{start:segment[1],end:segment[2],mode:segment[3]}};
+    context.__zoomTarget = {dataset:{start:segment[1],end:segment[2]}};
     run('zoomQuotaHistory(__zoomTarget)');
-    assert.strictEqual(getElement('quota_history_back').disabled, false);
-    const zoomed = plot.innerHTML;
-    const zoomRefresh = run("loadQuotaHistory('test','1d')");
-    waiting[1].resolve({...context.__switchPayload,end_at:end+300}); await zoomRefresh;
-    assert.strictEqual(plot.innerHTML, zoomed, 'auto refresh must retain the drilled-down period');
+    assert.strictEqual(calls.length, 3);
+    const zoomQuery = new URLSearchParams(calls[2].split('?')[1]);
+    assert.deepStrictEqual([Number(zoomQuery.get('start')), Number(zoomQuery.get('end'))], [Math.floor(Number(segment[1])), Math.ceil(Number(segment[2]))], 'zooming loads just that section');
+    waiting[2].resolve({...context.__switchPayload, start_at:Number(segment[1]), end_at:Number(segment[2])}); await settle();
+    assert.strictEqual(getElement('quota_history_back').hidden, false);
     const zoomRange = getElement('quota_history_range').textContent;
+    assert.strictEqual(zoomRange, run(`quotaTimeRangeText(${segment[1]},${segment[2]})`));
+    const zoomed = plot.innerHTML;
+    run("refreshPeriod('quota_history', false)");
+    waiting[3].resolve({...context.__switchPayload, start_at:Number(segment[1]), end_at:Number(segment[2])}); await settle();
+    assert.strictEqual(plot.innerHTML, zoomed, 'auto refresh must retain the drilled-down period');
     run("selectQuotaHistoryWindow('10080')");
     assert.strictEqual(getElement('quota_history_range').textContent, zoomRange, 'changing the quota window must preserve the time interval under inspection');
     run('backQuotaHistory()');
     assert.strictEqual(run('quotaHistoryZoom.length'), 0);
-    assert.strictEqual(getElement('quota_history_back').disabled, true);
+    waiting[4].resolve(context.__switchPayload); await settle();
+    assert.strictEqual(getElement('quota_history_back').hidden, true);
     const beforeFailure = plot.innerHTML;
-    const failed = run("loadQuotaHistory('test','1d')");
-    waiting[2].reject(new Error('offline')); await failed;
+    run("refreshPeriod('quota_history', false)");
+    waiting[5].reject(new Error('offline')); await settle();
     assert.strictEqual(plot.innerHTML, beforeFailure, 'a failed refresh must not erase existing data');
     assert.strictEqual(getElement('modal_status').textContent, 'offline');
     assert.strictEqual(getElement('quota_history_loading').hidden, true);
     assert.strictEqual(frame.innerHTMLWrites, frameWrites, 'switches and refreshes must preserve the chart frame');
-  } finally { run('api=__savedSwitchApi; refreshQuotaState=__savedSwitchSync'); }
+  } finally { run('clearQuotaHistoryTimer(); api=__savedSwitchApi; refreshQuotaState=__savedSwitchSync'); }
 }
 
 async function quotaHistoryRaceBehavior() {
   const waiting = [];
   context.__historyApi = () => new Promise(resolve => waiting.push(resolve));
-  run('__savedHistoryApi = api; __savedQuotaSync = refreshQuotaState; api = __historyApi; refreshQuotaState = async () => {}');
+  run("__savedHistoryApi = api; __savedQuotaSync = refreshQuotaState; api = __historyApi; refreshQuotaState = async () => {}; periodPickers.quota_history = {preset:'', start:0, end:2000, onChange() {}}");
   try {
-    const oldRequest = run("loadQuotaHistory('first','1h')");
-    const newRequest = run("loadQuotaHistory('second','1d')");
-    waiting[1]({series:[{limit_id:'codex',window_minutes:10080,points:[{observed_at:1000,remaining_percent:73}]}]});
+    const oldRequest = run("loadQuotaHistory('first', true)");
+    const newRequest = run("loadQuotaHistory('second', true)");
+    waiting[1]({start_at:0,end_at:2000,series:[{limit_id:'codex',window_minutes:10080,points:[{observed_at:1000,remaining_percent:73}]}]});
     await newRequest;
     const latest = quotaHistoryHtml();
     waiting[0]({series:[]});
     await oldRequest;
-    assert.strictEqual(quotaHistoryHtml(), latest);
+    assert.strictEqual(quotaHistoryHtml(), latest, 'a late response for an older request is ignored');
     assert.match(latest, /73%/);
-    const closingRequest = run("loadQuotaHistory('second','1h')");
+    const closingRequest = run("loadQuotaHistory('second', false)");
     run('clearQuotaHistoryTimer()');
     getElement('quota_history_content').innerHTML = 'closed';
     waiting[2]({series:[]});
     await closingRequest;
     assert.strictEqual(getElement('quota_history_content').innerHTML, 'closed');
-  } finally { run('api = __savedHistoryApi; refreshQuotaState = __savedQuotaSync'); }
+  } finally { run('delete periodPickers.quota_history; api = __savedHistoryApi; refreshQuotaState = __savedQuotaSync'); }
 }
 
 function performanceDiagnosticsBehavior() {
@@ -814,11 +980,11 @@ function performanceDiagnosticsBehavior() {
 
 async function cacheUsageBehavior() {
   const period = {start:1789214400,end:1789215000,complete:false,rate:80,call_count:3,sample_count:2,hit_count:1};
-  const model = {model_id:'external/gemini-3.8-flash',provider_id:'NA2H',speed_mode:'unknown',rate:80,input_tokens:1000,cached_input_tokens:800,call_count:3,sample_count:2,hit_count:1,periods:[period]};
+  const model = {model_id:'external/gemini-3.8-flash',provider_id:'Gateway',speed_mode:'unknown',rate:80,input_tokens:1000,cached_input_tokens:800,call_count:3,sample_count:2,hit_count:1,periods:[period]};
   context.__cachePayload = {capacity:512,cache:{models:[model, {...model, model_id:'<img onerror=bad>',rate:null,sample_count:0,periods:[{...period,rate:null,sample_count:0}]}, {...model,model_id:'deepseek',rate:0,hit_count:0,periods:[{...period,rate:0,hit_count:0,complete:true}]}]}};
   run('renderDiagnostics(__cachePayload)');
   const html = getElement('cache_records').innerHTML;
-  assert.match(html, /external\/gemini-3.8-flash · NA2H/);
+  assert.match(html, /external\/gemini-3.8-flash · Gateway/);
   assert.match(html, /80\.0%/);
   assert.match(html, />0\.0%</);
   assert.match(html, /未提供/);
@@ -851,13 +1017,38 @@ async function cacheUsageBehavior() {
   assert.strictEqual(run('diagnosticsTimer'), null);
 }
 
-function providerDiscoveryErrorBehavior() {
-  context.__badKey = Object.assign(new Error('upstream 401'), {status:401});
-  context.__badRequestKey = Object.assign(new Error('upstream 400'), {status:400});
-  context.__busyProvider = Object.assign(new Error('upstream 429'), {status:429});
-  assert.match(run('providerDiscoveryError(__badKey)'), /API Key 无效/);
-  assert.match(run('providerDiscoveryError(__badRequestKey)'), /API Key 无效/);
-  assert.match(run('providerDiscoveryError(__busyProvider)'), /请求过于频繁/);
+async function providerDiscoveryErrorBehavior() {
+  const upstream = (type, message = 'upstream failure') => Object.assign(new Error(message), {status:502, payload:{error:{type, message}}});
+  context.__badKey = upstream('auth', 'upstream 401');
+  context.__busyProvider = upstream('rate_limit', 'upstream 429');
+  context.__offlineProvider = upstream('dns_failure');
+  context.__downProvider = upstream('upstream_5xx');
+  context.__missingKey = Object.assign(new Error('provider API key is not configured'), {status:400, payload:{error:{message:'provider API key is not configured'}}});
+  context.__unknownFailure = upstream('something_new', 'raw upstream detail');
+  context.__plainFailure = new Error('');
+  assert.strictEqual(run('providerDiscoveryError(__badKey)'), 'API Key 无效或已过期，请检查后重新填写。');
+  assert.strictEqual(run('providerDiscoveryError(__busyProvider)'), '请求过于频繁，请稍后重试。');
+  assert.strictEqual(run('providerDiscoveryError(__offlineProvider)'), '连不上模型服务，请检查网络、代理和 Base URL。');
+  assert.strictEqual(run('providerDiscoveryError(__downProvider)'), '模型服务暂时不可用，请稍后重试。');
+  assert.strictEqual(run('providerDiscoveryError(__missingKey)'), '还没有填写 API Key。');
+  assert.strictEqual(run('providerDiscoveryError(__unknownFailure)'), 'raw upstream detail', 'unclassified failures keep their message');
+  assert.strictEqual(run('providerDiscoveryError(__plainFailure)'), '无法读取模型列表。');
+
+  // api() gives every caller the readable text; only EMP's own 401 drops the page session.
+  const originalFetch = context.fetch;
+  let body = {error:{type:'auth', message:'Incorrect API key provided'}};
+  context.fetch = async () => ({ok:false, status:401, statusText:'Unauthorized', text:async () => JSON.stringify(body)});
+  run("sessionToken='fixture-session'; legacyCookieAuth=false");
+  try {
+    await assert.rejects(run("__realApi('/api/providers/discover', {method:'POST', body:'{}'})"), error => error.message === 'API Key 无效或已过期，请检查后重新填写。' && error.session === false && error.status === 401);
+    assert.strictEqual(run('sessionToken'), 'fixture-session', 'an upstream 401 must not sign the page out');
+    body = {error:{message:'management session is required'}};
+    await assert.rejects(run("__realApi('/api/config')"), error => error.session === true && /请从 EMP 重新打开管理页/.test(error.message));
+    assert.strictEqual(run('sessionToken'), '', 'a lost EMP session is cleared');
+  } finally {
+    context.fetch = originalFetch;
+    run("sessionToken=''");
+  }
 }
 
 function quotaMeterBehavior() {
@@ -931,7 +1122,10 @@ async function creditLayoutBehavior() {
   assert.match(modal, /data-reset-countdown="2030-01-01T00:24:05Z">[1-9]/, 'official ISO expiry must show a positive remaining time');
   assert.strictEqual(run("resetCountdownText('2030-01-01T00:24:05Z', Date.UTC(2029,11,31,23,24,5))"), '1h');
   assert.match(modal, /First reset/);
-  assert.strictEqual(resetCreditInputs.length, 3, 'two detailed credits and automatic selection must be available');
+  assert.strictEqual(resetCreditInputs.length, 2, 'each detailed credit is selectable');
+  assert.deepStrictEqual(resetCreditInputs.map(input => input.value), ['0', '1']);
+  assert.deepStrictEqual(resetCreditInputs.map(input => input.checked), [true, false], 'the first credit is selected by default');
+  assert.doesNotMatch(modal, /value="auto"|由 OpenAI 选择下一个可用机会/, 'the automatic choice was removed');
   assert.strictEqual(getElement('modal_submit').textContent, '继续确认');
   const calls = [];
   context.__resetApi = async (path, options) => {
@@ -1122,7 +1316,9 @@ async function nativeOnlyIntegrationBehavior() {
   assert.match(getElement('modal_body').innerHTML, /应用当前 EMP 设置.*重启 Codex/);
   await getElement('modal_submit').click();
   assert(getElement('modal_backdrop').classList.contains('hidden'));
-  assert.strictEqual(getElement('integration_summary').textContent, 'EMP已启动，请重启Codex');
+  assert.strictEqual(getElement('integration_badge').textContent, '待重启');
+  assert.strictEqual(getElement('integration_summary').textContent, '请重启 Codex，让它加载 EMP。');
+  assert.match(document.querySelector('.toast').innerHTML, /EMP 已启动.*请重启 Codex/);
   assert.doesNotMatch(getElement('integration_summary').textContent, /无法确认|仅凭|未验证|共享后端/);
   assert.strictEqual(getElement('integration_toggle').dataset.action, 'restore');
   assert.doesNotMatch(getElement('integration_summary').textContent, /检查失败|仍加载旧目录/);
@@ -1192,7 +1388,9 @@ function modelGroupBehavior() {
   assert(html.indexOf("provider-b/old") < html.indexOf("provider-b/hidden"), "hidden models must sort last");
   assert.strictEqual((html.match(/class="entity-card model-card/g) || []).length, 4);
   assert.strictEqual((html.match(/<details class="action-menu">/g) || []).length, 0);
-  assert.strictEqual((html.match(/data-ui-action="model-test-vision"/g) || []).length, 4);
+  assert.strictEqual((html.match(/data-ui-action="model-edit"/g) || []).length, 4);
+  assert.strictEqual((html.match(/data-ui-action="model-test"/g) || []).length, 4);
+  assert.strictEqual((html.match(/data-ui-action="model-test-vision"/g) || []).length, 0, "per-modality tests live in the model editor");
   assert.strictEqual((html.match(/data-ui-action="model-remove"/g) || []).length, 4);
   assert.doesNotMatch(html, /<table>/, "model actions should not be squeezed into table cells");
   assert.doesNotMatch(html, /<br>/, "model metadata should wrap naturally instead of forcing extra lines");
@@ -1346,13 +1544,15 @@ async function atomicStateBehavior() {
   assert.strictEqual(run("modalReasoningSummarySupport"), true, "metadata inspection must retain summary capability");
 
   run("state = {catalog_presentations:{},accounts:[],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/model',provider:'provider-a',upstream_id:'model',input_modalities:['text'],output_modalities:['text','audio'],output_limit:4000,capability_sources:{input_modalities:{source:'advertised'},output_modalities:{source:'advertised'}}}]}; openManualModelModal('provider-a/model')");
-  assert.match(getElement("modal_body").innerHTML, /id="modal_model_input_modalities" value="text"/);
-  assert.match(getElement("modal_body").innerHTML, /id="modal_model_vision"/);
-  assert.strictEqual(getElement("modal_model_vision").value, "unsupported");
+  const editor = getElement("modal_body").innerHTML;
+  assert.deepStrictEqual(modalityInputs.map(input => [input.value, input.checked]), [["text", true], ["image", false]], "Codex input modalities are offered as checkboxes");
+  assert.match(editor, /data-ui-action="modality-test" data-id="image"/, "a saved model can test image input from the editor");
+  assert.match(editor, /onclick="testModalAudio\(\)"/, "a saved model can test audio input from the editor");
+  assert.doesNotMatch(editor, /id="modal_model_input_modalities"|id="modal_model_vision"/, "free-text modalities and the vision selector were replaced");
+  assert.strictEqual(run("modalVisionStatus"), "unsupported");
   getElement("modal_model_provider").value = "provider-a";
   getElement("modal_model_upstream").value = "model";
-  getElement("modal_model_input_modalities").value = "text";
-  getElement("modal_model_vision").value = "supported";
+  modalityInputs.find(input => input.value === "image").checked = true;
   context.__persistStateStub = async (_message, candidate) => { context.__savedCandidate = candidate; context.state = candidate; };
   run("__realPersistState = persistState; persistState = __persistStateStub");
   await run("saveManualModel()");
@@ -1364,21 +1564,32 @@ async function atomicStateBehavior() {
   assert.deepStrictEqual(Array.from(savedModel.output_modalities), ["text", "audio"], "editing input must preserve output modalities");
   assert.strictEqual(savedModel.output_limit, 4000, "editing input must preserve discovered limits");
   assert.strictEqual(savedModel.capability_sources.output_modalities.source, "advertised");
-  run("openManualModelModal('provider-a/model')");
+
+  run("state.models[0].input_modalities = ['text','image','audio']; openManualModelModal('provider-a/model')");
+  assert.deepStrictEqual(modalityInputs.map(input => [input.value, input.checked]), [["text", true], ["image", true]]);
   getElement("modal_model_provider").value = "provider-a";
   getElement("modal_model_upstream").value = "model";
-  getElement("modal_model_input_modalities").value = "text, invalid!";
-  await assert.rejects(run("saveManualModel()"), /请输入有效的其他输入模态/);
-  assert.deepStrictEqual(Array.from(run("state.models[0].input_modalities")), ["text", "image"]);
+  run("persistState = __persistStateStub");
+  await run("saveManualModel()");
+  run("persistState = __realPersistState; state = __savedCandidate");
+  assert.deepStrictEqual(Array.from(run("state.models[0].input_modalities")), ["text", "audio", "image"], "stored modalities Codex does not send are kept");
 
-  getElement("modal_model_input_modalities").value = "text";
-  getElement("modal_model_vision").value = "unknown";
+  run("state.models[0].input_modalities = ['text','invalid!']; openManualModelModal('provider-a/model')");
+  getElement("modal_model_provider").value = "provider-a";
+  getElement("modal_model_upstream").value = "model";
+  await assert.rejects(run("saveManualModel()"), /输入模态无效/);
+  assert.deepStrictEqual(Array.from(run("state.models[0].input_modalities")), ["text", "invalid!"], "a rejected save leaves the model unchanged");
+
+  run("state.models[0].input_modalities = ['text']; state.models[0].capability_sources = {input_modalities:{source:'unknown'}}; openManualModelModal('provider-a/model')");
+  assert.strictEqual(run("modalVisionStatus"), "unknown");
+  getElement("modal_model_provider").value = "provider-a";
+  getElement("modal_model_upstream").value = "model";
   run("persistState = __persistStateStub");
   await run("saveManualModel()");
   run("persistState = __realPersistState");
   run("state = __savedCandidate");
   assert.deepStrictEqual(Array.from(run("state.models[0].input_modalities")), ["text"]);
-  assert.strictEqual(run("state.models[0].capability_sources.input_modalities.source"), "unknown");
+  assert.strictEqual(run("state.models[0].capability_sources.input_modalities.source"), "unknown", "an unchecked, untested image box keeps vision unknown");
 
   const visionCalls = [];
   context.__apiStub = async (path, options) => {
@@ -1398,6 +1609,12 @@ async function atomicStateBehavior() {
   assert.strictEqual(probe.max_output_tokens, 512);
   assert.match(getElement("status").textContent, /仅为本次兼容性观察/);
   assert.strictEqual(run("state.models[0].capability_sources.input_modalities.source"), "unknown", "probe must not silently change a manual override");
+  run("openManualModelModal('provider-a/model')");
+  assert.strictEqual(modalityInputs.find(input => input.value === "image").checked, false);
+  await run("testModalVision()");
+  assert.strictEqual(modalityInputs.find(input => input.value === "image").checked, true, "a passing image test ticks the image box");
+  assert.strictEqual(run("modalVisionStatus"), "supported");
+  assert.strictEqual(run("state.models[0].capability_sources.input_modalities.source"), "unknown", "the editor test only changes the draft until saved");
 
   run("state = {native_catalog_path:'',catalog_presentations:{'provider-a/a':{catalog_alias:'A'},'provider-a/b':{catalog_alias:'B'}},accounts:[],providers:[{id:'provider-a',name:'Provider A'}],models:[{id:'provider-a/a',provider:'provider-a',upstream_id:'a',enabled:true},{id:'provider-a/b',provider:'provider-a',upstream_id:'b',enabled:true}]}; openManualModelModal('provider-a/a')");
   getElement("modal_model_provider").value = "provider-a";
@@ -1450,25 +1667,13 @@ async function accountSaveDoesNotWaitForCatalog() {
 }
 
 async function runtimeSettingsIsolationBehavior() {
-  let saved = {accounts:[], providers:[], models:[], codex_runtime_sources:['auto'], subscription_search:{enabled:false, account_id:''}};
-  let rejectSelection = false;
-  const configWrites = [];
-  const compatibility = () => ({
-    status:'recommended', preferences:[...saved.codex_runtime_sources],
-    runtimes:[
-      {source:'codex_app', selectable:true, installed:'0.152.1', status:'recommended'},
-      {source:'cursor', selectable:true, installed:'0.150.0', status:'supported'},
-      {source:'path_cli', selectable:false, installed:'0.146.0', status:'unsupported'},
-    ].map(item => ({...item, targeted:item.selectable && (saved.codex_runtime_sources.includes('auto') || saved.codex_runtime_sources.includes(item.source))})),
-  });
+  // Codex runtimes are no longer chosen in the page; saving settings writes the config
+  // once, keeps unrelated fields and re-reads the Codex status without runtime requests.
+  let saved = {accounts:[], providers:[], models:[], subscription_search:{enabled:false, account_id:'stale-account'}, unrelated_setting:'kept'};
+  const configWrites = [], calls = [];
   context.__runtimeSettingsApi = async (path, options = {}) => {
-    if (path === '/api/runtime/select') {
-      if (rejectSelection) throw new Error('selection rejected');
-      saved.codex_runtime_sources = JSON.parse(options.body).sources;
-      return compatibility();
-    }
-    if (path === '/api/runtime/scan') return compatibility();
-    if (path === '/api/integration') return {codex_compatibility:compatibility(), configuration:{state:'native'}, runtime:{state:'not_checked'}};
+    calls.push(path);
+    if (path === '/api/integration') return {codex_compatibility:{status:'supported', minimum:'0.149.0'}, configuration:{state:'native'}, runtime:{state:'not_checked'}};
     if (path === '/api/config') {
       if (options.method === 'POST') {
         configWrites.push(JSON.parse(options.body));
@@ -1480,45 +1685,19 @@ async function runtimeSettingsIsolationBehavior() {
     throw new Error('unexpected settings API '+path);
   };
   context.__runtimeConfig = JSON.parse(JSON.stringify(saved));
-  run('state = __runtimeConfig; runtimeSelectionDraft = null; api = __runtimeSettingsApi');
+  run('state = __runtimeConfig; api = __runtimeSettingsApi');
   await run('loadIntegration()');
-  runtimeInputs[1].checked = false;
-  run('stageCodexRuntimeSelection()');
-  await run('saveCodexRuntimeSelection()');
-  assert.deepStrictEqual(Array.from(run('state.codex_runtime_sources')), ['codex_app'], 'saving selection must update the general form snapshot');
-
+  assert.strictEqual(getElement('codex_compatibility').hidden, true, 'a supported Codex needs no version note');
   getElement('subscription_search_enabled').checked = true;
   await run('saveSubscriptionSearch()');
-  assert.deepStrictEqual(configWrites.at(-1).codex_runtime_sources, ['codex_app']);
-  assert.strictEqual(saved.subscription_search.enabled, true);
-  assert.strictEqual(saved.subscription_search.account_id, '', 'web search account selection must remain automatic');
-  assert.deepStrictEqual(runtimeInputs.map(input => input.checked), [true,false,false], 'search save must keep saved client selection');
-
-  runtimeInputs[0].checked = false;
-  runtimeInputs[1].checked = true;
-  run('stageCodexRuntimeSelection()');
-  await run('saveSubscriptionSearch()');
-  await run('scanCodexRuntimes()');
-  assert.deepStrictEqual(saved.codex_runtime_sources, ['codex_app'], 'search save must not silently save draft checkboxes');
-  assert.deepStrictEqual(runtimeInputs.map(input => input.checked), [false,true,false], 'draft must survive search save and rescan');
-  assert.strictEqual(getElement('codex_runtime_dirty').hidden, false);
-
-  rejectSelection = true;
-  assert.strictEqual(await run('saveCodexRuntimeSelection()'), false);
-  assert.deepStrictEqual(runtimeInputs.map(input => input.checked), [false,true,false], 'failed save must preserve draft for retry');
-  rejectSelection = false;
-  await run('saveCodexRuntimeSelection()');
-  assert.deepStrictEqual(saved.codex_runtime_sources, ['cursor']);
-  assert.strictEqual(getElement('codex_runtime_dirty').hidden, true);
-
-  runtimeInputs[1].checked = false;
-  run('stageCodexRuntimeSelection()');
-  await run('saveSubscriptionSearch()');
-  assert(runtimeInputs.every(input => !input.checked), 'empty draft must not be treated as automatic selection');
-  await run('useAutomaticCodexRuntimes()');
-  assert.deepStrictEqual(saved.codex_runtime_sources, ['auto']);
-  assert.deepStrictEqual(runtimeInputs.map(input => input.checked), [true,true,false]);
-  assert.strictEqual(getElement('codex_runtime_dirty').hidden, true);
+  await run('catalogSync');
+  assert.strictEqual(configWrites.length, 1);
+  assert.deepStrictEqual(saved.subscription_search, {enabled:true, account_id:''}, 'web search account selection must remain automatic');
+  assert.strictEqual(saved.unrelated_setting, 'kept', 'saving one setting must keep the rest of the config');
+  assert.strictEqual(getElement('status').textContent, '设置已保存，请重启 Codex。');
+  assert.strictEqual(getElement('subscription_search_enabled').checked, true);
+  assert.deepStrictEqual(calls, ['/api/integration', '/api/config', '/api/catalog/refresh', '/api/integration']);
+  assert.strictEqual(getElement('integration_summary').textContent, '当前使用原生 Codex。');
 }
 
 async function initialRenderIsolationBehavior() {
@@ -1565,7 +1744,7 @@ function updateBehavior() {
   await quotaHistoryRaceBehavior();
   performanceDiagnosticsBehavior();
   await cacheUsageBehavior();
-  providerDiscoveryErrorBehavior();
+  await providerDiscoveryErrorBehavior();
   quotaMeterBehavior();
   await creditLayoutBehavior();
   invalidCredentialAccountBehavior();

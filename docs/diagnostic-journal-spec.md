@@ -268,6 +268,6 @@ Missing IDs remain absent and unknown clients are labelled `unknown`.
 
 Route observations and transport failures carry the same request ID. WebSocket
 messages receive separate IDs even when they reuse one connection. EMP forwards
-the opaque ID to NA2H for cross-service correlation. Prompts, responses, arbitrary
+the opaque ID to the upstream gateway for cross-service correlation. Prompts, responses, arbitrary
 headers, credentials, and task titles are not included. Old records cannot be
 retroactively attributed.

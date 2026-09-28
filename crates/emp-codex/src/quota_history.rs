@@ -9,7 +9,10 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value, json};
 
-pub const SAMPLE_INTERVAL_SECONDS: i64 = 5 * 60;
+pub const SAMPLE_INTERVAL_SECONDS: i64 = 44;
+/// A query returns at most this many points per series; longer periods keep
+/// the newest sample of each evenly spaced slot.
+pub const MAX_POINTS_PER_SERIES: i64 = 720;
 pub const RETENTION_SECONDS: i64 = 15 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,9 +153,27 @@ impl QuotaHistoryStore {
     ) -> Result<Value, QuotaHistoryError> {
         let range_seconds =
             range_seconds(range_name).ok_or_else(QuotaHistoryError::unsupported_range)?;
-        let cutoff = now.saturating_sub(range_seconds);
+        let mut result = self.query_period(account_key, now.saturating_sub(range_seconds), now)?;
+        result["range"] = Value::String(range_name.to_owned());
+        Ok(result)
+    }
+
+    /// Samples observed in `[start, end]`, thinned to [`MAX_POINTS_PER_SERIES`].
+    /// `plans` also carries the plan in effect when the period starts.
+    pub fn query_period(
+        &self,
+        account_key: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<Value, QuotaHistoryError> {
+        if end <= start {
+            return Err(QuotaHistoryError::unsupported_range());
+        }
+        let (cutoff, now) = (start, end);
+        let spacing = ((end - start) / MAX_POINTS_PER_SERIES).max(SAMPLE_INTERVAL_SECONDS);
         let mut series = Vec::<Value>::new();
         let mut plans = BTreeMap::<i64, String>::new();
+        let mut last_plan = None::<String>;
         if self.path.exists() {
             let _guard = self
                 .lock
@@ -160,6 +181,22 @@ impl QuotaHistoryStore {
                 .map_err(|_| QuotaHistoryError::unavailable())?;
             reject_symlink(&self.path)?;
             let connection = self.connect()?;
+            let prior_plan: Option<(i64, String)> = connection
+                .query_row(
+                    "SELECT observed_at, plan_type FROM quota_samples \
+                     WHERE account_key = ?1 AND observed_at < ?2 AND plan_type IS NOT NULL \
+                     ORDER BY observed_at DESC LIMIT 1",
+                    params![account_key, cutoff],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|_| QuotaHistoryError::unavailable())?;
+            if let Some((observed_at, plan)) = prior_plan
+                && let Some(plan) = normalize_plan_type(&plan)
+            {
+                last_plan = Some(plan.clone());
+                plans.insert(observed_at, plan);
+            }
             let mut statement = connection
                 .prepare(
                     "SELECT observed_at, limit_id, window_kind, window_minutes, \
@@ -182,7 +219,10 @@ impl QuotaHistoryStore {
                     row.get(5).map_err(|_| QuotaHistoryError::unavailable())?;
                 let plan_type: Option<String> =
                     row.get(6).map_err(|_| QuotaHistoryError::unavailable())?;
-                if let Some(plan) = plan_type.as_deref().and_then(normalize_plan_type) {
+                if let Some(plan) = plan_type.as_deref().and_then(normalize_plan_type)
+                    && last_plan.as_deref() != Some(plan.as_str())
+                {
+                    last_plan = Some(plan.clone());
                     plans.insert(observed_at, plan);
                 }
                 let position = series.iter().position(|item| {
@@ -208,22 +248,34 @@ impl QuotaHistoryStore {
                     series.len() - 1
                 });
                 let remaining = round_two(100.0 - used.clamp(0.0, 100.0));
-                series[position]
+                let points = series[position]
                     .get_mut("points")
                     .and_then(Value::as_array_mut)
-                    .expect("new quota series always contains points")
-                    .push(json!({
-                        "observed_at": observed_at,
-                        "remaining_percent": remaining,
-                        "resets_at": resets_at,
-                    }));
+                    .expect("new quota series always contains points");
+                let point = json!({
+                    "observed_at": observed_at,
+                    "remaining_percent": remaining,
+                    "resets_at": resets_at,
+                });
+                let same_slot = points
+                    .last()
+                    .and_then(|last| last["observed_at"].as_i64())
+                    .is_some_and(|last| {
+                        last.div_euclid(spacing) == observed_at.div_euclid(spacing)
+                    });
+                if same_slot {
+                    *points.last_mut().expect("slot has a previous point") = point;
+                } else {
+                    points.push(point);
+                }
             }
         }
         Ok(json!({
-            "range": range_name,
+            "range": "custom",
             "start_at": cutoff,
             "end_at": now,
             "sample_interval_seconds": SAMPLE_INTERVAL_SECONDS,
+            "interval_seconds": spacing,
             "retention_days": RETENTION_SECONDS / (24 * 60 * 60),
             "series": series,
             "plans": plans
@@ -522,3 +574,42 @@ fn set_private_file_permissions(path: &Path) {
 
 #[cfg(not(unix))]
 fn set_private_file_permissions(_path: &Path) {}
+
+#[cfg(test)]
+mod period_tests {
+    use super::{MAX_POINTS_PER_SERIES, QuotaHistoryStore, SAMPLE_INTERVAL_SECONDS};
+    use serde_json::json;
+
+    fn snapshot(used: f64, plan: &str) -> serde_json::Value {
+        json!({"plan_type": plan, "rate_limits": {"primary": {"used_percent": used, "window_minutes": 300}}})
+    }
+
+    #[test]
+    fn long_periods_are_thinned_and_keep_the_plan_in_effect() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = QuotaHistoryStore::new(directory.path().join("history.sqlite3"));
+        let day = 24 * 60 * 60;
+        let start = 1_000_000 * SAMPLE_INTERVAL_SECONDS;
+        store
+            .append_snapshot("owner", &snapshot(1.0, "plus"), start - 100)
+            .unwrap();
+        for index in 0..(day / SAMPLE_INTERVAL_SECONDS) {
+            let at = start + index * SAMPLE_INTERVAL_SECONDS;
+            store
+                .append_snapshot("owner", &snapshot(2.0, "pro"), at)
+                .unwrap();
+        }
+
+        let hour = store.query_period("owner", start, start + 3600).unwrap();
+        assert_eq!(hour["interval_seconds"], SAMPLE_INTERVAL_SECONDS);
+        assert_eq!(hour["series"][0]["points"].as_array().unwrap().len(), 82);
+        assert_eq!(hour["plans"][0]["plan_type"], "plus");
+        assert_eq!(hour["plans"][1]["plan_type"], "pro");
+        assert_eq!(hour["plans"].as_array().unwrap().len(), 2);
+
+        let whole = store.query_period("owner", start, start + day).unwrap();
+        let points = whole["series"][0]["points"].as_array().unwrap().len() as i64;
+        assert!(points <= MAX_POINTS_PER_SERIES + 1, "{points} points");
+        assert!(store.query_period("owner", start, start).is_err());
+    }
+}

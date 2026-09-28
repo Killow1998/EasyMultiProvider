@@ -1,5 +1,7 @@
 //! Real server contract tests.
 use super::*;
+#[cfg(unix)]
+use std::sync::Mutex;
 
 #[test]
 fn migration_export_and_import_cross_the_authenticated_http_boundary() {
@@ -104,7 +106,7 @@ fn account_import_and_delete_keep_credentials_managed_and_private() {
         &server,
         "/api/accounts/import",
         &serde_json::to_vec(&json!({
-            "id":"egg","name":"Egg","prefix":"egg","enabled":true,
+            "id":"demo","name":"Demo","prefix":"demo","enabled":true,
             "auth_json":{"tokens":{"access_token":"account-secret","account_id":"account-id"}}
         }))
         .unwrap(),
@@ -134,7 +136,7 @@ fn account_import_and_delete_keep_credentials_managed_and_private() {
             .unwrap()["tokens"]["access_token"],
         "account-secret"
     );
-    let removed = delete(&server, "/api/accounts/egg", &[&session_header(&server)]);
+    let removed = delete(&server, "/api/accounts/demo", &[&session_header(&server)]);
     assert!(removed.starts_with("HTTP/1.1 200 OK\r\n"), "{removed}");
     assert!(!auth_path.exists());
     assert!(!auth_path.parent().unwrap().join("config.toml").exists());
@@ -195,8 +197,8 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     let directory = tempfile::tempdir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("emp-config.json");
-    // Python rejects applying an empty model picker; this success scenario needs
-    // the same visible model fixture as tests.test_server._integration_test_config.
+    // An empty model picker must be rejected; this success scenario needs one
+    // visible external model in the fixture.
     std::fs::write(&config, serde_json::to_vec(&json!({
         "providers":[{"id":"external","base_url":"https://example.invalid/v1","protocol":"responses"}],
         "models":[{"id":"external/model-a","provider":"external","upstream_id":"model-a","enabled":true}]
@@ -237,6 +239,118 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     assert!(restored.contains("openai_base_url = \"native\""));
     assert!(!restored.contains("model_catalog_json"));
     assert!(restored.contains("[features]\nweb_search = true"));
+}
+
+/// Answers `model/list` on the Codex control socket with whatever list the test sets.
+#[cfg(unix)]
+fn fake_codex_backend(home: &Path, models: Arc<Mutex<Vec<Value>>>) {
+    use std::os::unix::net::UnixListener;
+    let directory = home.join("app-server-control");
+    std::fs::create_dir_all(&directory).unwrap();
+    let listener = UnixListener::bind(directory.join("app-server-control.sock")).unwrap();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let models = Arc::clone(&models);
+            thread::spawn(move || {
+                let mut head = Vec::new();
+                let mut byte = [0_u8];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if stream.read(&mut byte).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8(head).unwrap();
+                let key = head
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("sec-websocket-key")
+                            .then(|| value.trim().to_owned())
+                    })
+                    .unwrap();
+                let accept = websocket_accept(&key).unwrap();
+                write!(stream, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
+                let mut websocket = WebSocketConnection::new(&mut stream);
+                while let Ok(Some(text)) = websocket.receive_text() {
+                    let message: Value = serde_json::from_str(&text).unwrap();
+                    let result = match message["method"].as_str() {
+                        Some("initialize") => json!({}),
+                        Some("model/list") => json!({"data":models.lock().unwrap().clone()}),
+                        _ => continue,
+                    };
+                    let _ = websocket.send_json(&json!({"id":message["id"],"result":result}));
+                }
+            });
+        }
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
+    // The Codex control socket lives under this directory, and Unix socket
+    // paths are short (104 bytes on macOS), so stay out of the long TMPDIR.
+    let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let root = canonical_root(&directory);
+    let config = root.join("emp-config.json");
+    std::fs::write(&config, serde_json::to_vec(&json!({
+        "providers":[{"id":"external","base_url":"https://example.invalid/v1","protocol":"responses"}],
+        "models":[{"id":"external/model-a","provider":"external","upstream_id":"model-a","enabled":true}]
+    })).unwrap()).unwrap();
+    std::fs::write(root.join("config.toml"), b"").unwrap();
+    // Codex is running, still on the catalog it loaded before EMP was applied.
+    let codex_models = Arc::new(Mutex::new(Vec::new()));
+    fake_codex_backend(&root, Arc::clone(&codex_models));
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config,
+        "missing-codex",
+        root.join("auth.json"),
+    )
+    .unwrap();
+    let session = session_header(&server);
+    let enabled = post(
+        &server,
+        "/api/integration/enable",
+        br#"{"confirm_reload":true}"#,
+        &[&session],
+    );
+    assert!(
+        enabled.contains("\"state\":\"reload_required\""),
+        "{enabled}"
+    );
+    let mut events = open_quota_events(&server, &session);
+
+    // Codex restarts and loads EMP's catalog, then asks EMP for models.
+    let codex_config = std::fs::read_to_string(root.join("config.toml")).unwrap();
+    let catalog_path = codex_config
+        .lines()
+        .find_map(|line| line.strip_prefix("model_catalog_json = "))
+        .unwrap()
+        .trim_matches('"');
+    let catalog: Value = serde_json::from_slice(&std::fs::read(catalog_path).unwrap()).unwrap();
+    *codex_models.lock().unwrap() = catalog["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|model| model["visibility"].as_str().unwrap_or("list") == "list")
+        .map(|model| {
+            let slug = model["slug"].as_str().unwrap();
+            json!({"id":slug,"displayName":model["display_name"].as_str().unwrap_or(slug),"description":model["description"].as_str().unwrap_or("")})
+        })
+        .collect();
+    let _ = request(&server, "/v1/models", &[]);
+
+    assert_eq!(
+        read_sse_frame(&mut events),
+        "event: integration-updated\ndata: {}\n"
+    );
+    let status = request(&server, "/api/integration", &[&session]);
+    assert!(status.contains("\"state\":\"emp_loaded\""), "{status}");
+    server.shutdown().unwrap();
 }
 
 fn export_confirmation(server: &ServerHandle) -> String {

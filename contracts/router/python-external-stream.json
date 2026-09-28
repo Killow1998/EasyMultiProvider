@@ -6,7 +6,6 @@
     "easy_multi_provider.stream_adapters.stream_anthropic_completion",
     "easy_multi_provider.router.forward_responses_stream"
   ],
-  "rust_test": "crates/emp-router/tests/streaming_python_oracle.rs",
   "same_stream_cases": [
     "Chat reasoning and answer separation through a fragmented SSE body",
     "Anthropic usage, text-block lifecycle, stop reason, and message_stop",
@@ -16,7 +15,11 @@
   ],
   "comparison": {
     "events": "exact projected JSON sequence after generated-ID normalization",
-    "errors": ["HTTP status", "error class", "terminal boundary"],
+    "errors": [
+      "HTTP status",
+      "error class",
+      "terminal boundary"
+    ],
     "requests": [
       "endpoint path",
       "upstream model",
@@ -31,5 +34,7 @@
     "transport first-event and idle timeouts",
     "drop cancels an unfinished response"
   ],
-  "side_effects": ["ephemeral loopback HTTP socket only"]
+  "side_effects": [
+    "ephemeral loopback HTTP socket only"
+  ]
 }

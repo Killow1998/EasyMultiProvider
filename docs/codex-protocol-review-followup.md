@@ -183,7 +183,7 @@ was replaced.
 
 ## 2026-09-18 — Adaptation target updated to Codex CLI 0.155.0
 
-Xian requested tracking official `rust-v0.155.0` for the ongoing ten-round
+The maintainer requested tracking official `rust-v0.155.0` for the ongoing ten-round
 audit. The exact release reference is commit
 `f0a1b8f0849d90960bc406b848f32e5a129b0457`, published
 `2026-09-17T23:14:43Z`. A selected source snapshot was downloaded to this
@@ -352,7 +352,7 @@ being implied.
   errors were environment failures.
 - Full isolated suite with a task-owned `/tmp` `CODEX_HOME`: `1203 tests`,
   `17 skipped`, `OK` in `60.307s`. The first default-state run was not accepted:
-  it hit restricted loopback and an unwritable default `/home/fumo/.codex` path;
+  it hit restricted loopback and an unwritable default `~/.codex` path;
   no real configuration was changed.
 - The parent-maintained fixture-only installed `codex-cli 0.155.0` acceptance
   set later reached `8/8 OK` in `8.889s`; Round 3 records that as prior evidence,
@@ -725,7 +725,7 @@ Final evidence:
   environment. The earlier ordinary-sandbox `EPERM` results are environment
   failures, not product failures.
 - `.venv/bin/python tools/test_codex_runtime.py
-  /home/fumo/.config/nvm/versions/node/v20.20.2/bin/codex`: **19 tests, OK,
+  <nvm>/bin/codex`: **19 tests, OK,
   19.248 s**, fixture-only against temporary `CODEX_HOME` and local fake
   endpoints. This does not expand full 0.155.0 provider parity or prove all
   models/capabilities match native behavior.
@@ -794,7 +794,7 @@ personal configuration changes or Codex source changes were performed.
 
 ### 2026-09-18 EMP 0.11.4 release preparation
 
-Xian subsequently authorized updating GitHub and publishing the fixes. The
+The maintainer subsequently authorized updating GitHub and publishing the fixes. The
 earlier audit entries describe their historical no-commit/no-publish boundary;
 this release stage has explicit authorization to commit, push and publish.
 

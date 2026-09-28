@@ -9,7 +9,6 @@
       "custom_tool_names"
     ]
   },
-  "rust_test": "crates/emp-protocol/tests/portable_python_oracle.rs",
   "request_cases": [
     "visible multimodal history and instruction hoisting",
     "paired function and custom tools",

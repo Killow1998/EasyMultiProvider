@@ -42,7 +42,6 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -234,6 +233,10 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<TcpStrea
     assert_eq!(
         read_sse_frame(&mut reader),
         "event: quota-updated\ndata: {}\n"
+    );
+    assert_eq!(
+        read_sse_frame(&mut reader),
+        "event: integration-updated\ndata: {}\n"
     );
     reader
 }

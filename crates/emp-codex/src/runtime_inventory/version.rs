@@ -5,8 +5,32 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// Oldest Codex whose requests EMP understands. Newer releases are accepted
+/// without warnings: EMP only rewrites `config.toml`, which every Codex reads.
+pub const MINIMUM_CODEX: (u32, u32, u32) = (0, 149, 0);
+
+pub fn minimum_codex() -> String {
+    let (major, minor, patch) = MINIMUM_CODEX;
+    format!("{major}.{minor}.{patch}")
+}
+
 pub(super) fn public(installed: Option<String>, status: &str) -> Value {
-    json!({"installed":installed,"status":status,"supported_range":"0.149.x–0.156.x","recommended":"0.156.1"})
+    json!({"installed":installed,"status":status,"minimum":minimum_codex()})
+}
+
+/// Returns the client's version when a request comes from a Codex build older
+/// than [`MINIMUM_CODEX`]. Codex identifies itself as `<originator>/<version> (…)`;
+/// other clients are never refused.
+pub fn outdated_codex_client(user_agent: &str) -> Option<String> {
+    let (originator, rest) = user_agent.split_once('/')?;
+    if !originator.trim().to_ascii_lowercase().starts_with("codex") {
+        return None;
+    }
+    let version = rest.split(|c: char| c.is_whitespace() || c == '(').next()?;
+    let mut parts = version.split(['.', '-', '+']);
+    let mut next = || parts.next()?.parse::<u32>().ok();
+    let found = (next()?, next()?, next()?);
+    (found < MINIMUM_CODEX).then(|| version.to_owned())
 }
 
 fn word(byte: u8) -> bool {
@@ -60,12 +84,8 @@ fn parse(bytes: &[u8], start: usize) -> Option<(String, &'static str)> {
     {
         return None;
     }
-    let status = if (major, minor) < (0, 149) {
+    let status = if (major, minor, patch) < MINIMUM_CODEX {
         "unsupported"
-    } else if !prerelease.is_empty() || (major, minor) > (0, 156) {
-        "unverified"
-    } else if (major, minor) == (0, 156) && patch >= 1 {
-        "recommended"
     } else {
         "supported"
     };
@@ -158,24 +178,39 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn codex_0156_and_0157_boundaries_match_python_01110() {
+    fn every_codex_from_the_minimum_on_is_supported() {
         for (output, installed, status) in [
-            ("codex-cli 0.156.0", "0.156.0", "supported"),
-            ("codex-cli 0.156.1", "0.156.1", "recommended"),
-            ("codex-cli 0.157.0", "0.157.0", "unverified"),
-            ("codex-cli 0.157.9", "0.157.9", "unverified"),
+            ("codex-cli 0.148.9", "0.148.9", "unsupported"),
+            ("codex-cli 0.149.0", "0.149.0", "supported"),
+            ("codex-cli 0.156.1", "0.156.1", "supported"),
+            ("codex-cli 0.190.0-alpha.1", "0.190.0-alpha.1", "supported"),
+            ("codex-cli 1.0.0", "1.0.0", "supported"),
         ] {
             assert_eq!(
                 classify(output),
-                json!({
-                    "installed":installed,
-                    "status":status,
-                    "supported_range":"0.149.x–0.156.x",
-                    "recommended":"0.156.1",
-                }),
+                json!({"installed":installed, "status":status, "minimum":"0.149.0"}),
                 "classification for {output}"
             );
         }
+    }
+
+    #[test]
+    fn only_outdated_codex_clients_are_refused() {
+        use super::outdated_codex_client as outdated;
+        assert_eq!(
+            outdated("codex_cli_rs/0.148.2 (Ubuntu 24.4.0; x86_64) xterm"),
+            Some("0.148.2".to_owned())
+        );
+        assert_eq!(outdated("codex_vscode/0.120.0"), Some("0.120.0".to_owned()));
+        assert_eq!(
+            outdated("Codex Desktop/0.100.1 (Mac OS 15; arm64)"),
+            Some("0.100.1".to_owned())
+        );
+        assert_eq!(outdated("codex_cli_rs/0.149.0 (Ubuntu; x86_64)"), None);
+        assert_eq!(outdated("codex-tui/0.200.0-alpha.3 (Linux)"), None);
+        assert_eq!(outdated("omp/18.3.1"), None);
+        assert_eq!(outdated("python-requests/2.31"), None);
+        assert_eq!(outdated("codex_cli_rs/garbage"), None);
     }
 
     #[cfg(unix)]
@@ -206,6 +241,6 @@ mod tests {
             return;
         }
         let candidate = script(dir.path(), "codex", "echo codex-cli 0.156.1", 0o700);
-        assert_eq!(super::observe(&candidate)["status"], "recommended");
+        assert_eq!(super::observe(&candidate)["status"], "supported");
     }
 }

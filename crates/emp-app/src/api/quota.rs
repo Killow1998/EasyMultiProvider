@@ -89,7 +89,9 @@ pub(crate) fn serve_quota_events(
     {
         return;
     }
+    let integration = &state.backend.integration.watch.revision;
     let mut observed_revision = u64::MAX;
+    let mut observed_integration = u64::MAX;
     loop {
         if state.shutdown.load(Ordering::Acquire) {
             break;
@@ -101,7 +103,11 @@ pub(crate) fn serve_quota_events(
         let (revision, _) = match state.backend.accounts.quota_condition.wait_timeout_while(
             revision,
             QUOTA_EVENT_KEEP_ALIVE,
-            |revision| *revision == observed_revision && !state.shutdown.load(Ordering::Acquire),
+            |revision| {
+                *revision == observed_revision
+                    && integration.load(Ordering::Acquire) == observed_integration
+                    && !state.shutdown.load(Ordering::Acquire)
+            },
         ) {
             Ok(result) => result,
             Err(_) => break,
@@ -113,13 +119,20 @@ pub(crate) fn serve_quota_events(
         {
             break;
         }
-        let frame: &[u8] = if current != observed_revision {
-            b"event: quota-updated\ndata: {}\n\n"
-        } else {
-            b": keep-alive\n\n"
-        };
+        let mut frame = Vec::new();
+        if current != observed_revision {
+            frame.extend_from_slice(b"event: quota-updated\ndata: {}\n\n");
+        }
+        let integration_now = integration.load(Ordering::Acquire);
+        if integration_now != observed_integration {
+            frame.extend_from_slice(b"event: integration-updated\ndata: {}\n\n");
+        }
+        if frame.is_empty() {
+            frame.extend_from_slice(b": keep-alive\n\n");
+        }
         observed_revision = current;
-        if stream.write_all(frame).is_err() || stream.flush().is_err() {
+        observed_integration = integration_now;
+        if stream.write_all(&frame).is_err() || stream.flush().is_err() {
             break;
         }
     }

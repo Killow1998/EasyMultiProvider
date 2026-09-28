@@ -2,80 +2,32 @@ use super::{OneShotUpstream, canonical_root, post, session_header};
 use crate::lifecycle::ServerHandle;
 use serde_json::{Value, json};
 use std::net::{IpAddr, Ipv4Addr};
-use std::process::{Command, Stdio};
 
-fn python_oracle(script: &str, input: &Value) -> Value {
-    let python = std::env::var("EMP_PYTHON_INTEROP")
-        .expect("EMP_PYTHON_INTEROP must point to the official Python environment");
-    let root = std::env::var("EMP_PYTHON_ORACLE_ROOT")
-        .expect("EMP_PYTHON_ORACLE_ROOT must point to the Python 0.11.11 oracle");
-    let mut child = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .env("EMP_PYTHON_ORACLE_ROOT", &root)
-        .current_dir(&root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("start Python 0.11.11 projection oracle");
-    serde_json::to_writer(child.stdin.take().expect("oracle stdin"), input)
-        .expect("write oracle fixture");
-    let output = child.wait_with_output().expect("wait for oracle");
-    assert!(
-        output.status.success(),
-        "Python oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("Python oracle JSON")
+// The Python oracle used to compute the expected upstream `input` array. The
+// Rust projection is now asserted directly: visible items pass through in
+// order, hidden reasoning never crosses the destination dialect boundary.
+fn expected_projected_input() -> Value {
+    json!([
+        {"type":"message","role":"user","content":[{"type":"input_text","text":"route-visible-user"}]},
+        {"type":"function_call","call_id":"call_route_fixture","name":"route_fixture_tool","arguments":"{}"},
+        {"type":"function_call_output","call_id":"call_route_fixture","output":"route-visible-tool-result"},
+        {"type":"message","role":"assistant","content":[{"type":"output_text","text":"route-visible-final"}]}
+    ])
 }
 
-fn projected_input(provider: &Value, body: &Value) -> Value {
-    python_oracle(
-        r#"
-import json, os, sys
-root = os.environ['EMP_PYTHON_ORACLE_ROOT']
-sys.path.insert(0, root)
-import easy_multi_provider
-assert easy_multi_provider.__version__ == '0.11.11', easy_multi_provider.__version__
-from easy_multi_provider.dialects import project_request
-case=json.load(sys.stdin)
-print(json.dumps(project_request(case['provider'],case['body'])['input'],ensure_ascii=False,sort_keys=True))
-"#,
-        &json!({ "provider":provider, "body":body }),
-    )
-}
-
-fn sidechat_expected_input(body: &Value, headers: &Value) -> Value {
-    python_oracle(
-        r#"
-import json, os, sys
-root = os.environ['EMP_PYTHON_ORACLE_ROOT']
-sys.path.insert(0, root)
-import easy_multi_provider
-assert easy_multi_provider.__version__ == '0.11.11', easy_multi_provider.__version__
-from easy_multi_provider.codex_history import HistoryCursor, HistorySnapshot, VisibleItem
-from easy_multi_provider.dialects import project_request
-from easy_multi_provider.history_continuity import HistoryContinuityEngine
-case=json.load(sys.stdin)
-class Reader:
-    def read_compaction_history(self, anchor, compaction):
-        return HistorySnapshot(anchor=anchor, items=(
-            VisibleItem(kind='user_message', content='parent reference'),
-            VisibleItem(kind='compaction_marker', content=''),
-        ), cursor=HistoryCursor(thread_id=anchor.thread_id),
-            source='fixture', source_model='gpt-native')
-provider={'protocol':'responses','auth_mode':'api_key'}
-prepared=HistoryContinuityEngine(Reader()).prepare(
-    {}, provider, {}, case['body']['model'], case['body'], case['headers'])
-print(json.dumps(project_request(provider,prepared)['input'],ensure_ascii=False,sort_keys=True))
-"#,
-        &json!({"body":body,"headers":headers}),
-    )
+fn expected_sidechat_input() -> Value {
+    // Sidechat history continuity: the parent's compaction summary becomes a
+    // user-visible reference, the inherited checkpoint stays hidden, and the
+    // side question follows.
+    json!([
+        {"type":"message","role":"user","content":[{"type":"input_text","text":"parent reference"}]},
+        {"type":"message","role":"user","content":"Side conversation boundary: reference only"},
+        {"type":"message","role":"user","content":"side question"}
+    ])
 }
 
 #[test]
-fn external_to_native_http_switch_preserves_python_visible_tool_history_and_headers() {
+fn external_to_native_http_switch_preserves_visible_tool_history_and_headers() {
     let upstream = OneShotUpstream::start(json!({
         "id":"switch-native","object":"response","status":"completed",
         "model":"native-upstream","output":[]
@@ -110,9 +62,8 @@ fn external_to_native_http_switch_preserves_python_visible_tool_history_and_head
     )
     .expect("start native destination server");
 
-    // This is the shared plain-history/tool-pair fixture from Python
-    // test_v06_switch_matrix, including hidden reasoning that must not cross
-    // the destination dialect boundary.
+    // Plain-history/tool-pair fixture with hidden reasoning that must not
+    // cross the destination dialect boundary.
     let body = json!({
         "model":"native/alias","stream":false,
         "input":[
@@ -123,10 +74,7 @@ fn external_to_native_http_switch_preserves_python_visible_tool_history_and_head
             {"type":"message","role":"assistant","content":[{"type":"output_text","text":"route-visible-final"}]}
         ]
     });
-    let expected_input = projected_input(
-        &json!({"protocol":"responses","auth_mode":"forward"}),
-        &body,
-    );
+    let expected_input = expected_projected_input();
     let response = post(
         &server,
         "/v1/responses",
@@ -255,7 +203,7 @@ fn short_to_long_native_history_fork_uses_exact_checkpoint_and_never_reads_later
         ],
         "client_metadata":{"x-codex-turn-metadata":turn_metadata}
     });
-    let expected_input = sidechat_expected_input(&body, &json!({"thread-id":child_id}));
+    let expected_input = expected_sidechat_input();
     let response = post(
         &server,
         "/v1/responses",

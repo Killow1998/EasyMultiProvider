@@ -8,7 +8,6 @@ use rcgen::{
 };
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
-use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -16,7 +15,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use std::{path::Path, process::Command};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RecordedRequest {
@@ -461,13 +459,6 @@ fn headers(authorization: &str) -> BTreeMap<String, String> {
     BTreeMap::from([("Authorization".to_owned(), authorization.to_owned())])
 }
 
-fn oracle_headers(lane: &str, authorization: &str) -> BTreeMap<String, String> {
-    BTreeMap::from([
-        ("Authorization".to_owned(), authorization.to_owned()),
-        ("X-Oracle-Lane".to_owned(), lane.to_owned()),
-    ])
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn complete_responses_reuse_connections_without_sharing_authorization() {
     let server = TestServer::start();
@@ -797,162 +788,4 @@ async fn tls_rejects_untrusted_and_wrong_host_but_accepts_a_trusted_name() {
         .await
         .expect_err("wrong TLS host must fail");
     assert_eq!(wrong_host.kind(), HttpTransportErrorKind::Network);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn socket_behavior_matches_the_live_python_oracle_when_configured() {
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let server = TestServer::start();
-    let script = r#"
-import json, sys
-from urllib.error import URLError
-from urllib.request import Request
-from easy_multi_provider import http_pool
-
-base = sys.argv[1]
-success = []
-http_pool.close_pools()
-for token in ("Bearer first", "Bearer second"):
-    request = Request(base + "/complete", headers={"Authorization": token, "X-Oracle-Lane": "python"})
-    with http_pool.open_request(request, timeout=2) as response:
-        success.append({"status": response.status, "body": response.read().decode(), "terminal": "eof"})
-stream = http_pool.open_request(Request(base + "/stream", headers={"X-Oracle-Lane": "python"}), timeout=2)
-first_line = next(stream).decode()
-stream.close()
-with http_pool.open_request(Request(base + "/complete", headers={"X-Oracle-Lane": "python"}), timeout=2) as response:
-    after_cancel = {"status": response.status, "body": response.read().decode(), "terminal": "eof"}
-try:
-    http_pool.open_request(Request(base + "/redirect", headers={"X-Oracle-Lane": "python"}), timeout=2)
-except Exception as exc:
-    redirect = {
-        "native_type": type(exc).__name__, "class": "redirect_disabled",
-        "http_status": None, "terminal": "error", "retry": False,
-    }
-else:
-    raise AssertionError("redirect unexpectedly followed")
-json.dump({"success": success, "first_line": first_line, "after_cancel": after_cancel,
-           "redirect": redirect}, sys.stdout, separators=(",", ":"))
-"#;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .arg(server.url(""))
-        .current_dir(root)
-        .output()
-        .expect("spawn Python HTTP oracle");
-    assert!(
-        output.status.success(),
-        "Python HTTP oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let mut oracle: Value = serde_json::from_slice(&output.stdout).expect("Python oracle JSON");
-    assert_eq!(oracle["redirect"]["native_type"], "URLError");
-    oracle["redirect"]
-        .as_object_mut()
-        .expect("redirect object")
-        .remove("native_type");
-
-    let client = HttpClient::new(HttpClientPolicy::default()).expect("Rust HTTP client");
-    let mut success = Vec::new();
-    for token in ["Bearer first", "Bearer second"] {
-        let response = client
-            .open(
-                HttpMethod::Get,
-                &server.url("/complete"),
-                oracle_headers("rust", token),
-                None,
-                false,
-            )
-            .await
-            .expect("Rust complete response");
-        let status = response.status();
-        let body = String::from_utf8(response.read_all().await.expect("Rust complete body"))
-            .expect("UTF-8 body");
-        success.push(json!({"status": status, "body": body, "terminal": "eof"}));
-    }
-    let mut stream = client
-        .open(
-            HttpMethod::Get,
-            &server.url("/stream"),
-            BTreeMap::from([("X-Oracle-Lane".to_owned(), "rust".to_owned())]),
-            None,
-            true,
-        )
-        .await
-        .expect("Rust stream response");
-    let mut first_line = Vec::new();
-    while !first_line.contains(&b'\n') {
-        first_line.extend(
-            stream
-                .next_chunk()
-                .await
-                .expect("Rust stream chunk")
-                .expect("Rust stream data"),
-        );
-    }
-    first_line.truncate(
-        first_line
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .expect("newline")
-            + 1,
-    );
-    drop(stream);
-    let after_cancel_response = client
-        .open(
-            HttpMethod::Get,
-            &server.url("/complete"),
-            BTreeMap::from([("X-Oracle-Lane".to_owned(), "rust".to_owned())]),
-            None,
-            false,
-        )
-        .await
-        .expect("Rust request after cancellation");
-    let after_cancel_status = after_cancel_response.status();
-    let after_cancel_body = String::from_utf8(
-        after_cancel_response
-            .read_all()
-            .await
-            .expect("Rust body after cancellation"),
-    )
-    .expect("UTF-8 body");
-    let redirect = client
-        .open(
-            HttpMethod::Get,
-            &server.url("/redirect"),
-            BTreeMap::from([("X-Oracle-Lane".to_owned(), "rust".to_owned())]),
-            None,
-            false,
-        )
-        .await
-        .expect_err("Rust redirect disabled");
-    assert_eq!(redirect.kind(), HttpTransportErrorKind::RedirectDisabled);
-    let rust = json!({
-        "success": success,
-        "first_line": String::from_utf8(first_line).expect("UTF-8 SSE line"),
-        "after_cancel": {
-            "status": after_cancel_status, "body": after_cancel_body, "terminal": "eof"
-        },
-        "redirect": {
-            "class": "redirect_disabled", "http_status": null,
-            "terminal": "error", "retry": false,
-        },
-    });
-    assert_eq!(rust, oracle);
-
-    let requests = server.requests();
-    for lane in ["python", "rust"] {
-        let requests = requests
-            .iter()
-            .filter(|request| request.oracle_lane.as_deref() == Some(lane))
-            .collect::<Vec<_>>();
-        assert_eq!(requests.len(), 5);
-        assert_eq!(requests[0].connection, requests[1].connection);
-        assert_ne!(requests[2].connection, requests[3].connection);
-        assert_eq!(requests[4].target, "/redirect");
-    }
-    server.release_streams();
 }

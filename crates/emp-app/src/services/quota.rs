@@ -55,6 +55,14 @@ fn save_account_quota_state(
             "quota_error",
         ));
     };
+    // The sampler runs every 44 s; leave config.json alone when nothing changed.
+    let unchanged = account.get("credential_status").and_then(Value::as_str) == Some(status)
+        && quota.is_none_or(|quota| account.get("quota") == Some(quota));
+    if unchanged {
+        drop(config);
+        return account_public_snapshot(state, account_id)
+            .ok_or_else(|| QuotaError::new("account changed during quota refresh", "quota_error"));
+    }
     account["credential_status"] = Value::String(status.to_owned());
     if let Some(quota) = quota {
         account["quota"] = quota.clone();
@@ -462,15 +470,16 @@ pub(crate) fn quota_history_response(
     state: &ServerState,
     account_id: &str,
     range_name: &str,
+    period: Option<(i64, i64)>,
     now: i64,
 ) -> Result<Value, QuotaHistoryResponseError> {
     let owner = quota_owner_key(state, account_id).map_err(QuotaHistoryResponseError::Account)?;
-    let mut result = state
-        .backend
-        .accounts
-        .quota_history
-        .query(&owner, range_name, now)
-        .map_err(QuotaHistoryResponseError::History)?;
+    let history = &state.backend.accounts.quota_history;
+    let mut result = match period {
+        Some((start, end)) => history.query_period(&owner, start, end),
+        None => history.query(&owner, range_name, now),
+    }
+    .map_err(QuotaHistoryResponseError::History)?;
     result["account_id"] = Value::String(account_id.to_owned());
     Ok(result)
 }

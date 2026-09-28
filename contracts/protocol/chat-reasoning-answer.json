@@ -7,8 +7,7 @@
     "easy_multi_provider/stream_adapters.py:stream_chat_completion"
   ],
   "rust_evidence": [
-    "crates/emp-protocol/tests/chat_projection.rs",
-    "crates/emp-protocol/tests/python_oracle.rs"
+    "crates/emp-protocol/tests/chat_projection.rs"
   ],
   "normalization": [
     "generated resp_, msg_, and rs_ identifiers are normalized by type while every item_id reference is checked",
@@ -31,5 +30,7 @@
     "missing DONE, missing finish reason, duplicate tool IDs and invalid payload shapes fail closed",
     "exactly one completed or incomplete terminal event follows all deltas"
   ],
-  "side_effects": ["none; request, complete response and stream projection are pure"]
+  "side_effects": [
+    "none; request, complete response and stream projection are pure"
+  ]
 }

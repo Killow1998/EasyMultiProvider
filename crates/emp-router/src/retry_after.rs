@@ -81,7 +81,7 @@ mod tests {
     use time::OffsetDateTime;
 
     #[test]
-    fn python_retry_after_contract() {
+    fn retry_after_parsing_accepts_http_dates_and_rejects_hostile_values() {
         let now = OffsetDateTime::from_unix_timestamp(0).unwrap();
         assert_eq!(
             parse_at(Some("Thu, 01 Jan 1970 00:00:30 GMT"), now),

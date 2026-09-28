@@ -12,96 +12,9 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-
-const PYTHON_ORACLE: &str = r#"
-import json, os, sys
-root = os.environ["EMP_PYTHON_ORACLE_ROOT"]
-sys.path.insert(0, root)
-import easy_multi_provider
-assert easy_multi_provider.__version__ == "0.11.11", easy_multi_provider.__version__
-from easy_multi_provider.auto_review import automatic_review_candidates
-from easy_multi_provider.route_plan import resolve_route
-payload = json.load(sys.stdin)
-results = []
-for case in payload["cases"]:
-    config = case["config"]
-    order = automatic_review_candidates(
-        config, case.get("native_quota"), case.get("native_available", False),
-        case.get("cooldowns", {}), now=100.0
-    )
-    item = {"order": order}
-    if case.get("requested_model"):
-        config["_auto_review_candidates"] = order
-        route = resolve_route(config, case["requested_model"])
-        item["route"] = {
-            "requested_model": route.requested_model,
-            "upstream_model": route.upstream_model,
-            "source": route.source,
-            "provider_id": route.provider_id,
-            "protocol": route.protocol,
-            "dialect": route.dialect,
-            "auth_mode": route.provider.get("auth_mode"),
-            "model_id": route.model.get("id"),
-            "model_upstream_id": route.model.get("upstream_id"),
-        }
-    results.append(item)
-json.dump({"version": easy_multi_provider.__version__, "results": results}, sys.stdout)
-"#;
-
-fn run_python_oracle(cases: &[Value]) -> Value {
-    let python = std::env::var("EMP_PYTHON_INTEROP")
-        .expect("EMP_PYTHON_INTEROP must point at the official 0.11.11 venv");
-    let root = std::env::var("EMP_PYTHON_ORACLE_ROOT")
-        .expect("EMP_PYTHON_ORACLE_ROOT must point at the official oracle");
-    assert!(
-        std::path::Path::new(&python).is_file(),
-        "Python oracle venv is missing"
-    );
-    assert!(
-        std::path::Path::new(&root)
-            .join("easy_multi_provider")
-            .is_dir()
-    );
-    let mut child = Command::new(python)
-        .args(["-c", PYTHON_ORACLE])
-        .env("EMP_PYTHON_ORACLE_ROOT", root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("start official Python oracle");
-    child
-        .stdin
-        .take()
-        .expect("oracle stdin")
-        .write_all(&serde_json::to_vec(&json!({"cases":cases})).expect("oracle input JSON"))
-        .expect("write oracle input");
-    let output = child.wait_with_output().expect("wait for Python oracle");
-    assert!(
-        output.status.success(),
-        "Python oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("oracle JSON output")
-}
-
-fn route_summary(route: &ResolvedRoute) -> Value {
-    json!({
-        "requested_model": route.requested_model,
-        "upstream_model": route.upstream_model,
-        "source": serde_json::to_value(route.source).expect("route source JSON"),
-        "provider_id": route.provider_id,
-        "protocol": route.protocol.as_config_str(),
-        "dialect": serde_json::to_value(route.dialect).expect("route dialect JSON"),
-        "auth_mode": route.provider.value().get("auth_mode"),
-        "model_id": route.model.value().get("id"),
-        "model_upstream_id": route.model.value().get("upstream_id"),
-    })
-}
 
 fn resolve_shared_route(
     server: &ServerHandle,
@@ -262,7 +175,7 @@ fn set_cooldowns(server: &ServerHandle, cooldowns: &Value) {
 }
 
 #[test]
-fn selector_and_route_match_live_python_01110() {
+fn auto_review_selects_candidates_by_headroom_and_cooldown() {
     let base_url = "http://127.0.0.1:9/v1";
     let accounts = vec![
         json!({"id":"high","name":"High","prefix":"current","enabled":true,"quota":{"rate_limits":{"primary":{"usedPercent":10}}}}),
@@ -291,16 +204,23 @@ fn selector_and_route_match_live_python_01110() {
         {"id":"empty","auth_file":""}, {"id":"invalid","auth_file":"invalid.enc","credential_status":"invalid"},
         {"id":"ok","auth_file":"ok.enc","quota":{"rate_limits":{"primary":{"usedPercent":20}}}}
     ]});
-    let cases = vec![
+    let cases = [
         json!({"config":base_config,"native_quota":{"rate_limits":{"primary":{"usedPercent":40}}},"native_available":true,"cooldowns":{},"requested_model":"codex-auto-review"}),
         json!({"config":base_config,"native_quota":{"rate_limits":{"primary":{"usedPercent":100}}},"native_available":true,"cooldowns":{"high":200},"requested_model":"stale-prefix/codex-auto-review"}),
         json!({"config":base_config,"native_quota":{"rate_limits":{"primary":{"usedPercent":40}}},"native_available":true,"cooldowns":{"@native":200,"high":200,"backup":200},"requested_model":"codex-auto-review"}),
         json!({"config":falsy_config,"native_quota":null,"native_available":false,"cooldowns":{}}),
         json!({"config":{"native_catalog_path":base_config["native_catalog_path"],"providers":base_config["providers"],"models":[{"id":"codex-auto-review","provider":"fallback","upstream_id":"ordinary-review","enabled":true}],"accounts":[]},"native_available":false,"cooldowns":{},"requested_model":"codex-auto-review"}),
     ];
-    let oracle = run_python_oracle(&cases);
-    assert_eq!(oracle["version"], "0.11.11");
-
+    // Candidate selection: lowest quota use first, ties keep config order,
+    // the native login leads when available, and cooled-down accounts only
+    // come back when nothing healthy remains.
+    let expected_orders = [
+        json!(["@native", "high", "backup", "tie-first", "tie-second"]),
+        json!(["backup", "tie-first", "tie-second"]),
+        json!(["tie-first", "tie-second"]),
+        json!(["ok"]),
+        json!([]),
+    ];
     for (index, case) in cases.iter().enumerate() {
         let case_config = case["config"].clone();
         let native_quota = case
@@ -322,15 +242,10 @@ fn selector_and_route_match_live_python_01110() {
             &cooling,
         );
         assert_eq!(
-            serde_json::to_value(rust_order).unwrap(),
-            oracle["results"][index]["order"]
+            serde_json::to_value(&rust_order).unwrap(),
+            expected_orders[index],
+            "candidate order for case {index}"
         );
-        if index == 0 {
-            assert_eq!(
-                oracle["results"][index]["order"],
-                json!(["@native", "high", "backup", "tie-first", "tie-second"])
-            );
-        }
         if let Some(requested) = case.get("requested_model").and_then(Value::as_str)
             && (index < 3 || index == 4)
         {
@@ -352,7 +267,6 @@ fn selector_and_route_match_live_python_01110() {
             );
             let route = resolve_shared_route(&server, &mut runtime_config, requested)
                 .expect("Rust route resolution");
-            assert_eq!(route_summary(&route), oracle["results"][index]["route"]);
             if index == 1 {
                 assert_eq!(route.requested_model, "stale-prefix/codex-auto-review");
                 assert_eq!(route.upstream_model, "codex-auto-review");

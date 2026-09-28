@@ -319,6 +319,13 @@ impl UsageLedger {
             ),
             &parameters,
         )?;
+        let unpriced_models = rows(
+            &connection,
+            &format!(
+                "SELECT route_model,COUNT(*) AS requests FROM selected_usage WHERE {selection} AND price_issue='unknown_model' GROUP BY route_model ORDER BY requests DESC LIMIT 50"
+            ),
+            &parameters,
+        )?;
         let first: Option<f64> =
             connection.query_row("SELECT MIN(observed_at) FROM usage_events", [], |row| {
                 row.get(0)
@@ -347,7 +354,7 @@ impl UsageLedger {
             totals.insert(field.into(), json!(total));
         }
         Ok(
-            json!({"start":start,"end":end,"category":category,"totals":totals,"groups":groups,"periods":periods,"issues":issues,"first_record_at":first,"sources":sources,"unmatched_overlap":unmatched,"uncorrelated_realtime":uncorrelated,"write_error":self.write_error.load(Ordering::Acquire),"pricing":self.prices.snapshot(now),"currency":"USD"}),
+            json!({"start":start,"end":end,"category":category,"totals":totals,"groups":groups,"periods":periods,"issues":issues,"unpriced_models":unpriced_models,"first_record_at":first,"sources":sources,"unmatched_overlap":unmatched,"uncorrelated_realtime":uncorrelated,"write_error":self.write_error.load(Ordering::Acquire),"pricing":self.prices.snapshot(now),"currency":"USD"}),
         )
     }
     pub fn price_pending(&self, stop: &AtomicBool) {
@@ -361,7 +368,7 @@ impl UsageLedger {
             let mut connection = self.connect()?;
             let pending = rows(
                 &connection,
-                "SELECT * FROM usage_events WHERE cost_nanos IS NULL AND price_issue IN ('unknown_model','missing_rate','unknown_tier') AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL AND price_revision != ? LIMIT 200",
+                "SELECT * FROM usage_events WHERE price_issue IN ('unknown_model','missing_rate','unknown_tier') AND (cost_nanos IS NULL OR cost_nanos=0) AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL AND price_revision != ? LIMIT 200",
                 &[SqlValue::Text(self.prices.revision())],
             )?;
             if pending.is_empty() {
@@ -391,7 +398,7 @@ impl UsageLedger {
                 .to_vec();
                 values.push(SqlValue::Text(python_json(&quote["rates"], true)));
                 values.push(sql(&event["id"]));
-                tx.execute("UPDATE usage_events SET cost_nanos=?,price_issue=?,price_key=?,price_fetched_at=?,price_revision=?,rates=? WHERE id=? AND cost_nanos IS NULL",params_from_iter(values))?;
+                tx.execute("UPDATE usage_events SET cost_nanos=?,price_issue=?,price_key=?,price_fetched_at=?,price_revision=?,rates=? WHERE id=? AND (cost_nanos IS NULL OR price_issue IN ('unknown_model','missing_rate'))",params_from_iter(values))?;
             }
             tx.commit()?;
         }

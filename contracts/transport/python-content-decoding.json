@@ -5,8 +5,7 @@
     "tests/test_adaptive_request_limits.py:AdaptiveRequestLimitTests.test_each_supported_compression_expands_without_replaying_or_truncating"
   ],
   "rust_evidence": [
-    "crates/emp-transport/tests/content_encoding.rs",
-    "crates/emp-transport/tests/python_oracle.rs:content_decoding_matches_live_python_oracle_when_configured"
+    "crates/emp-transport/tests/content_encoding.rs"
   ],
   "covered_cases": [
     "identity, gzip, x-gzip, zlib deflate and zstd decode to exact source bytes",
@@ -16,5 +15,7 @@
     "truncated or invalid compressed streams fail closed",
     "unsupported encodings and errors do not include request content"
   ],
-  "side_effects": ["none beyond the caller-owned request budget reservation"]
+  "side_effects": [
+    "none beyond the caller-owned request budget reservation"
+  ]
 }

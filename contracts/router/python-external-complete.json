@@ -9,7 +9,7 @@
     "easy_multi_provider/protocol_projection.py:responses_terminal_observation"
   ],
   "rust_evidence": [
-    "crates/emp-router/tests/python_oracle.rs:external_complete_routes_match_live_python_and_socket_contract"
+    "crates/emp-router/tests/external_complete_routes.rs"
   ],
   "same_fixture": {
     "downstream_protocol": "Responses",
@@ -32,5 +32,7 @@
     "account, forward, and native authentication ownership",
     "bounded external 504 and short-429 pre-output retry"
   ],
-  "side_effects": ["tests bind an ephemeral loopback HTTP port only"]
+  "side_effects": [
+    "tests bind an ephemeral loopback HTTP port only"
+  ]
 }

@@ -7,8 +7,7 @@
     "tests/test_stream_adapters.py"
   ],
   "rust_evidence": [
-    "crates/emp-transport/tests/failure_policy.rs",
-    "crates/emp-transport/tests/python_oracle.rs:failure_policy_matches_live_python_oracle_when_configured"
+    "crates/emp-transport/tests/failure_policy.rs"
   ],
   "covered_cases": [
     "origin HTTP 502 remains upstream_5xx while proxy evidence maps gateway 502 to proxy_unavailable 503",
@@ -19,5 +18,7 @@
     "free-route, explicit quota, capacity and Retry-After values above five seconds are not replayed",
     "public messages never include arbitrary upstream detail"
   ],
-  "side_effects": ["none; callers own delay, I/O and retry execution"]
+  "side_effects": [
+    "none; callers own delay, I/O and retry execution"
+  ]
 }

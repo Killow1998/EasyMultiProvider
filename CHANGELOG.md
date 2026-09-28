@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Show what the running Codex actually loaded: the integration card reads
+  `model/list` from Codex when Codex reaches EMP and reports "Codex is using
+  EMP", "Restart" or "Codex is not running". Updates arrive over the page's
+  event stream; the page no longer polls.
+- Restart messages always refer to Codex; the version note appears only when
+  Codex is unsupported. Add an auto-dismissing notice and an animated logo.
+- Support every Codex from 0.149.0 on without a runtime selector.
+- Show external models with Codex's 95% effective context window.
+- Price prefixed routes, count unknown models as 0, and add pricing references.
+- Clearer error messages that say whether the key, network or service failed;
+  per-modality model tests; a shared quota period picker.
+- The test suite is Rust-only: live Python-oracle comparisons are removed and
+  the Python E2E driver is replaced by Rust user-journey tests.
+
 ## 0.12.1 (2026-09-25)
 
 - Ship the Rust rewrite as the release implementation: the Python source moves
@@ -312,7 +328,7 @@ not establish an external-provider fault.
 - Resolve system proxy settings for each new upstream connection and quota query;
   invalidate native WebSocket reuse when the proxy endpoint changes.
 - Keep loopback providers direct even when a proxy is enabled while EMP runs.
-- Correlate upstream requests with NA2H using an opaque request ID.
+- Correlate upstream requests with the upstream gateway using an opaque request ID.
 - Record structured TLS causes and WebSocket receive state on transport failures.
 
 ## 0.9.92 (2026-09-08)

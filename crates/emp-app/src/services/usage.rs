@@ -67,6 +67,9 @@ pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandl
                     .ok()
                     .map(|config| config.clone())
                     .unwrap_or(json!({}));
+                if usage.ledger.prices.set_aliases(&config["pricing_aliases"]) {
+                    usage.ledger.price_pending(&history_state.shutdown);
+                }
                 usage.history.scan(
                     &usage.ledger,
                     &history_state.backend.accounts.codex_home,

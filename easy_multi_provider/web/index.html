@@ -16,7 +16,7 @@ h1{margin:0 0 2px;font-size:23px;letter-spacing:-.01em}h2{font-size:16px;margin:
 .page-header-controls{display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:10px 12px}
 .header-group{display:flex;align-items:center;gap:6px;flex:none;padding-right:12px;border-right:1px solid var(--border)}
 .page-header-controls :is(button,select,a){height:34px;margin:0;white-space:nowrap;font-family:inherit;font-size:13px;line-height:1.3;font-weight:400}
-.page-header-controls select{width:auto;min-width:98px;padding:6px 28px 6px 8px}
+.page-header-controls select{width:auto;min-width:98px;padding:0 28px 0 8px}
 .repo-link{display:inline-flex;align-items:center;padding:6px 10px;border:1px solid var(--border-strong);border-radius:4px;color:var(--text);text-decoration:none;font-size:13px}.repo-link:hover{background:var(--secondary-hover)}
 .update-progress{width:100%;height:8px;accent-color:var(--accent);margin-top:12px}
 section{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:16px;margin:12px 0}
@@ -54,7 +54,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{white-sp
 .performance-help{border:1px solid var(--border);border-radius:4px;padding:9px 10px;margin:8px 0 12px;background:var(--panel-soft);color:var(--muted);font-size:12px}.performance-help span{display:block}.performance-help strong{color:var(--text)}.health-grid{display:grid;grid-template-columns:repeat(3,minmax(90px,1fr));gap:8px;margin:10px 0 14px}.health-stat{border:1px solid var(--border);border-radius:4px;padding:8px 10px;background:var(--panel)}.health-stat span{display:block;color:var(--muted);font-size:11px}.health-stat strong{display:block;margin-top:2px;font-size:18px;font-weight:650}.health-stat small{color:var(--muted);font-size:10px}.performance-table{overflow:auto}.performance-table table{min-width:620px}.metric-trend{display:inline-block;margin-left:4px;font-size:11px;font-weight:650}.metric-trend.good{color:var(--success)}.metric-trend.bad{color:var(--danger)}.diagnostics-details{margin-top:14px;border-top:1px solid var(--border);padding-top:10px}.diagnostics-details summary{cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:8px}
 main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(470px,.88fr);gap:12px;align-items:start}.workspace-column>section,.workspace-side>section{margin:12px 0}.workspace-side{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto}.integration-actions{display:grid;gap:8px;margin-top:10px}.action-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.action-group-label{width:68px;color:var(--muted);font-size:12px}.search-toggle{padding-top:8px;border-top:1px solid var(--border)}
 .display-row{grid-template-columns:minmax(150px,1.15fr) minmax(130px,1fr) auto auto}.quota-battery-fill{animation:none}.quota-meter.is-updated .quota-battery-fill{animation:quota-level-in .5s ease-out both}
-.quota-chart{position:relative;aspect-ratio:628/280;min-height:0}.quota-chart .quota-empty{position:absolute;inset:0;min-height:0}.quota-hover-target{fill:transparent;pointer-events:all}.quota-segment{cursor:zoom-in}.quota-segment:hover,.quota-segment:focus-visible{fill:var(--accent);fill-opacity:.06;outline:none}.quota-period-divider{stroke:var(--border-strong);stroke-dasharray:3 4;vector-effect:non-scaling-stroke}.quota-period-divider.observed{stroke-dasharray:1 3}.quota-chart-guide{stroke:var(--muted);stroke-dasharray:3 3;pointer-events:none}.quota-chart-point{stroke:none}.quota-chart-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;min-height:44px}.quota-chart-toolbar .quota-ranges button.active{background:var(--panel-soft);color:var(--text);border-color:var(--accent)}.quota-history-navigation{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;min-height:36px;margin-bottom:8px;font-size:12px;color:var(--muted)}.quota-history-navigation button{padding:4px 9px;font-size:12px}.quota-history-navigation span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#quota_history_legend{min-height:18px}.quota-chart-tooltip{position:absolute;z-index:2;max-width:260px;padding:6px 8px;border:1px solid var(--border-strong);border-radius:4px;background:var(--panel);box-shadow:0 3px 12px rgba(0,0,0,.18);font-size:12px;pointer-events:none;transform:translate(-50%,calc(-100% - 8px));white-space:nowrap}.quota-chart-tooltip[hidden]{display:none}
+.quota-chart{position:relative;min-height:282px}.quota-chart .quota-empty{position:absolute;inset:0;min-height:0}.quota-hover-target{fill:transparent;pointer-events:all}.quota-segment{cursor:zoom-in}.quota-segment:hover,.quota-segment:focus-visible{fill:var(--accent);fill-opacity:.06;outline:none}.quota-period-divider{stroke:var(--border-strong);stroke-dasharray:3 4;vector-effect:non-scaling-stroke}.quota-period-divider.observed{stroke-dasharray:1 3}.quota-chart-guide{stroke:var(--muted);stroke-dasharray:3 3;pointer-events:none}.quota-chart-point{stroke:none}.quota-chart-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;min-height:44px}.quota-chart-toolbar .quota-ranges button.active{background:var(--panel-soft);color:var(--text);border-color:var(--accent)}.quota-history-navigation{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;min-height:36px;margin-bottom:8px;font-size:12px;color:var(--muted)}.quota-history-navigation button{padding:4px 9px;font-size:12px}.quota-history-navigation span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#quota_history_legend{min-height:18px}.quota-chart-tooltip{position:absolute;z-index:2;max-width:260px;padding:6px 8px;border:1px solid var(--border-strong);border-radius:4px;background:var(--panel);box-shadow:0 3px 12px rgba(0,0,0,.18);font-size:12px;pointer-events:none;transform:translate(-50%,calc(-100% - 8px));white-space:nowrap}.quota-chart-tooltip[hidden]{display:none}
 @keyframes quota-level-in{from{width:0;opacity:.6}}@keyframes quota-charge{from{transform:translateX(-120%)}to{transform:translateX(120%)}}@keyframes quota-pending{0%,100%{width:18%;opacity:.55}50%{width:70%;opacity:1}}
 @media(prefers-reduced-motion:reduce){.quota-battery-fill,.quota-meter.is-updated .quota-battery-fill,.quota-meter.is-refreshing .quota-battery-fill::after,.quota-pending .quota-battery-fill{animation:none;transition:none}}
 @media(max-width:1040px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}}
@@ -63,22 +63,9 @@ main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minma
 .failure-list{margin-top:16px;border-top:1px solid var(--border);padding-top:12px}.failure-list>summary{cursor:pointer;font-weight:600}.request-failure{margin-top:8px;border:1px solid var(--border);border-radius:6px;padding:10px 12px}.request-failure>summary{cursor:pointer;overflow-wrap:anywhere}.request-failure>summary span,.request-failure>summary time{margin-right:10px}.request-failure dl{display:grid;grid-template-columns:minmax(90px,auto) minmax(0,1fr);gap:6px 16px;font-size:13px}.request-failure dt{color:var(--muted)}.request-failure dd{margin:0;overflow-wrap:anywhere}.request-failure p{font-size:13px;margin-bottom:0}
 .cache-performance{margin-top:18px}.cache-performance h3{margin-bottom:6px}.cache-performance p{font-size:13px}.cache-model{margin-top:8px;border:1px solid var(--border);border-radius:6px;padding:10px 12px}.cache-model>summary{cursor:pointer;overflow-wrap:anywhere}.cache-model>summary span{margin-right:12px}.cache-periods{max-height:280px;overflow:auto}.cache-periods table{font-size:13px;min-width:450px}.cache-periods th{position:sticky;top:0;background:var(--panel)}.cache-model p{margin:10px 0}
 .usage-filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:12px 0}.usage-filters label{flex:1;min-width:145px}.usage-filters input,.usage-filters select{margin-top:4px}.usage-totals{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}.usage-total{background:var(--panel-soft);border:1px solid var(--border);border-radius:6px;padding:14px}.usage-total strong{display:block;font-size:25px;font-variant-numeric:tabular-nums}.usage-total span{color:var(--muted);font-size:12px}.usage-chart{width:100%;height:190px;display:block}.usage-chart text{fill:var(--muted);font-size:12px}.usage-chart rect{fill:var(--accent);cursor:pointer}.usage-chart rect:hover,.usage-chart rect:focus{fill:var(--success);outline:none}.usage-table{overflow:auto;max-height:370px}.usage-table table{font-size:12px;min-width:620px}.usage-table td small{display:block;color:var(--muted)}.usage-table td{font-variant-numeric:tabular-nums}.usage-notice{font-size:12px;color:var(--muted);margin:10px 0}.usage-warning{color:var(--warning)}
+.pricing-aliases{width:100%;border-collapse:collapse;margin:6px 0}.pricing-aliases td{padding:4px 6px;vertical-align:middle}.pricing-aliases td small{display:block}.pricing-aliases input:not([type=checkbox]){width:100%}
 </style>
 <style>
-/* Notion DESIGN.md controls: soft canvas, hairline borders, compact equal-height actions. */
-:root{--bg:#f7f7f5;--panel:#fff;--panel-soft:#fbfbfa;--input:#fff;--text:#37352f;--muted:#787066;--border:#e9e9e7;--border-strong:#d3d1cb;--accent:#2f6fdd;--accent-hover:#2563c5;--accent-soft:#edf2fd;--secondary-hover:#f1f1ef;--danger:#d44c47;--danger-soft:#fdebec;--danger-text:#c04b45;--warning:#c08b36;--warning-soft:#fdf6e5;--success:#448361;--code:#2c5fa8}
-:root[data-theme="dark"]{--bg:#191919;--panel:#202020;--panel-soft:#1f1f1f;--input:#252525;--text:#e9e9e7;--muted:#a2a29c;--border:#373737;--border-strong:#4d4d4d;--accent:#5b97f0;--accent-hover:#6ea5f2;--accent-soft:#253344;--secondary-hover:#2f2f2f;--danger:#e16259;--danger-soft:#3d2626;--danger-text:#e9877f;--warning:#d6a049;--warning-soft:#3a2f1e;--success:#6ea87e;--code:#a3c3f7}
-@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#191919;--panel:#202020;--panel-soft:#1f1f1f;--input:#252525;--text:#e9e9e7;--muted:#a2a29c;--border:#373737;--border-strong:#4d4d4d;--accent:#5b97f0;--accent-hover:#6ea5f2;--accent-soft:#253344;--secondary-hover:#2f2f2f;--danger:#e16259;--danger-soft:#3d2626;--danger-text:#e9877f;--warning:#d6a049;--warning-soft:#3a2f1e;--success:#6ea87e;--code:#a3c3f7}}
-body{font-size:14px}
-main{max-width:1360px;padding:28px 20px 44px}
-h1{font-size:24px;letter-spacing:-.02em}
-h2{font-size:15px;margin:0 0 14px}
-.page-header{align-items:flex-start;padding-bottom:18px;margin-bottom:8px}
-.page-brand p{margin-top:4px}
-.page-header-controls{justify-content:flex-end;flex-wrap:wrap;gap:10px}
-.page-header-controls :is(button,select,a){height:36px;min-height:36px;font-size:14px}
-.header-group{gap:7px;padding-right:10px}
-section{border-radius:12px;padding:18px 20px;box-shadow:0 1px 2px rgba(15,15,15,.04)}
 button,.repo-link{display:inline-flex;align-items:center;justify-content:center;gap:6px;box-sizing:border-box;height:36px;min-height:36px;margin:0;padding:0 12px;border-radius:8px;font-family:inherit;font-size:14px;font-weight:500;line-height:1;white-space:nowrap;flex:0 0 auto;text-decoration:none}
 .repo-link{border:1px solid var(--border-strong);background:transparent;color:var(--text)}
 .repo-link:hover{background:var(--secondary-hover);border-color:var(--border-strong)}
@@ -95,17 +82,9 @@ button:not(:disabled):hover{transform:none}
 .entity-card-actions{padding-top:10px;border-top:1px solid var(--border)}
 .entity-card-actions button{min-width:74px}
 .display-row{border-radius:10px;background:var(--panel)}
-.modal{border-radius:12px;padding:20px}
 .modal-actions{flex-wrap:wrap}
 .notification-close,.modal-close{width:36px;height:36px;min-height:36px;padding:0}
 @media(max-width:760px){main{padding:18px 12px 32px}section{padding:16px}.page-header{flex-direction:column;align-items:stretch}.action-group{display:block}.action-group-label{display:block;margin-bottom:8px;padding-top:0}.action-group>.toolbar,.action-group>.runtime-controls{margin:0}}
-.workspace-layout{grid-template-columns:minmax(0,1.2fr) minmax(390px,.8fr);gap:18px}
-.workspace-column>section,.workspace-side>section{margin:16px 0}
-section{border-radius:14px;padding:20px;box-shadow:0 5px 22px rgba(2,11,24,.07)}
-section>h2{margin-bottom:16px}
-.integration-card,.health-stat,.usage-total{border-radius:10px;background:var(--panel-soft)}
-.integration-card{padding:16px}
-.pill{padding:3px 9px;border:1px solid var(--border);font-weight:600}
 button[data-icon]{display:inline-flex}
 .repo-link{border:1px solid var(--border-strong);background:transparent;color:var(--text);cursor:pointer}
 .toolbar,.runtime-controls,.section-tools,.action-group{gap:8px}
@@ -210,17 +189,96 @@ button[data-icon]{display:inline-flex}
 .section-tools input{grid-column:1/-1;max-width:none;min-width:0}
 .section-tools .spacer{display:none}
 .section-tools>button:last-child{justify-self:end}
-.modal{border-radius:14px;padding:22px}
 .modal-actions{flex-wrap:wrap}
-.choice{display:block;min-height:0;white-space:normal}
-@media(max-width:1180px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}}
+.choice{display:block;height:auto;min-height:0;padding:10px 12px;white-space:normal;line-height:1.35}
+.choice small{overflow-wrap:anywhere}
 @media(max-width:760px){main{padding:18px 12px 32px}section{padding:15px}.page-header{flex-direction:column;align-items:stretch}.account-card{grid-template-columns:1fr;grid-template-rows:auto auto auto;padding:10px}.account-card .entity-card-main{grid-column:1;grid-row:1}.account-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1;grid-row:2;width:100%;padding-top:8px;border-top:1px solid var(--border)}.account-card .entity-card-actions button{width:100%}.account-card .entity-card-quota{grid-column:1;grid-row:3}.entity-card{padding:13px}.provider-card{grid-template-columns:minmax(0,1fr);padding:10px}.provider-card .entity-card-main{grid-column:1;grid-row:1}.provider-card .entity-card-meta{grid-column:1;grid-row:2}.provider-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1;grid-row:3;width:100%;padding-top:8px;border-top:1px solid var(--border)}.provider-card .entity-card-actions button{width:100%}.model-card{grid-template-columns:minmax(0,1fr) auto;padding:10px}.model-card .entity-card-main{grid-column:1;grid-row:1}.model-card .visibility{grid-column:2;grid-row:1}.model-card .entity-card-meta{grid-column:1/-1;grid-row:2}.model-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1/-1;grid-row:3;width:100%;padding-top:8px;border-top:1px solid var(--border)}.model-card .entity-card-actions button{width:100%}.action-group{grid-template-columns:1fr;gap:4px}.action-group-label{padding-top:0}.display-row{grid-template-columns:minmax(0,1fr) auto auto}}
+/* EMP design: flat panels, hairlines, one accent. Layout scales with the viewport. */
+:root{color-scheme:light;--bg:#f5f5f3;--panel:#fff;--panel-soft:#fafaf8;--input:#fff;--text:#1f1f1c;--muted:#6f6e69;--border:#e5e4df;--border-strong:#cfcec8;--accent:#2957c7;--accent-hover:#2149ad;--accent-soft:#e8eefa;--secondary-hover:#efeeea;--danger:#c43d38;--danger-soft:#fbecea;--danger-text:#b23a35;--warning:#a8701d;--warning-soft:#fbf3e3;--success:#2f7a4f;--code:#2951a8}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#131313;--panel:#1a1a1a;--panel-soft:#171717;--input:#1f1f1f;--text:#e8e8e5;--muted:#9a9a94;--border:#2a2a29;--border-strong:#3c3c3a;--accent:#7aa2f7;--accent-hover:#8fb1f8;--accent-soft:#1d273a;--secondary-hover:#242423;--danger:#e0645c;--danger-soft:#35201f;--danger-text:#ef8c85;--warning:#d9a24e;--warning-soft:#2f2616;--success:#5fb07f;--code:#8fb1f8}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#131313;--panel:#1a1a1a;--panel-soft:#171717;--input:#1f1f1f;--text:#e8e8e5;--muted:#9a9a94;--border:#2a2a29;--border-strong:#3c3c3a;--accent:#7aa2f7;--accent-hover:#8fb1f8;--accent-soft:#1d273a;--secondary-hover:#242423;--danger:#e0645c;--danger-soft:#35201f;--danger-text:#ef8c85;--warning:#d9a24e;--warning-soft:#2f2616;--success:#5fb07f;--code:#8fb1f8}}
+body{font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;font-feature-settings:"tnum" 0}
+main{max-width:none;margin:0;padding:0 clamp(16px,2.4vw,40px) 40px}
+h1{font-size:17px;font-weight:650;letter-spacing:0}
+h2{font-size:14px;font-weight:600;margin:0}
+.page-header{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 calc(-1*clamp(16px,2.4vw,40px)) 20px;padding:10px clamp(16px,2.4vw,40px);border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px)}
+.page-brand p{display:none}
+.page-header-controls{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px 14px}
+.page-header-controls :is(button,select,a){height:30px;min-height:30px;font-size:13px}
+.header-group{gap:6px;padding-right:14px;border-right:1px solid var(--border)}
+.header-group>span{display:inline-flex;align-items:center;align-self:stretch;color:var(--muted);font-size:12px;line-height:1}
+.workspace-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,34%);gap:clamp(16px,1.6vw,28px);align-items:start}
+.workspace-column>section,.workspace-side>section{margin:0 0 clamp(16px,1.6vw,28px)}
+.workspace-side{position:sticky;top:64px;max-height:calc(100vh - 80px);overflow:auto}
+section{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:12px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px 16px 16px;box-shadow:none}
+section>*{grid-column:1/-1}
+section>h2{grid-column:1;margin:0 0 12px}
+section>h2+.toolbar{grid-column:2;margin:0 0 12px;justify-content:flex-end}
+section>h2+.section-tools{grid-column:1/-1}
+button,.repo-link{height:32px;min-height:32px;padding:0 12px;border-radius:6px;font-size:13px;font-weight:500;box-shadow:none}
+button.secondary,.repo-link{background:var(--panel);border-color:var(--border-strong);color:var(--text)}
+button.secondary:hover,.repo-link:hover{background:var(--secondary-hover)}
+button.danger{background:transparent;border-color:var(--border-strong);color:var(--danger-text)}
+button.danger:hover{background:var(--danger-soft);border-color:var(--danger)}
+input,select,textarea{border-radius:6px;border-color:var(--border-strong)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:none;color:var(--muted);font-size:12px;font-weight:500}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.integration-card{padding:0;border:0;border-radius:0;background:none}
+.integration-card[data-state="emp_applied"] .pill::before{background:var(--success)}.integration-card[data-state="emp_applied"]:not([data-runtime="emp_loaded"],[data-runtime="stopped_waiting_for_start"]) .pill::before{background:var(--warning)}
+.integration-card:is([data-state="conflict"],[data-state="prepared"],[data-state="unavailable"]){border-left:0}
+.integration-card:is([data-state="conflict"],[data-state="prepared"],[data-state="unavailable"]) .pill::before{background:var(--danger)}
+.integration-card-header{gap:10px}
+.integration-actions{display:grid;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
+.action-group{grid-template-columns:64px minmax(0,1fr)}
+.action-group-label{color:var(--muted);font-size:12px}
+.entity-list{gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.entity-card,.account-card,.provider-card,.model-card{border:0;border-radius:0;background:var(--panel);border-bottom:1px solid var(--border)}
+.entity-card:last-child{border-bottom:0}
+.entity-card:hover{background:var(--panel-soft)}
+.provider-model-group h3{color:var(--muted);font-size:12px;font-weight:600}
+.display-list{gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.display-row{border:0;border-radius:0;border-bottom:1px solid var(--border);background:var(--panel)}
+.display-row:last-child{border-bottom:0}
+.integration-card,.health-stat,.usage-total{box-shadow:none}
+.health-stat,.usage-total{border-radius:8px;background:var(--panel-soft)}
+.modal{border-radius:10px;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+.modality-options{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.modality-option{display:inline-flex;align-items:center;gap:8px;margin:0;padding:0 4px 0 10px;height:32px;border:1px solid var(--border-strong);border-radius:6px;color:var(--text);font-size:13px;cursor:pointer}
+.modality-option:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}input[type=number]{-moz-appearance:textfield;appearance:textfield}
+.input-action{display:flex;align-items:stretch;gap:6px}.input-action input{flex:1;min-width:0}.input-action button{flex:none;height:auto;min-height:0;white-space:nowrap}
+.modality-option label{display:inline-flex;align-items:center;gap:6px;margin:0;color:var(--text);font-size:13px;cursor:pointer}.modality-option input{width:auto;margin:0}.modality-option .modality-test{height:24px;min-height:24px;padding:0 8px;font-size:12px}.modality-option:not(:has(.modality-test)){padding-right:10px}
+@media(max-width:1100px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}.page-header{position:static;flex-direction:column;align-items:stretch}.page-header-controls{justify-content:flex-start}}
+@media(max-width:760px){section{padding:12px}.header-group{padding-right:0;border-right:0}section>h2+.toolbar{grid-column:1/-1;justify-content:flex-start}}
+.period-picker{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 16px;margin:0 0 14px;padding-bottom:14px;border-bottom:1px solid var(--border)}
+.period-presets{display:inline-flex;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden}
+.period-presets button{margin:0;border:0;border-radius:0;height:30px;min-height:30px;background:var(--panel);color:var(--text)}
+.period-presets button+button{border-left:1px solid var(--border-strong)}
+.period-presets button.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.period-custom{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px}
+.period-custom label{display:grid;gap:3px;margin:0;font-size:12px}
+.dot-logo{display:block;height:24px;width:auto;overflow:visible}.dot-logo circle{fill:var(--text);opacity:.1;transition:opacity .18s,fill .3s}.dot-logo circle.on{opacity:1}.dot-logo circle.hot{fill:var(--accent);opacity:1;filter:drop-shadow(0 0 2px var(--accent))}.dot-logo.emp-live circle.on{fill:var(--success)}.brand-title{align-items:center}
+.toast{position:fixed;top:18px;left:50%;z-index:30;width:min(420px,calc(100vw - 32px));transform:translateX(-50%);padding:14px 16px 16px;background:var(--panel);border:1px solid var(--accent);border-radius:6px;box-shadow:0 10px 32px rgba(0,0,0,.28);cursor:pointer;overflow:hidden;animation:toast-in .22s ease-out both}.toast strong{display:block;font-size:15px;margin-bottom:3px}.toast p{margin:0;color:var(--text)}.toast::after{content:"";position:absolute;left:0;bottom:0;height:3px;width:100%;background:var(--accent);transform-origin:left;animation:toast-timer var(--toast-ms) linear both}.toast.leaving{animation:toast-out .2s ease-in both}
+@keyframes toast-in{from{opacity:0;transform:translate(-50%,-10px)}}@keyframes toast-out{to{opacity:0;transform:translate(-50%,-10px)}}@keyframes toast-timer{to{transform:scaleX(0)}}
+@media(prefers-reduced-motion:reduce){.toast,.toast.leaving{animation:none}}
+#notification{align-items:center;padding:6px 6px 6px 14px}#status{flex:1;line-height:1.45}#notification .notification-close{width:28px;height:28px;min-height:28px;font-size:20px}
+.usage-filters :is(select,input,button){height:32px;min-height:32px;padding-top:0;padding-bottom:0}
+.period-custom input{width:auto;min-width:190px;height:30px;padding:3px 8px}
+.period-custom button{margin:0;height:30px;min-height:30px}
+.period-sep{color:var(--muted);padding-bottom:6px}
+.quota-gap{stroke:none}.quota-gap-base{fill:var(--panel)}.quota-gap-stripe{stroke:var(--border);stroke-width:2}
+.quota-gap-label{fill:var(--muted);font-size:11px;paint-order:stroke;stroke:var(--panel);stroke-width:4px;stroke-linejoin:round;pointer-events:none}
+.quota-plan-empty{position:absolute;top:0;bottom:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden}
+.quota-chart-marker{pointer-events:none}
+.quota-history-navigation button[hidden]{display:none}
+.modal:has(.period-picker){width:min(1080px,100%)}
+@media(max-width:760px){.period-custom input{min-width:0;width:100%}.period-custom label{flex:1 1 140px}}
 </style>
 </head>
 <body>
 <main>
 <header class="page-header">
-  <div class="page-brand"><div class="brand-title"><h1>EMP</h1><span id="emp_version" class="brand-version"></span></div><p data-i18n="subtitle">管理 Codex 的账号和模型。</p></div>
+  <div class="page-brand"><div class="brand-title"><h1 aria-label="EMP"><svg id="emp_logo" class="dot-logo" aria-hidden="true"></svg></h1><span id="emp_version" class="brand-version"></span></div><p data-i18n="subtitle">管理 Codex 的账号和模型。</p></div>
   <div class="page-header-controls">
     <div class="header-group">
       <button type="button" class="secondary" data-icon="upload" onclick="selectMigrationFile()" data-i18n="import_emp">导入数据</button>
@@ -249,10 +307,7 @@ button[data-icon]{display:inline-flex}
   <div class="integration-card-header"><span id="integration_badge" class="pill" data-i18n="loading">加载中</span><h3 id="integration_title" data-i18n="integration_status">Codex 状态</h3></div>
   <p id="integration_summary" class="muted" data-i18n="integration_loading">正在读取状态…</p>
   <p id="codex_compatibility" class="muted" hidden></p>
-  <div id="codex_runtimes" class="runtime-list"></div>
-  <p id="codex_runtime_dirty" class="muted" hidden></p>
   <div class="integration-actions">
-    <div class="action-group"><span class="action-group-label" data-i18n="client_scope">客户端</span><div class="runtime-controls"><button id="codex_runtime_save" class="secondary" data-icon="save" onclick="saveCodexRuntimeSelection()" data-i18n="save_runtimes">保存选择</button><button class="secondary" data-icon="check" onclick="useAutomaticCodexRuntimes()" data-i18n="automatic_runtimes">选择全部</button><button id="codex_runtime_scan" class="secondary" data-icon="refresh" onclick="scanCodexRuntimes()" data-i18n="rescan_runtimes">重新扫描</button></div></div>
     <div class="action-group"><span class="action-group-label" data-i18n="emp_scope">EMP</span><div class="toolbar"><button id="integration_toggle" data-icon="check" data-action="enable" onclick="confirmIntegrationAction(this.dataset.action)" data-i18n="enable_codex" disabled>启用 EMP</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">性能</button><button class="secondary" data-icon="usage" onclick="openUsage()" data-i18n="usage">用量与估算</button></div></div>
     <div class="action-group search-toggle"><span class="action-group-label" data-i18n="search_scope">工具</span><label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="saveSubscriptionSearch()"><span data-i18n="enable_subscription_search">联网搜索</span></label></div>
   </div>
@@ -311,7 +366,6 @@ let modalReasoningSupport = null;
 let modalReasoningSummarySupport = null;
 let editingModelId = '';
 let activeQuotaAccountId = '';
-let activeQuotaRange = '1d';
 let quotaHistoryTimer = null;
 let quotaHistoryRequest = 0;
 let quotaHistoryPayload = null;
@@ -328,7 +382,6 @@ let quotaUpdateRunning = false;
 let diagnosticsTimer = null;
 let diagnosticsRequest = 0;
 let supportReportRequest = 0;
-let runtimeSelectionDraft = null;
 const expandedModelGroups = new Set();
 const refreshErrors = {};
 const refreshingAccounts = new Set();
@@ -394,6 +447,27 @@ function confirmedField(model, field) {
   if (!confirmedCapabilitySources.has(source)) return null;
   return model[field] ?? null;
 }
+// Codex only sends text and images; other stored modalities are kept but not offered.
+const COMMON_MODALITIES = ['text', 'image'];
+// Modalities with a test the edit panel can run against the saved model.
+const MODALITY_TESTS = {image: () => testModalVision()};
+let modalVisionStatus = 'unknown';
+function modalityOption(value, checked, testable = false) {
+  const test = testable && MODALITY_TESTS[value] ? `<button type="button" class="secondary modality-test" data-ui-action="modality-test" data-id="${esc(value)}">${tr('测试','Test')}</button>` : '';
+  return `<span class="modality-option"><label><input type="checkbox" data-modality value="${esc(value)}" ${checked ? 'checked' : ''} onchange="if(this.value==='image')modalVisionStatus=this.checked?'supported':'unsupported'">${esc(modalityLabel(value))}</label>${test}</span>`;
+}
+function modalityOptions(selected, vision, testable) {
+  const audio = testable ? `<button type="button" class="secondary modality-test" onclick="testModalAudio()">${tr('测试音频','Test audio')}</button>` : '';
+  return COMMON_MODALITIES.map(value => modalityOption(value, selected.includes(value), testable)).join('') + audio;
+}
+async function testModalAudio() {
+  if (!editingModelId) return notice(tr('请先保存模型再测试','Save the model before testing'), true);
+  await testModelAudio(editingModelId);
+}
+async function testModalVision() {
+  if (!editingModelId) return notice(tr('请先保存模型再测试','Save the model before testing'), true);
+  if (await testModelVision(editingModelId)) { const box = document.querySelector('[data-modality][value="image"]'); if (box) box.checked = true; modalVisionStatus = 'supported'; }
+}
 function modalityLabel(value) {
   const labels = language === 'en' ? {text:'text',image:'image',audio:'audio',video:'video'} : {text:'文本',image:'图像',audio:'音频',video:'视频'}; return labels[value] || value;
 }
@@ -417,30 +491,80 @@ function capabilitySummary(model) {
   return parts.join(' · ');
 }
 
-let usageRequest = 0, usagePayload = null, usagePreset = 'today', usagePoll = null;
+let usageRequest = 0, usagePayload = null, usagePoll = null;
 const usageSource = value => ({native:'Native', subscription:tr('其他 Subscription','Other Subscription'), external:'External Provider', unknown:tr('来源未确认','Unknown source')}[value] || value);
 const usageMoney = nanos => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN', {style:'currency', currency:'USD', minimumFractionDigits:2, maximumFractionDigits:4}).format(nanos / 1e9);
 const usageNumber = value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0);
 function usageLocalInput(date) { return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0,16); }
-function setUsagePeriod(preset) {
-  usagePreset = preset;
-  const start = new Date(), end = new Date();
-  if (preset === 'today') { start.setHours(0,0,0,0); end.setDate(end.getDate()+1); end.setHours(0,0,0,0); }
-  else if (preset === 'all') { start.setTime(0); end.setMinutes(end.getMinutes()+1); }
-  else { start.setDate(start.getDate() - (preset === '7d' ? 7 : 30)); end.setMinutes(end.getMinutes()+1); }
-  $('usage_start').value = usageLocalInput(start); $('usage_end').value = usageLocalInput(end);
-  $('usage_bucket').value = preset === 'today' ? 'hour' : 'day';
-  loadUsage();
+// Shared period controls and time axis, so every time-based panel reads the same way.
+const PERIOD_SECONDS = {'1h':3600, '1d':86400, '7d':7*86400};
+const periodPickers = {};
+function periodPresetLabel(preset) { return ({'1h':tr('近 1 小时','Last hour'),'1d':tr('近 1 天','Last day'),'7d':tr('近 7 天','Last 7 days'),all:tr('全部历史','All history')})[preset] || preset; }
+function periodPickerHtml(id, presets) {
+  const presetButtons = presets.map(preset => `<button type="button" class="secondary" data-ui-action="period-preset" data-id="${esc(id)}" data-preset="${esc(preset)}">${esc(periodPresetLabel(preset))}</button>`).join('');
+  return `<div class="period-picker"><div class="period-presets" role="group" aria-label="${esc(tr('时间段','Period'))}">${presetButtons}</div><div class="period-custom"><label>${tr('开始','From')}<input type="datetime-local" id="${esc(id)}_start" data-ui-action="period-edit" data-id="${esc(id)}"></label><span class="period-sep">—</span><label>${tr('结束','Until')}<input type="datetime-local" id="${esc(id)}_end" data-ui-action="period-edit" data-id="${esc(id)}"></label><button type="button" data-ui-action="period-apply" data-id="${esc(id)}">${tr('查询','Apply')}</button><button type="button" class="secondary" data-icon="refresh" data-ui-action="period-refresh" data-id="${esc(id)}">${t('refresh')}</button></div></div>`;
 }
+function periodPresetRange(preset) {
+  const end = Math.ceil(Date.now()/60000)*60;
+  return {start:preset === 'all' ? 0 : end - PERIOD_SECONDS[preset], end};
+}
+function markPeriodPreset(id) {
+  const picker = periodPickers[id];
+  document.querySelectorAll('[data-ui-action="period-preset"]').forEach(button => { if (button.dataset.id !== id) return; const active = Boolean(picker) && button.dataset.preset === picker.preset; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
+}
+function showPeriod(id) {
+  const picker = periodPickers[id]; if (!picker) return;
+  const start = $(`${id}_start`), end = $(`${id}_end`);
+  if (start) start.value = picker.start > 0 ? usageLocalInput(new Date(picker.start*1000)) : '';
+  if (end) end.value = usageLocalInput(new Date(picker.end*1000));
+  markPeriodPreset(id);
+}
+function setPeriod(id, period, options = {}) {
+  const picker = periodPickers[id]; if (!picker) return;
+  Object.assign(picker, period); showPeriod(id); return picker.onChange(picker, options);
+}
+function registerPeriodPicker(id, preset, onChange) { periodPickers[id] = {preset, onChange, ...periodPresetRange(preset)}; showPeriod(id); return onChange(periodPickers[id], {user:true}); }
+function selectPeriodPreset(id, preset) { return setPeriod(id, {preset, ...periodPresetRange(preset)}, {user:true}); }
+function applyCustomPeriod(id) {
+  const start = new Date($(`${id}_start`)?.value).getTime()/1000, end = new Date($(`${id}_end`)?.value).getTime()/1000;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return notice(tr('请选择有效的时间段。','Choose a valid period.'), true);
+  return setPeriod(id, {preset:'', start, end}, {user:true});
+}
+function editPeriod(id) { const picker = periodPickers[id]; if (picker) { picker.preset = ''; markPeriodPreset(id); } }
+// A preset period slides forward to now on refresh; a custom period stays fixed.
+function refreshPeriod(id, user = true) {
+  const picker = periodPickers[id]; if (!picker) return;
+  if (picker.preset) Object.assign(picker, periodPresetRange(picker.preset));
+  showPeriod(id); return picker.onChange(picker, {user});
+}
+const AXIS_STEPS = [60, 300, 900, 1800, 3600, 3*3600, 6*3600, 12*3600, 86400, 2*86400, 7*86400];
+function timeAxisTicks(start, end, maxTicks = 8) {
+  const step = AXIS_STEPS.find(value => (end-start)/value <= maxTicks) || AXIS_STEPS[AXIS_STEPS.length-1];
+  const offset = new Date(start*1000).getTimezoneOffset()*60;
+  const ticks = []; let previousDay = '';
+  for (let at = Math.ceil((start-offset)/step)*step+offset; at <= end; at += step) {
+    const date = new Date(at*1000), day = date.toLocaleDateString([], {month:'numeric',day:'numeric'});
+    const time = step >= 86400 ? day : date.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false});
+    ticks.push({at, time, day:step < 86400 && day !== previousDay ? day : ''}); previousDay = day;
+  }
+  return ticks;
+}
+// Round local-time ticks under a chart; `x` maps a Unix time to the chart's x coordinate.
+function timeAxisSvg(start, end, x, y, left, right) {
+  return timeAxisTicks(start, end).map(tick => {
+    const position = x(tick.at), anchor = position-left < 24 ? 'start' : right-position < 24 ? 'end' : 'middle';
+    return `<line x1="${position.toFixed(1)}" y1="${y-14}" x2="${position.toFixed(1)}" y2="${y-10}" stroke="var(--border-strong)"/><text x="${position.toFixed(1)}" y="${y}" text-anchor="${anchor}" fill="var(--muted)" font-size="10">${esc(tick.time)}${tick.day ? `<tspan x="${position.toFixed(1)}" dy="13">${esc(tick.day)}</tspan>` : ''}</text>`;
+  }).join('');
+}
+function usageBucketFor(period) { const span = period.end - period.start; return period.preset === 'all' || span > 3*86400 ? 'day' : span > 3*3600 ? 'hour' : 'minute'; }
 function openUsage() {
   usageRequest++; usagePayload = null;
   openModal(tr('用量与 API 估算','Usage & API estimates'), `
-    <div class="toolbar"><button type="button" class="secondary" onclick="setUsagePeriod('today')">${tr('今天','Today')}</button><button type="button" class="secondary" onclick="setUsagePeriod('7d')">${tr('近 7 天','Last 7 days')}</button><button type="button" class="secondary" onclick="setUsagePeriod('30d')">${tr('近 30 天','Last 30 days')}</button><button type="button" class="secondary" onclick="setUsagePeriod('all')">${tr('全部历史','All history')}</button><button type="button" class="secondary" onclick="scanUsageHistory()">${tr('扫描历史','Scan history')}</button><button type="button" class="secondary" data-icon="refresh" onclick="usagePreset ? setUsagePeriod(usagePreset) : loadUsage()">${t('refresh')}</button></div>
-    <div class="usage-filters"><label>${tr('开始 · 本地时间','From · local time')}<input type="datetime-local" id="usage_start" onchange="usagePreset=''"></label><label>${tr('结束 · 不包含此时刻','Until · exclusive')}<input type="datetime-local" id="usage_end" onchange="usagePreset=''"></label><button type="button" onclick="usagePreset='';loadUsage()">${tr('查询','Apply')}</button></div>
-    <div class="usage-filters"><label>${tr('来源','Source')}<select id="usage_category" onchange="loadUsage()"><option value="all">${tr('全部来源','All sources')}</option><option value="native">Native</option><option value="subscription">${tr('其他 Subscription','Other Subscription')}</option><option value="external">External Provider</option><option value="unknown">${tr('来源未确认','Unknown source')}</option></select></label><label>${tr('时间粒度','Group by')}<select id="usage_bucket" onchange="renderUsage()"><option value="hour">${tr('小时','Hour')}</option><option value="day">${tr('天','Day')}</option></select></label></div>
+    ${periodPickerHtml('usage', ['1h','1d','7d','all'])}
+    <div class="usage-filters"><label>${tr('来源','Source')}<select id="usage_category" onchange="loadUsage()"><option value="all">${tr('全部来源','All sources')}</option><option value="native">Native</option><option value="subscription">${tr('其他 Subscription','Other Subscription')}</option><option value="external">External Provider</option><option value="unknown">${tr('来源未确认','Unknown source')}</option></select></label><label>${tr('时间粒度','Group by')}<select id="usage_bucket" onchange="renderUsage()"><option value="minute">${tr('分钟','Minute')}</option><option value="hour">${tr('小时','Hour')}</option><option value="day">${tr('天','Day')}</option></select></label><button type="button" class="secondary" onclick="scanUsageHistory()">${tr('扫描历史','Scan history')}</button></div>
     <div id="usage_status" class="usage-notice" role="status"></div><div id="usage_result"></div>
     <p class="usage-notice">${tr('扫描本机 Codex 历史，并记录 EMP 实时用量，跨重启保留。输入包含缓存，输出包含推理；子项不重复相加。','Scans local Codex history and records EMP usage across restarts. Input includes cache; output includes reasoning. Subsets are not added twice.')}</p>`, '', null);
-  setUsagePeriod('today');
+  registerPeriodPicker('usage', '1d', (period, options) => { if (options.user && $('usage_bucket')) $('usage_bucket').value = usageBucketFor(period); return loadUsage(!options.user); });
 }
 async function scanUsageHistory() {
   try { await api('/api/usage/scan', {method:'POST',body:'{}'}); loadUsage(); }
@@ -450,13 +574,14 @@ async function loadUsage(background = false) {
   clearTimeout(usagePoll);
   const status = $('usage_status'); if (!status) return;
   const id = ++usageRequest;
-  const start = usagePreset === 'all' ? 0 : new Date($('usage_start').value).getTime()/1000, end = new Date($('usage_end').value).getTime()/1000;
+  const period = periodPickers.usage; if (!period) return;
+  const {start, end} = period;
   if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) { status.textContent = tr('请选择有效的时间段。','Choose a valid period.'); return; }
   if (!background) status.textContent = tr('正在查询…','Loading…');
   try {
     const result = await api('/api/usage?' + new URLSearchParams({start,end,category:$('usage_category').value}));
     if (id !== usageRequest || $('usage_status') !== status) return;
-    if (usagePreset === 'all' && result.first_record_at) {
+    if (period.preset === 'all' && result.first_record_at) {
       const first = new Date(result.first_record_at*1000); first.setHours(0,0,0,0);
       result.start = Math.max(0, first.getTime()/1000); $('usage_start').value = usageLocalInput(first);
     }
@@ -465,31 +590,51 @@ async function loadUsage(background = false) {
   } catch (error) { if (id === usageRequest && $('usage_status') === status) status.textContent = error.message; }
 }
 function usagePeriods() {
-  const groups = new Map(), daily = $('usage_bucket').value === 'day';
+  const groups = new Map(), bucket = $('usage_bucket').value;
   for (const row of usagePayload.periods) {
-    const date = new Date(row.start*1000); if (daily) date.setHours(0,0,0,0); else date.setMinutes(0,0,0);
-    const start = date.getTime()/1000, until = new Date(date); if (daily) until.setDate(until.getDate()+1); else until.setTime(until.getTime()+3600000);
+    const date = new Date(row.start*1000); if (bucket === 'day') date.setHours(0,0,0,0); else if (bucket === 'hour') date.setMinutes(0,0,0); else date.setSeconds(0,0);
+    const start = date.getTime()/1000, until = new Date(date); if (bucket === 'day') until.setDate(until.getDate()+1); else until.setTime(until.getTime()+(bucket === 'hour' ? 3600000 : 60000));
     if (!groups.has(start)) groups.set(start, {start,end:until.getTime()/1000,input_tokens:0,output_tokens:0,cost_nanos:0,requests:0,priced_requests:0});
     const group = groups.get(start); for (const key of ['input_tokens','output_tokens','cost_nanos','requests','priced_requests']) group[key] += row[key];
   }
   return [...groups.values()].sort((a,b) => a.start-b.start);
 }
 function zoomUsage(start,end) {
-  $('usage_start').value = usageLocalInput(new Date(Math.max(start,usagePayload.start)*1000));
-  $('usage_end').value = usageLocalInput(new Date(Math.min(end,usagePayload.end)*1000));
-  $('usage_bucket').value = 'hour'; usagePreset=''; loadUsage();
+  setPeriod('usage', {preset:'', start:Math.max(start,usagePayload.start), end:Math.min(end,usagePayload.end)}, {user:true});
 }
+// History rows only know the route they were recorded under, so that route is the source.
+const usageRowSource = row => row.category === 'unknown' && row.owner.startsWith('history:') ? tr('历史路由','Historical route') : usageSource(row.category);
 function usageOwner(row) {
-  if (row.owner.startsWith('history:')) return tr('历史路由 · ','Historical route · ') + row.owner.slice(8);
+  if (row.owner.startsWith('history:')) return row.category === 'unknown' ? row.owner.slice(8) : tr('历史路由 · ','Historical route · ') + row.owner.slice(8);
   if (row.category === 'external') return row.owner_name || row.owner;
   if (row.owner.startsWith('account:')) return row.owner_name || tr('账号 · ','Account · ') + row.owner.slice(8,16);
   if (row.owner.startsWith('credential:')) return (row.owner_name || row.owner.slice(11,19)) + tr(' · 身份未确认',' · identity unconfirmed');
   return tr('旧记录或路由 · 账号身份未确认','Legacy record or route · account identity unconfirmed');
 }
+// Models without a public price cost 0 unless they are priced as another model.
+function usagePricingEditor(data) {
+  const aliases = state?.pricing_aliases || {};
+  const counts = new Map((data.unpriced_models || []).map(row => [row.route_model, row.requests]));
+  const models = [...new Set([...counts.keys(), ...Object.keys(aliases)])].filter(Boolean);
+  if (!models.length) return '';
+  const rows = models.map(model => `<tr><td><code>${esc(model)}</code>${counts.has(model) ? `<small>${usageNumber(counts.get(model))} ${tr('次按 0 计','requests counted as 0')}</small>` : ''}</td><td><input data-pricing-alias="${esc(model)}" value="${esc(aliases[model] || '')}" placeholder="${tr('按哪个模型计价，例如 gpt-5.5','Price as, e.g. gpt-5.5')}"></td></tr>`).join('');
+  return `<details class="usage-notice"><summary>${tr('计价对照','Pricing references')}${counts.size ? ` · ${counts.size} ${tr('个模型没有公开价格，按 0 计','models have no public price and count as 0')}` : ''}</summary><p class="muted">${tr('可以为这些模型指定按哪个公开模型估价；留空则按 0 计。保存后会重新计算历史记录。','Optionally choose a public model to estimate these with; leave empty to count them as 0. Saving re-prices past records.')}</p><table class="pricing-aliases">${rows}</table><div class="toolbar"><button class="secondary" data-icon="save" onclick="saveUsagePricing()">${tr('保存计价对照','Save pricing references')}</button></div></details>`;
+}
+async function saveUsagePricing() {
+  const aliases = {...(state.pricing_aliases || {})};
+  document.querySelectorAll('[data-pricing-alias]').forEach(input => {
+    const value = input.value.trim();
+    if (value) aliases[input.dataset.pricingAlias] = value; else delete aliases[input.dataset.pricingAlias];
+  });
+  const candidate = cloneState(); candidate.pricing_aliases = aliases;
+  try { await persistState(tr('计价对照已保存，正在重新计价…','Pricing references saved; re-pricing…'), candidate); }
+  catch (error) { return notice(error.message, true); }
+  setTimeout(() => loadUsage(true), 1500);
+}
 function renderUsage() {
   const box = $('usage_result'); if (!box || !usagePayload) return;
   const data = usagePayload, totals = data.totals, periods = usagePeriods();
-  const cost = row => row.priced_requests ? usageMoney(row.cost_nanos) + (row.priced_requests < row.requests ? '*' : '') : '—';
+  const cost = row => row.priced_requests ? usageMoney(row.cost_nanos) : '—';
   const price = data.pricing, missing = totals.requests - totals.priced_requests;
   const max = Math.max(1,...periods.map(row=>row.input_tokens+row.output_tokens));
   const width = 720, plot = 628, range = data.end-data.start;
@@ -500,20 +645,43 @@ function renderUsage() {
     const label = new Date(row.start*1000).toLocaleString() + ' · ' + usageNumber(tokens) + ' tokens · ' + cost(row);
     return `<rect x="${x}" y="${150-h}" width="${w}" height="${Math.max(1,h)}" rx="2" tabindex="0" role="button" aria-label="${esc(label)}" data-ui-action="usage-zoom" data-start="${Number(row.start)}" data-end="${Number(row.end)}"><title>${esc(label)}</title></rect>`;
   }).join('');
-  const rows = data.groups.sort((a,b)=>(b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)).map(row => `<tr><td>${esc(usageSource(row.category))}<small>${esc(usageOwner(row))}</small></td><td>${esc(row.model)}<small>${row.service_tier === 'default' ? tr('普通','Standard') : esc(row.service_tier)}</small></td><td>${row.input_reports ? usageNumber(row.input_tokens) : '—'}<small>${tr('缓存 ','Cached ')}${row.cache_reports ? usageNumber(row.cached_input_tokens) : '—'}${row.cache_write_tokens ? ' · '+tr('写入 ','Write ')+usageNumber(row.cache_write_tokens) : ''}</small></td><td>${row.output_reports ? usageNumber(row.output_tokens) : '—'}<small>${tr('推理 ','Reasoning ')}${row.reasoning_reports ? usageNumber(row.reasoning_tokens) : '—'}</small></td><td>${cost(row)}</td><td>${usageNumber(row.requests)}</td></tr>`).join('');
+  const rows = data.groups.sort((a,b)=>(b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)).map(row => `<tr><td>${esc(usageRowSource(row))}<small>${esc(usageOwner(row))}</small></td><td>${esc(row.model)}<small>${row.service_tier === 'default' ? tr('普通','Standard') : esc(row.service_tier)}</small></td><td>${row.input_reports ? usageNumber(row.input_tokens) : '—'}<small>${tr('缓存 ','Cached ')}${row.cache_reports ? usageNumber(row.cached_input_tokens) : '—'}${row.cache_write_tokens ? ' · '+tr('写入 ','Write ')+usageNumber(row.cache_write_tokens) : ''}</small></td><td>${row.output_reports ? usageNumber(row.output_tokens) : '—'}<small>${tr('推理 ','Reasoning ')}${row.reasoning_reports ? usageNumber(row.reasoning_tokens) : '—'}</small></td><td>${cost(row)}</td><td>${usageNumber(row.requests)}</td></tr>`).join('');
   const history = data.history || {}, historical = data.sources?.find(row => row.origin === 'history')?.requests || 0;
   box.innerHTML = `<p class="usage-notice">${history.running || history.queued ? tr('正在后台扫描历史…','Scanning history in the background…') : history.last_scan_at ? tr('历史已扫描 · ','History scanned · ') + usageNumber(history.files) + tr(' 个文件',' files') : tr('等待历史扫描','Waiting for history scan')}${history.errors ? ' · ' + tr('部分文件读取失败','Some files could not be read') : ''}</p>
     <div class="usage-totals"><div class="usage-total"><span>Tokens</span><strong>${totals.input_reports || totals.output_reports ? usageNumber(totals.input_tokens+totals.output_tokens) : '—'}</strong><span>${usageNumber(totals.reported_requests)} / ${usageNumber(totals.requests)} ${tr('次请求有完整用量','requests reported usage')}</span></div><div class="usage-total"><span>${tr('API 等价估算 · USD','API equivalent · USD')}</span><strong>${cost(totals)}</strong><span>${usageNumber(totals.priced_requests)} / ${usageNumber(totals.requests)} ${tr('次请求已计价','requests priced')}</span></div></div>
-    ${totals.requests ? `<svg class="usage-chart" viewBox="0 0 ${width} 190" aria-label="${tr('Token 用量，点击柱形查看明细','Token usage; select a bar to zoom')}"><path d="M70 20V150H698" fill="none" stroke="var(--border)"/><text x="60" y="28" text-anchor="end">${new Intl.NumberFormat('en',{notation:'compact'}).format(max)}</text><text x="60" y="153" text-anchor="end">0</text>${bars}<text x="70" y="178">${esc(new Date(data.start*1000).toLocaleString())}</text><text x="698" y="178" text-anchor="end">${esc(new Date(data.end*1000).toLocaleString())}</text></svg><div class="usage-table"><table><thead><tr><th>${tr('来源 / 账号','Source / account')}</th><th>${tr('模型','Model')}</th><th>${tr('输入','Input')}</th><th>${tr('输出','Output')}</th><th>USD</th><th>${tr('请求','Calls')}</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p>${tr('这个时间段还没有用量记录。','No usage recorded in this period.')}</p>`}
+    ${totals.requests ? `<svg class="usage-chart" viewBox="0 0 ${width} 190" aria-label="${tr('Token 用量，点击柱形查看明细','Token usage; select a bar to zoom')}"><path d="M70 20V150H698" fill="none" stroke="var(--border)"/><text x="60" y="28" text-anchor="end">${new Intl.NumberFormat('en',{notation:'compact'}).format(max)}</text><text x="60" y="153" text-anchor="end">0</text>${bars}${timeAxisSvg(data.start, data.end, time => 70 + (time-data.start)/range*plot, 170, 70, 698)}</svg><div class="usage-table"><table><thead><tr><th>${tr('来源 / 账号','Source / account')}</th><th>${tr('模型','Model')}</th><th>${tr('输入','Input')}</th><th>${tr('输出','Output')}</th><th>USD</th><th>${tr('请求','Calls')}</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p>${tr('这个时间段还没有用量记录。','No usage recorded in this period.')}</p>`}
     ${historical ? `<p class="usage-notice">${usageNumber(historical)} ${tr('条来自本机历史，按扫描时可用价格折算；旧账号身份未确认，类别仅依据历史模型路由和现有配置推断。未记录的服务档位按普通模式估算。','records from local history, estimated at available scan-time prices. Old account identities are unconfirmed; categories are inferred from model routes and current configuration. Unrecorded service tiers use standard rates.')}</p>` : ''}
     ${data.unmatched_overlap || (historical && data.uncorrelated_realtime) ? `<p class="usage-notice usage-warning">${tr('部分历史与实时用量无法可靠匹配（缺少轮次信息或上报值不一致），合计可能包含重叠。','Some history and live usage cannot be reconciled (missing turn metadata or differing counts); totals may include overlap.')}</p>` : ''}
     ${data.issues?.some(row => ['inconsistent_usage','aggregate_usage'].includes(row.price_issue)) ? `<p class="usage-notice usage-warning">${tr('部分旧记录的用量字段不一致，或只有累计值；保留上报 token，暂不计价。','Some old usage fields disagree or contain only cumulative counts. Reported tokens are retained without pricing.')}</p>` : ''}
-    ${missing ? `<p class="usage-notice usage-warning">* ${tr('仅为已计价部分。','Priced subtotal only.')} ${missing} ${tr('次请求缺少用量或可确认的费率，未按免费处理。','requests lack usage or confirmed rates; they are not treated as free.')}</p>` : ''}
+    ${missing ? `<p class="usage-notice">${missing} ${tr('次请求没有回报用量（多为中断或失败的请求），未计入费用。','requests reported no usage (mostly interrupted or failed) and are not included in cost.')}</p>` : ''}
+    ${usagePricingEditor(data)}
     ${price.stale || price.error ? `<p class="usage-notice usage-warning">${tr('价格未更新，已有费率仅供参考。','Prices are not up to date; saved rates are for reference.')}</p>` : ''}
     ${data.write_error ? `<p class="usage-notice usage-warning">${tr('用量写入失败，当前统计可能不完整。请查看 EMP 日志。','Usage could not be saved; totals may be incomplete. Check the EMP log.')}</p>` : ''}
-    <details class="usage-notice"><summary>${tr('计价说明与价格更新时间','Pricing basis & updates')}</summary><p>${tr('按请求完成时的本地 API 价目估算，缺价时在价格补齐后计价，已计价历史不再改写。包含缓存折扣和可确认的长上下文、服务档位费率。并非订阅账单，不含工具调用费、缓存存储费、税费或转售加价。缺少缓存明细时无法精确计价。','Uses local API rates at request completion, or the first available rate if initially missing. Priced history is frozen. Includes cache discounts and known context/service tiers. Not a subscription bill; excludes tool fees, cache storage, tax and reseller markups. Missing cache details prevent a precise estimate.')}</p><p><a href="${esc(price.url)}" target="_blank" rel="noopener noreferrer">LiteLLM</a> · ${tr('每 24 小时后台更新','Updated in the background every 24 hours')} · ${price.fetched_at ? esc(new Date(price.fetched_at*1000).toLocaleString()) : tr('尚未获取价格','Prices not downloaded')}</p>${price.stale || price.error ? `<p class="usage-warning">${tr('价格尚未更新，暂用已有价目；没有价目的模型保留为未计价。','Prices are not up to date. Saved rates are used where available; other models remain unpriced.')}</p>` : ''}${data.first_record_at ? `<p>${tr('最早记录：','First record: ')}${esc(new Date(data.first_record_at*1000).toLocaleString())}</p>` : ''}</details>`;
+    <details class="usage-notice"><summary>${tr('计价说明与价格更新时间','Pricing basis & updates')}</summary><p>${tr('按请求完成时的本地 API 价目估算，缺价时在价格补齐后计价，已计价历史不再改写。包含缓存折扣和可确认的长上下文、服务档位费率。并非订阅账单，不含工具调用费、缓存存储费、税费或转售加价。缺少缓存明细时无法精确计价。','Uses local API rates at request completion, or the first available rate if initially missing. Priced history is frozen. Includes cache discounts and known context/service tiers. Not a subscription bill; excludes tool fees, cache storage, tax and reseller markups. Missing cache details prevent a precise estimate.')}</p><p><a href="${esc(price.url)}" target="_blank" rel="noopener noreferrer">LiteLLM</a> · ${tr('每 24 小时后台更新','Updated in the background every 24 hours')} · ${price.fetched_at ? esc(new Date(price.fetched_at*1000).toLocaleString()) : tr('尚未获取价格','Prices not downloaded')}</p>${price.stale || price.error ? `<p class="usage-warning">${tr('价格尚未更新，暂用已有价目；没有价目的模型保留为未计价。','Prices are not up to date. Saved rates are used where available; other models remain unpriced.')}</p>` : ''}</details>`;
 }
 
+const SESSION_ERRORS = ['management session is required', 'proxy caller authentication is required'];
+const UPSTREAM_ERROR_GROUPS = [
+  [['auth'], ['API Key 无效或已过期，请检查后重新填写。','The API key is invalid or expired. Check it and enter it again.']],
+  [['payment_required'], ['上游账户余额不足或需要付费。','The provider account is out of credit or requires payment.']],
+  [['rate_limit'], ['请求过于频繁，请稍后重试。','Too many requests. Try again later.']],
+  [['network','dns_failure','tls_failure','connect_timeout','proxy_unavailable','proxy_reset'], ['连不上模型服务，请检查网络、代理和 Base URL。','Cannot reach the model service. Check the network, proxy and Base URL.']],
+  [['timeout','upstream_504','first_event_timeout','first_output_timeout','idle_after_output','local_deadline'], ['模型服务响应超时，请稍后重试。','The model service timed out. Try again later.']],
+  [['upstream_5xx','upstream_capacity'], ['模型服务暂时不可用，请稍后重试。','The model service is temporarily unavailable. Try again later.']],
+  [['protocol_rejection'], ['模型服务拒绝了这个请求，可能不支持该模型或参数。','The model service rejected the request; it may not support this model or its parameters.']],
+  [['protocol_error','malformed_terminal','stream_error','stream_incomplete'], ['模型服务返回了无法识别的内容。','The model service returned something EMP could not read.']],
+  [['output_limit'], ['模型输出超过了上限。','The model output hit its limit.']],
+  [['context_length_exceeded'], ['内容超过了模型的上下文上限。','The input exceeds the model context window.']],
+  [['content_filter'], ['内容被模型服务的安全策略拦截。','The model service blocked the content.']],
+];
+// Turns an api() failure into a sentence that says whether the key, the network or the service is at fault.
+function upstreamErrorText(error, fallback = '') {
+  if (error?.session) return error.message;
+  const detail = error?.payload?.error || {};
+  if (detail.message === 'provider API key is not configured') return tr('还没有填写 API Key。','No API key has been entered yet.');
+  const group = UPSTREAM_ERROR_GROUPS.find(([types]) => types.includes(detail.type));
+  return group ? tr(...group[1]) : error?.message || fallback;
+}
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (!headers.has('Content-Type')) headers.set('Content-Type','application/json');
@@ -522,10 +690,15 @@ async function api(path, options = {}) {
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {error:{message:text || tr('服务器返回了无效响应', 'The server returned an invalid response')}}; }
   if (!response.ok) {
-    if (response.status === 401) clearSessionToken();
-    const error = new Error(data.error?.message || response.statusText || `HTTP ${response.status}`);
+    // Upstream failures carry error.type; EMP's own 401s mean this page lost its session.
+    const session = response.status === 401 && SESSION_ERRORS.includes(data.error?.message);
+    if (session) clearSessionToken();
+    const error = new Error(session ? tr('管理页登录已失效（EMP 可能已重启）。请从 EMP 重新打开管理页。','This page is no longer signed in (EMP may have restarted). Reopen the management page from EMP.') : data.error?.message || response.statusText || `HTTP ${response.status}`);
+    error.session = session;
     error.payload = data;
     error.status = response.status;
+    // Every caller shows error.message, so give upstream failures their readable text here.
+    error.message = upstreamErrorText(error, error.message);
     throw error;
   }
   return data;
@@ -668,6 +841,11 @@ function compactContext(value) {
   if (tokens >= 1000) return Math.round(tokens / 1000) + 'K';
   return String(Math.round(tokens));
 }
+// Codex only uses this share of a model's window (its own default is 95%).
+function usableContext(model) {
+  const maximum = Number(model?.context_window || 0); const percent = Number(model?.effective_context_window_percent) || 95;
+  return maximum > 0 ? Math.max(1, Math.round(maximum * Math.min(percent, 100) / 100)) : 0;
+}
 function canonicalDisplayName(value) { return String(value || '').replace(/^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+/, '').replace(/\s+\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]$/, ''); }
 function presentationPreview(route, fallback, context, alias, showContext) {
   const family = (state.catalog_families || []).find(item => (item.routes || []).some(candidate => candidate.id === route)); const saved = family ? familyPresentationFor(family.id) : presentationFor(route); const label = alias === undefined ? saved.catalog_alias : alias;
@@ -726,10 +904,10 @@ async function saveSubscriptionSearch() {
   await persistState(tr('设置已保存，请重启 Codex。','Settings saved. Restart Codex.'), candidate);
 }
 function fill() {
-  applyTranslations(); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
+  drawLogo(); applyTranslations(); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
 }
 async function load() {
-  applyPreferences();
+  applyPreferences(); drawLogo();
   try {
     state = await api('/api/config');
     const integration = loadIntegration();
@@ -756,85 +934,112 @@ function renderIntegrationToggle() {
   button.classList.toggle('secondary', restore);
   button.disabled = integrationBusy || (!restore && mode !== 'native');
 }
+// 5x7 dot-matrix glyphs for the header logo, drawn like a small OLED panel.
+const LOGO_GLYPHS = {E:['11111','10000','10000','11110','10000','10000','11111'], M:['10001','11011','10101','10101','10001','10001','10001'], P:['11110','10001','10001','11110','10000','10000','10000']};
+function drawLogo() {
+  const svg = $('emp_logo'); if (!svg || svg.childElementCount) return;
+  const pitch = 3.4, dots = [];
+  [...'EMP'].forEach((letter, index) => LOGO_GLYPHS[letter].forEach((row, y) => [...row].forEach((bit, x) => {
+    const column = index * 6 + x;
+    dots.push(`<circle cx="${(column * pitch + pitch / 2).toFixed(1)}" cy="${(y * pitch + pitch / 2).toFixed(1)}" r="1.25" data-column="${column}"${bit === '1' ? ' class="on" data-lit="1"' : ''}/>`);
+  })));
+  svg.setAttribute('viewBox', `0 0 ${(17 * pitch).toFixed(1)} ${(7 * pitch).toFixed(1)}`);
+  svg.innerHTML = dots.join('');
+}
+let logoAnimation = null;
+function animateLogo() {
+  const svg = $('emp_logo'); if (!svg) return;
+  drawLogo();
+  const dots = [...svg.querySelectorAll('circle')];
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  clearInterval(logoAnimation);
+  dots.forEach(dot => dot.classList.remove('on', 'hot'));
+  // Sweep a bright column across the panel, leaving the letters lit behind it, then flicker once.
+  let column = -1, flicker = 0;
+  logoAnimation = setInterval(() => {
+    column++;
+    if (column <= 17) {
+      dots.forEach(dot => {
+        const at = Number(dot.dataset.column);
+        dot.classList.toggle('hot', at === column);
+        if (at < column && dot.dataset.lit) dot.classList.add('on');
+      });
+      return;
+    }
+    flicker++;
+    dots.forEach(dot => dot.classList.toggle('on', Boolean(dot.dataset.lit) && flicker % 2 === 0));
+    if (flicker >= 4) { clearInterval(logoAnimation); logoAnimation = null; }
+  }, 45);
+}
+function renderLogoState(live) { drawLogo(); $('emp_logo')?.classList.toggle('emp-live', live); }
+function toast(title, body, ms = 7000) {
+  document.querySelector('.toast')?.remove();
+  const box = document.createElement('div');
+  box.className = 'toast'; box.setAttribute('role', 'status'); box.style.setProperty('--toast-ms', `${ms}ms`);
+  box.innerHTML = `<strong>${esc(title)}</strong><p>${esc(body)}</p>`;
+  const close = () => { box.classList.add('leaving'); setTimeout(() => box.remove(), 200); };
+  box.addEventListener('click', close);
+  document.body.appendChild(box);
+  setTimeout(close, ms);
+}
+// What the running Codex actually loaded, as seen through its app-server model list.
+function runtimeView(runtime) {
+  const views = {
+    emp_loaded: ['EMP', 'Codex 正在使用 EMP。', 'Codex is using EMP.'],
+    stopped_waiting_for_start: ['EMP', 'Codex 未运行，下次打开 Codex 就会使用 EMP。', 'Codex is not running. It will use EMP the next time it opens.'],
+    reload_required: ['待重启', '请重启 Codex，Codex 还在使用旧的模型列表。', 'Restart Codex. It is still using the old model list.', 'Restart'],
+    not_checked: ['待重启', '请重启 Codex，让它加载 EMP。', 'Restart Codex so it loads EMP.', 'Restart'],
+    catalog_unverified: ['待重启', '请重启 Codex，让它加载 EMP。', 'Restart Codex so it loads EMP.', 'Restart'],
+  };
+  const view = views[runtime.state] || ['待重启', '请重启 Codex，让它加载 EMP。', 'Restart Codex so it loads EMP.', 'Restart'];
+  return [language === 'en' ? (view[3] || view[0]) : view[0], tr(view[1], view[2])];
+}
+function conflictView(configuration) {
+  const conflicts = configuration.conflicts || [];
+  if (conflicts.includes('listener_mismatch') || conflicts.includes('catalog_mismatch')) {
+    return [tr('其他 EMP','Other EMP'), tr('Codex 正在使用另一个 EMP。要改用这个 EMP，请先恢复原生 Codex，再启动 EMP。','Codex is using another EMP. To switch to this one, restore Native Codex first, then start EMP.')];
+  }
+  return [tr('需要处理','Needs attention'), tr('Codex 的 config.toml 被其他程序改过。请恢复原生 Codex，再重新启动 EMP。','Another program changed Codex config.toml. Restore Native Codex, then start EMP again.')];
+}
+let codexMinimum = '0.149.0';
 function renderIntegration(info) {
   const configuration = info.configuration || {};
   const compatibility = info.codex_compatibility || {};
-  const english = language === 'en';
-  const views = english ? {
-    native: ['Native', 'Native Codex is active.'], emp_applied: ['EMP', 'EMP is ready. Restart Codex.'], prepared: ['Needs recovery', 'EMP setup is incomplete. Restore and try again.'], restoring: ['Restoring', 'Restoring Native Codex…'], conflict: ['Needs attention', 'Codex settings changed. Apply EMP again or restore Native Codex.'], unavailable: ['Unavailable', 'EMP status is unavailable. Try again.']
-  } : {
-    native: ['Native', '当前使用原生 Codex。'], emp_applied: ['EMP', 'EMP已启动，请重启Codex'], prepared: ['需要恢复', 'EMP 设置未完成，请恢复后重试。'], restoring: ['正在恢复', '正在恢复原生 Codex…'], conflict: ['需要处理', 'Codex 设置已变化，请重新应用 EMP 或恢复原生 Codex。'], unavailable: ['不可用', '暂时无法读取 EMP 状态，请重试。']
+  const views = {
+    native: ['Native', tr('当前使用原生 Codex。','Native Codex is active.')],
+    prepared: [tr('需要恢复','Needs recovery'), tr('EMP 设置未完成，请恢复后重试。','EMP setup is incomplete. Restore and try again.')],
+    restoring: [tr('正在恢复','Restoring'), tr('正在恢复原生 Codex…','Restoring Native Codex…')],
+    unavailable: [tr('不可用','Unavailable'), tr('暂时无法读取 EMP 状态，请重试。','EMP status is unavailable. Try again.')],
   };
-  const view = views[configuration.state] || views.unavailable;
+  const view = configuration.state === 'emp_applied' ? runtimeView(info.runtime || {})
+    : configuration.state === 'conflict' ? conflictView(configuration)
+    : views[configuration.state] || views.unavailable;
   $('integration_summary').textContent = view[1];
-  const runtimes = Array.isArray(compatibility.runtimes) ? compatibility.runtimes : [];
-  const recommended = compatibility.recommended || '0.154.0';
+  // Every Codex from the minimum on reads the same config.toml; only an older one needs attention.
+  const unsupported = compatibility.status === 'unsupported';
+  const minimum = codexMinimum = compatibility.minimum || codexMinimum;
   const installed = compatibility.installed ? ` ${compatibility.installed}` : '';
-  const compatibilityMessage = compatibility.status === 'unsupported'
-    ? tr(`Codex${installed} 版本过旧，请升级到 ${recommended}。`, `Codex${installed} is too old. Update to ${recommended}.`)
-    : compatibility.status === 'unverified'
-      ? tr(`Codex${installed} 尚未验证，建议使用 ${recommended}。`, `Codex${installed} is unverified. ${recommended} is recommended.`)
-      : compatibility.status === 'unavailable' && !runtimes.length
-        ? tr('未找到 Codex，请重新扫描。', 'Codex was not found. Rescan.')
-        : '';
-  $('codex_compatibility').textContent = compatibilityMessage;
-  $('codex_compatibility').hidden = !compatibilityMessage;
-  renderCodexRuntimes(compatibility);
+  $('codex_compatibility').textContent = unsupported ? tr(`Codex${installed} 版本过旧，EMP 需要 ${minimum} 或更新版本，请升级 Codex。`, `Codex${installed} is too old. EMP needs ${minimum} or newer; please update Codex.`) : '';
+  $('codex_compatibility').hidden = !unsupported;
   $('codex_compatibility').dataset.state = compatibility.status || 'unknown';
   $('integration').dataset.state = configuration.state || 'unknown';
+  $('integration').dataset.runtime = (info.runtime || {}).state || 'not_checked';
+  renderLogoState(configuration.state === 'emp_applied' && info.runtime?.state === 'emp_loaded');
   $('integration_badge').textContent = view[0];
   $('integration_title').textContent = t('integration_status');
   renderIntegrationToggle();
 }
-function runtimeSourceLabel(source) {
-  return ({codex_app:tr('ChatGPT App（Codex）','ChatGPT App (Codex)'),managed:tr('Codex 托管 runtime','Managed Codex runtime'),vscode:tr('VS Code Codex 插件','VS Code Codex plugin'),vscode_insiders:tr('VS Code Insiders Codex 插件','VS Code Insiders Codex plugin'),cursor:tr('Cursor Codex 插件','Cursor Codex plugin'),configured:tr('指定 Codex','Configured Codex'),path_cli:'Codex CLI'}[source] || tr('Codex runtime','Codex runtime'));
-}
-function renderCodexRuntimes(compatibility) {
-  const runtimes = Array.isArray(compatibility.runtimes) ? compatibility.runtimes : [];
-  if (Array.isArray(compatibility.preferences) && compatibility.preferences.length) state.codex_runtime_sources = [...compatibility.preferences];
-  const preferences = state.codex_runtime_sources || ['auto'];
-  const automatic = preferences.includes('auto');
-  $('codex_runtimes').innerHTML = runtimes.length ? runtimes.map(runtime => {
-    const checked = runtime.selectable && (runtimeSelectionDraft !== null ? runtimeSelectionDraft.includes(runtime.source) : automatic || preferences.includes(runtime.source));
-    const version = runtime.installed ? `v${runtime.installed}` : tr('版本未知','Unknown version');
-    const status = ({recommended:tr('推荐版本','Recommended'),supported:tr('兼容版本','Supported'),unverified:tr('未验证版本','Unverified version'),unsupported:tr('版本过旧，不兼容；请升级此客户端','Too old; update this client'),unavailable:tr('程序不可用；请重新扫描','Executable unavailable; rescan'),unknown:tr('无法启动或读取版本；请检查此客户端','Could not launch or read version; check this client')}[runtime.status] || tr('状态未知','Unknown status'));
-    return `<label class="runtime-row" data-selectable="${runtime.selectable ? 'true' : 'false'}"><input type="checkbox" data-runtime-source value="${esc(runtime.source)}" ${checked ? 'checked' : ''} ${runtime.selectable ? '' : 'disabled'} onchange="stageCodexRuntimeSelection()"><span class="runtime-name" title="${esc(runtime.path || '')}"><strong>${esc(runtimeSourceLabel(runtime.source))}</strong> ${esc(version)} · ${esc(status)}</span></label>`;
-  }).join('') : `<p class="muted">${tr('未找到 Codex，请重新扫描。','Codex was not found. Rescan.')}</p>`;
-  renderRuntimeDraftHint();
-}
-function renderRuntimeDraftHint() {
-  $('codex_runtime_dirty').hidden = runtimeSelectionDraft === null;
-  $('codex_runtime_dirty').textContent = tr('选择尚未保存。','Selection not saved.');
-}
-function stageCodexRuntimeSelection() {
-  runtimeSelectionDraft = [...document.querySelectorAll('[data-runtime-source]:checked')].filter(input => !input.disabled).map(input => input.value);
-  renderRuntimeDraftHint();
-}
-async function selectCodexRuntimes(sources) {
-  const submittedDraft = runtimeSelectionDraft;
+// EMP checks Codex whenever Codex reaches it and says so on the event stream.
+async function integrationUpdated() {
+  const before = $('integration').dataset.runtime;
   try {
-    const compatibility = await api('/api/runtime/select', {method:'POST', body:JSON.stringify({sources})});
-    state.codex_runtime_sources = [...(compatibility.preferences || sources)];
-    if (runtimeSelectionDraft === submittedDraft) runtimeSelectionDraft = null;
-    await loadIntegration();
-    notice(tr('Codex 客户端选择已保存','Codex client selection saved')); return true;
-  }
-  catch (error) { await loadIntegration(); notice(error.message, true); }
-  return false;
-}
-async function saveCodexRuntimeSelection() {
-  const sources = [...document.querySelectorAll('[data-runtime-source]:checked')].map(input => input.value);
-  if (!sources.length) { notice(tr('至少选择一个兼容的 Codex runtime','Select at least one compatible Codex runtime'), true); return false; }
-  return selectCodexRuntimes(sources);
-}
-async function useAutomaticCodexRuntimes() {
-  return selectCodexRuntimes(['auto']);
-}
-async function scanCodexRuntimes() {
-  $('codex_runtime_scan').disabled = true;
-  try { await api('/api/runtime/scan', {method:'POST', body:'{}'}); await loadIntegration(); notice(tr('Codex runtime 扫描完成','Codex runtime scan complete')); }
-  catch (error) { notice(error.message, true); }
-  finally { $('codex_runtime_scan').disabled = false; }
+    const info = await api('/api/integration');
+    renderIntegration(info);
+    if (before && before !== 'emp_loaded' && info.configuration?.state === 'emp_applied' && info.runtime?.state === 'emp_loaded') {
+      toast(tr('Codex 已加载 EMP','Codex loaded EMP'), tr('现在可以在 Codex 里选择 EMP 的模型了。','EMP models are now available in Codex.'));
+      animateLogo();
+    }
+  } catch (_) {}
 }
 async function loadIntegration() {
   const started = Date.now();
@@ -843,7 +1048,7 @@ async function loadIntegration() {
     const configuration = info.configuration || {};
     const runtime = info.runtime || {};
     const verifyKey = `${configuration.state || ''}:${runtime.state || ''}:${runtime.target || ''}`;
-    const passivelyVerifiable = configuration.state === 'emp_applied' && runtime.target === 'emp' && ['stop_failed','verification_failed','stopped_waiting_for_start'].includes(runtime.state);
+    const passivelyVerifiable = configuration.state === 'emp_applied' && runtime.state !== 'emp_loaded';
     if (passivelyVerifiable && !integrationVerificationAttempts.has(verifyKey)) {
       integrationVerificationAttempts.add(verifyKey);
       try { info = await api('/api/integration/verify', {method:'POST', body:'{}'}); }
@@ -977,16 +1182,21 @@ function supportDetailLabel(value) {
   };
   return labels[value] || esc(value || 'unknown');
 }
+function runtimeLabel(value) {
+  return {emp_loaded:tr('正在使用 EMP','using EMP'), stopped_waiting_for_start:tr('未运行','not running')}[value] || tr('等待重启 Codex','waiting for Codex restart');
+}
 function renderSupportReport(report) {
   const box = $('support_report'); if (!box) return;
   const config = report.configuration || {}, codex = report.codex || {}, network = report.network || {}, accounts = report.accounts || {};
   const imported = Array.isArray(accounts.imported) ? accounts.imported : [];
   const accountLines = imported.map(account => `${tr('导入账号','Imported account')} ${Number(account.index) || 0}: ${supportStatusLabel(account.quota_status)}`);
-  box.innerHTML = `<p><strong>${tr('配置','Config')}</strong> ${esc(config.path || '—')} · ${config.exists ? tr('存在','present') : tr('不存在','missing')} · ${tr('写入权限提示','write permission hint')}: ${supportDetailLabel(config.write_access_hint)}</p>
-    <p><strong>Codex</strong> ${esc(codex.version || '—')} · ${supportDetailLabel(codex.source)} · ${supportDetailLabel(codex.state)}</p>
+  const configNotes = [!config.exists && tr('文件不存在','file missing'), config.write_access_hint === 'denied' && tr('没有写入权限','not writable')].filter(Boolean);
+  const minimum = codexMinimum;
+  const codexNotes = [codex.compatibility === 'unsupported' ? tr(`版本过旧，需要 ${minimum} 或更新`, `too old, needs ${minimum} or newer`) : tr(`支持（需 ${minimum} 及以上）`, `supported (${minimum} or newer)`), codex.target === 'emp' && runtimeLabel(codex.state)].filter(Boolean);
+  box.innerHTML = `<p><strong>${tr('配置','Config')}</strong> ${esc(config.path || '—')}${configNotes.map(note => ' · ' + esc(note)).join('')}</p>
+    <p><strong>Codex</strong> ${esc(codex.version || tr('未找到','not found'))} · ${codexNotes.map(esc).join(' · ')}</p>
     <p><strong>${tr('代理','Proxy')}</strong> ${supportDetailLabel(network.source_at_startup)} · ${supportDetailLabel(network.chatgpt_route)}${network.proxy_scheme ? ' (' + esc(network.proxy_scheme) + ')' : ''}</p>
-    <p><strong>${tr('账号','Accounts')}</strong> Native: ${supportStatusLabel(accounts.native?.quota_status)}${accountLines.length ? ' · ' + accountLines.map(esc).join(' · ') : ''}</p>
-    <small>${tr('账号状态来自保存的状态及本次运行的错误；此报告不会探测网络或刷新额度。','Account status comes from saved state and errors observed in this run; this report does not probe the network or refresh quota.')}</small>`;
+    <p><strong>${tr('账号','Accounts')}</strong> Native: ${supportStatusLabel(accounts.native?.quota_status)}${accountLines.length ? ' · ' + accountLines.map(esc).join(' · ') : ''}</p>`;
 }
 async function loadSupportReport() {
   const request = ++supportReportRequest;
@@ -1032,7 +1242,7 @@ function confirmIntegrationAction(action) {
   openModal(selected[0], `<p>${esc(selected[1])}</p>`, selected[0], () => submitIntegrationAction(action));
 }
 function integrationOutcomeMessage(info, action) {
-  if (action === 'enable') return tr('EMP已启动，请重启Codex','EMP is ready. Restart Codex.');
+  if (action === 'enable') return info.runtime?.state === 'emp_loaded' ? tr('Codex 正在使用 EMP。','Codex is using EMP.') : tr('请重启 Codex，让它加载 EMP。','Restart Codex so it loads EMP.');
   if (action === 'restore') return tr('已恢复原生 Codex，请重启 Codex。','Native Codex restored. Restart Codex.');
   return tr('检查完成。','Check complete.');
 }
@@ -1058,7 +1268,10 @@ async function submitIntegrationAction(action) {
     const message = integrationOutcomeMessage(refreshed, action);
     $('modal_status').textContent = message;
     closeModal();
-    notice(message);
+    if (action === 'enable' && refreshed.runtime?.state !== 'emp_loaded') {
+      toast(tr('EMP 已启动','EMP is on'), tr('请重启 Codex。Codex 重启后，这里会自动显示“正在使用 EMP”。','Restart Codex. This page shows “Codex is using EMP” once it has restarted.'), 9000);
+      animateLogo();
+    } else notice(message);
   } catch (error) {
     if (error.payload && error.payload.configuration && error.payload.runtime) renderIntegration(error.payload);
     if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；可在账户的“编辑”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Restore visibility under the account Edit action, or add a model.');
@@ -1217,7 +1430,9 @@ async function consumeQuotaEventStream(response, signal) {
       while ((boundary = buffer.indexOf('\n\n')) >= 0) {
         const frame = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
-        if (frame.split('\n').some(line => line.startsWith('event:') && line.slice(6).trim() === 'quota-updated')) requestQuotaSync();
+        const events = frame.split('\n').filter(line => line.startsWith('event:')).map(line => line.slice(6).trim());
+        if (events.includes('quota-updated')) requestQuotaSync();
+        if (events.includes('integration-updated')) integrationUpdated();
       }
     }
   } finally {
@@ -1271,7 +1486,7 @@ async function drainQuotaUpdates() {
     do {
       quotaUpdatePending = false;
       await refreshQuotaState();
-      if (quotaHistoryTimer !== null && activeQuotaAccountId && document.visibilityState !== 'hidden') await loadQuotaHistory(activeQuotaAccountId, activeQuotaRange);
+      if (quotaHistoryTimer !== null && activeQuotaAccountId && document.visibilityState !== 'hidden') await refreshPeriod('quota_history', false);
     } while (quotaUpdatePending && document.visibilityState !== 'hidden');
   } finally { quotaUpdateRunning = false; }
 }
@@ -1284,7 +1499,8 @@ async function refreshQuotaState() {
     const next = [...(snapshot.native_account ? [snapshot.native_account] : []), ...(snapshot.accounts || [])];
     const previousById = new Map(previous.map(account => [account.id, account]));
     let changed = JSON.stringify({native_account:state.native_account || null,accounts:state.accounts || []}) !== JSON.stringify({native_account:snapshot.native_account || null,accounts:snapshot.accounts || []});
-    for (const account of next) if (accountQuotaSignature(previousById.get(account.id)) !== accountQuotaSignature(account)) { delete refreshErrors[account.id]; quotaAnimationAccounts.add(account.id); }
+    // Background samples update the numbers quietly; only a refresh the user clicked animates.
+    for (const account of next) if (accountQuotaSignature(previousById.get(account.id)) !== accountQuotaSignature(account)) delete refreshErrors[account.id];
     if (snapshot.refresh_errors) {
       const before = JSON.stringify(refreshErrors);
       for (const id of Object.keys(refreshErrors)) delete refreshErrors[id];
@@ -1332,7 +1548,7 @@ function openResetCredits(accountId) {
   const entries = resetCreditEntries(account);
   const selectable = entries.filter(item => item.status === 'available' && typeof item.id === 'string' && item.id.length > 0);
   const prior = resetAttempts.get(accountId);
-  const selectedIndex = prior ? selectable.findIndex(item => item.id === prior.creditId) : 0;
+  const selectedIndex = Math.max(0, prior ? selectable.findIndex(item => item.id === prior.creditId) : 0);
   const cards = entries.map((item,index) => {
     const expires = utcDateTimeText(item.expires_at), remaining = resetCountdownText(item.expires_at), granted = utcDateTimeText(item.granted_at);
     const title = item.title || tr(`重置机会 ${index + 1}`,`Reset opportunity ${index + 1}`);
@@ -1341,13 +1557,12 @@ function openResetCredits(accountId) {
     const choice = choiceIndex >= 0 ? `<label class="reset-credit-choice"><input type="radio" name="reset_credit_choice" value="${choiceIndex}"${choiceIndex === selectedIndex ? ' checked' : ''}><strong>${esc(title)}</strong></label>` : `<strong>${esc(title)}</strong>`;
     return `<article class="reset-credit-card"><header>${choice}${status}</header>${item.description ? `<p>${esc(item.description)}</p>` : ''}${granted ? `<div class="reset-credit-time"><time>${tr('获得','Granted')} · ${esc(granted)}</time></div>` : ''}<div class="reset-credit-time"><time>${expires ? `${tr('到期','Expires')} · ${esc(expires)}` : tr('未提供到期时间','No expiry provided')}</time>${remaining ? `<strong data-reset-countdown="${esc(item.expires_at)}">${esc(remaining)}</strong>` : ''}</div></article>`;
   }).join('');
-  const automatic = selectable.length ? `<article class="reset-credit-card"><label class="reset-credit-choice"><input type="radio" name="reset_credit_choice" value="auto"${prior && prior.creditId === null ? ' checked' : ''}><strong>${tr('由 OpenAI 选择下一个可用机会','Let OpenAI choose the next available opportunity')}</strong></label></article>` : '';
   const fallback = !selectable.length ? `<p class="muted">${entries.length ? tr('没有可选择的机会明细；OpenAI 会选择下一个可用机会。','No selectable credit details were returned; OpenAI will choose the next available opportunity.') : tr('OpenAI 只返回了可用次数，未返回每次机会的到期明细；OpenAI 会选择下一个可用机会。','OpenAI returned only the available count; it will choose the next available opportunity.')}</p>` : '';
-  const body = `<div class="reset-credit-note"><p><strong>${tr('使用后会发生什么','What happens after use')}</strong><br>${tr('使用一次重置机会会重置符合资格的 Codex 额度周期；新的额度与下一次刷新时间由 OpenAI 返回，EMP 会在使用后重新读取。','Using one opportunity resets the eligible Codex quota windows. OpenAI returns the new quota and next refresh time, which EMP must read again after use.')}</p></div><div class="reset-credit-summary">${tr('可用机会','Available opportunities')} <strong>${esc(resetCreditCount(account))}</strong></div><div class="reset-credit-list">${cards}${automatic}</div>${fallback}`;
+  const body = `<div class="reset-credit-note"><p><strong>${tr('使用后会发生什么','What happens after use')}</strong><br>${tr('使用一次重置机会会重置符合资格的 Codex 额度周期；新的额度与下一次刷新时间由 OpenAI 返回，EMP 会在使用后重新读取。','Using one opportunity resets the eligible Codex quota windows. OpenAI returns the new quota and next refresh time, which EMP must read again after use.')}</p></div><div class="reset-credit-summary">${tr('可用机会','Available opportunities')} <strong>${esc(resetCreditCount(account))}</strong></div><div class="reset-credit-list">${cards}</div>${fallback}`;
   openModal(tr('重置额度详情','Reset quota details'),body,tr('继续确认','Continue to confirmation'),async () => {
     const selected = document.querySelectorAll('input[name="reset_credit_choice"]:checked')[0];
     if (selectable.length && !selected) throw new Error(tr('请选择要使用的重置机会。','Choose a reset opportunity to use.'));
-    const credit = selected?.value === 'auto' ? null : selectable[Number(selected?.value)] || null;
+    const credit = selectable[Number(selected?.value)] || null;
     const creditId = credit?.id || null;
     resetAttemptKey(accountId,creditId);
     confirmResetCredit(account,credit);
@@ -1375,26 +1590,20 @@ function confirmResetCredit(account,credit) {
 }
 
 const quotaChartColors = ['#3b82f6','#f59e0b','#10b981','#a855f7','#ef4444','#06b6d4'];
-function quotaRangeLabel(value) { return ({'1h':tr('1 小时','1 hour'),'1d':tr('1 天','1 day'),'1w':tr('1 周','1 week'),'all':tr('全部 15 天','All 15 days')})[value] || value; }
 function quotaLimitLabel(limitId) { return ({codex:'Codex', codex_bengalfox:'Codex Spark'})[limitId] || limitId; }
 function quotaSeriesLabel(series) { const duration = compactWindowText(series.window_minutes); const label = duration === '?' ? (series.window_kind === 'primary' ? tr('主窗口','Primary') : tr('次窗口','Secondary')) : duration; return `${!series.limit_id || series.limit_id === 'codex' ? '' : quotaLimitLabel(series.limit_id) + ' · '}${label}`; }
 function quotaSeriesColor(series, index) { return Number(series.window_minutes) === 300 ? '#3b82f6' : Number(series.window_minutes) === 10080 ? '#10b981' : quotaChartColors[index % quotaChartColors.length]; }
-function quotaPointBreak(previous, point) {
+function quotaPointBreak(previous, point, gapLimit) {
   if (!previous) return '';
   const priorReset = Number(previous.resets_at), reset = Number(point.resets_at);
   if (priorReset > 0 && reset > 0 && Math.abs(reset-priorReset) > 60) return tr('新的额度周期','New quota period');
   if (Number(point.remaining_percent) > Number(previous.remaining_percent) + .1) return tr('额度回升','Quota replenished');
-  if (Number(point.observed_at) - Number(previous.observed_at) > 15 * 60) return tr('采样间隔','Sampling gap');
+  if (Number(point.observed_at) - Number(previous.observed_at) > gapLimit) return tr('无数据记录','No data recorded');
   return '';
 }
 function quotaValidPoint(point) { return point.observed_at != null && point.remaining_percent != null && Number.isFinite(Number(point.observed_at)) && Number.isFinite(Number(point.remaining_percent)); }
-const quotaRangeSeconds = {'1h':3600, '1d':86400, '1w':7*86400, 'all':15*86400};
-function quotaHistoryView(series, rangeName) {
-  if (quotaHistoryZoom.length) return quotaHistoryZoom[quotaHistoryZoom.length - 1];
-  const times = series.flatMap(item => item.points || []).filter(quotaValidPoint).map(point => Number(point.observed_at));
-  const end = Number(quotaHistoryPayload?.end_at) || (times.length ? Math.max(...times) : Date.now()/1000);
-  return {start:end-quotaRangeSeconds[rangeName], end, mode:rangeName === '1w' ? 'day' : 'reset'};
-}
+// Samples further apart than this leave a period with no record.
+function quotaGapLimit(payload) { return Math.max(180, 3 * (Number(payload?.interval_seconds) || 44)); }
 function quotaResetBoundaries(series, start, end) {
   const boundaries = new Map();
   for (const item of series) {
@@ -1416,84 +1625,92 @@ function quotaResetBoundaries(series, start, end) {
   }
   return [...boundaries.values()].sort((a,b) => a.at-b.at);
 }
+// Dividers mark quota resets (and days on long periods); clicking a section zooms into it.
 function quotaChartSections(series, view) {
-  let boundaries = [];
-  if (view.mode === 'reset') boundaries = quotaResetBoundaries(series, view.start, view.end);
-  else if (view.mode === 'day') {
+  // Over long spans reset lines would crowd the chart, so divide by day instead.
+  const long = view.end - view.start > 2*86400;
+  const boundaries = long ? [] : quotaResetBoundaries(series, view.start, view.end);
+  if (long) {
     const next = new Date(view.start*1000); next.setHours(0,0,0,0); next.setDate(next.getDate()+1);
-    while (next.getTime()/1000 < view.end) {
-      boundaries.push({at:next.getTime()/1000, kind:'day'});
-      next.setDate(next.getDate()+1);
-    }
-  } else {
-    const step = view.mode === 'hour' ? 3600 : 900;
-    for (let at = Math.floor(view.start/step)*step+step; at < view.end; at += step) boundaries.push({at, kind:'time'});
+    while (next.getTime()/1000 < view.end) { boundaries.push({at:next.getTime()/1000, kind:'day'}); next.setDate(next.getDate()+1); }
   }
-  const edges = [{at:view.start}, ...boundaries, {at:view.end}];
-  const sections = edges.slice(0,-1).map((edge,index) => {
-    const end = edges[index+1].at;
-    const mode = view.mode === 'day' ? 'reset' : view.mode === 'reset' ? (end-edge.at > 86400 ? 'day' : end-edge.at > 3600 ? 'hour' : 'quarter') : 'quarter';
-    return {start:edge.at, end, mode, zoomable:view.mode !== 'quarter' && end-edge.at > 900};
-  });
+  let edges = [view.start, ...boundaries.map(item => item.at), view.end];
+  if (edges.length === 2) {
+    const ticks = timeAxisTicks(view.start, view.end).map(tick => tick.at).filter(at => at > view.start && at < view.end);
+    edges = [view.start, ...ticks, view.end];
+  }
+  const sections = edges.slice(0,-1).map((start,index) => ({start, end:edges[index+1]})).map(section => ({...section, zoomable:section.end-section.start >= 900 && section.end-section.start < view.end-view.start}));
   return {boundaries, sections};
 }
 function quotaTimeRangeText(start, end) {
   const options = {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false};
   return `${new Date(start*1000).toLocaleString([],options)} — ${new Date(end*1000).toLocaleString([],options)}`;
 }
-function quotaChartSvg(series, view = null) {
-  const visible = point => quotaValidPoint(point) && (!view || (Number(point.observed_at) >= view.start && Number(point.observed_at) <= view.end));
-  const points = series.flatMap(item => item.points || []).filter(visible); if (!points.length) return '';
-  const minTime = view ? view.start : Math.min(...points.map(point => Number(point.observed_at))); const maxTime = view ? view.end : Math.max(...points.map(point => Number(point.observed_at))); const span = Math.max(1, maxTime - minTime);
+let quotaChartData = {points:[], gaps:[]};
+// Draw at the modal's real width so text keeps its size instead of scaling with the SVG.
+function quotaChartWidth() { return Math.round(Math.max(628, Math.min(1200, ($('modal_body')?.clientWidth || 628) - 2))); }
+function quotaChartSvg(series, view, gapLimit) {
+  const visible = point => quotaValidPoint(point) && Number(point.observed_at) >= view.start && Number(point.observed_at) <= view.end;
+  const samplesBySeries = series.map(item => (item.points || []).filter(visible).slice().sort((a,b) => Number(a.observed_at) - Number(b.observed_at)));
+  const points = samplesBySeries.flat(); if (!points.length) return '';
+  const minTime = view.start, maxTime = view.end, span = Math.max(1, maxTime - minTime);
   const percent = value => Math.max(0, Math.min(100, Number(value)));
   const values = points.map(point => percent(point.remaining_percent)); const minValue = Math.min(...values); const maxValue = Math.max(...values);
-  const padding = Math.max(1, (maxValue - minValue) * 0.1);
-  const axisMin = Math.max(0, Math.floor(minValue - padding)); const axisMax = Math.min(100, Math.ceil(maxValue + padding)); const axisSpan = axisMax - axisMin;
-  const left = 46, right = 610, top = 18, bottom = 218; const x = time => left + ((Number(time) - minTime) / span) * (right - left); const y = value => bottom - ((percent(value) - axisMin) / axisSpan) * (bottom - top);
-  const grid = Array.from({length:5}, (_, index) => axisMin + axisSpan * index / 4).map(value => `<line x1="${left}" y1="${y(value)}" x2="${right}" y2="${y(value)}" stroke="var(--border)"/><text x="${left-7}" y="${y(value)+4}" text-anchor="end" fill="var(--muted)" font-size="11">${Number(value.toFixed(2))}%</text>`).join('');
+  // Round percent gridlines (every 5, 10, 20 or 25 points).
+  const tickStep = [5, 10, 20, 25].find(step => (Math.ceil(maxValue/step) - Math.floor(minValue/step)) * step / step <= 5) || 25;
+  const axisMin = Math.max(0, Math.floor(minValue/tickStep)*tickStep - (minValue % tickStep === 0 && minValue > 0 ? tickStep : 0)); const axisMax = Math.min(100, Math.max(axisMin + tickStep, Math.ceil(maxValue/tickStep)*tickStep)); const axisSpan = axisMax - axisMin;
+  const width = quotaChartWidth(), left = 46, right = width - 18, top = 18, bottom = 218; const x = time => left + ((Number(time) - minTime) / span) * (right - left); const y = value => bottom - ((percent(value) - axisMin) / axisSpan) * (bottom - top);
+  const grid = Array.from({length:Math.round(axisSpan/tickStep)+1}, (_, index) => axisMin + tickStep * index).map(value => `<line x1="${left}" y1="${y(value)}" x2="${right}" y2="${y(value)}" stroke="var(--border)"/><text x="${left-7}" y="${y(value)+4}" text-anchor="end" fill="var(--muted)" font-size="11">${Number(value.toFixed(2))}%</text>`).join('');
+  // Periods without samples are shaded and labelled rather than left blank.
+  const times = [...new Set(points.map(point => Number(point.observed_at)))].sort((a,b) => a-b);
+  const gaps = []; let cursor = view.start;
+  for (const time of times) { if (time - cursor > gapLimit) gaps.push({start:cursor, end:time}); cursor = time; }
+  if (view.end - cursor > gapLimit) gaps.push({start:cursor, end:view.end});
+  const gapText = tr('无数据记录','No data recorded'), middle = (top+bottom)/2;
+  const gapMarks = `<defs><pattern id="quota-gap-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" class="quota-gap-base"/><line x1="0" y1="0" x2="0" y2="6" class="quota-gap-stripe"/></pattern></defs>` + gaps.map(gap => {
+    const x1 = x(gap.start), width = x(gap.end) - x1, center = (x1+width/2).toFixed(1);
+    // Wide gaps get a horizontal label; narrow ones a vertical one.
+    const label = width >= 72 ? `<text class="quota-gap-label" x="${center}" y="${middle+4}" text-anchor="middle">${gapText}</text>` : width >= 14 ? `<text class="quota-gap-label" x="${center}" y="${middle}" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 ${center} ${middle})">${gapText}</text>` : '';
+    return `<rect class="quota-gap" x="${x1.toFixed(1)}" y="${top}" width="${Math.max(0,width).toFixed(1)}" height="${bottom-top}" fill="url(#quota-gap-hatch)"/>${label}`;
+  }).join('');
+  const hoverPoints = [];
   const lines = series.map((item, index) => {
-    const color = quotaSeriesColor(item, index);
-    const samples = (item.points || []).filter(visible).slice().sort((a,b) => Number(a.observed_at) - Number(b.observed_at));
+    const color = quotaSeriesColor(item, index), samples = samplesBySeries[index];
     if (!samples.length) return '';
-    const path = samples.map((point, i) => `${i && !quotaPointBreak(samples[i-1], point) ? 'L' : 'M'}${x(point.observed_at).toFixed(1)},${y(point.remaining_percent).toFixed(1)}`).join(' ');
-    const dots = samples.map((point, i) => `<circle class="quota-chart-point" data-quota-point data-x="${x(point.observed_at).toFixed(1)}" data-y="${y(point.remaining_percent).toFixed(1)}" data-time="${esc(point.observed_at)}" data-value="${esc(Number(percent(point.remaining_percent).toFixed(2)))}" data-label="${esc(quotaSeriesLabel(item))}" data-reset="${esc(point.resets_at ?? '')}" data-break="${esc(quotaPointBreak(samples[i-1], point))}" cx="${x(point.observed_at).toFixed(1)}" cy="${y(point.remaining_percent).toFixed(1)}" r="1.8" fill="${color}"/>`).join('');
-    return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>${dots}`;
+    const path = samples.map((point, i) => `${i && !quotaPointBreak(samples[i-1], point, gapLimit) ? 'L' : 'M'}${x(point.observed_at).toFixed(1)},${y(point.remaining_percent).toFixed(1)}`).join(' ');
+    samples.forEach((point, i) => hoverPoints.push({series:index, x:x(point.observed_at), y:y(point.remaining_percent), time:Number(point.observed_at), value:Number(percent(point.remaining_percent).toFixed(2)), label:quotaSeriesLabel(item), reset:point.resets_at ?? '', note:quotaPointBreak(samples[i-1], point, gapLimit)}));
+    return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/><circle class="quota-chart-marker" data-series="${index}" r="4" fill="${color}" stroke="var(--panel)" stroke-width="2" hidden/>`;
   }).join('');
-  const {boundaries, sections} = quotaChartSections(series, view || {start:minTime,end:maxTime,mode:'reset'});
+  quotaChartData = {points:hoverPoints, gaps:gaps.map(gap => ({...gap, x1:x(gap.start), x2:x(gap.end)}))};
+  const {boundaries, sections} = quotaChartSections(series, view);
   const dividers = boundaries.map(({at,kind}) => `<line class="quota-period-divider${kind === 'observed' ? ' observed' : ''}" x1="${x(at)}" y1="${top}" x2="${x(at)}" y2="${bottom}"/>`).join('');
-  let lastLabelX = left;
-  const ticks = [minTime, ...boundaries.map(item => item.at).filter(at => { const position = x(at); if (position-lastLabelX < 66 || right-position < 66) return false; lastLabelX = position; return true; }), maxTime];
-  const labels = ticks.map((at,index) => {
-    const date = new Date(at*1000); const anchor = index === 0 ? 'start' : index === ticks.length-1 ? 'end' : 'middle';
-    const time = date.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false});
-    const day = date.toLocaleDateString([], {month:'numeric',day:'numeric'});
-    return `<text x="${x(at)}" y="237" text-anchor="${anchor}" fill="var(--muted)" font-size="10">${esc(view?.mode === 'day' ? day : time)}<tspan x="${x(at)}" dy="14">${esc(view?.mode === 'day' ? '' : day)}</tspan></text>`;
-  }).join('');
   const targets = sections.map(section => {
-    const canZoom = view && section.zoomable;
     const label = quotaTimeRangeText(section.start,section.end);
-    return `<rect class="quota-hover-target${canZoom ? ' quota-segment' : ''}" x="${x(section.start)}" y="${top}" width="${Math.max(0,x(section.end)-x(section.start))}" height="${bottom-top}" data-start="${section.start}" data-end="${section.end}" data-mode="${section.mode}" onpointermove="quotaChartHover(event)" onpointerleave="quotaChartLeave(event)"${canZoom ? ` role="button" tabindex="0" aria-label="${esc(tr('查看 ','View ') + label)}" onclick="zoomQuotaHistory(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();zoomQuotaHistory(this)}"` : ''}><title>${esc(label)}</title></rect>`;
+    return `<rect class="quota-hover-target${section.zoomable ? ' quota-segment' : ''}" x="${x(section.start)}" y="${top}" width="${Math.max(0,x(section.end)-x(section.start))}" height="${bottom-top}" data-start="${section.start}" data-end="${section.end}" onpointermove="quotaChartHover(event)" onpointerleave="quotaChartLeave(event)"${section.zoomable ? ` role="button" tabindex="0" aria-label="${esc(tr('查看 ','View ') + label)}" onclick="zoomQuotaHistory(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();zoomQuotaHistory(this)}"` : ''}><title>${esc(label)}</title></rect>`;
   }).join('');
-  return `<svg viewBox="0 0 628 266" role="group" aria-label="${esc(tr('Subscription 余量趋势','Subscription quota trend'))}">${grid}${dividers}${lines}<line class="quota-chart-guide" x1="${left}" y1="${top}" x2="${left}" y2="${bottom}" hidden/>${targets}${labels}</svg>`;
+  return `<svg viewBox="0 0 ${width} 266" role="group" aria-label="${esc(tr('Subscription 余量趋势','Subscription quota trend'))}">${grid}${gapMarks}${dividers}${lines}<line class="quota-chart-guide" x1="${left}" y1="${top}" x2="${left}" y2="${bottom}" hidden/>${targets}${timeAxisSvg(minTime, maxTime, x, 240, left, right)}</svg>`;
 }
 function quotaObservedTimeText(value) { const timestamp = Number(value); if (!Number.isFinite(timestamp)) return ''; const date = new Date(timestamp * 1000); return `${date.toLocaleString([], {hour12:false})} (${utcOffsetLabel(date)})`; }
 function quotaChartHover(event) {
   const svg = event.currentTarget?.ownerSVGElement; if (!svg) return;
   const bounds = svg.getBoundingClientRect(); if (!(bounds.width > 0)) return;
-  const cursorX = Math.max(46, Math.min(610, ((event.clientX - bounds.left) / bounds.width) * 628));
-  const points = svg.quotaPoints || (svg.quotaPoints = [...svg.querySelectorAll('[data-quota-point]')]); if (!points.length) return;
-  const nearest = points.reduce((best, point) => Math.abs(Number(point.dataset.x) - cursorX) < Math.abs(Number(best.dataset.x) - cursorX) ? point : best, points[0]);
-  if (svg.quotaNearest === nearest) return;
-  svg.quotaNearest = nearest;
-  const nearestX = Number(nearest.dataset.x); const active = points.filter(point => point.dataset.time === nearest.dataset.time);
-  (svg.quotaActive || []).forEach(point => point.setAttribute('r','1.8'));
-  active.forEach(point => point.setAttribute('r','4')); svg.quotaActive = active;
-  const guide = svg.querySelector('.quota-chart-guide'); if (guide) { guide.removeAttribute('hidden'); guide.setAttribute('x1', nearestX); guide.setAttribute('x2', nearestX); }
-  const tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip'); if (!tooltip) return;
-  const topY = Math.min(...active.map(point => Number(point.dataset.y))); tooltip.hidden = false; tooltip.style.left = `${Math.max(20,Math.min(80,nearestX / 628 * 100))}%`; tooltip.style.top = `${Math.max(70,topY) / 266 * 100}%`;
-  tooltip.innerHTML = `<strong>${esc(quotaObservedTimeText(nearest.dataset.time))}</strong><br>${active.map(point => { const reset = localTimeText(point.dataset.reset); return `${esc(point.dataset.label)} · ${esc(point.dataset.value)}%${point.dataset.break ? ' · ' + esc(point.dataset.break) : ''}${reset ? '<br>' + tr('重置时间：','Resets: ') + esc(reset) : ''}`; }).join('<br>')}`;
+  const width = svg.viewBox.baseVal.width, cursorX = Math.max(46, Math.min(width - 18, ((event.clientX - bounds.left) / bounds.width) * width));
+  const guide = svg.querySelector('.quota-chart-guide'), tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip');
+  const markers = [...svg.querySelectorAll('.quota-chart-marker')]; markers.forEach(marker => marker.setAttribute('hidden',''));
+  const gap = quotaChartData.gaps.find(item => cursorX > item.x1 && cursorX < item.x2);
+  const points = quotaChartData.points;
+  const nearest = !gap && points.length ? points.reduce((best, point) => Math.abs(point.x - cursorX) < Math.abs(best.x - cursorX) ? point : best, points[0]) : null;
+  const guideX = nearest ? nearest.x : cursorX;
+  if (guide) { guide.removeAttribute('hidden'); guide.setAttribute('x1', guideX); guide.setAttribute('x2', guideX); }
+  if (!tooltip) return;
+  tooltip.hidden = false; tooltip.style.left = `${Math.max(20,Math.min(80,guideX / width * 100))}%`;
+  if (!nearest) { tooltip.style.top = '45%'; tooltip.innerHTML = `<strong>${tr('无数据记录','No data recorded')}</strong><br>${esc(quotaTimeRangeText(gap.start, gap.end))}`; return; }
+  const active = points.filter(point => point.time === nearest.time);
+  for (const point of active) { const marker = markers.find(item => Number(item.dataset.series) === point.series); if (marker) { marker.setAttribute('cx', point.x.toFixed(1)); marker.setAttribute('cy', point.y.toFixed(1)); marker.removeAttribute('hidden'); } }
+  tooltip.style.top = `${Math.max(70, Math.min(...active.map(point => point.y))) / 266 * 100}%`;
+  tooltip.innerHTML = `<strong>${esc(quotaObservedTimeText(nearest.time))}</strong><br>${active.map(point => { const reset = localTimeText(point.reset); return `${esc(point.label)} · ${esc(point.value)}%${point.note ? ' · ' + esc(point.note) : ''}${reset ? '<br>' + tr('重置时间：','Resets: ') + esc(reset) : ''}`; }).join('<br>')}`;
 }
-function quotaChartLeave(event) { const svg = event.currentTarget?.ownerSVGElement; if (!svg) return; const guide = svg.querySelector('.quota-chart-guide'); if (guide) guide.setAttribute('hidden',''); (svg.quotaActive || []).forEach(point => point.setAttribute('r','1.8')); svg.quotaActive = []; svg.quotaNearest = null; const tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip'); if (tooltip) tooltip.hidden = true; }
+function quotaChartLeave(event) { const svg = event.currentTarget?.ownerSVGElement; if (!svg) return; svg.querySelector('.quota-chart-guide')?.setAttribute('hidden',''); svg.querySelectorAll('.quota-chart-marker').forEach(marker => marker.setAttribute('hidden','')); const tooltip = svg.parentElement?.querySelector('.quota-chart-tooltip'); if (tooltip) tooltip.hidden = true; }
 function quotaPlanTimeline(plans, view) {
   const byTime = new Map();
   for (const item of Array.isArray(plans) ? plans : []) { const observedAt = Number(item?.observed_at); const key = subscriptionPlanKey(item?.plan_type); if (Number.isFinite(observedAt) && observedAt <= view.end && key) byTime.set(observedAt,{observedAt,planType:item.plan_type,key}); }
@@ -1503,53 +1720,66 @@ function quotaPlanTimeline(plans, view) {
   const changes = [];
   for (const item of visible) { const previous = changes[changes.length-1]; if (previous && previous.key === item.key) continue; changes.push(item); }
   const segments = changes.map((item,index) => { const start = Math.max(view.start,item.observedAt); const end = index + 1 < changes.length ? Math.min(view.end,changes[index+1].observedAt) : view.end; if (!(end > start)) return ''; const left = (start-view.start)/(view.end-view.start)*100; const width = (end-start)/(view.end-view.start)*100; const label = subscriptionPlanLabel(item.planType); const title = `${label} · ${quotaTimeRangeText(start,end)}`; return `<span class="quota-plan-segment" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%;--plan-color:${subscriptionPlanColor(item.planType)}" title="${esc(title)}">${width >= 8 ? esc(label) : ''}</span>`; }).join('');
-  return segments ? `<div class="quota-plan-history"><span>${tr('订阅','Plan')}</span><div class="quota-plan-track" aria-label="${esc(tr('订阅方案历史','Subscription plan history'))}">${segments}</div></div>` : '';
+  const covered = changes.length ? Math.max(view.start, changes[0].observedAt) : view.end;
+  const emptyWidth = (covered - view.start) / (view.end - view.start) * 100;
+  const empty = emptyWidth > 0.5 ? `<span class="quota-plan-empty" style="left:0;width:${emptyWidth.toFixed(3)}%">${emptyWidth >= 10 ? tr('无数据记录','No data recorded') : ''}</span>` : '';
+  return segments ? `<div class="quota-plan-history"><span>${tr('订阅','Plan')}</span><div class="quota-plan-track" aria-label="${esc(tr('订阅方案历史','Subscription plan history'))}">${empty}${segments}</div></div>` : '';
 }
-function renderQuotaHistory(payload, rangeName) {
+function renderQuotaHistory(payload) {
   quotaHistoryPayload = payload;
-  activeQuotaRange = rangeName;
   const content = $('quota_history_content'); if (!content) return; const allSeries = (payload.series || []).filter(item => Array.isArray(item.points) && item.points.length);
   if (!content.querySelector('#quota_history_plot')) content.innerHTML = `<div id="quota_history_controls" class="quota-chart-toolbar"></div><div class="quota-history-navigation"><button id="quota_history_back" class="secondary" type="button" onclick="backQuotaHistory()">${tr('返回','Back')}</button><span id="quota_history_range"></span><span id="quota_history_loading" class="muted" role="status" hidden>${tr('更新中…','Updating…')}</span></div><div id="quota_history_plan"></div><div id="quota_history_legend" class="quota-legend"></div><div id="quota_history_plot" class="quota-chart"></div>`;
+  const period = periodPickers.quota_history;
+  const view = {start:Number(payload.start_at) || period?.start || 0, end:Number(payload.end_at) || period?.end || 0};
   const groups = [...new Set(allSeries.map(item => item.limit_id || 'codex'))];
   if (!groups.includes(activeQuotaLimit)) activeQuotaLimit = groups.includes('codex') ? 'codex' : groups[0];
   const groupSeries = allSeries.filter(item => (item.limit_id || 'codex') === activeQuotaLimit);
-  const view = quotaHistoryView(allSeries,rangeName);
   const windowKey = item => String(item.window_minutes || item.window_kind || 'unknown');
   const windows = [...new Set(groupSeries.map(windowKey))].sort((a,b) => Number(a) - Number(b));
-  const populatedWindows = [...new Set(groupSeries.filter(item => item.points.some(point => quotaValidPoint(point) && point.observed_at >= view.start && point.observed_at <= view.end)).map(windowKey))].sort((a,b) => Number(a) - Number(b));
-  if (!windows.includes(activeQuotaWindow)) activeQuotaWindow = populatedWindows[0] || windows[0];
+  if (!windows.includes(activeQuotaWindow)) activeQuotaWindow = windows[0];
   const series = groupSeries.filter(item => windowKey(item) === activeQuotaWindow);
   const tabs = groups.length > 1 ? `<div class="quota-ranges quota-groups" aria-label="${esc(tr('额度组','Quota group'))}">${groups.map(id => `<button type="button" class="secondary" data-limit-id="${esc(id)}" onclick="selectQuotaHistoryGroup(this.dataset.limitId)">${esc(quotaLimitLabel(id))}</button>`).join('')}</div>` : '';
   const windowTabs = windows.length > 1 ? `<div class="quota-ranges quota-windows" aria-label="${esc(tr('额度周期','Quota window'))}">${windows.map(key => `<button type="button" class="secondary" data-window="${esc(key)}" onclick="selectQuotaHistoryWindow(this.dataset.window)">${esc(compactWindowText(key))}</button>`).join('')}</div>` : '';
-  const planTimeline = quotaPlanTimeline(payload.plans || [],view);
-  const legend = series.map((item,index) => { const samples = item.points.filter(point => quotaValidPoint(point) && point.observed_at >= view.start && point.observed_at <= view.end); const last = samples.length ? samples.reduce((latest, point) => Number(point.observed_at) > Number(latest.observed_at) ? point : latest) : null; const color = quotaSeriesColor(item,index); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(compactWindowText(item.window_minutes))}<strong>${last ? esc(Number(Number(last.remaining_percent).toFixed(2))) + '%' : '—'}</strong></span>`; }).join('');
-  const chart = quotaChartSvg(series,view);
-  const plot = chart ? `${chart}<div class="quota-chart-tooltip" role="status" hidden></div>` : `<div class="quota-empty">${tr('此时间段暂无额度记录。','No quota records in this period.')}</div>`;
+  const planTimeline = view.end > view.start ? quotaPlanTimeline(payload.plans || [],view) : '';
+  const legend = series.map((item,index) => { const samples = item.points.filter(point => quotaValidPoint(point) && point.observed_at >= view.start && point.observed_at <= view.end); const last = samples.length ? samples.reduce((latest, point) => Number(point.observed_at) > Number(latest.observed_at) ? point : latest) : null; const color = quotaSeriesColor(item,index); return `<span><i class="quota-swatch" style="background:${color}"></i>${esc(compactWindowText(item.window_minutes))}<strong>${last ? esc(Number(Number(last.remaining_percent).toFixed(2))) + '%' : tr('无数据','No data')}</strong></span>`; }).join('');
+  const chart = view.end > view.start ? quotaChartSvg(series, view, quotaGapLimit(payload)) : '';
+  const plot = chart ? `${chart}<div class="quota-chart-tooltip" role="status" hidden></div>` : `<div class="quota-empty">${quotaHistoryLoading ? tr('正在读取记录…','Loading records…') : tr('此时间段无数据记录。','No data recorded in this period.')}</div>`;
   for (const [id, markup] of [['quota_history_controls',tabs+windowTabs],['quota_history_plan',planTimeline],['quota_history_legend',legend],['quota_history_plot',plot]]) { const node = $(id); if (node.quotaMarkup !== markup) { node.innerHTML = markup; node.quotaMarkup = markup; } }
   content.querySelectorAll('[data-limit-id], [data-window]').forEach(button => { const selected = button.dataset.limitId ? button.dataset.limitId === activeQuotaLimit : button.dataset.window === activeQuotaWindow; button.classList.toggle('active',selected); button.setAttribute('aria-pressed',String(selected)); });
-  $('quota_history_range').textContent = quotaTimeRangeText(view.start,view.end);
-  $('quota_history_back').disabled = !quotaHistoryZoom.length;
-  $('quota_history_loading').hidden = !quotaHistoryLoading;
+  $('quota_history_range').textContent = view.end > view.start ? quotaTimeRangeText(view.start,view.end) : '';
+  $('quota_history_back').hidden = !quotaHistoryZoom.length;
+  $('quota_history_loading').hidden = !quotaHistoryLoading || !quotaHistoryLoadingVisible;
 }
-function selectQuotaHistoryGroup(limitId) { activeQuotaLimit = limitId; if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload, activeQuotaRange); }
-function selectQuotaHistoryWindow(windowKey) { activeQuotaWindow = windowKey; if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload, activeQuotaRange); }
-function selectQuotaHistoryRange(rangeName) { activeQuotaRange = rangeName; activeQuotaWindow = ''; quotaHistoryZoom = []; document.querySelectorAll('.quota-ranges button[data-range]').forEach(button => button.classList.toggle('active',button.dataset.range === rangeName)); if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload,rangeName); }
-function zoomQuotaHistory(target) { quotaHistoryZoom.push({start:Number(target.dataset.start),end:Number(target.dataset.end),mode:target.dataset.mode}); if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload,activeQuotaRange); }
-function backQuotaHistory() { quotaHistoryZoom.pop(); if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload,activeQuotaRange); }
-async function loadQuotaHistory(accountId, rangeName) {
+function selectQuotaHistoryGroup(limitId) { activeQuotaLimit = limitId; if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload); }
+function selectQuotaHistoryWindow(windowKey) { activeQuotaWindow = windowKey; if (quotaHistoryPayload) renderQuotaHistory(quotaHistoryPayload); }
+function zoomQuotaHistory(target) {
+  const period = periodPickers.quota_history; if (!period) return;
+  quotaHistoryZoom.push({preset:period.preset, start:period.start, end:period.end});
+  setPeriod('quota_history', {preset:'', start:Number(target.dataset.start), end:Number(target.dataset.end)}, {user:true, zoom:true});
+}
+function backQuotaHistory() { const previous = quotaHistoryZoom.pop(); if (previous) setPeriod('quota_history', previous.preset ? {...previous, ...periodPresetRange(previous.preset)} : previous, {user:true, zoom:true}); }
+let quotaHistoryLoadingVisible = false;
+// Background reloads stay silent; only a period the user picked shows "Updating…".
+async function loadQuotaHistory(accountId, user = false) {
+  const period = periodPickers.quota_history; if (!period || !accountId) return;
   const request = ++quotaHistoryRequest;
-  activeQuotaRange = rangeName; quotaHistoryLoading = true;
-  const loading = $('quota_history_loading'); if (loading) loading.hidden = false;
+  quotaHistoryLoading = true; quotaHistoryLoadingVisible = user;
+  const loading = $('quota_history_loading'); if (loading && user) loading.hidden = false;
   try {
-    // One bounded snapshot supplies all range/window switches and drill-downs.
-    const payload = await api('/api/accounts/' + encodeURIComponent(accountId) + '/quota-history?range=all');
-    if (request === quotaHistoryRequest) { quotaHistoryLoading = false; $('modal_status').textContent = ''; renderQuotaHistory(payload,activeQuotaRange); }
+    const payload = await api('/api/accounts/' + encodeURIComponent(accountId) + '/quota-history?' + new URLSearchParams({start:Math.floor(period.start), end:Math.ceil(period.end)}));
+    if (request === quotaHistoryRequest) { quotaHistoryLoading = false; $('modal_status').textContent = ''; renderQuotaHistory(payload); }
   } catch (error) { if (request === quotaHistoryRequest) $('modal_status').textContent = error.message; }
   finally { if (request === quotaHistoryRequest) { quotaHistoryLoading = false; const indicator = $('quota_history_loading'); if (indicator) indicator.hidden = true; } }
   if (request === quotaHistoryRequest) await refreshQuotaState();
   drainQuotaUpdates();
 }
-function openQuotaHistory(accountId) { activeQuotaAccountId = accountId; activeQuotaRange = '1d'; activeQuotaLimit = 'codex'; activeQuotaWindow = ''; quotaHistoryZoom = []; quotaHistoryPayload = null; quotaHistoryLoading = true; const ranges = ['1h','1d','1w','all']; openModal(tr('Subscription 余量趋势','Subscription quota trend'), `<div class="quota-ranges">${ranges.map(rangeName => `<button type="button" class="secondary${rangeName === '1d' ? ' active' : ''}" data-ui-action="quota-range" data-range="${esc(rangeName)}">${esc(quotaRangeLabel(rangeName))}</button>`).join('')}</div><div id="quota_history_content"></div>`, '', null); renderQuotaHistory({series:[]},activeQuotaRange); loadQuotaHistory(accountId, activeQuotaRange); quotaHistoryTimer = setInterval(() => { if (!quotaHistoryLoading) loadQuotaHistory(activeQuotaAccountId, activeQuotaRange); }, 5 * 60 * 1000); }
+function openQuotaHistory(accountId) {
+  activeQuotaAccountId = accountId; activeQuotaLimit = 'codex'; activeQuotaWindow = ''; quotaHistoryZoom = []; quotaHistoryPayload = null; quotaHistoryLoading = true;
+  openModal(tr('Subscription 余量趋势','Subscription quota trend'), `${periodPickerHtml('quota_history', ['1h','1d','7d'])}<div id="quota_history_content"></div>`, '', null);
+  renderQuotaHistory({series:[]});
+  registerPeriodPicker('quota_history', '1d', (period, options) => { if (options.user && !options.zoom) quotaHistoryZoom = []; return loadQuotaHistory(activeQuotaAccountId, options.user); });
+  quotaHistoryTimer = setInterval(() => { if (!quotaHistoryLoading) refreshPeriod('quota_history', false); }, 5 * 60 * 1000);
+}
 
 function selectAccountFile() { $('a_auth_json').click(); }
 async function accountFileChosen(input) {
@@ -1662,7 +1892,7 @@ async function toggleProviderModels(id, enabled) {
   catch (error) { notice(error.message, true); }
 }
 function openProviderChooser() {
-  openModal(tr('添加 Provider','Add Provider'), `<p class="muted">${tr('官方 Provider 使用固定的 Base URL、协议和认证方式。自建 Provider 可选择自动检测。','Official Providers use fixed endpoints, protocols, and authentication. Custom Providers may use automatic protocol detection.')}</p><div class="choice-grid">` + Object.entries(officialProviders).map(([key,p]) => `<button class="choice" data-ui-action="official-provider-choose" data-provider="${esc(key)}"><strong>${esc(p.name)}</strong><small>${esc(key === 'chatgpt' ? tr('转发当前 Codex 登录态，不需要 API Key','Forward the active Codex login; no API Key required') : p.hint)}</small></button>`).join('') + `<button class="choice" onclick="openCustomProviderForm()"><strong>${tr('自建 Provider','Custom Provider')}</strong><small>${tr('填写 Base URL、API Key 和协议','Enter a Base URL, API Key, and protocol')}</small></button></div>`, '', null);
+  openModal(tr('添加 Provider','Add Provider'), `<p class="muted">${tr('官方 Provider 使用固定的 Base URL、协议和认证方式。自建 Provider 可选择自动检测。','Official Providers use fixed endpoints, protocols, and authentication. Custom Providers may use automatic protocol detection.')}</p><div class="choice-grid">` + Object.entries(officialProviders).filter(([key]) => key !== 'chatgpt').map(([key,p]) => `<button class="choice" data-ui-action="official-provider-choose" data-provider="${esc(key)}"><strong>${esc(p.name)}</strong><small>${esc(p.hint)}</small></button>`).join('') + `<button class="choice" onclick="openCustomProviderForm()"><strong>${tr('自建 Provider','Custom Provider')}</strong><small>${tr('填写 Base URL、API Key 和协议','Enter a Base URL, API Key, and protocol')}</small></button></div>`, '', null);
   $('modal_submit').style.display = 'none';
 }
 function chooseOfficialProvider(key) {
@@ -1704,11 +1934,11 @@ function renderModels() {
       const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? tr('支持推理，档位未知','reasoning supported; levels unknown') : tr('无推理档位控制','no reasoning level control'));
       const capabilities = capabilitySummary(m);
       return `<article class="entity-card model-card${m.enabled ? '' : ' model-hidden'}">
-        <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, m.context_window))}</strong></div>
+        <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, usableContext(m)))}</strong></div>
         <div class="entity-card-subtitle"><code>${esc(m.id)}</code></div></div>
-        <div class="entity-card-meta">context ${Number(m.context_window || 0).toLocaleString()} tokens · reasoning ${esc(reasoning)}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</div>
+        <div class="entity-card-meta">${m.context_window ? tr(`可用上下文 ${compactContext(usableContext(m))}（最大 ${compactContext(m.context_window)}）`,`context ${compactContext(usableContext(m))} usable (max ${compactContext(m.context_window)})`) : tr('上下文未知','context unknown')} · reasoning ${esc(reasoning)}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</div>
         <label class="visibility"><input type="checkbox" ${m.enabled ? 'checked' : ''} data-ui-action="model-toggle" data-id="${esc(m.id)}"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</label>
-        <div class="entity-card-actions"><button class="secondary" data-icon="edit" data-ui-action="model-edit" data-id="${esc(m.id)}">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" data-ui-action="model-test" data-id="${esc(m.id)}">${tr('测试','Test')}</button><button class="secondary" data-icon="test" data-ui-action="model-test-vision" data-id="${esc(m.id)}">${tr('测试图像','Test image')}</button><button class="danger" data-icon="trash" data-ui-action="model-remove" data-id="${esc(m.id)}">${tr('删除','Delete')}</button></div>
+        <div class="entity-card-actions"><button class="secondary" data-icon="edit" data-ui-action="model-edit" data-id="${esc(m.id)}">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" data-ui-action="model-test" data-id="${esc(m.id)}">${tr('测试','Test')}</button><button class="danger" data-icon="trash" data-ui-action="model-remove" data-id="${esc(m.id)}">${tr('删除','Delete')}</button></div>
       </article>`;
     }).join('');
     const toggle = items.length > 6 ? `<button type="button" class="secondary" data-ui-action="model-group-toggle" data-id="${esc(provider)}">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : '';
@@ -1716,7 +1946,7 @@ function renderModels() {
   }).join('');
 }
 function toggleModelGroup(provider) { if (expandedModelGroups.has(provider)) expandedModelGroups.delete(provider); else expandedModelGroups.add(provider); renderModels(); }
-function providerDiscoveryError(error) { const status = Number(error?.status || error?.payload?.error?.status || 0); if ([400,401,403].includes(status)) return tr('API Key 无效或没有读取模型列表的权限。','The API key is invalid or cannot read the model list.'); if (status === 429) return tr('请求过于频繁，请稍后重试。','Too many requests. Try again later.'); if (status >= 500) return tr('模型服务暂时不可用，请稍后重试。','The model service is temporarily unavailable. Try again later.'); return error?.message || tr('无法读取模型列表。','Could not read the model list.'); }
+function providerDiscoveryError(error) { return upstreamErrorText(error, tr('无法读取模型列表。','Could not read the model list.')); }
 async function discoverProvider(id) { try { notice(tr(`正在拉取 ${id} 的模型列表 …`,`Fetching models from ${id}…`)); const result = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider:id})}); openModelImportModal(id, result.models || []); } catch (error) { notice(providerDiscoveryError(error), true); } }
 function openModelImportModal(provider, models) {
   const sorted = [...models].sort(modelSort);
@@ -1731,16 +1961,17 @@ function updateDiscoveredCount() { const options = [...document.querySelectorAll
 function openManualModelModal(modelId = '') {
   const existing = (state.models || []).find(m => m.id === modelId) || {}; editingModelId = modelId; modalReasoningLevels = Array.isArray(existing.reasoning_levels) ? existing.reasoning_levels : null; modalReasoningSupport = typeof existing.supports_reasoning === 'boolean' ? existing.supports_reasoning : null; modalReasoningSummarySupport = typeof existing.supports_reasoning_summaries === 'boolean' ? existing.supports_reasoning_summaries : null;
   const options = (state.providers || []).map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join('');
-  const inputModalities = (Array.isArray(existing.input_modalities) ? existing.input_modalities : ['text']).filter(value => value !== 'image');
   const vision = visionStatus(existing);
-  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label>${tr('上游模型名','Upstream model name')}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${tr('例如 glm','for example glm')}" oninput="updateManualModelRoute()"></div><div><label>${tr('上下文窗口（可选）','Context window (optional)')}</label><input id="modal_model_context" type="number" min="0" value="${Number(existing.context_window || 0)}"></div><div><label>${tr('自动获取','Fetch metadata')}</label><button class="secondary" onclick="inspectModalModel()">${tr('获取上游最大值','Fetch upstream maximum')}</button></div><div class="wide"><label>${tr('图像输入能力','Vision input capability')}</label><select id="modal_model_vision"><option value="unknown">${tr('未知','Unknown')}</option><option value="supported">${tr('支持','Supported')}</option><option value="unsupported">${tr('不支持','Not supported')}</option></select><small class="muted">${tr('未知不会将图像能力宣称给 Codex；测试图像仅在点击按钮时发送。','Unknown does not claim image support to Codex; the image test runs only when clicked.')}</small></div><div class="wide"><label>${tr('其他输入模态（逗号分隔）','Other input modalities (comma-separated)')}</label><input id="modal_model_input_modalities" value="${esc(inputModalities.join(', '))}" placeholder="text, image"><small class="muted">${tr('Codex 目前使用 text / image；其他模态会保留在 EMP 中。','Codex currently uses text / image; other modalities remain in EMP.')}</small></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
+  const inputModalities = (Array.isArray(existing.input_modalities) ? existing.input_modalities : ['text']).filter(value => value !== 'image').concat(vision === 'supported' ? ['image'] : []);
+  modalVisionStatus = vision;
+  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label>${tr('上游模型名','Upstream model name')}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${tr('例如 glm','for example glm')}" oninput="updateManualModelRoute()"></div><div class="wide"><label>${tr('最大上下文窗口（可选）','Maximum context window (optional)')}</label><div class="input-action"><input id="modal_model_context" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.context_window || 0)}" oninput="this.value=this.value.replace(/\\D/g,'');previewModalContext()"><button type="button" class="secondary" onclick="inspectModalModel()">${tr('获取上游最大值','Fetch upstream maximum')}</button></div><small class="muted" id="modal_model_context_usable">${existing.context_window ? tr(`Codex 可用 ${compactContext(usableContext(existing))}`,`Codex uses ${compactContext(usableContext(existing))}`) : ''}</small></div><div class="wide"><label>${tr('输入模态','Input modalities')}</label><div id="modal_model_modalities" class="modality-options">${modalityOptions(inputModalities, vision, Boolean(modelId))}</div></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
   if (existing.provider) $('modal_model_provider').value = existing.provider;
-  $('modal_model_vision').value = vision;
   updateManualModelRoute();
 }
 function manualModelRoute() { const provider = $('modal_model_provider')?.value || ''; const entered = $('modal_model_upstream')?.value.trim() || ''; const prefix = provider + '/'; return provider && entered ? prefix + (entered.startsWith(prefix) ? entered.slice(prefix.length) : entered) : ''; }
 function updateManualModelRoute() { const route = manualModelRoute(); if ($('modal_model_route')) $('modal_model_route').textContent = route || tr('保存后生成','Generated after save'); }
-async function inspectModalModel() { const provider = $('modal_model_provider').value; const upstream = $('modal_model_upstream').value.trim(); if (!provider || !upstream) return notice(tr('请填写 Provider 和上游模型名','Enter a Provider and upstream model name'), true); try { const result = await api('/api/models/metadata', {method:'POST', body:JSON.stringify({provider, model:upstream})}); $('modal_model_context').value = result.context_window; modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : []; modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null; modalReasoningSummarySupport = typeof result.supports_reasoning_summaries === 'boolean' ? result.supports_reasoning_summaries : null; updateManualModelRoute(); notice(tr(`已获取上限：输入 ${Number(result.input_token_limit).toLocaleString()} · 输出 ${Number(result.output_token_limit).toLocaleString()}`,`Limits fetched: input ${Number(result.input_token_limit).toLocaleString()} · output ${Number(result.output_token_limit).toLocaleString()}`)); } catch (error) { notice(tr('获取失败：','Fetch failed: ') + error.message, true); } }
+function previewModalContext() { const value = Number($('modal_model_context').value) || 0; $('modal_model_context_usable').textContent = value ? tr(`Codex 可用 ${compactContext(usableContext({context_window:value}))}`,`Codex uses ${compactContext(usableContext({context_window:value}))}`) : ''; }
+async function inspectModalModel() { const provider = $('modal_model_provider').value; const upstream = $('modal_model_upstream').value.trim(); if (!provider || !upstream) return notice(tr('请填写 Provider 和上游模型名','Enter a Provider and upstream model name'), true); try { const result = await api('/api/models/metadata', {method:'POST', body:JSON.stringify({provider, model:upstream})}); $('modal_model_context').value = result.context_window; modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : []; modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null; modalReasoningSummarySupport = typeof result.supports_reasoning_summaries === 'boolean' ? result.supports_reasoning_summaries : null; updateManualModelRoute(); notice(tr(`已获取上限：输入 ${Number(result.input_token_limit).toLocaleString()} · 输出 ${Number(result.output_token_limit).toLocaleString()}`,`Limits fetched: input ${Number(result.input_token_limit).toLocaleString()} · output ${Number(result.output_token_limit).toLocaleString()}`)); } catch (error) { notice(tr('获取失败：','Fetch failed: ') + upstreamErrorText(error), true); } }
 async function saveManualModel() {
   const provider = $('modal_model_provider').value;
   const entered = $('modal_model_upstream').value.trim();
@@ -1751,11 +1982,13 @@ async function saveManualModel() {
   const previous = state.models.find(m => m.id === editingModelId);
   const collision = state.models.find(m => m.id === id && m.id !== editingModelId);
   if (collision) throw new Error(tr('模型路由已存在，不能覆盖另一个模型','That model route already exists and cannot overwrite another model'));
-  const vision = $('modal_model_vision').value;
-  if (!['unknown', 'supported', 'unsupported'].includes(vision)) throw new Error(tr('请选择图像输入能力','Choose a vision input capability'));
-  const modalities = [...new Set($('modal_model_input_modalities').value.split(',').map(value => value.trim().toLowerCase()).filter(Boolean))];
+  const imageChecked = Boolean(document.querySelector('[data-modality][value="image"]:checked'));
+  // Unchecked image keeps "unknown" until the user or a test has confirmed it either way.
+  const vision = imageChecked ? 'supported' : (modalVisionStatus === 'unknown' ? 'unknown' : 'unsupported');
+  const kept = (previous?.input_modalities || []).filter(value => !COMMON_MODALITIES.includes(value));
+  const modalities = [...new Set([...document.querySelectorAll('[data-modality]:checked')].map(input => input.value).concat(kept))].filter(value => value !== 'image');
   if (modalities.length > 16 || modalities.some(value => !/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(value) || value === 'image')) {
-    throw new Error(tr('请输入有效的其他输入模态；图像请使用上方选项','Enter valid other input modalities; use the vision selector for images'));
+    throw new Error(tr('输入模态无效；图像请使用上方选项','Invalid input modality; use the vision selector for images'));
   }
   if (vision === 'supported') modalities.push('image');
   if (!modalities.length) modalities.push('text');
@@ -1798,7 +2031,22 @@ async function testModelVision(id) {
     const answer = String(result.output_text || (result.output || []).flatMap(item => item.content || []).map(part => part.text || '').join('')).trim();
     if (!answer) throw new Error(tr('模型没有返回图像描述','The model returned no image description'));
     notice(tr('图像测试收到回复（仅为本次兼容性观察，非官方能力保证）：','Image test received a reply (observed compatibility, not an official guarantee): ') + answer.slice(0, 240));
-  } catch (error) { notice(tr('图像测试未通过：','Image test did not succeed: ') + error.message, true); }
+    return true;
+  } catch (error) { notice(tr('图像测试未通过：','Image test did not succeed: ') + upstreamErrorText(error), true); return false; }
+}
+
+// Sends one second of stereo speech: "Front left" on the left channel, then "Front right" on the right.
+async function testModelAudio(id) {
+  try {
+    notice(tr(`正在向 ${id} 发送声道测试音频…`,`Sending the channel test audio to ${id}…`));
+    const sound = await api('/api/models/audio-test-sound');
+    if (sound.format !== 'wav' || !sound.data) throw new Error(tr('测试音频不可用','Test audio is unavailable'));
+    const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:[{role:'user', content:[{type:'input_text',text:'Transcribe the speech in this audio and say which stereo channel each phrase plays on.'},{type:'input_audio',input_audio:{data:sound.data, format:'wav'}}]}], max_output_tokens:512})});
+    const answer = String(result.output_text || (result.output || []).flatMap(item => item.content || []).map(part => part.text || '').join('')).trim();
+    if (!answer) throw new Error(tr('模型没有返回音频内容','The model returned nothing about the audio'));
+    notice(tr('音频测试收到回复（应听到左声道 “Front left”、右声道 “Front right”）：','Audio test reply (expect “Front left” on the left, “Front right” on the right): ') + answer.slice(0, 240));
+    return true;
+  } catch (error) { notice(tr('音频测试未通过：','Audio test did not succeed: ') + upstreamErrorText(error), true); return false; }
 }
 
 function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryLoading = false; quotaHistoryRequest++; }
@@ -1901,7 +2149,10 @@ function runDynamicUiAction(element) {
     case 'account-refresh': refreshAccount(id); return true;
     case 'account-quota-history': openQuotaHistory(id); return true;
     case 'account-reset-credits': openResetCredits(id); return true;
-    case 'quota-range': selectQuotaHistoryRange(element.dataset.range || ''); return true;
+    case 'period-preset': selectPeriodPreset(id, element.dataset.preset || ''); return true;
+    case 'period-apply': applyCustomPeriod(id); return true;
+    case 'period-refresh': refreshPeriod(id); return true;
+    case 'period-edit': editPeriod(id); return true;
     case 'provider-discover': discoverProvider(id); return true;
     case 'provider-edit': editProvider(id); return true;
     case 'provider-toggle-models': toggleProviderModels(id, element.dataset.allHidden === 'true'); return true;
@@ -1910,7 +2161,7 @@ function runDynamicUiAction(element) {
     case 'model-toggle': toggleModel(id, element.checked); return true;
     case 'model-edit': openManualModelModal(id); return true;
     case 'model-test': testModel(id); return true;
-    case 'model-test-vision': testModelVision(id); return true;
+    case 'modality-test': MODALITY_TESTS[id]?.(); return true;
     case 'model-remove': removeModel(id); return true;
     case 'model-group-toggle': toggleModelGroup(id); return true;
     default: return false;
@@ -1918,11 +2169,11 @@ function runDynamicUiAction(element) {
 }
 function handleDynamicUiClick(event) {
   const element = dynamicActionElement(event.target);
-  if (element && element.dataset.uiAction !== 'model-toggle') runDynamicUiAction(element);
+  if (element && !['model-toggle','period-edit'].includes(element.dataset.uiAction)) runDynamicUiAction(element);
 }
 function handleDynamicUiChange(event) {
   const element = dynamicActionElement(event.target);
-  if (element?.dataset.uiAction === 'model-toggle') runDynamicUiAction(element);
+  if (['model-toggle','period-edit'].includes(element?.dataset.uiAction)) runDynamicUiAction(element);
 }
 function handleDynamicUiKeydown(event) {
   if (event.key !== 'Enter' && event.key !== ' ') return;

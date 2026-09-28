@@ -198,6 +198,35 @@ pub fn normalize_subscription_search(raw: Option<&Value>) -> ConfigResult<Value>
     Ok(serde_json::json!({"enabled": enabled, "account_id": ""}))
 }
 
+/// Map model names that have no public price to a model that has one.
+/// Empty references drop the entry.
+pub fn normalize_pricing_aliases(raw: Option<&Value>) -> ConfigResult<Value> {
+    let raw = match raw {
+        None | Some(Value::Null) => return Ok(Value::Object(Map::new())),
+        Some(Value::Object(raw)) => raw,
+        Some(_) => return Err(ConfigError::new("pricing_aliases must be an object")),
+    };
+    if raw.len() > 1000 {
+        return Err(ConfigError::new("pricing_aliases has too many entries"));
+    }
+    let mut aliases = Map::new();
+    for (model, reference) in raw {
+        let model = model.trim();
+        let Some(reference) = reference.as_str() else {
+            return Err(ConfigError::new("pricing_aliases values must be strings"));
+        };
+        let reference = reference.trim();
+        if model.is_empty() || reference.is_empty() {
+            continue;
+        }
+        if model.chars().count() > 256 || reference.chars().count() > 256 {
+            return Err(ConfigError::new("pricing_aliases entries are too long"));
+        }
+        aliases.insert(model.to_owned(), Value::String(reference.to_owned()));
+    }
+    Ok(Value::Object(aliases))
+}
+
 /// Validate ordered runtime selection with Python's trimming and deduplication.
 pub fn normalize_codex_runtime_sources(raw: Option<&Value>) -> ConfigResult<Value> {
     let raw = match raw {

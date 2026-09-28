@@ -36,6 +36,8 @@ EMP 在本机运行，主要解决两件事：
 
 - 增量扫描本机 Codex 历史，按时间段、账号和服务查看历史及实时 token 用量与 API 等价金额，价格每天后台更新。
   详见[用量统计说明](docs/usage-accounting.md)。
+- 在“计价对照”中把没有公开价格的模型按另一个模型计价（例如按 `gpt-5.5`）；
+  仍然没有价格的请求按 0 计，并会单独标出。
 
 - 在同一个 Codex 模型选择器中使用原生模型、其他 ChatGPT Subscription 和
   外部 API 模型。
@@ -67,27 +69,25 @@ EMP 在本机运行，主要解决两件事：
 
 ## 安装
 
-EMP 不会捆绑或替代 Codex。首次读取集成状态时，它会在有限的已知位置扫描
-Codex App runtime、当前 `.codex` 托管 runtime、OpenAI 的 VS Code/Cursor
-插件 runtime，以及 `PATH` 中的独立 `codex`。Web UI 会列出版本、合并相同程序，
-并允许用户多选计划使用 EMP 的兼容 Codex 客户端；多个客户端和 workspace 可以
-同时工作。EMP 会独立自动选择一个兼容 helper 程序用于版本检测和账户余量查询，
-这个内部选择不会路由模型请求或限制已选客户端。不兼容或无法读取的 runtime 仍会
-显示，但不可选择；可用的预发布或更新版本会明确标记为“尚未验证”。
+EMP 不会捆绑或替代 Codex。EMP 只修改共用的 `~/.codex/config.toml`，CLI、App、
+IDE 插件等所有 Codex 客户端都会读取这份设置，所以不需要选择客户端；多个客户端和
+workspace 可以同时工作。查询账户余量时，EMP 会在已知位置（Codex App、`.codex`
+托管 runtime、VS Code/Cursor 插件、`PATH` 中的 `codex`）找一个受支持的 Codex 来执行。
 
-这些客户端通常共用同一用户级 `.codex` 目录。客户端选择不会创建新的 Codex
-配置目录，也不会阻止其他客户端读取这份共享配置。
+EMP 不会停止、启动或重启 Codex。点“将 EMP 应用于 Codex”后，请自己重启 Codex。
+Codex 下次连到 EMP（拉取模型列表或发起对话）时，EMP 会通过 Codex 的本地控制通道
+读取 `model/list`，确认正在运行的 Codex 实际加载了哪份模型目录，并直接推送到
+Web UI，不做后台轮询。集成卡片会显示三种状态之一：
 
-EMP 把持久运行的 Codex App Server 视为外部所有者管理的共享后端。启用、恢复、
-刷新或检查集成时，EMP 都不会停止、启动或重启 Codex。EMP 通过现有本地控制通道
-读取 `model/list`，核对可见模型、显示名称和描述；目录未刷新时保持待确认状态，
-连接或权限失败则显示对应错误。这条只读探测路径已在 Windows、Intel macOS
-和 Linux 的官方 Codex 0.154.0 后台验证。检查成功不代表 Base URL 或其他启动配置
-已经热加载。Linux 同时支持扫描当前 `CODEX_HOME/plugins/.plugin-appserver/codex`，
+- **Codex 正在使用 EMP**：重启后已经加载 EMP；
+- **待重启**：Codex 仍在使用旧设置，请重启 Codex；
+- **Codex 未运行**：下次打开 Codex 就会使用 EMP。
+
+Linux 同时支持扫描当前 `CODEX_HOME/plugins/.plugin-appserver/codex`，
 其他 AppImage 或发行版的安装布局仍需单独验证。
 
-EMP 支持 Codex CLI `0.149.x` 至 `0.156.x`，推荐使用 `0.156.1`。Web UI 会显示
-当前安装版本；更高版本会标记为“尚未验证”，更旧版本会标记为“不再支持”。
+EMP 支持 Codex `0.149.0` 及以上版本。更旧的 Codex 发来请求时，EMP 会直接返回错误，
+提示需要升级 Codex。
 
 已在 runtime `0.153.4` 上验证 Gemini 3.7 Flash、3.8 Flash 的子任务委派、
 后续任务和工具调用。协议说明见 [子任务兼容性](docs/external-collaboration.md)。
@@ -98,7 +98,8 @@ Subscription 的编辑窗口可以逐模型设置上下文 token 数。留空使
 设置同时影响 Codex 模型列表和 EMP 的请求上下文检查，不会修改 API 地址或
 目标 Codex 的当前登录。已有任务能否立即采用新窗口取决于客户端是否刷新了
 目录；新建任务后应确认有效上下文。Native 导出后，其上下文设置随导入的账号
-迁移，不覆盖目标机器 Native 的设置。
+迁移，不覆盖目标机器 Native 的设置。外部 Provider 模型同样按 95% 计算，
+例如 256,000 的窗口在 Codex 模型列表中显示为 243K。
 
 ### 预构建安装包
 
@@ -170,16 +171,16 @@ ID 签名和公证。
 
 ### 从源码安装
 
-安装 Git 和 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)，然后拉取
-EMP：
+安装 Git 和 Rust 工具链（[`rustup`](https://rustup.rs/)），然后构建 EMP：
 
 ```bash
 git clone https://github.com/Killow1998/EasyMultiProvider.git
 cd EasyMultiProvider
-uv sync
+cargo build --locked --release -p emp-app --bin EMP
 ```
 
-`uv` 会管理 Python、虚拟环境和锁定依赖，不需要额外的 Python 版本管理器。
+运行测试：`cargo test --locked --workspace --all-targets`。测试全部使用临时目录和
+本地假上游，不会读写真实的 `~/.codex`，也不会调用真实 Provider。
 
 ## 快速开始
 
@@ -192,7 +193,7 @@ easy-multi-provider serve --config config.json
 在源码目录中运行时使用：
 
 ```bash
-uv run python -m easy_multi_provider serve --config config.json
+./target/release/EMP serve --config config.json
 ```
 
 首次启动时，EMP 会自动创建本机私有加密密钥，不需要设置环境变量，也不需要

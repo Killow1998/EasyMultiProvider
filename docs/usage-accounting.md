@@ -56,7 +56,7 @@ cached input and cache writes; output includes reasoning. These subsets are
 displayed separately but not added twice. Responses, Chat Completions (including
 DeepSeek cache fields) and Anthropic Messages normalize to this convention.
 Gemini gateways must include thoughts in OpenAI `completion_tokens`, with the
-thought count also reported as `reasoning_tokens`. NA2H's adapter and local
+thought count also reported as `reasoning_tokens`. The gateway's adapter and local
 metering follow this convention; both sides need the corrected gateway version.
 Reported usage on incomplete or failed responses still counts. Missing usage
 is shown as missing, not a successful zero-token call. Pre-request handshake

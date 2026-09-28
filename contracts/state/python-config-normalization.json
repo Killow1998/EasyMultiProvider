@@ -2,7 +2,7 @@
   "source": "EasyMultiProvider 0.11.6 easy_multi_provider.config.normalize",
   "status": "implemented",
   "implementation": "crates/emp-state/src/config.rs",
-  "test": "crates/emp-state/tests/config_normalization_compat.rs",
+  "test": "crates/emp-state/tests/config_normalization.rs",
   "limitations": [
     "filesystem canonicalization, secret extraction, merge behavior and persistence are separate state transitions"
   ],
@@ -32,7 +32,8 @@
         },
         "codex_runtime_sources": [
           "auto"
-        ]
+        ],
+        "pricing_aliases": {}
       }
     },
     {
@@ -46,9 +47,9 @@
         "codex_base_url": "http://127.0.0.1:4201/backend-api/codex///",
         "accounts": [
           {
-            "id": "egg",
+            "id": "demo",
             "prefix": "sub",
-            "name": "Egg",
+            "name": "Demo",
             "credential_status": "valid",
             "enabled": true,
             "hidden_models": [
@@ -135,8 +136,8 @@
         "codex_base_url": "http://127.0.0.1:4201/backend-api/codex",
         "accounts": [
           {
-            "id": "egg",
-            "name": "Egg",
+            "id": "demo",
+            "name": "Demo",
             "prefix": "sub",
             "auth_file": "",
             "credential_status": "valid",
@@ -290,7 +291,8 @@
         "codex_runtime_sources": [
           "configured",
           "path_cli"
-        ]
+        ],
+        "pricing_aliases": {}
       }
     },
     {
@@ -321,7 +323,8 @@
         },
         "codex_runtime_sources": [
           "auto"
-        ]
+        ],
+        "pricing_aliases": {}
       }
     },
     {
@@ -352,7 +355,8 @@
         },
         "codex_runtime_sources": [
           "auto"
-        ]
+        ],
+        "pricing_aliases": {}
       }
     },
     {
@@ -382,7 +386,8 @@
         },
         "codex_runtime_sources": [
           "auto"
-        ]
+        ],
+        "pricing_aliases": {}
       }
     }
   ],

@@ -7,9 +7,7 @@
     "tests/test_cache_usage.py:test_anthropic_stream_retains_start_usage_and_cumulative_output_delta"
   ],
   "rust_evidence": [
-    "crates/emp-protocol/tests/anthropic_stream.rs",
-    "crates/emp-protocol/tests/anthropic_python_oracle.rs:stream_projection_matches_live_python_oracle_when_configured",
-    "crates/emp-protocol/tests/anthropic_python_oracle.rs:stream_failures_match_live_python_status_and_class_when_configured"
+    "crates/emp-protocol/tests/anthropic_stream.rs"
   ],
   "covered_cases": [
     "created, text, function, custom tool and terminal events preserve exact sequence and output indices",
@@ -20,5 +18,7 @@
     "missing message_stop and empty output classify as stream_incomplete",
     "malformed tool JSON and unknown stop reasons classify as protocol_error"
   ],
-  "side_effects": ["none; response and message identifiers are injected by the caller"]
+  "side_effects": [
+    "none; response and message identifiers are injected by the caller"
+  ]
 }

@@ -112,11 +112,11 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(self.totals()["priced_requests"], 0)
 
     def test_source_inference_keeps_historical_identity_separate(self):
-        routes = history_routes({"accounts": [{"id": "private-account", "prefix": "egg"}],
-            "providers": [{"id": "na2h", "auth_mode": "api_key"}],
-            "models": [{"id": "na2h/gemini", "provider": "na2h", "upstream_model": "gemini"}]})
-        for model, category in (("gpt-example", "native"), ("egg/gpt-example", "subscription"),
-                                ("na2h/gemini", "external"), ("lost/gpt-example", "unknown")):
+        routes = history_routes({"accounts": [{"id": "private-account", "prefix": "acct-one"}],
+            "providers": [{"id": "gateway", "auth_mode": "api_key"}],
+            "models": [{"id": "gateway/gemini", "provider": "gateway", "upstream_model": "gemini"}]})
+        for model, category in (("gpt-example", "native"), ("acct-one/gpt-example", "subscription"),
+                                ("gateway/gemini", "external"), ("lost/gpt-example", "unknown")):
             state = {}
             for row in header(model):
                 parse_record(row, state, routes)
