@@ -210,11 +210,47 @@ pub fn estimate_tokens(usage: &Value, rates: &Value, tier: &str) -> Result<Value
         json!({"cost_nanos":cost.nanos().ok_or("price arithmetic failed")?,"price_issue":null,"rates":applied}),
     )
 }
+/// Bump when the lookup rules change so unpriced rows are quoted again.
+const LOOKUP_RULES: u32 = 2;
 struct PriceData {
     prices: Value,
+    aliases: Map<String, Value>,
     fetched: f64,
     revision: String,
     error: Option<&'static str>,
+}
+impl PriceData {
+    fn revise(&mut self) {
+        let basis = json!({"prices":self.prices,"aliases":self.aliases,"rules":LOOKUP_RULES});
+        self.revision = format!(
+            "{:x}",
+            Sha256::digest(super::python_json(&basis, false).as_bytes())
+        );
+    }
+}
+/// Resolve a request to a price entry: a user alias for the route or upstream
+/// name wins; otherwise try the upstream name, then the name without its
+/// provider/account prefix (for example `work/gpt-5` → `gpt-5`).
+fn price_source<'a>(
+    event: &Value,
+    prices: &'a Map<String, Value>,
+    aliases: &Map<String, Value>,
+) -> Option<&'a str> {
+    let upstream = event["upstream_model"].as_str().unwrap_or("");
+    let route = event["route_model"].as_str().unwrap_or("");
+    let alias = [route, upstream]
+        .into_iter()
+        .filter(|name| !name.is_empty())
+        .find_map(|name| aliases.get(name).and_then(Value::as_str));
+    if let Some(alias) = alias {
+        return model_key(alias, prices);
+    }
+    [upstream, route]
+        .into_iter()
+        .filter(|name| !name.is_empty())
+        .flat_map(|name| [Some(name), name.split_once('/').map(|(_, tail)| tail)])
+        .flatten()
+        .find_map(|name| model_key(name, prices))
 }
 pub struct PriceCatalog {
     path: PathBuf,
@@ -226,6 +262,7 @@ impl PriceCatalog {
             path,
             data: Mutex::new(PriceData {
                 prices: json!({}),
+                aliases: Map::new(),
                 fetched: 0.0,
                 revision: String::new(),
                 error: None,
@@ -246,16 +283,22 @@ impl PriceCatalog {
         &self.path
     }
     pub fn replace(&self, prices: Value, fetched: f64) {
-        let revision = format!(
-            "{:x}",
-            Sha256::digest(super::python_json(&prices, false).as_bytes())
-        );
-        *self.data.lock().expect("price catalog") = PriceData {
-            prices,
-            fetched,
-            revision,
-            error: None,
-        };
+        let mut data = self.data.lock().expect("price catalog");
+        data.prices = prices;
+        data.fetched = fetched;
+        data.error = None;
+        data.revise();
+    }
+    /// Apply the configured `pricing_aliases`; returns whether they changed.
+    pub fn set_aliases(&self, aliases: &Value) -> bool {
+        let aliases = aliases.as_object().cloned().unwrap_or_default();
+        let mut data = self.data.lock().expect("price catalog");
+        if data.aliases == aliases {
+            return false;
+        }
+        data.aliases = aliases;
+        data.revise();
+        true
     }
     pub fn refresh_failed(&self) {
         self.data.lock().expect("price catalog").error = Some("refresh_failed");
@@ -265,10 +308,7 @@ impl PriceCatalog {
     }
     pub fn quote(&self, event: &Value) -> Result<Value, &'static str> {
         let data = self.data.lock().map_err(|_| "price catalog unavailable")?;
-        let key = model_key(
-            event["upstream_model"].as_str().unwrap_or(""),
-            data.prices.as_object().unwrap(),
-        );
+        let key = price_source(event, data.prices.as_object().unwrap(), &data.aliases);
         let tier = event["service_tier"]
             .as_str()
             .filter(|s| !s.is_empty())
@@ -286,6 +326,14 @@ impl PriceCatalog {
             quote["cost_nanos"] = Value::Null;
             quote["rates"] = json!({});
         }
+        // Without a known price a request costs nothing; the issue stays so the
+        // UI can offer a pricing reference. Only unreported usage stays unpriced.
+        if matches!(
+            quote["price_issue"].as_str(),
+            Some("unknown_model" | "missing_rate")
+        ) {
+            quote["cost_nanos"] = json!(0);
+        }
         quote["price_key"] = json!(key);
         quote["price_fetched_at"] = json!(data.fetched);
         quote["price_revision"] = json!(data.revision);
@@ -294,5 +342,60 @@ impl PriceCatalog {
     pub fn snapshot(&self, now: f64) -> Value {
         let data = self.data.lock().expect("price catalog");
         json!({"source":"LiteLLM","url":PRICE_URL,"fetched_at":if data.fetched>0.0{json!(data.fetched)}else{Value::Null},"stale":now-data.fetched>=PRICE_INTERVAL,"error":data.error,"model_count":data.prices.as_object().unwrap().len(),"interval_hours":24})
+    }
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::PriceCatalog;
+    use serde_json::{Value, json};
+
+    fn catalog() -> PriceCatalog {
+        let catalog = PriceCatalog::new(std::path::PathBuf::from("/nonexistent/prices.json"), 1.0);
+        catalog.replace(
+            json!({"gpt-5":{"input_cost_per_token":"0.000001","output_cost_per_token":"0.000002"}}),
+            1.0,
+        );
+        catalog
+    }
+    fn request(route: &str, upstream: &str) -> Value {
+        json!({"route_model":route,"upstream_model":upstream,"input_tokens":1000,"output_tokens":10})
+    }
+
+    #[test]
+    fn account_prefixed_routes_use_the_public_price() {
+        let quote = catalog()
+            .quote(&request("work/gpt-5", "work/gpt-5"))
+            .unwrap();
+        assert_eq!(quote["price_key"], "gpt-5");
+        assert_eq!(quote["cost_nanos"], 1_020_000);
+    }
+
+    #[test]
+    fn unknown_models_cost_nothing_until_an_alias_prices_them() {
+        let catalog = catalog();
+        let before = catalog.revision();
+        let unknown = catalog
+            .quote(&request("lab/local-model", "local-model"))
+            .unwrap();
+        assert_eq!(unknown["price_issue"], "unknown_model");
+        assert_eq!(unknown["cost_nanos"], 0);
+        assert!(catalog.set_aliases(&json!({"lab/local-model":"gpt-5"})));
+        assert_ne!(
+            catalog.revision(),
+            before,
+            "changed aliases must re-price old rows"
+        );
+        assert!(!catalog.set_aliases(&json!({"lab/local-model":"gpt-5"})));
+        let priced = catalog
+            .quote(&request("lab/local-model", "local-model"))
+            .unwrap();
+        assert_eq!(priced["cost_nanos"], 1_020_000);
+        assert_eq!(priced["price_issue"], Value::Null);
+        let unreported = catalog
+            .quote(&json!({"route_model":"lab/local-model","upstream_model":"local-model"}))
+            .unwrap();
+        assert_eq!(unreported["price_issue"], "missing_usage");
+        assert_eq!(unreported["cost_nanos"], Value::Null);
     }
 }

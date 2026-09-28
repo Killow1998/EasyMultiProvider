@@ -74,7 +74,7 @@ pub type ConfigResult<T> = Result<T, ConfigError>;
 
 mod presentation;
 pub use presentation::{
-    normalize_catalog_presentations, normalize_codex_runtime_sources,
+    normalize_catalog_presentations, normalize_codex_runtime_sources, normalize_pricing_aliases,
     normalize_subscription_search, public_configuration_with_file_status,
 };
 
@@ -132,6 +132,7 @@ fn default_configuration() -> Value {
         "catalog_family_presentations": {},
         "subscription_search": {"enabled": false, "account_id": ""},
         "codex_runtime_sources": ["auto"],
+        "pricing_aliases": {},
     })
 }
 
@@ -552,6 +553,7 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
     let catalog_family_presentations =
         normalize_catalog_presentations(raw.get("catalog_family_presentations"))?;
     let subscription_search = normalize_subscription_search(raw.get("subscription_search"))?;
+    let pricing_aliases = normalize_pricing_aliases(raw.get("pricing_aliases"))?;
     let codex_runtime_sources = if raw.contains_key("codex_runtime_sources") {
         normalize_codex_runtime_sources(raw.get("codex_runtime_sources"))?
     } else {
@@ -574,5 +576,6 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "catalog_family_presentations": catalog_family_presentations,
         "subscription_search": subscription_search,
         "codex_runtime_sources": codex_runtime_sources,
+        "pricing_aliases": pricing_aliases,
     }))
 }
