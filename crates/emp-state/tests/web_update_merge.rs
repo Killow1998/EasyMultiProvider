@@ -19,7 +19,7 @@ fn web_update_merge_matches_frozen_fixture() {
             normalize_configuration(Some(&case["current"])).expect("valid current configuration");
         let actual = merge_web_update_with_time(&current, &case["incoming"], observed_at)
             .expect("valid Web update");
-        assert_eq!(actual.as_object().map(|object| object.len()), Some(15));
+        assert_eq!(actual.as_object().map(|object| object.len()), Some(16));
         for pointer in case["select"].as_array().expect("selected paths") {
             let pointer = pointer.as_str().expect("JSON pointer");
             assert_eq!(

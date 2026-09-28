@@ -35,6 +35,7 @@ fn error_fragment(input: &Value) -> String {
         return match field {
             "name" | "api_key" | "api_key_file" => "value must be a string".to_owned(),
             "resolved_protocol" => "resolved_protocol".to_owned(),
+            "protocol_observation" => "protocol_observation".to_owned(),
             field => format!("provider.{field}"),
         };
     }

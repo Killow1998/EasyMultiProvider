@@ -42,7 +42,7 @@ fn configuration_normalization_matches_frozen_fixture() {
     for case in fixture["valid"].as_array().expect("valid configurations") {
         let actual = normalize_configuration(Some(&case["input"])).expect("valid configuration");
         assert_eq!(actual, case["expected"], "case: {}", case["name"]);
-        assert_eq!(actual.as_object().map(|object| object.len()), Some(15));
+        assert_eq!(actual.as_object().map(|object| object.len()), Some(16));
     }
     for case in fixture["invalid"]
         .as_array()

@@ -32,7 +32,8 @@
         },
         "codex_runtime_sources": [
           "auto"
-        ]
+        ],
+        "pricing_aliases": {}
       }
     },
     {
@@ -290,7 +291,8 @@
         "codex_runtime_sources": [
           "configured",
           "path_cli"
-        ]
+        ],
+        "pricing_aliases": {}
       }
     },
     {
@@ -321,7 +323,8 @@
         },
         "codex_runtime_sources": [
           "auto"
-        ]
+        ],
+        "pricing_aliases": {}
       }
     },
     {
@@ -352,7 +355,8 @@
         },
         "codex_runtime_sources": [
           "auto"
-        ]
+        ],
+        "pricing_aliases": {}
       }
     },
     {
@@ -382,7 +386,8 @@
         },
         "codex_runtime_sources": [
           "auto"
-        ]
+        ],
+        "pricing_aliases": {}
       }
     }
   ],
