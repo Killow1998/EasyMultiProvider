@@ -91,7 +91,15 @@ For an API Provider, pull the upstream model list, choose the models you want, a
 
 ### 4. Apply EMP to Codex
 
-Click **Apply EMP to Codex**.
+Click **Apply EMP to Codex**, then restart Codex.
+
+The Codex integration card shows what the running Codex actually loaded:
+
+- **Codex is using EMP** — the restart picked up EMP;
+- **Restart** — Codex is still running with its old settings;
+- **Codex is not running** — the next Codex you open will use EMP.
+
+The card updates on its own when Codex reconnects to EMP, so there is nothing to refresh.
 
 EMP writes its settings to the shared `~/.codex/config.toml`, so every Codex client (CLI, App, IDE extensions) picks them up. Multiple clients and workspaces can run concurrently.
 
@@ -139,6 +147,7 @@ EMP records local operational metrics so you can see where your coding-agent usa
 - Upstream-reported prompt cache hit rates in token-weighted 10-minute periods.
 - Rolling median TTFT and TPS from the latest 20 valid calls per recently used model, compared with the preceding window.
 - Observed success, 429, 502, 503, and 504 rates.
+- Pricing references: price a model with no public price as another model (for example as `gpt-5.5`). Requests that still have no price count as 0 and are listed as such.
 
 Performance history survives EMP restarts. Missing upstream cache data is shown as unavailable rather than estimated.
 
@@ -150,11 +159,11 @@ Subscription editing supports per-model context token counts. Leave a field blan
 
 **Refresh model limits** retrieves the subscription catalog with that account's credentials. Configured values cannot exceed the upstream-advertised maximum. Codex's default 95% effective percentage is preserved, so an advertised 872,000-token window becomes 828,400 usable tokens.
 
-The catalog display and EMP request checks use the same effective window.
+External Provider models use the same 95% rule, so a 256,000-token window shows as 243K in the Codex model picker. The catalog display and EMP request checks use the same effective window.
 
 ## Codex compatibility
 
-The current source version is **v0.11.10**.
+The current source version is **v0.12.1**.
 
 EMP works with Codex **0.149.0 and newer**. There is no client to choose: EMP only edits the shared `config.toml`, which every Codex client reads. If an older Codex sends a request, EMP answers with an error telling you to update Codex.
 
@@ -166,9 +175,7 @@ To query account quota, EMP runs a supported Codex it finds in these locations (
 - a standalone `codex` on `PATH`,
 - and, on Linux, `$CODEX_HOME/plugins/.plugin-appserver/codex`.
 
-EMP treats a persistent Codex App Server as externally owned. Enabling, restoring, refreshing, or checking integration files does **not** stop, start, or restart Codex.
-
-EMP reads `model/list` from the existing local control socket on Windows, macOS, and Linux and compares the visible model catalog with its saved state.
+EMP never stops, starts, or restarts Codex; restart Codex yourself after applying or restoring. When Codex next reaches EMP (its model list or a turn), EMP reads `model/list` from Codex's local control socket on Windows, macOS, and Linux, checks which catalog the running Codex loaded, and pushes the result to the Web UI. There is no background polling.
 
 ## Web UI
 
@@ -237,16 +244,16 @@ EMP listens on `http://127.0.0.1:4200` by default. Use `--port` only when that p
 
 ## Install from source
 
-Install Git and [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then:
+Install Git and a Rust toolchain ([`rustup`](https://rustup.rs/)), then:
 
 ~~~bash
 git clone https://github.com/Killow1998/EasyMultiProvider.git
 cd EasyMultiProvider
-uv sync
-uv run python -m easy_multi_provider serve --config config.json
+cargo build --locked --release -p emp-app --bin EMP
+./target/release/EMP serve --config config.json
 ~~~
 
-`uv` manages Python, the virtual environment, and locked dependencies. No separate Python version manager is required.
+Run the tests with `cargo test --locked --workspace --all-targets`. The Rust test suite is self-contained: it uses temporary directories and local fake upstreams, and never touches your real `~/.codex` or calls a real provider.
 
 ## Configuration locations
 

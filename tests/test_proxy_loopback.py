@@ -98,7 +98,7 @@ class LiveSystemProxyTests(unittest.TestCase):
     def test_internal_request_id_is_forwarded_to_provider(self):
         from easy_multi_provider.router import _headers
         with patch("easy_multi_provider.router.api_key", return_value="fixture"):
-            headers = _headers({"auth_mode": "api_key", "id": "na2h"}, {"X-EMP-Request-ID": "0123456789abcdef"}, False)
+            headers = _headers({"auth_mode": "api_key", "id": "gateway"}, {"X-EMP-Request-ID": "0123456789abcdef"}, False)
             self.assertEqual(headers["X-EMP-Request-ID"], "0123456789abcdef")
-            headers = _headers({"auth_mode": "api_key", "id": "na2h"}, {"X-EMP-Request-ID": "invalid-user-value"}, False)
+            headers = _headers({"auth_mode": "api_key", "id": "gateway"}, {"X-EMP-Request-ID": "invalid-user-value"}, False)
             self.assertNotIn("X-EMP-Request-ID", headers)

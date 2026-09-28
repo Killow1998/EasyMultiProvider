@@ -1248,7 +1248,7 @@ class ServerAccountTests(unittest.TestCase):
 
             def import_account(account_id, upstream_id, access_token):
                 return state.import_account(
-                    {"id": account_id, "name": "Egg", "prefix": account_id},
+                    {"id": account_id, "name": "Acct-one", "prefix": account_id},
                     {
                         "auth_mode": "chatgpt",
                         "tokens": {
@@ -1264,21 +1264,21 @@ class ServerAccountTests(unittest.TestCase):
                     "primary": {"usedPercent": 23, "windowDurationMins": 300},
                 }
             }
-            import_account("egg", "upstream-account-a", "token-before-delete")
-            original_owner = state._quota_owner_key("egg")
-            self.assertTrue(state._record_quota_snapshot("egg", quota))
-            state.delete_account("egg")
+            import_account("acct-one", "upstream-account-a", "token-before-delete")
+            original_owner = state._quota_owner_key("acct-one")
+            self.assertTrue(state._record_quota_snapshot("acct-one", quota))
+            state.delete_account("acct-one")
 
-            import_account("egg-restored", "upstream-account-a", "rotated-token")
-            self.assertEqual(state._quota_owner_key("egg-restored"), original_owner)
-            restored = state.quota_history_snapshot("egg-restored", "all")
+            import_account("acct-one-restored", "upstream-account-a", "rotated-token")
+            self.assertEqual(state._quota_owner_key("acct-one-restored"), original_owner)
+            restored = state.quota_history_snapshot("acct-one-restored", "all")
             self.assertEqual(len(restored["series"]), 1)
             self.assertEqual(restored["series"][0]["points"][0]["remaining_percent"], 77.0)
-            state.delete_account("egg-restored")
+            state.delete_account("acct-one-restored")
 
-            import_account("egg", "upstream-account-b", "other-account-token")
-            self.assertNotEqual(state._quota_owner_key("egg"), original_owner)
-            self.assertEqual(state.quota_history_snapshot("egg", "all")["series"], [])
+            import_account("acct-one", "upstream-account-b", "other-account-token")
+            self.assertNotEqual(state._quota_owner_key("acct-one"), original_owner)
+            self.assertEqual(state.quota_history_snapshot("acct-one", "all")["series"], [])
 
     def test_legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1307,45 +1307,45 @@ class ServerAccountTests(unittest.TestCase):
             def points(owner):
                 return sum(len(series["points"]) for series in state.quota_history.query(owner, "all")["series"])
 
-            import_account("egg", "upstream-egg")
+            import_account("acct-one", "upstream-acct-one")
             history = state.quota_history
-            history.append_snapshot("egg", sample(10), observed_at=int(time.time()) - 900)
-            history.append_snapshot("egg", sample(20), observed_at=int(time.time()) - 300)
+            history.append_snapshot("acct-one", sample(10), observed_at=int(time.time()) - 900)
+            history.append_snapshot("acct-one", sample(20), observed_at=int(time.time()) - 300)
             history.append_snapshot("@native", sample(30), observed_at=int(time.time()) - 900)
             history.append_snapshot("ghost", sample(40), observed_at=int(time.time()) - 900)
 
             state.migrate_legacy_quota_history()
             state.migrate_legacy_quota_history()
-            egg = state._quota_owner_key("egg")
+            first_owner = state._quota_owner_key("acct-one")
             native = state._quota_owner_key("@native")
-            self.assertEqual(points(egg), 2)
-            self.assertEqual(points("egg"), 0)
+            self.assertEqual(points(first_owner), 2)
+            self.assertEqual(points("acct-one"), 0)
             # @native rows may come from any earlier login: the current one
             # cannot claim them.
             self.assertEqual(points(native), 0)
             self.assertEqual(points("@native"), 1)
             self.assertEqual(points("ghost"), 1)
 
-            history.append_snapshot("egg", sample(50), observed_at=int(time.time()))
-            state.delete_account("egg")
-            self.assertEqual(points(egg), 3)
-            import_account("egg", "someone-else")
-            other = state._quota_owner_key("egg")
-            self.assertNotEqual(other, egg)
+            history.append_snapshot("acct-one", sample(50), observed_at=int(time.time()))
+            state.delete_account("acct-one")
+            self.assertEqual(points(first_owner), 3)
+            import_account("acct-one", "someone-else")
+            other = state._quota_owner_key("acct-one")
+            self.assertNotEqual(other, first_owner)
             state.migrate_legacy_quota_history()
             self.assertEqual(points(other), 0)
 
             # Reimporting the id with different credentials attributes its
             # legacy rows with the credentials that recorded them first.
-            history.append_snapshot("egg", sample(60), observed_at=int(time.time()) - 60)
+            history.append_snapshot("acct-one", sample(60), observed_at=int(time.time()) - 60)
             # A reimport that is rejected leaves the rows alone.
-            import_account("hen", "upstream-hen")
+            import_account("acct-two", "upstream-acct-two")
             with self.assertRaisesRegex(ConfigError, "prefix is already in use"):
                 state.import_account(
-                    {"id": "egg", "name": "egg", "prefix": "hen"},
-                    {"tokens": {"access_token": "egg-token", "account_id": "third-identity"}},
+                    {"id": "acct-one", "name": "acct-one", "prefix": "acct-two"},
+                    {"tokens": {"access_token": "acct-one-token", "account_id": "third-identity"}},
                 )
-            self.assertEqual(points("egg"), 1)
+            self.assertEqual(points("acct-one"), 1)
             self.assertEqual(points(other), 0)
             # Also when only full configuration validation rejects it: the
             # prefix names an existing provider.
@@ -1355,27 +1355,27 @@ class ServerAccountTests(unittest.TestCase):
                 )
             with self.assertRaisesRegex(ConfigError, "conflict with provider ids"):
                 state.import_account(
-                    {"id": "egg", "name": "egg", "prefix": "deepseek"},
-                    {"tokens": {"access_token": "egg-token", "account_id": "third-identity"}},
+                    {"id": "acct-one", "name": "acct-one", "prefix": "deepseek"},
+                    {"tokens": {"access_token": "acct-one-token", "account_id": "third-identity"}},
                 )
-            self.assertEqual(points("egg"), 1)
+            self.assertEqual(points("acct-one"), 1)
             self.assertEqual(points(other), 0)
-            import_account("egg", "third-identity")
+            import_account("acct-one", "third-identity")
             self.assertEqual(points(other), 1)
-            self.assertEqual(points("egg"), 0)
+            self.assertEqual(points("acct-one"), 0)
 
             # Unreadable recording credentials: deleting the account drops the
             # rows instead of leaving them for the next account reusing the id.
-            history.append_snapshot("egg", sample(70), observed_at=int(time.time()) - 30)
+            history.append_snapshot("acct-one", sample(70), observed_at=int(time.time()) - 30)
             egg_auth = next(
-                item["auth_file"] for item in state.config["accounts"] if item["id"] == "egg"
+                item["auth_file"] for item in state.config["accounts"] if item["id"] == "acct-one"
             )
             Path(egg_auth).write_bytes(b"not a vault document")
-            state.delete_account("egg")
-            self.assertEqual(points("egg"), 0)
-            import_account("egg", "fourth-identity")
+            state.delete_account("acct-one")
+            self.assertEqual(points("acct-one"), 0)
+            import_account("acct-one", "fourth-identity")
             state.migrate_legacy_quota_history()
-            self.assertEqual(points(state._quota_owner_key("egg")), 0)
+            self.assertEqual(points(state._quota_owner_key("acct-one")), 0)
 
     def test_concurrent_prefix_change_cannot_reject_a_reimport_after_settling(self):
         # Settling is part of the reimport's validated commit: while it runs
@@ -1395,9 +1395,9 @@ class ServerAccountTests(unittest.TestCase):
                     {"tokens": {"access_token": account_id + "-token", "account_id": upstream_id}},
                 )
 
-            import_account("egg", "egg", "upstream-egg")
+            import_account("acct-one", "acct-one", "upstream-acct-one")
             state.quota_history.append_snapshot(
-                "egg",
+                "acct-one",
                 {"rate_limits": {"limitId": "codex", "primary": {"usedPercent": 10, "windowDurationMins": 300}}},
                 observed_at=int(time.time()) - 60,
             )
@@ -1411,7 +1411,7 @@ class ServerAccountTests(unittest.TestCase):
                 except ConfigError as exc:
                     results[name] = exc
 
-            reimport = threading.Thread(target=run, args=("reimport", "egg", "yolk", "upstream-egg-2"))
+            reimport = threading.Thread(target=run, args=("reimport", "acct-one", "acct-three", "upstream-acct-one-2"))
             reimport.start()
             # Wait until the reimport holds the configuration lock (it is
             # then settling, blocked on the history database).
@@ -1421,7 +1421,7 @@ class ServerAccountTests(unittest.TestCase):
                     break
                 state.lock.release()
                 time.sleep(0.005)
-            rival = threading.Thread(target=run, args=("rival", "hen", "yolk", "upstream-hen"))
+            rival = threading.Thread(target=run, args=("rival", "acct-two", "acct-three", "upstream-acct-two"))
             rival.start()
             time.sleep(0.2)
             blocker.execute("COMMIT")
@@ -1431,7 +1431,7 @@ class ServerAccountTests(unittest.TestCase):
             self.assertNotIsInstance(results["reimport"], ConfigError)
             self.assertIsInstance(results["rival"], ConfigError)
             self.assertIn("prefix is already in use", str(results["rival"]))
-            self.assertEqual([item["prefix"] for item in state.config["accounts"]], ["yolk"])
+            self.assertEqual([item["prefix"] for item in state.config["accounts"]], ["acct-three"])
 
     def test_account_id_is_not_freed_while_its_legacy_history_cannot_be_settled(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1445,20 +1445,20 @@ class ServerAccountTests(unittest.TestCase):
 
             def import_account(upstream_id):
                 state.import_account(
-                    {"id": "egg", "name": "egg", "prefix": "egg"},
+                    {"id": "acct-one", "name": "acct-one", "prefix": "acct-one"},
                     {"tokens": {"access_token": "token", "account_id": upstream_id}},
                 )
 
-            import_account("upstream-egg")
+            import_account("upstream-acct-one")
             # Legacy rows exist, but neither adoption nor deletion can reach them.
             state.quota_history.path.parent.mkdir(parents=True, exist_ok=True)
             state.quota_history.path.write_bytes(b"not a sqlite database")
 
             with self.assertRaises(ConfigError):
-                state.delete_account("egg")
+                state.delete_account("acct-one")
             with self.assertRaises(ConfigError):
                 import_account("someone-else")
-            self.assertTrue(any(item["id"] == "egg" for item in state.config["accounts"]))
+            self.assertTrue(any(item["id"] == "acct-one" for item in state.config["accounts"]))
 
     def test_web_config_update_keeps_api_key_out_of_config(self):
         with tempfile.TemporaryDirectory() as directory:

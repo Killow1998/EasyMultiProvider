@@ -980,11 +980,11 @@ function performanceDiagnosticsBehavior() {
 
 async function cacheUsageBehavior() {
   const period = {start:1789214400,end:1789215000,complete:false,rate:80,call_count:3,sample_count:2,hit_count:1};
-  const model = {model_id:'external/gemini-3.8-flash',provider_id:'NA2H',speed_mode:'unknown',rate:80,input_tokens:1000,cached_input_tokens:800,call_count:3,sample_count:2,hit_count:1,periods:[period]};
+  const model = {model_id:'external/gemini-3.8-flash',provider_id:'Gateway',speed_mode:'unknown',rate:80,input_tokens:1000,cached_input_tokens:800,call_count:3,sample_count:2,hit_count:1,periods:[period]};
   context.__cachePayload = {capacity:512,cache:{models:[model, {...model, model_id:'<img onerror=bad>',rate:null,sample_count:0,periods:[{...period,rate:null,sample_count:0}]}, {...model,model_id:'deepseek',rate:0,hit_count:0,periods:[{...period,rate:0,hit_count:0,complete:true}]}]}};
   run('renderDiagnostics(__cachePayload)');
   const html = getElement('cache_records').innerHTML;
-  assert.match(html, /external\/gemini-3.8-flash · NA2H/);
+  assert.match(html, /external\/gemini-3.8-flash · Gateway/);
   assert.match(html, /80\.0%/);
   assert.match(html, />0\.0%</);
   assert.match(html, /未提供/);
