@@ -747,7 +747,14 @@ fn desktop_launch_opens_the_bootstrap_url_on_the_configured_port() {
         .local_addr()
         .expect("address")
         .port();
-    let config_path = workspace.root.join("xdg/easy-multi-provider/config.json");
+    // The per-user desktop location: XDG on Linux, Application Support on macOS.
+    let config_path = if cfg!(target_os = "macos") {
+        workspace
+            .root
+            .join("home/Library/Application Support/EasyMultiProvider/config.json")
+    } else {
+        workspace.root.join("xdg/easy-multi-provider/config.json")
+    };
     write_file(
         &config_path,
         &json!({"host": "127.0.0.1", "port": port,
