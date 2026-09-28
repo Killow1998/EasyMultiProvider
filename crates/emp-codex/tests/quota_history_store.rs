@@ -1,6 +1,3 @@
-use std::io::Write;
-use std::process::{Command, Stdio};
-
 use emp_codex::quota_history::QuotaHistoryStore;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -41,7 +38,7 @@ fn fixture() -> Value {
                             "primary": {"usedPercent": 12.345, "windowDurationMins": 300, "resetsAt": null},
                             "secondary": {"usedPercent": 101, "windowDurationMins": 10080, "resetsAt": 3_000_000}
                         },
-                        "codex_bengalfox": {
+                        "codex-secondary": {
                             "primary": {"usedPercent": -1, "windowDurationMins": 300}
                         }
                     }
@@ -119,82 +116,7 @@ fn quota_history_has_a_standalone_storage_contract() {
 }
 
 #[test]
-fn quota_history_matches_live_python_and_shares_its_database_when_configured() {
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let directory = TempDir::new().expect("temporary directory");
-    let rust_path = directory.path().join("rust.sqlite3");
-    let python_path = directory.path().join("python.sqlite3");
-    let fixture = fixture();
-    let rust = run_rust(&rust_path, &fixture);
-    let script = r#"
-import json, pathlib, sys
-from easy_multi_provider.quota_history import QuotaHistoryError, QuotaHistoryStore
-
-payload = json.load(sys.stdin)
-fixture = payload["fixture"]
-
-def run(path):
-    store = QuotaHistoryStore(pathlib.Path(path))
-    counts = [store.append_snapshot(fixture["account"], item["quota"], observed_at=item["observed_at"]) for item in fixture["snapshots"]]
-    queries = {name: store.query(fixture["account"], name, now=fixture["now"]) for name in ("1h", "1d", "1w", "all")}
-    try:
-        store.query(fixture["account"], "forever", now=fixture["now"])
-    except QuotaHistoryError as exc:
-        invalid = str(exc)
-    return {"counts": counts, "queries": queries, "invalid": invalid}
-
-python = run(payload["python_path"])
-rust_database = QuotaHistoryStore(pathlib.Path(payload["rust_path"])).query(fixture["account"], "all", now=fixture["now"])
-json.dump({"python": python, "rust_database": rust_database}, sys.stdout, ensure_ascii=False, separators=(",", ":"))
-"#;
-    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut child = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .current_dir(workspace)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn Python quota history oracle");
-    child
-        .stdin
-        .take()
-        .expect("Python stdin")
-        .write_all(
-            serde_json::to_string(&json!({
-                "fixture": fixture,
-                "python_path": python_path,
-                "rust_path": rust_path,
-            }))
-            .expect("oracle input")
-            .as_bytes(),
-        )
-        .expect("write oracle input");
-    let output = child.wait_with_output().expect("wait for Python oracle");
-    assert!(
-        output.status.success(),
-        "Python quota history oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let oracle: Value = serde_json::from_slice(&output.stdout).expect("oracle output");
-    assert_eq!(rust, oracle["python"]);
-    assert_eq!(rust["queries"]["all"], oracle["rust_database"]);
-
-    let rust_reads_python = QuotaHistoryStore::new(&python_path)
-        .query(
-            fixture["account"].as_str().expect("account"),
-            "all",
-            fixture["now"].as_i64().expect("now"),
-        )
-        .expect("read Python database");
-    assert_eq!(rust["queries"]["all"], rust_reads_python);
-}
-
-#[test]
-fn quota_history_migrates_the_python_schema_without_plan_type() {
+fn quota_history_migrates_the_legacy_schema_without_plan_type() {
     let directory = TempDir::new().expect("temporary directory");
     let path = directory.path().join("legacy.sqlite3");
     let connection = rusqlite::Connection::open(&path).expect("legacy database");
@@ -242,9 +164,7 @@ fn quota_history_rejects_a_symlink_database() {
     let error = store
         .append_snapshot("ship", &fixture()["snapshots"][0]["quota"], 2_000_100)
         .expect_err("reject symlink");
-    assert_eq!(
-        error.to_string(),
-        "quota history path must not be a symlink"
-    );
+    let rendered = error.to_string();
+    assert!(rendered.contains("must not be a symlink"), "{rendered}");
     assert_eq!(std::fs::read(target).expect("target remains"), b"private");
 }

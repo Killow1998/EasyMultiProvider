@@ -237,8 +237,8 @@ fn account_server(
     let native_auth_path = root.join("codex/auth.json");
     std::fs::create_dir_all(native_auth_path.parent().unwrap()).unwrap();
     let mut config = json!({"codex_base_url":upstream.base_url(),"providers":[],"models":[],
-        "accounts":[{"id":"egg","name":"Egg","prefix":"egg","enabled":true,"hidden_models":[]}]});
-    let auth_path = emp_state::account_auth_path(&config, "egg", &config_path).unwrap();
+        "accounts":[{"id":"demo","name":"Demo","prefix":"demo","enabled":true,"hidden_models":[]}]});
+    let auth_path = emp_state::account_auth_path(&config, "demo", &config_path).unwrap();
     config["accounts"][0]["auth_file"] = Value::String(auth_path.to_string_lossy().into_owned());
     std::fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
@@ -492,12 +492,12 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
             "protocol":"responses","auth_mode":"forward"
         }],
         "accounts":[{
-            "id":"egg","name":"Egg","prefix":"egg",
+            "id":"demo","name":"Demo","prefix":"demo",
             "enabled":true,"hidden_models":[]
         }],
         "models":[]
     });
-    let auth_path = emp_state::account_auth_path(&config, "egg", &config_path)
+    let auth_path = emp_state::account_auth_path(&config, "demo", &config_path)
         .expect("managed account auth path");
     config["accounts"][0]["auth_file"] = Value::String(auth_path.to_string_lossy().into_owned());
     std::fs::create_dir_all(auth_path.parent().unwrap()).expect("account directory");
@@ -537,7 +537,7 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
         &cookie,
     ];
     let forward = post(&server, "/v1/responses", &body("upstream"), &context);
-    let account = post(&server, "/v1/responses", &body("egg/upstream"), &context);
+    let account = post(&server, "/v1/responses", &body("demo/upstream"), &context);
 
     for wire in [&forward, &account] {
         let (head, returned) = response_parts(wire);
@@ -562,7 +562,7 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
     assert!(
         response_parts(&account)
             .0
-            .contains("openai-model: egg/upstream\r\n")
+            .contains("openai-model: demo/upstream\r\n")
     );
 
     let forward = upstream.next();
@@ -607,14 +607,14 @@ for line in sys.stdin:
     elif method=='initialized': pass
     elif method=='account/read':
         auth=json.loads((home/'auth.json').read_text()); auth['tokens']['access_token']='rotated-secret'; (home/'auth.json').write_text(json.dumps(auth))
-        print(json.dumps({'id':request['id'],'result':{'account':{'email':'xian@example.com','planType':'pro'}}}),flush=True)
+        print(json.dumps({'id':request['id'],'result':{'account':{'email':'user@example.com','planType':'pro'}}}),flush=True)
     elif method=='account/rateLimits/read':
         print(json.dumps({'id':request['id'],'result':{'rateLimits':{'limitId':'codex','primary':{'usedPercent':7}}}}),flush=True)
 "#).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (_directory, server, auth_path) = account_server(&successful, script.to_str().unwrap());
     let cookie = session_header(&server);
-    let body = serde_json::to_vec(&json!({"model":"egg/upstream","input":"hello","stream":false}))
+    let body = serde_json::to_vec(&json!({"model":"demo/upstream","input":"hello","stream":false}))
         .unwrap();
     let response = post(
         &server,

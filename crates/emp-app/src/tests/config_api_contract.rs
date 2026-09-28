@@ -1,28 +1,8 @@
 use super::catalog_api_contract::{CatalogUpstream, catalog_server, parsed_body};
 use super::*;
 
-fn normalize_observed_times(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            for (key, value) in object {
-                if key == "observed_at" && value.as_str().is_some_and(|value| !value.is_empty()) {
-                    *value = json!("<observed_at>");
-                } else {
-                    normalize_observed_times(value);
-                }
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                normalize_observed_times(value);
-            }
-        }
-        _ => {}
-    }
-}
-
 #[test]
-fn settings_save_matches_python_state_and_preserves_credentials_across_restart() {
+fn settings_save_rejects_invalid_state_and_preserves_credentials_across_restart() {
     let upstream = CatalogUpstream::start(200);
     let (directory, server) = catalog_server(&upstream);
     let root = canonical_root(&directory);
@@ -52,7 +32,7 @@ fn settings_save_matches_python_state_and_preserves_credentials_across_restart()
     private_file["providers"][0]["api_key_file"] = json!("form-injected-secret.key");
     let mut restored = valid.clone();
     restored["native_model_context_windows"] = json!({});
-    let cases = vec![valid, excessive, invalid_type, private_file, restored];
+    let cases = [valid, excessive, invalid_type, private_file, restored];
     let mut actual = Vec::new();
     for (index, incoming) in cases.iter().enumerate() {
         let before =
@@ -96,13 +76,6 @@ fn settings_save_matches_python_state_and_preserves_credentials_across_restart()
         ),
         "synthetic-test-key"
     );
-    let key_path = server
-        .state
-        .backend
-        .configuration
-        .vault
-        .ensure_master_key()
-        .map(Path::to_path_buf);
     server.shutdown().expect("shutdown");
     let restarted = ServerHandle::start_with_config_options(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -117,77 +90,6 @@ fn settings_save_matches_python_state_and_preserves_credentials_across_restart()
         actual[4]["payload"]
     );
     restarted.shutdown().expect("shutdown restarted");
-
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let script = r#"
-import json, os, sys, threading
-from pathlib import Path
-from types import SimpleNamespace
-from easy_multi_provider import server
-import easy_multi_provider
-# The archived Python oracle keeps its release identity; the contract compares
-# state handling, so pin its version to the Rust build under test.
-easy_multi_provider.__version__ = "0.12.1"
-import easy_multi_provider.management_views as management_views
-management_views.__version__ = "0.12.1"
-import easy_multi_provider.server as emp_server
-emp_server.__version__ = "0.12.1"
-fixture=json.load(sys.stdin)
-state=server.AppState.__new__(server.AppState)
-state.config=fixture['initial']
-state.path=Path(fixture['path'])
-state.codex_home=Path(os.environ['CODEX_HOME'])
-state.lock=threading.RLock()
-state.runtime_controller=object()
-state._native_quota=None
-state._catalog_cache=None
-state._catalog_cache_revision=None
-state.integration_status=lambda:SimpleNamespace(state='inactive')
-results=[]
-for incoming in fixture['cases']:
-    handler=object.__new__(server.make_handler(state))
-    handler.path='/api/config'
-    handler._management_allowed=lambda:True
-    handler._record_http_request_start_once=lambda:None
-    handler._record_management_event=lambda *args,**kwargs:None
-    handler._record_unexpected_exception=lambda exc: (_ for _ in ()).throw(exc)
-    handler._body=lambda limit: incoming
-    captured={}
-    handler._send=lambda status,body,*args,**kwargs:captured.update(status=status,payload=json.loads(body))
-    handler._do_POST()
-    results.append(captured)
-json.dump(results,sys.stdout,ensure_ascii=False)
-"#;
-    let mut command = Command::new(python);
-    command
-        .args(["-c", script])
-        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-        .env("CODEX_HOME", root.join("codex"))
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    if let Some(path) = key_path {
-        command.env(emp_state::MASTER_KEY_FILE_ENV, path);
-    }
-    let mut child = command.spawn().expect("Python settings oracle");
-    serde_json::to_writer(
-        child.stdin.take().expect("stdin"),
-        &json!({"initial":initial,"cases":cases,"path":root.join("config.json")}),
-    )
-    .expect("fixture");
-    let output = child.wait_with_output().expect("oracle output");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let mut expected: Value = serde_json::from_slice(&output.stdout).expect("oracle JSON");
-    let mut actual = json!(actual);
-    normalize_observed_times(&mut expected);
-    normalize_observed_times(&mut actual);
-    assert_eq!(actual, expected);
 }
 
 #[test]

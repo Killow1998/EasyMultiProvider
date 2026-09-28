@@ -5,8 +5,6 @@ use emp_codex::{
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 fn jwt(user: &str, suffix: &str) -> String {
     let claims = json!({"https://api.openai.com/auth": {"chatgpt_user_id": user}});
@@ -70,7 +68,7 @@ fn rust_result(fixture: &Value) -> Value {
 }
 
 #[test]
-fn catalog_selection_matches_live_python_oracle_when_configured() {
+fn catalog_selection_resolves_context_windows_and_owner_fallbacks() {
     let root = tempfile::tempdir().expect("temporary root");
     let native = root.path().join("models_cache.json");
     let preserved = root
@@ -178,71 +176,37 @@ fn catalog_selection_matches_live_python_oracle_when_configured() {
     });
     let rust = rust_result(&fixture);
 
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        assert_eq!(rust["native_model"]["context_window"], 150);
-        assert_eq!(rust["account_model"]["context_window"], 700);
-        assert_eq!(rust["wrong_owner_fallback"]["context_window"], 500);
-        return;
-    };
-    let script = r#"
-import json, sys
-from unittest.mock import patch
-from easy_multi_provider.accounts import _auth_headers_from_value
-from easy_multi_provider.catalog import account_catalog_owner_from_headers, load_native_catalog, subscription_route_model
-
-fixture = json.load(sys.stdin)
-config = fixture["config"]
-good = fixture["headers"]["good"]
-opaque = fixture["headers"]["opaque"]
-accounts = fixture["accounts"]
-
-def route(slug, account=None):
-    with patch("easy_multi_provider.catalog.auth_headers", return_value=good):
-        return subscription_route_model(config, slug, account)
-
-json.dump({
-    "owners": [
-        account_catalog_owner_from_headers(good),
-        account_catalog_owner_from_headers(opaque),
-    ],
-    "auth_headers": _auth_headers_from_value(fixture["auth"]),
-    "auth_header_cases": [_auth_headers_from_value(value) for value in fixture["auth_header_cases"]],
-    "native_catalog": load_native_catalog(config),
-    "native_model": route("shared"),
-    "unsupported": route("unsupported"),
-    "account_model": route("shared", accounts[0]),
-    "wrong_owner_fallback": route("shared", accounts[1]),
-    "wrong_base_fallback": route("shared", accounts[2]),
-}, sys.stdout, ensure_ascii=False, separators=(",", ":"))
-"#;
-    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut child = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .current_dir(workspace)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn Python catalog oracle");
-    child
-        .stdin
-        .take()
-        .expect("Python stdin")
-        .write_all(
-            serde_json::to_string(&fixture)
-                .expect("fixture JSON")
-                .as_bytes(),
-        )
-        .expect("write fixture");
-    let output = child.wait_with_output().expect("wait for Python oracle");
-    assert!(
-        output.status.success(),
-        "Python catalog oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+    // Direct user-facing expectations, previously only checked against the
+    // Python oracle: catalog context windows resolve native > manual account
+    // > preserved native fallback, and unsupported models stay unroutable.
+    assert_ne!(rust["owners"][0], rust["owners"][1]);
+    assert_eq!(rust["unsupported"], Value::Null);
+    assert_eq!(rust["native_model"]["context_window"], 150);
+    assert_eq!(rust["account_model"]["context_window"], 700);
+    assert_eq!(rust["wrong_owner_fallback"]["context_window"], 500);
+    assert_eq!(rust["wrong_base_fallback"]["context_window"], 500);
+    assert_eq!(
+        rust["auth_headers"],
+        json!({"Authorization": format!("Bearer {}", jwt("user-a", "auth")), "chatgpt-account-id": "workspace-a"})
     );
-    let python: Value = serde_json::from_slice(&output.stdout).expect("Python oracle output");
-    assert_eq!(rust, python);
+    // Falsy token account ids (null, false, 0, empty, empty containers) fall
+    // back to the root account id. A non-empty non-string id is kept but
+    // unusable, so no header is emitted, while a stringy token account id
+    // wins over the root fallback.
+    for case in &rust["auth_header_cases"].as_array().unwrap()[..6] {
+        assert_eq!(case["chatgpt-account-id"], json!("root"), "{case}");
+    }
+    assert!(
+        rust["auth_header_cases"][6]
+            .get("chatgpt-account-id")
+            .is_none(),
+        "{}",
+        rust["auth_header_cases"][6]
+    );
+    assert_eq!(
+        rust["auth_header_cases"][7]["chatgpt-account-id"],
+        json!("nested")
+    );
 }
 
 #[test]

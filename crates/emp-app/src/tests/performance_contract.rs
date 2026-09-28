@@ -4,69 +4,30 @@ use crate::services::observation::request_tokens_per_second;
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::process::{Command, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-const PYTHON_TPS_ORACLE: &str = r#"
-import json, os, sys
-root = os.environ["EMP_PYTHON_ORACLE_ROOT"]
-sys.path.insert(0, root)
-import easy_multi_provider
-assert easy_multi_provider.__version__ == "0.11.11", easy_multi_provider.__version__
-from easy_multi_provider.performance import request_tokens_per_second
-cases = json.load(sys.stdin)
-json.dump([request_tokens_per_second(case["output_tokens"], case["duration_ms"]) for case in cases], sys.stdout)
-"#;
-
 #[test]
-fn request_tps_matches_live_python_01110_reference() {
-    let python = std::env::var("EMP_PYTHON_INTEROP")
-        .expect("EMP_PYTHON_INTEROP must point at the current Python venv");
-    let oracle = std::env::var("EMP_PYTHON_ORACLE_ROOT")
-        .expect("EMP_PYTHON_ORACLE_ROOT must point at the current Python checkout");
+fn request_tps_respects_observation_boundaries() {
     let cases = vec![
-        json!({"output_tokens":120,"duration_ms":2000}),
-        json!({"output_tokens":123,"duration_ms":4567}),
-        json!({"output_tokens":1,"duration_ms":86_400_000}),
-        json!({"output_tokens":0,"duration_ms":100}),
-        json!({"output_tokens":true,"duration_ms":100}),
-        json!({"output_tokens":10_000_001,"duration_ms":100}),
-        json!({"output_tokens":120,"duration_ms":99}),
-        json!({"output_tokens":120,"duration_ms":86_400_001}),
-        json!({"output_tokens":120,"duration_ms":100_000_000}),
+        (json!(120), json!(2000), json!(60.0)),
+        (json!(123), json!(4567), json!(26.93)),
+        (json!(1), json!(86_400_000), json!(0.0)),
+        (json!(0), json!(100), Value::Null),
+        (json!(true), json!(100), Value::Null),
+        (json!(10_000_001), json!(100), Value::Null),
+        (json!(120), json!(99), Value::Null),
+        (json!(120), json!(86_400_001), Value::Null),
+        (json!(120), json!(100_000_000), Value::Null),
     ];
-    let mut oracle_process = Command::new(python)
-        .args(["-c", PYTHON_TPS_ORACLE])
-        .env("EMP_PYTHON_ORACLE_ROOT", oracle)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("start live Python TPS oracle");
-    oracle_process
-        .stdin
-        .take()
-        .expect("Python oracle stdin")
-        .write_all(&serde_json::to_vec(&cases).expect("TPS cases JSON"))
-        .expect("write TPS cases");
-    let output = oracle_process
-        .wait_with_output()
-        .expect("wait for Python TPS oracle");
-    assert!(
-        output.status.success(),
-        "Python TPS oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let expected: Vec<Value> = serde_json::from_slice(&output.stdout).expect("Python TPS result");
-    let actual = cases
-        .iter()
-        .map(|case| {
-            request_tokens_per_second(&case["output_tokens"], &case["duration_ms"])
-                .map_or(Value::Null, |rate| json!(rate))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(actual, expected);
+    for (output_tokens, duration_ms, expected) in cases {
+        assert_eq!(
+            request_tokens_per_second(&output_tokens, &duration_ms)
+                .map_or(Value::Null, |rate| json!(rate)),
+            expected,
+            "tps for {output_tokens} tokens in {duration_ms} ms"
+        );
+    }
 }
 
 struct TimedUsageUpstream {
