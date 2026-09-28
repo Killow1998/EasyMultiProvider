@@ -14,6 +14,16 @@ use tempfile::TempDir;
 
 static EMP_STARTUP_FIXTURE: Mutex<()> = Mutex::new(());
 
+/// The fake release is always one patch ahead of the version under test.
+fn candidate_version() -> String {
+    let current = env!("CARGO_PKG_VERSION");
+    let (prefix, patch) = current.rsplit_once('.').expect("three-part version");
+    format!(
+        "{prefix}.{}",
+        patch.parse::<u64>().expect("numeric patch") + 1
+    )
+}
+
 struct ChildGuard(Child);
 
 impl Drop for ChildGuard {
@@ -110,23 +120,27 @@ fn create_package_mode(root: &Path, fail_startup: bool) -> Vec<u8> {
     let script = if fail_startup {
         r#"#!/bin/sh
 set -eu
-if [ "${1:-}" = "--version" ]; then printf 'EMP 0.12.2\n'; exit 0; fi
+if [ "${1:-}" = "--version" ]; then printf 'EMP {VERSION}\n'; exit 0; fi
 exit 17
 "#
     } else {
         r#"#!/bin/sh
 set -eu
-if [ "${1:-}" = "--version" ]; then printf 'EMP 0.12.2\n'; exit 0; fi
+if [ "${1:-}" = "--version" ]; then printf 'EMP {VERSION}\n'; exit 0; fi
 printf '%s' "$$" > "$EMP_UPDATE_TEST_PID"
 if [ -n "${EMP_UPDATE_READY:-}" ]; then
   job="${EMP_UPDATE_READY%/ready.json}"
   nonce=$(sed -n 's/.*"nonce":"\([^"]*\)".*/\1/p' "$job/plan.json")
-  printf '{"version":"0.12.2","nonce":"%s"}\n' "$nonce" > "$EMP_UPDATE_READY"
+  printf '{"version":"{VERSION}","nonce":"%s"}\n' "$nonce" > "$EMP_UPDATE_READY"
 fi
 exec sleep 90
 "#
     };
-    std::fs::write(&candidate, script).unwrap();
+    std::fs::write(
+        &candidate,
+        script.replace("{VERSION}", &candidate_version()),
+    )
+    .unwrap();
     std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o755)).unwrap();
     let archive = root.join("EMP-linux-x86_64.tar.gz");
     let status = Command::new("tar")
@@ -184,9 +198,10 @@ fn release_server_with_mode(
     let address = listener.local_addr().unwrap();
     let base = format!("http://{address}");
     let name = "EMP-linux-x86_64.tar.gz";
-    let asset_url = format!("{base}/releases/download/v0.12.2/{name}");
+    let version = candidate_version();
+    let asset_url = format!("{base}/releases/download/v{version}/{name}");
     let metadata = serde_json::json!({
-        "tag_name":"v0.12.2", "draft":false, "prerelease":false,
+        "tag_name":format!("v{version}"), "draft":false, "prerelease":false,
         "assets":[{"name":name,"digest":format!("sha256:{digest}"),"size":package.len(),"browser_download_url":asset_url}]
     }).to_string().into_bytes();
     let api_redirect = format!("{base}/api/latest");
@@ -240,7 +255,7 @@ fn release_server_with_mode(
                         stream.write_all(&metadata).unwrap();
                     }
                 }
-            } else if path == format!("/releases/download/v0.12.2/{name}") {
+            } else if path == format!("/releases/download/v{version}/{name}") {
                 write!(stream, "HTTP/1.1 302 Found\r\nLocation: {artifact_redirect}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
             } else if path == format!("/assets/{name}") {
                 if matches!(mode, FakeReleaseMode::PackageError) {
@@ -484,7 +499,7 @@ fn check_for_available(emp: &RunningEmp) {
         String::from_utf8_lossy(&check)
     );
     let available = wait_for_state(emp.port, &emp.session, "available", Duration::from_secs(10));
-    assert_eq!(available["latest_version"], "0.12.2");
+    assert_eq!(available["latest_version"], candidate_version());
 }
 
 fn stop_emp(emp: &mut RunningEmp) {
