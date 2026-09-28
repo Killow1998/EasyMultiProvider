@@ -354,7 +354,7 @@ fn python_oracle_dir() -> PathBuf {
     let sibling = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../EasyMultiProvider");
     assert!(
         sibling.join("easy_multi_provider/server.py").is_file(),
-        "set EMP_PYTHON_ORACLE_ROOT to the Python 0.11.10 checkout"
+        "set EMP_PYTHON_ORACLE_ROOT to the Python 0.11.11 checkout"
     );
     sibling
 }

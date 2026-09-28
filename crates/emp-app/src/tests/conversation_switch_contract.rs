@@ -8,7 +8,7 @@ fn python_oracle(script: &str, input: &Value) -> Value {
     let python = std::env::var("EMP_PYTHON_INTEROP")
         .expect("EMP_PYTHON_INTEROP must point to the official Python environment");
     let root = std::env::var("EMP_PYTHON_ORACLE_ROOT")
-        .expect("EMP_PYTHON_ORACLE_ROOT must point to the Python 0.11.10 oracle");
+        .expect("EMP_PYTHON_ORACLE_ROOT must point to the Python 0.11.11 oracle");
     let mut child = Command::new(python)
         .arg("-c")
         .arg(script)
@@ -18,7 +18,7 @@ fn python_oracle(script: &str, input: &Value) -> Value {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("start Python 0.11.10 projection oracle");
+        .expect("start Python 0.11.11 projection oracle");
     serde_json::to_writer(child.stdin.take().expect("oracle stdin"), input)
         .expect("write oracle fixture");
     let output = child.wait_with_output().expect("wait for oracle");
@@ -37,7 +37,7 @@ import json, os, sys
 root = os.environ['EMP_PYTHON_ORACLE_ROOT']
 sys.path.insert(0, root)
 import easy_multi_provider
-assert easy_multi_provider.__version__ == '0.11.10', easy_multi_provider.__version__
+assert easy_multi_provider.__version__ == '0.11.11', easy_multi_provider.__version__
 from easy_multi_provider.dialects import project_request
 case=json.load(sys.stdin)
 print(json.dumps(project_request(case['provider'],case['body'])['input'],ensure_ascii=False,sort_keys=True))
@@ -53,7 +53,7 @@ import json, os, sys
 root = os.environ['EMP_PYTHON_ORACLE_ROOT']
 sys.path.insert(0, root)
 import easy_multi_provider
-assert easy_multi_provider.__version__ == '0.11.10', easy_multi_provider.__version__
+assert easy_multi_provider.__version__ == '0.11.11', easy_multi_provider.__version__
 from easy_multi_provider.codex_history import HistoryCursor, HistorySnapshot, VisibleItem
 from easy_multi_provider.dialects import project_request
 from easy_multi_provider.history_continuity import HistoryContinuityEngine

@@ -71,7 +71,7 @@ def normalize_support_report_time(report):
         raise AssertionError("support report generated_at must be a string")
     datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
     normalized["generated_at"] = "<generated-at>"
-    # Python oracle stays 0.11.10 while the Rust release is 0.12.1; identity
+    # Python oracle stays 0.11.11 while the Rust release is 0.12.1; identity
     # differs by design and each backend asserts its own version explicitly.
     normalized["emp_version"] = "<emp-version>"
     return normalized
@@ -284,7 +284,7 @@ class RustEndToEnd(unittest.TestCase):
                 self.assertEqual(len(config["models"]), 4)
                 self.assertEqual(
                     config["emp_version"],
-                    "0.12.1" if backend.runtime_kind == "rust" else "0.11.10",
+                    "0.12.1" if backend.runtime_kind == "rust" else "0.11.11",
                 )
 
     def test_support_report_endpoint_is_allowlisted_authenticated_and_read_only(self):
@@ -309,7 +309,7 @@ class RustEndToEnd(unittest.TestCase):
             self.assertEqual(report["schema_version"], 1)
             self.assertEqual(
                 report["emp_version"],
-                "0.12.1" if backend.runtime_kind == "rust" else "0.11.10",
+                "0.12.1" if backend.runtime_kind == "rust" else "0.11.11",
             )
             self.assertEqual(report["configuration"]["location"], "custom")
             try:
@@ -614,10 +614,10 @@ class RustEndToEnd(unittest.TestCase):
                 (code, stdout.replace(b"\r\n", b"\n"), stderr.replace(b"\r\n", b"\n"))
                 for code, stdout, stderr in results
             ]
-            # The archived Python oracle stays 0.11.10 while the Rust release is
+            # The archived Python oracle stays 0.11.11 while the Rust release is
             # 0.12.1; --version output differs by design and is asserted below.
             if arguments == ["--version"]:
-                self.assertEqual(normalized[0], (0, b"EMP 0.11.10\n", b""))
+                self.assertEqual(normalized[0], (0, b"EMP 0.11.11\n", b""))
                 self.assertEqual(normalized[1], (0, b"EMP 0.12.1\n", b""))
             else:
                 self.assertEqual(normalized[0], normalized[1])
@@ -806,7 +806,7 @@ class RustEndToEnd(unittest.TestCase):
 
     @unittest.skipUnless(
         "EMP_PYTHON_ORACLE_ROOT" in os.environ,
-        "set EMP_PYTHON_ORACLE_ROOT to compare with official Python v0.11.10",
+        "set EMP_PYTHON_ORACLE_ROOT to compare with official Python v0.11.11",
     )
     def test_official_python_root_cookie_and_rust_one_time_bootstrap(self):
         python_backend, rust_backend = self.backends

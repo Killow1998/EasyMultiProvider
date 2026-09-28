@@ -61,10 +61,10 @@ class PythonRuntime:
                     + probe.stderr
                 )
             output = probe.stdout.splitlines()
-            if len(output) != 2 or output[0] != "0.11.10":
+            if len(output) != 2 or output[0] != "0.11.11":
                 version = output[0] if output else "unavailable"
                 raise AssertionError(
-                    "EMP_PYTHON_ORACLE_ROOT must be Python EMP 0.11.10; got "
+                    "EMP_PYTHON_ORACLE_ROOT must be Python EMP 0.11.11; got "
                     + version
                 )
             package_init = (root / "easy_multi_provider" / "__init__.py").resolve()

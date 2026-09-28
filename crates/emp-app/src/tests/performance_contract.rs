@@ -13,7 +13,7 @@ import json, os, sys
 root = os.environ["EMP_PYTHON_ORACLE_ROOT"]
 sys.path.insert(0, root)
 import easy_multi_provider
-assert easy_multi_provider.__version__ == "0.11.10", easy_multi_provider.__version__
+assert easy_multi_provider.__version__ == "0.11.11", easy_multi_provider.__version__
 from easy_multi_provider.performance import request_tokens_per_second
 cases = json.load(sys.stdin)
 json.dump([request_tokens_per_second(case["output_tokens"], case["duration_ms"]) for case in cases], sys.stdout)

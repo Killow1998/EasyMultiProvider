@@ -84,7 +84,7 @@ jobs:
         with:
           persist-credentials: false
           repository: Killow1998/EasyMultiProvider
-          ref: 3bcf72a5481a951cf9713f7d92784a6872970e1e
+          ref: 52e016c1bac1dd4256d34aa2d8c14ca726e96757
           path: python-oracle
 
       - name: Set up Rust

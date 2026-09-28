@@ -375,7 +375,7 @@ mod tests {
 import json, sys
 import easy_multi_provider
 from easy_multi_provider.router import _prepare_model_request
-assert easy_multi_provider.__version__ == "0.11.10"
+assert easy_multi_provider.__version__ == "0.11.11"
 cases = json.load(sys.stdin)
 out = []
 for case in cases:
@@ -399,7 +399,7 @@ json.dump(out, sys.stdout, separators=(",", ":"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("spawn Python 0.11.10 reasoning-summary oracle");
+            .expect("spawn Python 0.11.11 reasoning-summary oracle");
         child
             .stdin
             .take()

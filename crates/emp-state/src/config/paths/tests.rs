@@ -24,7 +24,7 @@ fn run_python_case(
     );
     let actual: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("Python config path JSON");
-    assert_eq!(actual["version"], "0.11.10");
+    assert_eq!(actual["version"], "0.11.11");
     assert_eq!(
         PathBuf::from(actual["module"].as_str().expect("Python module path")),
         python_root.join("easy_multi_provider/__init__.py")
