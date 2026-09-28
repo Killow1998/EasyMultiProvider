@@ -108,7 +108,7 @@ for line in sys.stdin:
         while not (control / "quota-release").exists() and time.monotonic() < deadline:
             time.sleep(0.005)
         assert (control / "quota-release").exists(), "quota fixture was never released"
-        print(json.dumps({"id":request["id"],"result":{"account":{"email":"xian@example.com","planType":"pro"}}}), flush=True)
+        print(json.dumps({"id":request["id"],"result":{"account":{"email":"user@example.com","planType":"pro"}}}), flush=True)
     elif method == "account/rateLimits/read":
         auth_path = pathlib.Path(os.environ["CODEX_HOME"]) / "auth.json"
         auth = json.loads(auth_path.read_text())
@@ -245,7 +245,7 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
             &server.state,
             &json!({
                 "id": id,
-                "name": "Egg",
+                "name": "Demo",
                 "prefix": id,
                 "auth_json": {
                     "tokens": {
@@ -258,8 +258,8 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
         .expect("import account")
     };
 
-    import("egg", "upstream-account-a", "token-before-delete");
-    let original_owner = quota_owner_key(&server.state, "egg").expect("original quota owner");
+    import("demo", "upstream-account-a", "token-before-delete");
+    let original_owner = quota_owner_key(&server.state, "demo").expect("original quota owner");
     let quota = json!({
         "rate_limits": {
             "limitId": "codex",
@@ -273,11 +273,11 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
         .quota_history
         .append_snapshot(&original_owner, &quota, 2_000_100)
         .expect("record original quota sample");
-    delete_account_state(&server.state, "egg").expect("delete original account");
+    delete_account_state(&server.state, "demo").expect("delete original account");
 
-    import("egg-restored", "upstream-account-a", "rotated-token");
+    import("demo-restored", "upstream-account-a", "rotated-token");
     assert_eq!(
-        quota_owner_key(&server.state, "egg-restored").expect("restored quota owner"),
+        quota_owner_key(&server.state, "demo-restored").expect("restored quota owner"),
         original_owner
     );
     let restored = server
@@ -288,10 +288,10 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
         .query(&original_owner, "1h", 2_000_200)
         .expect("query restored quota history");
     assert_eq!(restored["series"][0]["points"].as_array().unwrap().len(), 1);
-    delete_account_state(&server.state, "egg-restored").expect("delete restored account");
+    delete_account_state(&server.state, "demo-restored").expect("delete restored account");
 
-    import("egg", "upstream-account-b", "other-account-token");
-    let other_owner = quota_owner_key(&server.state, "egg").expect("other quota owner");
+    import("demo", "upstream-account-b", "other-account-token");
+    let other_owner = quota_owner_key(&server.state, "demo").expect("other quota owner");
     assert_ne!(other_owner, original_owner);
     let other_history = server
         .state
@@ -360,13 +360,13 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
             })
     };
 
-    import("egg", "upstream-egg");
+    import("demo", "upstream-demo");
     // Rows written by the previous release under local keys.
     history
-        .append_snapshot("egg", &sample(10), 2_000_100)
+        .append_snapshot("demo", &sample(10), 2_000_100)
         .unwrap();
     history
-        .append_snapshot("egg", &sample(20), 2_000_400)
+        .append_snapshot("demo", &sample(20), 2_000_400)
         .unwrap();
     history
         .append_snapshot("@native", &sample(30), 2_000_100)
@@ -377,10 +377,10 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
 
     crate::services::quota::migrate_legacy_quota_history(&server.state);
     crate::services::quota::migrate_legacy_quota_history(&server.state);
-    let egg = quota_owner_key(&server.state, "egg").unwrap();
+    let owner = quota_owner_key(&server.state, "demo").unwrap();
     let native = quota_owner_key(&server.state, "@native").unwrap();
-    assert_eq!(points(&egg), 2);
-    assert_eq!(points("egg"), 0);
+    assert_eq!(points(&owner), 2);
+    assert_eq!(points("demo"), 0);
     // `@native` rows may come from any earlier login: the current one
     // cannot claim them.
     assert_eq!(points(&native), 0);
@@ -391,32 +391,32 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     // A legacy row written after startup is adopted before the id is freed,
     // so a different account reusing the id never inherits it.
     history
-        .append_snapshot("egg", &sample(50), 2_000_700)
+        .append_snapshot("demo", &sample(50), 2_000_700)
         .unwrap();
-    delete_account_state(&server.state, "egg").expect("delete egg");
-    assert_eq!(points(&egg), 3);
-    import("egg", "someone-else");
-    let other = quota_owner_key(&server.state, "egg").unwrap();
-    assert_ne!(other, egg);
+    delete_account_state(&server.state, "demo").expect("delete demo");
+    assert_eq!(points(&owner), 3);
+    import("demo", "someone-else");
+    let other = quota_owner_key(&server.state, "demo").unwrap();
+    assert_ne!(other, owner);
     crate::services::quota::migrate_legacy_quota_history(&server.state);
     assert_eq!(points(&other), 0);
 
     // Reimporting the id with different credentials attributes its legacy
     // rows with the credentials that recorded them first.
     history
-        .append_snapshot("egg", &sample(60), 2_000_800)
+        .append_snapshot("demo", &sample(60), 2_000_800)
         .unwrap();
     // A reimport that is rejected leaves the rows alone.
-    import("hen", "upstream-hen");
+    import("team-a", "upstream-team-a");
     assert!(
         import_account_state(
             &server.state,
-            &json!({"id": "egg", "name": "egg", "prefix": "hen",
-                "auth_json": {"tokens": {"access_token": "egg-token", "account_id": "third-identity"}}}),
+            &json!({"id": "demo", "name": "demo", "prefix": "team-a",
+                "auth_json": {"tokens": {"access_token": "demo-token", "account_id": "third-identity"}}}),
         )
         .is_err_and(|error| error.contains("prefix is already in use"))
     );
-    assert_eq!(points("egg"), 1);
+    assert_eq!(points("demo"), 1);
     assert_eq!(points(&other), 0);
     // Also when only full configuration validation rejects it: the prefix
     // names an existing provider.
@@ -428,24 +428,24 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     assert!(
         import_account_state(
             &server.state,
-            &json!({"id": "egg", "name": "egg", "prefix": "deepseek",
-                "auth_json": {"tokens": {"access_token": "egg-token", "account_id": "third-identity"}}}),
+            &json!({"id": "demo", "name": "demo", "prefix": "deepseek",
+                "auth_json": {"tokens": {"access_token": "demo-token", "account_id": "third-identity"}}}),
         )
         .is_err_and(|error| error.contains("conflict"))
     );
-    assert_eq!(points("egg"), 1);
+    assert_eq!(points("demo"), 1);
     assert_eq!(points(&other), 0);
-    import("egg", "third-identity");
+    import("demo", "third-identity");
     assert_eq!(points(&other), 1);
-    assert_eq!(points("egg"), 0);
+    assert_eq!(points("demo"), 0);
 
     // When the recording credentials are unreadable the rows cannot be
     // attributed; deleting the account drops them instead of leaving them
     // for the next account that reuses the id.
     history
-        .append_snapshot("egg", &sample(70), 2_000_850)
+        .append_snapshot("demo", &sample(70), 2_000_850)
         .unwrap();
-    let egg_auth = emp_state::account_auth_path(
+    let owner_auth = emp_state::account_auth_path(
         &server
             .state
             .backend
@@ -454,15 +454,15 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
             .lock()
             .unwrap()
             .clone(),
-        "egg",
+        "demo",
         &server.state.backend.configuration.config_path,
     )
     .unwrap();
-    std::fs::write(&egg_auth, b"not a vault document").unwrap();
-    delete_account_state(&server.state, "egg").expect("delete unreadable egg");
-    assert_eq!(points("egg"), 0);
-    import("egg", "fourth-identity");
-    let fourth = quota_owner_key(&server.state, "egg").unwrap();
+    std::fs::write(&owner_auth, b"not a vault document").unwrap();
+    delete_account_state(&server.state, "demo").expect("delete unreadable demo");
+    assert_eq!(points("demo"), 0);
+    import("demo", "fourth-identity");
+    let fourth = quota_owner_key(&server.state, "demo").unwrap();
     crate::services::quota::migrate_legacy_quota_history(&server.state);
     assert_eq!(points(&fourth), 0);
     server
@@ -492,8 +492,8 @@ fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
     )
     .expect("start import lock state");
     let body = |token: &str| {
-        json!({"id": "egg", "name": "egg", "prefix": "egg",
-            "auth_json": {"tokens": {"access_token": token, "account_id": "upstream-egg"}}})
+        json!({"id": "demo", "name": "demo", "prefix": "demo",
+            "auth_json": {"tokens": {"access_token": token, "account_id": "upstream-demo"}}})
     };
     import_account_state(&server.state, &body("first")).expect("first import");
     let auth_path = emp_state::account_auth_path(
@@ -505,7 +505,7 @@ fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
             .lock()
             .unwrap()
             .clone(),
-        "egg",
+        "demo",
         &server.state.backend.configuration.config_path,
     )
     .unwrap();
@@ -519,10 +519,10 @@ fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
         .unwrap()
         .insert(
             auth_path.to_string_lossy().into_owned(),
-            json!({"tokens":{"access_token":"first-rotated","account_id":"upstream-egg"}}),
+            json!({"tokens":{"access_token":"first-rotated","account_id":"upstream-demo"}}),
         );
 
-    let lock = super::quota_refresh_lock(&server.state, "egg").unwrap();
+    let lock = super::quota_refresh_lock(&server.state, "demo").unwrap();
     let guard = lock.lock().unwrap();
     let (done_tx, done_rx) = mpsc::channel();
     thread::scope(|scope| {
@@ -577,10 +577,10 @@ fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
     )
     .expect("start settle failure state");
     let body = |upstream: &str| {
-        json!({"id": "egg", "name": "egg", "prefix": "egg",
+        json!({"id": "demo", "name": "demo", "prefix": "demo",
             "auth_json": {"tokens": {"access_token": "token", "account_id": upstream}}})
     };
-    import_account_state(&server.state, &body("upstream-egg")).expect("import egg");
+    import_account_state(&server.state, &body("upstream-demo")).expect("import demo");
     // Legacy rows exist, but neither adoption nor deletion can reach them.
     let history_path = server
         .state
@@ -591,7 +591,7 @@ fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
         .to_path_buf();
     std::fs::write(&history_path, b"not a sqlite database").expect("break quota history");
 
-    assert!(delete_account_state(&server.state, "egg").is_err());
+    assert!(delete_account_state(&server.state, "demo").is_err());
     assert!(import_account_state(&server.state, &body("someone-else")).is_err());
     let config = server
         .state
@@ -606,7 +606,7 @@ fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|account| account["id"] == "egg")
+            .any(|account| account["id"] == "demo")
     );
     server.shutdown().expect("shutdown settle failure state");
 }
@@ -768,11 +768,12 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
         json!({"id": id, "name": id, "prefix": prefix,
             "auth_json": {"tokens": {"access_token": format!("{id}-token"), "account_id": upstream}}})
     };
-    import_account_state(&server.state, &body("egg", "egg", "upstream-egg")).expect("import egg");
+    import_account_state(&server.state, &body("demo", "demo", "upstream-demo"))
+        .expect("import demo");
     let history = &server.state.backend.accounts.quota_history;
     history
         .append_snapshot(
-            "egg",
+            "demo",
             &json!({"rate_limits":{"limitId":"codex","primary":{"usedPercent":10,"windowDurationMins":300}}}),
             2_000_100,
         )
@@ -784,16 +785,18 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
         .expect("pause history writes");
     let configuration = &server.state.backend.configuration.config;
     let (reimport, rival) = thread::scope(|scope| {
-        let reimport = scope
-            .spawn(|| import_account_state(&server.state, &body("egg", "yolk", "upstream-egg-2")));
+        let reimport = scope.spawn(|| {
+            import_account_state(&server.state, &body("demo", "team-b", "upstream-demo-2"))
+        });
         // Wait until the reimport holds the configuration (it is then
         // settling, blocked on the history database).
         let deadline = Instant::now() + Duration::from_secs(2);
         while configuration.try_lock().is_ok() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
-        let rival = scope
-            .spawn(|| import_account_state(&server.state, &body("hen", "yolk", "upstream-hen")));
+        let rival = scope.spawn(|| {
+            import_account_state(&server.state, &body("team-a", "team-b", "upstream-team-a"))
+        });
         thread::sleep(Duration::from_millis(200));
         blocker
             .execute_batch("COMMIT")
@@ -807,6 +810,6 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
     );
     let config = configuration.lock().unwrap().clone();
     assert_eq!(config["accounts"].as_array().unwrap().len(), 1);
-    assert_eq!(config["accounts"][0]["prefix"], "yolk");
+    assert_eq!(config["accounts"][0]["prefix"], "team-b");
     server.shutdown().expect("shutdown settle race state");
 }

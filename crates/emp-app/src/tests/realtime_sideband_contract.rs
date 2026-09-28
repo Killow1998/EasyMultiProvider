@@ -357,7 +357,7 @@ fn sideband_upstream_handshake_errors_return_http_before_downstream_101() {
 }
 
 #[test]
-fn sideband_connection_refused_maps_to_python_502_and_releases_admission() {
+fn sideband_connection_refused_maps_to_502_and_releases_admission() {
     let (_fixture, _app_directory, idle_upstream, server) = server_fixture(true);
     let refused = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("reserve refused port");
     let url = format!(

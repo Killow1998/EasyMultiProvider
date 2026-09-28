@@ -146,8 +146,6 @@ mod tests {
     use super::*;
     use emp_core::{RouteSource, resolved_route_from_parts};
     use serde_json::json;
-    use std::io::Write;
-    use std::process::{Command, Stdio};
 
     fn case(
         name: &str,
@@ -368,60 +366,10 @@ mod tests {
         )
     }
 
-    fn python_results(cases: &[Value]) -> Option<Value> {
-        let python = std::env::var("EMP_PYTHON_INTEROP").ok()?;
-        let root = std::env::var("EMP_PYTHON_ORACLE_ROOT").ok()?;
-        let script = r#"
-import json, sys
-import easy_multi_provider
-from easy_multi_provider.router import _prepare_model_request
-assert easy_multi_provider.__version__ == "0.11.11"
-cases = json.load(sys.stdin)
-out = []
-for case in cases:
-    provider = case["provider"]
-    model = case["model"]
-    body = _prepare_model_request(case["config"], provider, model, case["route"], case["body"])
-    out.append({
-        "body": body,
-        "policy": model.get("_emp_reasoning_summary_policy"),
-        "preserve": model.get("_emp_preserve_reasoning_summary"),
-        "state": model.get("_emp_preserve_reasoning_state"),
-        "future_model_field": model.get("future_model_field"),
-    })
-json.dump(out, sys.stdout, separators=(",", ":"))
-"#;
-        let mut child = Command::new(python)
-            .arg("-c")
-            .arg(script)
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn Python 0.11.11 reasoning-summary oracle");
-        child
-            .stdin
-            .take()
-            .expect("Python stdin")
-            .write_all(serde_json::to_string(cases).unwrap().as_bytes())
-            .expect("write oracle cases");
-        let output = child.wait_with_output().expect("wait for Python oracle");
-        assert!(
-            output.status.success(),
-            "Python reasoning-summary oracle failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        Some(serde_json::from_slice(&output.stdout).expect("Python result JSON"))
-    }
-
     #[test]
-    fn external_request_preparation_matches_live_python_table() {
+    fn external_request_preparation_applies_summary_policy_once_and_keeps_unknown_fields() {
         let cases = cases();
         let rust = rust_results(&cases);
-        if let Some(python) = python_results(&cases) {
-            assert_eq!(rust, python);
-        }
 
         for (fixture, result) in cases.iter().zip(rust.as_array().unwrap()) {
             let name = fixture["name"].as_str().unwrap();

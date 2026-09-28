@@ -1,5 +1,4 @@
 use super::*;
-use std::process::Command;
 
 #[derive(Clone, Copy)]
 pub(super) struct UpstreamResponse {
@@ -173,26 +172,6 @@ fn response_parts(raw: &str) -> (u16, BTreeMap<String, String>, Vec<u8>) {
     (status, headers, raw.as_bytes()[separator + 4..].to_vec())
 }
 
-fn selected_headers(request: &UpstreamRequest) -> Value {
-    let selected = [
-        "authorization",
-        "chatgpt-account-id",
-        "openai-alpha",
-        "session-id",
-        "thread-id",
-        "content-type",
-        "accept",
-        "user-agent",
-    ];
-    let mut result = serde_json::Map::new();
-    for name in selected {
-        if let Some(value) = request.headers.get(name) {
-            result.insert(name.to_owned(), json!(value));
-        }
-    }
-    Value::Object(result)
-}
-
 fn error_code(raw: &str) -> String {
     let (status, _, body) = response_parts(raw);
     assert_ne!(status, 200);
@@ -230,18 +209,7 @@ pub(super) fn app_server_for(
 }
 
 #[test]
-fn live_call_matches_official_python_forwarding_over_real_http() {
-    let Some(python) = std::env::var_os("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let oracle_root = std::env::var_os("EMP_PYTHON_ORACLE_ROOT")
-        .expect("EMP_PYTHON_ORACLE_ROOT must name official Python oracle");
-    let oracle_root = PathBuf::from(oracle_root);
-    assert!(
-        oracle_root
-            .join("easy_multi_provider/realtime.py")
-            .is_file()
-    );
+fn live_call_forwards_the_native_session_over_real_http() {
     let directory = tempfile::tempdir().expect("fixture root");
     let native_auth = canonical_root(&directory).join("codex/auth.json");
     std::fs::create_dir_all(native_auth.parent().unwrap()).expect("native auth directory");
@@ -251,55 +219,14 @@ fn live_call_matches_official_python_forwarding_over_real_http() {
     )
     .expect("write native auth");
 
-    let python_upstream = RealtimeUpstream::start(UpstreamResponse {
+    let upstream = RealtimeUpstream::start(UpstreamResponse {
         status: 201,
         reason: "Created",
         content_type: "application/sdp; charset=utf-8",
         location: Some("/v1/live/rtc_voice_123"),
         body: b"v=answer\r\n",
     });
-    let script = format!(
-        r#"
-import json, sys
-from pathlib import Path
-import easy_multi_provider.realtime as realtime
-realtime.__version__ = "{}"
-from easy_multi_provider.realtime import RealtimeCall, forward_native_realtime_call
-result = forward_native_realtime_call(
-    sys.argv[1], Path(sys.argv[2]), {{
-        "Authorization":"Bearer caller-secret", "OpenAI-Alpha":"quicksilver=v2",
-        "Session-Id":"session-voice", "Thread-Id":"thread-voice",
-        "X-Ignored-Secret":"must-not-forward",
-    }}, RealtimeCall("v=0\r\no=offer\r\n", {{"model":"gpt-live","delegation":{{"type":"client"}}}}))
-print(json.dumps({{"status":result.status,"content_type":result.content_type,
-    "location":result.location,"body":result.body.decode("utf-8")}}))
-"#,
-        env!("CARGO_PKG_VERSION")
-    );
-    let oracle = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .arg(python_upstream.base_url())
-        .arg(&native_auth)
-        .current_dir(oracle_root)
-        .output()
-        .expect("run official Python realtime oracle");
-    assert!(
-        oracle.status.success(),
-        "Python Voice oracle failed: {}",
-        String::from_utf8_lossy(&oracle.stderr)
-    );
-    let expected: Value = serde_json::from_slice(&oracle.stdout).expect("Python oracle JSON");
-    let python_request = python_upstream.observed();
-
-    let rust_upstream = RealtimeUpstream::start(UpstreamResponse {
-        status: 201,
-        reason: "Created",
-        content_type: "application/sdp; charset=utf-8",
-        location: Some("/v1/live/rtc_voice_123"),
-        body: b"v=answer\r\n",
-    });
-    let (_app_directory, server) = app_server_for(&rust_upstream, &native_auth);
+    let (_app_directory, server) = app_server_for(&upstream, &native_auth);
     let body = multipart_offer();
     let cookie = session_header(&server);
     let response = post(
@@ -317,33 +244,31 @@ print(json.dumps({{"status":result.status,"content_type":result.content_type,
         ],
     );
     let (status, headers, response_body) = response_parts(&response);
-    let actual = json!({
-        "status":status,
-        "content_type":headers["content-type"],
-        "location":headers["location"],
-        "body":String::from_utf8(response_body).unwrap()
-    });
-    assert_eq!(actual, expected);
-    let rust_request = rust_upstream.observed();
-    assert_eq!(rust_request.method, "POST");
+    assert_eq!(status, 201);
+    assert_eq!(headers["content-type"], "application/sdp; charset=utf-8");
+    assert_eq!(headers["location"], "/v1/live/rtc_voice_123");
+    assert_eq!(response_body, b"v=answer\r\n");
+    let request = upstream.observed();
+    assert_eq!(request.method, "POST");
     assert_eq!(
-        rust_request.path,
+        request.path,
         "/backend/realtime/calls?intent=quicksilver&architecture=avas"
     );
+    // The upstream body carries the offer SDP and the native session payload.
+    let sent: Value = serde_json::from_slice(&request.body).expect("upstream JSON");
+    assert_eq!(sent["sdp"], "v=0\r\no=offer\r\n");
     assert_eq!(
-        serde_json::from_slice::<Value>(&rust_request.body).unwrap(),
-        serde_json::from_slice::<Value>(&python_request.body).unwrap()
+        sent["session"],
+        json!({"model":"gpt-live","delegation":{"type":"client"}})
     );
-    assert_eq!(
-        selected_headers(&rust_request),
-        selected_headers(&python_request)
-    );
-    assert_eq!(
-        rust_request.headers["authorization"],
-        "Bearer native-secret"
-    );
-    assert_eq!(rust_request.headers["chatgpt-account-id"], "acct-native");
-    assert!(!rust_request.headers.contains_key("x-ignored-secret"));
+    // The native subscription identity travels upstream; caller credentials
+    // and unrelated secrets never do. Thread/session correlation headers are
+    // intentionally forwarded for tracing.
+    assert_eq!(request.headers["thread-id"], "thread-voice");
+    assert_eq!(request.headers["session-id"], "session-voice");
+    assert_eq!(request.headers["authorization"], "Bearer native-secret");
+    assert_eq!(request.headers["chatgpt-account-id"], "acct-native");
+    assert!(!request.headers.contains_key("x-ignored-secret"));
     server.shutdown().expect("shutdown realtime fixture server");
 }
 

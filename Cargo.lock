@@ -422,6 +422,7 @@ dependencies = [
  "emp-router",
  "emp-state",
  "emp-transport",
+ "flate2",
  "getrandom 0.2.17",
  "libc",
  "rusqlite",

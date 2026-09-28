@@ -61,7 +61,7 @@ for line in sys.stdin:
             auth_path.write_text(json.dumps(auth))
         elif started != "rotated":
             raise AssertionError("stale credential reused: " + started)
-        print(json.dumps({"id":request["id"],"result":{"account":{"email":"xian@example.com","planType":"pro"}}}), flush=True)
+        print(json.dumps({"id":request["id"],"result":{"account":{"email":"user@example.com","planType":"pro"}}}), flush=True)
     elif method == "account/rateLimits/read":
         print(json.dumps({"id":request["id"],"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":9,"windowDurationMins":300}}}}), flush=True)
 "#,
@@ -340,7 +340,7 @@ for line in sys.stdin:
             me.with_suffix(".rotated").touch()
             while not me.with_suffix(".release").exists():
                 time.sleep(0.02)
-        print(json.dumps({"id":request["id"],"result":{"account":{"email":"xian@example.com","planType":"pro"}}}), flush=True)
+        print(json.dumps({"id":request["id"],"result":{"account":{"email":"user@example.com","planType":"pro"}}}), flush=True)
     elif method == "account/rateLimits/read":
         print(json.dumps({"id":request["id"],"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":9,"windowDurationMins":300}}}}), flush=True)
 "#,

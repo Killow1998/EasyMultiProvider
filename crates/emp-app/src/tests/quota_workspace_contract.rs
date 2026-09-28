@@ -74,7 +74,7 @@ for line in sys.stdin:
         elif started in ("native-workspace", "imported-fail"):
             print(json.dumps({"id":request["id"],"error":{"code":-32603,"message":"workspace routing discovery failed"}}), flush=True)
         elif started == "imported-success-rotated" and refresh:
-            print(json.dumps({"id":request["id"],"result":{"account":{"email":"xian@example.com","planType":"pro"}}}), flush=True)
+            print(json.dumps({"id":request["id"],"result":{"account":{"email":"user@example.com","planType":"pro"}}}), flush=True)
         else:
             raise AssertionError(f"unexpected account/read state: {started} {refresh}")
     elif method == "account/rateLimits/read":

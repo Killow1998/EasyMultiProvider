@@ -105,7 +105,7 @@ fn account_import_and_delete_keep_credentials_managed_and_private() {
         &server,
         "/api/accounts/import",
         &serde_json::to_vec(&json!({
-            "id":"egg","name":"Egg","prefix":"egg","enabled":true,
+            "id":"demo","name":"Demo","prefix":"demo","enabled":true,
             "auth_json":{"tokens":{"access_token":"account-secret","account_id":"account-id"}}
         }))
         .unwrap(),
@@ -135,7 +135,7 @@ fn account_import_and_delete_keep_credentials_managed_and_private() {
             .unwrap()["tokens"]["access_token"],
         "account-secret"
     );
-    let removed = delete(&server, "/api/accounts/egg", &[&session_header(&server)]);
+    let removed = delete(&server, "/api/accounts/demo", &[&session_header(&server)]);
     assert!(removed.starts_with("HTTP/1.1 200 OK\r\n"), "{removed}");
     assert!(!auth_path.exists());
     assert!(!auth_path.parent().unwrap().join("config.toml").exists());
@@ -196,8 +196,8 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     let directory = tempfile::tempdir().unwrap();
     let root = canonical_root(&directory);
     let config = root.join("emp-config.json");
-    // Python rejects applying an empty model picker; this success scenario needs
-    // the same visible model fixture as tests.test_server._integration_test_config.
+    // An empty model picker must be rejected; this success scenario needs one
+    // visible external model in the fixture.
     std::fs::write(&config, serde_json::to_vec(&json!({
         "providers":[{"id":"external","base_url":"https://example.invalid/v1","protocol":"responses"}],
         "models":[{"id":"external/model-a","provider":"external","upstream_id":"model-a","enabled":true}]

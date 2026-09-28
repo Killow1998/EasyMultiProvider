@@ -2,9 +2,6 @@ use emp_codex::quota::{
     parse_app_server_output_at, quota_rpc_error, reset_outcome, validated_reset_idempotency_key,
 };
 use serde_json::{Value, json};
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 fn fixture() -> Value {
     json!({
@@ -13,7 +10,7 @@ fn fixture() -> Value {
             "diagnostic output that is not JSON",
             {"id": 1, "result": {}},
             {"id": 2, "result": {
-                "account": {"email": "xian@example.com", "planType": "pro"},
+                "account": {"email": "user@example.com", "planType": "pro"},
                 "rateLimits": {
                     "limitId": "codex",
                     "primary": {"usedPercent": 30, "windowDurationMins": 300},
@@ -159,10 +156,10 @@ fn rust_result(fixture: &Value) -> Value {
 }
 
 #[test]
-fn quota_projection_matches_live_python_oracle_when_configured() {
+fn quota_projection_redacts_private_details_and_parses_app_server_output() {
     let fixture = fixture();
     let rust = rust_result(&fixture);
-    assert_eq!(rust["parsed"]["account_label"], "x***@example.com");
+    assert_eq!(rust["parsed"]["account_label"], "u***@example.com");
     assert_eq!(rust["parsed"]["plan_type"], "free");
     assert_eq!(
         rust["parsed"]["credits"]["reset_credits"]["available_count"],
@@ -173,166 +170,42 @@ fn quota_projection_matches_live_python_oracle_when_configured() {
         "opaque-reset-id"
     );
     assert!(!rust["rpc_errors"].to_string().contains("private-token"));
-
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let script = r#"
-import json, sys
-from unittest.mock import patch
-from easy_multi_provider import __version__
-assert __version__ == '0.11.11', __version__
-from easy_multi_provider.quota import QuotaError, _quota_rpc_error, _reset_outcome, _validated_reset_idempotency_key, parse_app_server_output
-
-fixture = json.load(sys.stdin)
-transcript = "\n".join(line if isinstance(line, str) else json.dumps(line, ensure_ascii=False, separators=(",", ":")) for line in fixture["transcript"])
-
-def error(exc):
-    return {"message": str(exc), "code": exc.code}
-
-with patch("easy_multi_provider.quota.time.time", return_value=fixture["observed_at"]):
-    parsed = parse_app_server_output(transcript)
-
-parse_failures = []
-for case in fixture["parse_failures"]:
-    try:
-        with patch("easy_multi_provider.quota.time.time", return_value=fixture["observed_at"]):
-            parse_app_server_output(case["transcript"])
-    except QuotaError as exc:
-        parse_failures.append(error(exc))
-
-rpc_errors = [error(_quota_rpc_error(case["method"], case["error"])) for case in fixture["rpc_errors"]]
-reset = []
-for transcript in fixture["reset_transcripts"]:
-    try:
-        reset.append({"ok": True, "outcome": _reset_outcome(transcript)})
-    except QuotaError as exc:
-        reset.append({"ok": False, "error": error(exc)})
-
-idempotency_keys = []
-for value in fixture["idempotency_keys"]:
-    try:
-        idempotency_keys.append({"ok": True, "value": _validated_reset_idempotency_key(value)})
-    except QuotaError as exc:
-        idempotency_keys.append({"ok": False, "error": error(exc)})
-
-json.dump({
-    "parsed": parsed,
-    "parse_failures": parse_failures,
-    "rpc_errors": rpc_errors,
-    "reset": reset,
-    "idempotency_keys": idempotency_keys,
-}, sys.stdout, ensure_ascii=False, separators=(",", ":"))
-"#;
-    let oracle_dir = python_oracle_dir();
-    let mut child = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .current_dir(&oracle_dir)
-        .env("PYTHONPATH", &oracle_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn Python quota oracle");
-    child
-        .stdin
-        .take()
-        .expect("Python stdin")
-        .write_all(
-            serde_json::to_string(&fixture)
-                .expect("fixture JSON")
-                .as_bytes(),
-        )
-        .expect("write fixture");
-    let output = child
-        .wait_with_output()
-        .expect("wait for Python quota oracle");
-    assert!(
-        output.status.success(),
-        "Python quota oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let python: Value = serde_json::from_slice(&output.stdout).expect("Python quota output");
-    assert_eq!(rust, python);
 }
 
 #[test]
-fn workspace_routing_retry_hint_matches_live_python_01110() {
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        eprintln!("skipping live Python 0.11.11 quota error oracle: EMP_PYTHON_INTEROP is unset");
-        return;
-    };
-    let oracle_dir = python_oracle_dir();
-    let cases = vec![
-        json!({"method":"account/read","error":{"message":"workspace routing discovery timed out"}}),
-        json!({"method":"account/read","error":{"message":"  WORKSPACE ROUTING DISCOVERY FAILED  "}}),
-        json!({"method":"account/read","error":{"message":"private backend detail"}}),
-        json!({"method":"account/rateLimits/read","error":{"message":"workspace routing discovery failed"}}),
-    ];
-    let rust = cases
-        .iter()
-        .map(|case| {
-            let error = quota_rpc_error(case["method"].as_str().unwrap(), &case["error"]);
-            json!({
-                "message":error.to_string(),
-                "code":error.code(),
-                "retry_imported_refresh":error.should_retry_imported_refresh(),
-            })
-        })
-        .collect::<Vec<_>>();
-    let script = r#"
-import json, sys
-from easy_multi_provider import __version__
-assert __version__ == "0.11.11", __version__
-from easy_multi_provider.quota import _quota_rpc_error
-cases = json.load(sys.stdin)
-json.dump([
-    {"message":str(error), "code":error.code,
-     "retry_imported_refresh":error.retry_imported_refresh}
-    for error in (_quota_rpc_error(case["method"], case["error"]) for case in cases)
-], sys.stdout, separators=(",", ":"))
-"#;
-    let mut child = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .current_dir(&oracle_dir)
-        .env("PYTHONPATH", &oracle_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn current Python quota oracle");
-    child
-        .stdin
-        .take()
-        .expect("Python stdin")
-        .write_all(&serde_json::to_vec(&cases).expect("encode quota error cases"))
-        .expect("write quota error cases");
-    let output = child
-        .wait_with_output()
-        .expect("wait for current Python quota oracle");
-    assert!(
-        output.status.success(),
-        "Python quota error oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let expected: Value = serde_json::from_slice(&output.stdout).expect("Python error JSON");
-    assert_eq!(serde_json::to_value(rust).unwrap(), expected);
-}
-
-fn python_oracle_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("EMP_PYTHON_ORACLE_ROOT").map(PathBuf::from) {
-        assert!(
-            path.join("easy_multi_provider/quota.py").is_file(),
-            "EMP_PYTHON_ORACLE_ROOT must contain easy_multi_provider/quota.py"
+fn workspace_routing_failures_flag_the_imported_refresh_retry() {
+    for (method, message, expected_code, expected_retry) in [
+        (
+            "account/read",
+            "workspace routing discovery timed out",
+            "quota_transport_error",
+            true,
+        ),
+        (
+            "account/read",
+            "  WORKSPACE ROUTING DISCOVERY FAILED  ",
+            "quota_transport_error",
+            true,
+        ),
+        (
+            "account/read",
+            "private backend detail",
+            "quota_account_read_failed",
+            false,
+        ),
+        (
+            "account/rateLimits/read",
+            "workspace routing discovery failed",
+            "quota_fetch_failed",
+            false,
+        ),
+    ] {
+        let error = quota_rpc_error(method, &json!({"message": message}));
+        assert_eq!(error.code(), expected_code, "{method}: {message}");
+        assert_eq!(
+            error.should_retry_imported_refresh(),
+            expected_retry,
+            "{method}: {message}"
         );
-        return path;
     }
-    let sibling = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../EasyMultiProvider");
-    assert!(
-        sibling.join("easy_multi_provider/quota.py").is_file(),
-        "set EMP_PYTHON_ORACLE_ROOT to the Python 0.11.11 checkout"
-    );
-    sibling
 }

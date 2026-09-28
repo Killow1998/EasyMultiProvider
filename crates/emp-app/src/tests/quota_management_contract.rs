@@ -141,7 +141,7 @@ fn native_and_imported_quota_refresh_cross_the_management_boundary() {
     .expect("encode auth");
     std::fs::write(&auth_path, &original_auth).expect("write native auth");
     let account_root = root.join("state").join("accounts");
-    let imported_auth = account_root.join("egg").join("auth.json.enc");
+    let imported_auth = account_root.join("demo").join("auth.json.enc");
     let duplicate_auth = account_root.join("native-copy").join("auth.json.enc");
     let config = root.join("config.json");
     std::fs::write(
@@ -151,9 +151,9 @@ fn native_and_imported_quota_refresh_cross_the_management_boundary() {
             "native_model_context_windows": {"gpt-visible": 200000},
             "account_store_path": account_root,
             "accounts": [{
-                "id": "egg",
-                "name": "egg",
-                "prefix": "egg",
+                "id": "demo",
+                "name": "demo",
+                "prefix": "demo",
                 "auth_file": imported_auth,
             }, {
                 "id": "native-copy",
@@ -191,7 +191,7 @@ for line in sys.stdin:
             (home / "auth.json").write_text(json.dumps(auth))
         elif started == "imported-rotated":
             assert request["params"] in ({"refreshToken": False}, {"refreshToken": True})
-        print(json.dumps({"id": request["id"], "result": {"account": {"email": "xian@example.com", "planType": "pro"}}}), flush=True)
+        print(json.dumps({"id": request["id"], "result": {"account": {"email": "user@example.com", "planType": "pro"}}}), flush=True)
     elif method == "account/rateLimits/read":
         if started == "imported-original":
             print(json.dumps({"id": request["id"], "error": {"message": "failed to fetch codex rate limits: GET https://example.invalid failed: 401 Unauthorized; content-type=text/plain; body=private-token"}}), flush=True)
@@ -243,7 +243,7 @@ for line in sys.stdin:
             &json!({
                 "tokens": {
                     "access_token": "imported-original",
-                    "account_id": "workspace-egg"
+                    "account_id": "workspace-demo"
                 }
             }),
         )
@@ -388,7 +388,7 @@ for line in sys.stdin:
         assert!(invalid.contains("quota_reset_invalid_request"));
     }
 
-    let imported = post(&server, "/api/accounts/egg/quota", b"{}", &[&session]);
+    let imported = post(&server, "/api/accounts/demo/quota", b"{}", &[&session]);
     assert!(imported.starts_with("HTTP/1.1 200 OK\r\n"), "{imported}");
     let imported: Value = serde_json::from_str(
         imported
@@ -425,7 +425,7 @@ for line in sys.stdin:
 
     let imported_reset = post(
         &server,
-        "/api/accounts/egg/quota-reset",
+        "/api/accounts/demo/quota-reset",
         br#"{"idempotency_key":"12345678-1234-4123-8123-123456789ABC"}"#,
         &[&session],
     );
@@ -518,7 +518,7 @@ for line in sys.stdin:
 
     let imported_history = request(
         &server,
-        "/api/accounts/egg/quota-history?range=all",
+        "/api/accounts/demo/quota-history?range=all",
         &[&session],
     );
     let imported_history: Value = serde_json::from_str(
@@ -535,7 +535,7 @@ for line in sys.stdin:
 
     let invalid_history = request(
         &server,
-        "/api/accounts/egg/quota-history?range=forever",
+        "/api/accounts/demo/quota-history?range=forever",
         &[&session],
     );
     assert!(
@@ -602,7 +602,7 @@ for line in sys.stdin:
     if method == "initialize":
         print(json.dumps({"id": request["id"], "result": {}}), flush=True)
     elif method == "account/read":
-        print(json.dumps({"id": request["id"], "result": {"account": {"email": "xian@example.com", "planType": "pro"}}}), flush=True)
+        print(json.dumps({"id": request["id"], "result": {"account": {"email": "user@example.com", "planType": "pro"}}}), flush=True)
     elif method == "account/rateLimits/read":
         print(json.dumps({"id": request["id"], "error": {"message": "failed to fetch codex rate limits: GET https://example.invalid failed: 429 Too Many Requests; content-type=text/plain; body=private-token"}}), flush=True)
 "#,

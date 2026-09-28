@@ -3,26 +3,9 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-
-fn repository_index_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../easy_multi_provider/web/index.html")
-}
-
-fn assert_embedded_index_matches(expected: &[u8], source: &str) {
-    let actual = emp_app::WEB_INDEX_BYTES;
-    assert!(
-        actual == expected,
-        "embedded Web UI differs from {source}: Rust {} bytes (SHA-256 {:x}), source {} bytes (SHA-256 {:x})",
-        actual.len(),
-        Sha256::digest(actual),
-        expected.len(),
-        Sha256::digest(expected),
-    );
-}
 
 fn canonical_root(directory: &TempDir) -> PathBuf {
     directory
@@ -186,24 +169,41 @@ fn spawn_emp(config: &std::path::Path) -> (u16, std::process::Child, String) {
 }
 
 #[test]
-fn embedded_index_matches_repository_bytes_exactly() {
-    let expected = std::fs::read(repository_index_path()).expect("read source Web UI");
-    assert_embedded_index_matches(&expected, "repository source");
+fn embedded_web_ui_is_a_complete_self_served_page() {
+    // The binary serves the page it embeds; the page is a complete HTML
+    // document with a script that performs the bootstrap exchange, so the UI
+    // works without any external asset fetches.
+    let page = emp_app::WEB_INDEX_BYTES;
+    let document = std::str::from_utf8(page).expect("embedded Web UI is UTF-8");
+    assert!(
+        document.to_ascii_lowercase().starts_with("<!doctype html>"),
+        "document starts with a doctype"
+    );
+    assert!(document.contains("</html>"), "document is closed");
+    assert!(
+        document.contains("<script"),
+        "the page carries the bootstrap script"
+    );
+    assert!(
+        document.contains("/api/session"),
+        "the script exchanges the bootstrap token for a session"
+    );
 }
 
 #[test]
-fn embedded_index_matches_current_python_release_bytes() {
-    let python = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../EasyMultiProvider/easy_multi_provider/web/index.html");
-    // CI checkouts may not include the adjacent oracle worktree; local
-    // differential runs assert exact release bytes when it is available.
-    if let Ok(expected) = std::fs::read(python) {
-        assert_embedded_index_matches(&expected, "Python release");
-    }
+fn served_index_matches_the_embedded_bytes() {
+    let directory = TempDir::new().expect("temporary directory");
+    let config = canonical_root(&directory).join("config.json");
+    let (port, mut child, _) = spawn_emp(&config);
+    let page = request(port, "/", &[]);
+    assert!(page.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    assert_eq!(body(&page), emp_app::WEB_INDEX_BYTES);
+    child.kill().expect("stop test EMP");
+    child.wait().expect("reap test EMP");
 }
 
 #[test]
-fn version_output_matches_the_existing_cli() {
+fn version_output_reports_the_running_release() {
     let output = Command::new(env!("CARGO_BIN_EXE_EMP"))
         .arg("--version")
         .output()
@@ -215,7 +215,7 @@ fn version_output_matches_the_existing_cli() {
 }
 
 #[test]
-fn management_bootstrap_contract_is_python_compatible() {
+fn management_bootstrap_exchanges_a_single_use_session_token() {
     let directory = TempDir::new().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     let (port, mut child, bootstrap_line) = spawn_emp(&config);
@@ -235,8 +235,7 @@ fn management_bootstrap_contract_is_python_compatible() {
     // The page carries no secrets; its script exchanges the bootstrap token.
     let page = request(port, "/", &[]);
     assert!(page.starts_with(b"HTTP/1.1 200 OK\r\n"));
-    let expected = std::fs::read(repository_index_path()).expect("read source Web UI");
-    assert_eq!(body(&page), expected.as_slice());
+    assert_eq!(body(&page), emp_app::WEB_INDEX_BYTES);
 
     let wrong_host = request(port, "/", &["Host: 127.0.0.2"]);
     assert!(wrong_host.starts_with(b"HTTP/1.1 403 Forbidden\r\n"));

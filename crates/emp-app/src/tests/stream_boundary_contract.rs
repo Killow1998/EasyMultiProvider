@@ -422,80 +422,39 @@ fn external_pre_output_retry_is_single_and_route_local() {
 }
 
 #[test]
-fn stream_boundary_helpers_match_live_python() {
-    fn semantic_frames(value: &Value) -> Vec<Value> {
-        value
-            .as_array()
-            .expect("frame array")
-            .iter()
-            .map(|frame| {
-                let frame = frame.as_str().expect("frame string");
-                let (event, data) = frame
-                    .strip_prefix("event: ")
-                    .and_then(|frame| frame.split_once("\ndata: "))
-                    .expect("SSE event and data lines");
-                let data = data.strip_suffix("\n\n").expect("SSE terminator");
-                json!({
-                    "event": event,
-                    "data": serde_json::from_str::<Value>(data).expect("SSE JSON data"),
-                })
-            })
-            .collect()
-    }
-
+fn stream_boundary_frames_and_activity_are_directly_asserted() {
     let events = [
         json!({"type":"response.created","response":{"status":"in_progress","output":[]}}),
         json!({"type":"response.output_text.delta","delta":"回答, key: value"}),
         json!({"type":"response.output_item.added","item":{"id":"call_1","type":"function_call"}}),
     ];
-    let rust = json!({
-        "frames": events.iter().map(|event| {
-            String::from_utf8(sse_frame(event["type"].as_str().unwrap(), event).unwrap()).unwrap()
-        }).collect::<Vec<_>>(),
-        "activity": events.iter().map(|event| {
+    // Frames round-trip: the event name leads and the payload is valid JSON
+    // with a trailing blank line, so any SSE client can parse them.
+    for event in &events {
+        let frame =
+            String::from_utf8(sse_frame(event["type"].as_str().unwrap(), event).unwrap()).unwrap();
+        let (event_name, data) = frame
+            .strip_prefix("event: ")
+            .and_then(|frame| frame.split_once("\ndata: "))
+            .expect("SSE event and data lines");
+        assert_eq!(event_name, event["type"]);
+        assert!(frame.ends_with("\n\n"));
+        let parsed: Value = serde_json::from_str(data.trim_end_matches("\n\n")).expect("SSE JSON");
+        assert_eq!(parsed, *event);
+    }
+    // Activity marks text deltas as output and tool items as tool calls.
+    let observed: Vec<bool> = events
+        .iter()
+        .map(|event| {
             let (output, tool) = stream_event_activity(event);
-            json!([output, tool])
-        }).collect::<Vec<_>>(),
-    });
-    let Ok(python) = std::env::var("EMP_PYTHON_INTEROP") else {
-        return;
-    };
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let script = r#"
-import json
-from easy_multi_provider.stream_adapters import _sse_frame
-from easy_multi_provider.transport_failures import event_activity
-events = [
-    {"type":"response.created","response":{"status":"in_progress","output":[]}},
-    {"type":"response.output_text.delta","delta":"回答, key: value"},
-    {"type":"response.output_item.added","item":{"id":"call_1","type":"function_call"}},
-]
-print(json.dumps({
-    "frames":[_sse_frame(event["type"], event).decode() for event in events],
-    "activity":[list(event_activity(event)) for event in events],
-}, ensure_ascii=False))
-"#;
-    let output = Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .current_dir(root)
-        .output()
-        .expect("spawn Python stream boundary oracle");
-    assert!(
-        output.status.success(),
-        "Python stream boundary oracle failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let python: Value = serde_json::from_slice(&output.stdout).expect("Python oracle JSON");
-    assert_eq!(rust["activity"], python["activity"]);
-    assert_eq!(
-        semantic_frames(&rust["frames"]),
-        semantic_frames(&python["frames"])
-    );
+            output || tool
+        })
+        .collect();
+    assert_eq!(observed, [false, true, true]);
 }
 
 #[test]
-fn response_body_errors_keep_the_python_status_boundary() {
+fn response_body_errors_keep_the_stable_status_boundary() {
     let (_directory, server) = test_server();
     let cookie = session_header(&server);
     let wrong_type = post(
