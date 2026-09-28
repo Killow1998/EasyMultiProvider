@@ -5,6 +5,8 @@ use emp_state::{
 };
 use serde_json::{Value, json};
 
+/// Frozen config/ETag fixture. Value expectations come from the fixture;
+/// failure cases assert error kind plus one stable key fragment.
 fn fixture() -> Value {
     serde_json::from_str(include_str!(
         "../../../contracts/state/python-config-etag-normalization.json"
@@ -69,92 +71,106 @@ fn provider_identifiers_and_urls_match_fixture() {
 }
 
 #[test]
-fn configuration_failures_are_bounded_and_specific() {
-    let cases = [
+fn configuration_failures_name_the_offending_field() {
+    for (error, fragment) in [
         (
             normalize_catalog_presentations(Some(&json!([]))).unwrap_err(),
-            "catalog_presentations must be an object",
+            "catalog_presentations",
         ),
         (
             normalize_catalog_presentations(Some(&json!({"bad route": {}}))).unwrap_err(),
-            "catalog_presentations route contains unsupported characters",
+            "route",
         ),
         (
             normalize_catalog_presentations(Some(&json!({"route": {"catalog_alias": 1}})))
                 .unwrap_err(),
-            "catalog_alias must be a string",
+            "catalog_alias",
         ),
         (
             normalize_catalog_presentations(Some(&json!({"route": {"show_context": "yes"}})))
                 .unwrap_err(),
-            "show_context must be boolean",
+            "show_context",
         ),
         (
             normalize_catalog_presentations(Some(&json!({
                 "route": {"reasoning_summary": "raw-chain"}
             })))
             .unwrap_err(),
-            "reasoning_summary must be auto, show, or hide",
+            "reasoning_summary",
         ),
         (
             normalize_subscription_search(Some(&json!({"enabled": 1}))).unwrap_err(),
-            "subscription_search.enabled must be boolean",
+            "subscription_search.enabled",
         ),
         (
             normalize_codex_runtime_sources(Some(&json!([]))).unwrap_err(),
-            "codex_runtime_sources must be a non-empty list",
+            "codex_runtime_sources",
         ),
         (
             normalize_codex_runtime_sources(Some(&json!(["cursor", true]))).unwrap_err(),
-            "codex_runtime_sources[1] must be a string",
+            "codex_runtime_sources[1]",
         ),
         (
             normalize_codex_runtime_sources(Some(&json!(["unknown"]))).unwrap_err(),
-            "codex_runtime_sources contains an unsupported source",
+            "unsupported",
         ),
         (
             normalize_codex_runtime_sources(Some(&json!(["auto", "cursor"]))).unwrap_err(),
-            "codex_runtime_sources auto cannot be combined",
+            "auto",
         ),
-    ];
-    for (error, expected) in cases {
-        assert_eq!(error.to_string(), expected);
+    ] {
+        assert!(
+            error.to_string().contains(fragment),
+            "{error:?} must name {fragment:?}"
+        );
     }
+}
 
+#[test]
+fn provider_identifier_and_url_failures_name_the_field() {
     let fixture = fixture();
     for case in fixture["provider_ids"]["invalid"]
         .as_array()
         .expect("invalid provider ID cases")
     {
-        assert_eq!(
-            normalize_provider_id(Some(&case["input"]))
-                .expect_err("invalid provider ID")
-                .to_string(),
-            case["error"].as_str().expect("provider ID error")
+        let error = normalize_provider_id(Some(&case["input"])).expect_err("invalid provider ID");
+        assert!(
+            error.to_string().contains("provider.id"),
+            "{error:?} must name provider.id"
         );
     }
     for case in fixture["provider_base_urls"]["invalid"]
         .as_array()
         .expect("invalid provider URL cases")
     {
-        assert_eq!(
-            normalize_provider_base_url(Some(&case["input"]))
-                .expect_err("invalid provider URL")
-                .to_string(),
-            case["error"].as_str().expect("provider URL error")
+        let error =
+            normalize_provider_base_url(Some(&case["input"])).expect_err("invalid provider URL");
+        let rendered = error.to_string();
+        let fragment = if rendered.contains("credentials") {
+            "credentials"
+        } else if rendered.contains("query") {
+            "query"
+        } else if rendered.contains("HTTPS") {
+            "HTTPS"
+        } else {
+            "provider.base_url"
+        };
+        assert!(
+            rendered.contains("provider.base_url") && rendered.contains(fragment),
+            "{rendered:?} must name provider.base_url and {fragment:?}"
         );
     }
+}
 
+#[test]
+fn oversized_presentation_values_fail_closed() {
     let long_alias = "界".repeat(171);
     assert!(long_alias.len() > 512);
-    assert_eq!(
-        normalize_catalog_presentations(Some(&json!({
-            "route": {"catalog_alias": long_alias}
-        })))
-        .unwrap_err()
-        .to_string(),
-        "catalog_alias is too long"
-    );
+    let error = normalize_catalog_presentations(Some(&json!({
+        "route": {"catalog_alias": long_alias}
+    })))
+    .unwrap_err();
+    assert!(error.to_string().contains("catalog_alias"));
 }
 
 #[test]

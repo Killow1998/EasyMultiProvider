@@ -164,7 +164,7 @@ mod tests {
     const NOW: f64 = 1_790_000_000.25;
 
     #[test]
-    fn creates_and_reuses_a_python_compatible_session() {
+    fn creates_and_reuses_a_url_safe_session() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory
             .path()

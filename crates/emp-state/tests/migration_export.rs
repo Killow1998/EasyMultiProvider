@@ -33,7 +33,7 @@ fn ids(value: &Value, field: &str) -> Vec<String> {
 }
 
 #[test]
-fn category_selection_matches_python_dependencies() {
+fn category_selection_matches_migration_groups() {
     let config = normalize_configuration(Some(&json!({
         "native_catalog_path": "missing-catalog.json",
         "accounts": [{"id": "other", "prefix": "other"}],
