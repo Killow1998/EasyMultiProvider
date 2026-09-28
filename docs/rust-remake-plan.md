@@ -68,7 +68,7 @@ The browser consumes HTTP JSON, SSE, downloads and existing model endpoints.
 Rust implements that contract. Decoupling does not require two processes,
 different origins, a frontend framework, a Node build or new CORS rules.
 
-- Keep easy_multi_provider/web/index.html (including its CSS/JS) and images
+- Keep the Web UI (now crates/emp-app/web/index.html) (including its CSS/JS) and images
   unchanged, at their current paths during backend replacement.
 - Put asset serving behind the app's web module. Embedding existing bytes into
   one executable is compatible with frontend/backend separation.

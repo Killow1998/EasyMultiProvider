@@ -2477,6 +2477,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "xtask"
+version = "0.12.1"
+dependencies = [
+ "emp-state",
+ "flate2",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+]
+
+[[package]]
 name = "yasna"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
