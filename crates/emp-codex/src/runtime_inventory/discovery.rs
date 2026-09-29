@@ -1,181 +1,97 @@
 //! Known installation layouts only; no recursive search of user directories.
+mod paths;
+mod platform;
+mod windows;
+
+#[cfg(test)]
+#[path = "discovery/matrix_tests.rs"]
+mod matrix_tests;
+#[cfg(all(test, unix))]
+#[path = "discovery/tests.rs"]
+mod tests;
+
+use paths::{app, editor, executable, nvm_installations, path_cli_in_with_extensions};
+pub(super) use paths::{nvm_roots, path_cli_in};
+use platform::{RuntimeOs, RuntimePlatform};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use windows::cli_runtime_for_launcher;
+#[cfg(windows)]
+use windows::registered_windows_codex_package_root;
 
 pub(super) struct Candidate {
-    pub source: &'static str,
-    pub name: &'static str,
-    pub path: PathBuf,
+    pub(super) source: &'static str,
+    pub(super) name: &'static str,
+    pub(super) path: PathBuf,
+    pub(super) unavailable: bool,
 }
 
-fn executable(path: &Path) -> bool {
-    let Ok(metadata) = path.metadata() else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-fn runtime_file(path: &Path) -> Option<PathBuf> {
-    if path.is_symlink()
-        || !path.is_file()
-        || !(path
-            .extension()
-            .is_some_and(|s| s.eq_ignore_ascii_case("exe"))
-            || executable(path))
-    {
-        return None;
-    }
-    path.canonicalize().ok()
-}
-pub(super) fn path_cli() -> Option<PathBuf> {
-    path_cli_in(&std::env::var_os("PATH")?)
-}
-/// Search `path_var` for a trusted `codex`. Empty and relative entries are
-/// skipped so a PATH such as `:/usr/bin` or `.:bin` never resolves against the
-/// current working directory.
-fn path_cli_in(path_var: &std::ffi::OsStr) -> Option<PathBuf> {
-    #[cfg(windows)]
-    let names = std::env::var("PATHEXT")
-        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
-        .split(';')
-        .filter(|ext| !ext.is_empty())
-        .map(|ext| format!("codex{ext}"))
-        .collect::<Vec<_>>();
-    #[cfg(not(windows))]
-    let names = ["codex".to_owned()];
-    std::env::split_paths(path_var)
-        .filter(|root| !root.as_os_str().is_empty() && root.is_absolute())
-        .find_map(|root| {
-            names
-                .iter()
-                .map(|name| root.join(name))
-                .find(|path| executable(path) && super::trust::trusted_binary(path).is_some())
-        })
-}
-fn newest(paths: impl Iterator<Item = PathBuf>) -> Option<PathBuf> {
-    paths
-        .filter_map(|path| {
-            let time = path
-                .metadata()
-                .ok()?
-                .modified()
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            Some((time, path))
-        })
-        .max()
-        .map(|(_, path)| path)
-}
-fn entries(root: &Path) -> Option<Vec<PathBuf>> {
-    root.read_dir()
-        .ok()?
-        .map(|entry| entry.ok().map(|entry| entry.path()))
-        .collect()
-}
-fn editor(root: &Path) -> Option<PathBuf> {
-    let extensions = entries(root)?
-        .into_iter()
-        .filter(|path| {
-            path.file_name().is_some_and(|name| {
-                name.to_string_lossy()
-                    .to_lowercase()
-                    .starts_with("openai.chatgpt-")
-            })
-        })
-        .collect::<Vec<_>>();
-    if extensions.len() > 64 {
-        return None;
-    }
-    let canonical = root.canonicalize().ok()?;
-    let system = if cfg!(windows) {
-        "windows"
-    } else if cfg!(target_os = "macos") {
-        "darwin"
-    } else if cfg!(target_os = "linux") {
-        "linux"
-    } else {
-        return None;
-    };
-    let arch = std::env::consts::ARCH;
-    if !matches!(arch, "x86_64" | "aarch64") {
-        return None;
-    }
-    let name = if cfg!(windows) { "codex.exe" } else { "codex" };
-    newest(
-        extensions
-            .into_iter()
-            .flat_map(|extension| {
-                let bin = extension.join("bin");
-                [
-                    bin.join(name),
-                    bin.join(format!("{system}-{arch}")).join(name),
-                ]
-            })
-            .filter_map(|path| runtime_file(&path))
-            .filter(|path| path.starts_with(&canonical)),
-    )
-}
-fn app(home: &Path, user_home: &Path) -> Option<PathBuf> {
-    let plugin = home
-        .join("plugins/.plugin-appserver")
-        .join(if cfg!(windows) { "codex.exe" } else { "codex" });
-    if cfg!(target_os = "macos") {
-        for root in [
-            user_home.join("Applications"),
-            PathBuf::from("/Applications"),
-        ] {
-            for name in ["ChatGPT.app", "Codex.app"] {
-                if let Some(path) = runtime_file(&root.join(name).join("Contents/Resources/codex"))
-                {
-                    return Some(path);
-                }
-            }
-        }
-    }
-    if let Some(path) = runtime_file(&plugin) {
-        return Some(path);
-    }
-    if cfg!(windows) {
-        let root = PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("OpenAI/Codex/bin");
-        let children = entries(&root)?;
-        if children.len() > 64 {
-            return None;
-        }
-        let canonical = root.canonicalize().ok()?;
-        return newest(
-            std::iter::once(root.join("codex.exe"))
-                .chain(
-                    children
-                        .into_iter()
-                        .filter(|path| path.is_dir())
-                        .map(|path| path.join("codex.exe")),
-                )
-                .filter_map(|path| runtime_file(&path))
-                .filter(|path| {
-                    path.parent() == Some(canonical.as_path())
-                        || path.parent().and_then(Path::parent) == Some(canonical.as_path())
-                }),
-        );
-    }
-    None
-}
 pub(super) fn discover(
     home: &Path,
     user_home: &Path,
     configured: Option<&Path>,
-    fallback: Option<&Path>,
+    path_var: Option<&OsStr>,
+    nvm_roots: &[PathBuf],
 ) -> Vec<Candidate> {
+    let platform = RuntimePlatform::current();
+    let path_extensions = std::env::var_os("PATHEXT");
+    let package_roots = platform
+        .filter(|platform| platform.os == RuntimeOs::Windows)
+        .map(desktop_package_roots)
+        .unwrap_or_default();
+    discover_with_platform(
+        home,
+        user_home,
+        configured,
+        path_var,
+        nvm_roots,
+        DiscoveryEnvironment {
+            platform,
+            path_extensions: path_extensions.as_deref(),
+            system_root: Path::new("/"),
+            package_roots: &package_roots,
+        },
+    )
+}
+
+fn desktop_package_roots(platform: RuntimePlatform) -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        registered_windows_codex_package_root(platform)
+            .into_iter()
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = platform;
+        Vec::new()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DiscoveryEnvironment<'a> {
+    platform: Option<RuntimePlatform>,
+    path_extensions: Option<&'a OsStr>,
+    system_root: &'a Path,
+    package_roots: &'a [PathBuf],
+}
+
+fn discover_with_platform(
+    home: &Path,
+    user_home: &Path,
+    configured: Option<&Path>,
+    path_var: Option<&OsStr>,
+    nvm_roots: &[PathBuf],
+    environment: DiscoveryEnvironment<'_>,
+) -> Vec<Candidate> {
+    let DiscoveryEnvironment {
+        platform,
+        path_extensions,
+        system_root,
+        package_roots,
+    } = environment;
     let mut result = Vec::new();
-    let mut add = |source, name, path: PathBuf| {
+    let mut add = |source, name, path: PathBuf, unavailable: bool| {
         let canonical = path
             .canonicalize()
             .unwrap_or_else(|_| emp_state::config::resolve_user_path(&path));
@@ -186,107 +102,89 @@ pub(super) fn discover(
                 .unwrap_or_else(|_| emp_state::config::resolve_user_path(&candidate.path))
                 == canonical
         }) {
-            result.push(Candidate { source, name, path });
+            result.push(Candidate {
+                source,
+                name,
+                path,
+                unavailable,
+            });
         }
     };
-    if let Some(path) = configured {
-        add("configured", "Configured Codex", path.to_owned());
+    if let Some(configured) = configured {
+        let path = platform
+            .and_then(|platform| cli_runtime_for_launcher(configured, platform))
+            .unwrap_or_else(|| configured.to_owned());
+        let unavailable = !path.exists()
+            || platform.is_some_and(|platform| {
+                platform.os == RuntimeOs::Windows && path == configured && {
+                    configured
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("cmd"))
+                        || configured
+                            .extension()
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("bat"))
+                        || configured
+                            .extension()
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("ps1"))
+                }
+            });
+        add("configured", "Configured Codex", path, unavailable);
     }
-    if let Some(path) = app(home, user_home) {
-        add("codex_app", "ChatGPT App (Codex)", path);
+    if let Some(platform) = platform
+        && let Some(path) = app(home, user_home, platform, system_root, package_roots)
+    {
+        add("codex_app", "ChatGPT App (Codex)", path, false);
     }
+    let binary_name = platform.map_or_else(
+        || if cfg!(windows) { "codex.exe" } else { "codex" },
+        RuntimePlatform::executable_name,
+    );
     let root = home.join("packages/standalone/current");
-    let names = if cfg!(windows) {
-        ["codex.exe", "codex"]
-    } else {
-        ["codex", "codex.exe"]
-    };
     if let Some(path) = [root.join("bin"), root]
         .into_iter()
-        .flat_map(|root| names.map(|name| root.join(name)))
+        .map(|root| root.join(binary_name))
         .find(|path| executable(path))
     {
-        add("managed", "Managed Codex runtime", path);
+        add("managed", "Managed Codex runtime", path, false);
     }
-    for (source, name, folder) in [
-        ("vscode", "VS Code extension", ".vscode"),
-        (
-            "vscode_insiders",
-            "VS Code Insiders extension",
-            ".vscode-insiders",
-        ),
-        ("cursor", "Cursor extension", ".cursor"),
-    ] {
-        if let Some(path) = editor(&user_home.join(folder).join("extensions")) {
-            add(source, name, path);
-        }
+    let daemon_binary = home
+        .join("packages/app-server-daemon/current/bin")
+        .join(binary_name);
+    if executable(&daemon_binary) {
+        add(
+            "app_server_daemon",
+            "App server daemon Codex",
+            daemon_binary,
+            false,
+        );
     }
-    if let Some(path) = path_cli().or_else(|| fallback.map(Path::to_owned)) {
-        add("path_cli", "PATH Codex CLI", path);
-    }
-    result
-}
-
-#[cfg(all(test, unix))]
-mod tests {
-    use super::path_cli_in;
-    use crate::runtime_inventory::trust::tests::{ancestors_are_private, private_dir, script};
-    use std::ffi::OsString;
-    use std::path::{Component, Path, PathBuf};
-
-    fn relative_to_cwd(target: &Path) -> PathBuf {
-        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
-        let target = target.canonicalize().unwrap();
-        let mut relative = PathBuf::new();
-        for component in cwd.components() {
-            if matches!(component, Component::Normal(_)) {
-                relative.push("..");
+    if let Some(platform) = platform {
+        for (source, name, folder) in [
+            ("vscode", "VS Code extension", ".vscode"),
+            (
+                "vscode_insiders",
+                "VS Code Insiders extension",
+                ".vscode-insiders",
+            ),
+            ("cursor", "Cursor extension", ".cursor"),
+        ] {
+            if let Some(path) = editor(&user_home.join(folder).join("extensions"), platform) {
+                add(source, name, path, false);
             }
         }
-        relative.join(target.strip_prefix("/").unwrap())
     }
 
-    #[test]
-    fn path_cli_skips_empty_and_relative_entries() {
-        let dir = private_dir();
-        script(dir.path(), "codex", "exit 0", 0o755);
-        let relative = relative_to_cwd(dir.path());
-        assert!(relative.is_relative() && relative.join("codex").is_file());
-        let path_var =
-            std::env::join_paths([PathBuf::new(), relative, PathBuf::from(".")]).unwrap();
-        assert_eq!(path_cli_in(&path_var), None);
-        assert_eq!(path_cli_in(&OsString::new()), None);
+    if let Some(path) = path_var.and_then(|value| {
+        platform.and_then(|platform| path_cli_in_with_extensions(value, platform, path_extensions))
+    }) {
+        add("path_cli", "PATH Codex CLI", path, false);
     }
-
-    #[test]
-    fn path_cli_skips_untrusted_directories() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = private_dir();
-        let shared = dir.path().join("shared");
-        std::fs::create_dir(&shared).unwrap();
-        script(&shared, "codex", "exit 0", 0o755);
-        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
-        let path_var = std::env::join_paths([shared.clone()]).unwrap();
-        assert_eq!(path_cli_in(&path_var), None);
-        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn path_cli_accepts_a_trusted_symlinked_installation() {
-        use std::os::unix::fs::symlink;
-        let dir = private_dir();
-        if !ancestors_are_private(dir.path()) {
-            return;
+    if let Some(platform) = platform {
+        for root in nvm_roots {
+            for path in nvm_installations(root, platform) {
+                add("nvm", "nvm Node Codex CLI", path, false);
+            }
         }
-        let install = dir.path().join("package");
-        let bin = dir.path().join("bin");
-        std::fs::create_dir(&install).unwrap();
-        std::fs::create_dir(&bin).unwrap();
-        let target = script(&install, "codex", "echo codex-cli 0.156.1", 0o755);
-        let link = bin.join("codex");
-        symlink(&target, &link).unwrap();
-        let path_var = std::env::join_paths([bin]).unwrap();
-        assert_eq!(path_cli_in(&path_var), Some(link));
     }
+    result
 }

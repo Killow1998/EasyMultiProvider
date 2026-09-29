@@ -63,6 +63,41 @@ pub(crate) fn validate_executable(path: &Path) -> Result<(), TrustFailure> {
     Ok(())
 }
 
+/// Validate a directory that will be placed on a child process PATH.
+/// Unlike an executable's ancestors, the directory itself cannot use sticky
+/// world-write protection: other users could add a higher-priority command.
+pub(crate) fn validate_search_directory(path: &Path) -> Result<(), TrustFailure> {
+    if !path.is_absolute() {
+        return Err(TrustFailure::NotTrusted);
+    }
+    let canonical = path.canonicalize().map_err(|_| TrustFailure::Unavailable)?;
+    let metadata = fs::metadata(&canonical).map_err(|_| TrustFailure::Unavailable)?;
+    if !metadata.is_dir() {
+        return Err(TrustFailure::NotTrusted);
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: getuid has no preconditions and cannot fail.
+        let current_uid = unsafe { libc::getuid() };
+        if !trusted_owner(metadata.uid(), current_uid) {
+            return Err(TrustFailure::NotTrusted);
+        }
+        let private_groups = PrivateGroups::current(current_uid);
+        if foreign_writable(&metadata, None, current_uid, &private_groups) {
+            return Err(TrustFailure::Writable);
+        }
+        let mut entry_uid = metadata.uid();
+        for parent in canonical.ancestors().skip(1) {
+            let info = fs::metadata(parent).map_err(|_| TrustFailure::Unavailable)?;
+            if foreign_writable(&info, Some(entry_uid), current_uid, &private_groups) {
+                return Err(TrustFailure::Writable);
+            }
+            entry_uid = info.uid();
+        }
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn trusted_owner(uid: u32, current_uid: u32) -> bool {
     uid == 0 || uid == current_uid

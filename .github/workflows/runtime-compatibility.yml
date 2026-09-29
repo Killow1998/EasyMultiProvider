@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2025, macos-15]
+        os: [ubuntu-22.04, windows-2025, macos-15-intel, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,4 +49,4 @@ jobs:
           printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\n' "$path" "$path" "$path" >> "$GITHUB_ENV"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - run: cargo test --locked --workspace --all-targets
+      - run: cargo test --locked --workspace --all-targets --no-fail-fast

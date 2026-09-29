@@ -13,6 +13,7 @@ emp-history = { path = "../emp-history" }
 emp-transport = { path = "../emp-transport" }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde_json = { workspace = true }
+serde = { workspace = true }
 sha2 = "0.10.9"
 tempfile = "3.27"
 time = { version = "0.3.55", features = ["parsing"] }
@@ -20,3 +21,10 @@ zstd = "0.13"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_Packaging_Appx",
+] }

@@ -527,23 +527,23 @@ mod tests {
 
     #[test]
     fn isolated_process_sequences_requests_and_returns_rotated_auth() {
-        let target = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("target");
-        fs::create_dir_all(&target).expect("create target directory");
         let root = tempfile::Builder::new()
             .prefix("emp-fake-codex-")
-            .tempdir_in(target)
+            .tempdir()
             .expect("temporary root");
         let script = root.path().join("fake-codex");
         fs::write(
             &script,
             r#"#!/usr/bin/env python3
-import json, os, pathlib, sys
+import configparser, json, os, pathlib, sys
 
 home = pathlib.Path(os.environ["CODEX_HOME"])
 assert pathlib.Path.cwd().samefile(home)
 assert sys.argv[1:] == ["app-server", "--stdio"]
+config = configparser.ConfigParser()
+config.read_string("[root]\n" + (home / "config.toml").read_text())
+assert config["root"]["cli_auth_credentials_store"] == '"file"'
+assert config.getboolean("features", "plugins", fallback=True) is False
 requests = []
 for line in sys.stdin:
     request = json.loads(line)

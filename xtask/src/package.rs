@@ -5,6 +5,7 @@ use crate::{
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -221,6 +222,7 @@ fn build_binary(root: &Path, target: Target, resource: Option<&Path>) -> Result<
             .env("EMP_PACKAGE_RESOURCE", resource)
             .env("EMP_REQUIRE_WINDOWS_RESOURCES", "1");
     }
+    append_package_path_remaps(&mut command, root)?;
     run_command(&mut command)?;
     let target_root = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
@@ -233,6 +235,110 @@ fn build_binary(root: &Path, target: Target, resource: Option<&Path>) -> Result<
     }
     make_executable(&executable)?;
     Ok(executable)
+}
+
+fn append_package_path_remaps(command: &mut Command, root: &Path) -> Result {
+    let remap_flags = package_path_remap_flags(root)?;
+    let rustflags = merge_rustflags(
+        std::env::var_os("CARGO_ENCODED_RUSTFLAGS").as_deref(),
+        std::env::var_os("RUSTFLAGS").as_deref(),
+        &remap_flags,
+    )?;
+    command.env("CARGO_ENCODED_RUSTFLAGS", rustflags);
+    Ok(())
+}
+
+fn package_path_remap_flags(root: &Path) -> Result<Vec<String>> {
+    let workspace = crate::physical(root)?;
+    let home = user_home_directory();
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|path| path.join(".cargo")));
+    let rustup_home = std::env::var_os("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|path| path.join(".rustup")));
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"));
+    let roots = [
+        (Some(workspace.clone()), "/workspace"),
+        (Some(target_dir), "/build"),
+        (cargo_home, "/cargo"),
+        (rustup_home, "/rustup"),
+        (home, "/user"),
+    ];
+    let mut remaps = Vec::new();
+    for (path, destination) in roots {
+        let Some(path) = path else {
+            continue;
+        };
+        let path = if path.is_absolute() {
+            path
+        } else {
+            workspace.join(path)
+        };
+        if !path.is_dir() {
+            continue;
+        }
+        let path = crate::physical(&path)
+            .map_err(|_| "could not resolve a package source directory for remapping".to_owned())?;
+        if remaps.iter().any(|(existing, _)| existing == &path) {
+            continue;
+        }
+        let source = path
+            .to_str()
+            .ok_or_else(|| "package source path remapping requires Unicode paths".to_owned())?
+            .to_owned();
+        remaps.push((path, format!("--remap-path-prefix={source}={destination}")));
+    }
+    // Rustc applies the last matching prefix, so nested roots must follow their parents.
+    remaps.sort_by(|(left, _), (right, _)| {
+        left.components().count().cmp(&right.components().count())
+    });
+    Ok(remaps.into_iter().map(|(_, flag)| flag).collect())
+}
+
+#[cfg(windows)]
+fn user_home_directory() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let mut home = std::env::var_os("HOMEDRIVE")?;
+            home.push(std::env::var_os("HOMEPATH")?);
+            Some(PathBuf::from(home))
+        })
+}
+
+#[cfg(not(windows))]
+fn user_home_directory() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn merge_rustflags(
+    encoded: Option<&OsStr>,
+    plain: Option<&OsStr>,
+    additions: &[String],
+) -> Result<OsString> {
+    if let Some(encoded) = encoded {
+        let mut merged = encoded.to_os_string();
+        if !merged.is_empty() && !additions.is_empty() {
+            merged.push("\u{1f}");
+        }
+        merged.push(additions.join("\u{1f}"));
+        return Ok(merged);
+    }
+    if let Some(plain) = plain {
+        let plain = plain.to_str().ok_or_else(|| {
+            "RUSTFLAGS must be Unicode to preserve package path remapping".to_owned()
+        })?;
+        let mut flags = plain
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        flags.extend_from_slice(additions);
+        return Ok(OsString::from(flags.join("\u{1f}")));
+    }
+    Ok(OsString::from(additions.join("\u{1f}")))
 }
 
 fn probe_version(executable: &Path) -> Result {
@@ -625,6 +731,48 @@ fn write_macos_app(destination: &Path, executable: &Path, icon: &Path) -> Result
     fs::write(contents.join("Info.plist"), info_plist(VERSION)).map_err(|error| error.to_string())
 }
 
+const HDIUTIL_CREATE_MAX_ATTEMPTS: usize = 3;
+const HDIUTIL_CREATE_RETRY_DELAYS: [Duration; HDIUTIL_CREATE_MAX_ATTEMPTS - 1] =
+    [Duration::from_millis(250), Duration::from_millis(750)];
+
+fn is_hdiutil_resource_busy(stderr: &[u8]) -> bool {
+    stderr.split(|byte| *byte == b'\n').any(|line| {
+        line.strip_suffix(b"\r").unwrap_or(line) == b"hdiutil: create failed - Resource busy"
+    })
+}
+
+fn run_hdiutil_create(command: &mut Command) -> Result {
+    for attempt in 1..=HDIUTIL_CREATE_MAX_ATTEMPTS {
+        let output = command
+            .output()
+            .map_err(|error| format!("could not run {:?}: {error}", command.get_program()))?;
+        std::io::stdout()
+            .write_all(&output.stdout)
+            .map_err(|error| format!("could not write hdiutil stdout: {error}"))?;
+        std::io::stderr()
+            .write_all(&output.stderr)
+            .map_err(|error| format!("could not write hdiutil stderr: {error}"))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+        if !is_hdiutil_resource_busy(&output.stderr) || attempt == HDIUTIL_CREATE_MAX_ATTEMPTS {
+            return Err(format!(
+                "{:?} failed with {}",
+                command.get_program(),
+                output.status
+            ));
+        }
+
+        eprintln!(
+            "hdiutil create reported transient Resource busy; retrying ({attempt}/{HDIUTIL_CREATE_MAX_ATTEMPTS})"
+        );
+        std::thread::sleep(HDIUTIL_CREATE_RETRY_DELAYS[attempt - 1]);
+    }
+
+    unreachable!("hdiutil create attempts are bounded")
+}
+
 fn write_dmg(
     root: &Path,
     build_root: &Path,
@@ -641,13 +789,13 @@ fn write_dmg(
     #[cfg(unix)]
     std::os::unix::fs::symlink("/Applications", stage.join("Applications"))
         .map_err(|error| error.to_string())?;
-    run_command(
-        Command::new("hdiutil")
-            .args(["create", "-volname", PRODUCT_NAME, "-srcfolder"])
-            .arg(&stage)
-            .args(["-ov", "-format", "UDZO"])
-            .arg(output),
-    )
+    let mut command = Command::new("hdiutil");
+    command
+        .args(["create", "-volname", PRODUCT_NAME, "-srcfolder"])
+        .arg(&stage)
+        .args(["-ov", "-format", "UDZO"])
+        .arg(output);
+    run_hdiutil_create(&mut command)
 }
 
 fn write_checksum(path: &Path) -> Result<PathBuf> {
@@ -667,6 +815,140 @@ fn write_checksum(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn fake_hdiutil(directory: &Path, action: &str) -> Command {
+        let executable = directory.join("fake-hdiutil");
+        let body = format!(
+            r#"count=0
+if [ -f "$FAKE_HDIUTIL_COUNT" ]; then
+  count=$(cat "$FAKE_HDIUTIL_COUNT")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$FAKE_HDIUTIL_COUNT"
+{action}
+"#
+        );
+        fs::write(&executable, format!("#!/bin/sh\nset -eu\n{body}")).unwrap();
+        make_executable(&executable).unwrap();
+        let mut command = Command::new(executable);
+        command.env("FAKE_HDIUTIL_COUNT", directory.join("count"));
+        command
+    }
+
+    #[test]
+    fn hdiutil_busy_match_requires_the_exact_transient_diagnostic() {
+        assert!(is_hdiutil_resource_busy(
+            b"hdiutil: create failed - Resource busy\r\n"
+        ));
+        assert!(!is_hdiutil_resource_busy(
+            b"hdiutil: create failed - Operation not permitted\n"
+        ));
+        assert!(!is_hdiutil_resource_busy(
+            b"other command failed - Resource busy\n"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hdiutil_create_recovers_from_one_transient_busy_failure() {
+        let directory = crate::temporary_directory("hdiutil-retry-").unwrap();
+        let mut command = fake_hdiutil(
+            directory.path(),
+            r#"if [ "$count" -eq 1 ]; then
+  echo 'hdiutil: create failed - Resource busy' >&2
+  exit 1
+fi
+echo created"#,
+        );
+
+        run_hdiutil_create(&mut command).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(directory.path().join("count")).unwrap(),
+            "2"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hdiutil_create_stops_after_three_busy_failures() {
+        let directory = crate::temporary_directory("hdiutil-busy-limit-").unwrap();
+        let mut command = fake_hdiutil(
+            directory.path(),
+            "echo 'hdiutil: create failed - Resource busy' >&2\nexit 1",
+        );
+
+        assert!(run_hdiutil_create(&mut command).is_err());
+
+        assert_eq!(
+            fs::read_to_string(directory.path().join("count")).unwrap(),
+            "3"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hdiutil_create_does_not_retry_other_failures() {
+        let directory = crate::temporary_directory("hdiutil-other-error-").unwrap();
+        let mut command = fake_hdiutil(
+            directory.path(),
+            "echo 'hdiutil: create failed - Operation not permitted' >&2\nexit 1",
+        );
+
+        assert!(run_hdiutil_create(&mut command).is_err());
+
+        assert_eq!(
+            fs::read_to_string(directory.path().join("count")).unwrap(),
+            "1"
+        );
+    }
+
+    #[test]
+    fn package_path_remaps_preserve_encoded_rustflags() {
+        let additions = ["--remap-path-prefix=/cargo cache=/cargo".to_owned()];
+        let merged = merge_rustflags(
+            Some(OsStr::new("-C\u{1f}debuginfo=2")),
+            Some(OsStr::new("-D ignored")),
+            &additions,
+        )
+        .unwrap();
+        assert_eq!(
+            merged.to_str().unwrap().split('\u{1f}').collect::<Vec<_>>(),
+            [
+                "-C",
+                "debuginfo=2",
+                "--remap-path-prefix=/cargo cache=/cargo"
+            ]
+        );
+    }
+
+    #[test]
+    fn package_path_remaps_convert_plain_rustflags_by_whitespace() {
+        let addition = "--remap-path-prefix=/cargo=/cargo";
+        let additions = [addition.to_owned()];
+        let merged = merge_rustflags(
+            None,
+            Some(OsStr::new("-C opt-level=2  --cfg plain_flag")),
+            &additions,
+        )
+        .unwrap();
+        assert_eq!(
+            merged.to_str().unwrap().split('\u{1f}').collect::<Vec<_>>(),
+            ["-C", "opt-level=2", "--cfg", "plain_flag", addition]
+        );
+    }
+
+    #[test]
+    fn package_path_remaps_use_generic_workspace_prefixes() {
+        let flags = package_path_remap_flags(&crate::project_root()).unwrap();
+        assert!(flags.iter().any(|flag| flag.ends_with("=/workspace")));
+        assert!(
+            flags
+                .iter()
+                .all(|flag| flag.starts_with("--remap-path-prefix="))
+        );
+    }
 
     #[test]
     fn info_plist_lists_sorted_keys_with_the_numeric_bundle_version() {

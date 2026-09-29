@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/Killow1998/EasyMultiProvider/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/Killow1998/EasyMultiProvider"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/Killow1998/EasyMultiProvider"></a>
-  <img alt="Codex 0.149.0+" src="https://img.shields.io/badge/Codex-0.149.0%2B-blue">
+  <img alt="Codex 0.158.0+" src="https://img.shields.io/badge/Codex-0.158.0%2B-blue">
   <img alt="Windows Linux macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey">
 </p>
 
@@ -91,15 +91,14 @@ For an API Provider, pull the upstream model list, choose the models you want, a
 
 ### 4. Apply EMP to Codex
 
-Click **Apply EMP to Codex**, then restart Codex.
+Click **Apply EMP to Codex**. The integration card shows the saved settings
+and the model catalog observed in the running Codex separately. If Codex still
+has its previous catalog, restart it through the launcher you normally use,
+then check the loaded catalog again.
 
-The Codex integration card shows what the running Codex actually loaded:
-
-- **Codex is using EMP** — the restart picked up EMP;
-- **Restart** — Codex is still running with its old settings;
-- **Codex is not running** — the next Codex you open will use EMP.
-
-The card updates on its own when Codex reconnects to EMP, so there is nothing to refresh.
+A matching catalog confirms that the models are visible. It does not prove
+that an already running session has adopted the new provider settings.
+The card updates when Codex reconnects to EMP; you can also check it manually.
 
 EMP writes its settings to the shared `~/.codex/config.toml`, so every Codex client (CLI, App, IDE extensions) picks them up. Multiple clients and workspaces can run concurrently.
 
@@ -114,7 +113,9 @@ team/gpt-5.6-luna
 provider/model
 ~~~
 
-With a ChatGPT login, catalog changes can refresh while Codex is running. Codex 0.155.0 also refreshes periodically; reopen the model picker if a newly added model is not visible immediately.
+With a ChatGPT login, supported Codex clients can pick up catalog changes while
+running. Changes become available on a later request; reopen the model picker if
+a new model is not visible yet.
 
 ## What EMP does
 
@@ -133,9 +134,17 @@ With a ChatGPT login, catalog changes can refresh while Codex is running. Codex 
 
 EMP is designed to keep provider changes from turning into a different coding client.
 
-It preserves native Codex sessions, `resume`, WebSockets, compression, and MCP where supported. For compacted tasks that switch between the current login, imported subscriptions, and external models, EMP reconstructs only Codex-owned visible history instead of forwarding provider-private opaque state.
+EMP preserves native Codex sessions, `resume`, WebSockets, compression, and MCP where supported. During live provider switching, it reconstructs Codex-owned visible history instead of forwarding provider-private opaque state.
 
-External subagent delegation, follow-up tasks, and tool calls have been verified with Gemini 3.7 Flash and 3.8 Flash on Codex runtime `0.153.4`. See [external collaboration compatibility](docs/external-collaboration.md).
+To return a conversation with EMP-owned compaction data to native Codex, finish
+active work and close Codex, then choose **Restore Native** in the Codex
+integration area of the Web UI. EMP converts only affected saved histories and
+backs up each affected history file before rewriting it, then restores native
+settings. The original conversation can then be resumed on supported Codex.
+When restoration finishes, EMP exits; reopen Codex to continue. You can also
+run `EMP restore` from the command line.
+
+For details about external subagent delegation, follow-up tasks, and tool calls, see [external collaboration compatibility](docs/external-collaboration.md).
 
 ### Usage, quota, and cost
 
@@ -163,9 +172,11 @@ External Provider models use the same 95% rule, so a 256,000-token window shows 
 
 ## Codex compatibility
 
-The current source version is **v0.12.2**.
+The current source version is **v0.12.3**.
 
-EMP works with Codex **0.149.0 and newer**. There is no client to choose: EMP only edits the shared `config.toml`, which every Codex client reads. If an older Codex sends a request, EMP answers with an error telling you to update Codex.
+EMP v0.12.3 has been validated with Codex **0.158.0**, which is also the minimum accepted version. Compatibility is rechecked when OpenAI introduces new models or changes client protocols, authentication, or history formats. Newer clients are accepted, but untested releases are not guaranteed compatible. Older clients receive an update message.
+
+There is no client to choose: EMP edits the shared `config.toml` used by Codex clients.
 
 To query account quota, EMP runs a supported Codex it finds in these locations (a configured binary wins):
 
@@ -173,9 +184,25 @@ To query account quota, EMP runs a supported Codex it finds in these locations (
 - the active `.codex` managed runtime,
 - OpenAI's VS Code / Cursor extension runtime,
 - a standalone `codex` on `PATH`,
+- on Unix, nvm installations under `NVM_DIR`, `$XDG_CONFIG_HOME/nvm`,
+  `~/.config/nvm`, or `~/.nvm`,
 - and, on Linux, `$CODEX_HOME/plugins/.plugin-appserver/codex`.
 
-EMP never stops, starts, or restarts Codex; restart Codex yourself after applying or restoring. When Codex next reaches EMP (its model list or a turn), EMP reads `model/list` from Codex's local control socket on Windows, macOS, and Linux, checks which catalog the running Codex loaded, and pushes the result to the Web UI. There is no background polling.
+Discovery covers Windows x64, Linux x64, macOS Intel and macOS Apple Silicon.
+EMP recognizes the known installation layouts of the CLI, IDE extension and
+desktop app on each platform.
+
+Known nvm locations also work when a desktop launcher has a minimal `PATH`.
+An npm-installed Codex uses its installation's trusted Node interpreter, so
+manual `codex` or `node` symlinks are unnecessary.
+
+EMP does not stop or restart your running Codex backend. Quota checks use a
+separate CLI helper; they do not launch the desktop GUI. Applying or restoring
+changes the saved settings. When Codex next reaches EMP (its model list or a turn), EMP
+reads `model/list` from Codex's local control socket and pushes the catalog
+observation to the Web UI. This read-only check does not reload the backend or
+verify its request routing. If a restart is needed, use the backend's usual
+launcher when your active work permits it. There is no background polling.
 
 ## Web UI
 

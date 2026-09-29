@@ -66,3 +66,11 @@ fn tool_pairing_and_collaboration_text_keep_turn_boundaries() {
         "Message Type: NEW_TASK\nDo work."
     );
 }
+
+#[test]
+fn numeric_reasoning_effort_is_rejected_instead_of_silently_dropped() {
+    let error = responses_to_chat(&json!({"reasoning":{"effort":64}}), "upstream")
+        .expect_err("Chat Completions does not accept numeric reasoning effort");
+    assert_eq!(error.kind(), ProtocolErrorKind::InvalidRequest);
+    assert!(error.to_string().contains("numeric reasoning effort"));
+}

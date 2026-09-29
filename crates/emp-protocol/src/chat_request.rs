@@ -654,9 +654,15 @@ pub fn responses_to_chat(body: &Value, upstream_model: &str) -> Result<Value, Pr
         .get("reasoning")
         .and_then(Value::as_object)
         .and_then(|reasoning| reasoning.get("effort"))
-        .and_then(Value::as_str)
     {
-        payload["reasoning_effort"] = Value::String(effort.to_owned());
+        if effort.is_number() {
+            return Err(request_error(
+                "request projection failed: numeric reasoning effort is unsupported by Chat Completions",
+            ));
+        }
+        if let Some(effort) = effort.as_str() {
+            payload["reasoning_effort"] = Value::String(effort.to_owned());
+        }
     }
     if let Some(format) = response_format(body)? {
         payload["response_format"] = format;

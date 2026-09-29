@@ -6,6 +6,7 @@ use super::*;
 pub(super) struct TrustedBinary {
     path: PathBuf,
     identity: BinaryIdentity,
+    launcher_directory: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,11 +27,13 @@ impl TrustedBinary {
         } else {
             find_in_path(name).ok_or_else(binary_unavailable)?
         };
+        let launcher_directory = crate::runtime_inventory::launcher::launcher_directory(&candidate);
         let path = candidate.canonicalize().map_err(|_| binary_unavailable())?;
         validate_binary_path(&path)?;
         Ok(Self {
             identity: binary_identity(&path)?,
             path,
+            launcher_directory,
         })
     }
 
@@ -72,12 +75,14 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
     };
     #[cfg(not(windows))]
     let names = [name.to_owned()];
-    env::split_paths(&env::var_os("PATH")?).find_map(|directory| {
-        names.iter().find_map(|name| {
-            let candidate = directory.join(name);
-            candidate.is_file().then_some(candidate)
+    env::split_paths(&env::var_os("PATH")?)
+        .filter(|directory| !directory.as_os_str().is_empty() && directory.is_absolute())
+        .find_map(|directory| {
+            names.iter().find_map(|name| {
+                let candidate = directory.join(name);
+                candidate.is_file().then_some(candidate)
+            })
         })
-    })
 }
 
 fn validate_binary_path(path: &Path) -> Result<(), QuotaError> {
@@ -155,7 +160,7 @@ pub(super) fn run_isolated_quota_process(
     )?;
     write_private(
         &directory.path().join("config.toml"),
-        b"cli_auth_credentials_store = \"file\"\n",
+        b"cli_auth_credentials_store = \"file\"\n\n[features]\nplugins = false\n",
     )?;
 
     binary.verify()?;
@@ -171,6 +176,20 @@ pub(super) fn run_isolated_quota_process(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(launcher_directory) = &binary.launcher_directory {
+        match crate::runtime_inventory::launcher::path_with_node(
+            launcher_directory,
+            env::var_os("PATH"),
+        ) {
+            crate::runtime_inventory::launcher::PathAdjustment::Set(path) => {
+                command.env("PATH", path);
+            }
+            crate::runtime_inventory::launcher::PathAdjustment::Inherit => {}
+            crate::runtime_inventory::launcher::PathAdjustment::Refuse => {
+                return Err(quota_check_failed());
+            }
+        }
+    }
     for key in INHERITED_ENVIRONMENT {
         if let Some(value) = env::var_os(key) {
             command.env(key, value);
@@ -570,5 +589,61 @@ mod credential_directory_tests {
             "links are not followed"
         );
         assert!(!root.path().join("elsewhere").exists());
+    }
+
+    #[test]
+    fn quota_process_runs_npm_codex_through_a_trusted_sibling_node() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("temporary nvm install");
+        let bin = root.path().join("versions/node/fixture/bin");
+        let package = root
+            .path()
+            .join("versions/node/fixture/lib/node_modules/@openai/codex/bin");
+        fs::create_dir_all(&bin).expect("create nvm bin");
+        fs::create_dir_all(&package).expect("create npm package");
+        let node = bin.join("node");
+        fs::write(
+            &node,
+            "#!/bin/sh\nscript=$1; shift; exec /bin/sh \"$script\" \"$@\"\n",
+        )
+        .expect("write fake node runtime");
+        fs::set_permissions(&node, fs::Permissions::from_mode(0o700))
+            .expect("make fake node executable");
+
+        let cli = package.join("codex.js");
+        fs::write(
+            &cli,
+            r#"#!/usr/bin/env node
+[ "$1" = "app-server" ] && [ "$2" = "--stdio" ] || exit 2
+IFS= read -r request || exit 3
+printf '%s\n' '{"id":1,"result":{}}'
+IFS= read -r request || exit 4
+IFS= read -r request || exit 5
+printf '%s\n' '{"id":2,"result":{"account":{"email":"user@example.com","planType":"pro"}}}'
+IFS= read -r request || exit 6
+printf '%s\n' '{"id":3,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":7}}}}'
+"#,
+        )
+        .expect("write fake npm Codex entry");
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700))
+            .expect("make fake npm Codex executable");
+        let launcher = bin.join("codex");
+        symlink(&cli, &launcher).expect("create npm launcher symlink");
+
+        let trusted = TrustedBinary::resolve(launcher.to_str().expect("UTF-8 launcher"))
+            .expect("trusted npm Codex launcher");
+        let auth = json!({"tokens":{"access_token":"fixture-token","account_id":"a"}});
+        let result = run_isolated_quota_process(
+            &auth,
+            &trusted,
+            Duration::from_secs(5),
+            false,
+            None,
+            None,
+            None,
+        )
+        .expect("quota request through sibling node");
+        assert_eq!(result.quota["rate_limits"]["primary"]["usedPercent"], 7);
     }
 }
