@@ -208,7 +208,10 @@ pub(super) fn wide_string_in_buffer(pointer: *mut u16, buffer: &[u16]) -> Option
     let address = pointer as usize;
     let byte_length = buffer.len().checked_mul(std::mem::size_of::<u16>())?;
     let end = start.checked_add(byte_length)?;
-    if address < start || address >= end || (address - start) % std::mem::size_of::<u16>() != 0 {
+    if address < start
+        || address >= end
+        || !(address - start).is_multiple_of(std::mem::size_of::<u16>())
+    {
         return None;
     }
     let offset = (address - start) / std::mem::size_of::<u16>();
