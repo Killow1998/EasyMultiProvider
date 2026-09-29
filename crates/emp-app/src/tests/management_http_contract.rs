@@ -3,6 +3,7 @@ use super::*;
 #[cfg(unix)]
 use std::sync::Mutex;
 
+#[cfg(unix)]
 fn response_json(response: &str) -> Value {
     serde_json::from_str(
         response
