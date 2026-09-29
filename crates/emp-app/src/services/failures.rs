@@ -169,6 +169,14 @@ pub(crate) fn stream_failure_value(error: &RouterError, response_id: &str) -> Va
     })
 }
 
+pub(crate) fn websocket_router_error(error: &RouterError) -> Value {
+    let failure = stream_failure_value(error, "resp_websocket_error");
+    serde_json::json!({
+        "type":"error", "status":error.status(),
+        "error":failure["response"]["error"]
+    })
+}
+
 pub(crate) fn pre_output_failure_response(event: &Value) -> Option<Vec<u8>> {
     if event.get("type").and_then(Value::as_str) != Some("response.failed") {
         return None;

@@ -221,6 +221,29 @@ impl RuntimeInventory {
         self.path_cli_fallback()
     }
 
+    /// Return the cached version observed for the selected trusted runtime.
+    /// The inventory may run its bounded `--version` probe when its cache is
+    /// stale, but this does not start a Codex app-server.
+    pub fn selected_trusted_version(&self) -> Option<String> {
+        let snapshot = self.snapshot(false);
+        let selected = snapshot["runtimes"]
+            .as_array()?
+            .iter()
+            .find(|runtime| runtime["helper"].as_bool() == Some(true))?;
+        if selected["supported"].as_bool() != Some(true)
+            || selected["status"].as_str() != Some("supported")
+        {
+            return None;
+        }
+        let path = selected["path"].as_str()?;
+        let version = selected["installed"].as_str()?;
+        if !self.cached_candidates_are_current() || trust::trusted_binary(Path::new(path)).is_none()
+        {
+            return None;
+        }
+        Some(version.to_owned())
+    }
+
     fn selected_path<'a>(&self, value: &'a Value) -> Option<&'a str> {
         value["runtimes"]
             .as_array()
@@ -323,6 +346,83 @@ mod tests {
             Vec::new(),
         );
         assert_eq!(inventory.executable(), "codex");
+    }
+
+    #[test]
+    fn selected_trusted_version_uses_the_cached_observation_without_starting_app_server() {
+        let root = tempfile::Builder::new()
+            .prefix("emp-inventory-version-")
+            .tempdir()
+            .unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let home = root.path().join("codex-home");
+        let user_home = root.path().join("user-home");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::create_dir(&user_home).unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&user_home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let version_calls = root.path().join("version-calls");
+        let app_server_calls = root.path().join("app-server-calls");
+        let body = format!(
+            "if [ \"$1\" = \"--version\" ]; then echo called >> '{}'; echo 'codex-cli 0.159.4'; else echo called >> '{}'; fi",
+            version_calls.display(),
+            app_server_calls.display()
+        );
+        let binary = script(root.path(), "codex", &body, 0o700);
+        assert_eq!(
+            super::trust::trusted_binary(&binary),
+            Some(binary.canonicalize().unwrap()),
+            "test runtime must satisfy the unchanged executable trust policy"
+        );
+        let inventory = RuntimeInventory::with_discovery(
+            home,
+            user_home,
+            Some(binary.clone()),
+            Some(OsString::new()),
+            Vec::new(),
+        );
+
+        assert_eq!(
+            inventory.selected_trusted_version().as_deref(),
+            Some("0.159.4")
+        );
+        assert_eq!(
+            inventory.selected_trusted_version().as_deref(),
+            Some("0.159.4")
+        );
+        assert_eq!(
+            std::fs::read_to_string(version_calls)
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert!(!app_server_calls.exists());
+    }
+
+    #[test]
+    fn selected_trusted_version_is_absent_when_no_supported_runtime_was_observed() {
+        let root = tempfile::Builder::new()
+            .prefix("emp-inventory-version-")
+            .tempdir()
+            .unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let home = root.path().join("codex-home");
+        let user_home = root.path().join("user-home");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::create_dir(&user_home).unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&user_home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let binary = script(root.path(), "codex", "echo 'codex-cli 0.157.9'", 0o700);
+        let inventory = RuntimeInventory::with_discovery(
+            home,
+            user_home,
+            Some(binary),
+            Some(OsString::new()),
+            Vec::new(),
+        );
+
+        assert_eq!(inventory.selected_trusted_version(), None);
     }
 
     #[test]

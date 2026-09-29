@@ -90,8 +90,10 @@ pub(crate) fn serve_quota_events(
         return;
     }
     let integration = &state.backend.integration.watch.revision;
+    let activity = &state.backend.activity;
     let mut observed_revision = u64::MAX;
     let mut observed_integration = u64::MAX;
+    let mut observed_activity = u64::MAX;
     loop {
         if state.shutdown.load(Ordering::Acquire) {
             break;
@@ -106,6 +108,7 @@ pub(crate) fn serve_quota_events(
             |revision| {
                 *revision == observed_revision
                     && integration.load(Ordering::Acquire) == observed_integration
+                    && activity.revision() == observed_activity
                     && !state.shutdown.load(Ordering::Acquire)
             },
         ) {
@@ -127,11 +130,21 @@ pub(crate) fn serve_quota_events(
         if integration_now != observed_integration {
             frame.extend_from_slice(b"event: integration-updated\ndata: {}\n\n");
         }
+        let activity_now = activity.revision();
+        if activity_now != observed_activity {
+            let snapshot = activity.snapshot(system_now().max(0.0) as u64);
+            if let Ok(activity_frame) =
+                crate::services::events::sse_frame("activity-updated", &snapshot)
+            {
+                frame.extend_from_slice(&activity_frame);
+            }
+        }
         if frame.is_empty() {
             frame.extend_from_slice(b": keep-alive\n\n");
         }
         observed_revision = current;
         observed_integration = integration_now;
+        observed_activity = activity_now;
         if stream.write_all(&frame).is_err() || stream.flush().is_err() {
             break;
         }

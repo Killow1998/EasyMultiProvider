@@ -124,11 +124,26 @@ a new model is not visible yet.
 - Use native Codex models, imported ChatGPT subscription models, and external API models from one catalog.
 - Import multiple subscription accounts and refresh available quota data.
 - Choose which Coding Agent models each subscription exposes.
+- Sync native and subscription model catalogs and capabilities from authenticated
+  Codex catalog responses. EMP refreshes automatically, keeps the last good cache
+  when refresh fails, and preserves visibility, aliases, and context overrides.
+  A newly exposed model needs no EMP release or manual model-list edit.
 - Add official or custom Providers through the Web UI.
+- Optionally route a text-only Provider through an installed Claude Code CLI.
+  Claude mode uses the Provider's existing Base URL and API key, requires
+  Anthropic Messages (or automatic detection that resolves to it), returns tool
+  calls to Codex to execute, and buffers replies before display.
 - Discover Provider models, import only the ones you want, test them, edit context limits, hide them, or remove them.
+- See dispatched request activity beside model, Provider, and subscription rows.
+  Active dots mark in-flight requests, with the count in their tooltips. A
+  distinct recent state marks completed requests and expires automatically. A
+  lost event stream clears active confidence.
 - Preserve text, image, reasoning, and structured tool capabilities when the destination reports or supports them.
 - Let Codex delegate a native child task to an external catalog model by its existing model slug while Codex continues to own the child task and permissions.
 - Let external models use Codex standalone web search. EMP prefers the current `.codex` login and can fall back to an available imported account without exposing Provider credentials.
+
+EMP refreshes the model list automatically. An already-open Codex 0.158 model
+picker may need reloading; the UI shows the existing reload notice.
 
 ### Codex continuity
 
@@ -170,11 +185,15 @@ Subscription editing supports per-model context token counts. Leave a field blan
 
 External Provider models use the same 95% rule, so a 256,000-token window shows as 243K in the Codex model picker. The catalog display and EMP request checks use the same effective window.
 
+Use the eye control beside **Model display** to show or hide context labels for
+Native, Subscription and External Provider models. This changes catalog labels,
+not context windows or request limits.
+
 ## Codex compatibility
 
-The current source version is **v0.12.3**.
+The current source version is **v0.12.4**.
 
-EMP v0.12.3 has been validated with Codex **0.158.0**, which is also the minimum accepted version. Compatibility is rechecked when OpenAI introduces new models or changes client protocols, authentication, or history formats. Newer clients are accepted, but untested releases are not guaranteed compatible. Older clients receive an update message.
+Codex **0.158.0** is the minimum accepted version. Compatibility is rechecked when OpenAI introduces new models or changes client protocols, authentication, or history formats. Newer clients may connect, but untested releases are not guaranteed compatible. Older clients receive an update message.
 
 There is no client to choose: EMP edits the shared `config.toml` used by Codex clients.
 

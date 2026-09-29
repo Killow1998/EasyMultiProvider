@@ -52,9 +52,14 @@ use std::time::Duration;
 use std::time::Instant;
 use tempfile::TempDir;
 
+mod activity_contract;
+mod activity_websocket_contract;
 mod auto_review_contract;
 mod cancellation_contract;
 mod catalog_api_contract;
+mod claude_availability_contract;
+mod claude_cli_contract;
+mod claude_cli_failure_contract;
 mod config_api_contract;
 mod conversation_http_contract;
 mod conversation_switch_contract;
@@ -237,6 +242,27 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<TcpStrea
     assert_eq!(
         read_sse_frame(&mut reader),
         "event: integration-updated\ndata: {}\n"
+    );
+    let activity_frame = read_sse_frame(&mut reader);
+    assert!(
+        activity_frame.starts_with("event: activity-updated\ndata: "),
+        "{activity_frame}"
+    );
+    let activity_body = activity_frame
+        .strip_prefix("event: activity-updated\ndata: ")
+        .expect("activity event prefix")
+        .trim();
+    let activity: Value = serde_json::from_str(activity_body).expect("activity snapshot");
+    assert_eq!(activity["recent_for_seconds"], 60);
+    assert_eq!(activity["routes"], json!([]));
+    assert_eq!(
+        activity
+            .as_object()
+            .expect("activity snapshot object")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["observed_at", "recent_for_seconds", "revision", "routes"]
     );
     reader
 }

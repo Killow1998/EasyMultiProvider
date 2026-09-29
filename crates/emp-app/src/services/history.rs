@@ -10,7 +10,6 @@ use crate::util::projection_ids;
 use crate::util::random_hex;
 use emp_core::ResolvedRoute;
 use emp_history::HistoryError;
-use emp_router::ExternalRouter;
 use emp_router::RouterError;
 use emp_router::project_external_payload;
 use emp_router::protocol_candidates;
@@ -84,6 +83,8 @@ pub(crate) fn prepare_history(
 
 pub(crate) enum DestinationPrepareError {
     Router(RouterError),
+    ClaudeCli(crate::services::claude_cli::ClaudeCliError),
+    Disconnected,
     History(&'static str),
     Context(Box<emp_history::context::ContextAssessment>),
 }
@@ -101,6 +102,7 @@ pub(crate) fn prepare_destination_context(
     route: &ResolvedRoute,
     body: Value,
     incoming: &BTreeMap<String, String>,
+    mut monitor: Option<&mut crate::services::disconnect::DisconnectMonitor>,
 ) -> Result<Value, DestinationPrepareError> {
     if route.dialect == emp_core::Dialect::CodexNative {
         // Incremental native input has unknown history completeness. Codex owns
@@ -154,8 +156,8 @@ pub(crate) fn prepare_destination_context(
     let Some(safe_budget) = assessment.safe_input_limit else {
         return Err(DestinationPrepareError::Context(assessment.into()));
     };
-    let router = ExternalRouter::new(&state.backend.transport.client);
     let mut summary_failure = None;
+    let mut activity_guard = None;
     let compacted = emp_history::context::compact_with(
         &body,
         candidate.model.value(),
@@ -165,15 +167,34 @@ pub(crate) fn prepare_destination_context(
                 Ok(ids) => ids,
                 Err(_) => return Err(()),
             };
-            match state
-                .backend
-                .transport
-                .runtime
-                .block_on(router.execute_complete(&candidate, summary_body, incoming, &ids))
-            {
-                Ok(result) => response_output_text(&result.body).ok_or(()),
+            if activity_guard.is_none() {
+                activity_guard = Some(state.backend.activity.begin(
+                    crate::services::activity::ActivityIdentity::from_route(&candidate),
+                    &state.backend.accounts.quota_revision,
+                    &state.backend.accounts.quota_condition,
+                ));
+            }
+            match crate::services::compaction::execute_summary_request(
+                state,
+                &candidate,
+                summary_body,
+                incoming,
+                &ids,
+                monitor.as_deref_mut(),
+            ) {
+                Ok((result, _)) => response_output_text(&result.body).ok_or(()),
                 Err(error) => {
-                    summary_failure = Some(error);
+                    summary_failure = Some(match error {
+                        crate::services::compaction::SummaryExecutionError::Router(error) => {
+                            DestinationPrepareError::Router(error)
+                        }
+                        crate::services::compaction::SummaryExecutionError::ClaudeCli(error) => {
+                            DestinationPrepareError::ClaudeCli(error)
+                        }
+                        crate::services::compaction::SummaryExecutionError::Disconnected => {
+                            DestinationPrepareError::Disconnected
+                        }
+                    });
                     Err(())
                 }
             }
@@ -183,10 +204,9 @@ pub(crate) fn prepare_destination_context(
         if reason == "compaction_unit_too_large" {
             return DestinationPrepareError::Context(Box::new(assessment.clone()));
         }
-        summary_failure.take().map_or(
-            DestinationPrepareError::History(reason),
-            DestinationPrepareError::Router,
-        )
+        summary_failure
+            .take()
+            .unwrap_or(DestinationPrepareError::History(reason))
     })?;
     let final_assessment = {
         let final_guard_body = context_guard_body(&compacted);
@@ -208,6 +228,8 @@ pub(crate) fn prepare_destination_context(
 pub(crate) fn destination_error_response(error: DestinationPrepareError) -> Vec<u8> {
     match error {
         DestinationPrepareError::Router(error) => router_error_response(error),
+        DestinationPrepareError::ClaudeCli(error) => error.http_response(),
+        DestinationPrepareError::Disconnected => Vec::new(),
         DestinationPrepareError::History(reason) => history_http_error(&HistoryError::new(reason)),
         DestinationPrepareError::Context(assessment) => {
             let estimate = assessment

@@ -41,6 +41,7 @@ use emp_state::save_configuration_in_transaction;
 use emp_state::with_file_transaction;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::TcpStream;
 
 pub(crate) fn management_request(
@@ -64,11 +65,15 @@ pub(crate) fn management_request(
     if request.raw_path() == "/api/config" {
         return update_configuration(request, state, &body);
     }
+    if request.raw_path() == "/api/catalog/context-preference" {
+        return update_catalog_context_preference(state, &body);
+    }
     if request.raw_path() == "/api/catalog/refresh" {
         let (path, model_count) = match refresh_catalog(state) {
             Ok(result) => result,
             Err(()) => return internal_error(),
         };
+        crate::services::account_catalog::request_refresh(state, false);
         return json_response(
             &json!({"status":"ok","catalog_path":path,"model_count":model_count}),
         );
@@ -249,12 +254,93 @@ fn update_configuration(request: Request<'_>, state: &ServerState, incoming: &Va
         Ok(saved) => saved,
         Err(_) => return internal_error(),
     };
+    let changed_account_ids = changed_account_ids(&current, &saved);
     *current = saved;
+    for id in changed_account_ids {
+        state.catalog_refresh.account_changed(&id);
+    }
     drop(current);
+    crate::services::account_catalog::request_refresh(state, false);
     // The usage worker applies changed pricing aliases and re-prices old rows.
     state.backend.usage.queue_scan();
     crate::services::runtime::mark_active_pending(state, "EMP configuration changed");
     read_management_request(request, state)
+}
+
+fn update_catalog_context_preference(state: &ServerState, incoming: &Value) -> Vec<u8> {
+    let Some(object) = incoming.as_object().filter(|object| object.len() == 1) else {
+        return config_error("catalog preference request must contain only catalog_show_context");
+    };
+    let Some(show_context) = object.get("catalog_show_context").and_then(Value::as_bool) else {
+        return config_error("catalog_show_context must be boolean");
+    };
+    let mut current = match state.backend.configuration.config.lock() {
+        Ok(config) => config,
+        Err(_) => return internal_error(),
+    };
+    let mut updated = current.clone();
+    updated["catalog_show_context"] = Value::Bool(show_context);
+    let saved = with_file_transaction(|transaction| -> Result<Value, ConfigError> {
+        save_configuration_in_transaction(
+            &updated,
+            Some(&state.backend.configuration.config_path),
+            &state.backend.configuration.vault,
+            transaction,
+        )?;
+        load_configuration(Some(&state.backend.configuration.config_path))
+    });
+    let saved = match saved {
+        Ok(saved) => saved,
+        Err(_) => return internal_error(),
+    };
+    *current = saved;
+    drop(current);
+    let refreshed = refresh_catalog(state);
+    crate::services::account_catalog::request_refresh(state, false);
+    if refreshed.is_err() {
+        return internal_error();
+    }
+    json_response(&json!({"catalog_show_context":show_context}))
+}
+
+fn changed_account_ids(before: &Value, after: &Value) -> BTreeSet<String> {
+    fn source_identities(config: &Value) -> BTreeMap<String, Vec<(String, bool, String)>> {
+        let mut accounts_by_id = BTreeMap::<String, Vec<(String, bool, String)>>::new();
+        for account in config
+            .get("accounts")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(id) = account.get("id").and_then(Value::as_str) {
+                accounts_by_id.entry(id.to_owned()).or_default().push((
+                    account
+                        .get("auth_file")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    account.get("enabled") != Some(&Value::Bool(false)),
+                    account
+                        .get("credential_status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                        .to_owned(),
+                ));
+            }
+        }
+        accounts_by_id
+    }
+
+    let before = source_identities(before);
+    let after = source_identities(after);
+    before
+        .keys()
+        .chain(after.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|id| before.get(id) != after.get(id))
+        .collect()
 }
 
 pub(crate) fn models_request(request: Request<'_>, state: &ServerState) -> Vec<u8> {
@@ -262,6 +348,9 @@ pub(crate) fn models_request(request: Request<'_>, state: &ServerState) -> Vec<u
         Ok(config) => config.clone(),
         Err(_) => return internal_error(),
     };
+    if request.raw_path() == "/v1/models" {
+        crate::services::account_catalog::request_refresh(state, false);
+    }
     let rich = request.raw_path() == "/v1/models"
         && query_values(request.target, "client_version")
             .iter()
@@ -411,6 +500,45 @@ fn metadata_error_response(error: emp_router::RouterError) -> Vec<u8> {
         &headers,
     )
 }
+
 pub(crate) fn internal_error() -> Vec<u8> {
     json_error_response(500, status_text(500), "internal server error", None, &[])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::changed_account_ids;
+    use serde_json::json;
+
+    #[test]
+    fn configuration_account_changes_return_only_affected_ids() {
+        let before = json!({
+            "accounts":[
+                {"id":"one","prefix":"old","name":"First","hidden_models":[],"auth_file":"/accounts/one/auth.json.enc","enabled":true,"credential_status":"valid"},
+                {"id":"two","prefix":"same","auth_file":"/accounts/two/auth.json.enc","enabled":true}
+            ]
+        });
+        let presentation_changed = json!({
+            "accounts":[
+                {"id":"one","prefix":"new","name":"Renamed","hidden_models":["model"],"auth_file":"/accounts/one/auth.json.enc","enabled":true,"credential_status":"valid"},
+                {"id":"two","prefix":"same","auth_file":"/accounts/two/auth.json.enc","enabled":true,"credential_status":"unknown"}
+            ]
+        });
+        assert!(changed_account_ids(&before, &presentation_changed).is_empty());
+
+        let source_changed = json!({
+            "accounts":[
+                {"id":"one","prefix":"new","name":"Renamed","auth_file":"/accounts/one/auth.json.enc","enabled":false,"credential_status":"valid"},
+                {"id":"three","prefix":"added","auth_file":"/accounts/three/auth.json.enc","enabled":true,"credential_status":"valid"}
+            ]
+        });
+        assert_eq!(
+            changed_account_ids(&before, &source_changed),
+            std::collections::BTreeSet::from([
+                "one".to_owned(),
+                "three".to_owned(),
+                "two".to_owned()
+            ])
+        );
+    }
 }

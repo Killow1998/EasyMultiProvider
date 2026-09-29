@@ -1,109 +1,112 @@
 //! Refresh one subscription's entitlements, checking ownership before persistence.
 use crate::app::ServerState;
 use crate::http::response::{json_error_response, status_text};
-use crate::services::accounts::{account_catalog_headers, native_auth_document};
-use crate::services::failures::router_error_response;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::time::Instant;
+
+mod pipeline;
+mod refresh_state;
+mod worker;
+
+use crate::services::failures::router_error_response;
+use pipeline::{
+    FetchAndPersistOutcome, PersistError, RefreshSource, fetch_and_persist, publish_pending_catalog,
+};
+pub(crate) use refresh_state::CatalogRefreshState;
+pub(crate) use worker::{request_refresh, run as run_refresh_worker};
 fn invalid(message: &str) -> Vec<u8> {
     json_error_response(400, status_text(400), message, None, &[])
 }
 fn internal() -> Vec<u8> {
     json_error_response(500, status_text(500), "internal server error", None, &[])
 }
-fn account_path(account: &Value) -> Option<PathBuf> {
-    Some(
-        PathBuf::from(account["auth_file"].as_str().filter(|s| !s.is_empty())?)
-            .parent()?
-            .join("models_cache.json"),
-    )
-}
-pub(crate) fn refresh(state: &ServerState, id: &str) -> Result<Value, Vec<u8>> {
-    let config = state
-        .backend
-        .configuration
-        .config
-        .lock()
-        .map_err(|_| internal())?
-        .clone();
-    let account = if id == "@native" {
-        None
-    } else {
-        Some(
-            config["accounts"]
-                .as_array()
-                .and_then(|accounts| accounts.iter().find(|account| account["id"] == id))
-                .filter(|account| account_path(account).is_some())
-                .ok_or_else(|| invalid("Subscription account is unavailable"))?,
-        )
-    };
-    let base = config["codex_base_url"].as_str().unwrap_or("");
-    let headers = match account {
-        Some(account) => account_catalog_headers(
-            account.as_object().unwrap(),
-            &state.backend.configuration.vault,
-        ),
-        None => native_auth_document(&state.backend.accounts.native_auth_path)
-            .and_then(|auth| emp_codex::account_auth_headers(&auth)),
-    }
-    .ok_or_else(|| invalid("Subscription credentials are unavailable"))?;
-    let owner = emp_codex::native_catalog_owner(&headers);
-    let path = account
-        .and_then(account_path)
-        .unwrap_or_else(|| emp_codex::native_catalog_path(config.as_object().unwrap()));
-    let mut catalog = state
-        .backend
-        .transport
-        .runtime
-        .block_on(emp_router::subscription_catalog::fetch(
-            &state.backend.transport.client,
-            base,
-            &headers,
-        ))
-        .map_err(router_error_response)?;
+fn read_account_cache(path: &std::path::Path) -> Option<Value> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 4 * 1024 * 1024
     {
+        return None;
+    }
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
+fn client_version_or_minimum(observed: Option<String>) -> String {
+    observed.unwrap_or_else(emp_codex::runtime_inventory::minimum_codex)
+}
+
+pub(crate) fn refresh(state: &ServerState, id: &str) -> Result<Value, Vec<u8>> {
+    let _poll = state.catalog_refresh.poll_gate().ok_or_else(internal)?;
+    let (config, generation) = {
         let current = state
             .backend
             .configuration
             .config
             .lock()
             .map_err(|_| internal())?;
-        if current["codex_base_url"] != base {
-            return Err(invalid(
-                "Subscription backend changed during model refresh; retry",
-            ));
-        }
-        if account.is_some() {
-            let current_account = current["accounts"]
-                .as_array()
-                .and_then(|accounts| accounts.iter().find(|account| account["id"] == id));
-            let current_owner = current_account
-                .and_then(Value::as_object)
-                .and_then(|account| {
-                    account_catalog_headers(account, &state.backend.configuration.vault)
-                })
-                .map(|headers| emp_codex::native_catalog_owner(&headers));
-            if current_account.and_then(account_path).as_ref() != Some(&path)
-                || current_owner.as_deref() != Some(&owner)
-            {
-                return Err(invalid("Subscription changed during model refresh; retry"));
-            }
-            catalog["account_owner"] = json!(owner);
-            catalog["base_url"] = json!(base);
+        let generation = if id == "@native" {
+            0
         } else {
-            let current_headers = native_auth_document(&state.backend.accounts.native_auth_path)
-                .and_then(|auth| emp_codex::account_auth_headers(&auth));
-            if emp_codex::native_catalog_path(current.as_object().unwrap()) != path
-                || current_headers.as_ref() != Some(&headers)
-            {
-                return Err(invalid("Native login changed during model refresh; retry"));
-            }
+            state.catalog_refresh.account_generation(id)
+        };
+        (current.clone(), generation)
+    };
+    let base = config["codex_base_url"]
+        .as_str()
+        .filter(|base| !base.is_empty())
+        .ok_or_else(|| invalid("Subscription backend is unavailable"))?;
+    let client_version = client_version_or_minimum(
+        state
+            .backend
+            .integration
+            .inventory
+            .selected_trusted_version(),
+    );
+    let source = (if id == "@native" {
+        RefreshSource::native(state, &config, base, client_version)
+    } else {
+        let account = config["accounts"]
+            .as_array()
+            .and_then(|accounts| accounts.iter().find(|account| account["id"] == id))
+            .ok_or_else(|| invalid("Subscription account is unavailable"))?;
+        RefreshSource::account(
+            state,
+            &config,
+            account,
+            base,
+            client_version,
+            generation,
+            false,
+        )
+    })
+    .ok_or_else(|| invalid("Subscription credentials are unavailable"))?;
+    let persisted = match fetch_and_persist(state, &source) {
+        FetchAndPersistOutcome::Persisted(persisted) => persisted,
+        FetchAndPersistOutcome::UpstreamError(error) => {
+            return Err(router_error_response(error));
         }
-        emp_state::filesystem::write_catalog_json(&path, &catalog).map_err(|_| internal())?;
-        if account.is_none() {
-            emp_codex::preserve_native_catalog(&config).map_err(|_| internal())?;
+        FetchAndPersistOutcome::PersistenceError(error) => {
+            return Err(match error {
+                PersistError::RuntimeChanged => {
+                    invalid("Codex runtime changed during model refresh; retry")
+                }
+                PersistError::SourceChanged => {
+                    invalid("Subscription changed during model refresh; retry")
+                }
+                PersistError::Internal => internal(),
+            });
         }
-    }
-    crate::services::catalog::refresh_catalog(state).map_err(|_| internal())?;
-    Ok(json!({"models":emp_codex::management_views::subscription_model_options(&catalog)}))
+        FetchAndPersistOutcome::Stopped => return Err(internal()),
+    };
+    state.catalog_refresh.mark_fresh(
+        &source.id,
+        &source.fingerprint(),
+        source.generation,
+        Instant::now(),
+    );
+    publish_pending_catalog(state).map_err(|_| internal())?;
+    Ok(
+        json!({"models":emp_codex::management_views::subscription_model_options(&persisted.catalog)}),
+    )
 }
+
+#[cfg(all(test, unix))]
+mod tests;

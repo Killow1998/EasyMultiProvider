@@ -46,6 +46,7 @@ fn category_selection_matches_migration_groups() {
             {"id": "bridge/local", "provider": "bridge", "upstream_id": "gpt-x"}
         ],
         "native_hidden_models": ["gpt-hidden"],
+        "catalog_show_context": false,
         "catalog_presentations": {
             "gpt-x": {"catalog_alias": "Native model"},
             "other/gpt-x": {"catalog_alias": "Other model"},
@@ -151,6 +152,7 @@ fn category_selection_matches_migration_groups() {
             "groups: {groups:?}"
         );
         assert_eq!(result["native_hidden_models"], json!(hidden));
+        assert_eq!(result["catalog_show_context"], false);
     }
 
     assert_eq!(

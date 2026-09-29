@@ -2,6 +2,8 @@
 
 use super::*;
 
+const MAX_ANTHROPIC_PASSTHROUGH_BYTES: usize = 12 * 1024 * 1024;
+
 impl<'a> ExternalRouter<'a> {
     pub const fn new(client: &'a HttpClient) -> Self {
         Self { client }
@@ -128,6 +130,122 @@ impl<'a> ExternalRouter<'a> {
             body: tools
                 .restore_response(projected)
                 .map_err(tool_response_error)?,
+        })
+    }
+
+    /// Send a native Anthropic Messages request through EMP's configured
+    /// transport and credentials while preserving its body and response bytes.
+    /// Only the configured upstream model and routing/auth headers are owned
+    /// by EMP; protocol headers emitted by the caller are allow-listed.
+    pub async fn execute_anthropic_passthrough(
+        &self,
+        route: &ResolvedRoute,
+        body: &Value,
+        incoming: &BTreeMap<String, String>,
+        protocol_headers: &BTreeMap<String, String>,
+    ) -> Result<PassthroughResponse, RouterError> {
+        if route.protocol != Protocol::AnthropicMessages {
+            return Err(RouterError::new(
+                RouterErrorKind::UnsupportedProtocol,
+                501,
+                FailureClass::ProtocolRejection,
+                Some("claude_cli_requires_anthropic_messages".to_owned()),
+                None,
+                "Claude Code CLI requires an Anthropic Messages provider route",
+            ));
+        }
+        let source = body
+            .as_object()
+            .ok_or_else(|| invalid_request("Anthropic Messages body must be an object"))?;
+        if source.get("stream").and_then(Value::as_bool) != Some(true) {
+            return Err(invalid_request(
+                "Claude Code CLI Messages request must stream",
+            ));
+        }
+        if source
+            .get("model")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            return Err(invalid_request("Anthropic Messages model is required"));
+        }
+
+        let provider = route.provider.value();
+        let target = endpoint(provider, Protocol::AnthropicMessages)?;
+        let mut headers = upstream_headers(provider, Protocol::AnthropicMessages, incoming)?;
+        headers.insert("Accept".to_owned(), "text/event-stream".to_owned());
+        for name in ["anthropic-beta", "anthropic-version"] {
+            if headers.contains_key(name) {
+                continue;
+            }
+            let Some((_, value)) = protocol_headers
+                .iter()
+                .find(|(header, _)| header.eq_ignore_ascii_case(name))
+            else {
+                continue;
+            };
+            if value.len() > 8192
+                || value
+                    .bytes()
+                    .any(|byte| byte.is_ascii_control() || byte == b'\r' || byte == b'\n')
+            {
+                return Err(invalid_request("invalid Anthropic protocol header"));
+            }
+            headers.insert(name.to_owned(), value.clone());
+        }
+
+        let mut upstream_body = body.clone();
+        upstream_body["model"] = Value::String(route.upstream_model.clone());
+        let encoded = request_encoding::encode_projected_request(&upstream_body).map_err(|_| {
+            RouterError::new(
+                RouterErrorKind::InvalidRequest,
+                422,
+                FailureClass::RouterError,
+                Some("request_serialization".to_owned()),
+                None,
+                "request serialization failed",
+            )
+        })?;
+        let response = self
+            .client
+            .open(HttpMethod::Post, &target, headers, Some(encoded), true)
+            .await
+            .map_err(transport_error)?;
+        let status = response.status();
+        let content_type = response
+            .header("content-type")
+            .unwrap_or("text/event-stream")
+            .to_owned();
+        let retry_after_seconds = retry_after::parse(response.header("retry-after"));
+        if !(200..300).contains(&status) {
+            let raw = response
+                .read_prefix(MAX_UPSTREAM_ERROR_BYTES)
+                .await
+                .map_err(transport_error)?;
+            let detail = String::from_utf8_lossy(&raw);
+            let failure = http_failure(HttpFailureInput {
+                status,
+                detail: &detail,
+                proxy_evidence: false,
+                retry_after_seconds,
+            });
+            return Err(RouterError::new(
+                RouterErrorKind::Upstream,
+                failure.status,
+                failure.error_class,
+                failure.failure_reason,
+                failure.retry_after_seconds,
+                "upstream request failed",
+            ));
+        }
+        let raw = response
+            .read_limited(MAX_ANTHROPIC_PASSTHROUGH_BYTES)
+            .await
+            .map_err(transport_error)?;
+        Ok(PassthroughResponse {
+            status,
+            content_type,
+            body: raw,
         })
     }
 

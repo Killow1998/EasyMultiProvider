@@ -100,6 +100,11 @@ button[data-icon]{display:inline-flex}
 .entity-card-title{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
 .entity-card-title strong{min-width:0;overflow-wrap:anywhere;font-size:14px}
 .entity-card-title .pill{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.request-activity{display:inline-grid;place-items:center;flex:none;width:12px;height:16px;border-radius:4px;vertical-align:middle;outline:none}
+.request-activity:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.request-activity::before{content:"";width:7px;height:7px;border:1px solid var(--border-strong);border-radius:50%;background:var(--muted);box-sizing:border-box}
+.request-activity[data-activity-state="active"]::before{border-color:var(--success);background:var(--success);box-shadow:0 0 0 2px color-mix(in srgb,var(--success) 20%,transparent)}
+.request-activity[data-activity-state="recent"]::before{border:2px solid var(--accent);background:transparent}
 .entity-card-subtitle,.entity-card-meta{color:var(--muted);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
 .entity-card-subtitle{margin-top:5px}
 .entity-card-subtitle span{display:block}
@@ -223,6 +228,7 @@ button.danger:hover{background:var(--danger-soft);border-color:var(--danger)}
 input,select,textarea{border-radius:6px;border-color:var(--border-strong)}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:none;color:var(--muted);font-size:12px;font-weight:500}
 .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.pill.provider-id-badge::before{display:none}
 .integration-card{padding:0;border:0;border-radius:0;background:none}
 .integration-card[data-state="emp_applied"] .pill::before{background:var(--success)}.integration-card[data-state="emp_applied"]:not([data-runtime="catalog_loaded"],[data-runtime="stopped_waiting_for_start"]) .pill::before{background:var(--warning)}
 .integration-card:is([data-state="conflict"],[data-state="prepared"],[data-state="unavailable"]){border-left:0}
@@ -239,6 +245,18 @@ input,select,textarea{border-radius:6px;border-color:var(--border-strong)}
 .display-list{gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden}
 .display-row{border:0;border-radius:0;border-bottom:1px solid var(--border);background:var(--panel)}
 .display-row:last-child{border-bottom:0}
+.catalog-display-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.catalog-display-heading h2{margin:0}
+.catalog-display-actions{display:flex;align-items:center;gap:6px;min-width:0}
+.catalog-display-actions button{width:36px;min-width:36px;padding:0}
+.catalog-display-actions svg{display:block;width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.display-row .catalog-route-title{display:flex;align-items:center;gap:6px;min-width:0}
+.display-row .catalog-route-title strong{min-width:0}
+.catalog-context-ring,.catalog-eye-path{transition:stroke 140ms ease,opacity 140ms ease}
+.catalog-search-shell{width:0;max-width:0;overflow:hidden;opacity:0;visibility:hidden;transition:width 180ms ease,max-width 180ms ease,opacity 140ms ease,visibility 0s linear 180ms}
+.catalog-search-shell.is-open{width:min(190px,32vw);max-width:min(190px,32vw);opacity:1;visibility:visible;transition:width 180ms ease,max-width 180ms ease,opacity 140ms ease,visibility 0s}
+.catalog-search-shell input{display:block;width:min(190px,32vw);min-width:0;margin:0}
+@media(prefers-reduced-motion:reduce){.catalog-context-ring,.catalog-eye-path,.catalog-search-shell,.catalog-search-shell.is-open{transition:none}}
 .integration-card,.health-stat,.usage-total{box-shadow:none}
 .health-stat,.usage-total{border-radius:8px;background:var(--panel-soft)}
 .modal{border-radius:10px;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
@@ -335,8 +353,20 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 </div>
 <aside class="workspace-side">
 <section>
-<h2 data-i18n="model_display">模型显示</h2>
-<div class="section-tools"><input id="catalog_display_search" type="search" placeholder="搜索模型" data-i18n-placeholder="search_models" oninput="renderCatalogDisplay()"></div>
+<div class="catalog-display-heading">
+  <h2 data-i18n="model_display">模型显示</h2>
+  <div class="catalog-display-actions">
+    <button id="catalog_context_toggle" type="button" class="secondary" aria-pressed="true" aria-label="隐藏上下文标签" title="隐藏上下文标签" onclick="toggleCatalogContext()">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle class="catalog-context-ring" cx="12" cy="12" r="10" stroke-dasharray="49 14"></circle><g class="catalog-eye-path" data-catalog-eye="open"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path><circle cx="12" cy="12" r="2.4"></circle></g><g class="catalog-eye-path" data-catalog-eye="closed" hidden><path d="M3 12s3.2-5.5 9-5.5c2.2 0 4 .7 5.5 1.7M21 12s-3.2 5.5-9 5.5c-2.2 0-4-.7-5.5-1.7"></path><path d="M4 4l16 16"></path></g></svg>
+    </button>
+    <button id="catalog_search_toggle" type="button" class="secondary" aria-expanded="false" aria-controls="catalog_display_search" aria-label="搜索模型" title="搜索模型" onclick="toggleCatalogSearch()">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 5 5"></path></svg>
+    </button>
+    <div id="catalog_search_shell" class="catalog-search-shell">
+      <input id="catalog_display_search" type="search" placeholder="搜索模型" aria-label="搜索模型" aria-hidden="true" tabindex="-1" inert oninput="renderCatalogDisplay()" onkeydown="catalogSearchKeydown(event)">
+    </div>
+  </div>
+</div>
 <div id="catalog_display_models" class="display-list"></div>
 </section>
 </aside>
@@ -377,6 +407,9 @@ let quotaStateTimer = null;
 let quotaStateBusy = false;
 let quotaEventsController = null;
 let quotaEventsConnected = false;
+let activitySnapshot = null;
+let activityClockOffsetSeconds = 0;
+let activityExpiryTimer = null;
 let quotaUpdatePending = false;
 let quotaUpdateRunning = false;
 let diagnosticsTimer = null;
@@ -847,10 +880,10 @@ function usableContext(model) {
   return maximum > 0 ? Math.max(1, Math.round(maximum * Math.min(percent, 100) / 100)) : 0;
 }
 function canonicalDisplayName(value) { return String(value || '').replace(/^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+/, '').replace(/\s+\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]$/, ''); }
-function presentationPreview(route, fallback, context, alias, showContext) {
+function presentationPreview(route, fallback, context, alias) {
   const family = (state.catalog_families || []).find(item => (item.routes || []).some(candidate => candidate.id === route)); const saved = family ? familyPresentationFor(family.id) : presentationFor(route); const label = alias === undefined ? saved.catalog_alias : alias;
   const visible = label || canonicalDisplayName(fallback) || route;
-  const withContext = showContext === undefined ? saved.show_context !== false : Boolean(showContext);
+  const withContext = state.catalog_show_context !== false;
   return withContext ? `[${String(compactContext(context)).padStart(5, ' ')}]  ${visible}` : visible;
 }
 function cloneState() { return JSON.parse(JSON.stringify(state)); }
@@ -862,7 +895,90 @@ function movePresentation(oldRoute, newRoute, target = state) {
     delete all[oldRoute];
   }
 }
+function updateCatalogDisplayControls() {
+  const showContext = state?.catalog_show_context !== false;
+  const contextButton = $('catalog_context_toggle');
+  if (contextButton) {
+    const label = showContext ? tr('隐藏上下文标签','Hide context labels') : tr('显示上下文标签','Show context labels');
+    contextButton.setAttribute('aria-pressed', String(showContext));
+    contextButton.setAttribute('aria-label', label);
+    contextButton.title = label;
+    contextButton.disabled = catalogContextPreferenceBusy;
+    const openEye = contextButton.querySelector('[data-catalog-eye="open"]');
+    const closedEye = contextButton.querySelector('[data-catalog-eye="closed"]');
+    if (openEye) openEye.toggleAttribute('hidden', !showContext);
+    if (closedEye) closedEye.toggleAttribute('hidden', showContext);
+  }
+  const searchButton = $('catalog_search_toggle');
+  const searchShell = $('catalog_search_shell');
+  const searchInput = $('catalog_display_search');
+  if (searchButton && searchShell && searchInput) {
+    const expanded = searchShell.classList.contains('is-open');
+    searchButton.setAttribute('aria-expanded', String(expanded));
+    const label = expanded ? tr('收起模型搜索','Close model search') : tr('搜索模型','Search models');
+    searchButton.setAttribute('aria-label', label);
+    searchButton.title = label;
+    searchInput.setAttribute('aria-label', tr('搜索模型','Search models'));
+    searchInput.placeholder = tr('搜索模型','Search models');
+  }
+}
+function toggleCatalogSearch(expanded) {
+  const shell = $('catalog_search_shell');
+  const input = $('catalog_display_search');
+  if (!shell || !input) return;
+  const open = expanded === undefined ? !shell.classList.contains('is-open') : Boolean(expanded);
+  if (open) {
+    input.inert = false;
+    input.removeAttribute('aria-hidden');
+    input.tabIndex = 0;
+    shell.classList.add('is-open');
+    updateCatalogDisplayControls();
+    input.focus();
+  } else {
+    input.value = '';
+    input.inert = true;
+    input.setAttribute('aria-hidden', 'true');
+    input.tabIndex = -1;
+    shell.classList.remove('is-open');
+    renderCatalogDisplay();
+    $('catalog_search_toggle')?.focus();
+  }
+}
+function catalogSearchKeydown(event) {
+  if (event.key !== 'Escape') return;
+  event.preventDefault();
+  toggleCatalogSearch(false);
+}
+let catalogContextPreferenceBusy = false;
+async function toggleCatalogContext() {
+  if (catalogContextPreferenceBusy) return;
+  const previous = state.catalog_show_context !== false;
+  const next = !previous;
+  state.catalog_show_context = next;
+  catalogContextPreferenceBusy = true;
+  updateCatalogDisplayControls();
+  renderCatalogDisplay();
+  renderModels();
+  try {
+    const saved = await api('/api/catalog/context-preference', {method:'POST', body:JSON.stringify({catalog_show_context:next})});
+    if (typeof saved?.catalog_show_context !== 'boolean') throw new Error(tr('无法保存上下文标签设置','Could not save the context label preference'));
+    state.catalog_show_context = saved.catalog_show_context;
+    renderCatalogDisplay();
+    renderModels();
+    notice(tr('上下文标签设置已保存','Context label preference saved'));
+    void syncSavedCatalog();
+  } catch (error) {
+    state.catalog_show_context = previous;
+    renderCatalogDisplay();
+    renderModels();
+    notice(error.message, true);
+  } finally {
+    catalogContextPreferenceBusy = false;
+    updateCatalogDisplayControls();
+  }
+}
 function renderCatalogDisplay() {
+  updateCatalogDisplayControls();
   const all = Array.isArray(state?.catalog_families) ? state.catalog_families : [];
   const query = String($('catalog_display_search')?.value || '').trim().toLowerCase();
   const matching = all.filter(model => !query || `${model.id} ${model.default_display_name} ${model.display_name} ${(model.routes || []).map(route => route.id).join(' ')}`.toLowerCase().includes(query));
@@ -871,19 +987,21 @@ function renderCatalogDisplay() {
   if (!visible.length) { $('catalog_display_models').innerHTML = `<p class="muted">${esc(t('no_matches'))}</p>`; return; }
   $('catalog_display_models').innerHTML = visible.map(model => {
     const routes = model.routes || []; const routeText = routes.map(route => route.id).join(' · ');
-    const presentation = familyPresentationFor(model.id);
-    const displayName = presentation.catalog_alias || model.default_display_name || model.display_name || model.id;
-    return `<div class="display-row"><div class="route"><strong>${esc(displayName)}</strong><code>${esc(routeText || model.id)}</code></div><button type="button" class="secondary" data-ui-action="catalog-display-editor" data-id="${esc(model.id)}" aria-label="${esc(tr('修改模型显示','Edit model display'))}">›</button></div>`;
+    const route = routes[0]?.id || model.id;
+    const displayName = presentationPreview(route, model.default_display_name || model.display_name || model.id, model.context_window);
+    const activity = activityIndicatorHtml('models', '', displayName, routes.map(item => item.id));
+    return `<div class="display-row"><div class="route"><div class="catalog-route-title"><strong>${esc(displayName)}</strong>${activity}</div><code>${esc(routeText || model.id)}</code></div><button type="button" class="secondary" data-ui-action="catalog-display-editor" data-id="${esc(model.id)}" aria-label="${esc(tr('修改模型显示','Edit model display'))}">›</button></div>`;
   }).join('');
+  updateActivityDots();
 }
 function openCatalogDisplayEditor(family) {
   const group = (state.catalog_families || []).find(item => item.id === family); if (!group) return;
   const presentation = familyPresentationFor(family);
   const routes = (group.routes || []).map(route => route.id).join(' · ') || family;
-  openModal(tr('修改模型显示','Edit model display'), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr('显示名称','Display name'))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label><label class="inline-check"><input id="modal_catalog_context" type="checkbox" ${presentation.show_context === false ? '' : 'checked'}> ${esc(t('context'))}</label><p class="muted">${esc(tr('设置将在完成后立即生效。','Settings take effect immediately when done.'))}</p>`, tr('完成','Done'), async () => {
+  openModal(tr('修改模型显示','Edit model display'), `<p><strong>${esc(group.default_display_name || group.display_name || family)}</strong><br><code>${esc(routes)}</code></p><label>${esc(tr('显示名称','Display name'))}<input id="modal_catalog_alias" value="${esc(presentation.catalog_alias || '')}" placeholder="${esc(group.default_display_name || family)}"></label><p class="muted">${esc(tr('更改名称后立即应用。','The new name takes effect immediately after saving.'))}</p>`, tr('完成','Done'), async () => {
     const candidate = cloneState(); candidate.catalog_family_presentations ||= {}; candidate.catalog_presentations ||= {};
     const current = candidate.catalog_family_presentations[family] || familyPresentationFor(family) || {};
-    candidate.catalog_family_presentations[family] = Object.assign({}, current, {catalog_alias:$('modal_catalog_alias').value.trim(), show_context:$('modal_catalog_context').checked});
+    candidate.catalog_family_presentations[family] = Object.assign({}, current, {catalog_alias:$('modal_catalog_alias').value.trim()});
     for (const route of group.routes || []) delete candidate.catalog_presentations[route.id];
     await persistState(tr('模型显示已保存','Model display saved'), candidate); closeModal();
   });
@@ -904,7 +1022,7 @@ async function saveSubscriptionSearch() {
   await persistState(tr('设置已保存；可在集成状态中检查 Codex 当前加载的模型目录。','Settings saved. Use the integration status to check Codex’s loaded model catalog.'), candidate);
 }
 function fill() {
-  drawLogo(); applyTranslations(); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
+  drawLogo(); applyTranslations(); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels(); updateActivityDots();
 }
 async function load() {
   applyPreferences(); drawLogo();
@@ -1360,6 +1478,122 @@ function accountIdentityHtml(account, hover = '') {
   return `<span class="account-identity${key ? ' has-plan' : ''}"><span class="account-identity-id"${hover}>${esc(label)}</span>${plan}</span>`;
 }
 
+function activityNowSeconds() { return Date.now() / 1000 + activityClockOffsetSeconds; }
+function activityTimestampText(timestamp) {
+  const date = new Date(timestamp * 1000);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = number => String(number).padStart(2, '0');
+  return `${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())} (${utcOffsetLabel(date)})`;
+}
+function activitySummary(matches) {
+  let inFlight = 0;
+  let lastFinished = null;
+  const routes = activitySnapshot?.routes || [];
+  for (const route of routes) {
+    if (!matches(route)) continue;
+    inFlight += route.in_flight;
+    if (route.last_finished !== null && (lastFinished === null || route.last_finished > lastFinished)) lastFinished = route.last_finished;
+  }
+  const recentFor = activitySnapshot?.recent_for_seconds || 0;
+  const recent = inFlight === 0 && lastFinished !== null && activityNowSeconds() - lastFinished < recentFor;
+  return {inFlight, lastFinished, recent};
+}
+function activityDescription(label, summary) {
+  const subject = String(label || tr('请求','Request'));
+  if (summary.inFlight > 0) {
+    const count = tr(`${summary.inFlight} 个请求正在进行`,`${summary.inFlight} active ${summary.inFlight === 1 ? 'request' : 'requests'}`);
+    const finished = summary.lastFinished === null
+      ? tr('尚无完成记录','no completion recorded yet')
+      : tr(`最近完成 ${activityTimestampText(summary.lastFinished)}`,`last finished ${activityTimestampText(summary.lastFinished)}`);
+    return `${subject}: ${count}; ${finished}`;
+  }
+  if (summary.recent && summary.lastFinished !== null) return `${subject}: ${tr(`最近请求完成于 ${activityTimestampText(summary.lastFinished)}`,`last request finished at ${activityTimestampText(summary.lastFinished)}`)}`;
+  return `${subject}: ${tr('近期没有请求','no recent requests')}`;
+}
+function activityIndicatorHtml(kind, id, label, modelIds = []) {
+  const attributes = kind === 'models'
+    ? `data-activity-models="${esc(JSON.stringify(modelIds))}"`
+    : `data-activity-id="${esc(id)}"`;
+  const description = activityDescription(label, {inFlight:0,lastFinished:null,recent:false});
+  return `<span class="request-activity" data-activity-kind="${esc(kind)}" ${attributes} data-activity-label="${esc(label)}" data-activity-state="inactive" role="img" tabindex="0" aria-label="${esc(description)}" title="${esc(description)}"></span>`;
+}
+function activitySummaryForIndicator(element) {
+  const kind = element.dataset.activityKind;
+  const id = element.dataset.activityId || '';
+  if (kind === 'model') return activitySummary(route => route.model_id === id);
+  if (kind === 'models') {
+    let ids = [];
+    try { ids = JSON.parse(element.dataset.activityModels || '[]'); } catch (_) {}
+    const idSet = new Set(Array.isArray(ids) ? ids : []);
+    return activitySummary(route => idSet.has(route.model_id));
+  }
+  if (kind === 'provider') return activitySummary(route => route.provider_id === id);
+  if (kind === 'account') return activitySummary(route => id === '@native'
+    ? route.provider_id === null && (route.account_id === null || route.account_id === '@native')
+    : route.account_id === id);
+  return {inFlight:0,lastFinished:null,recent:false};
+}
+function updateActivityDots() {
+  document.querySelectorAll('[data-activity-kind]').forEach(element => {
+    const summary = activitySummaryForIndicator(element);
+    const status = summary.inFlight > 0 ? 'active' : summary.recent ? 'recent' : 'inactive';
+    element.dataset.activityState = status;
+    const description = activityDescription(element.dataset.activityLabel, summary);
+    element.setAttribute('aria-label', description);
+    element.title = description;
+  });
+}
+function rescheduleActivityExpiry() {
+  if (activityExpiryTimer !== null) clearTimeout(activityExpiryTimer);
+  activityExpiryTimer = null;
+  if (!activitySnapshot || document.visibilityState === 'hidden') return;
+  const now = activityNowSeconds();
+  const recentFor = activitySnapshot.recent_for_seconds;
+  let nextExpiry = null;
+  for (const route of activitySnapshot.routes) {
+    if (route.in_flight > 0 || route.last_finished === null) continue;
+    const expiresAt = route.last_finished + recentFor;
+    if (expiresAt > now && (nextExpiry === null || expiresAt < nextExpiry)) nextExpiry = expiresAt;
+  }
+  if (nextExpiry === null) return;
+  activityExpiryTimer = setTimeout(() => {
+    activityExpiryTimer = null;
+    updateActivityDots();
+    rescheduleActivityExpiry();
+  }, Math.min(2147483647, Math.max(1, Math.ceil((nextExpiry - now) * 1000) + 25)));
+}
+function normalizeActivitySnapshot(value) {
+  const safeInteger = (number, minimum = 0) => Number.isSafeInteger(number) && number >= minimum;
+  if (!value || !safeInteger(value.revision) || !safeInteger(value.observed_at, 1)
+    || !safeInteger(value.recent_for_seconds, 1)
+    || !Array.isArray(value.routes) || value.routes.length > 4096) return null;
+  const routes = [];
+  for (const item of value.routes) {
+    if (!item || typeof item.model_id !== 'string' || !item.model_id || item.model_id.length > 512
+      || !(item.provider_id === null || typeof item.provider_id === 'string' && item.provider_id.length <= 512)
+      || !(item.account_id === null || typeof item.account_id === 'string' && item.account_id.length <= 512)
+      || !safeInteger(item.in_flight) || !((item.last_finished === null) || safeInteger(item.last_finished, 1))) continue;
+    routes.push({model_id:item.model_id, provider_id:item.provider_id, account_id:item.account_id, in_flight:item.in_flight, last_finished:item.last_finished});
+  }
+  return {revision:value.revision, observed_at:value.observed_at, recent_for_seconds:value.recent_for_seconds, routes};
+}
+function applyActivitySnapshot(value) {
+  const snapshot = normalizeActivitySnapshot(value);
+  if (!snapshot) return;
+  activitySnapshot = document.visibilityState === 'hidden'
+    ? {...snapshot, routes:snapshot.routes.map(route => route.in_flight === 0 ? route : {...route, in_flight:0})}
+    : snapshot;
+  activityClockOffsetSeconds = snapshot.observed_at - Date.now() / 1000;
+  updateActivityDots();
+  rescheduleActivityExpiry();
+}
+function clearActivityConfidence() {
+  if (!activitySnapshot) return;
+  activitySnapshot = {...activitySnapshot, routes:activitySnapshot.routes.map(route => route.in_flight === 0 ? route : {...route, in_flight:0})};
+  updateActivityDots();
+  rescheduleActivityExpiry();
+}
+
 function renderAccounts() {
   const accounts = [...(state.native_account ? [state.native_account] : []), ...(state.accounts || [])];
   if (!accounts.length) { quotaAnimationAccounts.clear(); $('accounts').innerHTML = `<p class="muted">${tr('还没有 Codex subscription 账户。','No Codex subscription accounts yet.')}</p>`; return; }
@@ -1379,14 +1613,16 @@ function renderAccounts() {
     const title = titleHasId ? '' : `<strong${a.native ? hover : ''}>${esc(titleText)}</strong>`;
     const identity = accountIdentityHtml(a, hover);
     const statusHtml = status || duplicateText ? `<div class="entity-card-status">${status}${status && duplicateText ? '<br>' : ''}${duplicateText ? `<span class="muted">${duplicateText}</span>` : ''}</div>` : '';
+    const activity = activityIndicatorHtml('account', a.native ? '@native' : a.id, titleText);
     return `<article class="entity-card account-card${duplicateCurrent ? ' account-duplicate' : ''}">
-      <div class="entity-card-main"><div class="entity-card-title">${title}${identity}</div>${statusHtml}</div>
+      <div class="entity-card-main"><div class="entity-card-title">${title}${identity}${activity}</div>${statusHtml}</div>
       <div class="entity-card-quota">${quotaMetersHtml(a, busy, animateQuota)}${creditHtml(a)}${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</div>
       <div class="entity-card-actions">${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} data-ui-action="account-refresh" data-id="${esc(a.id)}">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" data-ui-action="account-quota-history" data-id="${esc(a.id)}">${tr('趋势','Trend')}</button>${remove}</div>
     </article>`;
   }).join('');
   $('accounts').innerHTML = `<div class="entity-list">${rows}</div>`;
   quotaAnimationAccounts.clear();
+  updateActivityDots();
 }
 function utcOffsetLabel(date) { const minutes = -date.getTimezoneOffset(); const sign = minutes >= 0 ? '+' : '-'; const absolute = Math.abs(minutes); const hours = Math.floor(absolute / 60); const remainder = absolute % 60; return `UTC${sign}${hours}${remainder ? ':' + String(remainder).padStart(2, '0') : ''}`; }
 function resetTimestampMillis(value) {
@@ -1456,6 +1692,19 @@ function quotaMetersHtml(account, busy = false, animate = false) {
   return `<div class="quota-stack">${buckets.map(item => { const duration = compactWindowText(item.windowMinutes); const limitLabel = item.limitId && item.limitId !== 'codex' ? `${quotaLimitLabel(item.limitId)} · ${duration}` : duration; if (item.unreported) { const unavailable = tr(`${limitLabel} 未回传限制`, `No ${limitLabel} limit reported`); return `<div class="quota-meter is-unreported" title="${esc(unavailable)}"><div class="quota-meter-head"><span class="quota-window">${esc(limitLabel)}</span><strong class="quota-value">233%</strong></div><div class="quota-battery" role="img" aria-label="${esc(unavailable)}"><span class="quota-battery-fill"></span></div></div>`; } const levelClass = item.remaining <= 20 ? 'is-low' : item.remaining <= 50 ? 'is-medium' : 'is-high'; const reset = resetCountdownText(item.resetsAt); const aria = tr(`${limitLabel} 剩余 ${item.remaining}%`, `${limitLabel} ${item.remaining}% remaining`); return `<div class="quota-meter ${levelClass}${busy ? ' is-refreshing' : ''}${animate ? ' is-updated' : ''}"><div class="quota-meter-head"><span class="quota-window">${esc(limitLabel)}</span><strong class="quota-value">${esc(item.remaining)}%</strong></div><div class="quota-battery" role="progressbar" aria-label="${esc(aria)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(item.remaining)}" style="--quota-level:${esc(item.remaining)}%"><span class="quota-battery-fill"></span></div>${reset ? `<span class="quota-reset" title="${tr('距离额度重置','Time until quota reset')}" data-reset-countdown="${esc(item.resetsAt)}">${esc(reset)}</span>` : ''}</div>`; }).join('')}</div>`;
 }
 function accountQuotaSignature(account) { return JSON.stringify(account?.quota || null); }
+function processManagementEventFrame(frame) {
+  let eventType = '';
+  const data = [];
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('event:')) eventType = line.slice(6).trim();
+    else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+  }
+  if (eventType === 'quota-updated') requestQuotaSync();
+  else if (eventType === 'integration-updated') void integrationUpdated();
+  else if (eventType === 'activity-updated' && data.length) {
+    try { applyActivitySnapshot(JSON.parse(data.join('\n'))); } catch (_) {}
+  }
+}
 async function consumeQuotaEventStream(response, signal) {
   if (!response.body) throw new Error('Quota event stream has no readable body');
   const reader = response.body.getReader();
@@ -1465,14 +1714,13 @@ async function consumeQuotaEventStream(response, signal) {
     while (!signal.aborted) {
       const {done, value} = await reader.read();
       if (done) return;
+      if (signal.aborted) return;
       buffer += decoder.decode(value, {stream:true}).replace(/\r\n/g, '\n');
       let boundary;
       while ((boundary = buffer.indexOf('\n\n')) >= 0) {
         const frame = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
-        const events = frame.split('\n').filter(line => line.startsWith('event:')).map(line => line.slice(6).trim());
-        if (events.includes('quota-updated')) requestQuotaSync();
-        if (events.includes('integration-updated')) integrationUpdated();
+        processManagementEventFrame(frame);
       }
     }
   } finally {
@@ -1484,6 +1732,7 @@ async function runQuotaEventStream(controller) {
   while (!controller.signal.aborted && document.visibilityState !== 'hidden') {
     try {
       const response = await managementFetch('/api/accounts/events', {headers:{'Accept':'text/event-stream'}, signal:controller.signal, cache:'no-store'});
+      if (controller.signal.aborted || quotaEventsController !== controller) return;
       if (!response.ok) {
         if (response.status === 401) { clearSessionToken(); controller.abort(); return; }
         throw new Error(`Quota event stream returned HTTP ${response.status}`);
@@ -1492,8 +1741,13 @@ async function runQuotaEventStream(controller) {
       retryDelay = 1000;
       await consumeQuotaEventStream(response, controller.signal);
     } catch (error) {
+      if (quotaEventsController === controller) quotaEventsConnected = false;
       if (controller.signal.aborted) return;
-      quotaEventsConnected = false;
+    } finally {
+      if (quotaEventsController === controller) {
+        quotaEventsConnected = false;
+        clearActivityConfidence();
+      }
     }
     if (!controller.signal.aborted && document.visibilityState !== 'hidden') {
       await new Promise(resolve => setTimeout(resolve, retryDelay));
@@ -1503,20 +1757,24 @@ async function runQuotaEventStream(controller) {
 }
 function startQuotaEvents() {
   if (quotaEventsController || !(sessionToken || legacyCookieAuth) || document.visibilityState === 'hidden') return;
+  updateActivityDots();
+  rescheduleActivityExpiry();
   const controller = new AbortController();
   quotaEventsController = controller;
   runQuotaEventStream(controller).finally(() => {
     if (quotaEventsController === controller) {
       quotaEventsController = null;
+      quotaEventsConnected = false;
+      clearActivityConfidence();
       if (!controller.signal.aborted && (sessionToken || legacyCookieAuth) && document.visibilityState !== 'hidden') startQuotaEvents();
     }
-    quotaEventsConnected = false;
   });
 }
 function stopQuotaEvents() {
   if (quotaEventsController) quotaEventsController.abort();
   quotaEventsController = null;
   quotaEventsConnected = false;
+  clearActivityConfidence();
 }
 function requestQuotaSync() { quotaUpdatePending = true; return drainQuotaUpdates(); }
 async function drainQuotaUpdates() {
@@ -1916,13 +2174,17 @@ function renderProviders() {
   if (!providers.length) { $('providers').innerHTML = `<p class="muted">${tr('还没有 Provider。','No Providers yet.')}</p>`; return; }
   $('providers').innerHTML = `<div class="entity-list">${providers.map(p => {
     const models = (state.models || []).filter(model => model.provider === p.id); const allHidden = models.length > 0 && models.every(model => !model.enabled);
-    const providerPill = String(p.name || p.id) === String(p.id) ? '' : `<span class="pill">${esc(p.id)}</span>`;
+    const activity = activityIndicatorHtml('provider', p.id, p.name || p.id);
+    const providerHeading = String(p.name || p.id) === String(p.id)
+      ? activity
+      : `<span class="pill provider-id-badge">${activity}${esc(p.id)}</span>`;
     return `<article class="entity-card provider-card">
-      <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(p.name || p.id)}</strong>${providerPill}</div></div>
-      <div class="entity-card-meta"><code class="endpoint">${esc(p.base_url)}</code> · ${esc(protocolLabel(p.protocol))} · ${esc(authLabel(p.auth_mode))}${p.api_key_set ? tr(' · Key 已设置',' · Key set') : ''} · ${tr(`${models.length} 个模型`,`${models.length} models`)}</div>
+      <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(p.name || p.id)}</strong>${providerHeading}</div></div>
+      <div class="entity-card-meta"><code class="endpoint">${esc(p.base_url)}</code> · ${esc(protocolLabel(p.protocol))} · ${esc(authLabel(p.auth_mode))}${p.execution_backend === 'claude_cli' ? tr(' · Claude Code CLI',' · Claude Code CLI') : ''}${p.api_key_set ? tr(' · Key 已设置',' · Key set') : ''} · ${tr(`${models.length} 个模型`,`${models.length} models`)}</div>
       <div class="entity-card-actions"><button class="secondary" data-icon="download" data-ui-action="provider-discover" data-id="${esc(p.id)}">${tr('拉取模型','Fetch models')}</button><button class="secondary" data-icon="edit" data-ui-action="provider-edit" data-id="${esc(p.id)}">${tr('编辑','Edit')}</button><button class="secondary" ${models.length ? '' : 'disabled'} data-ui-action="provider-toggle-models" data-id="${esc(p.id)}" data-all-hidden="${allHidden ? 'true' : 'false'}">${allHidden ? tr('显示全部模型','Show all models') : tr('隐藏全部模型','Hide all models')}</button><button class="danger" data-icon="trash" data-ui-action="provider-remove" data-id="${esc(p.id)}">${tr('删除','Delete')}</button></div>
     </article>`;
   }).join('')}</div>`;
+  updateActivityDots();
 }
 async function toggleProviderModels(id, enabled) {
   const candidate = cloneState();
@@ -1935,27 +2197,98 @@ function openProviderChooser() {
   openModal(tr('添加 Provider','Add Provider'), `<p class="muted">${tr('官方 Provider 使用固定的 Base URL、协议和认证方式。自建 Provider 可选择自动检测。','Official Providers use fixed endpoints, protocols, and authentication. Custom Providers may use automatic protocol detection.')}</p><div class="choice-grid">` + Object.entries(officialProviders).filter(([key]) => key !== 'chatgpt').map(([key,p]) => `<button class="choice" data-ui-action="official-provider-choose" data-provider="${esc(key)}"><strong>${esc(p.name)}</strong><small>${esc(p.hint)}</small></button>`).join('') + `<button class="choice" onclick="openCustomProviderForm()"><strong>${tr('自建 Provider','Custom Provider')}</strong><small>${tr('填写 Base URL、API Key 和协议','Enter a Base URL, API Key, and protocol')}</small></button></div>`, '', null);
   $('modal_submit').style.display = 'none';
 }
+function claudeBackendControls(official = false) {
+  return `<div class="wide"><label>${tr('执行后端','Execution backend')}<select id="modal_provider_backend" onchange="providerBackendChanged()"><option value="http">${tr('标准 HTTP Provider','Standard HTTP provider')}</option><option value="claude_cli">Claude Code CLI</option></select></label></div><div id="modal_claude_backend_details" class="wide muted" hidden><p>${official ? tr('使用上方 Anthropic Messages 地址和 API Key。','Uses the Anthropic Messages URL and API key shown above.') : tr('使用此 Provider 已有的 Base URL、协议和认证设置。','Uses this Provider’s existing Base URL, protocol, and authentication settings.')} ${tr('仅发送文本，不发送图像或文件。工具调用作为提议返回，由 Codex 执行。回复会先缓冲完成，不会逐 token 显示。','Text only; images and files are not sent. Tool calls are returned as proposals for Codex to execute. Replies are buffered before display; tokens are not streamed.')}</p><p id="modal_claude_cli_status" role="status" aria-live="polite"></p></div>`;
+}
+function providerProtocolOptions(claudeOnly) {
+  const options = claudeOnly
+    ? [['auto', tr('自动检测','Auto detect')], ['anthropic_messages', 'Anthropic Messages']]
+    : [['auto', tr('自动检测','Auto detect')], ['chat_completions', 'Chat Completions'], ['responses', 'Responses'], ['anthropic_messages', 'Anthropic Messages']];
+  return options.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
+}
+function providerBackendChanged() {
+  const backend = $('modal_provider_backend');
+  if (!backend) return;
+  const isClaude = backend.value === 'claude_cli';
+  const previous = backend.dataset.lastValue;
+  const protocol = $('modal_provider_protocol');
+  if (protocol) {
+    if (!protocol.dataset.httpProtocol) protocol.dataset.httpProtocol = protocol.value || 'auto';
+    if (isClaude && previous !== 'claude_cli') protocol.dataset.httpProtocol = protocol.value || 'auto';
+    const protocolBeforeUpdate = protocol.value;
+    protocol.innerHTML = providerProtocolOptions(isClaude);
+    if (isClaude) {
+      protocol.value = ['auto', 'anthropic_messages'].includes(protocolBeforeUpdate) ? protocolBeforeUpdate : 'auto';
+    } else {
+      const restore = previous === 'claude_cli' ? protocol.dataset.httpProtocol : protocolBeforeUpdate;
+      protocol.value = ['auto', 'chat_completions', 'responses', 'anthropic_messages'].includes(restore) ? restore : 'auto';
+    }
+  }
+  const auth = $('modal_provider_auth');
+  if (auth) {
+    if (!auth.dataset.httpAuth) auth.dataset.httpAuth = auth.value || 'api_key';
+    if (isClaude && previous !== 'claude_cli') auth.dataset.httpAuth = auth.value || 'api_key';
+    if (isClaude && auth.value === 'forward') auth.value = 'api_key';
+    const forward = [...auth.options].find(option => option.value === 'forward');
+    if (forward) forward.disabled = isClaude;
+    if (!isClaude && previous === 'claude_cli' && auth.dataset.httpAuth) auth.value = auth.dataset.httpAuth;
+  }
+  backend.dataset.lastValue = backend.value;
+  const details = $('modal_claude_backend_details');
+  if (details) details.hidden = !isClaude;
+  if (isClaude) void refreshClaudeCliAvailability();
+}
+async function refreshClaudeCliAvailability() {
+  const status = $('modal_claude_cli_status');
+  if (!status) return;
+  status.textContent = tr('正在检查 Claude Code CLI…','Checking Claude Code CLI…');
+  try {
+    const result = await api('/api/runtime/claude-cli');
+    if ($('modal_provider_backend')?.value !== 'claude_cli' || !status.isConnected) return;
+    status.textContent = result.available
+      ? tr('EMP 可以访问 Claude Code CLI。','Claude Code CLI is available to EMP.')
+      : tr('EMP 未找到可用的 Claude Code CLI。请安装 CLI 或检查 EMP 是否能访问它，然后重新打开此表单。','EMP could not find an available Claude Code CLI. Install the CLI or check that EMP can access it, then reopen this form.');
+  } catch (_) {
+    if ($('modal_provider_backend')?.value !== 'claude_cli' || !status.isConnected) return;
+    status.textContent = tr('无法检查 Claude Code CLI。请确认本机已安装 CLI，且管理页仍处于登录状态。','Could not check Claude Code CLI availability. Confirm it is installed locally and that this management page is still signed in.');
+  }
+}
 function chooseOfficialProvider(key) {
   const preset = officialProviders[key]; const existing = (state.providers || []).find(p => p.id === preset.id);
   const keyField = preset.auth_mode === 'forward' ? `<p class="muted">${tr('该 Provider 会转发当前 Codex 进程携带的登录态，不保存 API Key。','This Provider forwards the active Codex login and does not store an API Key.')}</p>` : `<label>API Key${existing && existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : ''}<input id="modal_provider_key" type="password" placeholder="${tr('输入 API Key','Enter API Key')}"></label>`;
-  openModal(tr('配置 ','Configure ') + preset.name, `<p class="muted">Endpoint: <code>${esc(preset.base_url)}</code><br>${tr('协议','Protocol')}: ${esc(protocolLabel(preset.protocol))}<br>${tr('认证','Authentication')}: ${esc(authLabel(preset.auth_mode))}</p>${keyField}`, tr('保存 Provider','Save Provider'), async () => {
+  const backendField = key === 'anthropic' ? claudeBackendControls(true) : '';
+  openModal(tr('配置 ','Configure ') + preset.name, `<p class="muted">Endpoint: <code>${esc(preset.base_url)}</code><br>${tr('协议','Protocol')}: ${esc(protocolLabel(preset.protocol))}<br>${tr('认证','Authentication')}: ${esc(authLabel(preset.auth_mode))}</p>${backendField}${keyField}`, tr('保存 Provider','Save Provider'), async () => {
     const keyValue = preset.auth_mode === 'forward' ? '' : $('modal_provider_key').value.trim(); if (preset.auth_mode !== 'forward' && !keyValue && !(existing && existing.api_key_set)) throw new Error(tr('请填写 API Key','Enter an API Key'));
-    await saveProvider(Object.assign({}, preset, {api_key:keyValue})); closeModal();
+    const executionBackend = key === 'anthropic' ? $('modal_provider_backend').value : undefined;
+    await saveProvider(Object.assign({}, preset, {api_key:keyValue, ...(executionBackend ? {execution_backend:executionBackend} : {})})); closeModal();
   });
+  if (key === 'anthropic') {
+    $('modal_provider_backend').value = existing?.execution_backend === 'claude_cli' ? 'claude_cli' : 'http';
+    $('modal_provider_backend').dataset.lastValue = $('modal_provider_backend').value;
+    providerBackendChanged();
+  }
 }
 function openCustomProviderForm(existing) {
   existing = existing || {};
-  openModal(existing.id ? tr('编辑自建 Provider','Edit custom Provider') : tr('添加自建 Provider','Add custom Provider'), `<div class="grid"><div><label>${tr('ID（必填）','ID (required)')}</label><input id="modal_provider_id" value="${esc(existing.id || '')}" placeholder="${tr('例如 my-provider','for example my-provider')}" ${existing.id ? 'readonly' : ''}></div><div><label>${tr('显示名称（可选）','Display name (optional)')}</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="${tr('留空使用 ID','Leave blank to use the ID')}"></div><div class="wide"><label>${tr('Base URL（必填）','Base URL (required)')}</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com"></div><div><label>${tr('协议','Protocol')}</label><select id="modal_provider_protocol"><option value="auto">${tr('自动检测','Auto detect')}</option><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></div><div><label>${tr('认证','Authentication')}</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option></select></div><div class="wide"><label>API Key${existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : tr('（必填）',' (required)')}</label><input id="modal_provider_key" type="password"></div></div>`, tr('保存 Provider','Save Provider'), async () => {
+  const forwardAuthOption = existing.auth_mode === 'forward' ? `<option value="forward">Forward Codex auth</option>` : '';
+  openModal(existing.id ? tr('编辑自建 Provider','Edit custom Provider') : tr('添加自建 Provider','Add custom Provider'), `<div class="grid"><div><label>${tr('ID（必填）','ID (required)')}</label><input id="modal_provider_id" value="${esc(existing.id || '')}" placeholder="${tr('例如 my-provider','for example my-provider')}" ${existing.id ? 'readonly' : ''}></div><div><label>${tr('显示名称（可选）','Display name (optional)')}</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="${tr('留空使用 ID','Leave blank to use the ID')}"></div><div class="wide"><label>${tr('Base URL（必填）','Base URL (required)')}</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com"></div>${claudeBackendControls()}<div><label>${tr('协议','Protocol')}</label><select id="modal_provider_protocol"></select></div><div><label>${tr('认证','Authentication')}</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option>${forwardAuthOption}</select></div><div class="wide"><label>API Key${existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : tr('（必填）',' (required)')}</label><input id="modal_provider_key" type="password"></div></div>`, tr('保存 Provider','Save Provider'), async () => {
     const id = $('modal_provider_id').value.trim(); const base = $('modal_provider_base').value.trim(); if (!id || !base) throw new Error(tr('ID 和 Base URL 不能为空','ID and Base URL are required')); const keyValue = $('modal_provider_key').value.trim();
-    if (!keyValue && !existing.api_key_set) throw new Error(tr('请填写 API Key','Enter an API Key'));
-    await saveProvider({id, name:$('modal_provider_name').value.trim() || id, base_url:base, protocol:$('modal_provider_protocol').value, auth_mode:$('modal_provider_auth').value, api_key:keyValue}); closeModal();
+    const executionBackend = $('modal_provider_backend').value; const protocolValue = $('modal_provider_protocol').value; const authMode = $('modal_provider_auth').value;
+    if (authMode !== 'forward' && !keyValue && !existing.api_key_set) throw new Error(tr('请填写 API Key','Enter an API Key'));
+    if (executionBackend === 'claude_cli' && !['auto', 'anthropic_messages'].includes(protocolValue)) throw new Error(tr('Claude Code CLI 需要自动检测或 Anthropic Messages 协议','Claude Code CLI requires Auto detect or Anthropic Messages'));
+    if (executionBackend === 'claude_cli' && authMode === 'forward') throw new Error(tr('Claude Code CLI 需要 Provider API Key，不能转发 Codex 登录态','Claude Code CLI requires the Provider API key and cannot forward Codex authentication'));
+    await saveProvider({id, name:$('modal_provider_name').value.trim() || id, base_url:base, protocol:protocolValue, auth_mode:authMode, execution_backend:executionBackend, api_key:keyValue}); closeModal();
   });
-  if (existing.protocol) $('modal_provider_protocol').value = existing.protocol; if (existing.auth_mode) $('modal_provider_auth').value = existing.auth_mode;
+  const backend = $('modal_provider_backend'); backend.value = existing.execution_backend === 'claude_cli' ? 'claude_cli' : 'http'; backend.dataset.lastValue = backend.value;
+  const protocol = $('modal_provider_protocol'); protocol.innerHTML = providerProtocolOptions(false); protocol.value = existing.protocol || 'auto'; protocol.dataset.httpProtocol = existing.protocol || 'auto';
+  if (existing.auth_mode) $('modal_provider_auth').value = existing.auth_mode;
+  $('modal_provider_auth').dataset.httpAuth = $('modal_provider_auth').value;
+  providerBackendChanged();
 }
-function editProvider(id) { const provider = (state.providers || []).find(p => p.id === id); if (!provider) return; const officialKey = Object.keys(officialProviders).find(key => officialProviders[key].id === provider.id); const official = officialKey && officialProviders[officialKey]; if (official && provider.base_url === official.base_url) chooseOfficialProvider(officialKey); else openCustomProviderForm(provider); }
+function editProvider(id) { const provider = (state.providers || []).find(p => p.id === id); if (!provider) return; const officialKey = Object.keys(officialProviders).find(key => officialProviders[key].id === provider.id); const official = officialKey && officialProviders[officialKey]; if (official && provider.base_url === official.base_url && (provider.execution_backend !== 'claude_cli' || officialKey === 'anthropic')) chooseOfficialProvider(officialKey); else openCustomProviderForm(provider); }
 async function saveProvider(provider) {
   const old = (state.providers || []).find(p => p.id === provider.id); const apiKey = provider.api_key || (old && old.api_key_set ? '••••••••' : '');
-  const candidate = cloneState(); const next = Object.assign({}, provider, {api_key:apiKey, enabled:true}); const index = candidate.providers.findIndex(p => p.id === next.id); if (index >= 0) candidate.providers[index] = next; else candidate.providers.push(next); await persistState('', candidate);
+  const candidate = cloneState(); const next = Object.assign({}, old || {}, provider, {api_key:apiKey, enabled:true}); const index = candidate.providers.findIndex(p => p.id === next.id); if (index >= 0) candidate.providers[index] = next; else candidate.providers.push(next); await persistState('', candidate);
   const saved = (state.providers || []).find(p => p.id === provider.id);
   if (!saved || (saved.auth_mode !== 'forward' && !saved.api_key_set)) throw new Error(tr('API Key 未保存，请重新输入','The API Key was not saved; enter it again'));
   notice(tr('Provider 已保存','Provider saved'));
@@ -1973,8 +2306,10 @@ function renderModels() {
       const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : [];
       const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? tr('支持推理，档位未知','reasoning supported; levels unknown') : tr('无推理档位控制','no reasoning level control'));
       const capabilities = capabilitySummary(m);
+      const displayName = presentationPreview(m.id, m.display_name || m.upstream_id || m.id, usableContext(m));
+      const activity = activityIndicatorHtml('model', m.id, displayName);
       return `<article class="entity-card model-card${m.enabled ? '' : ' model-hidden'}">
-        <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(presentationPreview(m.id, m.display_name || m.upstream_id || m.id, usableContext(m)))}</strong></div>
+        <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(displayName)}</strong>${activity}</div>
         <div class="entity-card-subtitle"><code>${esc(m.id)}</code></div></div>
         <div class="entity-card-meta">${m.context_window ? tr(`可用上下文 ${compactContext(usableContext(m))}（最大 ${compactContext(m.context_window)}）`,`context ${compactContext(usableContext(m))} usable (max ${compactContext(m.context_window)})`) : tr('上下文未知','context unknown')} · reasoning ${esc(reasoning)}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</div>
         <label class="visibility"><input type="checkbox" ${m.enabled ? 'checked' : ''} data-ui-action="model-toggle" data-id="${esc(m.id)}"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</label>
@@ -1982,8 +2317,10 @@ function renderModels() {
       </article>`;
     }).join('');
     const toggle = items.length > 6 ? `<button type="button" class="secondary" data-ui-action="model-group-toggle" data-id="${esc(provider)}">${expanded ? t('collapse') : tr(`显示全部（${items.length}）`,`Show all (${items.length})`)}</button>` : '';
-    return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill">${esc(provider)}</span></h3><div class="entity-list">${rows}</div>${toggle}</div>`;
+    const activity = activityIndicatorHtml('provider', provider, providerNames[provider] || provider);
+    return `<div class="provider-model-group"><h3>${esc(providerNames[provider] || provider)} <span class="pill provider-id-badge">${activity}${esc(provider)}</span></h3><div class="entity-list">${rows}</div>${toggle}</div>`;
   }).join('');
+  updateActivityDots();
 }
 function toggleModelGroup(provider) { if (expandedModelGroups.has(provider)) expandedModelGroups.delete(provider); else expandedModelGroups.add(provider); renderModels(); }
 function providerDiscoveryError(error) { return upstreamErrorText(error, tr('无法读取模型列表。','Could not read the model list.')); }

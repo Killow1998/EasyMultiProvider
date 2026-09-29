@@ -109,7 +109,11 @@ pub(crate) fn compact_request(
         Ok(body) => body,
         Err(error) => return history_http_error(&error),
     };
-    body = match prepare_destination_context(state, &route, body, &incoming) {
+    let destination_context = {
+        let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
+        prepare_destination_context(state, &route, body, &incoming, monitor.as_mut())
+    };
+    body = match destination_context {
         Ok(body) => body,
         Err(error) => return destination_error_response(error),
     };
@@ -131,8 +135,10 @@ pub(crate) fn compact_request(
     let mut usage = crate::services::observation::Observation::new(
         state, &route, &body, &incoming, None, "compact",
     );
+    let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
     let (compacted, candidate) =
-        match external_compaction_response(state, &route, &body, &incoming, &ids) {
+        match external_compaction_response(state, &route, &body, &incoming, &ids, monitor.as_mut())
+        {
             Ok(result) => result,
             Err(error) => return error,
         };

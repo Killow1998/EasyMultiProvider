@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.12.4 (2026-09-29)
+
+- Add one global preference to show or hide context labels across Native,
+  Subscription and External Provider catalog routes. Old migration bundles
+  without the preference preserve the destination value; the setting does not
+  change model context windows.
+- Automatically sync native and subscription model catalogs and capabilities
+  from authenticated Codex catalog responses; retain last-good data on refresh
+  failure and preserve visibility, aliases, and context overrides. Newly
+  exposed models need no EMP release or manual model-list edit. In Codex 0.158,
+  an already-open picker may need reloading; EMP shows its existing reload
+  notice.
+- Expand model search from an accessible magnifier control, with Escape to clear
+  and collapse it and reduced-motion support.
+- Show request activity beside models, Providers and Subscription accounts:
+  active dots mark dispatched requests and their tooltips show the in-flight
+  count; recent dots mark completed work. Activity comes from the authenticated
+  event stream; a disconnect clears active confidence.
+- Allow a Provider to use an installed Claude Code CLI with its existing Base
+  URL and API key. Claude mode accepts Anthropic Messages or automatic
+  detection that resolves to Messages, handles text only, returns tool calls
+  for Codex to execute, and buffers replies before display.
+
 ## 0.12.3 (2026-09-29)
 
 - Validate against Codex 0.158.0 and raise the minimum accepted client version

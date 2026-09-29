@@ -128,6 +128,7 @@ fn default_configuration() -> Value {
         "models": [],
         "native_hidden_models": [],
         "native_model_context_windows": {},
+        "catalog_show_context": true,
         "catalog_presentations": {},
         "catalog_family_presentations": {},
         "subscription_search": {"enabled": false, "account_id": ""},
@@ -549,6 +550,11 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
     let native_model_context_windows =
         normalize_context_windows(raw.get("native_model_context_windows"))
             .map_err(account_error)?;
+    let catalog_show_context = match raw.get("catalog_show_context") {
+        None => true,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err(ConfigError::new("catalog_show_context must be boolean")),
+    };
     let catalog_presentations = normalize_catalog_presentations(raw.get("catalog_presentations"))?;
     let catalog_family_presentations =
         normalize_catalog_presentations(raw.get("catalog_family_presentations"))?;
@@ -572,6 +578,7 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "models": models,
         "native_hidden_models": native_hidden_models,
         "native_model_context_windows": native_model_context_windows,
+        "catalog_show_context": catalog_show_context,
         "catalog_presentations": catalog_presentations,
         "catalog_family_presentations": catalog_family_presentations,
         "subscription_search": subscription_search,

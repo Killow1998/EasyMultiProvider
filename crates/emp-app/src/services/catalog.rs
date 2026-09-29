@@ -14,11 +14,21 @@ use std::path::PathBuf;
 
 pub(crate) fn refresh_catalog(state: &ServerState) -> Result<(PathBuf, usize), ()> {
     let config = state.backend.configuration.config.lock().map_err(|_| ())?;
+    state.catalog_refresh.mark_catalog_publication_pending();
     let catalog = server_catalog(state, &config);
     let path = generated_catalog_path(state);
-    write_catalog_json(&path, &catalog).map_err(|_| ())?;
+    let previous = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let changed = previous.as_ref() != Some(&catalog);
+    if changed {
+        write_catalog_json(&path, &catalog).map_err(|_| ())?;
+    }
+    state.catalog_refresh.catalog_publication_succeeded();
     drop(config);
-    crate::services::runtime::mark_active_pending(state, "EMP model catalog changed");
+    if changed {
+        crate::services::runtime::mark_active_pending(state, "EMP model catalog changed");
+    }
     Ok((path, catalog["models"].as_array().map_or(0, Vec::len)))
 }
 
