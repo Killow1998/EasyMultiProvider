@@ -302,8 +302,7 @@ impl ServerHandle {
                             let _ = thread::Builder::new()
                                 .name("emp-request".to_string())
                                 .spawn(move || {
-                                    let _request_permit = request_permit;
-                                    handle_connection(stream, &request_state);
+                                    handle_connection(stream, &request_state, Some(request_permit));
                                 });
                         }
                         Err(_) => break,
@@ -413,12 +412,24 @@ impl ServerHandle {
 
     pub fn shutdown(self) -> Result<(), AppError> {
         let installing = self.state.updates.snapshot().state == "installing";
-        let restoration = if installing {
+        self.state.shutdown.store(true, Ordering::Release);
+        let admitted_work_drained = if let Some(gate) = self
+            .state
+            .connection_admission
+            .quiesce(0, Duration::from_secs(30))
+        {
+            gate.keep_closed();
+            true
+        } else {
+            false
+        };
+        let restoration = if !admitted_work_drained {
+            Err(AppError::ServerStopped)
+        } else if installing {
             Ok(())
         } else {
             self.state.backend.integration.restore_owned()
         };
-        self.state.shutdown.store(true, Ordering::Release);
         // Request threads are not joined (streams may outlive shutdown), so
         // quota checks that may rotate a credential are drained explicitly
         // before the final save below.

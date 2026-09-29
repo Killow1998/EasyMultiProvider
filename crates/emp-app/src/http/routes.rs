@@ -36,6 +36,7 @@ use crate::http::response::status_text;
 use crate::http::response::unauthorized_response;
 use crate::services::accounts::accounts_snapshot;
 use crate::services::accounts::delete_account_state;
+use crate::services::connection_admission::ConnectionPermit;
 use crate::services::quota::QuotaHistoryResponseError;
 use crate::services::quota::quota_history_response;
 use crate::util::system_now;
@@ -45,7 +46,11 @@ use std::net::Shutdown;
 use std::net::TcpStream;
 use std::sync::atomic::Ordering;
 
-pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
+pub(crate) fn handle_connection(
+    mut stream: TcpStream,
+    state: &ServerState,
+    mut request_permit: Option<ConnectionPermit>,
+) {
     if stream.set_nonblocking(false).is_err()
         || stream.set_nodelay(true).is_err()
         || stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT)).is_err()
@@ -69,6 +74,11 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
         return;
     };
     let path = request.raw_path();
+    if request.method == RequestMethod::Get && path == "/api/accounts/events" {
+        // This long-lived management stream carries no Codex traffic. Keeping
+        // its admission permit would make the UI block native restoration.
+        let _ = request_permit.take();
+    }
     // The management page carries a session; Codex does not.
     if (path.starts_with("/v1/models") || path.starts_with("/v1/responses"))
         && request.session_token().is_none()
@@ -241,6 +251,7 @@ pub(crate) fn handle_connection(mut stream: TcpStream, state: &ServerState) {
                     raw.body_prefix,
                     state,
                     system_now(),
+                    &mut stop_after_write,
                 ))
             }
             Some(request)

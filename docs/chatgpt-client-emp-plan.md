@@ -2,10 +2,7 @@
 
 状态：CLI Track A 待按审阅后的整夜方案实施；桌面端 Track B 等待用户人工验收。
 
-详细施工、闭环、预算和启动指令见：
-
-- [`lunamax-overnight-cli-plan.md`](lunamax-overnight-cli-plan.md)
-- [`lunamax-overnight-handoff.md`](lunamax-overnight-handoff.md)
+CLI 的整夜执行细节曾记录在本地交接材料中；这些内部提示文件不随仓库发布。
 
 ## 目标
 

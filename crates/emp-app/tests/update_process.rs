@@ -325,6 +325,20 @@ fn start_emp(
     ChildGuard,
     BufReader<std::process::ChildStdout>,
 ) {
+    // Do not let parallel process fixtures probe the developer's Codex/nvm
+    // installations through runtime discovery.
+    let fixture_home = config.parent().unwrap().join("fixture-home");
+    std::fs::create_dir_all(&fixture_home).unwrap();
+    let fixture_bin = fixture_home.join("bin");
+    std::fs::create_dir_all(&fixture_bin).unwrap();
+    for utility in ["sed", "sleep"] {
+        let executable = [Path::new("/usr/bin"), Path::new("/bin")]
+            .into_iter()
+            .map(|directory| directory.join(utility))
+            .find(|path| path.is_file())
+            .unwrap_or_else(|| panic!("system {utility} executable is required"));
+        std::os::unix::fs::symlink(executable, fixture_bin.join(utility)).unwrap();
+    }
     let reservation = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = reservation.local_addr().unwrap().port().to_string();
     drop(reservation);
@@ -342,6 +356,11 @@ fn start_emp(
         .env("EMP_UPDATE_TEST_REPOSITORY_URL", repository)
         .env("EMP_UPDATE_TEST_API_URL", api)
         .env("EMP_UPDATE_TEST_PID", pid_file)
+        .env("HOME", &fixture_home)
+        .env("XDG_CONFIG_HOME", fixture_home.join(".config"))
+        .env_remove("NVM_DIR")
+        .env_remove("USERPROFILE")
+        .env("PATH", &fixture_bin)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
     if fail_worker_ready {

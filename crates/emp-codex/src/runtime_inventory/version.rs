@@ -1,13 +1,14 @@
 //! Bounded version observations; raw process output never reaches the UI.
 use serde_json::{Value, json};
+use std::ffi::OsString;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Oldest Codex whose requests EMP understands. Newer releases are accepted
-/// without warnings: EMP only rewrites `config.toml`, which every Codex reads.
-pub const MINIMUM_CODEX: (u32, u32, u32) = (0, 149, 0);
+/// Lowest Codex version allowed by EMP's HTTP request gate for this release.
+/// Passing the gate does not establish protocol or history compatibility.
+pub const MINIMUM_CODEX: (u32, u32, u32) = (0, 158, 0);
 
 pub fn minimum_codex() -> String {
     let (major, minor, patch) = MINIMUM_CODEX;
@@ -108,7 +109,11 @@ fn classify(output: &str) -> Value {
 }
 
 pub(super) fn observe(path: &Path) -> Value {
-    observe_inner(path).unwrap_or_else(|error| {
+    observe_with_path(path, std::env::var_os("PATH"))
+}
+
+fn observe_with_path(path: &Path, inherited_path: Option<OsString>) -> Value {
+    observe_inner(path, inherited_path).unwrap_or_else(|error| {
         public(
             None,
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -119,15 +124,34 @@ pub(super) fn observe(path: &Path) -> Value {
         )
     })
 }
-fn observe_inner(path: &Path) -> std::io::Result<Value> {
+fn observe_inner(path: &Path, inherited_path: Option<OsString>) -> std::io::Result<Value> {
     // Never execute a candidate that fails the executable trust policy
     // (relative path, foreign owner, or writable ancestor directory).
+    let launch_directory = super::launcher::launcher_directory(path);
     let Some(path) = super::trust::trusted_binary(path) else {
         return Ok(public(None, "unknown"));
     };
     let mut output = tempfile::tempfile()?;
     let mut errors = tempfile::tempfile()?;
-    let mut child = Command::new(&path)
+    let mut command = Command::new(&path);
+    if let Some(directory) = launch_directory {
+        match super::launcher::path_with_node(&directory, inherited_path.clone()) {
+            super::launcher::PathAdjustment::Set(child_path) => {
+                command.env("PATH", child_path);
+            }
+            super::launcher::PathAdjustment::Inherit => {
+                if let Some(inherited_path) = inherited_path {
+                    command.env("PATH", inherited_path);
+                }
+            }
+            super::launcher::PathAdjustment::Refuse => {
+                return Ok(public(None, "unknown"));
+            }
+        }
+    } else if let Some(inherited_path) = inherited_path {
+        command.env("PATH", inherited_path);
+    }
+    let mut child = command
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
@@ -178,17 +202,17 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn every_codex_from_the_minimum_on_is_supported() {
+    fn versions_at_or_above_the_minimum_pass_the_version_gate() {
         for (output, installed, status) in [
-            ("codex-cli 0.148.9", "0.148.9", "unsupported"),
-            ("codex-cli 0.149.0", "0.149.0", "supported"),
-            ("codex-cli 0.156.1", "0.156.1", "supported"),
+            ("codex-cli 0.157.9", "0.157.9", "unsupported"),
+            ("codex-cli 0.158.0", "0.158.0", "supported"),
+            ("codex-cli 0.158.1", "0.158.1", "supported"),
             ("codex-cli 0.190.0-alpha.1", "0.190.0-alpha.1", "supported"),
             ("codex-cli 1.0.0", "1.0.0", "supported"),
         ] {
             assert_eq!(
                 classify(output),
-                json!({"installed":installed, "status":status, "minimum":"0.149.0"}),
+                json!({"installed":installed, "status":status, "minimum":"0.158.0"}),
                 "classification for {output}"
             );
         }
@@ -198,15 +222,15 @@ mod tests {
     fn only_outdated_codex_clients_are_refused() {
         use super::outdated_codex_client as outdated;
         assert_eq!(
-            outdated("codex_cli_rs/0.148.2 (Ubuntu 24.4.0; x86_64) xterm"),
-            Some("0.148.2".to_owned())
+            outdated("codex_cli_rs/0.157.9 (Ubuntu 24.4.0; x86_64) xterm"),
+            Some("0.157.9".to_owned())
         );
-        assert_eq!(outdated("codex_vscode/0.120.0"), Some("0.120.0".to_owned()));
+        assert_eq!(outdated("codex_vscode/0.157.9"), Some("0.157.9".to_owned()));
         assert_eq!(
-            outdated("Codex Desktop/0.100.1 (Mac OS 15; arm64)"),
-            Some("0.100.1".to_owned())
+            outdated("Codex Desktop/0.157.9 (Mac OS 15; arm64)"),
+            Some("0.157.9".to_owned())
         );
-        assert_eq!(outdated("codex_cli_rs/0.149.0 (Ubuntu; x86_64)"), None);
+        assert_eq!(outdated("codex_cli_rs/0.158.0 (Ubuntu; x86_64)"), None);
         assert_eq!(outdated("codex-tui/0.200.0-alpha.3 (Linux)"), None);
         assert_eq!(outdated("omp/18.3.1"), None);
         assert_eq!(outdated("python-requests/2.31"), None);
@@ -240,7 +264,47 @@ mod tests {
         if !ancestors_are_private(dir.path()) {
             return;
         }
-        let candidate = script(dir.path(), "codex", "echo codex-cli 0.156.1", 0o700);
+        let candidate = script(dir.path(), "codex", "echo codex-cli 0.158.0", 0o700);
         assert_eq!(super::observe(&candidate)["status"], "supported");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observe_runs_npm_cli_with_its_sibling_node_when_path_is_empty() {
+        use crate::runtime_inventory::trust::tests::{ancestors_are_private, private_dir, script};
+        use std::ffi::OsString;
+        use std::os::unix::fs::symlink;
+
+        let root = private_dir();
+        if !ancestors_are_private(root.path()) {
+            return;
+        }
+        let node_version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let bin = root
+            .path()
+            .join("versions/node")
+            .join(&node_version)
+            .join("bin");
+        let package = root
+            .path()
+            .join("versions/node")
+            .join(node_version)
+            .join("lib/node_modules/@openai/codex/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&package).unwrap();
+        script(
+            &bin,
+            "node",
+            "script=$1; shift; exec /bin/sh \"$script\" \"$@\"",
+            0o700,
+        );
+        let cli = script(&package, "codex.js", "exit 1", 0o700);
+        std::fs::write(&cli, "#!/usr/bin/env node\necho codex-cli 0.158.0\n").unwrap();
+        let launcher = bin.join("codex");
+        symlink(&cli, &launcher).unwrap();
+
+        let observed = super::observe_with_path(&launcher, Some(OsString::new()));
+        assert_eq!(observed["installed"], "0.158.0");
+        assert_eq!(observed["status"], "supported");
     }
 }

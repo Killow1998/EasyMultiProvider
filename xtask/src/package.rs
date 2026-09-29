@@ -5,6 +5,7 @@ use crate::{
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -221,6 +222,7 @@ fn build_binary(root: &Path, target: Target, resource: Option<&Path>) -> Result<
             .env("EMP_PACKAGE_RESOURCE", resource)
             .env("EMP_REQUIRE_WINDOWS_RESOURCES", "1");
     }
+    append_package_path_remaps(&mut command, root)?;
     run_command(&mut command)?;
     let target_root = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
@@ -233,6 +235,110 @@ fn build_binary(root: &Path, target: Target, resource: Option<&Path>) -> Result<
     }
     make_executable(&executable)?;
     Ok(executable)
+}
+
+fn append_package_path_remaps(command: &mut Command, root: &Path) -> Result {
+    let remap_flags = package_path_remap_flags(root)?;
+    let rustflags = merge_rustflags(
+        std::env::var_os("CARGO_ENCODED_RUSTFLAGS").as_deref(),
+        std::env::var_os("RUSTFLAGS").as_deref(),
+        &remap_flags,
+    )?;
+    command.env("CARGO_ENCODED_RUSTFLAGS", rustflags);
+    Ok(())
+}
+
+fn package_path_remap_flags(root: &Path) -> Result<Vec<String>> {
+    let workspace = crate::physical(root)?;
+    let home = user_home_directory();
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|path| path.join(".cargo")));
+    let rustup_home = std::env::var_os("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|path| path.join(".rustup")));
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"));
+    let roots = [
+        (Some(workspace.clone()), "/workspace"),
+        (Some(target_dir), "/build"),
+        (cargo_home, "/cargo"),
+        (rustup_home, "/rustup"),
+        (home, "/user"),
+    ];
+    let mut remaps = Vec::new();
+    for (path, destination) in roots {
+        let Some(path) = path else {
+            continue;
+        };
+        let path = if path.is_absolute() {
+            path
+        } else {
+            workspace.join(path)
+        };
+        if !path.is_dir() {
+            continue;
+        }
+        let path = crate::physical(&path)
+            .map_err(|_| "could not resolve a package source directory for remapping".to_owned())?;
+        if remaps.iter().any(|(existing, _)| existing == &path) {
+            continue;
+        }
+        let source = path
+            .to_str()
+            .ok_or_else(|| "package source path remapping requires Unicode paths".to_owned())?
+            .to_owned();
+        remaps.push((path, format!("--remap-path-prefix={source}={destination}")));
+    }
+    // Rustc applies the last matching prefix, so nested roots must follow their parents.
+    remaps.sort_by(|(left, _), (right, _)| {
+        left.components().count().cmp(&right.components().count())
+    });
+    Ok(remaps.into_iter().map(|(_, flag)| flag).collect())
+}
+
+#[cfg(windows)]
+fn user_home_directory() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let mut home = OsString::from(std::env::var_os("HOMEDRIVE")?);
+            home.push(std::env::var_os("HOMEPATH")?);
+            Some(PathBuf::from(home))
+        })
+}
+
+#[cfg(not(windows))]
+fn user_home_directory() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn merge_rustflags(
+    encoded: Option<&OsStr>,
+    plain: Option<&OsStr>,
+    additions: &[String],
+) -> Result<OsString> {
+    if let Some(encoded) = encoded {
+        let mut merged = encoded.to_os_string();
+        if !merged.is_empty() && !additions.is_empty() {
+            merged.push("\u{1f}");
+        }
+        merged.push(additions.join("\u{1f}"));
+        return Ok(merged);
+    }
+    if let Some(plain) = plain {
+        let plain = plain.to_str().ok_or_else(|| {
+            "RUSTFLAGS must be Unicode to preserve package path remapping".to_owned()
+        })?;
+        let mut flags = plain
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        flags.extend_from_slice(additions);
+        return Ok(OsString::from(flags.join("\u{1f}")));
+    }
+    Ok(OsString::from(additions.join("\u{1f}")))
 }
 
 fn probe_version(executable: &Path) -> Result {
@@ -667,6 +773,52 @@ fn write_checksum(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_path_remaps_preserve_encoded_rustflags() {
+        let additions = ["--remap-path-prefix=/cargo cache=/cargo".to_owned()];
+        let merged = merge_rustflags(
+            Some(OsStr::new("-C\u{1f}debuginfo=2")),
+            Some(OsStr::new("-D ignored")),
+            &additions,
+        )
+        .unwrap();
+        assert_eq!(
+            merged.to_str().unwrap().split('\u{1f}').collect::<Vec<_>>(),
+            [
+                "-C",
+                "debuginfo=2",
+                "--remap-path-prefix=/cargo cache=/cargo"
+            ]
+        );
+    }
+
+    #[test]
+    fn package_path_remaps_convert_plain_rustflags_by_whitespace() {
+        let addition = "--remap-path-prefix=/cargo=/cargo";
+        let additions = [addition.to_owned()];
+        let merged = merge_rustflags(
+            None,
+            Some(OsStr::new("-C opt-level=2  --cfg plain_flag")),
+            &additions,
+        )
+        .unwrap();
+        assert_eq!(
+            merged.to_str().unwrap().split('\u{1f}').collect::<Vec<_>>(),
+            ["-C", "opt-level=2", "--cfg", "plain_flag", addition]
+        );
+    }
+
+    #[test]
+    fn package_path_remaps_use_generic_workspace_prefixes() {
+        let flags = package_path_remap_flags(&crate::project_root()).unwrap();
+        assert!(flags.iter().any(|flag| flag.ends_with("=/workspace")));
+        assert!(
+            flags
+                .iter()
+                .all(|flag| flag.starts_with("--remap-path-prefix="))
+        );
+    }
 
     #[test]
     fn info_plist_lists_sorted_keys_with_the_numeric_bundle_version() {

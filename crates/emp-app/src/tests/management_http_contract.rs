@@ -3,6 +3,16 @@ use super::*;
 #[cfg(unix)]
 use std::sync::Mutex;
 
+fn response_json(response: &str) -> Value {
+    serde_json::from_str(
+        response
+            .split_once("\r\n\r\n")
+            .expect("HTTP response separator")
+            .1,
+    )
+    .expect("HTTP response JSON")
+}
+
 #[test]
 fn migration_export_and_import_cross_the_authenticated_http_boundary() {
     let source_directory = tempfile::tempdir().unwrap();
@@ -243,15 +253,28 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
 
 /// Answers `model/list` on the Codex control socket with whatever list the test sets.
 #[cfg(unix)]
-fn fake_codex_backend(home: &Path, models: Arc<Mutex<Vec<Value>>>) {
+fn fake_codex_backend(
+    home: &Path,
+    models: Arc<Mutex<Vec<Value>>>,
+    reject_model_list: bool,
+) -> (
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
     use std::os::unix::net::UnixListener;
     let directory = home.join("app-server-control");
     std::fs::create_dir_all(&directory).unwrap();
     let listener = UnixListener::bind(directory.join("app-server-control.sock")).unwrap();
+    let refresh_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed_refresh_requests = Arc::clone(&refresh_requests);
+    let catalog_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed_catalog_requests = Arc::clone(&catalog_requests);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { return };
             let models = Arc::clone(&models);
+            let refresh_requests = Arc::clone(&observed_refresh_requests);
+            let catalog_requests = Arc::clone(&observed_catalog_requests);
             thread::spawn(move || {
                 let mut head = Vec::new();
                 let mut byte = [0_u8];
@@ -273,18 +296,42 @@ fn fake_codex_backend(home: &Path, models: Arc<Mutex<Vec<Value>>>) {
                 let accept = websocket_accept(&key).unwrap();
                 write!(stream, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
                 let mut websocket = WebSocketConnection::new(&mut stream);
+                let mut initialized = false;
                 while let Ok(Some(text)) = websocket.receive_text() {
                     let message: Value = serde_json::from_str(&text).unwrap();
-                    let result = match message["method"].as_str() {
-                        Some("initialize") => json!({}),
-                        Some("model/list") => json!({"data":models.lock().unwrap().clone()}),
+                    let reply = match message["method"].as_str() {
+                        Some("initialize") => {
+                            assert!(
+                                !initialized,
+                                "control connection initialized more than once"
+                            );
+                            initialized = true;
+                            json!({"result":{}})
+                        }
+                        Some("config/batchWrite") => {
+                            refresh_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            json!({"error":{"code":-32601,"message":"Unexpected config mutation"}})
+                        }
+                        Some("model/list") if reject_model_list => {
+                            catalog_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            json!({"error":{"code":-32000,"message":"fixture model catalog error"}})
+                        }
+                        Some("model/list") => {
+                            catalog_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            json!({"result":{"data":models.lock().unwrap().clone()}})
+                        }
                         _ => continue,
                     };
-                    let _ = websocket.send_json(&json!({"id":message["id"],"result":result}));
+                    if message.get("id").is_some() {
+                        let mut reply = reply;
+                        reply["id"] = message["id"].clone();
+                        let _ = websocket.send_json(&reply);
+                    }
                 }
             });
         }
     });
+    (refresh_requests, catalog_requests)
 }
 
 #[cfg(unix)]
@@ -302,7 +349,8 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
     std::fs::write(root.join("config.toml"), b"").unwrap();
     // Codex is running, still on the catalog it loaded before EMP was applied.
     let codex_models = Arc::new(Mutex::new(Vec::new()));
-    fake_codex_backend(&root, Arc::clone(&codex_models));
+    let (refresh_requests, catalog_requests) =
+        fake_codex_backend(&root, Arc::clone(&codex_models), false);
     let server = ServerHandle::start_with_config_options(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         0,
@@ -349,7 +397,247 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
         "event: integration-updated\ndata: {}\n"
     );
     let status = request(&server, "/api/integration", &[&session]);
-    assert!(status.contains("\"state\":\"emp_loaded\""), "{status}");
+    let status = response_json(&status);
+    assert_eq!(status["configuration"]["persisted"], true);
+    assert_eq!(status["runtime"]["state"], "catalog_loaded");
+    assert_eq!(status["runtime"]["catalog_verified"], true);
+    assert_eq!(status["runtime"]["verification_scope"], "emp_model_catalog");
+    assert_eq!(status["runtime"]["routing_verified"], false);
+    assert_eq!(
+        refresh_requests.load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+
+    // A config conflict takes precedence over the previously observed catalog.
+    let applied_config = std::fs::read_to_string(root.join("config.toml")).unwrap();
+    let mut changed_url = false;
+    let conflicting_config = applied_config
+        .lines()
+        .map(|line| {
+            if line.starts_with("openai_base_url = ") {
+                changed_url = true;
+                "openai_base_url = \"https://other.example/v1\""
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(changed_url);
+    std::fs::write(root.join("config.toml"), &conflicting_config).unwrap();
+    let conflicted = response_json(&request(&server, "/api/integration", &[&session]));
+    assert_eq!(conflicted["configuration"]["state"], "conflict");
+    assert_eq!(conflicted["runtime"]["state"], "not_checked");
+    assert!(conflicted["runtime"]["target"].is_null());
+    assert_eq!(conflicted["runtime"]["catalog_verified"], false);
+    assert_eq!(conflicted["runtime"]["verification_scope"], "none");
+    assert!(conflicted["runtime"]["target_matches_saved_configuration"].is_null());
+    assert_eq!(conflicted["runtime"]["routing_verified"], false);
+    assert_eq!(conflicted["runtime"]["restoration_verified"], false);
+    assert!(
+        conflicted["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("configuration conflict")
+    );
+    let catalog_requests_before_conflict_check =
+        catalog_requests.load(std::sync::atomic::Ordering::Relaxed);
+    let rejected_check = post(&server, "/api/integration/reload", b"{}", &[&session]);
+    assert!(
+        rejected_check.starts_with("HTTP/1.1 409 Error\r\n"),
+        "{rejected_check}"
+    );
+    let rejected_status = response_json(&rejected_check);
+    assert_eq!(rejected_status["configuration"]["state"], "conflict");
+    assert!(
+        rejected_status["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("configuration is unresolved")
+    );
+    let support = response_json(&request(&server, "/api/support-report", &[&session]));
+    assert_eq!(support["codex"]["state"], "not_checked");
+    assert_eq!(support["codex"]["target"], "unknown");
+    assert_eq!(
+        std::fs::read_to_string(root.join("config.toml")).unwrap(),
+        conflicting_config
+    );
+    assert_eq!(
+        catalog_requests.load(std::sync::atomic::Ordering::Relaxed),
+        catalog_requests_before_conflict_check
+    );
+    std::fs::write(root.join("config.toml"), applied_config).unwrap();
+    let status = response_json(&request(&server, "/api/integration", &[&session]));
+    assert_eq!(status["configuration"]["state"], "emp_applied");
+    assert_eq!(status["runtime"]["state"], "catalog_loaded");
+
+    // An external config change makes the previous live catalog observation stale.
+    let externally_restored = server.state.backend.integration.manager.restore().unwrap();
+    assert!(externally_restored.ok());
+    let status = response_json(&request(&server, "/api/integration", &[&session]));
+    assert_eq!(status["configuration"]["state"], "native");
+    assert_eq!(status["runtime"]["state"], "not_checked");
+    assert_eq!(status["runtime"]["target"], "native");
+    assert_eq!(status["runtime"]["confidence"], "stale");
+    assert_eq!(status["runtime"]["last_known"]["state"], "catalog_loaded");
+    assert_eq!(status["runtime"]["last_known"]["target"], "emp");
+    let support = response_json(&request(&server, "/api/support-report", &[&session]));
+    assert_eq!(support["codex"]["state"], "not_checked");
+    assert_eq!(support["codex"]["target"], "native");
+    assert_eq!(support["codex"]["verification_scope"], "none");
+
+    // Probe the already loaded catalog before the explicit restore closes
+    // management admission and asks this EMP process to stop.
+    *codex_models.lock().unwrap() = vec![json!({"id":"gpt-5.5"})];
+    let native_config_before_check = std::fs::read(root.join("config.toml")).unwrap();
+    let catalog_requests_before_check = catalog_requests.load(std::sync::atomic::Ordering::Relaxed);
+    let checked = post(&server, "/api/integration/reload", b"{}", &[&session]);
+    assert!(checked.starts_with("HTTP/1.1 200 OK\r\n"), "{checked}");
+    let status = response_json(&checked);
+    assert_eq!(status["runtime"]["state"], "emp_catalog_absent");
+    assert_eq!(status["runtime"]["target"], "native");
+    assert_eq!(status["runtime"]["catalog_verified"], false);
+    assert_eq!(status["runtime"]["emp_models_absent"], true);
+    assert_eq!(status["runtime"]["restoration_verified"], false);
+    assert_eq!(status["runtime"]["routing_verified"], false);
+    assert_eq!(
+        std::fs::read(root.join("config.toml")).unwrap(),
+        native_config_before_check
+    );
+    assert_eq!(
+        catalog_requests.load(std::sync::atomic::Ordering::Relaxed),
+        catalog_requests_before_check + 1
+    );
+    assert_eq!(
+        refresh_requests.load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+
+    // A runtime observation record is best-effort metadata. Its write failure
+    // must not turn a committed native restore into an error or stop before
+    // the UI receives the restore result.
+    let runtime_path = server
+        .state
+        .backend
+        .integration
+        .manager
+        .lease_path()
+        .with_file_name("runtime.json");
+    let previous_runtime = std::fs::read(&runtime_path).unwrap();
+    std::fs::remove_file(&runtime_path).unwrap();
+    std::fs::create_dir(&runtime_path).unwrap();
+
+    let restored = post(
+        &server,
+        "/api/integration/restore",
+        br#"{"confirm_reload":true}"#,
+        &[&session],
+    );
+    assert!(restored.starts_with("HTTP/1.1 200 OK\r\n"), "{restored}");
+    let restored_result = response_json(&restored);
+    assert_eq!(restored_result["configuration"]["state"], "native");
+    assert_eq!(restored_result["runtime"]["target"], "native");
+    assert!(
+        server
+            .state
+            .shutdown
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+    let restored_config = std::fs::read_to_string(root.join("config.toml")).unwrap();
+    assert_eq!(restored_config.as_bytes(), native_config_before_check);
+    assert!(!restored_config.contains("model_catalog_json"));
+    server.shutdown().unwrap();
+    std::fs::remove_dir(&runtime_path).unwrap();
+    std::fs::write(&runtime_path, previous_runtime).unwrap();
+
+    // A new EMP process reports the persisted target as unverified and keeps
+    // the prior catalog observation only as last-known data.
+    let restarted = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config,
+        "missing-codex",
+        root.join("auth.json"),
+    )
+    .unwrap();
+    let status = response_json(&request(
+        &restarted,
+        "/api/integration",
+        &[&session_header(&restarted)],
+    ));
+    assert_eq!(status["configuration"]["state"], "native");
+    assert_eq!(status["runtime"]["state"], "not_checked");
+    assert_eq!(status["runtime"]["target"], "native");
+    assert_eq!(status["runtime"]["confidence"], "stale");
+    assert_eq!(
+        status["runtime"]["last_known"]["state"],
+        "emp_catalog_absent"
+    );
+    assert_eq!(status["runtime"]["last_known"]["catalog_verified"], false);
+    assert_eq!(status["runtime"]["last_known"]["emp_models_absent"], true);
+    assert_eq!(status["runtime"]["last_known"]["routing_verified"], false);
+    assert_eq!(
+        status["runtime"]["last_known"]["restoration_verified"],
+        false
+    );
+    restarted.shutdown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn integration_reports_model_list_errors_without_undoing_saved_config() {
+    let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let root = canonical_root(&directory);
+    let config = root.join("emp-config.json");
+    std::fs::write(&config, serde_json::to_vec(&json!({
+        "providers":[{"id":"external","base_url":"https://example.invalid/v1","protocol":"responses"}],
+        "models":[{"id":"external/model-a","provider":"external","upstream_id":"model-a","enabled":true}]
+    })).unwrap()).unwrap();
+    std::fs::write(root.join("config.toml"), b"").unwrap();
+    let codex_models = Arc::new(Mutex::new(Vec::new()));
+    let (refresh_requests, _) = fake_codex_backend(&root, codex_models, true);
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config,
+        "missing-codex",
+        root.join("auth.json"),
+    )
+    .unwrap();
+    let session = session_header(&server);
+
+    let enabled = post(
+        &server,
+        "/api/integration/enable",
+        br#"{"confirm_reload":true}"#,
+        &[&session],
+    );
+    assert!(enabled.starts_with("HTTP/1.1 200 OK\r\n"), "{enabled}");
+    let status = response_json(&enabled);
+    assert_eq!(status["configuration"]["state"], "emp_applied");
+    assert_eq!(status["runtime"]["state"], "verification_failed");
+    assert!(
+        status["runtime"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("rejected the model catalog query")
+    );
+    assert_eq!(
+        refresh_requests.load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert!(
+        std::fs::read_to_string(root.join("config.toml"))
+            .unwrap()
+            .contains("openai_base_url")
+    );
+
+    let checked = post(&server, "/api/integration/reload", b"{}", &[&session]);
+    assert!(checked.starts_with("HTTP/1.1 409 Error\r\n"), "{checked}");
+    let status = response_json(&checked);
+    assert_eq!(status["configuration"]["state"], "emp_applied");
+    assert_eq!(status["runtime"]["state"], "verification_failed");
+    assert_eq!(status["runtime"]["routing_verified"], false);
     server.shutdown().unwrap();
 }
 

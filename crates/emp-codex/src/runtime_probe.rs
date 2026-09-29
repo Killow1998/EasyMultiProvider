@@ -41,7 +41,7 @@ fn transport_error(error: ClientWebSocketError) -> ProbeError {
     match error.status() {
         403 => ProbeError {
             kind: "permission",
-            detail: "Codex model catalog access was denied",
+            detail: "Codex local control access was denied",
         },
         503 => ProbeError {
             kind: "unavailable",
@@ -49,20 +49,24 @@ fn transport_error(error: ClientWebSocketError) -> ProbeError {
         },
         504 => ProbeError {
             kind: "unavailable",
-            detail: "The shared Codex backend did not answer the catalog probe",
+            detail: "The shared Codex backend did not answer the control request",
         },
         500 => ProbeError {
             kind: "command",
-            detail: "Codex model catalog query failed",
+            detail: "Codex local control request failed",
         },
         _ => ProbeError {
             kind: "malformed",
-            detail: "Codex returned an invalid model catalog",
+            detail: "Codex returned an invalid local control response",
         },
     }
 }
 
-fn response(socket: &mut ClientWebSocket, id: u64) -> Result<Value, ProbeError> {
+fn response(
+    socket: &mut ClientWebSocket,
+    id: u64,
+    rejected_detail: &'static str,
+) -> Result<Value, ProbeError> {
     for _ in 0..100 {
         let Some(message) = socket.receive_value().map_err(transport_error)? else {
             return Err(ProbeError {
@@ -75,8 +79,12 @@ fn response(socket: &mut ClientWebSocket, id: u64) -> Result<Value, ProbeError> 
         }
         if message.get("error").is_some_and(|value| !value.is_null()) {
             return Err(ProbeError {
-                kind: "permission",
-                detail: "Codex rejected the read-only model catalog query",
+                kind: if message["error"]["code"].as_i64() == Some(-32601) {
+                    "unsupported"
+                } else {
+                    "rejected"
+                },
+                detail: rejected_detail,
             });
         }
         return Ok(message);
@@ -87,19 +95,25 @@ fn response(socket: &mut ClientWebSocket, id: u64) -> Result<Value, ProbeError> 
     })
 }
 
+fn initialize(socket: &mut ClientWebSocket) -> Result<(), ProbeError> {
+    socket
+        .send_json(&json!({"id":1,"method":"initialize","params":{
+            "clientInfo":{"name":"easy-multi-provider","title":"EMP","version":env!("CARGO_PKG_VERSION")},
+            "capabilities":null
+        }}))
+        .map_err(transport_error)?;
+    response(socket, 1, "Codex rejected the control connection handshake")?;
+    socket
+        .send_json(&json!({"method":"initialized"}))
+        .map_err(transport_error)
+}
+
 fn model_list(home: &Path) -> Result<Vec<Value>, ProbeError> {
     let path = home.join("app-server-control/app-server-control.sock");
     let mut socket =
         ClientWebSocket::connect_local(&path, Duration::from_secs(15)).map_err(transport_error)?;
     let result = (|| {
-        socket.send_json(&json!({"id":1,"method":"initialize","params":{
-            "clientInfo":{"name":"easy-multi-provider","title":"EMP","version":env!("CARGO_PKG_VERSION")},
-            "capabilities":null
-        }})).map_err(transport_error)?;
-        response(&mut socket, 1)?;
-        socket
-            .send_json(&json!({"method":"initialized"}))
-            .map_err(transport_error)?;
+        initialize(&mut socket)?;
         let mut models = Vec::new();
         let mut cursor: Option<String> = None;
         let mut seen = BTreeSet::new();
@@ -112,7 +126,7 @@ fn model_list(home: &Path) -> Result<Vec<Value>, ProbeError> {
             socket
                 .send_json(&json!({"id":id,"method":"model/list","params":params}))
                 .map_err(transport_error)?;
-            let reply = response(&mut socket, id)?;
+            let reply = response(&mut socket, id, "Codex rejected the model catalog query")?;
             let result = reply
                 .get("result")
                 .filter(|value| value.is_object())
@@ -272,7 +286,7 @@ fn validate_models(
         return make(
             "emp_loaded",
             true,
-            "Codex has loaded the current model names, descriptions and visibility".into(),
+            "Codex's visible model IDs, names, descriptions and visibility match EMP's current catalog; request routing is not exposed by this check".into(),
         );
     }
     let expected = expected
@@ -280,7 +294,7 @@ fn validate_models(
         .filter(|id| !id.is_empty())
         .collect::<BTreeSet<_>>();
     if expected.is_empty() {
-        return make("catalog_unverified",false,"Catalog settings are saved. Without distinct EMP model IDs, this check cannot verify native model visibility or display names. Restart active Codex clients safely, then check their model picker.".into());
+        return make("catalog_unverified",false,"Without distinct EMP model IDs, the shared model list cannot distinguish EMP from native settings; request routing is not exposed by this check".into());
     }
     if target == "emp" {
         let missing = expected
@@ -296,8 +310,16 @@ fn validate_models(
                 ),
             );
         }
-        make("emp_loaded",true,"The shared Codex backend exposes all expected EMP model IDs; other startup settings are not verified".into())
+        make("emp_loaded",true,"The shared Codex model list exposes all expected EMP model IDs; provider routing is not exposed by this check".into())
     } else {
+        if entries.is_empty() {
+            return make(
+                "catalog_unverified",
+                false,
+                "Codex returned an empty model list, so the native catalog cannot be verified"
+                    .into(),
+            );
+        }
         let remaining = expected
             .iter()
             .filter(|id| entries.contains_key(id.as_str()))
@@ -309,6 +331,48 @@ fn validate_models(
                 format!("Codex still exposes {remaining} EMP model(s)"),
             );
         }
-        make("native_loaded",true,"The shared Codex backend exposes no expected EMP model IDs; other startup settings are not verified".into())
+        make("native_loaded",false,"The shared Codex model list exposes no previous EMP-specific model IDs; this check does not verify restored provider routing or other native settings".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_catalog_is_unverified_when_the_shared_list_is_empty() {
+        let result = validate_models(&[], &["emp/model-a".to_owned()], "native", None);
+
+        assert_eq!(result.state, "catalog_unverified");
+        assert!(!result.verified);
+        assert!(result.detail.contains("empty model list"));
+    }
+
+    #[test]
+    fn matching_model_catalog_does_not_claim_request_routing() {
+        let result = validate_models(
+            &[json!({"id":"emp/model-a","displayName":"Model A","description":""})],
+            &["emp/model-a".to_owned()],
+            "emp",
+            None,
+        );
+
+        assert_eq!(result.state, "emp_loaded");
+        assert!(result.verified);
+        assert!(result.detail.contains("routing is not exposed"));
+    }
+
+    #[test]
+    fn native_model_list_without_emp_ids_does_not_claim_restoration() {
+        let result = validate_models(
+            &[json!({"id":"gpt-5.5"})],
+            &["emp/model-a".to_owned()],
+            "native",
+            None,
+        );
+
+        assert_eq!(result.state, "native_loaded");
+        assert!(!result.verified);
+        assert!(result.detail.contains("does not verify restored"));
     }
 }

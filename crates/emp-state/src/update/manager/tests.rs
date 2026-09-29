@@ -23,7 +23,8 @@ fn candidate_script(root: &std::path::Path, name: &str, body: &str) -> std::path
 fn candidate_version_probe_accepts_only_successful_exact_output() {
     let root = tempfile::TempDir::new().unwrap();
     let valid = candidate_script(root.path(), "valid", "printf 'EMP 0.12.0\\n'");
-    assert!(probe_candidate_version(&valid, "0.12.0", root.path(), Duration::from_secs(1)).is_ok());
+    probe_candidate_version(&valid, "0.12.0", root.path(), Duration::from_secs(1))
+        .expect("valid candidate version probe should succeed");
 
     let nonzero = candidate_script(root.path(), "nonzero", "printf 'EMP 0.12.0\\n'; exit 7");
     assert_eq!(

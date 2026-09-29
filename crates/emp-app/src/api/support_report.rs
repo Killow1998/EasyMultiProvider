@@ -15,10 +15,12 @@ const COMPATIBILITY: &[&str] = &["supported", "unsupported", "unavailable", "unk
 const RUNTIME_SOURCES: &[&str] = &[
     "configured",
     "codex_app",
+    "app_server_daemon",
     "managed",
     "vscode",
     "vscode_insiders",
     "cursor",
+    "nvm",
     "path_cli",
 ];
 const CREDENTIAL_STATES: &[&str] = &["valid", "invalid", "unknown"];
@@ -361,7 +363,22 @@ fn version_value(value: Option<&str>) -> Value {
 
 fn runtime_report(state: &ServerState) -> Value {
     let compatibility = crate::services::runtime::compatibility_snapshot(state, false);
-    let sync = state.backend.integration.runtime.snapshot();
+    let sync = crate::services::integration::integration_summary_with_result(state, None)
+        .ok()
+        .and_then(|summary| summary.get("runtime").cloned())
+        .unwrap_or_else(|| {
+            json!({
+                "state":"not_checked",
+                "target":null,
+                "catalog_verified":false,
+                "emp_models_absent":false,
+                "verification_scope":"none"
+            })
+        });
+    let raw_state = sync["state"].as_str().unwrap_or("not_checked");
+    let target = sync["target"].as_str();
+    let emp_models_absent = raw_state == "emp_catalog_absent";
+    let catalog_verified = sync["catalog_verified"].as_bool() == Some(true);
     let inventory = compatibility.get("runtimes").and_then(Value::as_array);
     let items = inventory
         .into_iter()
@@ -380,10 +397,10 @@ fn runtime_report(state: &ServerState) -> Value {
     let runtime_states = [
         "not_checked",
         "catalog_unverified",
+        "emp_catalog_absent",
         "reload_required",
         "stopping",
-        "emp_loaded",
-        "native_loaded",
+        "catalog_loaded",
         "stopped_waiting_for_start",
         "stop_failed",
         "verification_failed",
@@ -393,9 +410,14 @@ fn runtime_report(state: &ServerState) -> Value {
         "version": version_value(compatibility.get("installed").and_then(Value::as_str)),
         "compatibility": choice(compatibility.get("status").and_then(Value::as_str), COMPATIBILITY),
         "source": choice(compatibility.get("source").and_then(Value::as_str), RUNTIME_SOURCES),
-        "state": choice(sync.get("state").and_then(Value::as_str), &runtime_states),
-        "target": choice(sync.get("target").and_then(Value::as_str), &["emp", "native"]),
-        "verified": sync.get("verified").and_then(Value::as_bool) == Some(true),
+        "state": choice(Some(raw_state), &runtime_states),
+        "target": target.map_or("unknown", |target| choice(Some(target), &["emp", "native"])),
+        "verified": catalog_verified,
+        "catalog_verified": catalog_verified,
+        "emp_models_absent": emp_models_absent,
+        "verification_scope": sync["verification_scope"].as_str().unwrap_or("none"),
+        "routing_verified": false,
+        "restoration_verified": false,
         "inventory": items,
         "inventory_truncated": inventory.is_some_and(|items| items.len() > 16),
     })
@@ -506,7 +528,12 @@ mod tests {
         assert_eq!(choice(Some("secret-path"), COMPATIBILITY), "unknown");
         assert_eq!(choice(Some("invalid"), CREDENTIAL_STATES), "invalid");
         assert_eq!(choice(None, CREDENTIAL_STATES), "unknown");
+        assert_eq!(choice(Some("nvm"), RUNTIME_SOURCES), "nvm");
         assert_eq!(choice(Some("path_cli"), RUNTIME_SOURCES), "path_cli");
+        assert_eq!(
+            choice(Some("app_server_daemon"), RUNTIME_SOURCES),
+            "app_server_daemon"
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ EMP 在本机运行，主要解决两件事：
 时使用导入的账号，选中 `deepseek/deepseek-v4-pro` 时使用 DeepSeek API Key。编码任务、
 权限和工具仍由 Codex 管理。EMP 在本机统一管理模型列表、加密凭据和账号额度。
 
-当前源码版本为 `v0.12.2`。
+当前源码版本为 `v0.12.3`。
 
 ## 功能
 
@@ -61,9 +61,12 @@ EMP 在本机运行，主要解决两件事：
   导出时可多选 Native、其他 Subscription 和 External Provider，默认全选。
   Native 包含模型显示配置和本机 Codex 登录凭据；导入后作为额外 Subscription 账号，不替换当前登录。选中模型的共享分组显示设置会一并导出。
   导入时只有身份一致的账号才会更新；冲突账号保留双方，并为导入项分配新 ID/prefix，同步对应显示设置。导出结果按文件内容统计，缺少 Native 凭据时明确提示。
-- 保留 Codex 原生会话、`resume`、WebSocket、压缩和 MCP 功能。
-- 在当前登录、其他 Subscription 和外部模型之间切换时，使用 Codex 自己保存的
-  可见历史继续已经压缩过的任务。
+- 在客户端支持时，保留 Codex 原生会话、`resume`、WebSocket、压缩和 MCP 行为。
+- 在不同 Provider 之间实时切换时，使用 Codex 可见历史，不转发 Provider 私有状态。
+- 若会话含有 EMP 处理的压缩数据，想切回原生 Codex，先结束活动任务并关闭 Codex，
+  再在 Web UI 的 Codex 集成中点击“恢复原生”（Restore Native）。EMP 只转换受影响的
+  已保存历史，改写前备份历史文件，然后恢复原生设置。恢复完成后 EMP 会退出；重新打开
+  Codex 即可在受支持版本上继续原对话。也可使用命令行 `EMP restore`。
 - 外部模型可以使用 Codex 独立联网搜索；EMP 优先使用当前 `.codex` 登录，读取不到时
   自动回退到可用的导入账号，无需向外部 Provider 暴露凭据。
 
@@ -73,24 +76,31 @@ EMP 不会捆绑或替代 Codex。EMP 只修改共用的 `~/.codex/config.toml`�
 IDE 插件等所有 Codex 客户端都会读取这份设置，所以不需要选择客户端；多个客户端和
 workspace 可以同时工作。查询账户余量时，EMP 会在已知位置（Codex App、`.codex`
 托管 runtime、VS Code/Cursor 插件、`PATH` 中的 `codex`）找一个受支持的 Codex 来执行。
+Unix 上还会查找 `NVM_DIR`、`$XDG_CONFIG_HOME/nvm`、`~/.config/nvm` 和 `~/.nvm`
+中的安装。即使桌面启动器的 `PATH` 不含 nvm，npm 安装的 Codex 也可以使用同一安装中
+受信任的 Node，无需手动创建 `codex` 或 `node` 链接。
 
-EMP 不会停止、启动或重启 Codex。点“将 EMP 应用于 Codex”后，请自己重启 Codex。
-Codex 下次连到 EMP（拉取模型列表或发起对话）时，EMP 会通过 Codex 的本地控制通道
-读取 `model/list`，确认正在运行的 Codex 实际加载了哪份模型目录，并直接推送到
-Web UI，不做后台轮询。集成卡片会显示三种状态之一：
+路径检测覆盖 Windows x64、Linux x64、macOS Intel 和 macOS Apple Silicon，
+支持这些平台上 CLI、IDE 插件和桌面 App 的已知安装布局。
 
-- **Codex 正在使用 EMP**：重启后已经加载 EMP；
-- **待重启**：Codex 仍在使用旧设置，请重启 Codex；
-- **Codex 未运行**：下次打开 Codex 就会使用 EMP。
+EMP 不会停止或重启你正在使用的 Codex 后端。余量查询使用独立的 CLI 辅助进程，
+不会打开桌面 App。点“将 EMP 应用于 Codex”后，集成卡片会分别显示
+已保存的设置和正在运行的 Codex 加载的模型目录。如果目录仍是旧的，请在当前工作
+允许时，通过平时使用的启动器重启 Codex，然后再次检查目录。
+
+Codex 下次连到 EMP（拉取模型列表或发起对话）时，EMP 会通过本地控制通道读取
+`model/list`，并直接推送结果到 Web UI，不做后台轮询；也可以手动检查。
+目录匹配说明模型已可见，不代表已有会话采用了新的服务商设置。检查只读取状态，
+不会重新加载后端，也不会把目录匹配当作请求路由已经切换的证明。
 
 Linux 同时支持扫描当前 `CODEX_HOME/plugins/.plugin-appserver/codex`，
 其他 AppImage 或发行版的安装布局仍需单独验证。
 
-EMP 支持 Codex `0.149.0` 及以上版本。更旧的 Codex 发来请求时，EMP 会直接返回错误，
-提示需要升级 Codex。
+EMP v0.12.3 已在 Codex `0.158.0` 上验证；`0.158.0` 也是最低接受版本。新模型发布，
+以及客户端协议、登录或历史格式发生变化时，会重新评估兼容性。更新版本可以接入，
+但未经验证不保证兼容；低于最低版本的客户端会收到升级提示。
 
-已在 runtime `0.153.4` 上验证 Gemini 3.7 Flash、3.8 Flash 的子任务委派、
-后续任务和工具调用。协议说明见 [子任务兼容性](docs/external-collaboration.md)。
+外部子任务委派、后续任务和工具调用的说明见[子任务兼容性](docs/external-collaboration.md)。
 
 Subscription 的编辑窗口可以逐模型设置上下文 token 数。留空使用模型默认值；
 “刷新模型上限”会用该账号的登录凭据拉取订阅目录，输入不能超过目录中的
@@ -184,10 +194,10 @@ cargo build --locked --release -p emp-app --bin EMP
 
 ## 快速开始
 
-在 Linux 或 macOS 中显式启动打包后的 EMP：
+在解压后的 Linux `.tar.gz` 目录中显式启动打包后的 EMP：
 
 ```bash
-easy-multi-provider serve --config config.json
+./EMP serve --config config.json
 ```
 
 在源码目录中运行时使用：
@@ -219,10 +229,8 @@ EMP v0.9.0 至 v0.9.9 使用同一种加密迁移格式。当前版本可以导�
 中隐藏模型，在“模型显示”中修改显示名称，保存后点击“将 EMP 应用于
 Codex”。至少保留一个可见模型，显示名称不会改变模型 ID。
 
-使用 ChatGPT 登录时，名称、隐藏状态和新增模型可在 Codex 运行期间自动更新。
-EMP 会通过 Responses HTTP 和 WebSocket 通知模型目录版本变化，Codex 可在后续
-请求时拉取更新。Codex 0.155.0 也会约每 4.5 分钟定期刷新；空闲 App 菜单不保证
-保存后立即更新，刷新后可重新打开模型菜单查看。
+使用 ChatGPT 登录时，受支持的 Codex 客户端可在运行期间获取模型目录变更。
+目录变更会在后续请求时生效；若新模型尚未显示，可重新打开模型菜单查看。
 从旧版静态目录升级，或修改 Codex 的 Base URL 后，需要重启 Codex 一次。
 没有 ChatGPT 模型发现能力的客户端继续使用静态目录。
 回退至 EMP 0.9.91 或更早版本前，请先恢复原生 Codex。

@@ -7,6 +7,7 @@ use crate::http::response::{
     unauthorized_response,
 };
 use std::net::TcpStream;
+use std::time::Duration;
 
 pub(crate) fn quit_request(
     stream: &mut TcpStream,
@@ -45,6 +46,21 @@ pub(crate) fn quit_request(
             false,
         );
     }
+    let Some(restore_gate) = state
+        .connection_admission
+        .quiesce(1, Duration::from_secs(15))
+    else {
+        return (
+            json_error_response(
+                409,
+                status_text(409),
+                "Finish active Codex requests and WebSockets, then retry shutdown",
+                Some("active_conversations"),
+                &[],
+            ),
+            false,
+        );
+    };
     if state.backend.integration.restore_owned().is_err() {
         return (
             json_error_response(
@@ -57,6 +73,7 @@ pub(crate) fn quit_request(
             false,
         );
     }
+    restore_gate.keep_closed();
     (
         response(
             "HTTP/1.1 200 OK",

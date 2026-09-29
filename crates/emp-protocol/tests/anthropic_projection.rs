@@ -125,6 +125,14 @@ fn request_projection_preserves_history_boundaries_and_rejects_loss() {
 }
 
 #[test]
+fn numeric_reasoning_effort_is_rejected_instead_of_silently_dropped() {
+    let error = responses_to_anthropic(&json!({"reasoning":{"effort":64}}), "claude")
+        .expect_err("Anthropic effort must be a supported string");
+    assert_eq!(error.kind, AnthropicErrorKind::Request);
+    assert!(error.to_string().contains("numeric reasoning effort"));
+}
+
+#[test]
 fn complete_response_separates_text_tools_usage_and_terminal_reason() {
     let upstream = json!({
         "error": null,

@@ -13,6 +13,9 @@ mod records;
 mod source;
 mod visible;
 
+#[path = "history_repair.rs"]
+pub mod repair;
+
 use records::*;
 use source::{FileRecordSource, RecordSource, WalkReport, ZstdRecordSource};
 use visible::*;

@@ -34,6 +34,9 @@ Saved integration files and the live backend are independent states.
 - A saved file change never implies that a running backend hot-loaded it.
 - A prior-process observation is stale accounting until a new live probe
   succeeds.
+- An observation for an earlier integration target is historical evidence,
+  not verification of the current saved target. Configuration conflicts and
+  incomplete transactions take precedence over a previous catalog match.
 
 The UI must not call either state “synchronized” merely because the operation
 returned successfully.
@@ -70,9 +73,12 @@ waiting for the matching request ID.
 - `reload_required`: integration files are saved, but the observed model IDs do
   not match the target. The backend owner must restart Codex in a safe
   maintenance window before checking again.
-- `emp_loaded`: the shared backend exposes every expected EMP model ID.
-- `native_loaded`: the shared backend exposes none of the recorded EMP model
-  IDs.
+- `catalog_loaded`: the shared backend exposes every expected EMP model ID,
+  and the current catalog metadata matches when available for comparison.
+- `emp_catalog_absent`: the shared backend exposes none of the recorded EMP
+  model IDs. This does not verify that native routing has been restored.
+- `catalog_unverified`: the observed list cannot distinguish the saved target,
+  including an empty list when checking native restoration.
 - `stopped_waiting_for_start`: the shared listener is absent or unavailable;
   the backend owner must start it.
 - `verification_failed`: the listener answered, but the read-only query failed
@@ -83,9 +89,11 @@ waiting for the matching request ID.
 `stopping` and `stop_failed` are legacy recovery values only. Current
 enable/restore/reload flows do not produce them by controlling a process.
 
-`emp_loaded` and `native_loaded` verify only the observed model ID set. They do
-not prove that endpoint changes, model rename metadata, authentication,
-enrollment, or any other startup setting were hot-loaded.
+The public API maps the persisted legacy values `emp_loaded` and
+`native_loaded` to `catalog_loaded` and `emp_catalog_absent`. A catalog
+observation does not prove that endpoint changes, authentication, enrollment,
+or other startup settings were hot-loaded. Request routing remains explicitly
+unverified by this check.
 
 ## 5. Operations
 
@@ -117,6 +125,11 @@ The existing reload API is retained for compatibility, but “reload” now mean
 only “observe the catalog currently loaded by the shared backend.” It never
 reloads or controls the process.
 
+An empty `config/batchWrite` with `reloadUserConfig` is not a substitute:
+the inspected Codex implementation refreshes MCP and hook configuration, not
+the provider route or startup model catalog. EMP does not send this unrelated
+mutation as part of its catalog check.
+
 ## 6. Failure behavior
 
 - Missing/refused listener: report unavailable and wait for the owner; do not
@@ -143,7 +156,11 @@ Required regression coverage:
 - a missing listener reports waiting for its owner and does not start one;
 - a model ID mismatch reports `reload_required` and a safe-maintenance restart
   instruction;
-- configuration and runtime status remain separate in API and UI output.
+- configuration and runtime status remain separate in API and UI output;
+- a previous catalog match cannot verify a changed target or override a
+  configuration conflict;
+- reload performs only bounded catalog observation and never sends a config
+  mutation.
 
 The real shared-listener probe is verified on Linux for this change. macOS and
 Windows behavior is preserved behind the platform socket capability boundary

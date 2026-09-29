@@ -224,7 +224,7 @@ input,select,textarea{border-radius:6px;border-color:var(--border-strong)}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:none;color:var(--muted);font-size:12px;font-weight:500}
 .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--muted)}
 .integration-card{padding:0;border:0;border-radius:0;background:none}
-.integration-card[data-state="emp_applied"] .pill::before{background:var(--success)}.integration-card[data-state="emp_applied"]:not([data-runtime="emp_loaded"],[data-runtime="stopped_waiting_for_start"]) .pill::before{background:var(--warning)}
+.integration-card[data-state="emp_applied"] .pill::before{background:var(--success)}.integration-card[data-state="emp_applied"]:not([data-runtime="catalog_loaded"],[data-runtime="stopped_waiting_for_start"]) .pill::before{background:var(--warning)}
 .integration-card:is([data-state="conflict"],[data-state="prepared"],[data-state="unavailable"]){border-left:0}
 .integration-card:is([data-state="conflict"],[data-state="prepared"],[data-state="unavailable"]) .pill::before{background:var(--danger)}
 .integration-card-header{gap:10px}
@@ -901,7 +901,7 @@ async function saveSubscriptionSearch() {
     enabled: $('subscription_search_enabled').checked,
     account_id: ''
   };
-  await persistState(tr('设置已保存，请重启 Codex。','Settings saved. Restart Codex.'), candidate);
+  await persistState(tr('设置已保存；可在集成状态中检查 Codex 当前加载的模型目录。','Settings saved. Use the integration status to check Codex’s loaded model catalog.'), candidate);
 }
 function fill() {
   drawLogo(); applyTranslations(); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels();
@@ -982,17 +982,32 @@ function toast(title, body, ms = 7000) {
   document.body.appendChild(box);
   setTimeout(close, ms);
 }
-// What the running Codex actually loaded, as seen through its app-server model list.
+// The control API exposes a model list; it does not expose the request route.
 function runtimeView(runtime) {
-  const views = {
-    emp_loaded: ['EMP', 'Codex 正在使用 EMP。', 'Codex is using EMP.'],
-    stopped_waiting_for_start: ['EMP', 'Codex 未运行，下次打开 Codex 就会使用 EMP。', 'Codex is not running. It will use EMP the next time it opens.'],
-    reload_required: ['待重启', '请重启 Codex，Codex 还在使用旧的模型列表。', 'Restart Codex. It is still using the old model list.', 'Restart'],
-    not_checked: ['待重启', '请重启 Codex，让它加载 EMP。', 'Restart Codex so it loads EMP.', 'Restart'],
-    catalog_unverified: ['待重启', '请重启 Codex，让它加载 EMP。', 'Restart Codex so it loads EMP.', 'Restart'],
-  };
-  const view = views[runtime.state] || ['待重启', '请重启 Codex，让它加载 EMP。', 'Restart Codex so it loads EMP.', 'Restart'];
-  return [language === 'en' ? (view[3] || view[0]) : view[0], tr(view[1], view[2])];
+  const target = runtime.target || 'emp';
+  if (runtime.state === 'catalog_loaded') {
+    return [tr('EMP 模型已加载','EMP models observed'), tr('Codex 的模型列表符合 EMP 目录；此检查无法确认请求转发路线。','Codex’s model list matches the EMP catalog. This check cannot confirm request routing.')];
+  }
+  if (runtime.state === 'emp_catalog_absent') {
+    return [tr('EMP 模型已不可见','EMP models absent'), tr('共享模型列表不再包含此前的 EMP 专属模型 ID；这不能确认原生路由或其他设置已恢复。','The shared model list no longer contains the previous EMP-specific model IDs. This does not confirm native routing or other settings were restored.')];
+  }
+  if (runtime.state === 'stopped_waiting_for_start') {
+    return target === 'native'
+      ? [tr('等待 Codex 启动','Waiting for Codex'), tr('原生设置已保存；共享 Codex 后端当前不可用，下次正常启动时会读取这些设置。','Native settings are saved. The shared Codex backend is unavailable and will read them at its next normal start.')]
+      : [tr('等待 Codex 启动','Waiting for Codex'), tr('EMP 设置已保存；共享 Codex 后端当前不可用，下次正常启动时会读取这些设置。','EMP settings are saved. The shared Codex backend is unavailable and will read them at its next normal start.')];
+  }
+  if (runtime.state === 'reload_required') {
+    return target === 'native'
+      ? [tr('原生目录待更新','Native catalog pending'), tr('共享 Codex 后端仍显示 EMP 模型。让当前对话完成后，再请后端所有者正常重启以读取原生设置。','The shared Codex backend still shows EMP models. Let active chats finish, then ask its owner to restart it normally to load native settings.')]
+      : [tr('EMP 目录待更新','EMP catalog pending'), tr('共享 Codex 后端仍显示旧模型。让当前对话完成后，再请后端所有者正常重启以读取 EMP 设置。','The shared Codex backend still shows an old model list. Let active chats finish, then ask its owner to restart it normally to load EMP settings.')];
+  }
+  if (runtime.state === 'catalog_unverified') {
+    return [tr('目录无法确认','Catalog unverified'), tr('当前模型列表无法区分 EMP 与原生设置；方便时检查 Codex 的模型选择器。','The current model list cannot distinguish EMP from native settings. Check Codex’s model picker when convenient.')];
+  }
+  if (runtime.state === 'verification_failed') {
+    return [tr('无法检查目录','Catalog check failed'), tr('配置文件已保存，但共享 Codex 后端未能提供模型列表。','Settings are saved, but the shared Codex backend did not provide its model list.')];
+  }
+  return [tr('尚未检查','Not checked'), tr('配置状态来自 Codex 文件；尚未观察共享后端加载的模型目录。','Configuration status comes from the Codex files. The shared backend’s loaded model catalog has not been observed.')];
 }
 function conflictView(configuration) {
   const conflicts = configuration.conflicts || [];
@@ -1001,21 +1016,22 @@ function conflictView(configuration) {
   }
   return [tr('需要处理','Needs attention'), tr('Codex 的 config.toml 被其他程序改过。请恢复原生 Codex，再重新启动 EMP。','Another program changed Codex config.toml. Restore Native Codex, then start EMP again.')];
 }
-let codexMinimum = '0.149.0';
+let codexMinimum = '0.158.0';
 function renderIntegration(info) {
   const configuration = info.configuration || {};
   const compatibility = info.codex_compatibility || {};
   const views = {
-    native: ['Native', tr('当前使用原生 Codex。','Native Codex is active.')],
+    native: ['Native', tr('原生 Codex 设置已保存。','Native Codex settings are saved.')],
     prepared: [tr('需要恢复','Needs recovery'), tr('EMP 设置未完成，请恢复后重试。','EMP setup is incomplete. Restore and try again.')],
     restoring: [tr('正在恢复','Restoring'), tr('正在恢复原生 Codex…','Restoring Native Codex…')],
     unavailable: [tr('不可用','Unavailable'), tr('暂时无法读取 EMP 状态，请重试。','EMP status is unavailable. Try again.')],
   };
-  const view = configuration.state === 'emp_applied' ? runtimeView(info.runtime || {})
-    : configuration.state === 'conflict' ? conflictView(configuration)
+  const runtimeNeedsDisplay = ['catalog_loaded','emp_catalog_absent','stopped_waiting_for_start','reload_required','catalog_unverified','verification_failed'].includes(info.runtime?.state || '');
+  const view = configuration.state === 'conflict' ? conflictView(configuration)
+    : configuration.state === 'emp_applied' || configuration.state === 'native' && runtimeNeedsDisplay ? runtimeView(info.runtime || {})
     : views[configuration.state] || views.unavailable;
   $('integration_summary').textContent = view[1];
-  // Every Codex from the minimum on reads the same config.toml; only an older one needs attention.
+  // Passing this version gate does not verify protocol or history compatibility.
   const unsupported = compatibility.status === 'unsupported';
   const minimum = codexMinimum = compatibility.minimum || codexMinimum;
   const installed = compatibility.installed ? ` ${compatibility.installed}` : '';
@@ -1024,7 +1040,7 @@ function renderIntegration(info) {
   $('codex_compatibility').dataset.state = compatibility.status || 'unknown';
   $('integration').dataset.state = configuration.state || 'unknown';
   $('integration').dataset.runtime = (info.runtime || {}).state || 'not_checked';
-  renderLogoState(configuration.state === 'emp_applied' && info.runtime?.state === 'emp_loaded');
+  renderLogoState(configuration.state === 'emp_applied' && info.runtime?.routing_verified === true);
   $('integration_badge').textContent = view[0];
   $('integration_title').textContent = t('integration_status');
   renderIntegrationToggle();
@@ -1035,9 +1051,8 @@ async function integrationUpdated() {
   try {
     const info = await api('/api/integration');
     renderIntegration(info);
-    if (before && before !== 'emp_loaded' && info.configuration?.state === 'emp_applied' && info.runtime?.state === 'emp_loaded') {
-      toast(tr('Codex 已加载 EMP','Codex loaded EMP'), tr('现在可以在 Codex 里选择 EMP 的模型了。','EMP models are now available in Codex.'));
-      animateLogo();
+    if (before && before !== 'catalog_loaded' && info.runtime?.state === 'catalog_loaded' && info.runtime?.target === 'emp' && info.runtime?.catalog_verified === true) {
+      toast(tr('Codex 已加载 EMP 模型','Codex loaded EMP models'), tr('模型目录已匹配；此状态检查无法确认请求转发路线。','The model catalog matches. This status check cannot confirm request routing.'));
     }
   } catch (_) {}
 }
@@ -1048,7 +1063,7 @@ async function loadIntegration() {
     const configuration = info.configuration || {};
     const runtime = info.runtime || {};
     const verifyKey = `${configuration.state || ''}:${runtime.state || ''}:${runtime.target || ''}`;
-    const passivelyVerifiable = configuration.state === 'emp_applied' && runtime.state !== 'emp_loaded';
+    const passivelyVerifiable = configuration.state === 'emp_applied' && runtime.state !== 'catalog_loaded';
     if (passivelyVerifiable && !integrationVerificationAttempts.has(verifyKey)) {
       integrationVerificationAttempts.add(verifyKey);
       try { info = await api('/api/integration/verify', {method:'POST', body:'{}'}); }
@@ -1174,16 +1189,24 @@ function supportDetailLabel(value) {
   const labels = language === 'en' ? {
     allowed:'Likely writable', denied:'Write permission denied', unknown:'Unknown',
     environment:'Environment proxy', system:'System proxy', direct:'Direct', proxy:'Through proxy',
-    emp_loaded:'EMP loaded', native_loaded:'Native loaded', path_cli:'Codex CLI on PATH'
+    catalog_loaded:'EMP model catalog observed', emp_catalog_absent:'EMP model IDs absent', nvm:'Codex CLI managed by nvm', path_cli:'Codex CLI on PATH'
   } : {
     allowed:'可能可写', denied:'没有写入权限', unknown:'未知',
     environment:'环境变量代理', system:'系统代理', direct:'直连', proxy:'经过代理',
-    emp_loaded:'EMP 已加载', native_loaded:'原生配置已加载', path_cli:'PATH 中的 Codex CLI'
+    catalog_loaded:'已观察 EMP 模型目录', emp_catalog_absent:'EMP 模型 ID 已不可见', nvm:'由 nvm 管理的 Codex CLI', path_cli:'PATH 中的 Codex CLI'
   };
   return labels[value] || esc(value || 'unknown');
 }
 function runtimeLabel(value) {
-  return {emp_loaded:tr('正在使用 EMP','using EMP'), stopped_waiting_for_start:tr('未运行','not running')}[value] || tr('等待重启 Codex','waiting for Codex restart');
+  return {
+    catalog_loaded:tr('模型目录符合目标；请求路线未确认','model catalog matches target; request route unverified'),
+    emp_catalog_absent:tr('此前的 EMP 模型 ID 已不可见；恢复未确认','previous EMP model IDs are absent; restoration unverified'),
+    stopped_waiting_for_start:tr('共享后端不可用；配置会在下次正常启动时读取','shared backend unavailable; config will be read at next normal start'),
+    reload_required:tr('共享模型目录仍旧；当前对话结束后再请后端所有者正常重启','shared catalog is stale; ask its owner to restart normally after active chats finish'),
+    catalog_unverified:tr('无法区分当前加载的目录','loaded catalog cannot be distinguished'),
+    verification_failed:tr('无法读取共享模型目录','shared model catalog could not be read'),
+    not_checked:tr('尚未观察共享模型目录','shared model catalog has not been observed')
+  }[value] || tr('共享模型目录状态未知','shared model catalog state unknown');
 }
 function renderSupportReport(report) {
   const box = $('support_report'); if (!box) return;
@@ -1192,7 +1215,7 @@ function renderSupportReport(report) {
   const accountLines = imported.map(account => `${tr('导入账号','Imported account')} ${Number(account.index) || 0}: ${supportStatusLabel(account.quota_status)}`);
   const configNotes = [!config.exists && tr('文件不存在','file missing'), config.write_access_hint === 'denied' && tr('没有写入权限','not writable')].filter(Boolean);
   const minimum = codexMinimum;
-  const codexNotes = [codex.compatibility === 'unsupported' ? tr(`版本过旧，需要 ${minimum} 或更新`, `too old, needs ${minimum} or newer`) : tr(`支持（需 ${minimum} 及以上）`, `supported (${minimum} or newer)`), codex.target === 'emp' && runtimeLabel(codex.state)].filter(Boolean);
+  const codexNotes = [codex.compatibility === 'unsupported' ? tr(`版本过旧，需要 ${minimum} 或更新`, `too old, needs ${minimum} or newer`) : tr(`符合最低版本要求（${minimum}及以上）`, `Meets minimum version requirement (${minimum}+)`), codex.source && supportDetailLabel(codex.source), codex.target && runtimeLabel(codex.state,codex.target)].filter(Boolean);
   box.innerHTML = `<p><strong>${tr('配置','Config')}</strong> ${esc(config.path || '—')}${configNotes.map(note => ' · ' + esc(note)).join('')}</p>
     <p><strong>Codex</strong> ${esc(codex.version || tr('未找到','not found'))} · ${codexNotes.map(esc).join(' · ')}</p>
     <p><strong>${tr('代理','Proxy')}</strong> ${supportDetailLabel(network.source_at_startup)} · ${supportDetailLabel(network.chatgpt_route)}${network.proxy_scheme ? ' (' + esc(network.proxy_scheme) + ')' : ''}</p>
@@ -1230,48 +1253,65 @@ async function loadDiagnostics() {
 function openDiagnostics() { openModal(tr('性能与健康','Performance and health'), `<div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics(); loadSupportReport()">${esc(t('refresh'))}</button><button type="button" class="secondary" data-icon="download" onclick="downloadSupportReport()">${tr('下载脱敏报告','Download redacted report')}</button></div><details class="diagnostics-details" open><summary>${tr('系统诊断','System diagnostics')}</summary><div id="support_report" class="performance-help">${tr('正在读取诊断报告…','Loading support report…')}</div></details><div class="performance-help"><span><strong>TTFT</strong> · ${tr('请求进入 EMP 后，到收到首段正文或工具参数的时间。','Time from EMP receiving the request to the first text or tool-argument output.')}</span><span><strong>TPS</strong> · ${tr('上游回报的全部输出 token 除以完整请求耗时，包含首 token 等待与隐藏推理时间。','All upstream-reported output tokens divided by the complete request duration, including TTFT and hidden reasoning time.')}</span></div><div id="diagnostics_summary" class="muted"></div><div id="health_summary"></div><div id="performance_records"></div><div id="cache_records"></div><details class="failure-list"><summary>${tr('近期失败详情','Recent failure details')}</summary><div id="diagnostics_records"></div></details>`, '', null); loadDiagnostics(); loadSupportReport(); diagnosticsTimer = setInterval(() => { if (document.visibilityState !== 'hidden') { loadDiagnostics(); loadSupportReport(); } }, 10 * 60 * 1000); }
 function confirmIntegrationAction(action) {
   const actions = language === 'en' ? {
-    enable: ['Apply EMP to Codex', 'Apply the current EMP settings. Restart Codex when it finishes.'],
-    restore: ['Restore native Codex', 'Restore the Native Codex settings. Restart Codex when it finishes.'],
-    reload: ['Check Codex', 'Check whether Codex loaded the latest models.']
+    enable: ['Apply EMP to Codex', 'Save EMP settings and check Codex’s shared model catalog. Active chats keep running.'],
+    restore: ['Restore native Codex', 'Finish active Codex conversations and close Codex before restoring. EMP waits for requests to finish, makes existing conversation history portable, restores native settings, then stops. Reopen Codex after the restore completes.'],
+    reload: ['Check Codex', 'Read the saved target and compare it with Codex’s shared model catalog. This does not confirm request routing.']
   } : {
-    enable: ['将 EMP 应用于 Codex', '应用当前 EMP 设置。完成后请重启 Codex。'],
-    restore: ['恢复原生 Codex', '恢复原生 Codex 设置。完成后请重启 Codex。'],
-    reload: ['检查 Codex', '检查 Codex 是否已加载最新模型。']
+    enable: ['将 EMP 应用于 Codex', '保存 EMP 设置并检查 Codex 共享模型目录。当前对话会继续运行。'],
+    restore: ['恢复原生 Codex', '恢复前请结束活动对话并关闭 Codex。EMP 会等待请求完成、修复现有对话历史、恢复原生设置，然后退出。恢复完成后再重新打开 Codex。'],
+    reload: ['检查 Codex', '读取已保存目标并与 Codex 共享模型目录比较；此操作无法确认请求转发路线。']
   };
   const selected = actions[action]; if (!selected) return;
   openModal(selected[0], `<p>${esc(selected[1])}</p>`, selected[0], () => submitIntegrationAction(action));
 }
 function integrationOutcomeMessage(info, action) {
-  if (action === 'enable') return info.runtime?.state === 'emp_loaded' ? tr('Codex 正在使用 EMP。','Codex is using EMP.') : tr('请重启 Codex，让它加载 EMP。','Restart Codex so it loads EMP.');
-  if (action === 'restore') return tr('已恢复原生 Codex，请重启 Codex。','Native Codex restored. Restart Codex.');
+  if (action === 'restore') return tr('原生 Codex 设置已恢复。EMP 已退出；请重新打开 Codex。','Native Codex settings restored. EMP has stopped; reopen Codex.');
+  if (action === 'enable') {
+    const runtime = info.runtime || {};
+    if (runtime.state === 'catalog_loaded') return runtime.target === 'native'
+      ? tr('此前的 EMP 模型 ID 已不可见；原生恢复和请求转发路线未确认。','Previous EMP model IDs are absent; native restoration and request routing are unverified.')
+      : tr('EMP 模型目录已匹配；请求转发路线未确认。','The EMP model catalog matches; request routing is unverified.');
+    if (runtime.state === 'emp_catalog_absent') return tr('此前的 EMP 模型 ID 已不可见；原生恢复和请求转发路线未确认。','Previous EMP model IDs are absent; native restoration and request routing are unverified.');
+    if (runtime.state === 'reload_required') return tr('设置已保存；共享目录仍旧。当前对话结束后，可请后端所有者正常重启。','Settings are saved; the shared catalog is stale. After active chats finish, ask the backend owner to restart it normally.');
+    if (runtime.state === 'stopped_waiting_for_start') return tr('设置已保存；共享后端下次正常启动时会读取。','Settings are saved; the shared backend will read them at its next normal start.');
+    if (runtime.state === 'verification_failed') return tr('设置已保存，但无法检查共享模型目录。','Settings are saved, but the shared model catalog could not be checked.');
+    return tr('设置已保存；共享模型目录尚未确认。','Settings are saved; the shared model catalog has not been confirmed.');
+  }
   return tr('检查完成。','Check complete.');
 }
 async function submitIntegrationAction(action) {
   if (integrationBusy) return;
   integrationBusy = true;
   renderIntegrationToggle();
-  const progress = tr('正在应用设置…','Applying settings…');
+  const progress = action === 'reload'
+    ? tr('正在检查 Codex 模型目录…','Checking the Codex model catalog…')
+    : tr('正在应用设置…','Applying settings…');
   $('modal_status').textContent = progress;
   notice(progress);
   try {
+    let refreshed;
     if (action === 'enable') {
       await api('/api/integration/enable', {method:'POST', body:JSON.stringify({confirm_reload:true})});
     } else if (action === 'restore') {
-      await api('/api/integration/restore', {method:'POST', body:JSON.stringify({confirm_reload:true})});
+      refreshed = await api('/api/integration/restore', {method:'POST', body:JSON.stringify({confirm_reload:true})});
+      if (refreshed?.configuration?.state !== 'native') {
+        throw new Error(tr('恢复响应未确认原生 Codex 设置。','Restore response did not confirm native Codex settings.'));
+      }
+      renderIntegration(refreshed);
+      $('integration_summary').textContent = integrationOutcomeMessage(refreshed, action);
     } else if (action === 'reload') {
-      await api('/api/integration/reload', {method:'POST', body:JSON.stringify({confirm_reload:true})});
+      await api('/api/integration/reload', {method:'POST', body:'{}'});
     } else {
       throw new Error(tr('未知集成操作','Unknown integration action'));
     }
-    const refreshed = await loadIntegration();
-    if (!refreshed) throw new Error(tr('集成状态刷新失败','Failed to refresh integration status'));
+    if (action !== 'restore') {
+      refreshed = await loadIntegration();
+      if (!refreshed) throw new Error(tr('集成状态刷新失败','Failed to refresh integration status'));
+    }
     const message = integrationOutcomeMessage(refreshed, action);
     $('modal_status').textContent = message;
     closeModal();
-    if (action === 'enable' && refreshed.runtime?.state !== 'emp_loaded') {
-      toast(tr('EMP 已启动','EMP is on'), tr('请重启 Codex。Codex 重启后，这里会自动显示“正在使用 EMP”。','Restart Codex. This page shows “Codex is using EMP” once it has restarted.'), 9000);
-      animateLogo();
-    } else notice(message);
+    notice(message);
   } catch (error) {
     if (error.payload && error.payload.configuration && error.payload.runtime) renderIntegration(error.payload);
     if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；可在账户的“编辑”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Restore visibility under the account Edit action, or add a model.');

@@ -781,14 +781,20 @@ pub fn responses_to_anthropic(body: &Value, upstream_model: &str) -> Result<Valu
         .get("reasoning")
         .and_then(object)
         .and_then(|reasoning| reasoning.get("effort"))
-        .and_then(Value::as_str)
     {
-        if !matches!(effort, "low" | "medium" | "high" | "xhigh" | "max") {
+        if effort.is_number() {
             return Err(request_error(
-                "request projection failed: unsupported Anthropic reasoning effort",
+                "request projection failed: numeric reasoning effort is unsupported by Anthropic",
             ));
         }
-        output_config.insert("effort".to_owned(), Value::String(effort.to_owned()));
+        if let Some(effort) = effort.as_str() {
+            if !matches!(effort, "low" | "medium" | "high" | "xhigh" | "max") {
+                return Err(request_error(
+                    "request projection failed: unsupported Anthropic reasoning effort",
+                ));
+            }
+            output_config.insert("effort".to_owned(), Value::String(effort.to_owned()));
+        }
     }
     if !output_config.is_empty() {
         payload["output_config"] = Value::Object(output_config);

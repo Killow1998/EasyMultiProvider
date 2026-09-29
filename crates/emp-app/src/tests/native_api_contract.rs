@@ -2,6 +2,38 @@ use super::*;
 use emp_transport::decode_content;
 use std::sync::mpsc;
 
+#[test]
+fn codex_http_version_gate_rejects_below_minimum_and_accepts_minimum() {
+    let (_directory, server) = test_server();
+
+    let below_minimum = request(
+        &server,
+        "/v1/version-gate-probe",
+        &["User-Agent: codex_cli_rs/0.157.9 (Linux; x86_64)"],
+    );
+    assert!(
+        below_minimum.starts_with("HTTP/1.1 426 Upgrade Required\r\n"),
+        "{below_minimum}"
+    );
+    let body = below_minimum
+        .split_once("\r\n\r\n")
+        .expect("HTTP response body")
+        .1;
+    assert!(body.contains("unsupported_codex_version"), "{body}");
+    assert!(body.contains("0.158.0 or newer"), "{body}");
+
+    let minimum = request(
+        &server,
+        "/v1/version-gate-probe",
+        &["User-Agent: codex_cli_rs/0.158.0 (Linux; x86_64)"],
+    );
+    assert!(
+        minimum.starts_with("HTTP/1.1 404 Not Found\r\n"),
+        "{minimum}"
+    );
+    server.shutdown().expect("shutdown");
+}
+
 #[derive(Debug)]
 struct ObservedNativeRequest {
     path: String,

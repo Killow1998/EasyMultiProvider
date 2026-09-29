@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.12.3 (2026-09-29)
+
+- Validate against Codex 0.158.0 and raise the minimum accepted client version
+  to 0.158.0. Older clients receive an update message; newer, unvalidated
+  clients are not guaranteed compatible.
+- Find npm-installed Codex in known Unix nvm locations when EMP starts from a
+  desktop launcher with a minimal `PATH`. Use the installation's trusted Node
+  interpreter without requiring manual symlinks; preserve an existing Codex
+  selection on `PATH` ahead of nvm fallback discovery.
+- Discover the official VS Code extension, managed Codex daemon and ChatGPT
+  desktop app runtimes on Windows, Linux, macOS Intel and Apple Silicon.
+  Resolve Windows npm's native payload without depending on a desktop shell's
+  Node path, and select the CLI resource instead of launching the app GUI.
+- Recheck cached Codex installations when their executable is replaced,
+  removed, or no longer trusted, so quota queries can select a usable runtime.
+- Separate saved integration settings from the running Codex model catalog.
+  A matching catalog confirms model visibility, not a provider-route change;
+  absence of EMP models alone no longer claims native routing is restored.
+- Keep catalog checks read-only. Previous observations cannot override a
+  configuration conflict or verify a different saved target, and startup no
+  longer presents an old observation as a fresh result.
+- Disable remote plugin synchronization in isolated quota and reset helpers,
+  avoiding repeated plugin bundle downloads when those short-lived helpers
+  start. Normal Codex plugins and account isolation are preserved.
+- Convert affected EMP-owned compaction checkpoints before restoring native
+  settings, including supported parent, child and grandchild histories. Back up
+  each affected rollout before rewriting it, recover interrupted writes, and
+  refuse unsafe or unsupported changes. Finish active conversations and close
+  Codex before restoring. Use **Restore Native** in the Web UI, or run
+  `EMP restore` from the command line.
+- Limit history repair to affected conversations, stream the initial scan,
+  and bound retained data so unrelated unfinished conversations do not block
+  restoration. Render the successful restore response without fetching a
+  server that has already stopped.
+- Handle Codex 0.158.0 numeric reasoning controls explicitly: incompatible
+  external protocol projections return an error instead of silently omitting
+  the requested setting.
+
 ## 0.12.2 (2026-09-28)
 
 - Show what the running Codex actually loaded: the integration card reads
