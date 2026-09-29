@@ -48,7 +48,7 @@ fn targets() -> [TargetCase; 4] {
 fn fixture_root() -> TempDir {
     let root = tempfile::Builder::new()
         .prefix("emp-claude-discovery-")
-        .tempdir_in("/tmp")
+        .tempdir()
         .expect("create discovery fixture root");
     #[cfg(unix)]
     {
@@ -60,7 +60,6 @@ fn fixture_root() -> TempDir {
 
 fn inert_executable(path: &Path, contents: &[u8]) -> PathBuf {
     fs::create_dir_all(path.parent().expect("fixture parent")).unwrap();
-    private_fixture_directories(path.parent().unwrap());
     fs::write(path, contents).unwrap();
     #[cfg(unix)]
     {
@@ -70,23 +69,9 @@ fn inert_executable(path: &Path, contents: &[u8]) -> PathBuf {
     path.to_path_buf()
 }
 
-fn private_fixture_directories(_directory: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for ancestor in _directory
-            .ancestors()
-            .take_while(|ancestor| *ancestor != Path::new("/tmp"))
-        {
-            fs::set_permissions(ancestor, fs::Permissions::from_mode(0o700)).unwrap();
-        }
-    }
-}
-
 fn environment(platform: TargetPlatform, root: &Path) -> DiscoveryEnvironment {
     let home = root.join("home");
     fs::create_dir_all(&home).unwrap();
-    private_fixture_directories(&home);
     DiscoveryEnvironment {
         platform,
         home: Some(home.clone()),
@@ -101,9 +86,9 @@ fn environment(platform: TargetPlatform, root: &Path) -> DiscoveryEnvironment {
     }
 }
 
-// Sandboxed fixture paths map / to nobody. Keep discovery tests
-// deterministic while still rejecting writable or non-executable files;
-// resolve_claude_cli uses the full production ancestor trust check.
+// The discovery fixtures inject file-only trust so temporary directory
+// ownership and modes do not affect resolver tests. Production ancestor trust
+// is exercised through resolve_claude_cli.
 fn fixture_trust(path: &Path) -> Option<PathBuf> {
     let canonical = path.canonicalize().ok()?;
     let metadata = fs::metadata(&canonical).ok()?;
