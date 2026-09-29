@@ -537,6 +537,18 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
     let restored_result = response_json(&restored);
     assert_eq!(restored_result["configuration"]["state"], "native");
     assert_eq!(restored_result["runtime"]["target"], "native");
+    // The client returns after reading Content-Length, before the handler's
+    // half-close and shutdown store necessarily run. Wait for the observable
+    // post-response transition with a deadline.
+    let shutdown_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while !server
+        .state
+        .shutdown
+        .load(std::sync::atomic::Ordering::Acquire)
+        && std::time::Instant::now() < shutdown_deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     assert!(
         server
             .state

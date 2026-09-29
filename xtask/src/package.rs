@@ -303,7 +303,7 @@ fn user_home_directory() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
         .or_else(|| {
-            let mut home = OsString::from(std::env::var_os("HOMEDRIVE")?);
+            let mut home = std::env::var_os("HOMEDRIVE")?;
             home.push(std::env::var_os("HOMEPATH")?);
             Some(PathBuf::from(home))
         })
