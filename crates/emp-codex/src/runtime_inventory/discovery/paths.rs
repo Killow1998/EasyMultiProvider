@@ -101,7 +101,14 @@ pub(super) fn path_cli_in_roots_with_trust(
                     return None;
                 }
                 let candidate = cli_runtime_candidate_for_launcher(&launcher, platform)?;
-                trusted_path(&candidate)
+                let trusted = trusted_path(&candidate)?;
+                // Unix npm launchers are often symlinks; preserve their parent
+                // so version probing can locate the sibling Node executable.
+                Some(if platform.os == RuntimeOs::Windows {
+                    trusted
+                } else {
+                    candidate
+                })
             })
         })
 }

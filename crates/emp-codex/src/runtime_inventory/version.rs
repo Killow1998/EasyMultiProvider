@@ -303,7 +303,12 @@ mod tests {
         let launcher = bin.join("codex");
         symlink(&cli, &launcher).unwrap();
 
-        let observed = super::observe_with_path(&launcher, Some(OsString::new()));
+        let path = std::env::join_paths([&bin]).unwrap();
+        let discovered = super::super::discovery::path_cli_in(&path)
+            .expect("PATH discovery should retain the npm launcher");
+        assert_eq!(discovered, launcher);
+
+        let observed = super::observe_with_path(&discovered, Some(OsString::new()));
         assert_eq!(observed["installed"], "0.158.0");
         assert_eq!(observed["status"], "supported");
     }
