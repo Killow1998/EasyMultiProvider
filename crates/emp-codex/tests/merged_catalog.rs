@@ -28,3 +28,154 @@ fn external_catalog_keeps_coding_template_without_native_entitlements() {
     assert_eq!(external["model_messages"], json!({"tools":"safe"}));
     assert_eq!(external["supported_reasoning_levels"], json!([]));
 }
+
+#[test]
+fn claude_cli_catalog_is_text_only_without_erasing_stored_image_capabilities() {
+    let config = json!({
+        "providers":[{"id":"demo","protocol":"anthropic_messages","execution_backend":"claude_cli"}],
+        "models":[{
+            "id":"demo/model",
+            "provider":"demo",
+            "input_modalities":["text","image"],
+            "supports_image_detail_original":true
+        }]
+    });
+    let native = json!({"models":[]});
+
+    let claude_catalog = build_catalog(&config, &native, &BTreeMap::new(), &BTreeMap::new());
+    let claude_model = claude_catalog["models"]
+        .as_array()
+        .expect("models")
+        .iter()
+        .find(|entry| entry["slug"] == "demo/model")
+        .expect("Claude CLI model");
+    assert_eq!(claude_model["input_modalities"], json!(["text"]));
+    assert_eq!(claude_model["supports_image_detail_original"], false);
+
+    let mut http_config = config.clone();
+    http_config["providers"][0]["execution_backend"] = json!("http");
+    let http_catalog = build_catalog(&http_config, &native, &BTreeMap::new(), &BTreeMap::new());
+    let http_model = http_catalog["models"]
+        .as_array()
+        .expect("models")
+        .iter()
+        .find(|entry| entry["slug"] == "demo/model")
+        .expect("HTTP model");
+    assert_eq!(http_model["input_modalities"], json!(["text", "image"]));
+    assert_eq!(http_model["supports_image_detail_original"], true);
+    assert_eq!(
+        config["models"][0]["input_modalities"],
+        json!(["text", "image"])
+    );
+    assert_eq!(config["models"][0]["supports_image_detail_original"], true);
+}
+
+#[test]
+fn global_context_preference_changes_only_labels_for_every_catalog_source() {
+    let config = json!({
+        "accounts":[{"id":"subscription","name":"Account","prefix":"sub","auth_file":"credentials"}],
+        "providers":[{"id":"demo","protocol":"chat_completions"}],
+        "models":[{"id":"demo/model","provider":"demo","upstream_id":"model","context_window":6400,"display_name":"Provider model","description":"Provider description"}],
+        "catalog_presentations":{
+            "native-model":{"catalog_alias":"Native alias","show_context":true},
+            "sub/chat":{"catalog_alias":"Account alias","show_context":false},
+            "demo/model":{"catalog_alias":"Provider alias","show_context":false,"reasoning_summary":"show"}
+        }
+    });
+    let native = json!({"models":[{
+        "slug":"native-model","display_name":"Native model","description":"Native description",
+        "context_window":1600,"visibility":"list","supported_in_api":true
+    }]});
+    let account_catalogs = BTreeMap::from([(
+        "subscription".to_owned(),
+        json!({"models":[{
+            "slug":"chat","display_name":"Chat model","description":"Account model",
+            "context_window":3200,"visibility":"list","supported_in_api":true
+        }]}),
+    )]);
+
+    let mut hidden_config = config.clone();
+    hidden_config["catalog_show_context"] = json!(false);
+    let hidden = build_catalog(&hidden_config, &native, &account_catalogs, &BTreeMap::new());
+    let default_visible = build_catalog(&config, &native, &account_catalogs, &BTreeMap::new());
+
+    for route in ["native-model", "sub/chat", "demo/model"] {
+        let hidden_model = hidden["models"]
+            .as_array()
+            .expect("models")
+            .iter()
+            .find(|model| model["slug"] == route)
+            .unwrap_or_else(|| panic!("hidden model {route}"));
+        let visible_model = default_visible["models"]
+            .as_array()
+            .expect("models")
+            .iter()
+            .find(|model| model["slug"] == route)
+            .unwrap_or_else(|| panic!("visible model {route}"));
+        assert!(
+            !hidden_model["display_name"]
+                .as_str()
+                .unwrap()
+                .starts_with('[')
+        );
+        assert!(
+            !hidden_model["description"]
+                .as_str()
+                .unwrap()
+                .contains("Context ")
+        );
+        assert!(
+            visible_model["display_name"]
+                .as_str()
+                .unwrap()
+                .starts_with('[')
+        );
+        assert!(
+            visible_model["description"]
+                .as_str()
+                .unwrap()
+                .contains("Context ")
+        );
+        assert!(
+            hidden_model["context_window"]
+                .as_u64()
+                .is_some_and(|value| value > 0)
+        );
+        assert_eq!(
+            hidden_model["default_reasoning_summary"],
+            visible_model["default_reasoning_summary"]
+        );
+        for field in ["context_window", "max_context_window"] {
+            assert_eq!(hidden_model[field], visible_model[field], "{route} {field}");
+        }
+    }
+
+    for (route, alias) in [
+        ("native-model", "Native alias"),
+        ("sub/chat", "Account alias"),
+        ("demo/model", "Provider alias"),
+    ] {
+        assert!(
+            hidden["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|model| model["slug"] == route)
+                .unwrap()["display_name"]
+                .as_str()
+                .unwrap()
+                .contains(alias)
+        );
+        assert!(
+            default_visible["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|model| model["slug"] == route)
+                .unwrap()["display_name"]
+                .as_str()
+                .unwrap()
+                .contains(alias)
+        );
+    }
+}

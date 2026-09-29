@@ -263,6 +263,7 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
         }
     };
     *config = committed;
+    state.catalog_refresh.account_changed(account_id);
     drop(config);
     notify_quota_update(state, account_id, None);
     account_public_snapshot(state, account_id).ok_or_else(|| "account import failed".to_owned())
@@ -370,6 +371,7 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
         }
     };
     *config = committed;
+    state.catalog_refresh.account_changed(account_id);
     drop(config);
     notify_quota_update(state, account_id, None);
     Ok(())
@@ -437,7 +439,12 @@ pub(crate) fn replacing_account_credentials<T>(
             .iter()
             .map(|path| std::fs::read(path).ok())
             .collect::<Vec<_>>();
+        let previous_ids = configured_ids(&config);
         let result = replace(&mut config);
+        let current_ids = configured_ids(&config);
+        for id in previous_ids.iter().chain(current_ids.iter()) {
+            state.catalog_refresh.account_changed(id);
+        }
         for (path, before) in pending_files.iter().zip(before) {
             if std::fs::read(path).ok() != before {
                 forget_pending_rotation(state, Path::new(path));

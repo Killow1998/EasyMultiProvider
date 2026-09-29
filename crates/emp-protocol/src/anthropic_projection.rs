@@ -729,7 +729,7 @@ fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, AnthropicError> {
 }
 
 mod response;
-pub use response::response_from_anthropic;
+pub use response::{anthropic_usage, response_from_anthropic};
 
 pub fn responses_to_anthropic(body: &Value, upstream_model: &str) -> Result<Value, AnthropicError> {
     let Some(body) = object(body) else {

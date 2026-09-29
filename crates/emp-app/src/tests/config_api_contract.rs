@@ -93,6 +93,80 @@ fn settings_save_rejects_invalid_state_and_preserves_credentials_across_restart(
 }
 
 #[test]
+fn narrow_catalog_preference_update_requires_session_and_preserves_new_accounts() {
+    let (_directory, server) = test_server();
+    let cookie = session_header(&server);
+    let stale_page = parsed_body(&request(&server, "/api/config", &[&cookie]));
+    assert!(stale_page["accounts"].as_array().unwrap().is_empty());
+
+    let mut newer_config = stale_page.clone();
+    newer_config["accounts"] = json!([{
+        "id":"added-later", "name":"Added later", "prefix":"later", "enabled":true
+    }]);
+    let add_account = post(
+        &server,
+        "/api/config",
+        &serde_json::to_vec(&newer_config).expect("new account config"),
+        &[&cookie],
+    );
+    assert!(add_account.starts_with("HTTP/1.1 200"), "{add_account}");
+
+    let preference = br#"{"catalog_show_context":false}"#;
+    assert!(
+        post(&server, "/api/catalog/context-preference", preference, &[])
+            .starts_with("HTTP/1.1 401")
+    );
+    let origin = format!(
+        "Origin: http://attacker.invalid:{}",
+        server.local_addr().port()
+    );
+    assert!(
+        post(
+            &server,
+            "/api/catalog/context-preference",
+            preference,
+            &[&cookie, &origin]
+        )
+        .starts_with("HTTP/1.1 403")
+    );
+
+    let saved = post(
+        &server,
+        "/api/catalog/context-preference",
+        preference,
+        &[&cookie],
+    );
+    assert!(saved.starts_with("HTTP/1.1 200"), "{saved}");
+    assert_eq!(parsed_body(&saved)["catalog_show_context"], false);
+    let public = parsed_body(&request(&server, "/api/config", &[&cookie]));
+    assert_eq!(public["catalog_show_context"], false);
+    assert_eq!(public["accounts"][0]["id"], "added-later");
+    let persisted = load_configuration(Some(&server.state.backend.configuration.config_path))
+        .expect("persisted config");
+    assert_eq!(persisted["catalog_show_context"], false);
+    assert_eq!(persisted["accounts"][0]["id"], "added-later");
+
+    let before_invalid = std::fs::read(&server.state.backend.configuration.config_path)
+        .expect("config before invalid request");
+    let broad_payload = br#"{"catalog_show_context":true,"accounts":[]}"#;
+    assert!(
+        post(
+            &server,
+            "/api/catalog/context-preference",
+            broad_payload,
+            &[&cookie]
+        )
+        .starts_with("HTTP/1.1 400")
+    );
+    assert_eq!(
+        std::fs::read(&server.state.backend.configuration.config_path)
+            .expect("config after invalid request"),
+        before_invalid
+    );
+    server.shutdown().expect("shutdown");
+}
+
+#[test]
 fn startup_and_save_move_duplicate_visibility_to_native_without_touching_auth() {
     let upstream = CatalogUpstream::start(200);
     let (directory, server) = catalog_server(&upstream);

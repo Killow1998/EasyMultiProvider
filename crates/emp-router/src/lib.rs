@@ -151,6 +151,15 @@ pub struct CompleteResponse {
     pub body: Value,
 }
 
+/// An upstream response forwarded without decoding or protocol projection.
+/// This is used only by adapters that must preserve a native provider request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PassthroughResponse {
+    pub status: u16,
+    pub content_type: String,
+    pub body: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StreamResponseEvent {
     pub event: String,
@@ -207,6 +216,9 @@ pub fn protocol_candidates(route: &ResolvedRoute) -> Vec<Protocol> {
         return vec![route.protocol];
     }
     let provider = route.provider.value();
+    if provider.get("execution_backend").and_then(Value::as_str) == Some("claude_cli") {
+        return vec![Protocol::AnthropicMessages];
+    }
     let normal = if provider.get("auth_mode").and_then(Value::as_str) == Some("anthropic_api_key") {
         vec![Protocol::AnthropicMessages]
     } else if provider

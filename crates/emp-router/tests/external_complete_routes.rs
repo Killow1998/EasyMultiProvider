@@ -442,3 +442,60 @@ async fn a_dropped_connection_is_surfaced_as_a_network_failure() {
         "the router sends the POST once and leaves retries to the app"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anthropic_passthrough_preserves_cli_body_and_raw_response() {
+    let server = UpstreamServer::start();
+    let client = HttpClient::new(HttpClientPolicy::default()).expect("HTTP client");
+    let router = ExternalRouter::new(&client);
+    let request = json!({
+        "model":"claude-cli-model",
+        "stream":true,
+        "system":[{"type":"text","text":"protocol metadata"}],
+        "messages":[{"role":"user","content":[{"type":"text","text":"serialized transcript"}]}],
+        "tools":[{"name":"StructuredOutput","input_schema":{"type":"object"}}],
+        "output_config":{"effort":"high"}
+    });
+    let response = router
+        .execute_anthropic_passthrough(
+            &route(&server.base_url(), Protocol::AnthropicMessages, "upstream"),
+            &request,
+            &BTreeMap::new(),
+            &BTreeMap::from([(
+                "anthropic-beta".to_owned(),
+                "interleaved-thinking".to_owned(),
+            )]),
+        )
+        .await
+        .expect("native Messages passthrough");
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.content_type, "application/json");
+    let expected_response = json!({
+        "id":"anthropic_upstream", "type":"message", "model":"upstream",
+        "content":[
+            {"type":"text","text":"answer"},
+            {"type":"tool_use","id":"call_anthropic","name":"lookup","input":{"q":"x"}}
+        ],
+        "stop_reason":"tool_use", "usage":{"input_tokens":3,"output_tokens":2}
+    });
+    assert_eq!(
+        response.body,
+        serde_json::to_vec(&expected_response).unwrap()
+    );
+
+    let observed = server.requests();
+    assert_eq!(observed.len(), 1);
+    assert_eq!(observed[0].path, "/v1/messages");
+    assert_eq!(observed[0].body["model"], "upstream");
+    assert_eq!(observed[0].body["messages"], request["messages"]);
+    assert_eq!(observed[0].body["system"], request["system"]);
+    assert_eq!(observed[0].body["tools"], request["tools"]);
+    assert_eq!(observed[0].body["output_config"], request["output_config"]);
+    assert_eq!(observed[0].headers["x-api-key"], "test-key");
+    assert_eq!(
+        observed[0].headers["anthropic-beta"],
+        "interleaved-thinking"
+    );
+    assert_eq!(observed[0].headers["accept"], "text/event-stream");
+}

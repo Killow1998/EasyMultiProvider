@@ -54,6 +54,7 @@ struct ServerStartupOptions {
     open_browser: bool,
     markers: UpdateStartupMarkers,
     admission: ConnectionAdmissionConfig,
+    enable_catalog_refresh_worker: bool,
 }
 
 struct StartupContext<'a> {
@@ -66,6 +67,7 @@ struct StartupContext<'a> {
     markers: UpdateStartupMarkers,
     http_client_override: Option<emp_transport::HttpClient>,
     admission: ConnectionAdmissionConfig,
+    enable_catalog_refresh_worker: bool,
 }
 
 #[derive(Clone, Default)]
@@ -112,6 +114,8 @@ impl ServerHandle {
         open_browser: bool,
         markers: UpdateStartupMarkers,
     ) -> Result<Self, AppError> {
+        // Unit-test servers do not start a network worker by default; the
+        // catalog loopback integration fixture opts in explicitly below.
         Self::start_with_config_options_inner(StartupContext {
             host,
             port,
@@ -122,6 +126,29 @@ impl ServerHandle {
             markers,
             http_client_override: None,
             admission: ConnectionAdmissionConfig::default(),
+            enable_catalog_refresh_worker: !cfg!(test),
+        })
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn start_with_catalog_refresh_for_test(
+        host: IpAddr,
+        port: u16,
+        config_path: &Path,
+        codex_binary: &str,
+        native_auth_path: PathBuf,
+    ) -> Result<Self, AppError> {
+        Self::start_with_config_options_inner(StartupContext {
+            host,
+            port,
+            config_path,
+            codex_binary,
+            native_auth_path,
+            open_browser: false,
+            markers: UpdateStartupMarkers::default(),
+            http_client_override: None,
+            admission: ConnectionAdmissionConfig::default(),
+            enable_catalog_refresh_worker: true,
         })
     }
 
@@ -144,6 +171,7 @@ impl ServerHandle {
             markers: UpdateStartupMarkers::default(),
             http_client_override: Some(client),
             admission: ConnectionAdmissionConfig::default(),
+            enable_catalog_refresh_worker: false,
         })
     }
 
@@ -168,6 +196,7 @@ impl ServerHandle {
             markers: UpdateStartupMarkers::default(),
             http_client_override: None,
             admission,
+            enable_catalog_refresh_worker: false,
         })
     }
 
@@ -182,6 +211,7 @@ impl ServerHandle {
             markers,
             http_client_override,
             admission,
+            enable_catalog_refresh_worker,
         } = context;
         if !is_loopback(host) {
             return Err(AppError::HostNotLoopback);
@@ -222,6 +252,7 @@ impl ServerHandle {
                 open_browser,
                 markers,
                 admission,
+                enable_catalog_refresh_worker,
             },
         )
     }
@@ -251,6 +282,7 @@ impl ServerHandle {
         );
         let state = Arc::new(ServerState {
             shutdown,
+            catalog_refresh: crate::services::account_catalog::CatalogRefreshState::default(),
             sessions,
             connection_admission: ConnectionAdmission::new(startup_options.admission),
             bootstrap: BootstrapToken {
@@ -272,6 +304,9 @@ impl ServerHandle {
             _service_owner: service_owner,
         };
         handle.add_worker(listener)?;
+        if startup_options.enable_catalog_refresh_worker {
+            handle.add_catalog_refresh_worker()?;
+        }
         handle.add_quota_sampler()?;
         handle.add_runtime_watch()?;
         Ok(handle)
@@ -325,6 +360,19 @@ impl ServerHandle {
         if let Ok(mut workers) = self.workers.lock() {
             workers.push(worker);
         }
+        Ok(())
+    }
+
+    fn add_catalog_refresh_worker(&self) -> Result<(), AppError> {
+        let state = Arc::clone(&self.state);
+        let worker = thread::Builder::new()
+            .name("emp-catalog-refresh".to_owned())
+            .spawn(move || crate::services::account_catalog::run_refresh_worker(&state))
+            .map_err(AppError::Io)?;
+        if let Ok(mut workers) = self.workers.lock() {
+            workers.push(worker);
+        }
+        crate::services::account_catalog::request_refresh(&self.state, false);
         Ok(())
     }
 
@@ -413,6 +461,7 @@ impl ServerHandle {
     pub fn shutdown(self) -> Result<(), AppError> {
         let installing = self.state.updates.snapshot().state == "installing";
         self.state.shutdown.store(true, Ordering::Release);
+        self.state.catalog_refresh.stop();
         let admitted_work_drained = if let Some(gate) = self
             .state
             .connection_admission

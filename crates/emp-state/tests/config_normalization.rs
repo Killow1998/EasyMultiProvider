@@ -41,8 +41,17 @@ fn configuration_normalization_matches_frozen_fixture() {
     let fixture = fixture();
     for case in fixture["valid"].as_array().expect("valid configurations") {
         let actual = normalize_configuration(Some(&case["input"])).expect("valid configuration");
-        assert_eq!(actual, case["expected"], "case: {}", case["name"]);
-        assert_eq!(actual.as_object().map(|object| object.len()), Some(16));
+        let mut python_compatible = actual.clone();
+        python_compatible
+            .as_object_mut()
+            .expect("normalized object")
+            .remove("catalog_show_context");
+        assert_eq!(
+            python_compatible, case["expected"],
+            "case: {}",
+            case["name"]
+        );
+        assert_eq!(actual.as_object().map(|object| object.len()), Some(17));
     }
     for case in fixture["invalid"]
         .as_array()
@@ -74,4 +83,12 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
 
     let defaults = normalize_configuration(None).expect("defaults");
     assert_eq!(defaults["port"], 4200);
+    assert_eq!(defaults["catalog_show_context"], true);
+
+    let hidden = normalize_configuration(Some(&json!({"catalog_show_context": false})))
+        .expect("explicit display preference");
+    assert_eq!(hidden["catalog_show_context"], false);
+    let error = normalize_configuration(Some(&json!({"catalog_show_context": "false"})))
+        .expect_err("context display preference must be boolean");
+    assert!(error.to_string().contains("catalog_show_context"));
 }

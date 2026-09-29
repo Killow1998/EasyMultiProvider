@@ -15,6 +15,7 @@ use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
 use crate::services::failures::safe_failure_reason;
 use crate::services::failures::stream_failure_value;
+use crate::services::failures::websocket_router_error;
 use crate::services::history::DestinationPrepareError;
 use crate::services::history::history_stream_error;
 use crate::services::history::prepare_destination_context;
@@ -27,7 +28,6 @@ use crate::util::random_hex;
 use emp_codex::subscription_route_model;
 use emp_core::resolve_route;
 use emp_history::HistoryError;
-use emp_router::RouterError;
 use emp_router::native_metadata::native_response_headers;
 use emp_transport::ClientWebSocket;
 use emp_transport::FailureClass;
@@ -39,14 +39,6 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::TcpStream;
 use std::time::Duration;
-
-fn websocket_router_error(error: &RouterError) -> Value {
-    let failure = stream_failure_value(error, "resp_websocket_error");
-    serde_json::json!({
-        "type":"error", "status":error.status(),
-        "error":failure["response"]["error"]
-    })
-}
 
 fn native_stream_error_value(
     status: u16,
@@ -305,12 +297,19 @@ pub(crate) fn serve_responses_websocket(
                     continue;
                 }
             };
-        request_body = match prepare_destination_context(
-            state,
-            &route,
-            Value::Object(request_body),
-            &request_headers,
-        ) {
+        let destination_context = {
+            let mut monitor = monitor_stream.as_ref().and_then(|probe| {
+                crate::services::disconnect::DisconnectMonitor::start(probe).ok()
+            });
+            prepare_destination_context(
+                state,
+                &route,
+                Value::Object(request_body),
+                &request_headers,
+                monitor.as_mut(),
+            )
+        };
+        request_body = match destination_context {
             Ok(Value::Object(body)) => body,
             Ok(_) => {
                 let error = HistoryError::new("invalid_history_projection");
@@ -328,6 +327,13 @@ pub(crate) fn serve_responses_websocket(
                 }
                 continue;
             }
+            Err(DestinationPrepareError::ClaudeCli(error)) => {
+                if websocket.send_json(&error.websocket_value()).is_err() {
+                    return;
+                }
+                continue;
+            }
+            Err(DestinationPrepareError::Disconnected) => return,
             Err(DestinationPrepareError::History(reason)) => {
                 if websocket
                     .send_json(&history_stream_error(&HistoryError::new(reason)))
@@ -351,6 +357,7 @@ pub(crate) fn serve_responses_websocket(
                 continue;
             }
         };
+        let mut native_turn_activity = None;
         if route.dialect == emp_core::Dialect::CodexNative {
             let plan = match native::websocket_plan(
                 state,
@@ -469,6 +476,11 @@ pub(crate) fn serve_responses_websocket(
                     "responses",
                 )
                 .transport("websocket");
+                native_turn_activity = Some(state.backend.activity.begin(
+                    crate::services::activity::ActivityIdentity::from_route(&route),
+                    &state.backend.accounts.quota_revision,
+                    &state.backend.accounts.quota_condition,
+                ));
                 if client.send_json(&plan.payload).is_err() {
                     native_upstream = None;
                     last_native_response_id = None;
@@ -596,7 +608,118 @@ pub(crate) fn serve_responses_websocket(
         request_body.remove("generate");
         request_body.insert("stream".to_owned(), Value::Bool(true));
         let mut sent_output = false;
+        if crate::services::claude_cli::selected(&route) {
+            let started = std::time::Instant::now();
+            let mut monitor = monitor_stream.as_ref().and_then(|probe| {
+                crate::services::disconnect::DisconnectMonitor::start(probe).ok()
+            });
+            let _activity_guard = state.backend.activity.begin(
+                crate::services::activity::ActivityIdentity::from_route(&route),
+                &state.backend.accounts.quota_revision,
+                &state.backend.accounts.quota_condition,
+            );
+            let completion = match crate::services::claude_cli::execute_complete(
+                state,
+                &route,
+                &Value::Object(request_body.clone()),
+                &request_headers,
+                &ids,
+                monitor.as_mut(),
+            ) {
+                Ok(crate::services::claude_cli::ClaudeCliResult::Completed(completion)) => {
+                    completion
+                }
+                Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
+                    let mut usage = crate::services::observation::Observation::new(
+                        state,
+                        &route,
+                        &Value::Object(request_body.clone()),
+                        &request_headers,
+                        None,
+                        "responses",
+                    )
+                    .started_at(started)
+                    .transport("websocket");
+                    usage.disconnected();
+                    return;
+                }
+                Err(error) => {
+                    if let crate::services::claude_cli::ClaudeCliError::Router(router_error) =
+                        &error
+                    {
+                        let mut usage = crate::services::observation::Observation::new(
+                            state,
+                            &route,
+                            &Value::Object(request_body.clone()),
+                            &request_headers,
+                            None,
+                            "responses",
+                        )
+                        .started_at(started)
+                        .transport("websocket");
+                        usage.router_error(router_error);
+                    }
+                    if websocket.send_json(&error.websocket_value()).is_err() {
+                        return;
+                    }
+                    continue;
+                }
+            };
+            let selected_route = completion.route;
+            let response_value = completion.response.body;
+            let mut usage = crate::services::observation::Observation::new(
+                state,
+                &selected_route,
+                &Value::Object(request_body.clone()),
+                &request_headers,
+                None,
+                "responses",
+            )
+            .started_at(completion.request_started)
+            .transport("websocket");
+            usage.http_status(completion.response.status);
+            usage.observe(&response_value);
+            usage.finish();
+            if response_value["status"] == "completed" {
+                crate::services::context::record(
+                    state,
+                    &selected_route,
+                    &Value::Object(request_body.clone()),
+                    true,
+                );
+            }
+            crate::services::providers::persist_protocol_observation(state, &selected_route);
+            let events = match emp_router::response_json_stream_events(response_value, &ids, false)
+            {
+                Ok(events) => events,
+                Err(error) => {
+                    if websocket
+                        .send_json(&websocket_router_error(&error))
+                        .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+            };
+            for event in events {
+                if websocket.send_json(&event).is_err() {
+                    return;
+                }
+                if terminal_stream_event(&event) {
+                    break;
+                }
+            }
+            continue;
+        }
         if route.dialect == emp_core::Dialect::CodexNative {
+            let _activity_guard = native_turn_activity.take().unwrap_or_else(|| {
+                state.backend.activity.begin(
+                    crate::services::activity::ActivityIdentity::from_route(&route),
+                    &state.backend.accounts.quota_revision,
+                    &state.backend.accounts.quota_condition,
+                )
+            });
             let mut upstream = match native::open_stream_result(
                 state,
                 &route,
@@ -683,6 +806,11 @@ pub(crate) fn serve_responses_websocket(
                 }
             }
         } else {
+            let _activity_guard = state.backend.activity.begin(
+                crate::services::activity::ActivityIdentity::from_route(&route),
+                &state.backend.accounts.quota_revision,
+                &state.backend.accounts.quota_condition,
+            );
             let (mut upstream, candidate) = match crate::services::providers::open_external_stream(
                 state,
                 &route,

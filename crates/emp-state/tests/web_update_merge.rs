@@ -19,7 +19,11 @@ fn web_update_merge_matches_frozen_fixture() {
             normalize_configuration(Some(&case["current"])).expect("valid current configuration");
         let actual = merge_web_update_with_time(&current, &case["incoming"], observed_at)
             .expect("valid Web update");
-        assert_eq!(actual.as_object().map(|object| object.len()), Some(16));
+        assert_eq!(
+            actual["catalog_show_context"], current["catalog_show_context"],
+            "case: {}",
+            case["name"]
+        );
         for pointer in case["select"].as_array().expect("selected paths") {
             let pointer = pointer.as_str().expect("JSON pointer");
             assert_eq!(
@@ -160,4 +164,34 @@ fn same_origin_edits_keep_the_stored_key() {
             "{base_url}"
         );
     }
+}
+
+#[test]
+fn unrelated_web_edit_preserves_hidden_catalog_context_labels() {
+    let current = normalize_configuration(Some(&json!({"catalog_show_context": false})))
+        .expect("valid current configuration");
+    let incoming = json!({"subscription_search": {"enabled": true}});
+    let merged = merge_web_update_with_time(&current, &incoming, AT).expect("valid Web update");
+
+    assert_eq!(
+        merged["subscription_search"]["enabled"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(merged["catalog_show_context"].as_bool(), Some(false));
+
+    let explicit_update = json!({
+        "catalog_show_context": true,
+        "subscription_search": {"enabled": false}
+    });
+    let explicitly_updated =
+        merge_web_update_with_time(&current, &explicit_update, AT).expect("valid Web update");
+    assert_eq!(
+        explicitly_updated["catalog_show_context"].as_bool(),
+        Some(true)
+    );
+
+    let invalid_update = json!({"catalog_show_context": "false"});
+    let error = merge_web_update_with_time(&current, &invalid_update, AT)
+        .expect_err("non-boolean context preference");
+    assert!(error.to_string().contains("catalog_show_context"));
 }

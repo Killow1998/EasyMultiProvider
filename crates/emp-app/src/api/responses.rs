@@ -192,7 +192,11 @@ pub(crate) fn responses_request(
         }
         Err(error) => return ResponsesRequestResult::Buffered(history_http_error(&error)),
     };
-    body = match prepare_destination_context(state, &route, body, &incoming) {
+    let destination_context = {
+        let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
+        prepare_destination_context(state, &route, body, &incoming, monitor.as_mut())
+    };
+    body = match destination_context {
         Ok(body) => body,
         Err(DestinationPrepareError::History(reason)) if stream_requested => {
             let failed = history_stream_error(&HistoryError::new(reason));
@@ -202,11 +206,13 @@ pub(crate) fn responses_request(
             }
             return ResponsesRequestResult::Streamed;
         }
+        Err(DestinationPrepareError::Disconnected) => return ResponsesRequestResult::Streamed,
         Err(error) => {
             return ResponsesRequestResult::Buffered(destination_error_response(error));
         }
     };
     if route.dialect != emp_core::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
+        let started = std::time::Instant::now();
         let mut usage = crate::services::observation::Observation::new(
             state,
             &route,
@@ -214,12 +220,78 @@ pub(crate) fn responses_request(
             &incoming,
             None,
             "responses",
-        );
-        let (compacted, candidate) =
-            match external_compaction_response(state, &route, &body, &incoming, &ids) {
+        )
+        .started_at(started);
+        let (compacted, candidate) = if crate::services::claude_cli::selected(&route) {
+            let summary_body = crate::services::compaction::compaction_summary_body(&body);
+            let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
+            let _activity_guard = state.backend.activity.begin(
+                crate::services::activity::ActivityIdentity::from_route(&route),
+                &state.backend.accounts.quota_revision,
+                &state.backend.accounts.quota_condition,
+            );
+            match crate::services::claude_cli::execute_complete(
+                state,
+                &route,
+                &summary_body,
+                &incoming,
+                &ids,
+                monitor.as_mut(),
+            ) {
+                Ok(crate::services::claude_cli::ClaudeCliResult::Completed(completion)) => {
+                    let Some(summary) = crate::services::compaction::response_output_text(
+                        &completion.response.body,
+                    ) else {
+                        return ResponsesRequestResult::Buffered(json_error_response(
+                            502,
+                            status_text(502),
+                            "external compaction failed",
+                            Some("external_compaction_failed"),
+                            &[],
+                        ));
+                    };
+                    usage.http_status(completion.response.status);
+                    let compacted =
+                        match crate::services::compaction::external_compaction_from_summary(
+                            &body, &summary,
+                        ) {
+                            Ok(compacted) => compacted,
+                            Err(error) => return ResponsesRequestResult::Buffered(error),
+                        };
+                    (compacted, completion.route)
+                }
+                Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
+                    usage.disconnected();
+                    return ResponsesRequestResult::Streamed;
+                }
+                Err(error) => {
+                    if let crate::services::claude_cli::ClaudeCliError::Router(router_error) =
+                        &error
+                    {
+                        usage.router_error(router_error);
+                    } else if matches!(
+                        &error,
+                        crate::services::claude_cli::ClaudeCliError::ShuttingDown
+                    ) {
+                        usage.http_status(503);
+                    }
+                    return ResponsesRequestResult::Buffered(error.http_response());
+                }
+            }
+        } else {
+            let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
+            match external_compaction_response(
+                state,
+                &route,
+                &body,
+                &incoming,
+                &ids,
+                monitor.as_mut(),
+            ) {
                 Ok(result) => result,
                 Err(error) => return ResponsesRequestResult::Buffered(error),
-            };
+            }
+        };
         usage.observe(&compacted);
         usage.finish();
         persist_protocol_observation(state, &candidate);
@@ -254,14 +326,135 @@ pub(crate) fn responses_request(
             &[],
         ));
     }
+    if crate::services::claude_cli::selected(&route) {
+        let started = std::time::Instant::now();
+        let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
+        let _activity_guard = state.backend.activity.begin(
+            crate::services::activity::ActivityIdentity::from_route(&route),
+            &state.backend.accounts.quota_revision,
+            &state.backend.accounts.quota_condition,
+        );
+        let completion = match crate::services::claude_cli::execute_complete(
+            state,
+            &route,
+            &body,
+            &incoming,
+            &ids,
+            monitor.as_mut(),
+        ) {
+            Ok(crate::services::claude_cli::ClaudeCliResult::Completed(completion)) => completion,
+            Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
+                let mut usage = crate::services::observation::Observation::new(
+                    state,
+                    &route,
+                    &body,
+                    &incoming,
+                    None,
+                    "responses",
+                )
+                .started_at(started);
+                usage.disconnected();
+                return ResponsesRequestResult::Streamed;
+            }
+            Err(error) => {
+                if matches!(
+                    &error,
+                    crate::services::claude_cli::ClaudeCliError::Router(_)
+                        | crate::services::claude_cli::ClaudeCliError::ShuttingDown
+                ) {
+                    let mut usage = crate::services::observation::Observation::new(
+                        state,
+                        &route,
+                        &body,
+                        &incoming,
+                        None,
+                        "responses",
+                    )
+                    .started_at(started);
+                    match &error {
+                        crate::services::claude_cli::ClaudeCliError::Router(router_error) => {
+                            usage.router_error(router_error);
+                        }
+                        crate::services::claude_cli::ClaudeCliError::ShuttingDown => {
+                            usage.http_status(503);
+                        }
+                        _ => unreachable!("guarded Claude CLI error variant"),
+                    }
+                }
+                return ResponsesRequestResult::Buffered(error.http_response());
+            }
+        };
+        let route = &completion.route;
+        let response_value = completion.response.body;
+        let mut usage = crate::services::observation::Observation::new(
+            state,
+            route,
+            &body,
+            &incoming,
+            None,
+            "responses",
+        )
+        .started_at(completion.request_started);
+        usage.http_status(completion.response.status);
+        usage.observe(&response_value);
+        usage.finish();
+        if response_value["status"] == "completed" {
+            crate::services::context::record(state, route, &body, true);
+        }
+        crate::services::providers::persist_protocol_observation(state, route);
+        if stream_requested {
+            let stream_body = match generated_response_stream(response_value, &ids) {
+                Ok(body) => body,
+                Err(error) => return ResponsesRequestResult::Buffered(error),
+            };
+            if write_stream_head(stream).is_err()
+                || write_stream_frames(stream, &[stream_body]).is_err()
+            {
+                return ResponsesRequestResult::Streamed;
+            }
+            return ResponsesRequestResult::Streamed;
+        }
+        let body = match serde_json::to_vec(&response_value) {
+            Ok(body) => body,
+            Err(_) => {
+                return ResponsesRequestResult::Buffered(json_error_response(
+                    500,
+                    status_text(500),
+                    "internal server error",
+                    None,
+                    &[],
+                ));
+            }
+        };
+        return ResponsesRequestResult::Buffered(response(
+            &format!(
+                "HTTP/1.1 {} {}",
+                completion.response.status,
+                status_text(completion.response.status)
+            ),
+            &completion.response.content_type,
+            &body,
+            &[],
+        ));
+    }
     if route.dialect == emp_core::Dialect::CodexNative {
         if python_truthy(body.get("stream")) {
+            let _activity_guard = state.backend.activity.begin(
+                crate::services::activity::ActivityIdentity::from_route(&route),
+                &state.backend.accounts.quota_revision,
+                &state.backend.accounts.quota_condition,
+            );
             return match serve_native_stream(stream, state, &route, &config, &body, &incoming, &ids)
             {
                 Ok(()) => ResponsesRequestResult::Streamed,
                 Err(response) => ResponsesRequestResult::Buffered(response),
             };
         }
+        let _activity_guard = state.backend.activity.begin(
+            crate::services::activity::ActivityIdentity::from_route(&route),
+            &state.backend.accounts.quota_revision,
+            &state.backend.accounts.quota_condition,
+        );
         return ResponsesRequestResult::Buffered(native::complete(
             state,
             &route,
@@ -271,6 +464,11 @@ pub(crate) fn responses_request(
         ));
     }
     if python_truthy(body.get("stream")) {
+        let _activity_guard = state.backend.activity.begin(
+            crate::services::activity::ActivityIdentity::from_route(&route),
+            &state.backend.accounts.quota_revision,
+            &state.backend.accounts.quota_condition,
+        );
         return match serve_external_stream(stream, state, &route, &body, &incoming, &ids) {
             Ok(()) => ResponsesRequestResult::Streamed,
             Err(response) => ResponsesRequestResult::Buffered(response),
@@ -279,6 +477,7 @@ pub(crate) fn responses_request(
     let started = std::time::Instant::now();
     let router = ExternalRouter::new(&state.backend.transport.client);
     let candidates = protocol_candidates(&route);
+    let mut activity_guard = None;
     'candidate: for (index, protocol) in candidates.iter().copied().enumerate() {
         let candidate = match route.with_protocol(protocol) {
             Ok(candidate) => candidate,
@@ -287,6 +486,13 @@ pub(crate) fn responses_request(
             }
         };
         for attempt in 0..3 {
+            if activity_guard.is_none() {
+                activity_guard = Some(state.backend.activity.begin(
+                    crate::services::activity::ActivityIdentity::from_route(&route),
+                    &state.backend.accounts.quota_revision,
+                    &state.backend.accounts.quota_condition,
+                ));
+            }
             match state
                 .backend
                 .transport

@@ -168,7 +168,11 @@ pub(crate) fn sync_runtime(
 }
 
 pub(crate) fn compatibility_snapshot(state: &ServerState, refresh: bool) -> Value {
-    state.backend.integration.inventory.snapshot(refresh)
+    let snapshot = state.backend.integration.inventory.snapshot(refresh);
+    if refresh {
+        crate::services::account_catalog::request_refresh(state, false);
+    }
+    snapshot
 }
 
 pub(crate) fn helper_binary(state: &ServerState) -> String {
@@ -324,6 +328,9 @@ pub(crate) fn watch_runtime(state: &ServerState) {
             Ok(_operation) => sync_runtime(state, None, false, true, false).ok(),
             Err(_) => None,
         };
+        if checked.is_some() {
+            crate::services::account_catalog::request_refresh(state, false);
+        }
         last_check = Some(Instant::now());
         if checked.is_some_and(|result| before != result.state) {
             watch.revision.fetch_add(1, Ordering::AcqRel);

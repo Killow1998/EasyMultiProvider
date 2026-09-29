@@ -50,6 +50,12 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     } else {
         auth_mode
     };
+    let execution_backend = string_value(raw.get("execution_backend"), "value", false)?;
+    let execution_backend = if execution_backend.is_empty() {
+        "http"
+    } else {
+        execution_backend.as_str()
+    };
     let api_key = string_value(raw.get("api_key"), "value", false)?;
     let api_key_file = string_value(raw.get("api_key_file"), "value", false)?;
     let anthropic_version = string_value(raw.get("anthropic_version"), "value", false)?;
@@ -82,7 +88,24 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
             "forward providers must use the Responses protocol",
         ));
     }
-    Ok(serde_json::json!({
+    if auth_mode == "forward" && execution_backend == "claude_cli" {
+        return Err(ConfigError::new(
+            "provider.execution_backend claude_cli cannot use forward authentication",
+        ));
+    }
+    if !["http", "claude_cli"].contains(&execution_backend) {
+        return Err(ConfigError::new(
+            "provider.execution_backend must be http or claude_cli",
+        ));
+    }
+    if execution_backend == "claude_cli"
+        && !["auto", "anthropic_messages"].contains(&protocol.as_str())
+    {
+        return Err(ConfigError::new(
+            "provider.execution_backend claude_cli requires provider.protocol auto or anthropic_messages",
+        ));
+    }
+    let mut normalized = serde_json::json!({
         "id": id,
         "name": name,
         "base_url": base_url,
@@ -96,5 +119,73 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
         "resolved_protocol": resolved_protocol,
         "protocol_observation": protocol_observation,
         "capabilities": capabilities,
-    }))
+    });
+    // Preserve the historic serialized shape for providers using the default.
+    // An explicit backend remains visible and round-trips through normal config APIs.
+    if raw.contains_key("execution_backend") {
+        normalized["execution_backend"] = Value::String(execution_backend.to_owned());
+    }
+    Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_provider;
+    use serde_json::json;
+
+    #[test]
+    fn execution_backend_defaults_to_http_without_changing_legacy_shape() {
+        let provider = json!({
+            "id":"example", "name":"Example", "base_url":"https://example.invalid/v1",
+            "protocol":"responses", "auth_mode":"api_key", "api_key":"secret"
+        });
+        let normalized = normalize_provider(&provider).expect("legacy provider");
+
+        assert!(normalized.get("execution_backend").is_none());
+    }
+
+    #[test]
+    fn execution_backend_accepts_claude_cli_and_rejects_unknown_values() {
+        let provider = json!({
+            "id":"example", "name":"Example", "base_url":"https://example.invalid/v1",
+            "protocol":"anthropic_messages", "auth_mode":"api_key", "api_key":"secret",
+            "execution_backend":"claude_cli"
+        });
+        let normalized = normalize_provider(&provider).expect("Claude CLI provider");
+        assert_eq!(normalized["execution_backend"], "claude_cli");
+
+        let automatic = json!({
+            "id":"automatic", "name":"Automatic", "base_url":"https://example.invalid/v1",
+            "protocol":"auto", "auth_mode":"api_key", "api_key":"secret",
+            "execution_backend":"claude_cli"
+        });
+        assert_eq!(
+            normalize_provider(&automatic).expect("automatic Messages route")["protocol"],
+            "auto"
+        );
+
+        let invalid = json!({
+            "id":"example", "name":"Example", "base_url":"https://example.invalid/v1",
+            "protocol":"responses", "auth_mode":"api_key", "api_key":"secret",
+            "execution_backend":"shell"
+        });
+        assert_eq!(
+            normalize_provider(&invalid)
+                .expect_err("unknown execution backend")
+                .to_string(),
+            "provider.execution_backend must be http or claude_cli"
+        );
+
+        let unsupported_protocol = json!({
+            "id":"example", "name":"Example", "base_url":"https://example.invalid/v1",
+            "protocol":"responses", "auth_mode":"api_key", "api_key":"secret",
+            "execution_backend":"claude_cli"
+        });
+        assert_eq!(
+            normalize_provider(&unsupported_protocol)
+                .expect_err("Claude CLI requires a Messages route")
+                .to_string(),
+            "provider.execution_backend claude_cli requires provider.protocol auto or anthropic_messages"
+        );
+    }
 }

@@ -226,6 +226,7 @@ pub(crate) fn family_identity(model: &Value, fallback: &str) -> String {
         .to_owned()
 }
 fn external_entry(model: &Value, template: &Value, provider: &Value) -> Value {
+    let claude_cli = text(provider, "execution_backend") == "claude_cli";
     let mut entry = Map::new();
     for field in [
         "base_instructions",
@@ -270,6 +271,13 @@ fn external_entry(model: &Value, template: &Value, provider: &Value) -> Value {
                 && nonempty(model, "resolved_protocol")
                     .or_else(|| nonempty(provider, "resolved_protocol"))
                     == Some("responses")));
+    let input_modalities = if claude_cli {
+        vec!["text".to_owned()]
+    } else {
+        codex_input_modalities(model.get("input_modalities"))
+    };
+    let supports_image_detail_original =
+        !claude_cli && model.get("supports_image_detail_original") == Some(&Value::Bool(true));
     let friendly = text(model, "display_name").trim();
     let description = text(model, "description").trim();
     let description =
@@ -286,11 +294,11 @@ fn external_entry(model: &Value, template: &Value, provider: &Value) -> Value {
         "slug":text(model,"id"), "display_name":text(model,"id"),
         "description":if description.is_empty() { "External provider model" } else { description },
         "visibility":model.get("visibility").cloned().unwrap_or(json!("list")), "supported_in_api":true,
-        "input_modalities":codex_input_modalities(model.get("input_modalities")),
+        "input_modalities":input_modalities,
         "supports_reasoning_summaries":summaries, "supports_reasoning_summary_parameter":summaries,
         "default_reasoning_summary":if summaries {"auto"} else {"none"},
         "support_verbosity":false, "default_verbosity":null, "supports_search_tool":true,
-        "supports_image_detail_original":model.get("supports_image_detail_original") == Some(&Value::Bool(true)),
+        "supports_image_detail_original":supports_image_detail_original,
         "supports_parallel_tool_calls":boolean_capability(model,provider,"parallel_tools"),
         "apply_patch_tool_type":null, "multi_agent_version":null, "supported_reasoning_levels":[],
     });
@@ -326,8 +334,8 @@ fn external_entry(model: &Value, template: &Value, provider: &Value) -> Value {
     }
     // The Python entry is first decorated without user overrides, then again
     // during family/route presentation. Preserve both passes for exact labels.
-    entry["display_name"] = json!(display_name(&entry, &json!({})));
-    entry["description"] = json!(description_with_context(&entry, &json!({})));
+    entry["display_name"] = json!(display_name(&entry, &json!({}), true));
+    entry["description"] = json!(description_with_context(&entry, &json!({}), true));
     entry
 }
 fn boolean_capability(model: &Value, provider: &Value, field: &str) -> bool {
@@ -374,8 +382,12 @@ fn apply_presentation(config: &Value, entry: &mut Value) {
     if family.is_some() {
         presentation["_family_scoped"] = true.into();
     }
-    entry["display_name"] = json!(display_name(entry, &presentation));
-    entry["description"] = json!(description_with_context(entry, &presentation));
+    let show_context = config
+        .get("catalog_show_context")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    entry["display_name"] = json!(display_name(entry, &presentation, show_context));
+    entry["description"] = json!(description_with_context(entry, &presentation, show_context));
     let policy = text(&presentation, "reasoning_summary");
     let supports = entry
         .get("supports_reasoning_summary_parameter")
@@ -387,7 +399,7 @@ fn apply_presentation(config: &Value, entry: &mut Value) {
         entry["default_reasoning_summary"] = json!("auto");
     }
 }
-fn display_name(model: &Value, presentation: &Value) -> String {
+fn display_name(model: &Value, presentation: &Value, show_context: bool) -> String {
     let alias = text(presentation, "catalog_alias");
     let name = if !alias.is_empty() {
         let source = if presentation.get("_family_scoped") == Some(&Value::Bool(true)) {
@@ -408,7 +420,7 @@ fn display_name(model: &Value, presentation: &Value) -> String {
                 .unwrap_or_default(),
         )
     };
-    if presentation.get("show_context") == Some(&Value::Bool(false)) {
+    if !show_context {
         return name;
     }
     let context = usable_context(model);
@@ -419,7 +431,7 @@ fn display_name(model: &Value, presentation: &Value) -> String {
     };
     format!("[{label:>5}]  {name}")
 }
-fn description_with_context(model: &Value, presentation: &Value) -> String {
+fn description_with_context(model: &Value, presentation: &Value, show_context: bool) -> String {
     let description = text(model, "description").trim();
     let mut description = description.to_owned();
     if let Some(index) = description.rfind("Context ")
@@ -442,7 +454,7 @@ fn description_with_context(model: &Value, presentation: &Value) -> String {
         };
     }
     let context = usable_context(model);
-    if presentation.get("show_context") == Some(&Value::Bool(false)) || context == 0 {
+    if !show_context || context == 0 {
         return description;
     }
     let context = format!("Context {}", compact_context(context));

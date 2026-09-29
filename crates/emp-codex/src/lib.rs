@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 mod executable_trust;
 pub mod history;
+pub mod installed_cli;
 pub mod management_views;
 pub mod merged_catalog;
 pub mod quota;

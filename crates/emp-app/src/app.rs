@@ -2,6 +2,7 @@
 use crate::error::AppError;
 use crate::services::accounts::AccountState;
 use crate::services::accounts::duplicate_accounts;
+use crate::services::activity::ActivityService;
 use crate::services::integration::IntegrationState;
 use crate::services::providers::ConfigurationState;
 use crate::util::{random_hex, system_now};
@@ -31,6 +32,7 @@ use tokio::runtime::Runtime;
 
 pub(crate) struct ServerState {
     pub(crate) shutdown: Arc<AtomicBool>,
+    pub(crate) catalog_refresh: crate::services::account_catalog::CatalogRefreshState,
     pub(crate) sessions: Arc<SessionStore>,
     pub(crate) connection_admission: crate::services::connection_admission::ConnectionAdmission,
     pub(crate) bootstrap: BootstrapToken,
@@ -45,6 +47,7 @@ pub(crate) struct BackendState {
     pub(crate) configuration: ConfigurationState,
     pub(crate) transport: TransportState,
     pub(crate) accounts: AccountState,
+    pub(crate) activity: ActivityService,
     pub(crate) integration: IntegrationState,
     pub(crate) usage: crate::services::usage::UsageState,
     pub(crate) diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
@@ -176,6 +179,7 @@ impl BackendState {
                 pending_rotations: Mutex::new(BTreeMap::new()),
                 credential_operations: Default::default(),
             },
+            activity: ActivityService::default(),
             integration: IntegrationState::new(integration, codex_home, codex_binary),
         })
     }

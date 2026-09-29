@@ -9,6 +9,23 @@ use crate::http::response::{
 use crate::services::runtime::compatibility_snapshot;
 use std::net::TcpStream;
 
+/// Reports whether EMP can resolve a trusted Claude Code CLI installation.
+/// This is deliberately a path-only availability check: it never starts the CLI.
+pub(crate) fn claude_cli_availability_request() -> Vec<u8> {
+    let available = emp_codex::installed_cli::resolve_claude_cli().is_some();
+    let guidance = if available {
+        "Claude Code CLI is available to EMP."
+    } else {
+        "Claude Code CLI was not found as an available local installation. Install it or check that EMP can access it, then reopen this form."
+    };
+    let body = serde_json::to_vec(&serde_json::json!({
+        "available": available,
+        "guidance": guidance,
+    }))
+    .expect("Claude CLI availability JSON");
+    response("HTTP/1.1 200 OK", "application/json", &body, &[])
+}
+
 pub(crate) fn management_request(
     stream: &mut TcpStream,
     request: Request<'_>,

@@ -63,6 +63,19 @@ fn anthropic_auth_mode_skips_openai_protocols_entirely() {
 }
 
 #[test]
+fn claude_cli_auto_route_selects_anthropic_messages_for_its_native_relay() {
+    let provider = json!({
+        "id":"claude-cli", "base_url":"https://external.example/v1",
+        "protocol":"auto", "auth_mode":"api_key", "api_key":"test-key",
+        "execution_backend":"claude_cli"
+    });
+    assert_eq!(
+        candidates(provider, base_model("claude-cli")),
+        ["anthropic_messages"]
+    );
+}
+
+#[test]
 fn a_matching_observation_is_tried_first_but_stale_observations_are_ignored() {
     let observed_provider = base_provider();
     let mut observed_model = base_model("observed");

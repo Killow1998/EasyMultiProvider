@@ -4,6 +4,7 @@ use super::*;
 
 struct ValidatedImport {
     source: Value,
+    catalog_show_context: Option<bool>,
     accounts: Vec<(Value, Value)>,
     provider_keys: Map<String, Value>,
 }
@@ -22,6 +23,9 @@ fn validate_import_payload(payload: &Value) -> MigrationResult<ValidatedImport> 
         .get("config")
         .filter(|value| value.is_object())
         .ok_or(MigrationError::InvalidConfiguration)?;
+    let catalog_show_context = raw_config
+        .get("catalog_show_context")
+        .and_then(Value::as_bool);
     let source = normalize_configuration(Some(raw_config))
         .map_err(|_| MigrationError::InvalidConfiguration)?;
 
@@ -73,6 +77,7 @@ fn validate_import_payload(payload: &Value) -> MigrationResult<ValidatedImport> 
 
     Ok(ValidatedImport {
         source,
+        catalog_show_context,
         accounts,
         provider_keys,
     })
@@ -170,6 +175,7 @@ fn merge_import(
 ) -> MigrationResult<(Value, BTreeMap<String, Value>, MigrationImportSummary)> {
     let ValidatedImport {
         source,
+        catalog_show_context,
         accounts: source_accounts,
         provider_keys,
     } = payload;
@@ -182,6 +188,9 @@ fn merge_import(
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
     let mut target = current.clone();
+    if let Some(show_context) = catalog_show_context {
+        target["catalog_show_context"] = Value::Bool(show_context);
+    }
 
     let mut providers = target
         .get("providers")

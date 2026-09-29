@@ -117,6 +117,43 @@ fn import_merges_without_deleting_local_entries_and_reencrypts_provider_keys() {
 }
 
 #[test]
+fn import_preserves_or_replaces_global_context_display_by_field_presence() {
+    let directory = tempdir().expect("temporary directory");
+    let root = root(&directory);
+    let path = root.join("target/config.json");
+    let vault = vault(&root);
+    let current = normalize_configuration(Some(&json!({"catalog_show_context": false})))
+        .expect("current configuration");
+    save_configuration(&current, Some(&path), &vault).expect("save current configuration");
+    let current = load_configuration(Some(&path)).expect("load current configuration");
+
+    let old_bundle = bundle(&payload(json!({}), json!([]), json!({})));
+    let (preserved, _) = import_migration_bundle(&current, &old_bundle, PASSWORD, &path, &vault)
+        .expect("import old bundle");
+    assert_eq!(preserved["catalog_show_context"], false);
+
+    let explicit_bundle = bundle(&payload(
+        json!({"catalog_show_context": true}),
+        json!([]),
+        json!({}),
+    ));
+    let (replaced, _) =
+        import_migration_bundle(&preserved, &explicit_bundle, PASSWORD, &path, &vault)
+            .expect("import explicit preference");
+    assert_eq!(replaced["catalog_show_context"], true);
+
+    let explicit_hidden_bundle = bundle(&payload(
+        json!({"catalog_show_context": false}),
+        json!([]),
+        json!({}),
+    ));
+    let (hidden, _) =
+        import_migration_bundle(&replaced, &explicit_hidden_bundle, PASSWORD, &path, &vault)
+            .expect("import explicit hidden preference");
+    assert_eq!(hidden["catalog_show_context"], false);
+}
+
+#[test]
 fn import_updates_the_same_account_and_renames_a_different_identity() {
     let directory = tempdir().expect("temporary directory");
     let root = root(&directory);

@@ -235,6 +235,12 @@ fn merge_web_update_at_time(
     let mut merged = incoming.clone();
     let merged_object = merged.as_object_mut().expect("checked object");
 
+    if !merged_object.contains_key("catalog_show_context")
+        && let Some(value) = current.get("catalog_show_context")
+    {
+        merged_object.insert("catalog_show_context".to_owned(), value.clone());
+    }
+
     merged_object.insert(
         "codex_runtime_sources".to_owned(),
         current
