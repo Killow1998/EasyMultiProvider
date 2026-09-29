@@ -144,6 +144,9 @@ impl SummaryUpstream {
                     }
                     Err(_) => break,
                 };
+                stream
+                    .set_nonblocking(false)
+                    .expect("normalize accepted summary CPA socket");
                 let (path, headers, body) = receive_upstream_request(&mut stream);
                 let transcript = user_transcript(&body);
                 let final_turn = transcript

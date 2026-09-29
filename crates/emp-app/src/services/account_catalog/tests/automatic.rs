@@ -51,6 +51,9 @@ impl RefreshCatalogFixture {
                     }
                     Err(error) => panic!("refresh accept: {error}"),
                 };
+                stream
+                    .set_nonblocking(false)
+                    .expect("blocking refresh stream");
                 request_number += 1;
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
@@ -128,8 +131,19 @@ impl Drop for RefreshCatalogFixture {
         if let Some(release) = &self.release_first {
             let _ = release.send(());
         }
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("join refresh fixture");
+        if let Some(worker) = self.worker.take()
+            && let Err(payload) = worker.join()
+        {
+            if thread::panicking() {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| payload.downcast_ref::<&str>().copied())
+                    .unwrap_or("non-string panic payload");
+                eprintln!("refresh fixture worker also panicked during test unwind: {message}");
+            } else {
+                std::panic::resume_unwind(payload);
+            }
         }
     }
 }

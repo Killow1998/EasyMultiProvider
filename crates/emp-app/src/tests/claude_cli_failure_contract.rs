@@ -57,6 +57,9 @@ impl RecordingCpa {
                     }
                     Err(_) => break,
                 };
+                stream
+                    .set_nonblocking(false)
+                    .expect("normalize accepted fake CPA socket");
                 let (path, headers, body) = receive_upstream_request(&mut stream);
                 if request_sender
                     .send(CpaRequest {

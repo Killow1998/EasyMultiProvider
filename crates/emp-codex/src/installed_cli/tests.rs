@@ -70,11 +70,11 @@ fn inert_executable(path: &Path, contents: &[u8]) -> PathBuf {
     path.to_path_buf()
 }
 
-fn private_fixture_directories(directory: &Path) {
+fn private_fixture_directories(_directory: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        for ancestor in directory
+        for ancestor in _directory
             .ancestors()
             .take_while(|ancestor| *ancestor != Path::new("/tmp"))
         {
@@ -267,13 +267,13 @@ fn missing_and_unsafe_candidates_do_not_resolve() {
     let target = targets()[1];
     let root = fixture_root();
     let bin = root.path().join("unsafe");
-    let command = inert_executable(&bin.join("claude"), b"unsafe");
+    let _command = inert_executable(&bin.join("claude"), b"unsafe");
     let mut env = environment(target.platform, root.path());
     env.path = Some(std::env::join_paths([&bin]).unwrap());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&command, fs::Permissions::from_mode(0o777)).unwrap();
+        fs::set_permissions(&_command, fs::Permissions::from_mode(0o777)).unwrap();
     }
     assert!(resolve_with(&env, fixture_trust).is_none());
 

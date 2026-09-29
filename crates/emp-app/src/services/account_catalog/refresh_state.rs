@@ -199,7 +199,7 @@ impl CatalogRefreshState {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn wait_until_idle(&self, timeout: Duration) -> bool {
         let Ok(mut queue) = self.queue.lock() else {
             return false;
