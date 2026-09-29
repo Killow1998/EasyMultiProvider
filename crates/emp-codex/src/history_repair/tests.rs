@@ -904,26 +904,23 @@ fn rollback_in_child_fails_closed_before_parent_or_child_changes() {
 #[test]
 fn preparing_manifest_recovery_removes_only_verified_stage_and_keeps_backup() {
     let fixture = fixture(false, false, false);
+    let home = canonical_home(&fixture.home).unwrap();
     let target_relative = fixture
         .parent_path
         .strip_prefix(&fixture.home)
         .unwrap()
         .to_path_buf();
-    let transaction_dir = fixture.home.join(REPAIR_DIRECTORY).join("repair-preparing");
+    let target_path = home.join(&target_relative);
+    let transaction_dir = home.join(REPAIR_DIRECTORY).join("repair-preparing");
     fs::create_dir_all(&transaction_dir).unwrap();
     let backup_relative = PathBuf::from(format!(
         "{REPAIR_DIRECTORY}/repair-preparing/{PARENT_ID}.original"
     ));
-    let stage_path = fixture
-        .parent_path
-        .with_file_name(".emp-history-repair-preparing.stage");
-    let stage_relative = stage_path
-        .strip_prefix(&fixture.home)
-        .unwrap()
-        .to_path_buf();
-    let before = fs::read(&fixture.parent_path).unwrap();
+    let stage_relative = target_relative.with_file_name(".emp-history-repair-preparing.stage");
+    let stage_path = home.join(&stage_relative);
+    let before = fs::read(&target_path).unwrap();
     let after = [before.as_slice(), b"staged"].concat();
-    fs::write(fixture.home.join(&backup_relative), &before).unwrap();
+    fs::write(home.join(&backup_relative), &before).unwrap();
     fs::write(&stage_path, &after).unwrap();
     let manifest_path = transaction_dir.join("manifest.json");
     let mut manifest = RepairManifest {
@@ -941,26 +938,25 @@ fn preparing_manifest_recovery_removes_only_verified_stage_and_keeps_backup() {
         }],
     };
     write_manifest(&manifest_path, &manifest).unwrap();
-    recover_preparing(&fixture.home, &manifest_path, manifest).unwrap();
+    recover_preparing(&home, &manifest_path, manifest).unwrap();
     manifest = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
     assert_eq!(manifest.status, "aborted");
     assert!(!stage_path.exists());
-    assert_eq!(
-        fs::read(fixture.home.join(backup_relative)).unwrap(),
-        before
-    );
-    assert_eq!(fs::read(&fixture.parent_path).unwrap(), before);
+    assert_eq!(fs::read(home.join(backup_relative)).unwrap(), before);
+    assert_eq!(fs::read(&target_path).unwrap(), before);
 }
 
 #[test]
 fn prepared_recovery_accepts_already_published_target_without_missing_stage() {
     let fixture = fixture(false, false, false);
+    let home = canonical_home(&fixture.home).unwrap();
     let target_relative = fixture
         .parent_path
         .strip_prefix(&fixture.home)
         .unwrap()
         .to_path_buf();
-    let transaction_dir = fixture.home.join(REPAIR_DIRECTORY).join("repair-prepared");
+    let target_path = home.join(&target_relative);
+    let transaction_dir = home.join(REPAIR_DIRECTORY).join("repair-prepared");
     fs::create_dir_all(&transaction_dir).unwrap();
     let backup_relative = PathBuf::from(format!(
         "{REPAIR_DIRECTORY}/repair-prepared/{PARENT_ID}.original"
@@ -968,10 +964,10 @@ fn prepared_recovery_accepts_already_published_target_without_missing_stage() {
     let stage_relative = PathBuf::from(format!(
         "sessions/2026/09/29/.emp-history-repair-prepared-{PARENT_ID}.stage"
     ));
-    let before = fs::read(&fixture.parent_path).unwrap();
+    let before = fs::read(&target_path).unwrap();
     let after = [before.as_slice(), b"published"].concat();
-    fs::write(fixture.home.join(&backup_relative), &before).unwrap();
-    fs::write(&fixture.parent_path, &after).unwrap();
+    fs::write(home.join(&backup_relative), &before).unwrap();
+    fs::write(&target_path, &after).unwrap();
     let manifest_path = transaction_dir.join("manifest.json");
     let manifest = RepairManifest {
         format_version: 1,
@@ -989,15 +985,15 @@ fn prepared_recovery_accepts_already_published_target_without_missing_stage() {
     };
     write_manifest(&manifest_path, &manifest).unwrap();
     recover_pending(
-        &fixture.home,
-        &fixture.home.join(REPAIR_DIRECTORY),
+        &home,
+        &home.join(REPAIR_DIRECTORY),
         vec![(manifest_path.clone(), manifest)],
     )
     .unwrap();
     let committed: RepairManifest =
         serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();
     assert_eq!(committed.status, "committed");
-    assert_eq!(fs::read(&fixture.parent_path).unwrap(), after);
+    assert_eq!(fs::read(&target_path).unwrap(), after);
 }
 
 #[test]

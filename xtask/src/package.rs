@@ -731,6 +731,48 @@ fn write_macos_app(destination: &Path, executable: &Path, icon: &Path) -> Result
     fs::write(contents.join("Info.plist"), info_plist(VERSION)).map_err(|error| error.to_string())
 }
 
+const HDIUTIL_CREATE_MAX_ATTEMPTS: usize = 3;
+const HDIUTIL_CREATE_RETRY_DELAYS: [Duration; HDIUTIL_CREATE_MAX_ATTEMPTS - 1] =
+    [Duration::from_millis(250), Duration::from_millis(750)];
+
+fn is_hdiutil_resource_busy(stderr: &[u8]) -> bool {
+    stderr.split(|byte| *byte == b'\n').any(|line| {
+        line.strip_suffix(b"\r").unwrap_or(line) == b"hdiutil: create failed - Resource busy"
+    })
+}
+
+fn run_hdiutil_create(command: &mut Command) -> Result {
+    for attempt in 1..=HDIUTIL_CREATE_MAX_ATTEMPTS {
+        let output = command
+            .output()
+            .map_err(|error| format!("could not run {:?}: {error}", command.get_program()))?;
+        std::io::stdout()
+            .write_all(&output.stdout)
+            .map_err(|error| format!("could not write hdiutil stdout: {error}"))?;
+        std::io::stderr()
+            .write_all(&output.stderr)
+            .map_err(|error| format!("could not write hdiutil stderr: {error}"))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+        if !is_hdiutil_resource_busy(&output.stderr) || attempt == HDIUTIL_CREATE_MAX_ATTEMPTS {
+            return Err(format!(
+                "{:?} failed with {}",
+                command.get_program(),
+                output.status
+            ));
+        }
+
+        eprintln!(
+            "hdiutil create reported transient Resource busy; retrying ({attempt}/{HDIUTIL_CREATE_MAX_ATTEMPTS})"
+        );
+        std::thread::sleep(HDIUTIL_CREATE_RETRY_DELAYS[attempt - 1]);
+    }
+
+    unreachable!("hdiutil create attempts are bounded")
+}
+
 fn write_dmg(
     root: &Path,
     build_root: &Path,
@@ -747,13 +789,13 @@ fn write_dmg(
     #[cfg(unix)]
     std::os::unix::fs::symlink("/Applications", stage.join("Applications"))
         .map_err(|error| error.to_string())?;
-    run_command(
-        Command::new("hdiutil")
-            .args(["create", "-volname", PRODUCT_NAME, "-srcfolder"])
-            .arg(&stage)
-            .args(["-ov", "-format", "UDZO"])
-            .arg(output),
-    )
+    let mut command = Command::new("hdiutil");
+    command
+        .args(["create", "-volname", PRODUCT_NAME, "-srcfolder"])
+        .arg(&stage)
+        .args(["-ov", "-format", "UDZO"])
+        .arg(output);
+    run_hdiutil_create(&mut command)
 }
 
 fn write_checksum(path: &Path) -> Result<PathBuf> {
@@ -773,6 +815,94 @@ fn write_checksum(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn fake_hdiutil(directory: &Path, action: &str) -> Command {
+        let executable = directory.join("fake-hdiutil");
+        let body = format!(
+            r#"count=0
+if [ -f "$FAKE_HDIUTIL_COUNT" ]; then
+  count=$(cat "$FAKE_HDIUTIL_COUNT")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$FAKE_HDIUTIL_COUNT"
+{action}
+"#
+        );
+        fs::write(&executable, format!("#!/bin/sh\nset -eu\n{body}")).unwrap();
+        make_executable(&executable).unwrap();
+        let mut command = Command::new(executable);
+        command.env("FAKE_HDIUTIL_COUNT", directory.join("count"));
+        command
+    }
+
+    #[test]
+    fn hdiutil_busy_match_requires_the_exact_transient_diagnostic() {
+        assert!(is_hdiutil_resource_busy(
+            b"hdiutil: create failed - Resource busy\r\n"
+        ));
+        assert!(!is_hdiutil_resource_busy(
+            b"hdiutil: create failed - Operation not permitted\n"
+        ));
+        assert!(!is_hdiutil_resource_busy(
+            b"other command failed - Resource busy\n"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hdiutil_create_recovers_from_one_transient_busy_failure() {
+        let directory = crate::temporary_directory("hdiutil-retry-").unwrap();
+        let mut command = fake_hdiutil(
+            directory.path(),
+            r#"if [ "$count" -eq 1 ]; then
+  echo 'hdiutil: create failed - Resource busy' >&2
+  exit 1
+fi
+echo created"#,
+        );
+
+        run_hdiutil_create(&mut command).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(directory.path().join("count")).unwrap(),
+            "2"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hdiutil_create_stops_after_three_busy_failures() {
+        let directory = crate::temporary_directory("hdiutil-busy-limit-").unwrap();
+        let mut command = fake_hdiutil(
+            directory.path(),
+            "echo 'hdiutil: create failed - Resource busy' >&2\nexit 1",
+        );
+
+        assert!(run_hdiutil_create(&mut command).is_err());
+
+        assert_eq!(
+            fs::read_to_string(directory.path().join("count")).unwrap(),
+            "3"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hdiutil_create_does_not_retry_other_failures() {
+        let directory = crate::temporary_directory("hdiutil-other-error-").unwrap();
+        let mut command = fake_hdiutil(
+            directory.path(),
+            "echo 'hdiutil: create failed - Operation not permitted' >&2\nexit 1",
+        );
+
+        assert!(run_hdiutil_create(&mut command).is_err());
+
+        assert_eq!(
+            fs::read_to_string(directory.path().join("count")).unwrap(),
+            "1"
+        );
+    }
 
     #[test]
     fn package_path_remaps_preserve_encoded_rustflags() {

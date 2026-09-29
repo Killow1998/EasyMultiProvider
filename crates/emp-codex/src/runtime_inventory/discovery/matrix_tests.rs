@@ -226,7 +226,7 @@ fn runtime_source_paths_cover_the_four_by_three_installation_matrix() {
                 [path_root.clone()],
                 &names,
                 target.platform,
-                |_| true,
+                |candidate| candidate.canonicalize().ok(),
             )
             .as_deref(),
             Some(canonical(&native_cli).as_path()),
@@ -268,7 +268,7 @@ fn runtime_source_paths_cover_the_four_by_three_installation_matrix() {
                     [path_root.clone()],
                     &names,
                     target.platform,
-                    |_| true,
+                    |candidate| candidate.canonicalize().ok(),
                 )
                 .as_deref(),
                 Some(canonical(hoisted_cli).as_path()),
@@ -285,7 +285,7 @@ fn runtime_source_paths_cover_the_four_by_three_installation_matrix() {
                     [path_root.clone()],
                     &names,
                     target.platform,
-                    |_| true,
+                    |candidate| candidate.canonicalize().ok(),
                 )
                 .as_deref(),
                 Some(canonical(bundled_cli).as_path()),
@@ -305,7 +305,7 @@ fn runtime_source_paths_cover_the_four_by_three_installation_matrix() {
                 [path_root.clone()],
                 &names,
                 target.platform,
-                |_| true,
+                |candidate| candidate.canonicalize().ok(),
             ),
             None,
             "{} PATH CLI candidate must be absent when native payload is absent",
@@ -442,8 +442,14 @@ fn windows_local_npm_bin_resolves_adjacent_codex_package() {
         b"codex-cli 0.156.9; local package vendor fallback; never execute",
     );
     let names = ["codex.cmd".to_owned()];
-    let resolve =
-        || paths::path_cli_in_roots_with_trust([bin_directory.clone()], &names, platform, |_| true);
+    let resolve = || {
+        paths::path_cli_in_roots_with_trust(
+            [bin_directory.clone()],
+            &names,
+            platform,
+            |candidate| candidate.canonicalize().ok(),
+        )
+    };
 
     assert!(paths::executable(&launcher));
     assert_eq!(resolve().as_deref(), Some(canonical(&nested).as_path()));

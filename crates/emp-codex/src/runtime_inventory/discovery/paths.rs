@@ -82,16 +82,14 @@ pub(super) fn path_cli_in_roots(
     names: &[String],
     platform: RuntimePlatform,
 ) -> Option<PathBuf> {
-    path_cli_in_roots_with_trust(roots, names, platform, |candidate| {
-        super::super::trust::trusted_binary(candidate).is_some()
-    })
+    path_cli_in_roots_with_trust(roots, names, platform, super::super::trust::trusted_binary)
 }
 
 pub(super) fn path_cli_in_roots_with_trust(
     roots: impl IntoIterator<Item = PathBuf>,
     names: &[String],
     platform: RuntimePlatform,
-    mut is_trusted: impl FnMut(&Path) -> bool,
+    mut trusted_path: impl FnMut(&Path) -> Option<PathBuf>,
 ) -> Option<PathBuf> {
     roots
         .into_iter()
@@ -103,7 +101,7 @@ pub(super) fn path_cli_in_roots_with_trust(
                     return None;
                 }
                 let candidate = cli_runtime_candidate_for_launcher(&launcher, platform)?;
-                is_trusted(&candidate).then_some(candidate)
+                trusted_path(&candidate)
             })
         })
 }
