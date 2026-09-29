@@ -121,7 +121,7 @@ fn finds_native_installation_with_minimal_path_for_supported_matrix() {
             &home.join(".local/bin").join(name),
             b"inert native Claude fixture; never execute",
         );
-        env.path = Some(OsString::from("/usr/bin:/bin"));
+        env.path = Some(std::env::join_paths([root.path().join("unrelated-search-path")]).unwrap());
 
         let cli = resolve_with(&env, fixture_trust).expect(target.name);
         assert_eq!(
@@ -166,7 +166,7 @@ fn discovers_npm_native_payloads_in_known_prefixes_for_supported_matrix() {
                 .join(name),
             b"inert native npm payload; never execute",
         );
-        env.path = Some(OsString::from("/usr/bin:/bin"));
+        env.path = Some(std::env::join_paths([root.path().join("unrelated-search-path")]).unwrap());
 
         let cli = resolve_with(&env, fixture_trust).expect(target.name);
         assert_eq!(
@@ -230,20 +230,34 @@ fn path_order_wins_and_unsafe_commands_are_skipped() {
     let cli = resolve_with(&env, fixture_trust).expect("PATH candidate");
     assert_eq!(cli.executable, first_cli.canonicalize().unwrap());
 
+    let first_canonical = first_cli.canonicalize().unwrap();
+    let second_canonical = second_cli.canonicalize().unwrap();
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&first_cli, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(fixture_trust(&first_cli).is_none());
     }
-    let cli = resolve_with(&env, fixture_trust).expect("second safe PATH candidate");
+    let cli = resolve_with(&env, |candidate| {
+        let trusted = fixture_trust(candidate)?;
+        (trusted != first_canonical).then_some(trusted)
+    })
+    .expect("second safe PATH candidate");
     assert_eq!(cli.executable, second_cli.canonicalize().unwrap());
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&second_cli, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(fixture_trust(&second_cli).is_none());
     }
-    let cli = resolve_with(&env, fixture_trust).expect("trusted native fallback");
+    let denied_paths = [first_canonical.as_path(), second_canonical.as_path()];
+    let cli = resolve_with(&env, |candidate| {
+        let trusted = fixture_trust(candidate)?;
+        (!denied_paths.contains(&trusted.as_path())).then_some(trusted)
+    })
+    .expect("trusted native fallback");
     assert_eq!(cli.executable, fallback.canonicalize().unwrap());
 }
 
@@ -252,17 +266,23 @@ fn missing_and_unsafe_candidates_do_not_resolve() {
     let target = targets()[1];
     let root = fixture_root();
     let bin = root.path().join("unsafe");
-    let _command = inert_executable(&bin.join("claude"), b"unsafe");
+    let command = inert_executable(&bin.join("claude"), b"unsafe");
     let mut env = environment(target.platform, root.path());
     env.path = Some(std::env::join_paths([&bin]).unwrap());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&_command, fs::Permissions::from_mode(0o777)).unwrap();
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(resolve_with(&env, fixture_trust).is_none());
     }
-    assert!(resolve_with(&env, fixture_trust).is_none());
+    let denied_path = command.canonicalize().unwrap();
+    let cli = resolve_with(&env, |candidate| {
+        let trusted = fixture_trust(candidate)?;
+        (trusted != denied_path).then_some(trusted)
+    });
+    assert!(cli.is_none());
 
-    env.path = Some(OsString::from("/missing/claude/path"));
+    env.path = Some(std::env::join_paths([root.path().join("missing-search-path")]).unwrap());
     assert!(resolve_with(&env, fixture_trust).is_none());
 }
 
@@ -276,7 +296,7 @@ fn nvm_installation_is_found_without_adding_node_for_native_payload() {
     inert_executable(&node_bin.join("node"), b"node sibling fixture");
     let mut env = environment(target.platform, root.path());
     env.nvm_dir = Some(nvm);
-    env.path = Some(OsString::from("/usr/bin:/bin"));
+    env.path = Some(std::env::join_paths([root.path().join("unrelated-search-path")]).unwrap());
 
     let cli = resolve_with(&env, fixture_trust).expect("nvm-installed Claude");
     assert_eq!(cli.executable, expected.canonicalize().unwrap());
@@ -293,7 +313,7 @@ fn legacy_node_script_keeps_the_trusted_sibling_node_on_child_path() {
     let launcher = inert_executable(&bin.join("claude"), b"#!/usr/bin/env node\n// old CLI");
     inert_executable(&bin.join("node"), b"node sibling fixture");
     let mut env = environment(target.platform, root.path());
-    env.path = Some(OsString::from("/usr/bin:/bin"));
+    env.path = Some(std::env::join_paths([root.path().join("unrelated-search-path")]).unwrap());
     env.nvm_dir = Some(root.path().join("nvm"));
 
     assert!(is_node_launcher(&launcher));
