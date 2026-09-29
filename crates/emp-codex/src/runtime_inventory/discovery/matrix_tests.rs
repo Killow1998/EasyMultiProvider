@@ -221,6 +221,10 @@ fn runtime_source_paths_cover_the_four_by_three_installation_matrix() {
         assert_eq!(target.platform.cli_target_triple(), target.cli_triple);
         assert_eq!(target.platform.cli_optional_package(), target.cli_package);
         let names = paths::cli_command_names(target.platform, extensions);
+        let expected_path_cli = match target.platform.os {
+            RuntimeOs::Windows => canonical(&native_cli),
+            RuntimeOs::Linux | RuntimeOs::Macos => launcher.clone(),
+        };
         assert_eq!(
             paths::path_cli_in_roots_with_trust(
                 [path_root.clone()],
@@ -229,7 +233,7 @@ fn runtime_source_paths_cover_the_four_by_three_installation_matrix() {
                 |candidate| candidate.canonicalize().ok(),
             )
             .as_deref(),
-            Some(canonical(&native_cli).as_path()),
+            Some(expected_path_cli.as_path()),
             "{} PATH CLI candidate",
             target.name
         );
