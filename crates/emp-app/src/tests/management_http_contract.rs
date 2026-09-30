@@ -245,6 +245,36 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     )));
     assert!(applied.contains("model_catalog_json"));
     assert!(applied.contains("[features]\nweb_search = true"));
+
+    // An idle desktop session may keep its writer lock even with no HTTP
+    // request in flight. Both buttons must explain that blocker and leave
+    // EMP forwarding until the session closes.
+    rusqlite::Connection::open(root.join("state_5.sqlite"))
+        .unwrap()
+        .execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT);")
+        .unwrap();
+    let locks = root.join("thread-writer-locks");
+    std::fs::create_dir_all(&locks).unwrap();
+    let writer =
+        std::fs::File::create(locks.join("11111111-1111-4111-8111-111111111111.lock")).unwrap();
+    writer.lock().unwrap();
+    for endpoint in ["/api/integration/restore", "/api/quit"] {
+        let blocked = post(
+            &server,
+            endpoint,
+            br#"{"confirm_reload":true}"#,
+            &[&session_header(&server)],
+        );
+        assert!(blocked.starts_with("HTTP/1.1 409 "), "{blocked}");
+        assert!(
+            blocked.contains("\"code\":\"active_codex_writer\""),
+            "{blocked}"
+        );
+        assert!(blocked.contains("Close the ChatGPT/Codex app"), "{blocked}");
+        assert_eq!(std::fs::read_to_string(&codex_config).unwrap(), applied);
+        assert!(request(&server, "/healthz", &[]).starts_with("HTTP/1.1 200 OK\r\n"));
+    }
+    drop(writer);
     server.shutdown().unwrap();
     let restored = std::fs::read_to_string(&codex_config).unwrap();
     assert!(restored.contains("openai_base_url = \"native\""));

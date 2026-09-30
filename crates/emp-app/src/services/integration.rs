@@ -276,6 +276,17 @@ pub(crate) fn restore_native_with_history(
     Ok((result, report))
 }
 
+pub(crate) fn restore_error_message(reason: &str) -> &'static str {
+    match reason {
+        "active_codex_writer" => {
+            "Conversation history is still open in Codex. Close the ChatGPT/Codex app, CLI sessions and Codex IDE sessions, then retry. EMP is still running."
+        }
+        _ => {
+            "Native settings were left unchanged because conversation history could not be made portable"
+        }
+    }
+}
+
 impl IntegrationState {
     pub(crate) fn new(
         manager: IntegrationManager,
@@ -313,7 +324,7 @@ impl IntegrationState {
         let (result, _) =
             restore_native_with_history(&self.manager, Some(&self.search)).map_err(|reason| {
                 eprintln!("EMP native restore stopped: {reason}");
-                crate::error::AppError::ServerStopped
+                crate::error::AppError::NativeRestoreBlocked(reason)
             })?;
         if !result.ok() {
             return Err(crate::error::AppError::ServerStopped);
