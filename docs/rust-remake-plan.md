@@ -150,6 +150,40 @@ Start with cohesive modules; introduce emp-observability or emp-update only
 when actual dependency boundaries justify a crate. Additional architecture
 must not block working product behavior.
 
+### Maintenance boundaries
+
+The implemented boundaries below preserve the existing public entry points.
+They separate decisions from I/O and connection state, so a local change has
+a local verification target rather than automatically requiring every suite.
+
+| Area | Modules and ownership | Focused verification |
+| --- | --- | --- |
+| Codex rollout reader | `history/location.rs`: lookup and containment; `source.rs`/`lines.rs`: bounded plain/zstd I/O; `scan.rs`: identity and ordinal evidence; `replay.rs`/`reverse.rs`: visible reconstruction and checkpoint selection | `cargo test -p emp-codex --test history_contract`; `cargo test -p emp-codex --lib history::` |
+| Context preparation | `context/budget.rs`: assessment; `estimate.rs`: payload cost; `calibration.rs`: observations; `compaction.rs`: orchestration; `compaction/units.rs`: tool-pair boundaries; `summary.rs`: bounded map/reduce | `cargo test -p emp-history`; `cargo test -p emp-app --lib tests::conversation_` |
+| WebSocket transport | `websocket/network.rs`: TCP/TLS and proxy handshakes; `compression.rs`: RFC 7692; `client.rs`: upstream lifecycle; `downstream.rs`: consumer frames | `cargo test -p emp-transport --lib --test websocket --test websocket_pump` |
+| Codex configuration ownership | `fields.rs`: pure TOML comparison/editing; `manager.rs`: enable/restore; `storage.rs`: lease transitions and persistence; `files.rs`: bounded config I/O | `cargo test -p emp-integration`; `cargo test -p emp-app --test user_journeys codex_integration_enable_and_restore_preserve_user_toml` |
+| Responses WebSocket endpoint | `api/websocket.rs`: authentication, admission and turn preparation; `native_socket.rs`: upstream reuse and previous-response ownership; `http_stream.rs`: native/external HTTP streaming; `claude.rs`: single-step Claude projection | `cargo test -p emp-app --lib native_api_contract`; activity/capacity contracts; installed-CLI WebSocket contract when the CLI is available |
+
+Production imports name concrete dependencies; internal helpers remain private
+to their owning module. A downstream connection owns its `NativeSession`, and
+each prepared `Turn` keeps the existing immutable route/configuration snapshot.
+The activity guard survives native WebSocket-to-HTTP fallback. Native and
+external stream handlers remain explicit because their metadata, owner and
+protocol-observation policies differ; no generic stream adapter is needed.
+
+The cleanup also replaces database-candidate sorting with maximum selection,
+centralizes paginated-history validation, and hides the incremental estimator's
+fields behind its existing operations. Long-conversation tests retain active
+turn/tool-pair preservation and bounded summary-call assertions rather than a
+machine-dependent elapsed-time threshold. Constructor/getter-only duplication
+was removed; frame, error, cancellation, lineage and recovery contracts remain.
+The reader's 32 contracts and native endpoint's 14 contracts are grouped into
+smaller files with shared fixtures and unchanged test bodies.
+
+Changing a module's public contract or its resource ownership still requires
+the listed consumer contracts. A module split does not remove integration
+dependencies, prove a performance improvement, or require a live-service restart.
+
 ## Compatibility oracle
 
 The `contracts/` tree records four independent contract levels:
