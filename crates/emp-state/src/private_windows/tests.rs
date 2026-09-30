@@ -45,6 +45,27 @@ fn set_test_acl(path: &Path, acl: &LocalAllocation, protected: bool) {
     );
 }
 
+fn set_test_owner(path: &Path) {
+    // An elevated runner may create files owned by Administrators. Model an
+    // ordinary user's legacy key explicitly, preserving its inherited DACL.
+    let user = CurrentUser::load().unwrap();
+    let mut path = wide_path(path);
+    assert_eq!(
+        unsafe {
+            SetNamedSecurityInfoW(
+                path.as_mut_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                user.sid(),
+                null_mut(),
+                null(),
+                null(),
+            )
+        },
+        ERROR_SUCCESS
+    );
+}
+
 #[test]
 fn applies_and_validates_a_current_user_only_file_acl() {
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -63,6 +84,7 @@ fn legacy_inherited_key_is_protected_without_changing_key_or_credentials() {
     let key = crate::FernetKey::generate();
     let bytes = format!("{}\n", key.encoded());
     fs::write(&path, &bytes).unwrap();
+    set_test_owner(&path);
     let file = File::open(&path).unwrap();
     assert!(!descriptor_dacl_is_protected(descriptor(&file).0));
     let credentials = directory.path().join("credentials");
@@ -123,6 +145,7 @@ fn legacy_key_granting_another_principal_access_is_not_silently_repaired() {
     let path = directory.path().join("master.key");
     let bytes = crate::FernetKey::generate().encoded().to_owned();
     fs::write(&path, &bytes).unwrap();
+    set_test_owner(&path);
     let mut everyone = null_mut();
     let sid_string: Vec<u16> = "S-1-1-0\0".encode_utf16().collect();
     assert_ne!(
