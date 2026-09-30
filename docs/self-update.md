@@ -16,6 +16,20 @@ the DMG read-only and copies `EMP.app` without following symlinks. Source
 checkouts, standalone macOS binaries, mounted read-only disk images, and protected
 portable directories are not silently converted into installations.
 
+## Windows upgrades from Python releases
+
+The existing master key and encrypted account files are reused. A legacy key
+whose owner and sole FullControl grant are the current user can inherit that
+grant from its private state directory. On first load, EMP protects that key's
+DACL without changing the key bytes or its owner. A key granting another
+principal access is still rejected rather than silently treated as private.
+
+Private-state and updater writes preserve an already-correct owner. They request
+DACL changes without also requesting ownership changes, so an ordinary user's
+own installation does not need `WRITE_OWNER` merely to write the startup marker.
+The Windows regression tests cover inherited keys, existing encrypted credentials,
+an owner without `WRITE_OWNER`, and rejection of shared keys.
+
 ## Linux installation and migration
 
 The recommended Linux installation uses `install-user.sh` from the extracted tar
