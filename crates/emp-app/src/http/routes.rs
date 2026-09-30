@@ -93,23 +93,7 @@ pub(crate) fn handle_connection(
     } else {
         None
     };
-    let outdated_codex = path
-        .starts_with("/v1/")
-        .then(|| request.header("User-Agent"))
-        .flatten()
-        .and_then(emp_codex::runtime_inventory::outdated_codex_client);
-    let response = if let Some(version) = outdated_codex {
-        let minimum = emp_codex::runtime_inventory::minimum_codex();
-        Some(json_error_response(
-            426,
-            status_text(426),
-            &format!(
-                "EMP does not support Codex {version}. Please update Codex to {minimum} or newer."
-            ),
-            Some("unsupported_codex_version"),
-            &[],
-        ))
-    } else if gated_mutation && permit.is_none() {
+    let response = if gated_mutation && permit.is_none() {
         Some(json_error_response(
             503,
             status_text(503),

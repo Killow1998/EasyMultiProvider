@@ -175,12 +175,22 @@ pub(crate) fn compatibility_snapshot(state: &ServerState, refresh: bool) -> Valu
     snapshot
 }
 
-pub(crate) fn helper_binary(state: &ServerState) -> String {
+pub(crate) fn helper_binary(state: &ServerState) -> Result<String, emp_codex::quota::QuotaError> {
     // Explicit process injection is used by isolated quota fixtures.
     if state.backend.accounts.codex_binary != "codex" {
-        return state.backend.accounts.codex_binary.clone();
+        return Ok(state.backend.accounts.codex_binary.clone());
     }
-    state.backend.integration.inventory.executable()
+    state
+        .backend
+        .integration
+        .inventory
+        .executable()
+        .ok_or_else(|| {
+            emp_codex::quota::QuotaError::new(
+                "No trusted executable Codex engine is available for this operation",
+                "quota_runtime_unavailable",
+            )
+        })
 }
 
 pub(crate) fn mark_pending(state: &ServerState, target: &str, detail: &str) -> Result<(), ()> {

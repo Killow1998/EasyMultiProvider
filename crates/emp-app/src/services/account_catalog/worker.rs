@@ -110,12 +110,14 @@ fn refresh_sources(state: &ServerState) -> Vec<RefreshSource> {
     else {
         return Vec::new();
     };
-    let client_version = state
+    let Some(client_version) = state
         .backend
         .integration
         .inventory
         .selected_trusted_version()
-        .unwrap_or_else(emp_codex::runtime_inventory::minimum_codex);
+    else {
+        return Vec::new();
+    };
     let mut sources = Vec::new();
     if let Some(source) = RefreshSource::native(state, &config, base, client_version.clone()) {
         sources.push(source);

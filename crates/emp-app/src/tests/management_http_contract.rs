@@ -681,6 +681,31 @@ fn integration_reports_model_list_errors_without_undoing_saved_config() {
     assert_eq!(status["configuration"]["state"], "emp_applied");
     assert_eq!(status["runtime"]["state"], "verification_failed");
     assert_eq!(status["runtime"]["routing_verified"], false);
+
+    // Desktop clients may run normally without publishing this optional
+    // control socket. A missing endpoint does not establish process state.
+    let saved_config = std::fs::read(root.join("config.toml")).unwrap();
+    std::fs::remove_file(root.join("app-server-control/app-server-control.sock")).unwrap();
+    let unavailable = post(&server, "/api/integration/reload", b"{}", &[&session]);
+    assert!(
+        unavailable.starts_with("HTTP/1.1 200 OK\r\n"),
+        "{unavailable}"
+    );
+    let status = response_json(&unavailable);
+    assert_eq!(status["configuration"]["state"], "emp_applied");
+    assert_eq!(status["runtime"]["state"], "catalog_unverified");
+    assert_eq!(status["runtime"]["catalog_verified"], false);
+    assert_eq!(status["runtime"]["routing_verified"], false);
+    assert!(
+        status["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("not yet verified")
+    );
+    assert_eq!(
+        std::fs::read(root.join("config.toml")).unwrap(),
+        saved_config
+    );
     server.shutdown().unwrap();
 }
 

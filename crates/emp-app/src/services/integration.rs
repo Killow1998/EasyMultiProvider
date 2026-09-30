@@ -142,17 +142,14 @@ fn integration_summary_from_status(state: &ServerState, status: &IntegrationStat
         action
     } else {
         match runtime_state.as_str() {
-            "catalog_unverified" => {
-                "The model list cannot distinguish the saved configuration; check the Codex model picker when convenient"
+            "catalog_unverified" | "stopped_waiting_for_start" => {
+                "The shared model catalog is not yet verified; check the Codex model picker when convenient"
             }
             "reload_required" if runtime["target"] == "native" => {
                 "The saved native configuration differs from the running catalog; let active chats finish, then ask the shared backend owner to restart it normally"
             }
             "reload_required" => {
                 "The saved EMP catalog differs from the running catalog; let active chats finish, then ask the shared backend owner to restart it normally"
-            }
-            "stopped_waiting_for_start" => {
-                "The shared backend is unavailable; its next normal start will read the saved configuration"
             }
             "catalog_loaded" => {
                 "The model catalog matches the saved target; request routing is not observable through the current control API"

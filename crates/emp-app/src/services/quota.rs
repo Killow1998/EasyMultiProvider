@@ -373,7 +373,7 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
     let query = |auth: &Value, allow_refresh: bool| {
         run_quota_query_persisting(
             auth,
-            &crate::services::runtime::helper_binary(state),
+            &crate::services::runtime::helper_binary(state)?,
             Duration::from_secs(45),
             allow_refresh,
             |refreshed| credentials.persist(refreshed),
@@ -385,7 +385,7 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
     {
         return match read_native_login_quota(
             &state.backend.accounts.native_auth_path,
-            &crate::services::runtime::helper_binary(state),
+            &crate::services::runtime::helper_binary(state)?,
             Duration::from_secs(45),
         ) {
             Ok(quota) => {
@@ -431,7 +431,7 @@ fn refresh_account_by_id_inner(state: &ServerState, account_id: &str) -> Result<
     }
     let quota = read_native_login_quota(
         &state.backend.accounts.native_auth_path,
-        &crate::services::runtime::helper_binary(state),
+        &crate::services::runtime::helper_binary(state)?,
         Duration::from_secs(45),
     )?;
     if let Ok(mut current) = state.backend.accounts.native_quota.lock() {
@@ -498,7 +498,7 @@ pub(crate) fn consume_quota_reset_for_account(
     if account_id == "@native" {
         return consume_native_quota_reset(
             &state.backend.accounts.native_auth_path,
-            &crate::services::runtime::helper_binary(state),
+            &crate::services::runtime::helper_binary(state)?,
             Duration::from_secs(45),
             idempotency_key,
             credit_id,
@@ -512,7 +512,7 @@ pub(crate) fn consume_quota_reset_for_account(
     {
         return consume_native_quota_reset(
             &state.backend.accounts.native_auth_path,
-            &crate::services::runtime::helper_binary(state),
+            &crate::services::runtime::helper_binary(state)?,
             Duration::from_secs(45),
             idempotency_key,
             credit_id,
@@ -521,7 +521,7 @@ pub(crate) fn consume_quota_reset_for_account(
     let query = |auth: &Value, allow_refresh: bool| {
         run_quota_reset_persisting(
             auth,
-            &crate::services::runtime::helper_binary(state),
+            &crate::services::runtime::helper_binary(state)?,
             Duration::from_secs(45),
             allow_refresh,
             idempotency_key,

@@ -91,7 +91,6 @@ fn ui_is_served_without_secrets_or_session_cookie() {
         assert!(head.contains("\r\nReferrer-Policy: no-referrer\r\n"));
     }
     let web = String::from_utf8_lossy(WEB_INDEX_BYTES);
-    assert!(web.contains("let codexMinimum = '0.158.0';"));
     assert!(web.contains("establishSession()"));
     assert!(web.contains("X-EMP-Session"));
     assert!(web.contains("X-EMP-Bootstrap"));

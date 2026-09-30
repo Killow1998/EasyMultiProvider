@@ -192,10 +192,10 @@ pub fn observe(
     match model_list(home) {
         Ok(models) => validate_models(&models, expected, target, catalog),
         Err(error) if error.kind == "unavailable" => RuntimeSyncResult::new(
-            "stopped_waiting_for_start",
+            "catalog_unverified",
             target,
             false,
-            "The shared Codex backend is unavailable; configuration is saved and will load when its owner starts it",
+            "The Codex control interface is unavailable; settings are saved, but the shared model catalog is not yet verified",
         ),
         Err(error) => RuntimeSyncResult::new(
             if error.kind == "unsupported" {
@@ -338,6 +338,22 @@ fn validate_models(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_control_socket_does_not_imply_the_app_is_stopped() {
+        let home = tempfile::tempdir().unwrap();
+        for target in ["emp", "native"] {
+            let result = observe(home.path(), &["emp/model-a".to_owned()], target, None);
+            assert_eq!(result.state, "catalog_unverified");
+            assert_eq!(result.target, target);
+            assert!(!result.verified);
+            assert!(result.observed_models.is_empty());
+            assert_eq!(
+                result.detail,
+                "The Codex control interface is unavailable; settings are saved, but the shared model catalog is not yet verified"
+            );
+        }
+    }
 
     #[test]
     fn native_catalog_is_unverified_when_the_shared_list_is_empty() {

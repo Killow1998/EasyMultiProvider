@@ -3,34 +3,21 @@ use emp_transport::decode_content;
 use std::sync::mpsc;
 
 #[test]
-fn codex_http_version_gate_rejects_below_minimum_and_accepts_minimum() {
+fn old_cli_app_and_editor_engines_reach_normal_route_validation() {
     let (_directory, server) = test_server();
-
-    let below_minimum = request(
-        &server,
-        "/v1/version-gate-probe",
-        &["User-Agent: codex_cli_rs/0.157.9 (Linux; x86_64)"],
-    );
-    assert!(
-        below_minimum.starts_with("HTTP/1.1 426 Upgrade Required\r\n"),
-        "{below_minimum}"
-    );
-    let body = below_minimum
-        .split_once("\r\n\r\n")
-        .expect("HTTP response body")
-        .1;
-    assert!(body.contains("unsupported_codex_version"), "{body}");
-    assert!(body.contains("0.158.0 or newer"), "{body}");
-
-    let minimum = request(
-        &server,
-        "/v1/version-gate-probe",
-        &["User-Agent: codex_cli_rs/0.158.0 (Linux; x86_64)"],
-    );
-    assert!(
-        minimum.starts_with("HTTP/1.1 404 Not Found\r\n"),
-        "{minimum}"
-    );
+    for originator in ["codex_cli_rs", "Codex Desktop", "codex_vscode"] {
+        let response = request(
+            &server,
+            "/v1/version-gate-probe",
+            &[&format!(
+                "User-Agent: {originator}/0.155.0-alpha.9.2 (test host)"
+            )],
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 404 Not Found\r\n"),
+            "{response}"
+        );
+    }
     server.shutdown().expect("shutdown");
 }
 

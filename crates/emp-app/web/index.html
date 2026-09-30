@@ -230,7 +230,7 @@ input,select,textarea{border-radius:6px;border-color:var(--border-strong)}
 .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--muted)}
 .pill.provider-id-badge::before{display:none}
 .integration-card{padding:0;border:0;border-radius:0;background:none}
-.integration-card[data-state="emp_applied"] .pill::before{background:var(--success)}.integration-card[data-state="emp_applied"]:not([data-runtime="catalog_loaded"],[data-runtime="stopped_waiting_for_start"]) .pill::before{background:var(--warning)}
+.integration-card[data-state="emp_applied"] .pill::before{background:var(--success)}.integration-card[data-state="emp_applied"]:not([data-runtime="catalog_loaded"]) .pill::before{background:var(--warning)}
 .integration-card:is([data-state="conflict"],[data-state="prepared"],[data-state="unavailable"]){border-left:0}
 .integration-card:is([data-state="conflict"],[data-state="prepared"],[data-state="unavailable"]) .pill::before{background:var(--danger)}
 .integration-card-header{gap:10px}
@@ -713,6 +713,7 @@ const UPSTREAM_ERROR_GROUPS = [
 function upstreamErrorText(error, fallback = '') {
   if (error?.session) return error.message;
   const detail = error?.payload?.error || {};
+  if (detail.code === 'active_codex_writer') return tr('Codex 仍在使用对话历史。请先完成活动对话，再关闭 ChatGPT App、Codex CLI 和 IDE 中的 Codex 会话，然后重试。','Codex is still using conversation history. Finish active conversations, close ChatGPT App, Codex CLI and Codex sessions in your IDE, then retry.');
   if (detail.message === 'provider API key is not configured') return tr('还没有填写 API Key。','No API key has been entered yet.');
   const group = UPSTREAM_ERROR_GROUPS.find(([types]) => types.includes(detail.type));
   return group ? tr(...group[1]) : error?.message || fallback;
@@ -1090,18 +1091,13 @@ function runtimeView(runtime) {
   if (runtime.state === 'emp_catalog_absent') {
     return [tr('EMP 模型已不可见','EMP models absent'), tr('共享模型列表不再包含此前的 EMP 专属模型 ID；这不能确认原生路由或其他设置已恢复。','The shared model list no longer contains the previous EMP-specific model IDs. This does not confirm native routing or other settings were restored.')];
   }
-  if (runtime.state === 'stopped_waiting_for_start') {
-    return target === 'native'
-      ? [tr('等待 Codex 启动','Waiting for Codex'), tr('原生设置已保存；共享 Codex 后端当前不可用，下次正常启动时会读取这些设置。','Native settings are saved. The shared Codex backend is unavailable and will read them at its next normal start.')]
-      : [tr('等待 Codex 启动','Waiting for Codex'), tr('EMP 设置已保存；共享 Codex 后端当前不可用，下次正常启动时会读取这些设置。','EMP settings are saved. The shared Codex backend is unavailable and will read them at its next normal start.')];
+  if (runtime.state === 'catalog_unverified' || runtime.state === 'stopped_waiting_for_start') {
+    return [tr('目录待确认','Catalog unverified'), tr('设置已保存，尚未确认 Codex 当前加载的模型目录。可在 Codex 模型选择器中查看。','Settings are saved; Codex’s loaded model catalog is not yet verified. Check the model picker in Codex.')];
   }
   if (runtime.state === 'reload_required') {
     return target === 'native'
       ? [tr('原生目录待更新','Native catalog pending'), tr('共享 Codex 后端仍显示 EMP 模型。让当前对话完成后，再请后端所有者正常重启以读取原生设置。','The shared Codex backend still shows EMP models. Let active chats finish, then ask its owner to restart it normally to load native settings.')]
       : [tr('EMP 目录待更新','EMP catalog pending'), tr('共享 Codex 后端仍显示旧模型。让当前对话完成后，再请后端所有者正常重启以读取 EMP 设置。','The shared Codex backend still shows an old model list. Let active chats finish, then ask its owner to restart it normally to load EMP settings.')];
-  }
-  if (runtime.state === 'catalog_unverified') {
-    return [tr('目录无法确认','Catalog unverified'), tr('当前模型列表无法区分 EMP 与原生设置；方便时检查 Codex 的模型选择器。','The current model list cannot distinguish EMP from native settings. Check Codex’s model picker when convenient.')];
   }
   if (runtime.state === 'verification_failed') {
     return [tr('无法检查目录','Catalog check failed'), tr('配置文件已保存，但共享 Codex 后端未能提供模型列表。','Settings are saved, but the shared Codex backend did not provide its model list.')];
@@ -1115,7 +1111,6 @@ function conflictView(configuration) {
   }
   return [tr('需要处理','Needs attention'), tr('Codex 的 config.toml 被其他程序改过。请恢复原生 Codex，再重新启动 EMP。','Another program changed Codex config.toml. Restore Native Codex, then start EMP again.')];
 }
-let codexMinimum = '0.158.0';
 function renderIntegration(info) {
   const configuration = info.configuration || {};
   const compatibility = info.codex_compatibility || {};
@@ -1130,12 +1125,10 @@ function renderIntegration(info) {
     : configuration.state === 'emp_applied' || configuration.state === 'native' && runtimeNeedsDisplay ? runtimeView(info.runtime || {})
     : views[configuration.state] || views.unavailable;
   $('integration_summary').textContent = view[1];
-  // Passing this version gate does not verify protocol or history compatibility.
-  const unsupported = compatibility.status === 'unsupported';
-  const minimum = codexMinimum = compatibility.minimum || codexMinimum;
-  const installed = compatibility.installed ? ` ${compatibility.installed}` : '';
-  $('codex_compatibility').textContent = unsupported ? tr(`Codex${installed} 版本过旧，EMP 需要 ${minimum} 或更新版本，请升级 Codex。`, `Codex${installed} is too old. EMP needs ${minimum} or newer; please update Codex.`) : '';
-  $('codex_compatibility').hidden = !unsupported;
+  const engine = compatibility.installed || tr('版本未知','version unknown');
+  const host = compatibility.host_version ? `${tr('宿主','Host')} ${compatibility.host_version} · ` : '';
+  $('codex_compatibility').textContent = `${host}Codex engine ${engine}`;
+  $('codex_compatibility').hidden = false;
   $('codex_compatibility').dataset.state = compatibility.status || 'unknown';
   $('integration').dataset.state = configuration.state || 'unknown';
   $('integration').dataset.runtime = (info.runtime || {}).state || 'not_checked';
@@ -1300,9 +1293,9 @@ function runtimeLabel(value) {
   return {
     catalog_loaded:tr('模型目录符合目标；请求路线未确认','model catalog matches target; request route unverified'),
     emp_catalog_absent:tr('此前的 EMP 模型 ID 已不可见；恢复未确认','previous EMP model IDs are absent; restoration unverified'),
-    stopped_waiting_for_start:tr('共享后端不可用；配置会在下次正常启动时读取','shared backend unavailable; config will be read at next normal start'),
+    stopped_waiting_for_start:tr('控制接口不可用；目录尚未验证','control interface unavailable; catalog unverified'),
     reload_required:tr('共享模型目录仍旧；当前对话结束后再请后端所有者正常重启','shared catalog is stale; ask its owner to restart normally after active chats finish'),
-    catalog_unverified:tr('无法区分当前加载的目录','loaded catalog cannot be distinguished'),
+    catalog_unverified:tr('共享模型目录尚未验证','shared model catalog not yet verified'),
     verification_failed:tr('无法读取共享模型目录','shared model catalog could not be read'),
     not_checked:tr('尚未观察共享模型目录','shared model catalog has not been observed')
   }[value] || tr('共享模型目录状态未知','shared model catalog state unknown');
@@ -1313,18 +1306,13 @@ function renderSupportReport(report) {
   const imported = Array.isArray(accounts.imported) ? accounts.imported : [];
   const accountLines = imported.map(account => `${tr('导入账号','Imported account')} ${Number(account.index) || 0}: ${supportStatusLabel(account.quota_status)}`);
   const configNotes = [!config.exists && tr('文件不存在','file missing'), config.write_access_hint === 'denied' && tr('没有写入权限','not writable')].filter(Boolean);
-  const minimum = codexMinimum;
   const compatibilityNote = {
-    supported:tr(`符合最低版本要求（${minimum}及以上）`, `Meets minimum version requirement (${minimum}+)`),
-    unsupported:tr(`版本过旧，需要 ${minimum} 或更新`, `too old, needs ${minimum} or newer`)
+    available:tr('引擎可执行；功能按实际结果判断', 'engine available; individual operations are checked when used'),
+    unknown:tr('无法确认引擎版本', 'engine version could not be observed')
   }[codex.compatibility];
-  const versionFallback = {
-    unavailable:tr('未找到','not found'),
-    supported:tr('已找到','found'),
-    unsupported:tr('已找到','found')
-  }[codex.compatibility];
+  const versionFallback = { unavailable:tr('未找到可用引擎','no engine available') }[codex.compatibility];
   const versionLabel = codex.version || versionFallback || tr('版本未知','version unknown');
-  const codexNotes = [compatibilityNote, codex.source && supportDetailLabel(codex.source), codex.target && runtimeLabel(codex.state,codex.target)].filter(Boolean);
+  const codexNotes = [codex.host_version && `${tr('宿主','Host')} ${codex.host_version}`, compatibilityNote, codex.source && supportDetailLabel(codex.source), codex.target && runtimeLabel(codex.state,codex.target)].filter(Boolean);
   box.innerHTML = `<p><strong>${tr('配置','Config')}</strong> ${esc(config.path || '—')}${configNotes.map(note => ' · ' + esc(note)).join('')}</p>
     <p><strong>Codex</strong> ${esc(versionLabel)}${codexNotes.map(note => ' · ' + esc(note)).join('')}</p>
     <p><strong>${tr('代理','Proxy')}</strong> ${supportDetailLabel(network.source_at_startup)} · ${supportDetailLabel(network.chatgpt_route)}${network.proxy_scheme ? ' (' + esc(network.proxy_scheme) + ')' : ''}</p>
@@ -1382,7 +1370,7 @@ function integrationOutcomeMessage(info, action) {
       : tr('EMP 模型目录已匹配；请求转发路线未确认。','The EMP model catalog matches; request routing is unverified.');
     if (runtime.state === 'emp_catalog_absent') return tr('此前的 EMP 模型 ID 已不可见；原生恢复和请求转发路线未确认。','Previous EMP model IDs are absent; native restoration and request routing are unverified.');
     if (runtime.state === 'reload_required') return tr('设置已保存；共享目录仍旧。当前对话结束后，可请后端所有者正常重启。','Settings are saved; the shared catalog is stale. After active chats finish, ask the backend owner to restart it normally.');
-    if (runtime.state === 'stopped_waiting_for_start') return tr('设置已保存；共享后端下次正常启动时会读取。','Settings are saved; the shared backend will read them at its next normal start.');
+    if (runtime.state === 'catalog_unverified' || runtime.state === 'stopped_waiting_for_start') return runtimeView(runtime)[1];
     if (runtime.state === 'verification_failed') return tr('设置已保存，但无法检查共享模型目录。','Settings are saved, but the shared model catalog could not be checked.');
     return tr('设置已保存；共享模型目录尚未确认。','Settings are saved; the shared model catalog has not been confirmed.');
   }

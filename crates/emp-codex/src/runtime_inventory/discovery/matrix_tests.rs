@@ -403,23 +403,23 @@ fn runtime_source_paths_cover_the_four_by_three_installation_matrix() {
 }
 
 #[test]
-fn helper_selection_prefers_configured_supported_then_first_supported() {
-    let unsupported = json!({"source": "configured", "supported": false});
-    let configured = json!({"source": "configured", "supported": true});
-    let first_supported = json!({"source": "app_server_daemon", "supported": true});
+fn helper_selection_prefers_configured_available_then_first_available() {
+    let unavailable = json!({"source": "configured", "available": false});
+    let configured = json!({"source": "configured", "available": true});
+    let first_available = json!({"source": "app_server_daemon", "available": true});
     assert_eq!(choose_helper(&[]), None);
-    assert_eq!(choose_helper(&[unsupported]), None);
+    assert_eq!(choose_helper(&[unavailable]), None);
     assert_eq!(
         choose_helper(&[
-            json!({"source": "configured", "supported": false}),
-            first_supported.clone(),
+            json!({"source": "configured", "available": false}),
+            first_available.clone(),
         ]),
         Some(1)
     );
     assert_eq!(
-        choose_helper(&[first_supported, configured]),
+        choose_helper(&[first_available, configured]),
         Some(1),
-        "configured supported runtime retains precedence"
+        "configured available runtime retains precedence"
     );
 }
 
@@ -538,4 +538,46 @@ fn windows_package_enumeration_rejects_second_call_size_changes() {
     assert!(!windows_package_list_response_is_stable(2, 128, 1, 64));
     assert!(!windows_package_list_response_is_stable(1, 128, 1, 127));
     assert!(!windows_package_list_response_is_stable(1, 128, 1, 129));
+}
+
+#[test]
+fn mac_intel_nested_chatgpt_engine_stays_inside_outer_bundle() {
+    let fixture = fixture_root();
+    let root = fixture.path();
+    let target = matrix()
+        .into_iter()
+        .find(|t| t.name == "macOS Intel")
+        .unwrap();
+    let engine = root.join(
+        "Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+    );
+    inert_file(&engine);
+    assert_eq!(
+        app(
+            &root.join("home"),
+            &root.join("user"),
+            target.platform,
+            root,
+            &[]
+        ),
+        Some(canonical(&engine))
+    );
+    #[cfg(unix)]
+    {
+        fs::remove_file(&engine).unwrap();
+        let outside = inert_file(&root.join("outside/codex"));
+        // A symlinked parent is canonicalized, then rejected at the bundle boundary.
+        fs::remove_dir_all(engine.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(outside.parent().unwrap(), engine.parent().unwrap()).unwrap();
+        assert!(
+            app(
+                &root.join("home"),
+                &root.join("user"),
+                target.platform,
+                root,
+                &[]
+            )
+            .is_none()
+        );
+    }
 }

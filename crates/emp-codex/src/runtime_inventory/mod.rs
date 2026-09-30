@@ -9,7 +9,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-pub use version::{MINIMUM_CODEX, minimum_codex, outdated_codex_client};
 
 struct Cached {
     checked: Instant,
@@ -111,9 +110,8 @@ impl RuntimeInventory {
             cache: Mutex::new(None),
         }
     }
-    /// Installations admitted by the version gate share the same `config.toml`.
-    /// The helper is the configured binary, else the first installation that
-    /// passes that gate; this does not establish protocol/history compatibility.
+    /// Observe executable engines without claiming protocol compatibility.
+    /// The helper prefers the configured engine, then the first available engine.
     pub fn snapshot(&self, refresh: bool) -> Value {
         let mut cache = self.cache.lock().expect("runtime inventory");
         if !refresh
@@ -129,6 +127,13 @@ impl RuntimeInventory {
             self.path_var.as_deref(),
             &self.nvm_roots,
         );
+        let candidate_identities = candidates
+            .iter()
+            .flat_map(|candidate| {
+                std::iter::once(&candidate.path).chain(candidate.fallbacks.iter())
+            })
+            .map(|path| (path.clone(), ExecutableIdentity::read(path)))
+            .collect::<Vec<_>>();
         let mut runtimes = Vec::new();
         for chunk in candidates.chunks(4) {
             let observed = std::thread::scope(|scope| {
@@ -145,11 +150,14 @@ impl RuntimeInventory {
                     .collect::<Vec<_>>()
             });
             for (candidate, mut item) in chunk.iter().zip(observed) {
-                let supported = item["status"] == "supported";
+                let available = item["status"] == "available";
                 item["source"] = json!(candidate.source);
                 item["name"] = json!(candidate.name);
-                item["path"] = json!(candidate.path);
-                item["supported"] = json!(supported);
+                if item.get("path").is_none() {
+                    item["path"] = json!(candidate.path);
+                }
+                item["available"] = json!(available);
+                item["host_version"] = json!(candidate.host_version);
                 item["helper"] = json!(false);
                 runtimes.push(item);
             }
@@ -164,25 +172,18 @@ impl RuntimeInventory {
                 .cloned()
                 .unwrap_or_else(|| version::public(None, "unavailable"))
         };
-        value
-            .as_object_mut()
-            .unwrap()
-            .retain(|key, _| matches!(key.as_str(), "installed" | "status" | "minimum" | "source"));
+        value.as_object_mut().unwrap().retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "installed" | "status" | "source" | "host_version"
+            )
+        });
         if value.get("source").is_none() {
             value["source"] = json!("path_cli");
         }
         value["helper_source"] = chosen
             .map(|index| runtimes[index]["source"].clone())
             .unwrap_or(Value::Null);
-        let candidate_identities = candidates
-            .iter()
-            .map(|candidate| {
-                (
-                    candidate.path.clone(),
-                    ExecutableIdentity::read(&candidate.path),
-                )
-            })
-            .collect();
         value["runtimes"] = json!(runtimes);
         *cache = Some(Cached {
             checked: Instant::now(),
@@ -191,7 +192,7 @@ impl RuntimeInventory {
         });
         value
     }
-    pub fn executable(&self) -> String {
+    pub fn executable(&self) -> Option<String> {
         let value = self.snapshot(false);
         let selected = value["runtimes"]
             .as_array()
@@ -202,10 +203,10 @@ impl RuntimeInventory {
         if self.cached_candidates_are_current() {
             match selected {
                 Some(path) if trust::trusted_binary(Path::new(path)).is_some() => {
-                    return path.to_owned();
+                    return Some(path.to_owned());
                 }
                 Some(_) => {}
-                None => return self.path_cli_fallback(),
+                None => return None,
             }
         }
 
@@ -216,9 +217,9 @@ impl RuntimeInventory {
             && let Some(path) = self.selected_path(&refreshed)
             && trust::trusted_binary(Path::new(path)).is_some()
         {
-            return path.to_owned();
+            return Some(path.to_owned());
         }
-        self.path_cli_fallback()
+        None
     }
 
     /// Return the cached version observed for the selected trusted runtime.
@@ -230,8 +231,8 @@ impl RuntimeInventory {
             .as_array()?
             .iter()
             .find(|runtime| runtime["helper"].as_bool() == Some(true))?;
-        if selected["supported"].as_bool() != Some(true)
-            || selected["status"].as_str() != Some("supported")
+        if selected["available"].as_bool() != Some(true)
+            || selected["status"].as_str() != Some("available")
         {
             return None;
         }
@@ -263,29 +264,34 @@ impl RuntimeInventory {
                     .all(|(path, identity)| ExecutableIdentity::read(path) == *identity)
             })
     }
-
-    fn path_cli_fallback(&self) -> String {
-        self.path_var
-            .as_deref()
-            .and_then(discovery::path_cli_in)
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "codex".into())
-    }
 }
 
 fn choose_helper(runtimes: &[Value]) -> Option<usize> {
     runtimes
         .iter()
-        .position(|item| item["supported"] == true && item["source"] == "configured")
-        .or_else(|| runtimes.iter().position(|item| item["supported"] == true))
+        .position(|item| item["available"] == true && item["source"] == "configured")
+        .or_else(|| runtimes.iter().position(|item| item["available"] == true))
 }
 
 fn observe_candidate(candidate: &discovery::Candidate) -> Value {
     if candidate.unavailable {
-        version::public(None, "unavailable")
-    } else {
-        version::observe(&candidate.path)
+        return version::public(None, "unavailable");
     }
+    let mut observation = version::observe(&candidate.path);
+    if observation["status"] != "available" {
+        for path in &candidate.fallbacks {
+            if !discovery::verified_fallback(candidate, path) {
+                continue;
+            }
+            let fallback = version::observe(path);
+            if fallback["status"] == "available" {
+                observation = fallback;
+                observation["path"] = json!(path);
+                break;
+            }
+        }
+    }
+    observation
 }
 
 #[cfg(all(test, unix))]
@@ -314,20 +320,24 @@ mod tests {
             Vec::new(),
         );
 
-        assert_eq!(inventory.executable(), binary.to_string_lossy());
+        assert_eq!(inventory.executable().as_deref(), binary.to_str());
         assert_eq!(inventory.snapshot(false)["helper_source"], "configured");
 
         let replacement = root.path().join("replacement");
         script(root.path(), "replacement", "echo codex-cli 0.148.0", 0o700);
         std::fs::rename(&replacement, &binary).unwrap();
-        assert_eq!(inventory.executable(), "codex");
+        assert_eq!(inventory.executable().as_deref(), binary.to_str());
+        assert_eq!(
+            inventory.selected_trusted_version().as_deref(),
+            Some("0.148.0")
+        );
 
         script(root.path(), "replacement", "echo codex-cli 0.158.0", 0o700);
         std::fs::rename(&replacement, &binary).unwrap();
-        assert_eq!(inventory.executable(), binary.to_string_lossy());
+        assert_eq!(inventory.executable().as_deref(), binary.to_str());
 
         std::fs::remove_file(&binary).unwrap();
-        assert_eq!(inventory.executable(), "codex");
+        assert_eq!(inventory.executable(), None);
     }
 
     #[test]
@@ -345,7 +355,7 @@ mod tests {
             Some(OsString::new()),
             Vec::new(),
         );
-        assert_eq!(inventory.executable(), "codex");
+        assert_eq!(inventory.executable(), None);
     }
 
     #[test]
@@ -364,7 +374,7 @@ mod tests {
         let version_calls = root.path().join("version-calls");
         let app_server_calls = root.path().join("app-server-calls");
         let body = format!(
-            "if [ \"$1\" = \"--version\" ]; then echo called >> '{}'; echo 'codex-cli 0.159.4'; else echo called >> '{}'; fi",
+            "if [ \"$1\" = \"--version\" ]; then echo called >> '{}'; echo 'codex-cli 0.155.0-alpha.9.2'; else echo called >> '{}'; fi",
             version_calls.display(),
             app_server_calls.display()
         );
@@ -384,11 +394,11 @@ mod tests {
 
         assert_eq!(
             inventory.selected_trusted_version().as_deref(),
-            Some("0.159.4")
+            Some("0.155.0-alpha.9.2")
         );
         assert_eq!(
             inventory.selected_trusted_version().as_deref(),
-            Some("0.159.4")
+            Some("0.155.0-alpha.9.2")
         );
         assert_eq!(
             std::fs::read_to_string(version_calls)
@@ -401,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_trusted_version_is_absent_when_no_supported_runtime_was_observed() {
+    fn selected_trusted_version_is_absent_when_no_version_was_observed() {
         let root = tempfile::Builder::new()
             .prefix("emp-inventory-version-")
             .tempdir()
@@ -413,7 +423,7 @@ mod tests {
         std::fs::create_dir(&user_home).unwrap();
         std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::set_permissions(&user_home, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let binary = script(root.path(), "codex", "echo 'codex-cli 0.157.9'", 0o700);
+        let binary = script(root.path(), "codex", "echo 'unknown'", 0o700);
         let inventory = RuntimeInventory::with_discovery(
             home,
             user_home,
@@ -441,6 +451,8 @@ mod tests {
             source: "configured",
             name: "Configured Codex",
             path: launcher,
+            host_version: None,
+            fallbacks: Vec::new(),
             unavailable: true,
         });
         assert_eq!(observation["status"], "unavailable");
@@ -450,7 +462,7 @@ mod tests {
 
     #[test]
     #[ignore = "manual installed Codex 0.158.0 inventory probe; set EMP_CODEX_0158_BINARY"]
-    fn installed_codex_0158_is_reported_supported_by_runtime_inventory() {
+    fn installed_codex_0158_is_reported_available_by_runtime_inventory() {
         let binary = std::env::var_os("EMP_CODEX_0158_BINARY")
             .expect("EMP_CODEX_0158_BINARY must point to the installed 0.158.0 runtime");
         let home = PathBuf::from(std::env::var_os("CODEX_HOME").expect("disposable CODEX_HOME"));
@@ -465,7 +477,7 @@ mod tests {
 
         let snapshot = inventory.snapshot(true);
         assert_eq!(snapshot["installed"], "0.158.0");
-        assert_eq!(snapshot["status"], "supported");
+        assert_eq!(snapshot["status"], "available");
         assert_eq!(snapshot["helper_source"], "configured");
         assert_eq!(snapshot["runtimes"][0]["helper"], true);
     }

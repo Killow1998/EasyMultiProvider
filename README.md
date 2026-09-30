@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/Killow1998/EasyMultiProvider/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/Killow1998/EasyMultiProvider"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/Killow1998/EasyMultiProvider"></a>
-  <img alt="Codex 0.158.0+" src="https://img.shields.io/badge/Codex-0.158.0%2B-blue">
+  <img alt="Codex CLI · App · IDE" src="https://img.shields.io/badge/Codex-CLI%20%C2%B7%20App%20%C2%B7%20IDE-blue">
   <img alt="Windows Linux macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey">
 </p>
 
@@ -155,8 +155,8 @@ a new model is not visible yet.
 - Let Codex delegate a native child task to an external catalog model by its existing model slug while Codex continues to own the child task and permissions.
 - Let external models use Codex standalone web search. EMP prefers the current `.codex` login and can fall back to an available imported account without exposing Provider credentials.
 
-EMP refreshes the model list automatically. An already-open Codex 0.158 model
-picker may need reloading; the UI shows the existing reload notice.
+EMP refreshes the model list automatically. An already-open Codex model picker
+may need reloading; the UI reports when the observed catalog still differs.
 
 ### Codex continuity
 
@@ -207,11 +207,23 @@ control changes catalog labels, not context windows or request limits.
 
 The current source version is **v0.12.4**.
 
-Codex **0.158.0** is the minimum accepted version. Compatibility is rechecked when OpenAI introduces new models or changes client protocols, authentication, or history formats. Newer clients may connect, but untested releases are not guaranteed compatible. Older clients receive an update message.
+EMP supports Codex CLI, desktop App and IDE extension installations without a
+universal minimum engine version. Each operation depends on the interfaces that
+the installed engine actually provides. If an engine lacks quota reads, quota
+reset or catalog inspection, EMP reports that operation as unavailable; it does
+not reject all requests solely because of the version number. Authentication,
+protocol and conversation-history checks still apply.
+
+Diagnostics show the App or extension version separately from its Codex engine
+version. An available engine means EMP could run it and read its version, not
+that every feature has been verified. Model catalog refresh uses the observed
+engine version; if it cannot be determined, EMP keeps the cached catalog and
+reports that refresh is unavailable.
 
 There is no client to choose: EMP edits the shared `config.toml` used by Codex clients.
 
-To query account quota, EMP runs a supported Codex it finds in these locations (a configured binary wins):
+To query account quota, EMP selects a trusted, executable Codex engine with an
+observed version from these locations (a configured binary wins):
 
 - the Codex App runtime,
 - the active `.codex` managed runtime,
@@ -234,7 +246,9 @@ separate CLI helper; they do not launch the desktop GUI. Applying or restoring
 changes the saved settings. When Codex next reaches EMP (its model list or a turn), EMP
 reads `model/list` from Codex's local control socket and pushes the catalog
 observation to the Web UI. This read-only check does not reload the backend or
-verify its request routing. If a restart is needed, use the backend's usual
+verify its request routing. If the control interface is unavailable, EMP reports
+that settings are saved and the catalog is unverified; this does not mean the
+App has stopped. If a restart is needed, use the backend's usual
 launcher when your active work permits it. There is no background polling.
 
 ## Web UI

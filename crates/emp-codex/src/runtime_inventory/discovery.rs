@@ -1,4 +1,7 @@
 //! Known installation layouts only; no recursive search of user directories.
+#[cfg(any(windows, test))]
+mod cache;
+mod metadata;
 mod paths;
 mod platform;
 mod windows;
@@ -10,8 +13,10 @@ mod matrix_tests;
 #[path = "discovery/tests.rs"]
 mod tests;
 
+pub(super) use paths::nvm_roots;
+#[cfg(test)]
+pub(super) use paths::path_cli_in;
 use paths::{app, editor, executable, nvm_installations, path_cli_in_with_extensions};
-pub(super) use paths::{nvm_roots, path_cli_in};
 use platform::{RuntimeOs, RuntimePlatform};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -24,6 +29,8 @@ pub(super) struct Candidate {
     pub(super) name: &'static str,
     pub(super) path: PathBuf,
     pub(super) unavailable: bool,
+    pub(super) host_version: Option<String>,
+    pub(super) fallbacks: Vec<PathBuf>,
 }
 
 pub(super) fn discover(
@@ -35,11 +42,15 @@ pub(super) fn discover(
 ) -> Vec<Candidate> {
     let platform = RuntimePlatform::current();
     let path_extensions = std::env::var_os("PATHEXT");
-    let package_roots = platform
+    let packages = platform
         .filter(|platform| platform.os == RuntimeOs::Windows)
         .map(desktop_package_roots)
         .unwrap_or_default();
-    discover_with_platform(
+    let package_roots = packages
+        .iter()
+        .map(|(root, _)| root.clone())
+        .collect::<Vec<_>>();
+    let mut candidates = discover_with_platform(
         home,
         user_home,
         configured,
@@ -51,10 +62,29 @@ pub(super) fn discover(
             system_root: Path::new("/"),
             package_roots: &package_roots,
         },
-    )
+    );
+    for candidate in &mut candidates {
+        if candidate.source == "codex_app"
+            && let Some((_, version)) = packages.iter().find(|(root, _)| {
+                root.canonicalize()
+                    .is_ok_and(|root| candidate.path.starts_with(root))
+            })
+        {
+            candidate.host_version = Some(version.clone());
+            #[cfg(windows)]
+            if let Some(local) = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+            {
+                candidate.fallbacks =
+                    cache::verified_candidates(&candidate.path, &local.join("OpenAI/Codex/bin"));
+            }
+        }
+    }
+    candidates
 }
 
-fn desktop_package_roots(platform: RuntimePlatform) -> Vec<PathBuf> {
+fn desktop_package_roots(platform: RuntimePlatform) -> Vec<(PathBuf, String)> {
     #[cfg(windows)]
     {
         registered_windows_codex_package_root(platform)
@@ -105,8 +135,10 @@ fn discover_with_platform(
             result.push(Candidate {
                 source,
                 name,
-                path,
+                path: path.clone(),
                 unavailable,
+                host_version: metadata::host_version(source, &path),
+                fallbacks: Vec::new(),
             });
         }
     };
@@ -187,4 +219,16 @@ fn discover_with_platform(
         }
     }
     result
+}
+
+pub(super) fn verified_fallback(candidate: &Candidate, path: &Path) -> bool {
+    #[cfg(any(windows, test))]
+    {
+        cache::matches_resource(&candidate.path, path)
+    }
+    #[cfg(not(any(windows, test)))]
+    {
+        let _ = (candidate, path);
+        false
+    }
 }

@@ -2,6 +2,16 @@
 
 ## 0.12.4 (2026-09-29)
 
+- Recognize the ChatGPT App's nested macOS engine and verified Windows engine
+  cache. Show App/extension and engine versions separately; check operations
+  when used instead of rejecting every client below Codex 0.158. Keep existing
+  model catalogs when an engine version cannot be observed.
+- Report an unavailable catalog control interface as an unverified catalog,
+  without claiming the App has stopped. Explain active conversation locks when
+  native restoration or exit must wait, while keeping EMP running.
+- Repair upgrades from older Windows releases without changing account keys or
+  encrypted credentials, and write private state without requiring permission
+  to change file ownership.
 - Add one global preference to show or hide context labels across Native,
   Subscription and External Provider catalog routes. Old migration bundles
   without the preference preserve the destination value; the setting does not
