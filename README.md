@@ -93,11 +93,10 @@ For Claude, choose **Add Provider → Claude**, then **Local Claude subscription
 or **CPA**. Both routes require the installed Claude Code CLI.
 
 - **Local Claude subscription** reuses the Claude Code subscription sign-in for
-  the current OS user and needs no URL or API key. Before each request, EMP checks
-  for a Claude.ai subscription sign-in; CLI API-key and Console auth do not qualify
-  for this mode. Sign in through Claude Code itself if needed. EMP does not import
-  tokens or provide a separate login flow. Add aliases or full model IDs with
-  **Add model**; they appear in Codex's model picker.
+  the current OS user. Before each request, EMP checks for a Claude.ai subscription
+  sign-in; CLI API-key and Console auth do not qualify for this mode. If needed,
+  sign in through Claude Code. Add model aliases or full IDs with **Add model** to
+  choose them in Codex's model picker.
 - **CPA** uses a Claude-Code-compatible CPA Base URL and API key. For direct
   Anthropic API access, add the separate **Anthropic API** Provider.
 

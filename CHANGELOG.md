@@ -21,10 +21,9 @@
 - Add two Claude routes through the installed Claude Code CLI: Local Claude
   subscription reuses the current OS user's Claude Code sign-in, which EMP checks
   before each request; CLI API-key and Console auth do not qualify for this mode.
-  Sign in through Claude Code itself. CPA uses a Claude-Code-compatible Base URL
-  and API key. Add local-login model aliases or full IDs manually. Direct
-  Anthropic API remains a separate Anthropic API Provider. EMP does not import
-  tokens or provide its own login flow.
+  Sign in through Claude Code. CPA uses a Claude-Code-compatible Base URL and API
+  key. Add local-login model aliases or full IDs manually. Direct Anthropic API
+  remains a separate Anthropic API Provider.
 - Forward image inputs and supported inline document content only when the
   Claude model's configured capabilities and selected upstream support them.
   Codex executes tool calls, and replies remain buffered until generation

@@ -242,7 +242,7 @@ EMP v0.9.0 至 v0.9.9 使用同一种加密迁移格式。当前版本可以导�
 
 使用 Claude 时，在 Web UI 中选择 **Add Provider → Claude**，再选 **Local Claude subscription** 或 **CPA**。两种方式都需要安装 Claude Code CLI。
 
-- **Local Claude subscription** 复用当前操作系统用户的 Claude Code 订阅登录，不需要 URL 或 API Key。每次请求前，EMP 会检查是否已通过 Claude Code 登录 Claude.ai 订阅；CLI API Key 和 Console 登录不适用于本机模式。若需登录，请在 Claude Code 中完成。EMP 不导入令牌，也不提供单独的登录流程。使用 **Add model** 手动添加别名或完整模型 ID，之后即可在 Codex 模型选择器中选择。
+- **Local Claude subscription** 使用当前操作系统用户的 Claude Code 订阅登录。每次请求前，EMP 会检查 Claude.ai 订阅登录；CLI API Key 和 Console 登录不适用于本机模式。若需登录，请在 Claude Code 中登录。使用 **Add model** 手动添加别名或完整模型 ID，即可在 Codex 模型选择器中选择。
 - **CPA** 使用兼容 Claude Code 的 CPA Base URL 和 API Key。直接连接 Anthropic API 时，请另加 **Anthropic API** Provider。
 
 只有当前原生账号时，可以跳过导入账号和 Provider：在“当前 Codex 登录 → 编辑”
