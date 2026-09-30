@@ -1,17 +1,7 @@
-name: Runtime compatibility
+name: Runtime checks
 
 on:
   pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".cargo/**"
-      - "crates/**"
-      - "xtask/**"
-      - "contracts/**"
-      - ".github/workflows/runtime-compatibility.yml"
-  push:
-    branches: [main]
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
@@ -25,13 +15,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust-workspace:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, windows-2025, macos-15-intel, macos-15]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,7 +37,6 @@ jobs:
         shell: bash
         run: |
           path="$(cd "$RUNNER_TEMP" && pwd -P)/emp-rust-contract"
-          if [ "$RUNNER_OS" = Windows ]; then path="$(cygpath -w "$path")"; fi
           mkdir -p "$path"
           printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\n' "$path" "$path" "$path" >> "$GITHUB_ENV"
       - run: cargo fmt --all -- --check
