@@ -1,5 +1,7 @@
 //! Release discovery, verified download, and handoff to the replacement worker.
+pub(super) mod diagnostics;
 mod operations;
+pub use diagnostics::UpdateDiagnostic;
 #[cfg(test)]
 mod tests;
 
@@ -23,6 +25,7 @@ const MAX_REDIRECTS: usize = 10;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
+    pub failure: Option<UpdateDiagnostic>,
     pub state: String,
     pub current_version: String,
     pub latest_version: Option<String>,
@@ -37,6 +40,8 @@ pub struct Snapshot {
 pub struct UpdateManager(Arc<Inner>);
 
 struct Inner {
+    diagnostic: Mutex<UpdateDiagnostic>,
+    diagnostic_path: Option<PathBuf>,
     snapshot: Mutex<Snapshot>,
     start_transition: Mutex<()>,
     asset: Mutex<Option<Asset>>,
@@ -152,7 +157,9 @@ impl UpdateManager {
         hooks: UpdateHooks,
     ) -> Result<Self> {
         let supported = installation_target(&executable).is_ok();
+        let diagnostic_path = diagnostics::path_for(&restart_args);
         let initial = Snapshot {
+            failure: diagnostic_path.as_deref().and_then(diagnostics::read),
             state: if installation_rolled_back {
                 "error".to_owned()
             } else {
@@ -187,6 +194,8 @@ impl UpdateManager {
             .build()
             .map_err(|_| UpdateError("update_failed"))?;
         Ok(Self(Arc::new(Inner {
+            diagnostic: Mutex::new(UpdateDiagnostic::default()),
+            diagnostic_path,
             snapshot: Mutex::new(initial),
             start_transition: Mutex::new(()),
             asset: Mutex::new(None),
@@ -208,6 +217,7 @@ impl UpdateManager {
             .lock()
             .map(|snapshot| snapshot.clone())
             .unwrap_or_else(|_| Snapshot {
+                failure: None,
                 state: "error".to_owned(),
                 current_version: String::new(),
                 latest_version: None,
@@ -282,26 +292,40 @@ pub fn installation_target(executable: &Path) -> Result<(PathBuf, String)> {
     }
 }
 
-fn create_job(parent: &Path) -> Result<PathBuf> {
+fn create_job(parent: &Path, manager: &UpdateManager) -> Result<PathBuf> {
     for _ in 0..10 {
         let path = parent.join(format!(".emp-update-{}-{}", std::process::id(), nonce()?));
         match fs::create_dir(&path) {
             Ok(()) => return Ok(path),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(manager.io_error("create_staging", error)),
         }
     }
     Err(UpdateError("update_failed"))
 }
 
+#[cfg(test)]
 fn probe_candidate_version(
     binary: &Path,
     version: &str,
     job: &Path,
     timeout: Duration,
 ) -> Result<()> {
+    probe_candidate_version_observed(binary, version, job, timeout, None)
+}
+fn probe_candidate_version_observed(
+    binary: &Path,
+    version: &str,
+    job: &Path,
+    timeout: Duration,
+    manager: Option<&UpdateManager>,
+) -> Result<()> {
+    let report = |error| match manager {
+        Some(manager) => manager.io_error("verify_version", error),
+        None => UpdateError::from(error),
+    };
     let output = job.join("candidate-version.stdout");
-    let stdout = fs::File::create(&output)?;
+    let stdout = fs::File::create(&output).map_err(report)?;
     let mut command = Command::new(binary);
     command
         .arg("--version")
@@ -317,15 +341,16 @@ fn probe_candidate_version(
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
     #[cfg(windows)]
-    let mut child = super::process::spawn_quiet(&mut command).map_err(|error| {
-        if error == UpdateError("worker_failed") {
-            UpdateError("update_failed")
-        } else {
-            error
-        }
-    })?;
+    let mut child =
+        super::process::spawn_quiet_reporting(&mut command, report).map_err(|error| {
+            if error == UpdateError("worker_failed") {
+                UpdateError("update_failed")
+            } else {
+                error
+            }
+        })?;
     #[cfg(not(windows))]
-    let mut child = command.spawn()?;
+    let mut child = command.spawn().map_err(report)?;
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
@@ -334,19 +359,29 @@ fn probe_candidate_version(
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                if let Some(manager) = manager
+                    && let Ok(mut diagnostic) = manager.0.diagnostic.lock()
+                {
+                    diagnostic.reason = Some("timeout".into());
+                }
                 return Err(UpdateError("update_failed"));
             }
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(error.into());
+                return Err(report(error));
             }
         }
     };
     if !status.success() {
+        if let Some(manager) = manager
+            && let Ok(mut diagnostic) = manager.0.diagnostic.lock()
+        {
+            diagnostic.exit_code = status.code();
+        }
         return Err(UpdateError("version_mismatch"));
     }
-    let stdout = fs::read(output)?;
+    let stdout = fs::read(output).map_err(report)?;
     if String::from_utf8_lossy(&stdout).trim() != format!("EMP {version}") {
         return Err(UpdateError("version_mismatch"));
     }

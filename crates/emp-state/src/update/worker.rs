@@ -58,7 +58,10 @@ fn write(path: &Path, value: &serde_json::Value) -> Result<()> {
     .map_err(|_| UpdateError("update_failed"))
 }
 fn phase(job: &Path, name: &str) {
-    let _ = write(&job.join("worker-status.json"), &json!({"phase":name}));
+    let _ = write(
+        &job.join("worker-status.json"),
+        &json!({"phase":name,"pid":std::process::id(),"timestamp":super::manager::diagnostics::timestamp()}),
+    );
 }
 fn touch(path: &Path) -> Result<()> {
     fs::OpenOptions::new()
@@ -117,6 +120,7 @@ pub fn run(plan_path: &Path) -> Result<u8> {
         plan.target.join(&plan.relative_binary)
     };
     let mut child = None;
+    let mut exit_code = None;
     let install = (|| -> Result<()> {
         phase(job, "replacing");
         fs::rename(&plan.target, &backup)?;
@@ -142,7 +146,8 @@ pub fn run(plan_path: &Path) -> Result<u8> {
                 touch(&job.join("success"))?;
                 return Ok(());
             }
-            if child.as_mut().unwrap().child.try_wait()?.is_some() {
+            if let Some(status) = child.as_mut().unwrap().child.try_wait()? {
+                exit_code = status.code();
                 break;
             }
             std::thread::sleep(Duration::from_millis(200));
@@ -151,6 +156,35 @@ pub fn run(plan_path: &Path) -> Result<u8> {
     })();
     if install.is_ok() {
         return Ok(0);
+    }
+    if let Err(error) = &install {
+        let stage = crate::read_file_limited(&job.join("worker-status.json"), 4096)
+            .ok()
+            .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+            .and_then(|value| {
+                value
+                    .get("phase")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned)
+            })
+            .filter(|value| {
+                matches!(
+                    value.as_str(),
+                    "replacing" | "starting" | "waiting_for_startup"
+                )
+            })
+            .unwrap_or_else(|| "worker".into());
+        let receipt = super::manager::UpdateDiagnostic {
+            stage,
+            error: error.0.into(),
+            timestamp: super::manager::diagnostics::timestamp(),
+            current_version: env!("CARGO_PKG_VERSION").into(),
+            target_version: Some(plan.version.clone()),
+            exit_code,
+            ..super::manager::UpdateDiagnostic::default()
+        };
+        let path = super::manager::diagnostics::path_for(&plan.args);
+        super::manager::diagnostics::save(path.as_deref(), &receipt);
     }
     phase(job, "restoring");
     if let Some(child) = &mut child {

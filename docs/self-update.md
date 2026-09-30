@@ -85,6 +85,14 @@ This is binary rollback, not rollback for future data migrations. The staging
 directory contains only fixed phase diagnostics, without exception text, account
 information, or request data.
 
+The most recent failed attempt is also saved as `state/update-last-error.json`
+beside the user configuration. This one small file is overwritten on the next
+failure and survives cleanup of a failed staging directory. It records the
+failed stage and available HTTP status, system error number or child exit code;
+it does not store exception text, URLs, arguments, account data or credentials.
+The update dialog shows the failure stage. If the receipt cannot be saved, the
+same fixed fields remain in the process console and current management state.
+
 The source tests cover release selection, URL boundaries, checksums, archive
 selection, drain behavior, management authorization, and binary rollback. Native
 packaged replacement must also be smoke-tested on each target OS before claiming

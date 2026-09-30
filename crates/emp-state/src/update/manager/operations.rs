@@ -43,21 +43,28 @@ impl UpdateManager {
             _ => return Err(UpdateError("update_unavailable")),
         };
         let manager = self.clone();
-        if std::thread::Builder::new()
+        if let Err(error) = std::thread::Builder::new()
             .name("emp-update".to_owned())
             .spawn(move || {
+                manager.stage(if check {
+                    "check_release"
+                } else {
+                    "prepare_install"
+                });
                 let result = if check {
                     manager.check()
                 } else {
                     manager.install()
                 };
                 if let Err(error) = result {
+                    manager.failed(error);
                     let latest = manager.snapshot().latest_version;
                     manager.set("error", error.0, latest, 0);
                 }
             })
-            .is_err()
         {
+            self.io_error("start_update", error);
+            self.failed(UpdateError("update_failed"));
             let latest = self.snapshot().latest_version;
             self.set("error", "update_failed", latest, 0);
             return Err(UpdateError("update_failed"));
@@ -82,13 +89,17 @@ impl UpdateManager {
             return Ok(());
         }
         if !response.status().is_success() {
+            self.http_error(response.status().as_u16());
             return Err(UpdateError("check_failed"));
         }
         let mut raw = Vec::new();
         response
             .take((MAX_RELEASE_BYTES + 1) as u64)
             .read_to_end(&mut raw)
-            .map_err(|_| UpdateError("update_failed"))?;
+            .map_err(|error| {
+                self.io_error("read_release", error);
+                UpdateError("update_failed")
+            })?;
         if raw.len() > MAX_RELEASE_BYTES {
             return Err(UpdateError("invalid_release"));
         }
@@ -102,6 +113,7 @@ impl UpdateManager {
             )?;
         #[cfg(not(target_os = "linux"))]
         let migration = false;
+        self.stage("parse_release");
         match latest_asset(&raw, &desired, &snapshot.current_version, &self.0.endpoints)? {
             Some(asset) => {
                 let latest = asset.version.clone();
@@ -167,7 +179,8 @@ impl UpdateManager {
         if !target.exists() {
             return Err(UpdateError("directory_not_writable"));
         }
-        let job = create_job(parent)?;
+        self.stage("create_staging");
+        let job = create_job(parent, self)?;
         let result = self.install_job(&asset, &target, &relative, &job);
         if result.is_err() {
             let _ = fs::remove_dir_all(&job);
@@ -181,13 +194,21 @@ impl UpdateManager {
             self.set("downloading", "", Some(asset.version.clone()), progress);
         })?;
         self.set("verifying", "", Some(asset.version.clone()), 100);
+        self.stage("extract_package");
         let candidate = extract_candidate(&package, job, relative)?;
         let binary = if relative.is_empty() {
             candidate.clone()
         } else {
             candidate.join(relative)
         };
-        probe_candidate_version(&binary, &asset.version, job, Duration::from_secs(30))?;
+        self.stage("verify_version");
+        probe_candidate_version_observed(
+            &binary,
+            &asset.version,
+            job,
+            Duration::from_secs(30),
+            Some(self),
+        )?;
 
         let worker = job.join(if cfg!(windows) {
             "worker.exe"
@@ -196,7 +217,9 @@ impl UpdateManager {
         });
         // The helper runs the protocol understood by this manager version. A separate copy also
         // lets Windows replace the original executable after its parent exits.
-        fs::copy(&self.0.executable, &worker)?;
+        self.stage("prepare_worker");
+        fs::copy(&self.0.executable, &worker)
+            .map_err(|error| self.io_error("prepare_worker", error))?;
         let pid = std::process::id();
         let birth = created(pid).ok_or(UpdateError("worker_failed"))?;
         let update_nonce = nonce()?;
@@ -209,18 +232,26 @@ impl UpdateManager {
             "version": asset.version,
             "nonce": update_nonce,
         });
+        self.stage("write_plan");
         crate::filesystem::atomic_write_private_state(
             &job.join("plan.json"),
             &serde_json::to_vec(&plan).map_err(|_| UpdateError("update_failed"))?,
         )
-        .map_err(|_| UpdateError("update_failed"))?;
+        .map_err(|error| {
+            if let Ok(mut diagnostic) = self.0.diagnostic.lock() {
+                diagnostic.reason = Some(format!("{error:?}"));
+            }
+            UpdateError("update_failed")
+        })?;
 
         self.set("waiting", "", Some(asset.version.clone()), 100);
+        self.stage("drain_requests");
         (self.0.begin_handoff)()?;
         let mut handoff_guard = HandoffGuard {
             reopen: Arc::clone(&self.0.reopen_handoff),
             armed: true,
         };
+        self.stage("start_worker");
         let mut worker_process = spawn(
             &worker,
             &[
@@ -230,15 +261,27 @@ impl UpdateManager {
             &[],
             false,
         )?;
+        self.stage("wait_worker");
         let deadline = Instant::now() + Duration::from_secs(30);
         while !job.join("worker-ready").is_file() {
-            if worker_process.child.try_wait()?.is_some() || Instant::now() >= deadline {
+            let status = worker_process
+                .child
+                .try_wait()
+                .map_err(|error| self.io_error("wait_worker", error))?;
+            if status.is_some() || Instant::now() >= deadline {
+                if let Ok(mut diagnostic) = self.0.diagnostic.lock() {
+                    diagnostic.exit_code = status.and_then(|status| status.code());
+                    if status.is_none() {
+                        diagnostic.reason = Some("timeout".into());
+                    }
+                }
                 worker_process.stop();
                 return Err(UpdateError("worker_failed"));
             }
             std::thread::sleep(Duration::from_millis(100));
         }
         self.set("installing", "", Some(asset.version.clone()), 100);
+        self.stage("shutdown_previous");
         if let Err(error) = (self.0.handoff)() {
             worker_process.stop();
             return Err(error);
@@ -273,7 +316,10 @@ impl UpdateManager {
                 .timeout(timeout)
                 .header("Accept", accept)
                 .send()
-                .map_err(|_| UpdateError(transport_error))?;
+                .map_err(|error| {
+                    self.transport_error(&error);
+                    UpdateError(transport_error)
+                })?;
             if !response.status().is_redirection() {
                 return Ok(response);
             }

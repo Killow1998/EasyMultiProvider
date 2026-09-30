@@ -2,6 +2,11 @@
 
 ## 0.12.6 (2026-09-30)
 
+- Save the latest update failure with its stage, HTTP status or available system
+  error code. Keep this small receipt after staging cleanup and across restarts,
+  and show a specific failure stage in the update dialog. Updater phase receipts
+  include process identity and time; startup failures record the child exit code.
+
 - Align Credit and reset controls in a shared central account column with stable
   widths and right-aligned amounts. Place Delete before Edit, Refresh and Trend
   so their positions match for Native and imported accounts. Keep the complete
