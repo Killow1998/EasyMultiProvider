@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-const COMPATIBILITY: &[&str] = &["supported", "unsupported", "unavailable", "unknown"];
+const COMPATIBILITY: &[&str] = &["available", "unavailable", "unknown"];
 const RUNTIME_SOURCES: &[&str] = &[
     "configured",
     "codex_app",
@@ -361,6 +361,22 @@ fn version_value(value: Option<&str>) -> Value {
         .map_or(Value::Null, |value| Value::String(value.to_owned()))
 }
 
+fn host_version_value(value: Option<&str>) -> Value {
+    value
+        .filter(|value| {
+            valid_version(value) || {
+                let fields = value.split('.').collect::<Vec<_>>();
+                fields.len() == 4
+                    && fields.iter().all(|field| {
+                        !field.is_empty()
+                            && field.len() <= 5
+                            && field.bytes().all(|b| b.is_ascii_digit())
+                    })
+            }
+        })
+        .map_or(Value::Null, |value| Value::String(value.to_owned()))
+}
+
 fn runtime_report(state: &ServerState) -> Value {
     let compatibility = crate::services::runtime::compatibility_snapshot(state, false);
     let sync = crate::services::integration::integration_summary_with_result(state, None)
@@ -388,6 +404,7 @@ fn runtime_report(state: &ServerState) -> Value {
             let object = item.as_object()?;
             Some(json!({
                 "version": version_value(object.get("installed").and_then(Value::as_str)),
+                "host_version": host_version_value(object.get("host_version").and_then(Value::as_str)),
                 "compatibility": choice(object.get("status").and_then(Value::as_str), COMPATIBILITY),
                 "source": choice(object.get("source").and_then(Value::as_str), RUNTIME_SOURCES),
                 "selected": object.get("helper").and_then(Value::as_bool) == Some(true),
@@ -408,6 +425,7 @@ fn runtime_report(state: &ServerState) -> Value {
     ];
     json!({
         "version": version_value(compatibility.get("installed").and_then(Value::as_str)),
+        "host_version": host_version_value(compatibility.get("host_version").and_then(Value::as_str)),
         "compatibility": choice(compatibility.get("status").and_then(Value::as_str), COMPATIBILITY),
         "source": choice(compatibility.get("source").and_then(Value::as_str), RUNTIME_SOURCES),
         "state": choice(Some(raw_state), &runtime_states),
@@ -518,13 +536,14 @@ pub(crate) fn read(state: &ServerState) -> Vec<u8> {
 mod tests {
     use super::{
         COMPATIBILITY, CREDENTIAL_STATES, ConfigPlatform, RUNTIME_SOURCES, choice,
-        configuration_path_mask, desktop_config_path, quota_status, valid_version,
+        configuration_path_mask, desktop_config_path, host_version_value, quota_status,
+        valid_version,
     };
     use serde_json::json;
 
     #[test]
     fn support_report_allowlists_reject_unknown_values() {
-        assert_eq!(choice(Some("supported"), COMPATIBILITY), "supported");
+        assert_eq!(choice(Some("available"), COMPATIBILITY), "available");
         assert_eq!(choice(Some("secret-path"), COMPATIBILITY), "unknown");
         assert_eq!(choice(Some("invalid"), CREDENTIAL_STATES), "invalid");
         assert_eq!(choice(None, CREDENTIAL_STATES), "unknown");
@@ -544,6 +563,23 @@ mod tests {
         for invalid in ["", "0.11", "12345.1.1", "1.2.1234567", "1.2.3+", "1.2.3 x"] {
             assert!(!valid_version(invalid), "{invalid}");
         }
+    }
+
+    #[test]
+    fn host_metadata_allows_msix_versions_without_changing_engine_validation() {
+        assert_eq!(
+            host_version_value(Some("26.915.4065.0")),
+            json!("26.915.4065.0")
+        );
+        assert_eq!(
+            host_version_value(Some("26.924.22138")),
+            json!("26.924.22138")
+        );
+        assert!(!valid_version("26.915.4065.0"));
+        assert_eq!(
+            host_version_value(Some("file:///private/package")),
+            json!(null)
+        );
     }
 
     #[test]

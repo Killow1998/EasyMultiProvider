@@ -137,6 +137,11 @@ pub(crate) fn responses_request(
             ));
         }
     };
+    if crate::services::claude_cli::selected(&route)
+        && let Err(error) = crate::services::claude_cli::preflight_input(&body)
+    {
+        return ResponsesRequestResult::Buffered(error.http_response());
+    }
     let ids = match projection_ids() {
         Ok(ids) => ids,
         Err(_) => {

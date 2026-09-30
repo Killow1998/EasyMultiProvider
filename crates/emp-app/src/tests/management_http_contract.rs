@@ -245,6 +245,36 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     )));
     assert!(applied.contains("model_catalog_json"));
     assert!(applied.contains("[features]\nweb_search = true"));
+
+    // An idle desktop session may keep its writer lock even with no HTTP
+    // request in flight. Both buttons must explain that blocker and leave
+    // EMP forwarding until the session closes.
+    rusqlite::Connection::open(root.join("state_5.sqlite"))
+        .unwrap()
+        .execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT);")
+        .unwrap();
+    let locks = root.join("thread-writer-locks");
+    std::fs::create_dir_all(&locks).unwrap();
+    let writer =
+        std::fs::File::create(locks.join("11111111-1111-4111-8111-111111111111.lock")).unwrap();
+    writer.lock().unwrap();
+    for endpoint in ["/api/integration/restore", "/api/quit"] {
+        let blocked = post(
+            &server,
+            endpoint,
+            br#"{"confirm_reload":true}"#,
+            &[&session_header(&server)],
+        );
+        assert!(blocked.starts_with("HTTP/1.1 409 "), "{blocked}");
+        assert!(
+            blocked.contains("\"code\":\"active_codex_writer\""),
+            "{blocked}"
+        );
+        assert!(blocked.contains("Close the ChatGPT/Codex app"), "{blocked}");
+        assert_eq!(std::fs::read_to_string(&codex_config).unwrap(), applied);
+        assert!(request(&server, "/healthz", &[]).starts_with("HTTP/1.1 200 OK\r\n"));
+    }
+    drop(writer);
     server.shutdown().unwrap();
     let restored = std::fs::read_to_string(&codex_config).unwrap();
     assert!(restored.contains("openai_base_url = \"native\""));
@@ -651,6 +681,31 @@ fn integration_reports_model_list_errors_without_undoing_saved_config() {
     assert_eq!(status["configuration"]["state"], "emp_applied");
     assert_eq!(status["runtime"]["state"], "verification_failed");
     assert_eq!(status["runtime"]["routing_verified"], false);
+
+    // Desktop clients may run normally without publishing this optional
+    // control socket. A missing endpoint does not establish process state.
+    let saved_config = std::fs::read(root.join("config.toml")).unwrap();
+    std::fs::remove_file(root.join("app-server-control/app-server-control.sock")).unwrap();
+    let unavailable = post(&server, "/api/integration/reload", b"{}", &[&session]);
+    assert!(
+        unavailable.starts_with("HTTP/1.1 200 OK\r\n"),
+        "{unavailable}"
+    );
+    let status = response_json(&unavailable);
+    assert_eq!(status["configuration"]["state"], "emp_applied");
+    assert_eq!(status["runtime"]["state"], "catalog_unverified");
+    assert_eq!(status["runtime"]["catalog_verified"], false);
+    assert_eq!(status["runtime"]["routing_verified"], false);
+    assert!(
+        status["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("not yet verified")
+    );
+    assert_eq!(
+        std::fs::read(root.join("config.toml")).unwrap(),
+        saved_config
+    );
     server.shutdown().unwrap();
 }
 

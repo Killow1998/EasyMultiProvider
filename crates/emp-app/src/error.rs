@@ -10,6 +10,7 @@ pub(crate) enum AppError {
     HostNotLoopback,
     Io(std::io::Error),
     ServerStopped,
+    NativeRestoreBlocked(&'static str),
     ServiceOwned,
     RandomUnavailable,
     WebSession(WebSessionError),
@@ -33,6 +34,9 @@ impl std::fmt::Display for AppError {
                 formatter.write_str("another EMP service owns this configuration")
             }
             Self::ServerStopped => formatter.write_str("server task stopped before shutdown"),
+            Self::NativeRestoreBlocked(reason) => {
+                write!(formatter, "native restoration blocked: {reason}")
+            }
             Self::RandomUnavailable => formatter.write_str("secure randomness is unavailable"),
             Self::WebSession(error) => write!(formatter, "{error}"),
             Self::Config(error) => write!(formatter, "{error}"),

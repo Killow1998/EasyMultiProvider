@@ -19,6 +19,11 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
+#[cfg(any(target_os = "macos", all(test, unix)))]
+mod macos;
+mod prepared;
+pub use prepared::PreparedExecutable;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TrustFailure {
     /// The target or an ancestor cannot be inspected.

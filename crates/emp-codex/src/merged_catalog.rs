@@ -271,11 +271,7 @@ fn external_entry(model: &Value, template: &Value, provider: &Value) -> Value {
                 && nonempty(model, "resolved_protocol")
                     .or_else(|| nonempty(provider, "resolved_protocol"))
                     == Some("responses")));
-    let input_modalities = if claude_cli {
-        vec!["text".to_owned()]
-    } else {
-        codex_input_modalities(model.get("input_modalities"))
-    };
+    let input_modalities = codex_input_modalities(model.get("input_modalities"));
     let supports_image_detail_original =
         !claude_cli && model.get("supports_image_detail_original") == Some(&Value::Bool(true));
     let friendly = text(model, "display_name").trim();

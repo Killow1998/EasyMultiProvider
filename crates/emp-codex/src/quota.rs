@@ -297,6 +297,17 @@ pub fn validated_reset_credit_id(value: Option<&str>) -> Result<Option<&str>, Qu
 
 /// Classify one JSON-RPC error without exposing its upstream URL or body.
 pub fn quota_rpc_error(method: &str, error: &Value) -> QuotaError {
+    if error.get("code").and_then(Value::as_i64) == Some(-32601) {
+        let message = match method {
+            "account/rateLimitResetCredit/consume" => {
+                "This Codex engine does not provide quota reset"
+            }
+            "account/rateLimits/read" => "This Codex engine does not provide quota reads",
+            "account/read" => "This Codex engine does not provide account reads",
+            _ => "This Codex engine does not provide the requested operation",
+        };
+        return QuotaError::new(message, "quota_operation_unavailable");
+    }
     let message = error
         .as_object()
         .and_then(|error| error.get("message"))

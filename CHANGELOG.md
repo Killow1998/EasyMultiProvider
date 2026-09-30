@@ -1,7 +1,19 @@
 # Changelog
 
-## 0.12.4 (2026-09-29)
+## 0.12.4 (2026-09-30)
 
+- Recognize the ChatGPT App's nested macOS engine and verified Windows engine
+  cache. Show App/extension and engine versions separately; check operations
+  when used instead of rejecting every client below Codex 0.158. Keep existing
+  model catalogs when an engine version cannot be observed.
+- Support signed macOS App engines in shared Applications installations.
+  Cached version reads remain responsive while runtime discovery is running.
+- Report an unavailable catalog control interface as an unverified catalog,
+  without claiming the App has stopped. Explain active conversation locks when
+  native restoration or exit must wait, while keeping EMP running.
+- Repair upgrades from older Windows releases without changing account keys or
+  encrypted credentials, and write private state without requiring permission
+  to change file ownership.
 - Add one global preference to show or hide context labels across Native,
   Subscription and External Provider catalog routes. Old migration bundles
   without the preference preserve the destination value; the setting does not
@@ -18,10 +30,16 @@
   active dots mark dispatched requests and their tooltips show the in-flight
   count; recent dots mark completed work. Activity comes from the authenticated
   event stream; a disconnect clears active confidence.
-- Allow a Provider to use an installed Claude Code CLI with its existing Base
-  URL and API key. Claude mode accepts Anthropic Messages or automatic
-  detection that resolves to Messages, handles text only, returns tool calls
-  for Codex to execute, and buffers replies before display.
+- Add two Claude routes through the installed Claude Code CLI: Local Claude
+  subscription reuses the current OS user's Claude Code sign-in, which EMP checks
+  before each request; CLI API-key and Console auth do not qualify for this mode.
+  Sign in through Claude Code. CPA uses a Claude-Code-compatible Base URL and API
+  key. Add local-login model aliases or full IDs manually. Direct Anthropic API
+  remains a separate Anthropic API Provider.
+- Forward image inputs and supported inline document content only when the
+  Claude model's configured capabilities and selected upstream support them.
+  Codex executes tool calls, and replies remain buffered until generation
+  finishes.
 
 ## 0.12.3 (2026-09-29)
 

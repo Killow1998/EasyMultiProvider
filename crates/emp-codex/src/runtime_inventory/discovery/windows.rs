@@ -80,7 +80,9 @@ pub(super) fn windows_npm_native_candidate(
     })
 }
 #[cfg(windows)]
-pub(super) fn registered_windows_codex_package_root(platform: RuntimePlatform) -> Option<PathBuf> {
+pub(super) fn registered_windows_codex_package_root(
+    platform: RuntimePlatform,
+) -> Option<(PathBuf, String)> {
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
     use windows_sys::Win32::Storage::Packaging::Appx::{
@@ -156,6 +158,7 @@ pub(super) fn registered_windows_codex_package_root(platform: RuntimePlatform) -
         return None;
     }
 
+    let version = registered_package_version(&full_name)?;
     let full_name = full_name
         .encode_utf16()
         .chain(std::iter::once(0))
@@ -175,7 +178,10 @@ pub(super) fn registered_windows_codex_package_root(platform: RuntimePlatform) -
         return None;
     }
     let end = path.iter().position(|unit| *unit == 0)?;
-    Some(PathBuf::from(std::ffi::OsString::from_wide(&path[..end])))
+    Some((
+        PathBuf::from(std::ffi::OsString::from_wide(&path[..end])),
+        version,
+    ))
 }
 
 #[cfg(any(windows, test))]
@@ -218,4 +224,31 @@ pub(super) fn wide_string_in_buffer(pointer: *mut u16, buffer: &[u16]) -> Option
     let tail = buffer.get(offset..)?;
     let length = tail.iter().position(|unit| *unit == 0)?;
     String::from_utf16(&tail[..length]).ok()
+}
+
+#[cfg(any(windows, test))]
+fn registered_package_version(full_name: &str) -> Option<String> {
+    let version = full_name.split('_').nth(1)?;
+    let parts = version.split('.').collect::<Vec<_>>();
+    (parts.len() == 4
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.parse::<u16>().is_ok()))
+    .then(|| version.to_owned())
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    #[test]
+    fn host_version_comes_from_registered_package_identity() {
+        assert_eq!(
+            super::registered_package_version("OpenAI.Codex_26.915.4065.0_x64__2p2nqsd0c76g0")
+                .as_deref(),
+            Some("26.915.4065.0")
+        );
+        assert_eq!(
+            super::registered_package_version("OpenAI.Codex_not-a-version_x64__2p2nqsd0c76g0"),
+            None
+        );
+    }
 }

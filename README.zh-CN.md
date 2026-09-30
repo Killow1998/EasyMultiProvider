@@ -49,8 +49,10 @@ EMP 在本机运行，主要解决两件事：
 - 在模型、Provider 和 Subscription 账户旁查看请求活动：活动点标记进行中的请求，
   提示文字显示数量；近期状态表示刚完成的请求并会自动过期；事件流断开时会清除活动状态。
 - 通过 Web UI 添加官方或自建 Provider。
-- 可选地通过本机安装的 Claude Code CLI 处理文本请求，复用 Provider 的 Base URL 和
-  API Key；协议须为 Anthropic Messages，或自动检测为该协议。工具调用由 Codex 执行，回复会缓冲后显示。
+- 通过已安装的 Claude Code CLI 使用 Claude：可复用当前操作系统用户的 Claude Code
+  登录，也可连接兼容 Claude Code 的 CPA Base URL 和 API Key。本地登录模型需通过
+  “Add model”手动添加别名或完整模型 ID。工具调用由 Codex 执行，回复在生成完成后显示。
+- 只有当 Claude 模型的已配置能力和所选上游都支持时，才会转发图片输入和受支持的内联文档内容。
 - 拉取 Provider 模型，自由选择导入模型，修改上下文窗口，执行测试并隐藏
   不常用模型。
 - Provider 报告或支持时，保留文本、图片、推理和结构化工具调用能力。
@@ -82,7 +84,8 @@ EMP 在本机运行，主要解决两件事：
 EMP 不会捆绑或替代 Codex。EMP 只修改共用的 `~/.codex/config.toml`，CLI、App、
 IDE 插件等所有 Codex 客户端都会读取这份设置，所以不需要选择客户端；多个客户端和
 workspace 可以同时工作。查询账户余量时，EMP 会在已知位置（Codex App、`.codex`
-托管 runtime、VS Code/Cursor 插件、`PATH` 中的 `codex`）找一个受支持的 Codex 来执行。
+托管 runtime、VS Code/Cursor 插件、`PATH` 中的 `codex`）选择受信任、可执行且已观测到
+版本的 Codex 引擎来执行。
 Unix 上还会查找 `NVM_DIR`、`$XDG_CONFIG_HOME/nvm`、`~/.config/nvm` 和 `~/.nvm`
 中的安装。即使桌面启动器的 `PATH` 不含 nvm，npm 安装的 Codex 也可以使用同一安装中
 受信任的 Node，无需手动创建 `codex` 或 `node` 链接。
@@ -98,16 +101,22 @@ EMP 不会停止或重启你正在使用的 Codex 后端。余量查询使用独
 Codex 下次连到 EMP（拉取模型列表或发起对话）时，EMP 会通过本地控制通道读取
 `model/list`，并直接推送结果到 Web UI，不做后台轮询；也可以手动检查。
 目录匹配说明模型已可见，不代表已有会话采用了新的服务商设置。检查只读取状态，
-不会重新加载后端，也不会把目录匹配当作请求路由已经切换的证明。
+不会重新加载后端，也不会把目录匹配当作请求路由已经切换的证明。控制接口不可用时，
+EMP 会显示设置已保存、共享模型目录尚未验证，不据此判断 App 已停止。
 
 Linux 同时支持扫描当前 `CODEX_HOME/plugins/.plugin-appserver/codex`，
 其他 AppImage 或发行版的安装布局仍需单独验证。
 
-Codex `0.158.0` 是最低接受版本。新模型发布，以及客户端协议、登录或历史格式发生变化时，
-会重新评估兼容性。更新版本可以接入，但未经验证不保证兼容；低于最低版本的客户端会收到升级提示。
+EMP 支持 Codex CLI、桌面 App 和 IDE 扩展，不以统一的最低引擎版本拒绝接入。
+余量读取、额度重置和模型目录检查分别取决于所用引擎提供的接口；缺少某个接口时，
+只报告对应操作不可用。认证、协议和对话历史保护仍然生效。
 
-EMP 会自动刷新模型列表。已打开的 Codex 0.158 模型选择器可能需要重新加载；界面会显示
-现有的重新加载提示。
+诊断信息分别显示 App／扩展的宿主版本与 Codex 引擎版本。“引擎可用”表示 EMP
+能够运行它并读到版本，不代表所有功能都已验证。模型目录刷新使用实际观测到的
+引擎版本；无法确定时保留已有缓存，并提示该次刷新不可用。
+
+EMP 会自动刷新模型列表。已打开的 Codex 模型选择器可能需要重新加载；界面会提示
+观测到的目录是否仍与已保存设置不同。
 
 外部子任务委派、后续任务和工具调用的说明见[子任务兼容性](docs/external-collaboration.md)。
 
@@ -120,9 +129,9 @@ Subscription 的编辑窗口可以逐模型设置上下文 token 数。留空使
 迁移，不覆盖目标机器 Native 的设置。外部 Provider 模型同样按 95% 计算，
 例如 256,000 的窗口在 Codex 模型列表中显示为 243K。
 
-在“模型显示”标题旁点击眼睛按钮，可统一显示或隐藏原生、Subscription 和
-External Provider 模型的上下文标签。此操作只改变模型目录标签，不会修改上下文窗口
-或请求限制。
+在右侧“模型显示”区域使用全局眼睛开关，可统一显示或隐藏该区域及 Codex 模型选择器中的
+Native、Subscription 和 External Provider 上下文标签。左侧模型列表不重复显示这些标签。
+此操作只改变模型目录标签，不会修改上下文窗口或请求限制。
 
 ### 预构建安装包
 
@@ -237,6 +246,11 @@ EMP v0.9.0 至 v0.9.9 使用同一种加密迁移格式。当前版本可以导�
 3. 按需调整模型显示状态或上下文窗口。
 4. 点击 **将 EMP 应用于 Codex**。
 5. 正常启动 Codex，通过 `/model` 或 App 模型菜单选择模型。
+
+使用 Claude 时，在 Web UI 中选择 **Add Provider → Claude**，再选 **Local Claude subscription** 或 **CPA**。两种方式都需要安装 Claude Code CLI。
+
+- **Local Claude subscription** 使用当前操作系统用户的 Claude Code 订阅登录。每次请求前，EMP 会检查 Claude.ai 订阅登录；CLI API Key 和 Console 登录不适用于本机模式。若需登录，请在 Claude Code 中登录。使用 **Add model** 手动添加别名或完整模型 ID，即可在 Codex 模型选择器中选择。
+- **CPA** 使用兼容 Claude Code 的 CPA Base URL 和 API Key。直接连接 Anthropic API 时，请另加 **Anthropic API** Provider。
 
 只有当前原生账号时，可以跳过导入账号和 Provider：在“当前 Codex 登录 → 编辑”
 中隐藏模型，在“模型显示”中修改显示名称，保存后点击“将 EMP 应用于

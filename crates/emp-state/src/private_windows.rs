@@ -13,8 +13,9 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
-    EXPLICIT_ACCESS_W, GRANT_ACCESS, GetSecurityInfo, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT,
-    SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+    EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, GetSecurityInfo, NO_MULTIPLE_TRUSTEE,
+    SE_FILE_OBJECT, SetEntriesInAclW, SetNamedSecurityInfoW, SetSecurityInfo, TRUSTEE_IS_SID,
+    TRUSTEE_IS_USER, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, CONTAINER_INHERIT_ACE,
@@ -24,8 +25,9 @@ use windows_sys::Win32::Security::{
     TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ALL_ACCESS, FILE_ATTRIBUTE_REPARSE_POINT, FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW,
-    VOLUME_NAME_DOS,
+    FILE_ALL_ACCESS, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_NAME_NORMALIZED, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    GetFinalPathNameByHandleW, READ_CONTROL, ReOpenFile, VOLUME_NAME_DOS, WRITE_DAC,
 };
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -128,26 +130,8 @@ pub(super) fn set_private_directory(path: &Path) -> Result<(), FilesystemError> 
     let user = CurrentUser::load()?;
     let acl = private_acl(user.sid(), true)?;
     let mut wide = wide_path(path);
-    // SAFETY: all pointers remain valid for the call and the ACL is owned by
-    // `acl` until after Windows copies it into the object security descriptor.
-    let status = unsafe {
-        SetNamedSecurityInfoW(
-            wide.as_mut_ptr(),
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION
-                | DACL_SECURITY_INFORMATION
-                | PROTECTED_DACL_SECURITY_INFORMATION,
-            user.sid(),
-            null_mut(),
-            acl.0.cast(),
-            null(),
-        )
-    };
-    if status == ERROR_SUCCESS {
-        Ok(())
-    } else {
-        Err(FilesystemError::KeyDirectoryUnavailable)
-    }
+    set_named_private_acl(&mut wide, user.sid(), acl.0.cast())
+        .map_err(|_| FilesystemError::KeyDirectoryUnavailable)
 }
 
 pub(super) fn set_private_file(file: &File) -> Result<(), FilesystemError> {
@@ -158,17 +142,53 @@ pub(super) fn set_private_file(file: &File) -> Result<(), FilesystemError> {
     // of the already-open file, then let SetNamedSecurityInfoW acquire the
     // access it needs without weakening the file's ordinary data handle.
     let mut wide = path_for_file_handle(file)?;
-    // SAFETY: the path and ACL buffers remain live for this synchronous call.
+    set_named_private_acl(&mut wide, user.sid(), acl.0.cast())
+}
+
+fn set_named_private_acl(
+    path: &mut [u16],
+    user: PSID,
+    acl: *const ACL,
+) -> Result<(), FilesystemError> {
+    let mut owner = null_mut();
+    let mut descriptor = null_mut();
+    // SAFETY: path is null-terminated; descriptor owns the returned owner SID.
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            path.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            &mut descriptor,
+        )
+    };
+    let _descriptor = LocalAllocation(descriptor);
+    if status != ERROR_SUCCESS || owner.is_null() {
+        return Err(FilesystemError::ManagedFileUnavailable);
+    }
+    // A file owner can change its DACL without WRITE_OWNER. Request ownership
+    // changes only when needed: Python-created updater directories often grant
+    // Modify rather than FullControl, even to their own creator.
+    let change_owner = unsafe { EqualSid(owner, user) } == 0;
+    let information = DACL_SECURITY_INFORMATION
+        | PROTECTED_DACL_SECURITY_INFORMATION
+        | if change_owner {
+            OWNER_SECURITY_INFORMATION
+        } else {
+            0
+        };
+    // SAFETY: the path, user SID, and ACL remain live through the call.
     let status = unsafe {
         SetNamedSecurityInfoW(
-            wide.as_mut_ptr(),
+            path.as_mut_ptr(),
             SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION
-                | DACL_SECURITY_INFORMATION
-                | PROTECTED_DACL_SECURITY_INFORMATION,
-            user.sid(),
+            information,
+            if change_owner { user } else { null_mut() },
             null_mut(),
-            acl.0.cast(),
+            acl,
             null(),
         )
     };
@@ -238,12 +258,13 @@ pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemErr
     if owner.is_null() || unsafe { EqualSid(owner, user.sid()) } == 0 {
         return Err(FilesystemError::KeyFileNotOwned);
     }
-    if dacl.is_null() || !descriptor_dacl_is_protected(descriptor) {
+    if dacl.is_null() {
         return Err(FilesystemError::KeyFileNotPrivate);
     }
 
-    // EMP's DACL contains exactly one full-control allow ACE for this user.
-    // Requiring that shape rejects inherited or group access.
+    // Require exactly one full-control allow ACE for this user before migrating
+    // an inherited legacy ACL. Never repair a key that grants another principal
+    // access: that is a different security condition, not a missing flag.
     let mut information: ACL_SIZE_INFORMATION = unsafe { zeroed() };
     // SAFETY: dacl belongs to the live security descriptor and the output
     // buffer has the documented structure and size.
@@ -275,6 +296,44 @@ pub(super) fn validate_private_key_file(file: &File) -> Result<(), FilesystemErr
     let ace_sid = (&ace.SidStart as *const u32).cast_mut().cast::<c_void>();
     // SAFETY: SidStart is the variable-length SID at the end of this ACE.
     if unsafe { EqualSid(ace_sid, user.sid()) } == 0 {
+        return Err(FilesystemError::KeyFileNotPrivate);
+    }
+    if !descriptor_dacl_is_protected(descriptor) {
+        protect_legacy_key(file, &user)?;
+    }
+    Ok(())
+}
+
+fn protect_legacy_key(file: &File, user: &CurrentUser) -> Result<(), FilesystemError> {
+    // Reopen the validated object itself, not its pathname. The extra handle
+    // needs only DACL access and cannot be redirected to a substituted file.
+    let handle = unsafe {
+        ReOpenFile(
+            file.as_raw_handle() as HANDLE,
+            READ_CONTROL | WRITE_DAC,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(FilesystemError::KeyFileNotPrivate);
+    }
+    let handle = OwnedHandle(handle);
+    let acl = private_acl(user.sid(), false)?;
+    // SAFETY: the handle identifies the already-validated key; acl remains live.
+    // This changes neither the key bytes nor its owner.
+    let status = unsafe {
+        SetSecurityInfo(
+            handle.0,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            acl.0.cast(),
+            null(),
+        )
+    };
+    if status != ERROR_SUCCESS {
         return Err(FilesystemError::KeyFileNotPrivate);
     }
     Ok(())
@@ -325,27 +384,5 @@ fn wide_path(path: &Path) -> Vec<u16> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn applies_and_validates_a_current_user_only_file_acl() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        set_private_directory(directory.path()).expect("private directory ACL");
-        let path = directory.path().join("private.txt");
-        let file = File::create(path).expect("create file");
-        set_private_file(&file).expect("private file ACL");
-        validate_private_key_file(&file).expect("validate private ACL");
-    }
-
-    #[test]
-    fn detects_directory_reparse_points() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let target = directory.path().join("target");
-        let link = directory.path().join("link");
-        fs::create_dir(&target).expect("target directory");
-        std::os::windows::fs::symlink_dir(&target, &link).expect("directory symlink");
-        let metadata = fs::symlink_metadata(link).expect("link metadata");
-        assert!(metadata_is_reparse(&metadata));
-    }
-}
+#[path = "private_windows/tests.rs"]
+mod tests;

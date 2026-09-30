@@ -1,4 +1,4 @@
-use emp_state::normalize_provider;
+use emp_state::{normalize_configuration, normalize_provider};
 use serde_json::{Value, json};
 
 /// Frozen provider fixture. Failure cases assert the stable key fragment
@@ -103,4 +103,27 @@ fn provider_normalization_rejects_unusable_values_with_field_fragments() {
             "{input}: {error:?} must name {fragment:?}"
         );
     }
+}
+
+#[test]
+fn claude_login_provider_round_trips_without_url_or_credentials() {
+    let raw = json!({
+        "providers":[{
+            "id":"claude-local",
+            "protocol":"anthropic_messages",
+            "execution_backend":"claude_cli",
+            "auth_mode":"claude_login"
+        }],
+        "models":[{"id":"claude-local/sonnet","provider":"claude-local","upstream_id":"sonnet"}]
+    });
+    let normalized = normalize_configuration(Some(&raw)).expect("normalized local login config");
+    let round_trip = normalize_configuration(Some(&normalized)).expect("config round trip");
+    let provider = &round_trip["providers"][0];
+
+    assert_eq!(provider["execution_backend"], "claude_cli");
+    assert_eq!(provider["auth_mode"], "claude_login");
+    assert_eq!(provider["base_url"], "");
+    assert_eq!(provider["api_key"], "");
+    assert_eq!(provider["api_key_file"], "");
+    assert_eq!(round_trip["models"][0]["upstream_id"], "sonnet");
 }

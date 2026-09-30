@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod executable_trust;
+pub use executable_trust::PreparedExecutable;
 pub mod history;
 pub mod installed_cli;
 pub mod management_views;

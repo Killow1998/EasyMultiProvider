@@ -29,10 +29,6 @@ fn read_account_cache(path: &std::path::Path) -> Option<Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
-fn client_version_or_minimum(observed: Option<String>) -> String {
-    observed.unwrap_or_else(emp_codex::runtime_inventory::minimum_codex)
-}
-
 pub(crate) fn refresh(state: &ServerState, id: &str) -> Result<Value, Vec<u8>> {
     let _poll = state.catalog_refresh.poll_gate().ok_or_else(internal)?;
     let (config, generation) = {
@@ -53,13 +49,18 @@ pub(crate) fn refresh(state: &ServerState, id: &str) -> Result<Value, Vec<u8>> {
         .as_str()
         .filter(|base| !base.is_empty())
         .ok_or_else(|| invalid("Subscription backend is unavailable"))?;
-    let client_version = client_version_or_minimum(
-        state
-            .backend
-            .integration
-            .inventory
-            .selected_trusted_version(),
-    );
+    // Version probing may prepare a signed desktop-engine snapshot. Do it
+    // explicitly here, after releasing the configuration mutex; persistence
+    // only reads the already verified observation and checks its identity.
+    state.backend.integration.inventory.snapshot(false);
+    let client_version = state
+        .backend
+        .integration
+        .inventory
+        .selected_trusted_version()
+        .ok_or_else(|| {
+            invalid("Codex engine version is unavailable; model refresh was not started")
+        })?;
     let source = (if id == "@native" {
         RefreshSource::native(state, &config, base, client_version)
     } else {

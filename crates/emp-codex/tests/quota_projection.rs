@@ -209,3 +209,29 @@ fn workspace_routing_failures_flag_the_imported_refresh_retry() {
         );
     }
 }
+
+#[test]
+fn missing_rpc_is_local_to_the_requested_operation() {
+    for (method, detail) in [
+        ("account/rateLimits/read", "quota reads"),
+        ("account/rateLimitResetCredit/consume", "quota reset"),
+        ("account/read", "account reads"),
+    ] {
+        let unavailable =
+            quota_rpc_error(method, &json!({"code":-32601,"message":"Method not found"}));
+        assert_eq!(unavailable.code(), "quota_operation_unavailable");
+        assert!(unavailable.to_string().contains(detail));
+        assert_ne!(
+            quota_rpc_error(
+                method,
+                &json!({"code":-32603,"message":"HTTP 401 Unauthorized"})
+            )
+            .code(),
+            "quota_operation_unavailable"
+        );
+        assert_ne!(
+            quota_rpc_error(method, &json!({"code":-32603,"message":"network timeout"})).code(),
+            "quota_operation_unavailable"
+        );
+    }
+}

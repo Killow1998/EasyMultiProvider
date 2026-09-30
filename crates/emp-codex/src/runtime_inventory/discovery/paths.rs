@@ -40,11 +40,13 @@ pub(super) fn runtime_file(path: &Path) -> Option<PathBuf> {
 /// Search `path_var` for a trusted `codex`. Empty and relative entries are
 /// skipped so a PATH such as `:/usr/bin` or `.:bin` never resolves against the
 /// current working directory.
+#[cfg(test)]
 pub(in crate::runtime_inventory) fn path_cli_in(path_var: &std::ffi::OsStr) -> Option<PathBuf> {
     let platform = RuntimePlatform::current()?;
     path_cli_in_for(path_var, platform)
 }
 
+#[cfg(test)]
 pub(super) fn path_cli_in_for(path_var: &OsStr, platform: RuntimePlatform) -> Option<PathBuf> {
     let path_extensions = std::env::var_os("PATHEXT");
     path_cli_in_with_extensions(path_var, platform, path_extensions.as_deref())
@@ -184,6 +186,10 @@ fn desktop_app_candidates(
             ] {
                 for name in ["ChatGPT.app", "Codex.app"] {
                     paths.push(root.join(name).join("Contents/Resources/codex"));
+                    paths
+                        .push(root.join(name).join(
+                            "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+                        ));
                 }
             }
         }
@@ -204,7 +210,28 @@ pub(super) fn app(
 ) -> Option<PathBuf> {
     desktop_app_candidates(home, user_home, platform, system_root, package_roots)
         .into_iter()
-        .find_map(|path| runtime_file(&path))
+        .find_map(|path| {
+            let canonical = runtime_file(&path)?;
+            let boundary = if platform.os == RuntimeOs::Macos {
+                path.ancestors()
+                    .filter(|p| p.extension().is_some_and(|s| s == "app"))
+                    .last()
+                    .map(Path::to_owned)
+            } else if platform.os == RuntimeOs::Windows {
+                package_roots
+                    .iter()
+                    .find(|root| path.starts_with(root))
+                    .cloned()
+            } else {
+                None
+            };
+            if let Some(boundary) = boundary
+                && !canonical.starts_with(boundary.canonicalize().ok()?)
+            {
+                return None;
+            }
+            Some(canonical)
+        })
 }
 /// Known nvm roots only. This reads their direct Node-version children and
 /// never sources shell startup files or walks the user's home recursively.

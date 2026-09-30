@@ -1,4 +1,4 @@
-use super::{client_version_or_minimum, refresh};
+use super::refresh;
 use crate::lifecycle::ServerHandle;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -138,7 +138,7 @@ fn start_server(
 
 #[test]
 fn model_refresh_uses_each_selected_runtime_version_for_query_and_user_agent() {
-    for version in ["0.158.6", "0.159.2"] {
+    for version in ["0.155.0-alpha.9.2", "0.159.2"] {
         let directory = tempfile::Builder::new()
             .prefix("emp-account-catalog-")
             .tempdir()
@@ -243,13 +243,20 @@ fn model_refresh_rechecks_account_ownership_after_the_upstream_request() {
 }
 
 #[test]
-fn minimum_version_is_used_only_when_inventory_has_no_observation() {
-    assert_eq!(
-        client_version_or_minimum(None),
-        emp_codex::runtime_inventory::minimum_codex()
+fn missing_engine_version_preserves_cached_catalog_and_refuses_refresh() {
+    let directory = tempfile::tempdir().unwrap();
+    let (server, auth_path) =
+        start_server(&directory, "http://127.0.0.1:1/v1", "0.155.0-alpha.9.2");
+    std::fs::remove_file(directory.path().join("fake-codex")).unwrap();
+    let cache = auth_path.parent().unwrap().join("models_cache.json");
+    let cached = br#"{"models":[{"slug":"preserved"}]}"#;
+    std::fs::write(&cache, cached).unwrap();
+    let response = refresh(&server.state, "demo");
+    let response = String::from_utf8(response.expect_err("no synthetic client version")).unwrap();
+    assert!(
+        response.contains("Codex engine version is unavailable"),
+        "{response}"
     );
-    assert_eq!(
-        client_version_or_minimum(Some("0.159.2".to_owned())),
-        "0.159.2"
-    );
+    assert_eq!(std::fs::read(&cache).unwrap(), cached);
+    server.shutdown().unwrap();
 }

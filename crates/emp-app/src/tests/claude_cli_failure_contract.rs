@@ -486,18 +486,42 @@ fn installed_cli_shutdown_cancels_held_cpa_request_while_client_remains_connecte
 }
 
 #[test]
-#[ignore = "requires trusted installed Claude Code CLI and host NSS/loopback access; run explicitly with --ignored"]
-fn installed_cli_rejects_input_modalities_before_cpa_but_keeps_tool_result_json() {
-    require_installed_trusted_cli();
+fn claude_cli_rejects_unresolvable_media_before_cpa_inference() {
     let cpa = RecordingCpa::replying(401, None);
     let (_directory, server) = claude_server(&cpa.base_url());
     let mut failures = Vec::new();
 
-    for (modality, explicit_message_type) in [
-        ("input_image", true),
-        ("input_file", true),
-        ("input_image", false),
-        ("input_file", false),
+    for (label, modality, explicit_message_type, media_fields) in [
+        (
+            "unresolved image file ID",
+            "input_image",
+            true,
+            json!({"file_id":"file-unavailable"}),
+        ),
+        (
+            "unresolved document file ID in shorthand message",
+            "input_file",
+            false,
+            json!({"file_id":"file-unavailable"}),
+        ),
+        (
+            "local document path reference",
+            "input_file",
+            true,
+            json!({"filename":"private.txt","file_url":"/private/fixture.txt"}),
+        ),
+        (
+            "audio input",
+            "input_audio",
+            true,
+            json!({"input_audio":{"data":"AAAA","format":"wav"}}),
+        ),
+        (
+            "video input",
+            "input_video",
+            true,
+            json!({"video_url":"https://video.invalid/sample.mp4"}),
+        ),
     ] {
         let mut body = request_body(false);
         if !explicit_message_type {
@@ -506,61 +530,48 @@ fn installed_cli_rejects_input_modalities_before_cpa_but_keeps_tool_result_json(
                 .expect("easy input message object")
                 .remove("type");
         }
+        let mut part = json!({"type":modality});
+        if let Some(fields) = media_fields.as_object() {
+            for (key, value) in fields {
+                part[key] = value.clone();
+            }
+        }
         body["input"][0]["content"]
             .as_array_mut()
             .expect("message content")
-            .push(json!({"type":modality,"file_id":"test-fixture"}));
+            .push(part);
         let request = serde_json::to_vec(&body).expect("unsupported modality JSON");
         let reply = bounded_post(&server, &request, CLI_CASE_BUDGET);
         let unexpected_requests = cpa.requests.try_iter().count();
         eprintln!(
-            "modality {modality}, explicit_type={explicit_message_type}: status {}, elapsed {:?}, CPA requests {unexpected_requests}",
+            "{label}: status {}, elapsed {:?}, CPA requests {unexpected_requests}",
             reply.status, reply.elapsed
         );
         if !(400..500).contains(&reply.status) {
             failures.push(format!(
-                "modality {modality} (explicit_type={explicit_message_type}) returned {}, elapsed {:?}",
-                reply.status,
-                reply.elapsed
+                "{label} returned {}, elapsed {:?}",
+                reply.status, reply.elapsed
             ));
         }
         if unexpected_requests != 0 {
+            failures.push(format!("{label} reached CPA {unexpected_requests} times"));
+        }
+        let error: Value = serde_json::from_slice(&reply.body).unwrap_or(Value::Null);
+        let error_text = error.to_string().to_ascii_lowercase();
+        if !error_text.contains("unsupported") && !error_text.contains("file") {
             failures.push(format!(
-                "modality {modality} (explicit_type={explicit_message_type}) reached CPA {unexpected_requests} times"
+                "{label} did not return an actionable media error: {error}"
             ));
         }
     }
 
-    let tool_result = json!({
-        "model":"demo/model", "stream":false,
-        "input":[
-            {"type":"message","role":"user","content":[{"type":"input_text","text":"previous request"}]},
-            {"type":"function_call","call_id":"call-fixture","name":"inspect","arguments":"{}"},
-            {"type":"function_call_output","call_id":"call-fixture","output":"{\"type\":\"input_image\",\"input_file\":\"ordinary result field\"}"},
-            {"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}
-        ],
-        "tools":[{"type":"function","name":"inspect","parameters":{"type":"object","properties":{}}}]
-    });
-    let request = serde_json::to_vec(&tool_result).expect("ordinary tool result JSON");
-    let reply = bounded_post(&server, &request, CLI_CASE_BUDGET);
     let cpa_requests = cpa.finish();
     server.shutdown().expect("shutdown isolated EMP server");
-
-    if reply.status != 401 {
+    if !cpa_requests.is_empty() {
         failures.push(format!(
-            "ordinary tool result returned {}, elapsed {:?}, body {}",
-            reply.status,
-            reply.elapsed,
-            String::from_utf8_lossy(&reply.body)
-        ));
-    }
-    if cpa_requests.len() != 1 {
-        failures.push(format!(
-            "ordinary tool result reached CPA {} times",
+            "unsupported media reached CPA {} times",
             cpa_requests.len()
         ));
-    } else {
-        assert_one_cpa_request(&cpa_requests[0]);
     }
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }

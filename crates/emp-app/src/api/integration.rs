@@ -225,8 +225,8 @@ pub(crate) fn management_integration_request(
                         409,
                         None,
                         Some(json!({
-                            "code":"native_history_restore_blocked",
-                            "message":"Native settings were left unchanged because conversation history could not be made portable",
+                            "code":if reason == "active_codex_writer" { reason } else { "native_history_restore_blocked" },
+                            "message":crate::services::integration::restore_error_message(reason),
                             "reason":reason
                         })),
                     );

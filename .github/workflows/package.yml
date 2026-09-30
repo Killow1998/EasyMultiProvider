@@ -10,45 +10,16 @@ on:
         required: false
         default: ""
         type: string
-  pull_request:
-    paths:
-      - ".github/workflows/package.yml"
-      - ".cargo/**"
-      - "crates/**"
-      - "xtask/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "assets/**"
-      - "packaging/**"
-      - "CHANGELOG.md"
-      - "README.md"
-      - "README.zh-CN.md"
-      - "LICENSE"
   push:
-    branches:
-      - main
     tags:
       - "v*"
-    paths:
-      - ".github/workflows/package.yml"
-      - ".cargo/**"
-      - "crates/**"
-      - "xtask/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "assets/**"
-      - "packaging/**"
-      - "CHANGELOG.md"
-      - "README.md"
-      - "README.zh-CN.md"
-      - "LICENSE"
 
 permissions:
   contents: read
 
 concurrency:
   group: package-${{ github.ref }}-${{ inputs.release_tag || 'build' }}
-  cancel-in-progress: ${{ inputs.release_tag == '' }}
+  cancel-in-progress: ${{ inputs.release_tag == '' && !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   package:
@@ -79,8 +50,6 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c # 1.93.1
-        with:
-          toolchain: 1.93.1
 
       - name: Use a real temporary directory
         shell: bash
@@ -101,13 +70,19 @@ jobs:
       - name: Verify native background update and rollback
         run: cargo +1.93.1 xtask package-smoke
 
+      - name: Verify Windows legacy credentials and restricted update permissions
+        if: runner.os == 'Windows'
+        run: >-
+          cargo +1.93.1 test --locked --release -p emp-state --lib
+          private_windows::tests -- --skip detects_directory_reparse_points
+
       - name: Upload package artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: EMP-${{ runner.os }}-${{ runner.arch }}
           path: artifacts/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   release:
     name: Publish Release
@@ -146,8 +121,6 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c # 1.93.1
-        with:
-          toolchain: 1.93.1
 
       - name: Download all native packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

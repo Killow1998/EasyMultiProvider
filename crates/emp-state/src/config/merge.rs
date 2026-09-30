@@ -2,9 +2,9 @@
 
 use super::provider_url::{hostname, parse_provider_url};
 use super::{
-    ConfigError, ConfigResult, MODEL_BOOLEAN_CAPABILITIES, Map, TOP_LEVEL_PROVENANCE_FIELDS, Value,
-    deployment_identity, endpoint_fingerprint, json_truthy, normalize_configuration,
-    normalize_input_modalities,
+    ConfigError, ConfigResult, MASKED_API_KEY, MODEL_BOOLEAN_CAPABILITIES, Map,
+    TOP_LEVEL_PROVENANCE_FIELDS, Value, deployment_identity, endpoint_fingerprint, json_truthy,
+    normalize_configuration, normalize_input_modalities,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -224,6 +224,15 @@ fn provider_origin_changed(incoming: &Map<String, Value>, old: &Value) -> bool {
     }
 }
 
+fn is_claude_login(provider: &Map<String, Value>) -> bool {
+    provider.get("execution_backend").and_then(Value::as_str) == Some("claude_cli")
+        && provider.get("auth_mode").and_then(Value::as_str) == Some("claude_login")
+}
+
+fn stored_provider_is_claude_login(provider: &Value) -> bool {
+    provider.as_object().is_some_and(is_claude_login)
+}
+
 fn merge_web_update_at_time(
     current: &Value,
     incoming: &Value,
@@ -269,32 +278,77 @@ fn merge_web_update_at_time(
                 .and_then(Value::as_str)
                 .and_then(|id| old_providers.get(id));
             let origin_changed = old.is_some_and(|old| provider_origin_changed(provider, old));
-            let masked = provider
-                .get("api_key")
-                .is_some_and(|value| value == "••••••••");
-            if !provider.contains_key("api_key") || masked {
-                provider.insert(
-                    "api_key".to_owned(),
-                    old.filter(|_| !origin_changed)
-                        .and_then(|value| value.get("api_key"))
-                        .cloned()
-                        .unwrap_or_else(|| Value::String(String::new())),
-                );
-            }
-            let incoming_file = provider.get("api_key_file");
+            let claude_login = is_claude_login(provider);
+            let local_login_changed =
+                old.is_some_and(|old| stored_provider_is_claude_login(old) != claude_login);
+            let credential_changed = origin_changed || local_login_changed;
+            let incoming_file = provider.get("api_key_file").cloned();
             let old_file = old.and_then(|value| value.get("api_key_file"));
-            if incoming_file.is_some_and(json_truthy) && incoming_file != old_file {
-                return Err(ConfigError::new("provider.api_key_file is managed by EMP"));
-            }
-            if origin_changed {
-                // The managed secret belongs to the previous origin. Saving an
-                // explicit new key recreates it; otherwise it is removed.
+
+            if claude_login {
+                let api_key = provider
+                    .get("api_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !api_key.is_empty() && api_key != MASKED_API_KEY {
+                    return Err(ConfigError::new(
+                        "Claude CLI local login cannot include an API key",
+                    ));
+                }
+                if incoming_file.as_ref().is_some_and(json_truthy) {
+                    return Err(ConfigError::new(
+                        "Claude CLI local login cannot include a provider key file",
+                    ));
+                }
+                let incoming_url = provider
+                    .get("base_url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim();
+                let old_url = old
+                    .and_then(|value| value.get("base_url"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim();
+                let carried_old_url = local_login_changed && incoming_url == old_url;
+                if !incoming_url.is_empty() && !carried_old_url {
+                    return Err(ConfigError::new(
+                        "provider.base_url must be empty for Claude CLI local login",
+                    ));
+                }
+                // The browser may carry the old CPA URL and masked key while
+                // changing this provider's auth mode. Drop all CPA credentials.
+                provider.insert("base_url".to_owned(), Value::String(String::new()));
+                provider.insert("api_key".to_owned(), Value::String(String::new()));
                 provider.insert("api_key_file".to_owned(), Value::String(String::new()));
-            } else if old_file.is_some_and(json_truthy) {
-                provider.insert(
-                    "api_key_file".to_owned(),
-                    old_file.expect("truthy old file").clone(),
-                );
+            } else {
+                let masked = provider
+                    .get("api_key")
+                    .is_some_and(|value| value == MASKED_API_KEY);
+                if !provider.contains_key("api_key") || masked {
+                    provider.insert(
+                        "api_key".to_owned(),
+                        old.filter(|_| !credential_changed)
+                            .and_then(|value| value.get("api_key"))
+                            .cloned()
+                            .unwrap_or_else(|| Value::String(String::new())),
+                    );
+                }
+                if incoming_file.as_ref().is_some_and(json_truthy)
+                    && incoming_file.as_ref() != old_file
+                {
+                    return Err(ConfigError::new("provider.api_key_file is managed by EMP"));
+                }
+                if credential_changed {
+                    // The managed secret belongs to the previous origin or
+                    // auth mode. Saving an explicit new key recreates it.
+                    provider.insert("api_key_file".to_owned(), Value::String(String::new()));
+                } else if old_file.is_some_and(json_truthy) {
+                    provider.insert(
+                        "api_key_file".to_owned(),
+                        old_file.expect("truthy old file").clone(),
+                    );
+                }
             }
             if old.is_some_and(|old| {
                 ["base_url", "protocol", "deployment_identity"]

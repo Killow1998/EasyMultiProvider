@@ -61,15 +61,19 @@ pub(crate) fn quit_request(
             false,
         );
     };
-    if state.backend.integration.restore_owned().is_err() {
-        return (
-            json_error_response(
-                409,
-                status_text(409),
-                "Native configuration could not be restored; EMP is still running",
-                None,
-                &[],
+    if let Err(error) = state.backend.integration.restore_owned() {
+        let (code, message) = match error {
+            crate::error::AppError::NativeRestoreBlocked(reason) => (
+                Some(reason),
+                crate::services::integration::restore_error_message(reason),
             ),
+            _ => (
+                None,
+                "Native configuration could not be restored; EMP is still running",
+            ),
+        };
+        return (
+            json_error_response(409, status_text(409), message, code, &[]),
             false,
         );
     }

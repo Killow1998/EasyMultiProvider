@@ -114,9 +114,9 @@ fn nvm_layouts_are_bounded_version_sorted_and_keep_the_launcher_path() {
     assert_eq!(discovered[path_index].path, path_cli);
     let path_observed = crate::runtime_inventory::version::observe(&path_cli);
     let nvm_observed = crate::runtime_inventory::version::observe(&installations[0]);
-    assert_eq!(path_observed["status"], "supported");
+    assert_eq!(path_observed["status"], "available");
     assert_eq!(path_observed["installed"], "0.158.0");
-    assert_eq!(nvm_observed["status"], "supported");
+    assert_eq!(nvm_observed["status"], "available");
     assert_eq!(nvm_observed["installed"], "0.200.0");
     assert_eq!(
         installations

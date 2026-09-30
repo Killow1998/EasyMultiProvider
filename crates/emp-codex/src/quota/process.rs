@@ -4,7 +4,7 @@ use super::*;
 
 #[derive(Debug)]
 pub(super) struct TrustedBinary {
-    path: PathBuf,
+    executable: crate::PreparedExecutable,
     identity: BinaryIdentity,
     launcher_directory: Option<PathBuf>,
 }
@@ -29,22 +29,20 @@ impl TrustedBinary {
         };
         let launcher_directory = crate::runtime_inventory::launcher::launcher_directory(&candidate);
         let path = candidate.canonicalize().map_err(|_| binary_unavailable())?;
-        validate_binary_path(&path)?;
+        let executable = crate::PreparedExecutable::prepare(&path).map_err(trust_error)?;
         Ok(Self {
-            identity: binary_identity(&path)?,
-            path,
+            identity: binary_identity(executable.path())?,
+            executable,
             launcher_directory,
         })
     }
 
     fn verify(&self) -> Result<(), QuotaError> {
-        let verified = Self::resolve(
-            self.path
-                .to_str()
-                .ok_or_else(|| QuotaError::new("Codex executable was replaced", "quota_error"))?,
-        )
-        .map_err(|_| QuotaError::new("Codex executable was replaced", "quota_error"))?;
-        if verified.path != self.path || verified.identity != self.identity {
+        let path = self.executable.path();
+        validate_binary_path(path)?;
+        if path.canonicalize().map_err(|_| binary_unavailable())? != path
+            || binary_identity(path)? != self.identity
+        {
             return Err(QuotaError::new(
                 "Codex executable was replaced",
                 "quota_error",
@@ -86,8 +84,12 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
 }
 
 fn validate_binary_path(path: &Path) -> Result<(), QuotaError> {
-    use crate::executable_trust::{TrustFailure, validate_executable};
-    validate_executable(path).map_err(|failure| match failure {
+    crate::executable_trust::validate_executable(path).map_err(trust_error)
+}
+
+fn trust_error(failure: crate::executable_trust::TrustFailure) -> QuotaError {
+    use crate::executable_trust::TrustFailure;
+    match failure {
         TrustFailure::Unavailable => binary_unavailable(),
         TrustFailure::NotTrusted => {
             QuotaError::new("Codex executable is not trusted", "quota_error")
@@ -95,7 +97,7 @@ fn validate_binary_path(path: &Path) -> Result<(), QuotaError> {
         TrustFailure::Writable => {
             QuotaError::new("Codex executable path is writable", "quota_error")
         }
-    })
+    }
 }
 
 fn binary_identity(path: &Path) -> Result<BinaryIdentity, QuotaError> {
@@ -164,7 +166,7 @@ pub(super) fn run_isolated_quota_process(
     )?;
 
     binary.verify()?;
-    let mut command = Command::new(&binary.path);
+    let mut command = Command::new(binary.executable.path());
     command
         .arg("app-server")
         .arg("--stdio")

@@ -63,6 +63,19 @@ certificates while accepting a configured root.
 
 ## Release workflow
 
+Pull requests run one Linux format, lint and test job. A newer push to the same
+pull request cancels its superseded run. The checks are not repeated on merge,
+and ordinary source or documentation changes do not build release packages.
+Focused checks can also be run locally before opening a pull request.
+
+The **Package** workflow runs only for a version tag or an explicit manual
+dispatch. Its temporary Actions artifacts expire after one day; published
+Release assets are independent of that retention period. Native package checks
+cover startup, update/rollback and TLS, plus the Windows legacy-key and
+restricted-permission regressions. Tests use isolated installations; a green
+run does not establish compatibility with every installed desktop App or IDE
+extension, which requires checking the actual runtime and existing user state.
+
 The **Package** workflow builds on all four native runners, merges the outputs,
 checks the exact 22-file manifest and each SHA-256 sidecar with
 `cargo xtask validate-release`, and publishes six

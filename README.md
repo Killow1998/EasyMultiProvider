@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/Killow1998/EasyMultiProvider/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/Killow1998/EasyMultiProvider"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/Killow1998/EasyMultiProvider"></a>
-  <img alt="Codex 0.158.0+" src="https://img.shields.io/badge/Codex-0.158.0%2B-blue">
+  <img alt="Codex CLI · App · IDE" src="https://img.shields.io/badge/Codex-CLI%20%C2%B7%20App%20%C2%B7%20IDE-blue">
   <img alt="Windows Linux macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey">
 </p>
 
@@ -89,6 +89,17 @@ In the Web UI, either:
 
 For an API Provider, pull the upstream model list, choose the models you want, and optionally edit their context windows.
 
+For Claude, choose **Add Provider → Claude**, then **Local Claude subscription**
+or **CPA**. Both routes require the installed Claude Code CLI.
+
+- **Local Claude subscription** reuses the Claude Code subscription sign-in for
+  the current OS user. Before each request, EMP checks for a Claude.ai subscription
+  sign-in; CLI API-key and Console auth do not qualify for this mode. If needed,
+  sign in through Claude Code. Add model aliases or full IDs with **Add model** to
+  choose them in Codex's model picker.
+- **CPA** uses a Claude-Code-compatible CPA Base URL and API key. For direct
+  Anthropic API access, add the separate **Anthropic API** Provider.
+
 ### 4. Apply EMP to Codex
 
 Click **Apply EMP to Codex**. The integration card shows the saved settings
@@ -129,10 +140,12 @@ a new model is not visible yet.
   when refresh fails, and preserves visibility, aliases, and context overrides.
   A newly exposed model needs no EMP release or manual model-list edit.
 - Add official or custom Providers through the Web UI.
-- Optionally route a text-only Provider through an installed Claude Code CLI.
-  Claude mode uses the Provider's existing Base URL and API key, requires
-  Anthropic Messages (or automatic detection that resolves to it), returns tool
-  calls to Codex to execute, and buffers replies before display.
+- Route Claude requests through the installed Claude Code CLI using either the
+  current OS user's Claude Code sign-in or a compatible CPA Base URL and API key.
+  Add local-login model aliases or full IDs manually with **Add model**. Codex
+  executes tool calls, and replies are buffered until generation finishes.
+- Forward image inputs and supported inline document content only for Claude
+  models whose configured capabilities and selected upstream support them.
 - Discover Provider models, import only the ones you want, test them, edit context limits, hide them, or remove them.
 - See dispatched request activity beside model, Provider, and subscription rows.
   Active dots mark in-flight requests, with the count in their tooltips. A
@@ -142,8 +155,8 @@ a new model is not visible yet.
 - Let Codex delegate a native child task to an external catalog model by its existing model slug while Codex continues to own the child task and permissions.
 - Let external models use Codex standalone web search. EMP prefers the current `.codex` login and can fall back to an available imported account without exposing Provider credentials.
 
-EMP refreshes the model list automatically. An already-open Codex 0.158 model
-picker may need reloading; the UI shows the existing reload notice.
+EMP refreshes the model list automatically. An already-open Codex model picker
+may need reloading; the UI reports when the observed catalog still differs.
 
 ### Codex continuity
 
@@ -185,19 +198,32 @@ Subscription editing supports per-model context token counts. Leave a field blan
 
 External Provider models use the same 95% rule, so a 256,000-token window shows as 243K in the Codex model picker. The catalog display and EMP request checks use the same effective window.
 
-Use the eye control beside **Model display** to show or hide context labels for
-Native, Subscription and External Provider models. This changes catalog labels,
-not context windows or request limits.
+Use the global eye control in the right-side **Model display** to show or hide
+context labels there and in the Codex model picker for Native, Subscription and
+External Provider models. The left model list does not repeat these labels. The
+control changes catalog labels, not context windows or request limits.
 
 ## Codex compatibility
 
 The current source version is **v0.12.4**.
 
-Codex **0.158.0** is the minimum accepted version. Compatibility is rechecked when OpenAI introduces new models or changes client protocols, authentication, or history formats. Newer clients may connect, but untested releases are not guaranteed compatible. Older clients receive an update message.
+EMP supports Codex CLI, desktop App and IDE extension installations without a
+universal minimum engine version. Each operation depends on the interfaces that
+the installed engine actually provides. If an engine lacks quota reads, quota
+reset or catalog inspection, EMP reports that operation as unavailable; it does
+not reject all requests solely because of the version number. Authentication,
+protocol and conversation-history checks still apply.
+
+Diagnostics show the App or extension version separately from its Codex engine
+version. An available engine means EMP could run it and read its version, not
+that every feature has been verified. Model catalog refresh uses the observed
+engine version; if it cannot be determined, EMP keeps the cached catalog and
+reports that refresh is unavailable.
 
 There is no client to choose: EMP edits the shared `config.toml` used by Codex clients.
 
-To query account quota, EMP runs a supported Codex it finds in these locations (a configured binary wins):
+To query account quota, EMP selects a trusted, executable Codex engine with an
+observed version from these locations (a configured binary wins):
 
 - the Codex App runtime,
 - the active `.codex` managed runtime,
@@ -220,7 +246,9 @@ separate CLI helper; they do not launch the desktop GUI. Applying or restoring
 changes the saved settings. When Codex next reaches EMP (its model list or a turn), EMP
 reads `model/list` from Codex's local control socket and pushes the catalog
 observation to the Web UI. This read-only check does not reload the backend or
-verify its request routing. If a restart is needed, use the backend's usual
+verify its request routing. If the control interface is unavailable, EMP reports
+that settings are saved and the catalog is unverified; this does not mean the
+App has stopped. If a restart is needed, use the backend's usual
 launcher when your active work permits it. There is no background polling.
 
 ## Web UI

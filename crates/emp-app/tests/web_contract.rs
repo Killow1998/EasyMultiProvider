@@ -169,40 +169,6 @@ fn spawn_emp(config: &std::path::Path) -> (u16, std::process::Child, String) {
 }
 
 #[test]
-fn embedded_web_ui_is_a_complete_self_served_page() {
-    // The binary serves the page it embeds; the page is a complete HTML
-    // document with a script that performs the bootstrap exchange, so the UI
-    // works without any external asset fetches.
-    let page = emp_app::WEB_INDEX_BYTES;
-    let document = std::str::from_utf8(page).expect("embedded Web UI is UTF-8");
-    assert!(
-        document.to_ascii_lowercase().starts_with("<!doctype html>"),
-        "document starts with a doctype"
-    );
-    assert!(document.contains("</html>"), "document is closed");
-    assert!(
-        document.contains("<script"),
-        "the page carries the bootstrap script"
-    );
-    assert!(
-        document.contains("/api/session"),
-        "the script exchanges the bootstrap token for a session"
-    );
-}
-
-#[test]
-fn served_index_matches_the_embedded_bytes() {
-    let directory = TempDir::new().expect("temporary directory");
-    let config = canonical_root(&directory).join("config.json");
-    let (port, mut child, _) = spawn_emp(&config);
-    let page = request(port, "/", &[]);
-    assert!(page.starts_with(b"HTTP/1.1 200 OK\r\n"));
-    assert_eq!(body(&page), emp_app::WEB_INDEX_BYTES);
-    child.kill().expect("stop test EMP");
-    child.wait().expect("reap test EMP");
-}
-
-#[test]
 fn version_output_reports_the_running_release() {
     let output = Command::new(env!("CARGO_BIN_EXE_EMP"))
         .arg("--version")

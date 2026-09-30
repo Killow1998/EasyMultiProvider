@@ -178,9 +178,8 @@ pub(crate) fn persist_fetched_catalog(
         .backend
         .integration
         .inventory
-        .selected_trusted_version()
-        .unwrap_or_else(emp_codex::runtime_inventory::minimum_codex);
-    if current_version != source.client_version {
+        .selected_trusted_version();
+    if current_version.as_deref() != Some(source.client_version.as_str()) {
         return Err(PersistError::RuntimeChanged);
     }
 
@@ -256,9 +255,8 @@ pub(crate) fn persist_fetched_catalog(
         .backend
         .integration
         .inventory
-        .selected_trusted_version()
-        .unwrap_or_else(emp_codex::runtime_inventory::minimum_codex);
-    if version_after_lock != source.client_version {
+        .selected_trusted_version();
+    if version_after_lock.as_deref() != Some(source.client_version.as_str()) {
         return Err(PersistError::RuntimeChanged);
     }
 

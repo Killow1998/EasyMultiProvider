@@ -230,7 +230,7 @@ input,select,textarea{border-radius:6px;border-color:var(--border-strong)}
 .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--muted)}
 .pill.provider-id-badge::before{display:none}
 .integration-card{padding:0;border:0;border-radius:0;background:none}
-.integration-card[data-state="emp_applied"] .pill::before{background:var(--success)}.integration-card[data-state="emp_applied"]:not([data-runtime="catalog_loaded"],[data-runtime="stopped_waiting_for_start"]) .pill::before{background:var(--warning)}
+.integration-card[data-state="emp_applied"] .pill::before{background:var(--success)}.integration-card[data-state="emp_applied"]:not([data-runtime="catalog_loaded"]) .pill::before{background:var(--warning)}
 .integration-card:is([data-state="conflict"],[data-state="prepared"],[data-state="unavailable"]){border-left:0}
 .integration-card:is([data-state="conflict"],[data-state="prepared"],[data-state="unavailable"]) .pill::before{background:var(--danger)}
 .integration-card-header{gap:10px}
@@ -275,7 +275,9 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .period-presets button.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
 .period-custom{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px}
 .period-custom label{display:grid;gap:3px;margin:0;font-size:12px}
-.dot-logo{display:block;height:24px;width:auto;overflow:visible}.dot-logo circle{fill:var(--text);opacity:.1;transition:opacity .18s,fill .3s}.dot-logo circle.on{opacity:1}.dot-logo circle.hot{fill:var(--accent);opacity:1;filter:drop-shadow(0 0 2px var(--accent))}.dot-logo.emp-live circle.on{fill:var(--success)}.brand-title{align-items:center}
+.dot-logo{display:block;height:24px;width:auto;overflow:visible}.dot-logo circle{fill:var(--text);opacity:.1;transition:opacity .18s,fill .3s}.dot-logo circle.on{opacity:.78;animation:logo-dot-flow 3.8s ease-in-out infinite;animation-delay:var(--twinkle-delay,0s)}.dot-logo.emp-live circle.on{fill:var(--success)}.brand-title{align-items:center}
+@keyframes logo-dot-flow{0%,100%{opacity:.52}50%{opacity:1}}
+@media(prefers-reduced-motion:reduce){.dot-logo circle{transition:none}.dot-logo circle.on{animation:none;opacity:1}}
 .toast{position:fixed;top:18px;left:50%;z-index:30;width:min(420px,calc(100vw - 32px));transform:translateX(-50%);padding:14px 16px 16px;background:var(--panel);border:1px solid var(--accent);border-radius:6px;box-shadow:0 10px 32px rgba(0,0,0,.28);cursor:pointer;overflow:hidden;animation:toast-in .22s ease-out both}.toast strong{display:block;font-size:15px;margin-bottom:3px}.toast p{margin:0;color:var(--text)}.toast::after{content:"";position:absolute;left:0;bottom:0;height:3px;width:100%;background:var(--accent);transform-origin:left;animation:toast-timer var(--toast-ms) linear both}.toast.leaving{animation:toast-out .2s ease-in both}
 @keyframes toast-in{from{opacity:0;transform:translate(-50%,-10px)}}@keyframes toast-out{to{opacity:0;transform:translate(-50%,-10px)}}@keyframes toast-timer{to{transform:scaleX(0)}}
 @media(prefers-reduced-motion:reduce){.toast,.toast.leaving{animation:none}}
@@ -466,7 +468,7 @@ const officialProviders = {
   chatgpt: {id:'chatgpt-subscription', name:'ChatGPT Subscription', base_url:'https://chatgpt.com/backend-api/codex', protocol:'responses', auth_mode:'forward', hint:'转发当前 Codex 登录态，不需要 API Key'},
   openai: {id:'openai', name:'OpenAI', base_url:'https://api.openai.com/v1', protocol:'responses', auth_mode:'api_key', hint:'OpenAI Responses API'},
   gemini: {id:'gemini', name:'Gemini AI Studio', base_url:'https://generativelanguage.googleapis.com/v1beta/openai', protocol:'chat_completions', auth_mode:'api_key', hint:'Google OpenAI-compatible API'},
-  anthropic: {id:'anthropic', name:'Anthropic', base_url:'https://api.anthropic.com/v1', protocol:'anthropic_messages', auth_mode:'anthropic_api_key', hint:'Anthropic Messages API'},
+  anthropic: {id:'anthropic', name:'Anthropic API', base_url:'https://api.anthropic.com/v1', protocol:'anthropic_messages', auth_mode:'anthropic_api_key', hint:'Anthropic Messages API'},
   deepseek: {id:'deepseek', name:'DeepSeek', base_url:'https://api.deepseek.com', protocol:'chat_completions', auth_mode:'api_key', hint:'DeepSeek OpenAI-compatible API'},
   openrouter: {id:'openrouter', name:'OpenRouter', base_url:'https://openrouter.ai/api/v1', protocol:'responses', auth_mode:'api_key', hint:'OpenRouter OpenAI-compatible API'},
   xai: {id:'xai', name:'xAI', base_url:'https://api.x.ai/v1', protocol:'responses', auth_mode:'api_key', hint:'xAI Grok Responses API'},
@@ -711,6 +713,7 @@ const UPSTREAM_ERROR_GROUPS = [
 function upstreamErrorText(error, fallback = '') {
   if (error?.session) return error.message;
   const detail = error?.payload?.error || {};
+  if (detail.code === 'active_codex_writer') return tr('Codex 仍在使用对话历史。请先完成活动对话，再关闭 ChatGPT App、Codex CLI 和 IDE 中的 Codex 会话，然后重试。','Codex is still using conversation history. Finish active conversations, close ChatGPT App, Codex CLI and Codex sessions in your IDE, then retry.');
   if (detail.message === 'provider API key is not configured') return tr('还没有填写 API Key。','No API key has been entered yet.');
   const group = UPSTREAM_ERROR_GROUPS.find(([types]) => types.includes(detail.type));
   return group ? tr(...group[1]) : error?.message || fallback;
@@ -880,9 +883,12 @@ function usableContext(model) {
   return maximum > 0 ? Math.max(1, Math.round(maximum * Math.min(percent, 100) / 100)) : 0;
 }
 function canonicalDisplayName(value) { return String(value || '').replace(/^\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]\s+/, '').replace(/\s+\[\s*(?:\d+(?:\.\d+)?(?:K|M)?|\?)\]$/, ''); }
-function presentationPreview(route, fallback, context, alias) {
+function presentationName(route, fallback, alias) {
   const family = (state.catalog_families || []).find(item => (item.routes || []).some(candidate => candidate.id === route)); const saved = family ? familyPresentationFor(family.id) : presentationFor(route); const label = alias === undefined ? saved.catalog_alias : alias;
-  const visible = label || canonicalDisplayName(fallback) || route;
+  return label || canonicalDisplayName(fallback) || route;
+}
+function presentationPreview(route, fallback, context, alias) {
+  const visible = presentationName(route, fallback, alias);
   const withContext = state.catalog_show_context !== false;
   return withContext ? `[${String(compactContext(context)).padStart(5, ' ')}]  ${visible}` : visible;
 }
@@ -1059,35 +1065,11 @@ function drawLogo() {
   const pitch = 3.4, dots = [];
   [...'EMP'].forEach((letter, index) => LOGO_GLYPHS[letter].forEach((row, y) => [...row].forEach((bit, x) => {
     const column = index * 6 + x;
-    dots.push(`<circle cx="${(column * pitch + pitch / 2).toFixed(1)}" cy="${(y * pitch + pitch / 2).toFixed(1)}" r="1.25" data-column="${column}"${bit === '1' ? ' class="on" data-lit="1"' : ''}/>`);
+    const twinkleDelay = -(column * .18 + y * .13);
+    dots.push(`<circle cx="${(column * pitch + pitch / 2).toFixed(1)}" cy="${(y * pitch + pitch / 2).toFixed(1)}" r="1.25"${bit === '1' ? ` class="on" data-lit="1" style="--twinkle-delay:${twinkleDelay.toFixed(2)}s"` : ''}/>`);
   })));
   svg.setAttribute('viewBox', `0 0 ${(17 * pitch).toFixed(1)} ${(7 * pitch).toFixed(1)}`);
   svg.innerHTML = dots.join('');
-}
-let logoAnimation = null;
-function animateLogo() {
-  const svg = $('emp_logo'); if (!svg) return;
-  drawLogo();
-  const dots = [...svg.querySelectorAll('circle')];
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  clearInterval(logoAnimation);
-  dots.forEach(dot => dot.classList.remove('on', 'hot'));
-  // Sweep a bright column across the panel, leaving the letters lit behind it, then flicker once.
-  let column = -1, flicker = 0;
-  logoAnimation = setInterval(() => {
-    column++;
-    if (column <= 17) {
-      dots.forEach(dot => {
-        const at = Number(dot.dataset.column);
-        dot.classList.toggle('hot', at === column);
-        if (at < column && dot.dataset.lit) dot.classList.add('on');
-      });
-      return;
-    }
-    flicker++;
-    dots.forEach(dot => dot.classList.toggle('on', Boolean(dot.dataset.lit) && flicker % 2 === 0));
-    if (flicker >= 4) { clearInterval(logoAnimation); logoAnimation = null; }
-  }, 45);
 }
 function renderLogoState(live) { drawLogo(); $('emp_logo')?.classList.toggle('emp-live', live); }
 function toast(title, body, ms = 7000) {
@@ -1109,18 +1091,13 @@ function runtimeView(runtime) {
   if (runtime.state === 'emp_catalog_absent') {
     return [tr('EMP 模型已不可见','EMP models absent'), tr('共享模型列表不再包含此前的 EMP 专属模型 ID；这不能确认原生路由或其他设置已恢复。','The shared model list no longer contains the previous EMP-specific model IDs. This does not confirm native routing or other settings were restored.')];
   }
-  if (runtime.state === 'stopped_waiting_for_start') {
-    return target === 'native'
-      ? [tr('等待 Codex 启动','Waiting for Codex'), tr('原生设置已保存；共享 Codex 后端当前不可用，下次正常启动时会读取这些设置。','Native settings are saved. The shared Codex backend is unavailable and will read them at its next normal start.')]
-      : [tr('等待 Codex 启动','Waiting for Codex'), tr('EMP 设置已保存；共享 Codex 后端当前不可用，下次正常启动时会读取这些设置。','EMP settings are saved. The shared Codex backend is unavailable and will read them at its next normal start.')];
+  if (runtime.state === 'catalog_unverified' || runtime.state === 'stopped_waiting_for_start') {
+    return [tr('目录待确认','Catalog unverified'), tr('设置已保存，尚未确认 Codex 当前加载的模型目录。可在 Codex 模型选择器中查看。','Settings are saved; Codex’s loaded model catalog is not yet verified. Check the model picker in Codex.')];
   }
   if (runtime.state === 'reload_required') {
     return target === 'native'
       ? [tr('原生目录待更新','Native catalog pending'), tr('共享 Codex 后端仍显示 EMP 模型。让当前对话完成后，再请后端所有者正常重启以读取原生设置。','The shared Codex backend still shows EMP models. Let active chats finish, then ask its owner to restart it normally to load native settings.')]
       : [tr('EMP 目录待更新','EMP catalog pending'), tr('共享 Codex 后端仍显示旧模型。让当前对话完成后，再请后端所有者正常重启以读取 EMP 设置。','The shared Codex backend still shows an old model list. Let active chats finish, then ask its owner to restart it normally to load EMP settings.')];
-  }
-  if (runtime.state === 'catalog_unverified') {
-    return [tr('目录无法确认','Catalog unverified'), tr('当前模型列表无法区分 EMP 与原生设置；方便时检查 Codex 的模型选择器。','The current model list cannot distinguish EMP from native settings. Check Codex’s model picker when convenient.')];
   }
   if (runtime.state === 'verification_failed') {
     return [tr('无法检查目录','Catalog check failed'), tr('配置文件已保存，但共享 Codex 后端未能提供模型列表。','Settings are saved, but the shared Codex backend did not provide its model list.')];
@@ -1134,7 +1111,6 @@ function conflictView(configuration) {
   }
   return [tr('需要处理','Needs attention'), tr('Codex 的 config.toml 被其他程序改过。请恢复原生 Codex，再重新启动 EMP。','Another program changed Codex config.toml. Restore Native Codex, then start EMP again.')];
 }
-let codexMinimum = '0.158.0';
 function renderIntegration(info) {
   const configuration = info.configuration || {};
   const compatibility = info.codex_compatibility || {};
@@ -1149,12 +1125,10 @@ function renderIntegration(info) {
     : configuration.state === 'emp_applied' || configuration.state === 'native' && runtimeNeedsDisplay ? runtimeView(info.runtime || {})
     : views[configuration.state] || views.unavailable;
   $('integration_summary').textContent = view[1];
-  // Passing this version gate does not verify protocol or history compatibility.
-  const unsupported = compatibility.status === 'unsupported';
-  const minimum = codexMinimum = compatibility.minimum || codexMinimum;
-  const installed = compatibility.installed ? ` ${compatibility.installed}` : '';
-  $('codex_compatibility').textContent = unsupported ? tr(`Codex${installed} 版本过旧，EMP 需要 ${minimum} 或更新版本，请升级 Codex。`, `Codex${installed} is too old. EMP needs ${minimum} or newer; please update Codex.`) : '';
-  $('codex_compatibility').hidden = !unsupported;
+  const engine = compatibility.installed || tr('版本未知','version unknown');
+  const host = compatibility.host_version ? `${tr('宿主','Host')} ${compatibility.host_version} · ` : '';
+  $('codex_compatibility').textContent = `${host}Codex engine ${engine}`;
+  $('codex_compatibility').hidden = false;
   $('codex_compatibility').dataset.state = compatibility.status || 'unknown';
   $('integration').dataset.state = configuration.state || 'unknown';
   $('integration').dataset.runtime = (info.runtime || {}).state || 'not_checked';
@@ -1307,11 +1281,11 @@ function supportDetailLabel(value) {
   const labels = language === 'en' ? {
     allowed:'Likely writable', denied:'Write permission denied', unknown:'Unknown',
     environment:'Environment proxy', system:'System proxy', direct:'Direct', proxy:'Through proxy',
-    catalog_loaded:'EMP model catalog observed', emp_catalog_absent:'EMP model IDs absent', nvm:'Codex CLI managed by nvm', path_cli:'Codex CLI on PATH'
+    catalog_loaded:'EMP model catalog observed', emp_catalog_absent:'EMP model IDs absent', nvm:'Codex CLI managed by nvm', path_cli:'Codex CLI on PATH', codex_app:'ChatGPT App (Codex)'
   } : {
     allowed:'可能可写', denied:'没有写入权限', unknown:'未知',
     environment:'环境变量代理', system:'系统代理', direct:'直连', proxy:'经过代理',
-    catalog_loaded:'已观察 EMP 模型目录', emp_catalog_absent:'EMP 模型 ID 已不可见', nvm:'由 nvm 管理的 Codex CLI', path_cli:'PATH 中的 Codex CLI'
+    catalog_loaded:'已观察 EMP 模型目录', emp_catalog_absent:'EMP 模型 ID 已不可见', nvm:'由 nvm 管理的 Codex CLI', path_cli:'PATH 中的 Codex CLI', codex_app:'ChatGPT App（Codex）'
   };
   return labels[value] || esc(value || 'unknown');
 }
@@ -1319,9 +1293,9 @@ function runtimeLabel(value) {
   return {
     catalog_loaded:tr('模型目录符合目标；请求路线未确认','model catalog matches target; request route unverified'),
     emp_catalog_absent:tr('此前的 EMP 模型 ID 已不可见；恢复未确认','previous EMP model IDs are absent; restoration unverified'),
-    stopped_waiting_for_start:tr('共享后端不可用；配置会在下次正常启动时读取','shared backend unavailable; config will be read at next normal start'),
+    stopped_waiting_for_start:tr('控制接口不可用；目录尚未验证','control interface unavailable; catalog unverified'),
     reload_required:tr('共享模型目录仍旧；当前对话结束后再请后端所有者正常重启','shared catalog is stale; ask its owner to restart normally after active chats finish'),
-    catalog_unverified:tr('无法区分当前加载的目录','loaded catalog cannot be distinguished'),
+    catalog_unverified:tr('共享模型目录尚未验证','shared model catalog not yet verified'),
     verification_failed:tr('无法读取共享模型目录','shared model catalog could not be read'),
     not_checked:tr('尚未观察共享模型目录','shared model catalog has not been observed')
   }[value] || tr('共享模型目录状态未知','shared model catalog state unknown');
@@ -1332,10 +1306,15 @@ function renderSupportReport(report) {
   const imported = Array.isArray(accounts.imported) ? accounts.imported : [];
   const accountLines = imported.map(account => `${tr('导入账号','Imported account')} ${Number(account.index) || 0}: ${supportStatusLabel(account.quota_status)}`);
   const configNotes = [!config.exists && tr('文件不存在','file missing'), config.write_access_hint === 'denied' && tr('没有写入权限','not writable')].filter(Boolean);
-  const minimum = codexMinimum;
-  const codexNotes = [codex.compatibility === 'unsupported' ? tr(`版本过旧，需要 ${minimum} 或更新`, `too old, needs ${minimum} or newer`) : tr(`符合最低版本要求（${minimum}及以上）`, `Meets minimum version requirement (${minimum}+)`), codex.source && supportDetailLabel(codex.source), codex.target && runtimeLabel(codex.state,codex.target)].filter(Boolean);
+  const compatibilityNote = {
+    available:tr('引擎可执行；功能按实际结果判断', 'engine available; individual operations are checked when used'),
+    unknown:tr('无法确认引擎版本', 'engine version could not be observed')
+  }[codex.compatibility];
+  const versionFallback = { unavailable:tr('未找到可用引擎','no engine available') }[codex.compatibility];
+  const versionLabel = codex.version || versionFallback || tr('版本未知','version unknown');
+  const codexNotes = [codex.host_version && `${tr('宿主','Host')} ${codex.host_version}`, compatibilityNote, codex.source && supportDetailLabel(codex.source), codex.target && runtimeLabel(codex.state,codex.target)].filter(Boolean);
   box.innerHTML = `<p><strong>${tr('配置','Config')}</strong> ${esc(config.path || '—')}${configNotes.map(note => ' · ' + esc(note)).join('')}</p>
-    <p><strong>Codex</strong> ${esc(codex.version || tr('未找到','not found'))} · ${codexNotes.map(esc).join(' · ')}</p>
+    <p><strong>Codex</strong> ${esc(versionLabel)}${codexNotes.map(note => ' · ' + esc(note)).join('')}</p>
     <p><strong>${tr('代理','Proxy')}</strong> ${supportDetailLabel(network.source_at_startup)} · ${supportDetailLabel(network.chatgpt_route)}${network.proxy_scheme ? ' (' + esc(network.proxy_scheme) + ')' : ''}</p>
     <p><strong>${tr('账号','Accounts')}</strong> Native: ${supportStatusLabel(accounts.native?.quota_status)}${accountLines.length ? ' · ' + accountLines.map(esc).join(' · ') : ''}</p>`;
 }
@@ -1391,7 +1370,7 @@ function integrationOutcomeMessage(info, action) {
       : tr('EMP 模型目录已匹配；请求转发路线未确认。','The EMP model catalog matches; request routing is unverified.');
     if (runtime.state === 'emp_catalog_absent') return tr('此前的 EMP 模型 ID 已不可见；原生恢复和请求转发路线未确认。','Previous EMP model IDs are absent; native restoration and request routing are unverified.');
     if (runtime.state === 'reload_required') return tr('设置已保存；共享目录仍旧。当前对话结束后，可请后端所有者正常重启。','Settings are saved; the shared catalog is stale. After active chats finish, ask the backend owner to restart it normally.');
-    if (runtime.state === 'stopped_waiting_for_start') return tr('设置已保存；共享后端下次正常启动时会读取。','Settings are saved; the shared backend will read them at its next normal start.');
+    if (runtime.state === 'catalog_unverified' || runtime.state === 'stopped_waiting_for_start') return runtimeView(runtime)[1];
     if (runtime.state === 'verification_failed') return tr('设置已保存，但无法检查共享模型目录。','Settings are saved, but the shared model catalog could not be checked.');
     return tr('设置已保存；共享模型目录尚未确认。','Settings are saved; the shared model catalog has not been confirmed.');
   }
@@ -2174,14 +2153,21 @@ function renderProviders() {
   if (!providers.length) { $('providers').innerHTML = `<p class="muted">${tr('还没有 Provider。','No Providers yet.')}</p>`; return; }
   $('providers').innerHTML = `<div class="entity-list">${providers.map(p => {
     const models = (state.models || []).filter(model => model.provider === p.id); const allHidden = models.length > 0 && models.every(model => !model.enabled);
+    const localLogin = p.execution_backend === 'claude_cli' && p.auth_mode === 'claude_login';
     const activity = activityIndicatorHtml('provider', p.id, p.name || p.id);
     const providerHeading = String(p.name || p.id) === String(p.id)
       ? activity
       : `<span class="pill provider-id-badge">${activity}${esc(p.id)}</span>`;
+    const connectionDetails = localLogin
+      ? tr('本机 Claude 订阅','Local Claude subscription')
+      : `<code class="endpoint">${esc(p.base_url)}</code> · ${esc(protocolLabel(p.protocol))} · ${esc(authLabel(p.auth_mode))}${p.api_key_set ? tr(' · Key 已设置',' · Key set') : ''}`;
+    const modelAction = localLogin
+      ? `<button class="secondary" data-icon="plus" data-ui-action="provider-add-model" data-id="${esc(p.id)}">${tr('添加模型','Add model')}</button>`
+      : `<button class="secondary" data-icon="download" data-ui-action="provider-discover" data-id="${esc(p.id)}">${tr('拉取模型','Fetch models')}</button>`;
     return `<article class="entity-card provider-card">
       <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(p.name || p.id)}</strong>${providerHeading}</div></div>
-      <div class="entity-card-meta"><code class="endpoint">${esc(p.base_url)}</code> · ${esc(protocolLabel(p.protocol))} · ${esc(authLabel(p.auth_mode))}${p.execution_backend === 'claude_cli' ? tr(' · Claude Code CLI',' · Claude Code CLI') : ''}${p.api_key_set ? tr(' · Key 已设置',' · Key set') : ''} · ${tr(`${models.length} 个模型`,`${models.length} models`)}</div>
-      <div class="entity-card-actions"><button class="secondary" data-icon="download" data-ui-action="provider-discover" data-id="${esc(p.id)}">${tr('拉取模型','Fetch models')}</button><button class="secondary" data-icon="edit" data-ui-action="provider-edit" data-id="${esc(p.id)}">${tr('编辑','Edit')}</button><button class="secondary" ${models.length ? '' : 'disabled'} data-ui-action="provider-toggle-models" data-id="${esc(p.id)}" data-all-hidden="${allHidden ? 'true' : 'false'}">${allHidden ? tr('显示全部模型','Show all models') : tr('隐藏全部模型','Hide all models')}</button><button class="danger" data-icon="trash" data-ui-action="provider-remove" data-id="${esc(p.id)}">${tr('删除','Delete')}</button></div>
+      <div class="entity-card-meta">${connectionDetails}${p.execution_backend === 'claude_cli' && !localLogin ? tr(' · Claude Code CLI',' · Claude Code CLI') : ''} · ${tr(`${models.length} 个模型`,`${models.length} models`)}</div>
+      <div class="entity-card-actions">${modelAction}<button class="secondary" data-icon="edit" data-ui-action="provider-edit" data-id="${esc(p.id)}">${tr('编辑','Edit')}</button><button class="secondary" ${models.length ? '' : 'disabled'} data-ui-action="provider-toggle-models" data-id="${esc(p.id)}" data-all-hidden="${allHidden ? 'true' : 'false'}">${allHidden ? tr('显示全部模型','Show all models') : tr('隐藏全部模型','Hide all models')}</button><button class="danger" data-icon="trash" data-ui-action="provider-remove" data-id="${esc(p.id)}">${tr('删除','Delete')}</button></div>
     </article>`;
   }).join('')}</div>`;
   updateActivityDots();
@@ -2194,49 +2180,43 @@ async function toggleProviderModels(id, enabled) {
   catch (error) { notice(error.message, true); }
 }
 function openProviderChooser() {
-  openModal(tr('添加 Provider','Add Provider'), `<p class="muted">${tr('官方 Provider 使用固定的 Base URL、协议和认证方式。自建 Provider 可选择自动检测。','Official Providers use fixed endpoints, protocols, and authentication. Custom Providers may use automatic protocol detection.')}</p><div class="choice-grid">` + Object.entries(officialProviders).filter(([key]) => key !== 'chatgpt').map(([key,p]) => `<button class="choice" data-ui-action="official-provider-choose" data-provider="${esc(key)}"><strong>${esc(p.name)}</strong><small>${esc(p.hint)}</small></button>`).join('') + `<button class="choice" onclick="openCustomProviderForm()"><strong>${tr('自建 Provider','Custom Provider')}</strong><small>${tr('填写 Base URL、API Key 和协议','Enter a Base URL, API Key, and protocol')}</small></button></div>`, '', null);
+  openModal(tr('添加 Provider','Add Provider'), `<p class="muted">${tr('Anthropic API 直接连接 Anthropic Messages API。Claude 连接可选择本机订阅登录或 CPA。','Anthropic API connects directly to the Anthropic Messages API. Claude connections can use a local subscription login or a CPA endpoint.')}</p><div class="choice-grid">` + Object.entries(officialProviders).filter(([key]) => key !== 'chatgpt').map(([key,p]) => `<button class="choice" data-ui-action="official-provider-choose" data-provider="${esc(key)}"><strong>${esc(p.name)}</strong><small>${esc(p.hint)}</small></button>`).join('') + `<button class="choice" data-ui-action="claude-provider-choose"><strong>Claude</strong><small>${tr('选择本机 Claude 订阅登录或 CPA','Choose local Claude subscription login or CPA')}</small></button><button class="choice" onclick="openCustomProviderForm()"><strong>${tr('自建 Provider','Custom Provider')}</strong><small>${tr('填写 Base URL、API Key 和协议','Enter a Base URL, API Key, and protocol')}</small></button></div>`, '', null);
   $('modal_submit').style.display = 'none';
 }
-function claudeBackendControls(official = false) {
-  return `<div class="wide"><label>${tr('执行后端','Execution backend')}<select id="modal_provider_backend" onchange="providerBackendChanged()"><option value="http">${tr('标准 HTTP Provider','Standard HTTP provider')}</option><option value="claude_cli">Claude Code CLI</option></select></label></div><div id="modal_claude_backend_details" class="wide muted" hidden><p>${official ? tr('使用上方 Anthropic Messages 地址和 API Key。','Uses the Anthropic Messages URL and API key shown above.') : tr('使用此 Provider 已有的 Base URL、协议和认证设置。','Uses this Provider’s existing Base URL, protocol, and authentication settings.')} ${tr('仅发送文本，不发送图像或文件。工具调用作为提议返回，由 Codex 执行。回复会先缓冲完成，不会逐 token 显示。','Text only; images and files are not sent. Tool calls are returned as proposals for Codex to execute. Replies are buffered before display; tokens are not streamed.')}</p><p id="modal_claude_cli_status" role="status" aria-live="polite"></p></div>`;
+function normalizedIdentity(value) { return String(value || '').trim().toLocaleLowerCase(); }
+function providerIdentityTaken(id) {
+  const identity = normalizedIdentity(id);
+  if (!identity) return false;
+  const accounts = [state.native_account, ...(state.accounts || [])].filter(Boolean);
+  return (state.providers || []).some(provider => normalizedIdentity(provider.id) === identity)
+    || accounts.some(account => [account.id, account.prefix].some(value => normalizedIdentity(value) === identity));
 }
-function providerProtocolOptions(claudeOnly) {
-  const options = claudeOnly
-    ? [['auto', tr('自动检测','Auto detect')], ['anthropic_messages', 'Anthropic Messages']]
-    : [['auto', tr('自动检测','Auto detect')], ['chat_completions', 'Chat Completions'], ['responses', 'Responses'], ['anthropic_messages', 'Anthropic Messages']];
+function providerNameTaken(name) {
+  const identity = normalizedIdentity(name);
+  if (!identity) return false;
+  const accounts = [state.native_account, ...(state.accounts || [])].filter(Boolean);
+  return (state.providers || []).some(provider => normalizedIdentity(provider.name || provider.id) === identity)
+    || accounts.some(account => normalizedIdentity(account.name || account.id) === identity);
+}
+function defaultClaudeProviderIdentity(connection) {
+  const idBase = connection === 'local' ? 'claude' : 'claude-cpa';
+  const nameBase = connection === 'local' ? 'Claude Subscription' : 'Claude CPA';
+  for (let suffix = 1; ; suffix++) {
+    const id = suffix === 1 ? idBase : `${idBase}-${suffix}`;
+    const name = suffix === 1 ? nameBase : `${nameBase} ${suffix}`;
+    if (!providerIdentityTaken(id) && !providerNameTaken(name)) return {id, name};
+  }
+}
+function openClaudeConnectionChooser(existing = {}) {
+  const editing = Boolean(existing.id);
+  const id = esc(existing.id || '');
+  const switching = editing ? `<p class="muted">${tr('保留现有 Provider ID 和路由。选择新的连接方式后再保存。','The Provider ID and route stay the same. Choose a connection method, then save it.')}</p>` : '';
+  openModal(editing ? tr('选择 Claude 连接方式','Choose Claude connection') : tr('Claude 连接方式','Claude connection'), `${switching}<div class="choice-grid"><button class="choice" data-ui-action="claude-local-choose" data-id="${id}"><strong>${tr('本機 Claude 訂閱','Local Claude subscription')}</strong><small>${tr('复用当前操作系统用户的 Claude Code 订阅登录；如需登录，请在 Claude Code 中完成。','Reuse this OS user’s Claude Code subscription sign-in. Sign in through Claude Code if needed.')}</small></button><button class="choice" data-ui-action="claude-cpa-choose" data-id="${id}"><strong>CPA</strong><small>${tr('连接自定义 CPA，需要 Base URL 和 API Key。回复完成后显示。','Connect a custom CPA with a Base URL and API key. Replies appear after generation finishes.')}</small></button></div>`, '', null);
+  $('modal_submit').style.display = 'none';
+}
+function providerProtocolOptions() {
+  const options = [['auto', tr('自动检测','Auto detect')], ['chat_completions', 'Chat Completions'], ['responses', 'Responses'], ['anthropic_messages', 'Anthropic Messages']];
   return options.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
-}
-function providerBackendChanged() {
-  const backend = $('modal_provider_backend');
-  if (!backend) return;
-  const isClaude = backend.value === 'claude_cli';
-  const previous = backend.dataset.lastValue;
-  const protocol = $('modal_provider_protocol');
-  if (protocol) {
-    if (!protocol.dataset.httpProtocol) protocol.dataset.httpProtocol = protocol.value || 'auto';
-    if (isClaude && previous !== 'claude_cli') protocol.dataset.httpProtocol = protocol.value || 'auto';
-    const protocolBeforeUpdate = protocol.value;
-    protocol.innerHTML = providerProtocolOptions(isClaude);
-    if (isClaude) {
-      protocol.value = ['auto', 'anthropic_messages'].includes(protocolBeforeUpdate) ? protocolBeforeUpdate : 'auto';
-    } else {
-      const restore = previous === 'claude_cli' ? protocol.dataset.httpProtocol : protocolBeforeUpdate;
-      protocol.value = ['auto', 'chat_completions', 'responses', 'anthropic_messages'].includes(restore) ? restore : 'auto';
-    }
-  }
-  const auth = $('modal_provider_auth');
-  if (auth) {
-    if (!auth.dataset.httpAuth) auth.dataset.httpAuth = auth.value || 'api_key';
-    if (isClaude && previous !== 'claude_cli') auth.dataset.httpAuth = auth.value || 'api_key';
-    if (isClaude && auth.value === 'forward') auth.value = 'api_key';
-    const forward = [...auth.options].find(option => option.value === 'forward');
-    if (forward) forward.disabled = isClaude;
-    if (!isClaude && previous === 'claude_cli' && auth.dataset.httpAuth) auth.value = auth.dataset.httpAuth;
-  }
-  backend.dataset.lastValue = backend.value;
-  const details = $('modal_claude_backend_details');
-  if (details) details.hidden = !isClaude;
-  if (isClaude) void refreshClaudeCliAvailability();
 }
 async function refreshClaudeCliAvailability() {
   const status = $('modal_claude_cli_status');
@@ -2244,59 +2224,110 @@ async function refreshClaudeCliAvailability() {
   status.textContent = tr('正在检查 Claude Code CLI…','Checking Claude Code CLI…');
   try {
     const result = await api('/api/runtime/claude-cli');
-    if ($('modal_provider_backend')?.value !== 'claude_cli' || !status.isConnected) return;
+    if (!status.isConnected) return;
+    const guidance = typeof result.guidance === 'string' ? result.guidance.trim() : '';
     status.textContent = result.available
-      ? tr('EMP 可以访问 Claude Code CLI。','Claude Code CLI is available to EMP.')
-      : tr('EMP 未找到可用的 Claude Code CLI。请安装 CLI 或检查 EMP 是否能访问它，然后重新打开此表单。','EMP could not find an available Claude Code CLI. Install the CLI or check that EMP can access it, then reopen this form.');
+      ? tr('已找到 Claude Code CLI，EMP 可以访问。', guidance || 'Claude Code CLI is available to EMP.')
+      : tr('未找到可用的 Claude Code CLI。请安装或检查 EMP 是否能够访问。', guidance || 'Claude Code CLI was not found. Install it or check that EMP can access it, then reopen this form.');
   } catch (_) {
-    if ($('modal_provider_backend')?.value !== 'claude_cli' || !status.isConnected) return;
-    status.textContent = tr('无法检查 Claude Code CLI。请确认本机已安装 CLI，且管理页仍处于登录状态。','Could not check Claude Code CLI availability. Confirm it is installed locally and that this management page is still signed in.');
+    if (!status.isConnected) return;
+    status.textContent = tr('无法检查 Claude Code CLI。请重新加载管理页后重试。','Could not check Claude Code CLI availability. Reload this page to try again.');
   }
+}
+function openClaudeCpaForm(existing = {}) {
+  const editing = Boolean(existing.id);
+  const identity = editing ? {} : defaultClaudeProviderIdentity('cpa');
+  const switchingFromLocal = existing.auth_mode === 'claude_login';
+  const keyHint = existing.api_key_set
+    ? tr('留空会保留已保存的 Key','Leave blank to keep the saved key')
+    : tr('必填','required');
+  const switchButton = editing ? `<button type="button" class="secondary" data-ui-action="claude-change-connection" data-id="${esc(existing.id)}">${tr('更改连接方式','Change connection method')}</button>` : '';
+  const body = `<p class="muted">${tr('配置 CPA 端点，通过本机 Claude Code CLI 发送 Claude 请求；回复会在生成完成后显示。','Configure a CPA endpoint for Claude requests through the installed Claude Code CLI. Replies appear when generation finishes.')}</p><div class="grid"><div><label>${tr('Provider ID / 路由（必填）','Provider ID / route (required)')}<input id="modal_cpa_id" value="${esc(existing.id || identity.id)}" placeholder="${tr('例如 claude-cpa','for example claude-cpa')}" ${editing ? 'readonly' : ''}></label></div><div><label>${tr('显示名称（可选）','Display name (optional)')}<input id="modal_cpa_name" value="${esc(existing.name || identity.name)}" placeholder="${tr('留空使用 Provider ID','Leave blank to use the Provider ID')}"></label></div><div class="wide"><label>CPA Base URL<input id="modal_cpa_base" type="url" value="${esc(existing.base_url || '')}" placeholder="https://cpa.example.com" required></label></div><div class="wide"><label>API Key (${keyHint})<input id="modal_cpa_key" type="password" autocomplete="new-password" placeholder="${existing.api_key_set ? esc(tr('已保存；留空保持不变','Saved; leave blank to keep it')) : esc(tr('输入 CPA API Key','Enter the CPA API key'))}"></label></div><div class="wide"><p id="modal_claude_cli_status" class="muted" role="status" aria-live="polite">${tr('正在检查 Claude Code CLI…','Checking Claude Code CLI…')}</p>${switchButton}</div></div>`;
+  openModal(editing ? tr('编辑 Claude CPA','Edit Claude CPA') : tr('添加 Claude CPA','Add Claude CPA'), body, tr('保存 Provider','Save Provider'), async () => {
+    const id = $('modal_cpa_id').value.trim();
+    const baseUrl = $('modal_cpa_base').value.trim();
+    const apiKey = $('modal_cpa_key').value.trim();
+    if (!id || !baseUrl) throw new Error(tr('Provider ID 和 CPA Base URL 不能为空','Provider ID and CPA Base URL are required'));
+    if (!editing && providerIdentityTaken(id)) throw new Error(tr('Provider ID 与现有 Provider 或账户冲突','Provider ID conflicts with an existing Provider or account'));
+    if (!apiKey && !existing.api_key_set) throw new Error(tr('请填写 CPA API Key','Enter the CPA API key'));
+    await saveProvider({
+      id,
+      name:$('modal_cpa_name').value.trim() || existing.name || identity.name,
+      base_url:baseUrl,
+      protocol:editing && !switchingFromLocal ? existing.protocol : existing.protocol || 'anthropic_messages',
+      auth_mode:editing && !switchingFromLocal ? existing.auth_mode : 'api_key',
+      execution_backend:'claude_cli',
+      api_key:apiKey
+    });
+    closeModal();
+  });
+  void refreshClaudeCliAvailability();
+}
+function openLocalClaudeSubscriptionForm(existing = {}) {
+  const editing = Boolean(existing.id);
+  const identity = editing ? {} : defaultClaudeProviderIdentity('local');
+  const protocol = ['auto', 'anthropic_messages'].includes(existing.protocol) ? existing.protocol : 'anthropic_messages';
+  const switchButton = editing ? `<button type="button" class="secondary" data-ui-action="claude-change-connection" data-id="${esc(existing.id)}">${tr('更改连接方式','Change connection method')}</button>` : '';
+  const body = `<p class="muted">${tr('使用当前操作系统用户的 Claude Code 订阅登录。如未登录，请在 Claude Code 中登录。','Use this OS user’s Claude Code subscription sign-in. If you are not signed in, sign in through Claude Code.')}</p><p class="muted">${tr('手动添加模型别名或完整 ID，即可在 Codex 模型选择器中选择。','Add model aliases or full IDs to the Codex model picker.')}</p><div class="grid"><div><label>${tr('Provider ID / 路由（必填）','Provider ID / route (required)')}<input id="modal_local_claude_id" value="${esc(existing.id || identity.id)}" placeholder="claude" ${editing ? 'readonly' : ''}></label></div><div><label>${tr('显示名称（可选）','Display name (optional)')}<input id="modal_local_claude_name" value="${esc(existing.name || identity.name)}" placeholder="${tr('留空使用 Provider ID','Leave blank to use the Provider ID')}"></label></div><div class="wide"><p id="modal_claude_cli_status" class="muted" role="status" aria-live="polite">${tr('正在检查 Claude Code CLI…','Checking Claude Code CLI…')}</p>${switchButton}</div></div>`;
+  openModal(editing ? tr('编辑本機 Claude 訂閱','Edit local Claude subscription') : tr('本機 Claude 訂閱','Local Claude subscription'), body, tr('保存 Provider','Save Provider'), async () => {
+    const id = $('modal_local_claude_id').value.trim();
+    if (!id) throw new Error(tr('Provider ID 不能为空','Provider ID is required'));
+    if (!editing && providerIdentityTaken(id)) throw new Error(tr('Provider ID 与现有 Provider 或账户冲突','Provider ID conflicts with an existing Provider or account'));
+    await saveProvider({
+      id,
+      name:$('modal_local_claude_name').value.trim() || existing.name || identity.name,
+      execution_backend:'claude_cli',
+      auth_mode:'claude_login',
+      protocol,
+      base_url:'',
+      api_key:'',
+      api_key_file:''
+    });
+    closeModal();
+  });
+  void refreshClaudeCliAvailability();
+}
+function editClaudeProvider(provider) {
+  return provider.auth_mode === 'claude_login'
+    ? openLocalClaudeSubscriptionForm(provider)
+    : openClaudeCpaForm(provider);
 }
 function chooseOfficialProvider(key) {
   const preset = officialProviders[key]; const existing = (state.providers || []).find(p => p.id === preset.id);
+  if (existing?.execution_backend === 'claude_cli') return editClaudeProvider(existing);
   const keyField = preset.auth_mode === 'forward' ? `<p class="muted">${tr('该 Provider 会转发当前 Codex 进程携带的登录态，不保存 API Key。','This Provider forwards the active Codex login and does not store an API Key.')}</p>` : `<label>API Key${existing && existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : ''}<input id="modal_provider_key" type="password" placeholder="${tr('输入 API Key','Enter API Key')}"></label>`;
-  const backendField = key === 'anthropic' ? claudeBackendControls(true) : '';
-  openModal(tr('配置 ','Configure ') + preset.name, `<p class="muted">Endpoint: <code>${esc(preset.base_url)}</code><br>${tr('协议','Protocol')}: ${esc(protocolLabel(preset.protocol))}<br>${tr('认证','Authentication')}: ${esc(authLabel(preset.auth_mode))}</p>${backendField}${keyField}`, tr('保存 Provider','Save Provider'), async () => {
+  openModal(tr('配置 ','Configure ') + preset.name, `<p class="muted">Endpoint: <code>${esc(preset.base_url)}</code><br>${tr('协议','Protocol')}: ${esc(protocolLabel(preset.protocol))}<br>${tr('认证','Authentication')}: ${esc(authLabel(preset.auth_mode))}</p>${keyField}`, tr('保存 Provider','Save Provider'), async () => {
     const keyValue = preset.auth_mode === 'forward' ? '' : $('modal_provider_key').value.trim(); if (preset.auth_mode !== 'forward' && !keyValue && !(existing && existing.api_key_set)) throw new Error(tr('请填写 API Key','Enter an API Key'));
-    const executionBackend = key === 'anthropic' ? $('modal_provider_backend').value : undefined;
-    await saveProvider(Object.assign({}, preset, {api_key:keyValue, ...(executionBackend ? {execution_backend:executionBackend} : {})})); closeModal();
+    await saveProvider(Object.assign({}, preset, {api_key:keyValue})); closeModal();
   });
-  if (key === 'anthropic') {
-    $('modal_provider_backend').value = existing?.execution_backend === 'claude_cli' ? 'claude_cli' : 'http';
-    $('modal_provider_backend').dataset.lastValue = $('modal_provider_backend').value;
-    providerBackendChanged();
-  }
 }
 function openCustomProviderForm(existing) {
   existing = existing || {};
+  if (existing.execution_backend === 'claude_cli') return editClaudeProvider(existing);
   const forwardAuthOption = existing.auth_mode === 'forward' ? `<option value="forward">Forward Codex auth</option>` : '';
-  openModal(existing.id ? tr('编辑自建 Provider','Edit custom Provider') : tr('添加自建 Provider','Add custom Provider'), `<div class="grid"><div><label>${tr('ID（必填）','ID (required)')}</label><input id="modal_provider_id" value="${esc(existing.id || '')}" placeholder="${tr('例如 my-provider','for example my-provider')}" ${existing.id ? 'readonly' : ''}></div><div><label>${tr('显示名称（可选）','Display name (optional)')}</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="${tr('留空使用 ID','Leave blank to use the ID')}"></div><div class="wide"><label>${tr('Base URL（必填）','Base URL (required)')}</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com"></div>${claudeBackendControls()}<div><label>${tr('协议','Protocol')}</label><select id="modal_provider_protocol"></select></div><div><label>${tr('认证','Authentication')}</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option>${forwardAuthOption}</select></div><div class="wide"><label>API Key${existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : tr('（必填）',' (required)')}</label><input id="modal_provider_key" type="password"></div></div>`, tr('保存 Provider','Save Provider'), async () => {
+  openModal(existing.id ? tr('编辑自建 Provider','Edit custom Provider') : tr('添加自建 Provider','Add custom Provider'), `<div class="grid"><div><label>${tr('ID（必填）','ID (required)')}</label><input id="modal_provider_id" value="${esc(existing.id || '')}" placeholder="${tr('例如 my-provider','for example my-provider')}" ${existing.id ? 'readonly' : ''}></div><div><label>${tr('显示名称（可选）','Display name (optional)')}</label><input id="modal_provider_name" value="${esc(existing.name || '')}" placeholder="${tr('留空使用 ID','Leave blank to use the ID')}"></div><div class="wide"><label>${tr('Base URL（必填）','Base URL (required)')}</label><input id="modal_provider_base" value="${esc(existing.base_url || '')}" placeholder="https://api.example.com"></div><div><label>${tr('协议','Protocol')}</label><select id="modal_provider_protocol"></select></div><div><label>${tr('认证','Authentication')}</label><select id="modal_provider_auth"><option value="api_key">Bearer API Key</option><option value="anthropic_api_key">Anthropic API Key</option>${forwardAuthOption}</select></div><div class="wide"><label>API Key${existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : tr('（必填）',' (required)')}</label><input id="modal_provider_key" type="password"></div></div>`, tr('保存 Provider','Save Provider'), async () => {
     const id = $('modal_provider_id').value.trim(); const base = $('modal_provider_base').value.trim(); if (!id || !base) throw new Error(tr('ID 和 Base URL 不能为空','ID and Base URL are required')); const keyValue = $('modal_provider_key').value.trim();
-    const executionBackend = $('modal_provider_backend').value; const protocolValue = $('modal_provider_protocol').value; const authMode = $('modal_provider_auth').value;
+    const protocolValue = $('modal_provider_protocol').value; const authMode = $('modal_provider_auth').value;
     if (authMode !== 'forward' && !keyValue && !existing.api_key_set) throw new Error(tr('请填写 API Key','Enter an API Key'));
-    if (executionBackend === 'claude_cli' && !['auto', 'anthropic_messages'].includes(protocolValue)) throw new Error(tr('Claude Code CLI 需要自动检测或 Anthropic Messages 协议','Claude Code CLI requires Auto detect or Anthropic Messages'));
-    if (executionBackend === 'claude_cli' && authMode === 'forward') throw new Error(tr('Claude Code CLI 需要 Provider API Key，不能转发 Codex 登录态','Claude Code CLI requires the Provider API key and cannot forward Codex authentication'));
-    await saveProvider({id, name:$('modal_provider_name').value.trim() || id, base_url:base, protocol:protocolValue, auth_mode:authMode, execution_backend:executionBackend, api_key:keyValue}); closeModal();
+    await saveProvider({id, name:$('modal_provider_name').value.trim() || id, base_url:base, protocol:protocolValue, auth_mode:authMode, api_key:keyValue}); closeModal();
   });
-  const backend = $('modal_provider_backend'); backend.value = existing.execution_backend === 'claude_cli' ? 'claude_cli' : 'http'; backend.dataset.lastValue = backend.value;
-  const protocol = $('modal_provider_protocol'); protocol.innerHTML = providerProtocolOptions(false); protocol.value = existing.protocol || 'auto'; protocol.dataset.httpProtocol = existing.protocol || 'auto';
+  const protocol = $('modal_provider_protocol'); protocol.innerHTML = providerProtocolOptions(); protocol.value = existing.protocol || 'auto';
   if (existing.auth_mode) $('modal_provider_auth').value = existing.auth_mode;
-  $('modal_provider_auth').dataset.httpAuth = $('modal_provider_auth').value;
-  providerBackendChanged();
 }
-function editProvider(id) { const provider = (state.providers || []).find(p => p.id === id); if (!provider) return; const officialKey = Object.keys(officialProviders).find(key => officialProviders[key].id === provider.id); const official = officialKey && officialProviders[officialKey]; if (official && provider.base_url === official.base_url && (provider.execution_backend !== 'claude_cli' || officialKey === 'anthropic')) chooseOfficialProvider(officialKey); else openCustomProviderForm(provider); }
+function editProvider(id) { const provider = (state.providers || []).find(p => p.id === id); if (!provider) return; if (provider.execution_backend === 'claude_cli') return editClaudeProvider(provider); const officialKey = Object.keys(officialProviders).find(key => officialProviders[key].id === provider.id); const official = officialKey && officialProviders[officialKey]; if (official && provider.base_url === official.base_url) chooseOfficialProvider(officialKey); else openCustomProviderForm(provider); }
 async function saveProvider(provider) {
-  const old = (state.providers || []).find(p => p.id === provider.id); const apiKey = provider.api_key || (old && old.api_key_set ? '••••••••' : '');
-  const candidate = cloneState(); const next = Object.assign({}, old || {}, provider, {api_key:apiKey, enabled:true}); const index = candidate.providers.findIndex(p => p.id === next.id); if (index >= 0) candidate.providers[index] = next; else candidate.providers.push(next); await persistState('', candidate);
+  const old = (state.providers || []).find(p => p.id === provider.id); const localLogin = provider.execution_backend === 'claude_cli' && provider.auth_mode === 'claude_login'; const apiKey = localLogin ? '' : provider.api_key || (old && old.api_key_set ? '••••••••' : '');
+  const candidate = cloneState(); const next = Object.assign({}, old || {}, provider, {api_key:apiKey, enabled:true});
+  if (localLogin) { next.base_url = ''; next.api_key = ''; next.api_key_file = ''; delete next.api_key_set; }
+  const index = candidate.providers.findIndex(p => p.id === next.id); if (index >= 0) candidate.providers[index] = next; else candidate.providers.push(next); await persistState('', candidate);
   const saved = (state.providers || []).find(p => p.id === provider.id);
-  if (!saved || (saved.auth_mode !== 'forward' && !saved.api_key_set)) throw new Error(tr('API Key 未保存，请重新输入','The API Key was not saved; enter it again'));
+  if (!saved || (saved.auth_mode !== 'forward' && saved.auth_mode !== 'claude_login' && !saved.api_key_set)) throw new Error(tr('API Key 未保存，请重新输入','The API Key was not saved; enter it again'));
   notice(tr('Provider 已保存','Provider saved'));
 }
 async function removeProvider(id) { if (!confirm(tr(`删除 Provider ${id} 及其模型？`,`Delete Provider ${id} and its models?`))) return; const candidate = cloneState(); candidate.providers = candidate.providers.filter(p => p.id !== id); candidate.models = candidate.models.filter(m => m.provider !== id); try { await persistState(tr('Provider 已删除','Provider deleted'), candidate); } catch (error) { notice(error.message, true); } }
 
 function renderModels() {
-  const models = [...(state.models || [])].sort(modelSort); if (!models.length) { $('models').innerHTML = `<p class="muted">${tr('还没有外部模型；点击 Provider 的“拉取模型”开始选择。','No external models yet. Use Fetch models on a Provider to add them.')}</p>`; return; }
+  const models = [...(state.models || [])].sort(modelSort); if (!models.length) { $('models').innerHTML = `<p class="muted">${tr('还没有外部模型；点击 Provider 的“拉取模型”或“添加模型”来添加。','No external models yet. Use Fetch models or Add model on a Provider to add one.')}</p>`; return; }
   const providerNames = Object.fromEntries((state.providers || []).map(p => [p.id, p.name || p.id])); const groups = {};
   models.forEach(model => { (groups[model.provider] ||= []).push(model); });
   const configuredOrder = (state.providers || []).map(provider => provider.id); const groupOrder = [...configuredOrder.filter(provider => groups[provider]), ...Object.keys(groups).filter(provider => !configuredOrder.includes(provider))];
@@ -2306,12 +2337,12 @@ function renderModels() {
       const levels = Array.isArray(m.reasoning_levels) ? m.reasoning_levels : [];
       const reasoning = levels.length ? levels.join('/') : (m.supports_reasoning === true ? tr('支持推理，档位未知','reasoning supported; levels unknown') : tr('无推理档位控制','no reasoning level control'));
       const capabilities = capabilitySummary(m);
-      const displayName = presentationPreview(m.id, m.display_name || m.upstream_id || m.id, usableContext(m));
+      const displayName = presentationName(m.id, m.display_name || m.upstream_id || m.id);
       const activity = activityIndicatorHtml('model', m.id, displayName);
       return `<article class="entity-card model-card${m.enabled ? '' : ' model-hidden'}">
         <div class="entity-card-main"><div class="entity-card-title"><strong>${esc(displayName)}</strong>${activity}</div>
         <div class="entity-card-subtitle"><code>${esc(m.id)}</code></div></div>
-        <div class="entity-card-meta">${m.context_window ? tr(`可用上下文 ${compactContext(usableContext(m))}（最大 ${compactContext(m.context_window)}）`,`context ${compactContext(usableContext(m))} usable (max ${compactContext(m.context_window)})`) : tr('上下文未知','context unknown')} · reasoning ${esc(reasoning)}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</div>
+        <div class="entity-card-meta">reasoning ${esc(reasoning)}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</div>
         <label class="visibility"><input type="checkbox" ${m.enabled ? 'checked' : ''} data-ui-action="model-toggle" data-id="${esc(m.id)}"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</label>
         <div class="entity-card-actions"><button class="secondary" data-icon="edit" data-ui-action="model-edit" data-id="${esc(m.id)}">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" data-ui-action="model-test" data-id="${esc(m.id)}">${tr('测试','Test')}</button><button class="danger" data-icon="trash" data-ui-action="model-remove" data-id="${esc(m.id)}">${tr('删除','Delete')}</button></div>
       </article>`;
@@ -2335,20 +2366,41 @@ function openModelImportModal(provider, models) {
 function filterDiscoveredModels(value) { const query = String(value || '').trim().toLowerCase(); document.querySelectorAll('[data-discovered-option]').forEach(option => { option.hidden = Boolean(query) && !String(option.dataset.search || '').includes(query); }); const select = $('discovered_select_all'); const clear = $('discovered_clear_all'); if (select) select.textContent = query ? tr('全选搜索结果','Select all results') : tr('全选','Select all'); if (clear) clear.textContent = query ? tr('全不选搜索结果','Select no results') : tr('全不选','Select none'); updateDiscoveredCount(); }
 function setDiscoveredChecks(checked) { document.querySelectorAll('[data-discovered-option]').forEach(option => { if (!option.hidden) { const input = option.querySelector('input[name="discovered_model"]'); if (input) input.checked = checked; } }); updateDiscoveredCount(); }
 function updateDiscoveredCount() { const options = [...document.querySelectorAll('input[name="discovered_model"]')]; const visible = options.filter(input => !input.closest('[data-discovered-option]')?.hidden); const selected = options.filter(input => input.checked).length; const count = $('discovered_count'); if (count) count.textContent = tr(`已选 ${selected}/${options.length}（当前结果 ${visible.filter(input => input.checked).length}/${visible.length}）`,`${selected}/${options.length} selected (${visible.filter(input => input.checked).length}/${visible.length} in current results)`); }
-function openManualModelModal(modelId = '') {
-  const existing = (state.models || []).find(m => m.id === modelId) || {}; editingModelId = modelId; modalReasoningLevels = Array.isArray(existing.reasoning_levels) ? existing.reasoning_levels : null; modalReasoningSupport = typeof existing.supports_reasoning === 'boolean' ? existing.supports_reasoning : null; modalReasoningSummarySupport = typeof existing.supports_reasoning_summaries === 'boolean' ? existing.supports_reasoning_summaries : null;
-  const options = (state.providers || []).map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join('');
+function openManualModelModal(modelId = '', preferredProviderId = '') {
+  const existing = (state.models || []).find(m => m.id === modelId) || {};
+  const selectedProviderId = existing.provider || preferredProviderId || (state.providers || [])[0]?.id || '';
+  const selectedProvider = (state.providers || []).find(provider => provider.id === selectedProviderId);
+  const localClaude = selectedProvider?.auth_mode === 'claude_login';
+  editingModelId = modelId;
+  modalReasoningLevels = Array.isArray(existing.reasoning_levels) ? existing.reasoning_levels : null;
+  modalReasoningSupport = typeof existing.supports_reasoning === 'boolean' ? existing.supports_reasoning : null;
+  modalReasoningSummarySupport = typeof existing.supports_reasoning_summaries === 'boolean' ? existing.supports_reasoning_summaries : null;
+  const options = (state.providers || []).map(p => `<option value="${esc(p.id)}">${esc(p.name || p.id)} (${esc(p.id)})</option>`).join('');
   const vision = visionStatus(existing);
   const inputModalities = (Array.isArray(existing.input_modalities) ? existing.input_modalities : ['text']).filter(value => value !== 'image').concat(vision === 'supported' ? ['image'] : []);
+  const upstreamLabel = localClaude ? tr('模型别名或完整 ID','Model alias or full ID') : tr('上游模型名','Upstream model name');
+  const upstreamPlaceholder = localClaude ? tr('输入 Claude Code 支持的别名或完整 ID','Enter a Claude Code model alias or full ID') : tr('例如 glm','for example glm');
   modalVisionStatus = vision;
-  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label>${tr('上游模型名','Upstream model name')}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${tr('例如 glm','for example glm')}" oninput="updateManualModelRoute()"></div><div class="wide"><label>${tr('最大上下文窗口（可选）','Maximum context window (optional)')}</label><div class="input-action"><input id="modal_model_context" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.context_window || 0)}" oninput="this.value=this.value.replace(/\\D/g,'');previewModalContext()"><button type="button" class="secondary" onclick="inspectModalModel()">${tr('获取上游最大值','Fetch upstream maximum')}</button></div><small class="muted" id="modal_model_context_usable">${existing.context_window ? tr(`Codex 可用 ${compactContext(usableContext(existing))}`,`Codex uses ${compactContext(usableContext(existing))}`) : ''}</small></div><div class="wide"><label>${tr('输入模态','Input modalities')}</label><div id="modal_model_modalities" class="modality-options">${modalityOptions(inputModalities, vision, Boolean(modelId))}</div></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
-  if (existing.provider) $('modal_model_provider').value = existing.provider;
+  const body = `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label id="modal_model_upstream_label">${upstreamLabel}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${upstreamPlaceholder}" oninput="updateManualModelRoute()"></div><div class="wide"><label>${tr('最大上下文窗口（可选）','Maximum context window (optional)')}</label><div class="input-action"><input id="modal_model_context" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.context_window || 0)}" oninput="this.value=this.value.replace(/\\D/g,'');previewModalContext()"><button id="modal_model_context_inspect" type="button" class="secondary" onclick="inspectModalModel()" ${localClaude ? 'hidden' : ''}>${tr('获取上游最大值','Fetch upstream maximum')}</button></div><small class="muted" id="modal_model_context_usable">${existing.context_window ? tr(`Codex 可用 ${compactContext(usableContext(existing))}`,`Codex uses ${compactContext(usableContext(existing))}`) : ''}</small></div><div class="wide"><label>${tr('输入模态','Input modalities')}</label><div id="modal_model_modalities" class="modality-options">${modalityOptions(inputModalities, vision, Boolean(modelId))}</div></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`;
+  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), body, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
+  if (selectedProviderId) $('modal_model_provider').value = selectedProviderId;
   updateManualModelRoute();
 }
 function manualModelRoute() { const provider = $('modal_model_provider')?.value || ''; const entered = $('modal_model_upstream')?.value.trim() || ''; const prefix = provider + '/'; return provider && entered ? prefix + (entered.startsWith(prefix) ? entered.slice(prefix.length) : entered) : ''; }
-function updateManualModelRoute() { const route = manualModelRoute(); if ($('modal_model_route')) $('modal_model_route').textContent = route || tr('保存后生成','Generated after save'); }
+function updateManualModelRoute() {
+  const route = manualModelRoute();
+  if ($('modal_model_route')) $('modal_model_route').textContent = route || tr('保存后生成','Generated after save');
+  const provider = (state.providers || []).find(item => item.id === $('modal_model_provider')?.value);
+  const localClaude = provider?.auth_mode === 'claude_login';
+  const label = $('modal_model_upstream_label');
+  const upstream = $('modal_model_upstream');
+  const inspect = $('modal_model_context_inspect');
+  if (label) label.textContent = localClaude ? tr('模型别名或完整 ID','Model alias or full ID') : tr('上游模型名','Upstream model name');
+  if (upstream) upstream.placeholder = localClaude ? tr('输入 Claude Code 支持的别名或完整 ID','Enter a Claude Code model alias or full ID') : tr('例如 glm','for example glm');
+  if (inspect) inspect.hidden = Boolean(localClaude);
+}
 function previewModalContext() { const value = Number($('modal_model_context').value) || 0; $('modal_model_context_usable').textContent = value ? tr(`Codex 可用 ${compactContext(usableContext({context_window:value}))}`,`Codex uses ${compactContext(usableContext({context_window:value}))}`) : ''; }
-async function inspectModalModel() { const provider = $('modal_model_provider').value; const upstream = $('modal_model_upstream').value.trim(); if (!provider || !upstream) return notice(tr('请填写 Provider 和上游模型名','Enter a Provider and upstream model name'), true); try { const result = await api('/api/models/metadata', {method:'POST', body:JSON.stringify({provider, model:upstream})}); $('modal_model_context').value = result.context_window; modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : []; modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null; modalReasoningSummarySupport = typeof result.supports_reasoning_summaries === 'boolean' ? result.supports_reasoning_summaries : null; updateManualModelRoute(); notice(tr(`已获取上限：输入 ${Number(result.input_token_limit).toLocaleString()} · 输出 ${Number(result.output_token_limit).toLocaleString()}`,`Limits fetched: input ${Number(result.input_token_limit).toLocaleString()} · output ${Number(result.output_token_limit).toLocaleString()}`)); } catch (error) { notice(tr('获取失败：','Fetch failed: ') + upstreamErrorText(error), true); } }
+async function inspectModalModel() { const provider = $('modal_model_provider').value; const upstream = $('modal_model_upstream').value.trim(); if (!provider || !upstream) return notice(tr('请填写 Provider 和上游模型名','Enter a Provider and upstream model name'), true); if ((state.providers || []).some(item => item.id === provider && item.auth_mode === 'claude_login')) return notice(tr('本机 Claude 登录不提供模型目录查询，请手动输入模型别名或完整 ID。','Local Claude login has no model-list lookup; enter a model alias or full ID manually.'), true); try { const result = await api('/api/models/metadata', {method:'POST', body:JSON.stringify({provider, model:upstream})}); $('modal_model_context').value = result.context_window; modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : []; modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null; modalReasoningSummarySupport = typeof result.supports_reasoning_summaries === 'boolean' ? result.supports_reasoning_summaries : null; updateManualModelRoute(); notice(tr(`已获取上限：输入 ${Number(result.input_token_limit).toLocaleString()} · 输出 ${Number(result.output_token_limit).toLocaleString()}`,`Limits fetched: input ${Number(result.input_token_limit).toLocaleString()} · output ${Number(result.output_token_limit).toLocaleString()}`)); } catch (error) { notice(tr('获取失败：','Fetch failed: ') + upstreamErrorText(error), true); } }
 async function saveManualModel() {
   const provider = $('modal_model_provider').value;
   const entered = $('modal_model_upstream').value.trim();
@@ -2531,10 +2583,15 @@ function runDynamicUiAction(element) {
     case 'period-refresh': refreshPeriod(id); return true;
     case 'period-edit': editPeriod(id); return true;
     case 'provider-discover': discoverProvider(id); return true;
+    case 'provider-add-model': openManualModelModal('', id); return true;
     case 'provider-edit': editProvider(id); return true;
     case 'provider-toggle-models': toggleProviderModels(id, element.dataset.allHidden === 'true'); return true;
     case 'provider-remove': removeProvider(id); return true;
     case 'official-provider-choose': chooseOfficialProvider(element.dataset.provider || ''); return true;
+    case 'claude-provider-choose': openClaudeConnectionChooser(); return true;
+    case 'claude-local-choose': openLocalClaudeSubscriptionForm((state.providers || []).find(provider => provider.id === id) || {}); return true;
+    case 'claude-cpa-choose': openClaudeCpaForm((state.providers || []).find(provider => provider.id === id) || {}); return true;
+    case 'claude-change-connection': openClaudeConnectionChooser((state.providers || []).find(provider => provider.id === id) || {}); return true;
     case 'model-toggle': toggleModel(id, element.checked); return true;
     case 'model-edit': openManualModelModal(id); return true;
     case 'model-test': testModel(id); return true;
