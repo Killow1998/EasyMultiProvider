@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.6 (2026-09-30)
+
+- Align Credit and reset controls in a shared central account column with stable
+  widths and right-aligned amounts. Place Delete before Edit, Refresh and Trend
+  so their positions match for Native and imported accounts. Keep the complete
+  control groups together on smaller screens.
+
 ## 0.12.5 (2026-09-30)
 
 - Show the Codex version and model status on one line; keep detailed application
