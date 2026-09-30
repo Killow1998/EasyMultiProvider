@@ -46,10 +46,19 @@ pub fn created(pid: u32) -> Option<f64> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::{
-            Foundation::{CloseHandle, FILETIME},
-            System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+            Foundation::{CloseHandle, FILETIME, WAIT_TIMEOUT},
+            System::Threading::{
+                GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+                PROCESS_SYNCHRONIZE, WaitForSingleObject,
+            },
         };
-        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        let process = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            )
+        };
         if process.is_null() {
             return None;
         }
@@ -66,10 +75,12 @@ pub fn created(pid: u32) -> Option<f64> {
                 &mut times[3],
             )
         };
-        unsafe { CloseHandle(process) };
         // Windows retains a terminated process object while a launcher/debugger
-        // still holds its handle. Its creation time is not a liveness check.
-        if result == 0 || times[1].dwHighDateTime != 0 || times[1].dwLowDateTime != 0 {
+        // still holds its handle. Creation time is not a liveness check, and the
+        // exit time is undefined for a running process. Test its signal instead.
+        let running = unsafe { WaitForSingleObject(process, 0) } == WAIT_TIMEOUT;
+        unsafe { CloseHandle(process) };
+        if result == 0 || !running {
             return None;
         }
         let ticks = ((times[0].dwHighDateTime as u64) << 32) | times[0].dwLowDateTime as u64;
@@ -260,18 +271,20 @@ mod tests {
     #[test]
     fn exited_parent_is_not_alive_while_its_process_handle_is_retained() {
         use std::process::{Command, Stdio};
-        let mut child = Command::new("cmd.exe")
-            .args(["/D", "/C", "exit 0"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        assert!(child.wait().unwrap().success());
-        // Keep Child (and therefore its Windows handle) alive during the query.
-        assert_eq!(super::created(child.id()), None);
+        for code in [0, 259] {
+            let mut child = Command::new("cmd.exe")
+                .args(["/D", "/C", &format!("exit {code}")])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            assert_eq!(child.wait().unwrap().code(), Some(code));
+            // Retain the handle, including when exit code is STILL_ACTIVE (259).
+            assert_eq!(super::created(child.id()), None);
+            drop(child);
+        }
         assert!(super::created(std::process::id()).is_some());
-        drop(child);
     }
 
     #[cfg(windows)]
