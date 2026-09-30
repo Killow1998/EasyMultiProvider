@@ -1288,11 +1288,11 @@ function supportDetailLabel(value) {
   const labels = language === 'en' ? {
     allowed:'Likely writable', denied:'Write permission denied', unknown:'Unknown',
     environment:'Environment proxy', system:'System proxy', direct:'Direct', proxy:'Through proxy',
-    catalog_loaded:'EMP model catalog observed', emp_catalog_absent:'EMP model IDs absent', nvm:'Codex CLI managed by nvm', path_cli:'Codex CLI on PATH'
+    catalog_loaded:'EMP model catalog observed', emp_catalog_absent:'EMP model IDs absent', nvm:'Codex CLI managed by nvm', path_cli:'Codex CLI on PATH', codex_app:'ChatGPT App (Codex)'
   } : {
     allowed:'可能可写', denied:'没有写入权限', unknown:'未知',
     environment:'环境变量代理', system:'系统代理', direct:'直连', proxy:'经过代理',
-    catalog_loaded:'已观察 EMP 模型目录', emp_catalog_absent:'EMP 模型 ID 已不可见', nvm:'由 nvm 管理的 Codex CLI', path_cli:'PATH 中的 Codex CLI'
+    catalog_loaded:'已观察 EMP 模型目录', emp_catalog_absent:'EMP 模型 ID 已不可见', nvm:'由 nvm 管理的 Codex CLI', path_cli:'PATH 中的 Codex CLI', codex_app:'ChatGPT App（Codex）'
   };
   return labels[value] || esc(value || 'unknown');
 }
@@ -1314,9 +1314,19 @@ function renderSupportReport(report) {
   const accountLines = imported.map(account => `${tr('导入账号','Imported account')} ${Number(account.index) || 0}: ${supportStatusLabel(account.quota_status)}`);
   const configNotes = [!config.exists && tr('文件不存在','file missing'), config.write_access_hint === 'denied' && tr('没有写入权限','not writable')].filter(Boolean);
   const minimum = codexMinimum;
-  const codexNotes = [codex.compatibility === 'unsupported' ? tr(`版本过旧，需要 ${minimum} 或更新`, `too old, needs ${minimum} or newer`) : tr(`符合最低版本要求（${minimum}及以上）`, `Meets minimum version requirement (${minimum}+)`), codex.source && supportDetailLabel(codex.source), codex.target && runtimeLabel(codex.state,codex.target)].filter(Boolean);
+  const compatibilityNote = {
+    supported:tr(`符合最低版本要求（${minimum}及以上）`, `Meets minimum version requirement (${minimum}+)`),
+    unsupported:tr(`版本过旧，需要 ${minimum} 或更新`, `too old, needs ${minimum} or newer`)
+  }[codex.compatibility];
+  const versionFallback = {
+    unavailable:tr('未找到','not found'),
+    supported:tr('已找到','found'),
+    unsupported:tr('已找到','found')
+  }[codex.compatibility];
+  const versionLabel = codex.version || versionFallback || tr('版本未知','version unknown');
+  const codexNotes = [compatibilityNote, codex.source && supportDetailLabel(codex.source), codex.target && runtimeLabel(codex.state,codex.target)].filter(Boolean);
   box.innerHTML = `<p><strong>${tr('配置','Config')}</strong> ${esc(config.path || '—')}${configNotes.map(note => ' · ' + esc(note)).join('')}</p>
-    <p><strong>Codex</strong> ${esc(codex.version || tr('未找到','not found'))} · ${codexNotes.map(esc).join(' · ')}</p>
+    <p><strong>Codex</strong> ${esc(versionLabel)}${codexNotes.map(note => ' · ' + esc(note)).join('')}</p>
     <p><strong>${tr('代理','Proxy')}</strong> ${supportDetailLabel(network.source_at_startup)} · ${supportDetailLabel(network.chatgpt_route)}${network.proxy_scheme ? ' (' + esc(network.proxy_scheme) + ')' : ''}</p>
     <p><strong>${tr('账号','Accounts')}</strong> Native: ${supportStatusLabel(accounts.native?.quota_status)}${accountLines.length ? ' · ' + accountLines.map(esc).join(' · ') : ''}</p>`;
 }
