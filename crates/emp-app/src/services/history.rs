@@ -97,6 +97,24 @@ fn context_guard_body(body: &Value) -> Cow<'_, Value> {
     }
 }
 
+fn assess_destination_context(
+    candidate: &ResolvedRoute,
+    body: &Value,
+) -> Result<emp_history::context::ContextAssessment, DestinationPrepareError> {
+    let payload = if crate::services::claude_cli::selected(candidate) {
+        crate::services::claude_cli::context_estimation_payload(body)
+            .map_err(DestinationPrepareError::ClaudeCli)?
+    } else {
+        project_external_payload(candidate, body).map_err(DestinationPrepareError::Router)?
+    };
+    Ok(emp_history::context::assess(
+        candidate.provider.value(),
+        candidate.model.value(),
+        candidate.protocol.as_config_str(),
+        &payload,
+    ))
+}
+
 pub(crate) fn prepare_destination_context(
     state: &ServerState,
     route: &ResolvedRoute,
@@ -132,17 +150,7 @@ pub(crate) fn prepare_destination_context(
     let candidate = route
         .with_protocol(protocol)
         .map_err(|_| DestinationPrepareError::History("history_compaction_failed"))?;
-    let assessment = {
-        let guard_body = context_guard_body(&body);
-        let payload = project_external_payload(&candidate, guard_body.as_ref())
-            .map_err(DestinationPrepareError::Router)?;
-        emp_history::context::assess(
-            candidate.provider.value(),
-            candidate.model.value(),
-            candidate.protocol.as_config_str(),
-            &payload,
-        )
-    };
+    let assessment = assess_destination_context(&candidate, context_guard_body(&body).as_ref())?;
     if let Some(bytes) = assessment
         .input_estimate
         .and_then(|tokens| tokens.checked_mul(2))
@@ -208,17 +216,8 @@ pub(crate) fn prepare_destination_context(
             .take()
             .unwrap_or(DestinationPrepareError::History(reason))
     })?;
-    let final_assessment = {
-        let final_guard_body = context_guard_body(&compacted);
-        let payload = project_external_payload(&candidate, final_guard_body.as_ref())
-            .map_err(DestinationPrepareError::Router)?;
-        emp_history::context::assess(
-            candidate.provider.value(),
-            candidate.model.value(),
-            candidate.protocol.as_config_str(),
-            &payload,
-        )
-    };
+    let final_assessment =
+        assess_destination_context(&candidate, context_guard_body(&compacted).as_ref())?;
     if final_assessment.blocked() {
         return Err(DestinationPrepareError::Context(final_assessment.into()));
     }

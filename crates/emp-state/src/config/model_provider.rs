@@ -8,7 +8,7 @@ const PROVIDER_PROTOCOLS: [&str; 4] = [
     "chat_completions",
     "anthropic_messages",
 ];
-const PROVIDER_AUTH_MODES: [&str; 3] = ["api_key", "anthropic_api_key", "forward"];
+const PROVIDER_AUTH_MODES: [&str; 4] = ["api_key", "anthropic_api_key", "forward", "claude_login"];
 const CAPABILITY_SOURCES: [(&str, f64); 7] = [
     ("official", 0.95),
     ("advertised", 0.75),

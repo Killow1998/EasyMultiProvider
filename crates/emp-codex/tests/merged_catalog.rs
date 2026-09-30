@@ -30,13 +30,13 @@ fn external_catalog_keeps_coding_template_without_native_entitlements() {
 }
 
 #[test]
-fn claude_cli_catalog_is_text_only_without_erasing_stored_image_capabilities() {
+fn claude_cli_catalog_keeps_known_images_but_not_unproven_image_detail_or_other_modalities() {
     let config = json!({
         "providers":[{"id":"demo","protocol":"anthropic_messages","execution_backend":"claude_cli"}],
         "models":[{
             "id":"demo/model",
             "provider":"demo",
-            "input_modalities":["text","image"],
+            "input_modalities":["text","image","audio","video"],
             "supports_image_detail_original":true
         }]
     });
@@ -49,7 +49,7 @@ fn claude_cli_catalog_is_text_only_without_erasing_stored_image_capabilities() {
         .iter()
         .find(|entry| entry["slug"] == "demo/model")
         .expect("Claude CLI model");
-    assert_eq!(claude_model["input_modalities"], json!(["text"]));
+    assert_eq!(claude_model["input_modalities"], json!(["text", "image"]));
     assert_eq!(claude_model["supports_image_detail_original"], false);
 
     let mut http_config = config.clone();
@@ -65,9 +65,70 @@ fn claude_cli_catalog_is_text_only_without_erasing_stored_image_capabilities() {
     assert_eq!(http_model["supports_image_detail_original"], true);
     assert_eq!(
         config["models"][0]["input_modalities"],
-        json!(["text", "image"])
+        json!(["text", "image", "audio", "video"])
     );
     assert_eq!(config["models"][0]["supports_image_detail_original"], true);
+}
+
+#[test]
+fn claude_cli_catalog_does_not_invent_image_support_when_not_advertised() {
+    let config = json!({
+        "providers":[{"id":"demo","protocol":"anthropic_messages","execution_backend":"claude_cli"}],
+        "models":[{"id":"demo/text-only","provider":"demo","input_modalities":["text","audio","video"]}]
+    });
+    let catalog = build_catalog(
+        &config,
+        &json!({"models":[]}),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+    let model = catalog["models"]
+        .as_array()
+        .expect("models")
+        .iter()
+        .find(|entry| entry["slug"] == "demo/text-only")
+        .expect("text-only model");
+
+    assert_eq!(model["input_modalities"], json!(["text"]));
+    assert_eq!(
+        config["models"][0]["input_modalities"],
+        json!(["text", "audio", "video"])
+    );
+}
+
+#[test]
+fn claude_login_configuration_generates_a_credential_free_codex_route() {
+    let config = emp_state::normalize_configuration(Some(&json!({
+        "providers":[{
+            "id":"claude-local",
+            "protocol":"anthropic_messages",
+            "execution_backend":"claude_cli",
+            "auth_mode":"claude_login"
+        }],
+        "models":[{
+            "id":"claude-local/sonnet",
+            "provider":"claude-local",
+            "upstream_id":"sonnet",
+            "input_modalities":["text"]
+        }]
+    })))
+    .expect("local login configuration");
+    let catalog = build_catalog(
+        &config,
+        &json!({"models":[]}),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+    let model = catalog["models"]
+        .as_array()
+        .expect("models")
+        .iter()
+        .find(|entry| entry["slug"] == "claude-local/sonnet")
+        .expect("Codex picker route");
+
+    assert_eq!(model["input_modalities"], json!(["text"]));
+    assert!(model.get("api_key").is_none());
+    assert!(model.get("api_key_file").is_none());
 }
 
 #[test]

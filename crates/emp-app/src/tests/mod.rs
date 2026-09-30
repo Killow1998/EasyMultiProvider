@@ -60,6 +60,8 @@ mod catalog_api_contract;
 mod claude_availability_contract;
 mod claude_cli_contract;
 mod claude_cli_failure_contract;
+#[cfg(unix)]
+mod claude_local_login_contract;
 mod config_api_contract;
 mod conversation_http_contract;
 mod conversation_switch_contract;

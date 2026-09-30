@@ -253,6 +253,15 @@ pub(crate) fn serve_responses_websocket(
                     continue;
                 }
             };
+        if crate::services::claude_cli::selected(&route)
+            && let Err(error) =
+                crate::services::claude_cli::preflight_input(&Value::Object(request_body.clone()))
+        {
+            if websocket.send_json(&error.websocket_value()).is_err() {
+                return;
+            }
+            continue;
+        }
         let ids = match projection_ids() {
             Ok(ids) => ids,
             Err(_) => {

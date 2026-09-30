@@ -1,3 +1,4 @@
+use super::media::ExpectedUserContent;
 use crate::app::ServerState;
 use crate::http::response::{response, status_text};
 use crate::services::claude_cli::ClaudeCliError;
@@ -35,7 +36,7 @@ pub(super) fn run_once(
     state: &ServerState,
     route: &ResolvedRoute,
     incoming: &BTreeMap<String, String>,
-    transcript: &[u8],
+    expected_user_content: &ExpectedUserContent,
     token: &str,
     cancelled: &AtomicBool,
     result_tx: mpsc::SyncSender<Result<RelayResult, ClaudeCliError>>,
@@ -61,7 +62,13 @@ pub(super) fn run_once(
             Err(error) => break Err(error),
         };
         match handle_request(
-            accepted, state, route, incoming, transcript, token, cancelled,
+            accepted,
+            state,
+            route,
+            incoming,
+            expected_user_content,
+            token,
+            cancelled,
         ) {
             Ok(Some(result)) => break Ok(result),
             Ok(None) if probe_requests < MAX_RELAY_PROBE_REQUESTS => {
@@ -84,11 +91,11 @@ fn handle_request(
     state: &ServerState,
     route: &ResolvedRoute,
     incoming: &BTreeMap<String, String>,
-    transcript: &[u8],
+    expected_user_content: &ExpectedUserContent,
     token: &str,
     cancelled: &AtomicBool,
 ) -> Result<Option<RelayResult>, ClaudeCliError> {
-    let request = read_accepted_request(&mut stream)?;
+    let mut request = read_accepted_request(&mut stream)?;
     let health_preflight = request.method == "HEAD" && request.path == "/api/hello";
     if request.path != "/v1/messages" && !health_preflight {
         write_error(&mut stream, 404, "not_found");
@@ -108,7 +115,9 @@ fn handle_request(
             .map_err(|_| ClaudeCliError::Failure("claude_cli_relay_write_failed"))?;
         return Ok(None);
     }
-    if !messages_match(&request.body, transcript) {
+    if !normalize_cli_system_messages(&mut request.body)
+        || !messages_match(&request.body, expected_user_content)
+    {
         write_error(&mut stream, 400, "invalid_request");
         return Err(ClaudeCliError::Failure("claude_cli_transcript_mismatch"));
     }
@@ -271,30 +280,186 @@ fn read_request(stream: &mut TcpStream) -> Result<RelayRequest, ClaudeCliError> 
     })
 }
 
-fn messages_match(body: &Value, transcript: &[u8]) -> bool {
+fn normalize_cli_system_messages(body: &mut Value) -> bool {
+    let Some(messages) = body.get("messages").and_then(Value::as_array) else {
+        return false;
+    };
+    let mut user_message = None;
+    let mut moved_system_blocks = Vec::new();
+    for message in messages {
+        match message.get("role").and_then(Value::as_str) {
+            Some("user") if user_message.is_none() => user_message = Some(message.clone()),
+            Some("user") | Some("assistant") => return false,
+            Some("system") => {
+                if message
+                    .as_object()
+                    .is_none_or(|object| object.len() != 2 || !object.contains_key("content"))
+                {
+                    return false;
+                }
+                match message.get("content") {
+                    Some(Value::String(text)) => {
+                        moved_system_blocks.push(serde_json::json!({"type":"text","text":text}));
+                    }
+                    Some(Value::Array(blocks)) if !blocks.is_empty() => {
+                        if blocks.iter().any(|block| {
+                            block.get("type").and_then(Value::as_str) != Some("text")
+                                || !block.get("text").is_some_and(Value::is_string)
+                        }) {
+                            return false;
+                        }
+                        moved_system_blocks.extend(blocks.iter().cloned());
+                    }
+                    _ => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
+    let Some(user_message) = user_message else {
+        return false;
+    };
+    let mut system_blocks = match body.get("system") {
+        None => Vec::new(),
+        Some(Value::String(text)) => vec![serde_json::json!({"type":"text","text":text})],
+        Some(Value::Array(blocks)) => {
+            if blocks.iter().any(|block| {
+                block.get("type").and_then(Value::as_str) != Some("text")
+                    || !block.get("text").is_some_and(Value::is_string)
+            }) {
+                return false;
+            }
+            blocks.clone()
+        }
+        Some(_) => return false,
+    };
+    system_blocks.extend(moved_system_blocks);
+
+    let Some(object) = body.as_object_mut() else {
+        return false;
+    };
+    object.insert("messages".to_owned(), Value::Array(vec![user_message]));
+    if !system_blocks.is_empty() {
+        object.insert("system".to_owned(), Value::Array(system_blocks));
+    }
+    true
+}
+
+fn messages_match(body: &Value, expected: &ExpectedUserContent) -> bool {
     if body.get("stream").and_then(Value::as_bool) != Some(true) {
         return false;
     }
     let Some(messages) = body.get("messages").and_then(Value::as_array) else {
         return false;
     };
-    let users = messages
-        .iter()
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .collect::<Vec<_>>();
-    if users.len() != 1 {
+    let [message] = messages.as_slice() else {
+        return false;
+    };
+    if message.get("role").and_then(Value::as_str) != Some("user") {
         return false;
     }
-    let content = &users[0]["content"];
-    let text = match content {
-        Value::String(text) => Some(text.as_str()),
-        Value::Array(parts) if parts.len() == 1 => parts[0]
-            .get("text")
-            .and_then(Value::as_str)
-            .filter(|_| parts[0].get("type").and_then(Value::as_str) == Some("text")),
-        _ => None,
+    match expected {
+        ExpectedUserContent::Text(transcript) => {
+            let content = &message["content"];
+            let text = match content {
+                Value::String(text) => Some(text.as_str()),
+                Value::Array(parts) if parts.len() == 1 => parts[0]
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .filter(|_| parts[0].get("type").and_then(Value::as_str) == Some("text")),
+                _ => None,
+            };
+            text.is_some_and(|text| text.as_bytes() == transcript)
+        }
+        ExpectedUserContent::Blocks(expected) => {
+            let Some(content) = message.get("content").and_then(Value::as_array) else {
+                return false;
+            };
+            matches_expected_blocks(content, expected)
+        }
+    }
+}
+
+fn matches_expected_blocks(actual: &[Value], expected: &[Value]) -> bool {
+    let mut actual_index = 0;
+    let mut deferred_resizes = Vec::new();
+    for expected_block in expected {
+        let Some(actual_block) = actual.get(actual_index) else {
+            return false;
+        };
+        if block_matches(expected_block, actual_block) {
+            actual_index += 1;
+            continue;
+        }
+        if expected_block.get("type").and_then(Value::as_str) != Some("image")
+            || actual_block.get("type").and_then(Value::as_str) != Some("image")
+        {
+            return false;
+        }
+        if let Some(note) = actual.get(actual_index + 1)
+            && super::image_geometry::matches_resize(expected_block, actual_block, note)
+        {
+            actual_index += 2;
+        } else {
+            deferred_resizes.push((expected_block, actual_block));
+            actual_index += 1;
+        }
+    }
+    let Some(trailing) = actual.get(actual_index..) else {
+        return false;
     };
-    text.is_some_and(|text| text.as_bytes() == transcript)
+    if trailing.len() != deferred_resizes.len() {
+        return false;
+    }
+    deferred_resizes
+        .iter()
+        .zip(trailing)
+        .all(|((expected_image, actual_image), note)| {
+            super::image_geometry::matches_resize(expected_image, actual_image, note)
+        })
+}
+
+fn block_matches(expected: &Value, actual: &Value) -> bool {
+    if expected == actual {
+        return true;
+    }
+    let (Some(expected_fields), Some(actual_fields)) = (expected.as_object(), actual.as_object())
+    else {
+        return false;
+    };
+    if expected_fields.len() != actual_fields.len()
+        || expected_fields
+            .iter()
+            .any(|(key, value)| key != "text" && actual_fields.get(key) != Some(value))
+        || expected_fields.get("type").and_then(Value::as_str) != Some("text")
+    {
+        return false;
+    }
+    let Some(expected_text) = expected_fields.get("text").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(actual_text) = actual_fields.get("text").and_then(Value::as_str) else {
+        return false;
+    };
+    let (Some(expected_value), Some(actual_value)) = (
+        transcript_marker_value(expected_text),
+        transcript_marker_value(actual_text),
+    ) else {
+        return false;
+    };
+    expected_value == actual_value
+}
+
+fn transcript_marker_value(text: &str) -> Option<Value> {
+    let value = serde_json::from_str::<Value>(text).ok()?;
+    let object = value.as_object()?;
+    let metadata_marker = object.len() == 1 && object.contains_key("codex_responses_metadata");
+    let item_marker = object
+        .get("codex_item_index")
+        .and_then(Value::as_u64)
+        .is_some()
+        && object.get("item").is_some_and(Value::is_object);
+    (metadata_marker || item_marker).then_some(value)
 }
 
 fn has_only_structured_output_carrier(body: &Value) -> bool {
@@ -359,17 +524,154 @@ mod tests {
             "messages":[{"role":"user","content":[{"type":"text","text":"{\"model\":\"m\",\"input\":\"hello\",\"stream\":false}"}]}],
             "tools":[{"name":"StructuredOutput","input_schema":{"type":"object"}}]
         });
-        assert!(messages_match(&body, transcript));
+        assert!(messages_match(
+            &body,
+            &ExpectedUserContent::Text(transcript.to_vec())
+        ));
         assert!(has_only_structured_output_carrier(&body));
         let mut changed = body.clone();
         changed["messages"][0]["content"][0]["text"] = "different".into();
-        assert!(!messages_match(&changed, transcript));
+        assert!(!messages_match(
+            &changed,
+            &ExpectedUserContent::Text(transcript.to_vec())
+        ));
         changed = body.clone();
         changed["tools"]
             .as_array_mut()
             .unwrap()
             .push(serde_json::json!({"name":"Bash"}));
         assert!(!has_only_structured_output_carrier(&changed));
+    }
+
+    #[test]
+    fn relay_requires_exact_ordered_text_and_media_blocks() {
+        let expected = vec![
+            serde_json::json!({"type":"text","text":"item 0 image part 1 follows"}),
+            serde_json::json!({"type":"image","source":{"type":"url","url":"https://images.invalid/a.png"}}),
+        ];
+        let body = serde_json::json!({
+            "stream":true,
+            "messages":[{"role":"user","content":expected}],
+            "tools":[{"name":"StructuredOutput"}]
+        });
+        assert!(messages_match(
+            &body,
+            &ExpectedUserContent::Blocks(expected.clone())
+        ));
+
+        let mut changed = body.clone();
+        changed["messages"][0]["content"][1]["source"]["url"] =
+            "https://images.invalid/other.png".into();
+        assert!(!messages_match(
+            &changed,
+            &ExpectedUserContent::Blocks(expected.clone())
+        ));
+        changed = body;
+        changed["messages"][0]["content"]
+            .as_array_mut()
+            .unwrap()
+            .reverse();
+        assert!(!messages_match(
+            &changed,
+            &ExpectedUserContent::Blocks(expected)
+        ));
+    }
+
+    #[test]
+    fn relay_canonicalizes_only_marker_text_and_rejects_outer_metadata_changes() {
+        let marker = serde_json::json!({
+            "codex_item_index":1,
+            "item":{
+                "type":"function_call_output",
+                "call_id":"call-fixture",
+                "output":{"type":"thinking","reasoning":{"keep":true},"encrypted_content":"opaque"}
+            },
+            "tool_output_part_index":0,
+            "tool_output_part":{"type":"input_text","text":"opaque tool text"}
+        });
+        let expected_text = serde_json::to_string(&marker).expect("marker JSON");
+        let expected = serde_json::json!({
+            "type":"text",
+            "text":expected_text,
+            "cache_control":{"type":"ephemeral"}
+        });
+        let mut actual = expected.clone();
+        actual["text"] = format!("{}\n", expected["text"].as_str().unwrap()).into();
+        assert!(block_matches(&expected, &actual));
+
+        let mut unexpected_outer_field = actual.clone();
+        unexpected_outer_field["annotations"] = serde_json::json!({"unbound":true});
+        assert!(!block_matches(&expected, &unexpected_outer_field));
+
+        let mut changed_opaque_value = actual;
+        let mut parsed: Value =
+            serde_json::from_str(changed_opaque_value["text"].as_str().unwrap())
+                .expect("marker JSON");
+        parsed["item"]["output"]["reasoning"]["keep"] = false.into();
+        changed_opaque_value["text"] = serde_json::to_string(&parsed).unwrap().into();
+        assert!(!block_matches(&expected, &changed_opaque_value));
+    }
+
+    #[test]
+    fn normalize_cli_system_messages_appends_text_without_losing_block_metadata() {
+        let existing = serde_json::json!({
+            "type":"text",
+            "text":"EMP system instruction",
+            "cache_control":{"type":"ephemeral"}
+        });
+        let reminder = serde_json::json!({
+            "type":"text",
+            "text":"synthetic CLI reminder",
+            "cache_control":{"type":"ephemeral"}
+        });
+        let user = serde_json::json!({
+            "role":"user",
+            "content":[{"type":"text","text":"expected transcript"}]
+        });
+        let mut body = serde_json::json!({
+            "system":[existing],
+            "messages":[
+                {"role":"system","content":[reminder]},
+                user
+            ]
+        });
+
+        assert!(normalize_cli_system_messages(&mut body));
+        assert_eq!(body["system"][0]["text"], "EMP system instruction");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["system"][1]["text"], "synthetic CLI reminder");
+        assert_eq!(body["system"][1]["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["messages"], serde_json::json!([user]));
+    }
+
+    #[test]
+    fn normalize_cli_system_messages_rejects_extra_roles_and_non_text_content_atomically() {
+        for mut body in [
+            serde_json::json!({"messages":[
+                {"role":"system","content":"synthetic reminder"},
+                {"role":"user","content":"one"},
+                {"role":"user","content":"unexpected second user"}
+            ]}),
+            serde_json::json!({"messages":[
+                {"role":"system","content":[{"type":"tool_use","name":"Bash"}]},
+                {"role":"user","content":"one"}
+            ]}),
+            serde_json::json!({"messages":[
+                {"role":"assistant","content":"unexpected assistant"},
+                {"role":"user","content":"one"}
+            ]}),
+            serde_json::json!({"messages":[
+                {"role":"developer","content":"unexpected role"},
+                {"role":"user","content":"one"}
+            ]}),
+        ] {
+            let original = body.clone();
+            assert!(!normalize_cli_system_messages(&mut body));
+            assert_eq!(
+                body, original,
+                "rejected normalization must not mutate input"
+            );
+        }
     }
 
     #[test]

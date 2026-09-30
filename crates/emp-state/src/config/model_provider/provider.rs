@@ -37,7 +37,19 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     } else {
         name
     };
-    let base_url = normalize_provider_base_url(raw.get("base_url"))?;
+    let claude_login = raw.get("execution_backend").and_then(Value::as_str) == Some("claude_cli")
+        && raw.get("auth_mode").and_then(Value::as_str) == Some("claude_login");
+    let base_url = if claude_login {
+        let base_url = string_value(raw.get("base_url"), "provider.base_url", false)?;
+        if !base_url.is_empty() {
+            return Err(ConfigError::new(
+                "provider.base_url must be empty for Claude CLI local login",
+            ));
+        }
+        String::new()
+    } else {
+        normalize_provider_base_url(raw.get("base_url"))?
+    };
     let protocol = string_value(raw.get("protocol"), "value", false)?;
     let protocol = if protocol.is_empty() {
         "chat_completions".to_owned()
@@ -80,7 +92,7 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     }
     if !PROVIDER_AUTH_MODES.contains(&auth_mode.as_str()) {
         return Err(ConfigError::new(
-            "provider.auth_mode must be api_key, anthropic_api_key, or forward",
+            "provider.auth_mode must be api_key, anthropic_api_key, forward, or claude_login",
         ));
     }
     if auth_mode == "forward" && protocol != "responses" {
@@ -96,6 +108,16 @@ pub fn normalize_provider(raw: &Value) -> ConfigResult<Value> {
     if !["http", "claude_cli"].contains(&execution_backend) {
         return Err(ConfigError::new(
             "provider.execution_backend must be http or claude_cli",
+        ));
+    }
+    if auth_mode == "claude_login" && execution_backend != "claude_cli" {
+        return Err(ConfigError::new(
+            "provider.auth_mode claude_login requires provider.execution_backend claude_cli",
+        ));
+    }
+    if claude_login && (!api_key.is_empty() || !api_key_file.is_empty()) {
+        return Err(ConfigError::new(
+            "Claude CLI local login cannot include an API key or key file",
         ));
     }
     if execution_backend == "claude_cli"
@@ -186,6 +208,60 @@ mod tests {
                 .expect_err("Claude CLI requires a Messages route")
                 .to_string(),
             "provider.execution_backend claude_cli requires provider.protocol auto or anthropic_messages"
+        );
+    }
+
+    #[test]
+    fn claude_cli_local_login_requires_empty_url_and_no_provider_credentials() {
+        let provider = json!({
+            "id":"local-claude",
+            "protocol":"anthropic_messages",
+            "execution_backend":"claude_cli",
+            "auth_mode":"claude_login"
+        });
+        let normalized = normalize_provider(&provider).expect("local CLI login");
+        assert_eq!(normalized["execution_backend"], "claude_cli");
+        assert_eq!(normalized["auth_mode"], "claude_login");
+        assert_eq!(normalized["base_url"], "");
+        assert_eq!(normalized["api_key"], "");
+        assert_eq!(normalized["api_key_file"], "");
+
+        let mut empty_url = provider.clone();
+        empty_url["base_url"] = json!("");
+        normalize_provider(&empty_url).expect("empty local URL");
+
+        for (field, value, error) in [
+            (
+                "base_url",
+                json!("https://cpa.example/v1"),
+                "provider.base_url must be empty",
+            ),
+            ("api_key", json!("credential"), "cannot include an API key"),
+            (
+                "api_key_file",
+                json!("secrets/provider.key.enc"),
+                "cannot include an API key or key file",
+            ),
+        ] {
+            let mut invalid = provider.clone();
+            invalid[field] = value;
+            assert!(
+                normalize_provider(&invalid)
+                    .expect_err("invalid local CLI provider")
+                    .to_string()
+                    .contains(error),
+                "field {field} must be rejected"
+            );
+        }
+
+        let mut http_local_login = provider;
+        http_local_login["execution_backend"] = json!("http");
+        http_local_login["base_url"] = json!("https://api.example/v1");
+        assert!(
+            normalize_provider(&http_local_login)
+                .expect_err("local login requires the Claude CLI backend")
+                .to_string()
+                .contains("requires provider.execution_backend claude_cli")
         );
     }
 }

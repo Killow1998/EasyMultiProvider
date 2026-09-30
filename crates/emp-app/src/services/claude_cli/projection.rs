@@ -6,10 +6,10 @@ use emp_router::{CompleteResponse, ProjectionIds, response_json_stream_events};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
-const MAX_TRANSCRIPT_BYTES: usize = 10 * 1024 * 1024;
+pub(super) const MAX_TRANSCRIPT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_TOOL_SCHEMA_BYTES: usize = 64 * 1024;
 
-pub(super) const SYSTEM_PROMPT: &str = "You are a one-request compatibility bridge for Codex. The user message is a serialized Codex Responses conversation in order. Read that conversation and infer the next assistant answer and any Codex tool proposals it requests. Return only the required structured object. Preserve tool names, namespaces, and arguments from the conversation. Do not claim a tool result unless it appears in the conversation. Do not execute tools, access files, or contact services.";
+pub(super) const SYSTEM_PROMPT: &str = "You are a one-request compatibility bridge for Codex. The user message contains the ordered Codex Responses conversation. In multimodal input, each text record identifies its input item and content part; the native image or document block immediately following a media record belongs to that exact part. Read the text and associated native media together, then infer the next assistant answer and any Codex tool proposals. Return only the required structured object. Preserve tool names, namespaces, and arguments from the conversation. Do not claim a tool result unless it appears in the conversation. Do not execute tools, access files, or contact services.";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ToolIdentity {
@@ -26,17 +26,22 @@ enum ToolKind {
 }
 
 pub(super) fn transcript(body: &Value) -> Result<Vec<u8>, &'static str> {
-    if has_unsupported_input_modality(body) {
+    let transcript = normalized_transcript(body);
+    if has_unsupported_input_modality(&transcript) {
         return Err("unsupported_input_modality");
     }
-    let mut transcript = body.clone();
-    transcript["stream"] = Value::Bool(false);
-    sanitize_private_reasoning_items(&mut transcript);
     let encoded = serde_json::to_vec(&transcript).map_err(|_| "claude_cli_invalid_transcript")?;
     if encoded.len() > MAX_TRANSCRIPT_BYTES {
         return Err("claude_cli_input_too_large");
     }
     Ok(encoded)
+}
+
+pub(super) fn normalized_transcript(body: &Value) -> Value {
+    let mut transcript = body.clone();
+    transcript["stream"] = Value::Bool(false);
+    sanitize_private_reasoning_items(&mut transcript);
+    transcript
 }
 
 fn has_unsupported_input_modality(body: &Value) -> bool {
@@ -138,7 +143,15 @@ pub(super) fn effort(body: &Value) -> Result<Option<&'static str>, &'static str>
 }
 
 pub(super) fn parse_cli_result(stdout: &[u8]) -> Result<Value, &'static str> {
-    let output: Value = serde_json::from_slice(stdout).map_err(|_| "claude_cli_invalid_output")?;
+    let output: Value = match serde_json::from_slice(stdout) {
+        Ok(output) => output,
+        Err(_) => stdout
+            .split(|byte| *byte == b'\n')
+            .rev()
+            .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+            .find(|event| event.get("type").and_then(Value::as_str) == Some("result"))
+            .ok_or("claude_cli_invalid_output")?,
+    };
     if output.get("is_error").and_then(Value::as_bool) == Some(true) {
         return Err("claude_cli_result_error");
     }
@@ -646,6 +659,13 @@ mod tests {
         assert_eq!(
             parse_cli_result(br#"{"type":"result","is_error":true,"structured_output":{}}"#),
             Err("claude_cli_result_error")
+        );
+        let jsonl = br#"{"type":"system","subtype":"init"}
+{"type":"result","subtype":"success","structured_output":{"answer":"ok","tool_calls":[]}}
+"#;
+        assert_eq!(
+            parse_cli_result(jsonl).unwrap()["structured_output"]["answer"],
+            "ok"
         );
         assert_eq!(
             effort(&json!({"reasoning":{"effort":"low"}})),
