@@ -1,6 +1,10 @@
 //! Complete Responses projection from external upstream output.
 
-use super::*;
+use super::tools::raw_tools;
+use super::{PLAINTEXT_REASONING_FIELDS, PortableProjectionError, error};
+use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 
 pub(super) fn custom_tool_ids(raw_id: Option<&Value>, call_id: Option<&Value>) -> (String, String) {
     let paired = call_id
@@ -49,7 +53,9 @@ pub(super) fn custom_tool_input(value: Option<&Value>) -> String {
 }
 
 pub fn custom_tool_names(body: &Value) -> Result<BTreeSet<String>, PortableProjectionError> {
-    let body = object(body).ok_or_else(|| error(0, "input", "invalid_input"))?;
+    let body = body
+        .as_object()
+        .ok_or_else(|| error(0, "input", "invalid_input"))?;
     Ok(raw_tools(body)?
         .into_iter()
         .filter(|tool| tool.value.get("type").and_then(Value::as_str) == Some("custom"))
@@ -95,7 +101,7 @@ pub(super) fn project_reasoning_item(
             .into_iter()
             .flatten()
             .filter_map(|part| {
-                let part = object(part)?;
+                let part = part.as_object()?;
                 (part.get("type").and_then(Value::as_str) == Some("summary_text")
                     && part.get("text").is_some_and(Value::is_string))
                 .then(|| json!({"type": "summary_text", "text": part["text"]}))
@@ -114,7 +120,8 @@ pub fn project_response(
     preserve_reasoning_summary: bool,
     preserve_reasoning_state: bool,
 ) -> Result<Value, PortableProjectionError> {
-    let mut projected = object(response)
+    let mut projected = response
+        .as_object()
         .ok_or_else(|| error(0, "output", "invalid_response_output"))?
         .clone();
     for field in PLAINTEXT_REASONING_FIELDS {
@@ -132,7 +139,7 @@ pub fn project_response(
         .flatten()
         .enumerate()
     {
-        let Some(item) = object(raw) else {
+        let Some(item) = raw.as_object() else {
             return Err(error(index, "output", "invalid_response_output"));
         };
         if item.get("type").and_then(Value::as_str) == Some("reasoning") {

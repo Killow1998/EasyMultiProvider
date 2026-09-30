@@ -1,6 +1,7 @@
 //! Terminal and output-item validation for portable Responses.
 
-use super::*;
+use super::{ResponsesValidationError, TerminalObservation};
+use serde_json::{Map, Value};
 
 fn validation_error(message: &'static str) -> ResponsesValidationError {
     ResponsesValidationError::new(message)
@@ -55,7 +56,7 @@ fn validate_output_item(item: &Map<String, Value>) -> Result<(), ResponsesValida
                 ));
             }
             for raw in content {
-                let Some(part) = object(raw) else {
+                let Some(part) = raw.as_object() else {
                     return Err(validation_error(
                         "upstream Responses JSON contains invalid message content",
                     ));
@@ -114,7 +115,7 @@ fn validate_output_item(item: &Map<String, Value>) -> Result<(), ResponsesValida
             let valid_summary = match item.get("summary") {
                 None | Some(Value::Null) => true,
                 Some(Value::Array(parts)) => parts.iter().all(|raw| {
-                    object(raw).is_some_and(|part| {
+                    raw.as_object().is_some_and(|part| {
                         part.get("type").and_then(Value::as_str) == Some("summary_text")
                             && part.get("text").is_some_and(Value::is_string)
                     })
@@ -143,7 +144,7 @@ pub fn validate_responses_body(
     value: &Value,
     validate_output_items: bool,
 ) -> Result<(), ResponsesValidationError> {
-    let Some(response) = object(value) else {
+    let Some(response) = value.as_object() else {
         return Err(validation_error("upstream Responses JSON is not an object"));
     };
     let status = response
@@ -161,7 +162,7 @@ pub fn validate_responses_body(
         .and_then(Value::as_array)
         .ok_or_else(|| validation_error("upstream Responses JSON has no valid output"))?;
     for raw in output {
-        let Some(item) = object(raw) else {
+        let Some(item) = raw.as_object() else {
             return Err(validation_error(
                 "upstream Responses JSON contains an invalid output item",
             ));
