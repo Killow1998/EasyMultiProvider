@@ -70,11 +70,13 @@ jobs:
       - name: Verify native background update and rollback
         run: cargo +1.93.1 xtask package-smoke
 
-      - name: Verify Windows legacy credentials and restricted update permissions
+      - name: Verify Windows process handoff and private state
         if: runner.os == 'Windows'
-        run: >-
-          cargo +1.93.1 test --locked --release -p emp-state --lib
-          private_windows::tests -- --skip detects_directory_reparse_points
+        shell: pwsh
+        run: |
+          cargo +1.93.1 test --locked --release -p emp-state --lib update::process::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.93.1 test --locked --release -p emp-state --lib private_windows::tests -- --skip detects_directory_reparse_points
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
