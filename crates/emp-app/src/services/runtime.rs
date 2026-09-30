@@ -175,16 +175,41 @@ pub(crate) fn compatibility_snapshot(state: &ServerState, refresh: bool) -> Valu
     snapshot
 }
 
-pub(crate) fn helper_binary(state: &ServerState) -> Result<String, emp_codex::quota::QuotaError> {
+pub(crate) struct HelperBinary {
+    selector: String,
+    // Temporary return values live until the surrounding quota call ends.
+    // This retains the private executable even after quota resolves its path.
+    _prepared: Option<emp_codex::PreparedExecutable>,
+}
+
+impl std::ops::Deref for HelperBinary {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.selector
+    }
+}
+
+pub(crate) fn helper_binary(
+    state: &ServerState,
+) -> Result<HelperBinary, emp_codex::quota::QuotaError> {
     // Explicit process injection is used by isolated quota fixtures.
     if state.backend.accounts.codex_binary != "codex" {
-        return Ok(state.backend.accounts.codex_binary.clone());
+        return Ok(HelperBinary {
+            selector: state.backend.accounts.codex_binary.clone(),
+            _prepared: None,
+        });
     }
     state
         .backend
         .integration
         .inventory
-        .executable()
+        .prepared_executable()
+        .and_then(|prepared| {
+            Some(HelperBinary {
+                selector: prepared.quota_selector().to_str()?.to_owned(),
+                _prepared: Some(prepared),
+            })
+        })
         .ok_or_else(|| {
             emp_codex::quota::QuotaError::new(
                 "No trusted executable Codex engine is available for this operation",

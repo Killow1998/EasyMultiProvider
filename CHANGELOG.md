@@ -6,6 +6,8 @@
   cache. Show App/extension and engine versions separately; check operations
   when used instead of rejecting every client below Codex 0.158. Keep existing
   model catalogs when an engine version cannot be observed.
+- Support signed macOS App engines in shared Applications installations.
+  Cached version reads remain responsive while runtime discovery is running.
 - Report an unavailable catalog control interface as an unverified catalog,
   without claiming the App has stopped. Explain active conversation locks when
   native restoration or exit must wait, while keeping EMP running.

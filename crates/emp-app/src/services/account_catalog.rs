@@ -49,6 +49,10 @@ pub(crate) fn refresh(state: &ServerState, id: &str) -> Result<Value, Vec<u8>> {
         .as_str()
         .filter(|base| !base.is_empty())
         .ok_or_else(|| invalid("Subscription backend is unavailable"))?;
+    // Version probing may prepare a signed desktop-engine snapshot. Do it
+    // explicitly here, after releasing the configuration mutex; persistence
+    // only reads the already verified observation and checks its identity.
+    state.backend.integration.inventory.snapshot(false);
     let client_version = state
         .backend
         .integration

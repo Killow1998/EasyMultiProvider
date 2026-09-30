@@ -110,6 +110,9 @@ fn refresh_sources(state: &ServerState) -> Vec<RefreshSource> {
     else {
         return Vec::new();
     };
+    // Populate/refresh observations outside the configuration lock. The
+    // persistence path must never prepare or launch an executable.
+    state.backend.integration.inventory.snapshot(false);
     let Some(client_version) = state
         .backend
         .integration

@@ -99,12 +99,12 @@ fn observe_inner(path: &Path, inherited_path: Option<OsString>) -> std::io::Resu
     // Never execute a candidate that fails the executable trust policy
     // (relative path, foreign owner, or writable ancestor directory).
     let launch_directory = super::launcher::launcher_directory(path);
-    let Some(path) = super::trust::trusted_binary(path) else {
+    let Ok(prepared) = crate::executable_trust::PreparedExecutable::prepare(path) else {
         return Ok(public(None, "unknown"));
     };
     let mut output = tempfile::tempfile()?;
     let mut errors = tempfile::tempfile()?;
-    let mut command = Command::new(&path);
+    let mut command = Command::new(prepared.path());
     if let Some(directory) = launch_directory {
         match super::launcher::path_with_node(&directory, inherited_path.clone()) {
             super::launcher::PathAdjustment::Set(child_path) => {
@@ -129,19 +129,30 @@ fn observe_inner(path: &Path, inherited_path: Option<OsString>) -> std::io::Resu
         .stderr(errors.try_clone()?)
         .spawn()?;
     let deadline = Instant::now() + Duration::from_secs(2);
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break Some(status);
-        }
-        if Instant::now() >= deadline
-            || output.metadata()?.len() > 2 * 1024 * 1024
-            || errors.metadata()?.len() > 32 * 1024
-        {
+    let observed = (|| -> std::io::Result<_> {
+        Ok(loop {
+            if let Some(status) = child.try_wait()? {
+                break Some(status);
+            }
+            if Instant::now() >= deadline
+                || output.metadata()?.len() > 2 * 1024 * 1024
+                || errors.metadata()?.len() > 32 * 1024
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        })
+    })();
+    // Preserve the snapshot until even an I/O-error path has reaped its child.
+    let status = match observed {
+        Ok(status) => status,
+        Err(error) => {
             let _ = child.kill();
             let _ = child.wait();
-            break None;
+            return Err(error);
         }
-        std::thread::sleep(Duration::from_millis(10));
     };
     let Some(status) = status else {
         return Ok(public(None, "unknown"));
