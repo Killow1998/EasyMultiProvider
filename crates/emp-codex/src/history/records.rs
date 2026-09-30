@@ -1,4 +1,11 @@
-use super::*;
+use super::MAX_ROLLOUT_SCAN_BYTES;
+use super::location::Location;
+use super::visible::{content_text, normalize_visible_item, string_from, token, uuid_shape};
+use emp_history::{HistoryError, VisibleItem};
+use rusqlite::{Connection, OpenFlags};
+use serde_json::{Map, Value};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 pub(super) fn locate(database: &Path, thread: &str) -> Result<Location, HistoryError> {
     let connection = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY)

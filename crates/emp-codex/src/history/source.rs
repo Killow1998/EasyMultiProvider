@@ -1,4 +1,15 @@
-use super::*;
+use super::lines::{
+    read_bounded_line_with_reason, rollout_json_line, walk_bounded_reader, walk_records,
+};
+use super::records::{HistoryBase, session_meta_history_base};
+use super::visible::token;
+use super::{MAX_ROLLOUT_LINE_BYTES, MAX_ROLLOUT_SCAN_BYTES};
+use emp_history::HistoryError;
+use serde_json::{Map, Value};
+use std::ffi::OsStr;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::path::Path;
 
 #[derive(Debug)]
 pub(super) struct WalkReport {
@@ -33,7 +44,7 @@ impl RecordSource for FileRecordSource<'_> {
         self.file
             .seek(SeekFrom::Start(self.start))
             .map_err(|_| HistoryError::new("source_unavailable"))?;
-        super::walk_records(self.file, self.end, visit)
+        walk_records(self.file, self.end, visit)
     }
 }
 
@@ -89,7 +100,7 @@ impl RecordSource for ZstdRecordSource<'_> {
             .map_err(|_| HistoryError::new("invalid_compressed_rollout"))?;
         let limited = decoder.take(self.uncompressed_limit);
         let mut reader = BufReader::with_capacity(64 * 1024, limited);
-        let report = super::walk_bounded_reader(
+        let report = walk_bounded_reader(
             &mut reader,
             self.uncompressed_limit,
             "invalid_compressed_rollout",
@@ -108,6 +119,68 @@ impl RecordSource for ZstdRecordSource<'_> {
         }
         Ok(report)
     }
+}
+
+/// Read the first session metadata record through bounded plain or zstd I/O.
+pub(super) fn read_session_meta(path: &Path) -> Result<Option<Map<String, Value>>, HistoryError> {
+    if !fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
+        return Err(HistoryError::new("source_missing"));
+    }
+    let mut file = File::open(path).map_err(|_| HistoryError::new("source_missing"))?;
+    let captured_end = file
+        .metadata()
+        .map_err(|_| HistoryError::new("source_unavailable"))?
+        .len();
+    if is_compressed_rollout(path) {
+        if captured_end > MAX_ROLLOUT_SCAN_BYTES {
+            return Err(HistoryError::new("source_too_large"));
+        }
+        let compressed = file.by_ref().take(captured_end);
+        let decoder = zstd::stream::read::Decoder::new(compressed)
+            .map_err(|_| HistoryError::new("invalid_compressed_rollout"))?;
+        let mut reader = BufReader::with_capacity(
+            64 * 1024,
+            decoder.take((MAX_ROLLOUT_LINE_BYTES as u64).saturating_add(1)),
+        );
+        return read_session_meta_from(&mut reader, "invalid_compressed_rollout");
+    }
+    let head = captured_end.min((MAX_ROLLOUT_LINE_BYTES as u64).saturating_add(1));
+    let mut reader = BufReader::with_capacity(64 * 1024, file.by_ref().take(head));
+    read_session_meta_from(&mut reader, "source_unavailable")
+}
+
+fn read_session_meta_from(
+    reader: &mut impl BufRead,
+    io_error_reason: &str,
+) -> Result<Option<Map<String, Value>>, HistoryError> {
+    let mut line = Vec::new();
+    while let Some(terminated) = read_bounded_line_with_reason(reader, &mut line, io_error_reason)?
+    {
+        let Some(record) = rollout_json_line(&line, terminated)? else {
+            continue;
+        };
+        if matches!(
+            token(record.get("type")).as_str(),
+            "session_meta" | "sessionmeta"
+        ) {
+            return Ok(Some(record));
+        }
+    }
+    Ok(None)
+}
+
+pub(super) fn read_history_base(path: &Path) -> Result<Option<HistoryBase>, HistoryError> {
+    read_session_meta(path)?
+        .as_ref()
+        .map(session_meta_history_base)
+        .transpose()
+        .map(Option::flatten)
+}
+
+pub(super) fn is_compressed_rollout(path: &Path) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.ends_with(".jsonl.zst"))
 }
 
 #[cfg(test)]
