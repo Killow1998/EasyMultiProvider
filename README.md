@@ -89,6 +89,18 @@ In the Web UI, either:
 
 For an API Provider, pull the upstream model list, choose the models you want, and optionally edit their context windows.
 
+For Claude, choose **Add Provider → Claude**, then **Local Claude subscription**
+or **CPA**. Both routes require the installed Claude Code CLI.
+
+- **Local Claude subscription** reuses the Claude Code subscription sign-in for
+  the current OS user and needs no URL or API key. Before each request, EMP checks
+  for a Claude.ai subscription sign-in; CLI API-key and Console auth do not qualify
+  for this mode. Sign in through Claude Code itself if needed. EMP does not import
+  tokens or provide a separate login flow. Add aliases or full model IDs with
+  **Add model**; they appear in Codex's model picker.
+- **CPA** uses a Claude-Code-compatible CPA Base URL and API key. For direct
+  Anthropic API access, add the separate **Anthropic API** Provider.
+
 ### 4. Apply EMP to Codex
 
 Click **Apply EMP to Codex**. The integration card shows the saved settings
@@ -129,10 +141,12 @@ a new model is not visible yet.
   when refresh fails, and preserves visibility, aliases, and context overrides.
   A newly exposed model needs no EMP release or manual model-list edit.
 - Add official or custom Providers through the Web UI.
-- Optionally route a text-only Provider through an installed Claude Code CLI.
-  Claude mode uses the Provider's existing Base URL and API key, requires
-  Anthropic Messages (or automatic detection that resolves to it), returns tool
-  calls to Codex to execute, and buffers replies before display.
+- Route Claude requests through the installed Claude Code CLI using either the
+  current OS user's Claude Code sign-in or a compatible CPA Base URL and API key.
+  Add local-login model aliases or full IDs manually with **Add model**. Codex
+  executes tool calls, and replies are buffered until generation finishes.
+- Forward image inputs and supported inline document content only for Claude
+  models whose configured capabilities and selected upstream support them.
 - Discover Provider models, import only the ones you want, test them, edit context limits, hide them, or remove them.
 - See dispatched request activity beside model, Provider, and subscription rows.
   Active dots mark in-flight requests, with the count in their tooltips. A
@@ -185,9 +199,10 @@ Subscription editing supports per-model context token counts. Leave a field blan
 
 External Provider models use the same 95% rule, so a 256,000-token window shows as 243K in the Codex model picker. The catalog display and EMP request checks use the same effective window.
 
-Use the eye control beside **Model display** to show or hide context labels for
-Native, Subscription and External Provider models. This changes catalog labels,
-not context windows or request limits.
+Use the global eye control in the right-side **Model display** to show or hide
+context labels there and in the Codex model picker for Native, Subscription and
+External Provider models. The left model list does not repeat these labels. The
+control changes catalog labels, not context windows or request limits.
 
 ## Codex compatibility
 

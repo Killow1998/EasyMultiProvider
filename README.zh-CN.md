@@ -49,8 +49,10 @@ EMP 在本机运行，主要解决两件事：
 - 在模型、Provider 和 Subscription 账户旁查看请求活动：活动点标记进行中的请求，
   提示文字显示数量；近期状态表示刚完成的请求并会自动过期；事件流断开时会清除活动状态。
 - 通过 Web UI 添加官方或自建 Provider。
-- 可选地通过本机安装的 Claude Code CLI 处理文本请求，复用 Provider 的 Base URL 和
-  API Key；协议须为 Anthropic Messages，或自动检测为该协议。工具调用由 Codex 执行，回复会缓冲后显示。
+- 通过已安装的 Claude Code CLI 使用 Claude：可复用当前操作系统用户的 Claude Code
+  登录，也可连接兼容 Claude Code 的 CPA Base URL 和 API Key。本地登录模型需通过
+  “Add model”手动添加别名或完整模型 ID。工具调用由 Codex 执行，回复在生成完成后显示。
+- 只有当 Claude 模型的已配置能力和所选上游都支持时，才会转发图片输入和受支持的内联文档内容。
 - 拉取 Provider 模型，自由选择导入模型，修改上下文窗口，执行测试并隐藏
   不常用模型。
 - Provider 报告或支持时，保留文本、图片、推理和结构化工具调用能力。
@@ -120,9 +122,9 @@ Subscription 的编辑窗口可以逐模型设置上下文 token 数。留空使
 迁移，不覆盖目标机器 Native 的设置。外部 Provider 模型同样按 95% 计算，
 例如 256,000 的窗口在 Codex 模型列表中显示为 243K。
 
-在“模型显示”标题旁点击眼睛按钮，可统一显示或隐藏原生、Subscription 和
-External Provider 模型的上下文标签。此操作只改变模型目录标签，不会修改上下文窗口
-或请求限制。
+在右侧“模型显示”区域使用全局眼睛开关，可统一显示或隐藏该区域及 Codex 模型选择器中的
+Native、Subscription 和 External Provider 上下文标签。左侧模型列表不重复显示这些标签。
+此操作只改变模型目录标签，不会修改上下文窗口或请求限制。
 
 ### 预构建安装包
 
@@ -237,6 +239,11 @@ EMP v0.9.0 至 v0.9.9 使用同一种加密迁移格式。当前版本可以导�
 3. 按需调整模型显示状态或上下文窗口。
 4. 点击 **将 EMP 应用于 Codex**。
 5. 正常启动 Codex，通过 `/model` 或 App 模型菜单选择模型。
+
+使用 Claude 时，在 Web UI 中选择 **Add Provider → Claude**，再选 **Local Claude subscription** 或 **CPA**。两种方式都需要安装 Claude Code CLI。
+
+- **Local Claude subscription** 复用当前操作系统用户的 Claude Code 订阅登录，不需要 URL 或 API Key。每次请求前，EMP 会检查是否已通过 Claude Code 登录 Claude.ai 订阅；CLI API Key 和 Console 登录不适用于本机模式。若需登录，请在 Claude Code 中完成。EMP 不导入令牌，也不提供单独的登录流程。使用 **Add model** 手动添加别名或完整模型 ID，之后即可在 Codex 模型选择器中选择。
+- **CPA** 使用兼容 Claude Code 的 CPA Base URL 和 API Key。直接连接 Anthropic API 时，请另加 **Anthropic API** Provider。
 
 只有当前原生账号时，可以跳过导入账号和 Provider：在“当前 Codex 登录 → 编辑”
 中隐藏模型，在“模型显示”中修改显示名称，保存后点击“将 EMP 应用于

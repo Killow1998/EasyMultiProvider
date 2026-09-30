@@ -18,10 +18,17 @@
   active dots mark dispatched requests and their tooltips show the in-flight
   count; recent dots mark completed work. Activity comes from the authenticated
   event stream; a disconnect clears active confidence.
-- Allow a Provider to use an installed Claude Code CLI with its existing Base
-  URL and API key. Claude mode accepts Anthropic Messages or automatic
-  detection that resolves to Messages, handles text only, returns tool calls
-  for Codex to execute, and buffers replies before display.
+- Add two Claude routes through the installed Claude Code CLI: Local Claude
+  subscription reuses the current OS user's Claude Code sign-in, which EMP checks
+  before each request; CLI API-key and Console auth do not qualify for this mode.
+  Sign in through Claude Code itself. CPA uses a Claude-Code-compatible Base URL
+  and API key. Add local-login model aliases or full IDs manually. Direct
+  Anthropic API remains a separate Anthropic API Provider. EMP does not import
+  tokens or provide its own login flow.
+- Forward image inputs and supported inline document content only when the
+  Claude model's configured capabilities and selected upstream support them.
+  Codex executes tool calls, and replies remain buffered until generation
+  finishes.
 
 ## 0.12.3 (2026-09-29)
 
