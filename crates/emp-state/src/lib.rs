@@ -19,6 +19,7 @@ pub mod filesystem;
 pub mod lock;
 pub mod migration;
 pub mod model_values;
+pub mod official_registry;
 #[cfg(windows)]
 mod private_windows;
 pub mod vault;

@@ -102,14 +102,9 @@ or **CPA**. Both routes require the installed Claude Code CLI.
 
 ### 4. Apply EMP to Codex
 
-Click **Apply EMP to Codex**. The integration card shows the saved settings
-and the model catalog observed in the running Codex separately. If Codex still
-has its previous catalog, restart it through the launcher you normally use,
-then check the loaded catalog again.
-
-A matching catalog confirms that the models are visible. It does not prove
-that an already running session has adopted the new provider settings.
-The card updates when Codex reconnects to EMP; you can also check it manually.
+Click **Apply EMP to Codex**. The status line shows your Codex version and
+**EMP models loaded** once the model list is ready. If it asks you to reopen
+Codex, finish your current work and open Codex again.
 
 EMP writes its settings to the shared `~/.codex/config.toml`, so every Codex client (CLI, App, IDE extensions) picks them up. Multiple clients and workspaces can run concurrently.
 
@@ -205,7 +200,7 @@ control changes catalog labels, not context windows or request limits.
 
 ## Codex compatibility
 
-The current source version is **v0.12.4**.
+The current source version is **v0.12.5**.
 
 EMP supports Codex CLI, desktop App and IDE extension installations without a
 universal minimum engine version. Each operation depends on the interfaces that
@@ -342,6 +337,13 @@ Desktop launch stores configuration in the normal per-user location:
 The Linux user installer places the binary at `$XDG_DATA_HOME/easy-multi-provider/EMP` (default `~/.local/share/easy-multi-provider/EMP`) and the launcher at `~/.local/bin/EMP`.
 
 The Linux user installer and Web UI updates do not require sudo or an administrator password. Configuration and account data stay in the user configuration directory and are not replaced by binary updates. Existing system `.deb` installations remain managed by their package manager.
+
+A red dot on **Check updates** marks an available release. If an older Windows
+version exits during an update without reopening, download `EMP.exe` from
+[Releases](https://github.com/Killow1998/EasyMultiProvider/releases/latest),
+replace the closed executable and open it. Your accounts and settings stay in
+the user configuration directory. Version 0.12.5 fixes the exited-process wait
+for subsequent updates.
 
 ## Docs
 

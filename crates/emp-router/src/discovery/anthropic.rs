@@ -140,10 +140,10 @@ fn append_anthropic_models(
             ),
             (
                 "reasoning_levels".to_owned(),
-                source(if reasoning_levels.is_empty() {
-                    "unknown"
-                } else {
+                source(if !reasoning_levels.is_empty() || effort == Some(false) {
                     "advertised"
+                } else {
+                    "unknown"
                 }),
             ),
             (

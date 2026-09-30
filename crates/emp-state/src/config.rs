@@ -502,7 +502,18 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
     }
     let mut models = Vec::new();
     for model in python_iterable(raw.get("models"))? {
-        models.push(normalize_model(&model)?);
+        let mut model = normalize_model(&model)?;
+        if let Some(provider) = providers.iter().find(|provider| {
+            provider["id"] == model["provider"] && provider["execution_backend"] == "claude_cli"
+        }) {
+            model = crate::official_registry::enrich_discovered_models(
+                provider.as_object().expect("normalized provider"),
+                vec![model],
+            )
+            .remove(0);
+            model = normalize_model(&model)?;
+        }
+        models.push(model);
     }
     let provider_ids = providers
         .iter()

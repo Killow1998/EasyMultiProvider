@@ -240,3 +240,33 @@ fn global_context_preference_changes_only_labels_for_every_catalog_source() {
         );
     }
 }
+
+#[test]
+fn claude_picker_receives_all_efforts_and_images_after_loading_sparse_saved_models() {
+    let config = emp_state::normalize_configuration(Some(&json!({
+        "providers":[{"id":"cpa","base_url":"https://cpa.example.invalid/v1",
+            "execution_backend":"claude_cli","protocol":"anthropic_messages"}],
+        "models":[{"id":"cpa/claude-sonnet-5-5","provider":"cpa","upstream_id":"claude-sonnet-5-5"}]
+    })))
+    .unwrap();
+    let catalog = build_catalog(
+        &config,
+        &json!({"models":[]}),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+    let model = catalog["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["slug"] == "cpa/claude-sonnet-5-5")
+        .unwrap();
+    assert_eq!(model["input_modalities"], json!(["text", "image"]));
+    let efforts: Vec<_> = model["supported_reasoning_levels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|level| level["effort"].as_str().unwrap())
+        .collect();
+    assert_eq!(efforts, ["low", "medium", "high", "xhigh", "max"]);
+}

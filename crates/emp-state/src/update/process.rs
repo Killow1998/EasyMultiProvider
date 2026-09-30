@@ -9,6 +9,9 @@ pub fn created(pid: u32) -> Option<f64> {
     {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let suffix = stat.rsplit_once(')')?.1;
+        if matches!(suffix.split_whitespace().next(), Some("Z" | "X")) {
+            return None;
+        }
         let ticks = suffix.split_whitespace().nth(19)?.parse::<f64>().ok()?;
         let boot = std::fs::read_to_string("/proc/stat")
             .ok()?
@@ -64,7 +67,9 @@ pub fn created(pid: u32) -> Option<f64> {
             )
         };
         unsafe { CloseHandle(process) };
-        if result == 0 {
+        // Windows retains a terminated process object while a launcher/debugger
+        // still holds its handle. Its creation time is not a liveness check.
+        if result == 0 || times[1].dwHighDateTime != 0 || times[1].dwLowDateTime != 0 {
             return None;
         }
         let ticks = ((times[0].dwHighDateTime as u64) << 32) | times[0].dwLowDateTime as u64;
@@ -249,6 +254,24 @@ mod tests {
             spawn(&executable, &[], &[("RUST_LOG", "trace".to_owned())], false),
             Err(super::super::UpdateError("worker_failed"))
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exited_parent_is_not_alive_while_its_process_handle_is_retained() {
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("cmd.exe")
+            .args(["/D", "/C", "exit 0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        // Keep Child (and therefore its Windows handle) alive during the query.
+        assert_eq!(super::created(child.id()), None);
+        assert!(super::created(std::process::id()).is_some());
+        drop(child);
     }
 
     #[cfg(windows)]

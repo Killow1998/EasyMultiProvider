@@ -497,13 +497,16 @@ pub fn http(
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|error| error.to_string())?;
+    let body = if method == "POST" { "{}" } else { "" };
     let mut request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nContent-Length: 0\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+        body.len()
     );
     for (name, value) in headers {
         request.push_str(&format!("{name}: {value}\r\n"));
     }
     request.push_str("\r\n");
+    request.push_str(body);
     stream
         .write_all(request.as_bytes())
         .map_err(|error| error.to_string())?;

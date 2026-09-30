@@ -1,6 +1,8 @@
 //! Smoke tests for a freshly built package in `artifacts/`: the in-app update
 //! worker replaces or restores a synthetic installation, and on Linux the
 //! archive installer sets up a desktop user. No real Codex state is touched.
+mod parent;
+
 use crate::package::{KillOnDrop, Os, Target, http, reserve_loopback_port};
 use crate::{PRODUCT_NAME, Result, copy, physical, project_root, sha256_file, temporary_directory};
 use emp_state::update::extract::extract_candidate;
@@ -154,11 +156,12 @@ fn update_in(
         serde_json::json!({"host": "127.0.0.1", "port": port}).to_string(),
     )
     .map_err(error)?;
+    let mut parent = parent::Parent::start(&installed, root, &config, port)?;
     let plan = serde_json::json!({
         "target": installed_target,
         "candidate": candidate,
         "relative_binary": relative,
-        "parents": [],
+        "parents": [parent.identity],
         "args": ["serve", "--config", config, "--port", port.to_string()],
         "version": version,
         "nonce": "packaged-smoke",
@@ -192,6 +195,14 @@ fn update_in(
             .spawn()
             .map_err(|error| format!("start update worker: {error}"))?,
     );
+    let ready_deadline = Instant::now() + Duration::from_secs(10);
+    while !job.join("worker-ready").is_file() {
+        if worker.0.try_wait().map_err(error)?.is_some() || Instant::now() >= ready_deadline {
+            return Err("update worker did not become ready before old EMP exits".into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    parent.quit()?;
     let deadline = Instant::now() + Duration::from_secs(85);
     let status = loop {
         if let Some(status) = worker.0.try_wait().map_err(error)? {
