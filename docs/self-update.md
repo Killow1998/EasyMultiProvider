@@ -73,6 +73,11 @@ requests. If requests do not finish within five minutes, installation is cancell
 and the gate reopens. The helper waits for the old packaged process to exit, then
 replaces only the validated sibling installation and starts it in a visible window.
 
+An exited process no longer counts as running just because its launcher retains
+a Windows process handle. The native package check starts an old EMP, exits it
+through the management API, and retains that handle through replacement and
+rollback to exercise this handoff.
+
 The new process must acknowledge startup with the planned version and nonce. If it
 exits or does not acknowledge startup within one minute, only the updater-launched
 process tree is stopped and the previous binary or app is restored and relaunched.

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.12.5 (2026-09-30)
+
+- Show the Codex version and model status on one line; keep detailed application
+  and engine information in diagnostics. Compact the subscription model editor,
+  move Credit and reset controls into account headers, and align activity dots
+  before names throughout the model and account lists.
+- Restore missing reasoning levels and image capabilities for known Claude models
+  in CPA and local Claude connections. Existing models gain the defaults on load;
+  provider restrictions and manual settings remain authoritative. Add editable
+  reasoning levels to the model form and publish them to the Codex model picker.
+- Animate the enabled EMP dot-matrix logo in gray and green. Make actual account,
+  provider and model request activity visible with a brighter pulse and halo,
+  while respecting reduced-motion settings.
+- Show a red dot on Check updates when a newer release is available, with a quiet
+  background check when the management page opens.
+- Fix Windows update handoff waiting on an already-exited EMP whose process handle
+  is still held by its launcher. Packaged update and rollback checks now start and
+  exit an actual old EMP while retaining its process handle.
+
 ## 0.12.4 (2026-09-30)
 
 - Recognize the ChatGPT App's nested macOS engine and verified Windows engine

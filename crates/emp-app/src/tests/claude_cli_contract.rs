@@ -322,6 +322,7 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
     assert_eq!(path, "/v1/messages");
     assert_eq!(headers["authorization"], "Bearer upstream-secret");
     assert_eq!(upstream_body["model"], "sonnet");
+    assert_eq!(upstream_body["output_config"]["effort"], "low");
     assert!(headers.contains_key("anthropic-version"), "{headers:?}");
     assert_eq!(upstream_body["stream"], true);
     assert_eq!(upstream_body["messages"].as_array().unwrap().len(), 1);

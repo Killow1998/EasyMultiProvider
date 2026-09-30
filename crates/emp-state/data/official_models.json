@@ -262,20 +262,36 @@
       "context_window": 1050000,
       "max_input_tokens": 922000,
       "max_output_tokens": 128000,
-      "input_modalities": ["text", "image"],
-      "output_modalities": ["text"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "supports_reasoning": true,
-      "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "reasoning_control": "reasoning.effort enum: low, medium, high, xhigh, max",
       "tool_calling": true,
       "parallel_tool_calling": null,
       "structured_output": true,
       "streaming": true,
       "web_search": true,
-      "protocols": ["responses", "chat_completions"],
+      "protocols": [
+        "responses",
+        "chat_completions"
+      ],
       "aliases": [],
       "sources_by_field": {
-        "all": ["https://developers.openai.com/api/docs/models/gpt-6-astra"]
+        "all": [
+          "https://developers.openai.com/api/docs/models/gpt-6-astra"
+        ]
       }
     },
     {
@@ -1193,6 +1209,62 @@
         "input_modalities": [
           "https://github.com/meta-llama/llama-models",
           "https://ai.meta.com/llama/get-started/"
+        ]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-opus-5-5",
+      "display_name": "Claude Opus 5.5",
+      "reviewed_at": "2026-09-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoning_control": "effort",
+      "aliases": [],
+      "sources_by_field": {
+        "input_modalities": [
+          "https://platform.claude.com/docs/en/models/overview"
+        ],
+        "reasoning_levels": [
+          "https://platform.claude.com/docs/en/build-with-claude/effort"
+        ]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-sonnet-5-5",
+      "display_name": "Claude Sonnet 5.5",
+      "reviewed_at": "2026-09-30",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoning_control": "effort",
+      "aliases": [],
+      "sources_by_field": {
+        "input_modalities": [
+          "https://platform.claude.com/docs/en/models/overview"
+        ],
+        "reasoning_levels": [
+          "https://platform.claude.com/docs/en/build-with-claude/effort"
         ]
       }
     }
