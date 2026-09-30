@@ -3,10 +3,6 @@ use crate::runtime_inventory::ExecutableIdentity;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-
-type Digests = Vec<(ExecutableIdentity, [u8; 32])>;
-static DIGESTS: OnceLock<Mutex<Digests>> = OnceLock::new();
 
 fn no_redirect(path: &Path) -> bool {
     path.ancestors().all(|part| {
@@ -30,10 +26,8 @@ fn digest(path: &Path) -> Option<[u8; 32]> {
     if before.length > 1024 * 1024 * 1024 {
         return None;
     }
-    let mut cache = DIGESTS.get_or_init(|| Mutex::new(Vec::new())).lock().ok()?;
-    if let Some((_, hash)) = cache.iter().find(|(identity, _)| identity == &before) {
-        return Some(*hash);
-    }
+    // Metadata can stay unchanged after a same-length overwrite (coarse
+    // timestamps or a copy preserving mtime). It cannot cache byte identity.
     let mut file = std::fs::File::open(path).ok()?;
     let mut hash = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -52,13 +46,7 @@ fn digest(path: &Path) -> Option<[u8; 32]> {
     if read != before.length || ExecutableIdentity::read(path).as_ref() != Some(&before) {
         return None;
     }
-    let hash: [u8; 32] = hash.finalize().into();
-    cache.retain(|(identity, _)| identity.canonical != before.canonical);
-    if cache.len() >= 128 {
-        cache.remove(0);
-    }
-    cache.push((before, hash));
-    Some(hash)
+    Some(hash.finalize().into())
 }
 
 pub(super) fn matches_resource(resource: &Path, candidate: &Path) -> bool {
@@ -130,6 +118,17 @@ mod tests {
             verified_candidates(&resource, &cache),
             vec![engine.canonicalize().unwrap()]
         );
+        // Updaters can preserve mtime; changed bytes must still be rejected.
+        let modified = engine.metadata().unwrap().modified().unwrap();
+        std::fs::write(&engine, b"incorrect bytes").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&engine)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert!(verified_candidates(&resource, &cache).is_empty());
+        std::fs::copy(&resource, &engine).unwrap();
         std::fs::write(&resource, b"new official version").unwrap();
         assert!(verified_candidates(&resource, &cache).is_empty());
     }

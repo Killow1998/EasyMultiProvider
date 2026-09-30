@@ -31,7 +31,6 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c # 1.93.1
         with:
-          toolchain: 1.93.1
           components: rustfmt, clippy
       - name: Use a real temporary directory
         shell: bash
