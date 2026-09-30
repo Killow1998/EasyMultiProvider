@@ -1,6 +1,20 @@
 //! Upstream WebSocket client lifecycle and frame I/O.
 
-use super::*;
+use super::compression::{DecompressionError, PerMessageDeflate};
+use super::network::{ReadWrite, read_http_head, websocket_connection};
+use super::{
+    ClientWebSocket, ClientWebSocketError, frame_length_prefix, local_socket_error,
+    websocket_accept,
+};
+use crate::{
+    MAX_PROXY_REQUEST_BYTES,
+    websocket_pump::{FrameDecodeError, FrameDecoder, FramePoll, WebSocketPoll},
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use serde_json::Value;
+use std::io::Write;
+use std::time::Duration;
+use url::Url;
 
 impl ClientWebSocket {
     pub fn connect(
