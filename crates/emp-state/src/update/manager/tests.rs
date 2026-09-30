@@ -207,6 +207,105 @@ fn nonce_random_source_failure_is_returned() {
     assert_eq!(error, crate::update::UpdateError("update_failed"));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets() {
+    let root = tempfile::tempdir().unwrap();
+    let binary = root.path().join("EMP");
+    std::fs::write(&binary, b"original executable").unwrap();
+    let args = vec![
+        "--config".into(),
+        root.path()
+            .join("config.json")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 512];
+        while !request.windows(4).any(|chunk| chunk == b"\r\n\r\n") {
+            let count = stream.read(&mut buffer).unwrap();
+            assert_ne!(count, 0);
+            request.extend_from_slice(&buffer[..count]);
+        }
+        stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+    });
+    let endpoints = UpdateEndpoints::for_source(&base, format!("{base}/latest"));
+    let manager = UpdateManager::with_endpoints(
+        binary.clone(),
+        args.clone(),
+        "0.12.6",
+        endpoints.clone(),
+        || panic!("failed download must not exit EMP"),
+    )
+    .unwrap();
+    *manager.0.asset.lock().unwrap() = Some(super::Asset {
+        version: "9.0.0".into(),
+        name: "EMP-linux-x86_64.tar.gz".into(),
+        url: format!("{base}/package?token=secret-never-log"),
+        size: 7,
+        digest: "a".repeat(64),
+    });
+    manager.start("install").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while manager.snapshot().state != "error" && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    server.join().unwrap();
+    let snapshot = manager.snapshot();
+    assert_eq!(snapshot.error, "update_failed");
+    let receipt = snapshot.failure.unwrap();
+    assert_eq!(receipt.stage, "download_package");
+    assert_eq!(receipt.http_status, Some(503));
+    assert_eq!(std::fs::read(&binary).unwrap(), b"original executable");
+    assert!(!std::fs::read_dir(root.path()).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".emp-update-")
+    }));
+    let raw = std::fs::read_to_string(root.path().join("state/update-last-error.json")).unwrap();
+    assert!(!raw.contains("secret-never-log"));
+    assert!(!raw.contains(&base));
+    let reopened =
+        UpdateManager::with_endpoints(binary, args, "0.12.6", endpoints, || Ok(())).unwrap();
+    assert_eq!(reopened.snapshot().failure.unwrap().http_status, Some(503));
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_candidate_launch_preserves_the_original_system_error_code() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = UpdateManager::with_endpoints(
+        std::env::current_exe().unwrap(),
+        Vec::new(),
+        "0.12.6",
+        UpdateEndpoints::default(),
+        || Ok(()),
+    )
+    .unwrap();
+    manager.stage("verify_version");
+    let error = super::probe_candidate_version_observed(
+        &root.path().join("absent"),
+        "0.12.6",
+        root.path(),
+        Duration::from_secs(1),
+        Some(&manager),
+    )
+    .unwrap_err();
+    manager.failed(error);
+    let receipt = manager.snapshot().failure.unwrap();
+    assert_eq!(receipt.stage, "verify_version");
+    assert_eq!(receipt.os_error, Some(libc::ENOENT));
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn dpkg_owned_install_requires_manual_migration_before_any_download() {

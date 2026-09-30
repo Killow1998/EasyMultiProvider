@@ -129,10 +129,16 @@ impl Drop for QuietLaunch {
 }
 #[cfg(windows)]
 pub(super) fn spawn_quiet(command: &mut Command) -> Result<Child> {
-    // CreateProcess can show a bad-image dialog before returning for a broken update.
-    // This guard only changes the calling thread and restores its mode after spawn.
+    spawn_quiet_reporting(command, UpdateError::from)
+}
+#[cfg(windows)]
+pub(super) fn spawn_quiet_reporting(
+    command: &mut Command,
+    report: impl FnOnce(std::io::Error) -> UpdateError,
+) -> Result<Child> {
+    // Capture the original CreateProcess error before restoring thread error mode.
     let _quiet_launch = QuietLaunch::begin()?;
-    Ok(command.spawn()?)
+    command.spawn().map_err(report)
 }
 pub fn spawn(
     executable: &Path,

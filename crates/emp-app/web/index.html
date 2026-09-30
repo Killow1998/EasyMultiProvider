@@ -2529,6 +2529,21 @@ function updateErrorLabel(code) {
   };
   return messages[code] || tr('更新失败，当前版本未受影响，请重试。','Update failed; the current version is unchanged. Please retry.');
 }
+function updateFailureLabel(info) {
+  const failure = info.failure;
+  const stages = {
+    start_update:tr('启动更新任务','starting the update task'), check_release:tr('检查版本','checking for a release'), read_release:tr('读取版本信息','reading release information'), parse_release:tr('解析版本信息','validating release information'),
+    prepare_install:tr('准备安装','preparing installation'), create_staging:tr('创建更新目录','creating the update folder'), download_package:tr('下载安装包','downloading the package'),
+    write_package:tr('保存安装包','saving the package'), sync_package:tr('写入安装包','flushing the package'), verify_checksum:tr('校验安装包','verifying the checksum'), extract_package:tr('解包','extracting the package'),
+    verify_version:tr('检查新版程序','checking the new executable'), prepare_worker:tr('准备更新程序','preparing the updater'), write_plan:tr('保存更新计划','saving the update plan'), drain_requests:tr('等待请求结束','waiting for requests'),
+    start_worker:tr('启动更新程序','starting the updater'), wait_worker:tr('等待更新程序就绪','waiting for the updater'), shutdown_previous:tr('退出旧版','exiting the previous version'),
+    replacing:tr('替换程序','replacing the executable'), starting:tr('启动新版','starting the new version'), waiting_for_startup:tr('等待新版启动','waiting for startup'),
+  };
+  if (!failure || (failure.error !== info.error && info.error !== 'install_rolled_back') || !stages[failure.stage]) return updateErrorLabel(info.error);
+  const reasons = {timeout:tr('连接超时','connection timed out'), connection:tr('连接失败','connection failed'), PermissionDenied:tr('没有写入权限','permission denied'), StorageFull:tr('磁盘空间不足','disk full')};
+  const detail = reasons[failure.reason] || (failure.http_status ? `HTTP ${failure.http_status}` : Number.isInteger(failure.os_error) ? tr(`系统错误 ${failure.os_error}`,`system error ${failure.os_error}`) : Number.isInteger(failure.exit_code) ? tr(`程序退出码 ${failure.exit_code}`,`exit code ${failure.exit_code}`) : '');
+  return tr(`${stages[failure.stage]}时失败`, `Update failed while ${stages[failure.stage]}`) + (detail ? `：${detail}` : '') + (info.error === 'install_rolled_back' ? tr('，已恢复旧版。', '. The previous version has been restored.') : '。');
+}
 function renderUpdateHint(info) {
   latestUpdateInfo = info;
   const button = $('check_update');
@@ -2567,7 +2582,7 @@ function renderUpdate(info) {
     downloading:tr(`正在后台下载 ${info.progress}%…`,`Downloading in the background: ${info.progress}%…`),
     verifying:tr('正在校验安装包…','Verifying the package…'), waiting:tr('下载完成，正在等待当前请求结束…','Download complete. Waiting for current requests to finish…'),
     installing:tr('正在安装并重启 EMP，完成后会打开新页面。','Installing and restarting EMP. A new page will open when ready.'),
-    error:updateErrorLabel(info.error),
+    error:updateFailureLabel(info),
   };
   $('update_status').textContent = labels[info.state] || labels.idle;
   $('update_version').textContent = tr(`当前版本 v${info.current_version}`,`Current version: ${info.current_version}`);
