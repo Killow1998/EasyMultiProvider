@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.12.4 (2026-09-29)
+## 0.12.4 (2026-09-30)
 
 - Recognize the ChatGPT App's nested macOS engine and verified Windows engine
   cache. Show App/extension and engine versions separately; check operations
