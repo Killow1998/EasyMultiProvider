@@ -20,17 +20,33 @@ where
     if asset.size == 0 || asset.size > MAX_PACKAGE_BYTES {
         return Err(UpdateError("invalid_package_size"));
     }
+    // Reserve our own file once. Each network retry truncates this handle,
+    // resetting both byte count and digest without trusting a partial download.
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| manager.io_error("write_package", error))?;
+    manager.retry_network(|| {
+        file.set_len(0)
+            .and_then(|()| std::io::Seek::rewind(&mut file))
+            .map_err(|error| manager.io_error("write_package", error))?;
+        download_attempt(manager, asset, &mut file, &mut progress)
+    })
+}
+
+fn download_attempt(
+    manager: &UpdateManager,
+    asset: &Asset,
+    file: &mut std::fs::File,
+    progress: &mut impl FnMut(u8),
+) -> Result<()> {
     manager.stage("download_package");
     let mut response = manager.open_package(&asset.url)?;
     if !response.status().is_success() {
         manager.http_error(response.status().as_u16());
         return Err(UpdateError("update_failed"));
     }
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(destination)
-        .map_err(|error| manager.io_error("write_package", error))?;
     let mut digest = Sha256::new();
     let mut size = 0_u64;
     let deadline = Instant::now() + Duration::from_secs(600);
@@ -56,6 +72,11 @@ where
     }
     file.sync_all()
         .map_err(|error| manager.io_error("sync_package", error))?;
+    if size < asset.size {
+        // A complete HTTP response can still have a truncated package body.
+        manager.incomplete_download();
+        return Err(UpdateError("update_failed"));
+    }
     manager.stage("verify_checksum");
     if size != asset.size || format!("{:x}", digest.finalize()) != asset.digest {
         return Err(UpdateError("checksum_mismatch"));

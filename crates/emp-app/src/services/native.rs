@@ -117,6 +117,19 @@ fn observe_retry(
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("x-emp-request-id"))
         .map(|(_, value)| value);
+    if decision.retry {
+        state.backend.activity.request_retry(
+            &serde_json::json!(request_id),
+            match decision.reason {
+                NativeRetryReason::Network => "network",
+                NativeRetryReason::AccountRefresh => "account_refresh",
+                NativeRetryReason::ReasoningFallback => "reasoning_fallback",
+            },
+            decision.status,
+            &state.backend.accounts.quota_revision,
+            &state.backend.accounts.quota_condition,
+        );
+    }
     state.backend.diagnostics.journal.event(
         "info",
         "native_retry_decision",
@@ -208,7 +221,18 @@ fn open_stream_result_with_monitor(
     monitor: Option<&mut DisconnectMonitor>,
 ) -> Result<CancellableNativeStreamOpen, NativeHttpError> {
     let started = std::time::Instant::now();
-    let router = NativeRouter::new(&state.backend.transport.client);
+    let on_attempt = || {
+        crate::services::observation::request_started(
+            state,
+            route,
+            &Value::Object(body.clone()),
+            incoming,
+        )
+    };
+    let on_retry = |decision| observe_retry(state, incoming, decision);
+    let router = NativeRouter::new(&state.backend.transport.client)
+        .with_retry_observer(&on_retry)
+        .with_attempt_observer(&on_attempt);
     let mut usage_owner = String::new();
     let open = router.open_stream(
         route,
@@ -225,7 +249,10 @@ fn open_stream_result_with_monitor(
         crate::services::disconnect::raced(&state.backend.transport.runtime, monitor, open);
     let result = match result {
         DisconnectRace::Ready(result) => result,
-        DisconnectRace::Disconnected => return Ok(CancellableNativeStreamOpen::Disconnected),
+        DisconnectRace::Disconnected => {
+            crate::services::observation::request_cancelled(state, route, incoming);
+            return Ok(CancellableNativeStreamOpen::Disconnected);
+        }
     };
     match result {
         Ok(mut stream) => {
@@ -258,7 +285,17 @@ pub(crate) fn complete(
 ) -> Vec<u8> {
     let started = std::time::Instant::now();
     let on_retry = |decision| observe_retry(state, incoming, decision);
-    let router = NativeRouter::new(&state.backend.transport.client).with_retry_observer(&on_retry);
+    let on_attempt = || {
+        crate::services::observation::request_started(
+            state,
+            route,
+            &Value::Object(body.clone()),
+            incoming,
+        )
+    };
+    let router = NativeRouter::new(&state.backend.transport.client)
+        .with_retry_observer(&on_retry)
+        .with_attempt_observer(&on_attempt);
     let mut usage_owner = String::new();
     let result = state
         .backend
@@ -332,7 +369,17 @@ pub(crate) fn compact(
 ) -> Vec<u8> {
     let started = std::time::Instant::now();
     let on_retry = |decision| observe_retry(state, incoming, decision);
-    let router = NativeRouter::new(&state.backend.transport.client).with_retry_observer(&on_retry);
+    let on_attempt = || {
+        crate::services::observation::request_started(
+            state,
+            route,
+            &Value::Object(body.clone()),
+            incoming,
+        )
+    };
+    let router = NativeRouter::new(&state.backend.transport.client)
+        .with_retry_observer(&on_retry)
+        .with_attempt_observer(&on_attempt);
     let mut usage_owner = String::new();
     let result = state
         .backend

@@ -43,6 +43,9 @@ impl UpdateManager {
             _ => return Err(UpdateError("update_unavailable")),
         };
         let manager = self.clone();
+        if let Ok(mut snapshot) = self.0.snapshot.lock() {
+            snapshot.retry_count = 0;
+        }
         if let Err(error) = std::thread::Builder::new()
             .name("emp-update".to_owned())
             .spawn(move || {
@@ -73,6 +76,13 @@ impl UpdateManager {
     }
 
     pub(super) fn check(&self) -> Result<()> {
+        self.retry_network(|| {
+            self.stage("check_release");
+            self.check_once()
+        })
+    }
+
+    fn check_once(&self) -> Result<()> {
         let response = self.get(
             &self.0.endpoints.release_api_url,
             "application/vnd.github+json",

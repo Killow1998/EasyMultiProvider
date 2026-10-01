@@ -17,6 +17,10 @@ pub struct UpdateDiagnostic {
     pub os_error: Option<i32>,
     pub http_status: Option<u16>,
     pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub retry_count: u8,
+    #[serde(default)]
+    pub retry_limit: u8,
 }
 
 pub(in crate::update) fn path_for(args: &[String]) -> Option<PathBuf> {
@@ -67,7 +71,11 @@ impl UpdateManager {
     pub(in crate::update) fn io_error(&self, stage: &str, error: std::io::Error) -> UpdateError {
         self.stage(stage);
         if let Ok(mut diagnostic) = self.0.diagnostic.lock() {
-            diagnostic.reason = Some(format!("{:?}", error.kind()));
+            diagnostic.reason = Some(if error.kind() == std::io::ErrorKind::TimedOut {
+                "timeout".into()
+            } else {
+                format!("{:?}", error.kind())
+            });
             diagnostic.os_error = error.raw_os_error();
             let mut source = error.source();
             while let Some(cause) = source {
@@ -79,6 +87,8 @@ impl UpdateManager {
                         diagnostic.reason = Some("timeout".into());
                     } else if request.is_connect() {
                         diagnostic.reason = Some("connection".into());
+                    } else if request.is_body() || request.is_request() {
+                        diagnostic.reason = Some("request".into());
                     }
                 }
                 source = cause.source();
@@ -117,6 +127,13 @@ impl UpdateManager {
         }
     }
 
+    pub(in crate::update) fn incomplete_download(&self) {
+        self.stage("download_package");
+        if let Ok(mut diagnostic) = self.0.diagnostic.lock() {
+            diagnostic.reason = Some("incomplete_download".into());
+        }
+    }
+
     pub(in crate::update) fn failed(&self, error: UpdateError) {
         let snapshot = self.snapshot();
         let mut diagnostic = self
@@ -129,6 +146,8 @@ impl UpdateManager {
         diagnostic.timestamp = timestamp();
         diagnostic.current_version = snapshot.current_version;
         diagnostic.target_version = snapshot.latest_version;
+        diagnostic.retry_count = snapshot.retry_count;
+        diagnostic.retry_limit = snapshot.retry_limit;
         save(self.0.diagnostic_path.as_deref(), &diagnostic);
         if let Ok(mut snapshot) = self.0.snapshot.lock() {
             snapshot.failure = Some(diagnostic);

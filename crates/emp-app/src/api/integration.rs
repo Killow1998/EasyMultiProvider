@@ -6,8 +6,6 @@ use crate::http::response::{
     body_error_response, cross_origin_response, json_error_response, response, status_text,
     unauthorized_response,
 };
-use crate::services::accounts::native_auth_document;
-use crate::services::catalog::{refresh_catalog, server_catalog};
 use crate::services::integration::integration_summary_with_result;
 use crate::services::integration::restore_native_with_history;
 use crate::services::runtime::sync_runtime;
@@ -142,28 +140,12 @@ pub(crate) fn management_integration_request(
         return summary_response(state, if successful { 200 } else { 409 }, None, error);
     }
     let result = match operation {
-        "enable" => {
-            let config = match state.backend.configuration.config.lock() {
-                Ok(config) => config.clone(),
-                Err(_) => return unavailable(503),
-            };
-            let catalog = server_catalog(state, &config);
-            let visible = catalog["models"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|model| {
-                    model
-                        .get("slug")
-                        .and_then(Value::as_str)
-                        .is_some_and(|id| !id.is_empty())
-                        && model
-                            .get("visibility")
-                            .and_then(Value::as_str)
-                            .unwrap_or("list")
-                            == "list"
-                });
-            if !visible {
+        "enable" => match crate::services::integration::enable::apply(state) {
+            Ok(result) => result,
+            Err(crate::services::integration::enable::EnableError::Unavailable(status)) => {
+                return unavailable(status);
+            }
+            Err(crate::services::integration::enable::EnableError::EmptyCatalog) => {
                 return summary_response(
                     state,
                     409,
@@ -174,51 +156,10 @@ pub(crate) fn management_integration_request(
                     })),
                 );
             }
-            let (catalog_path, _) = match refresh_catalog(state) {
-                Ok(value) => value,
-                Err(_) => return unavailable(503),
-            };
-            let dynamic = native_auth_document(&state.backend.accounts.native_auth_path)
-                .and_then(|auth| emp_state::validate_auth_json(&auth).ok())
-                .is_some();
-            let base_url = state.base_url.clone();
-            let path = catalog_path.to_string_lossy();
-            if dynamic {
-                let status = match manager.status() {
-                    Ok(status) => status,
-                    Err(_) => return unavailable(409),
-                };
-                if status.relation == "applied"
-                    && let Some(lease) = &status.lease
-                    && lease.fields["openai_base_url"].applied.value.as_deref() == Some(&base_url)
-                    && (lease.fields["model_catalog_json"].applied.value.as_deref()
-                        == Some(path.as_ref())
-                        || (!lease.fields["model_catalog_json"].applied.present
-                            && lease.fields[emp_integration::REALTIME_SIDEBAND_FIELD]
-                                .applied
-                                .value
-                                .as_deref()
-                                != Some(&base_url)))
-                {
-                    match manager.restore() {
-                        Ok(result) if !result.ok() => {
-                            return summary_response(state, 409, Some(&result), None);
-                        }
-                        Err(_) => return unavailable(409),
-                        _ => {}
-                    }
-                }
-            }
-            manager.enable_with_sideband(
-                &base_url,
-                if dynamic { None } else { Some(path.as_ref()) },
-                true,
-                dynamic.then_some(base_url.as_str()),
-            )
-        }
+        },
         "restore" => {
             match restore_native_with_history(manager, Some(&state.backend.integration.search)) {
-                Ok((result, _)) => Ok(result),
+                Ok((result, _)) => result,
                 Err(reason) => {
                     return summary_response(
                         state,
@@ -234,10 +175,6 @@ pub(crate) fn management_integration_request(
             }
         }
         _ => return json_error_response(404, status_text(404), "not found", None, &[]),
-    };
-    let result = match result {
-        Ok(result) => result,
-        Err(_) => return unavailable(409),
     };
     let mut stop_after_restore_response = false;
     if result.ok() {

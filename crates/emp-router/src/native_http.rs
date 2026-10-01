@@ -165,6 +165,7 @@ fn compact_endpoint(provider: &Map<String, Value>) -> Result<String, NativeHttpE
 pub struct NativeRouter<'a> {
     client: &'a HttpClient,
     retry_observer: Option<&'a (dyn Fn(NativeRetryDecision) + Sync)>,
+    attempt_observer: Option<&'a (dyn Fn() + Sync)>,
 }
 
 #[derive(Clone, Copy)]
@@ -185,6 +186,7 @@ impl<'a> NativeRouter<'a> {
         Self {
             client,
             retry_observer: None,
+            attempt_observer: None,
         }
     }
 
@@ -195,6 +197,12 @@ impl<'a> NativeRouter<'a> {
         observer: &'a (dyn Fn(NativeRetryDecision) + Sync),
     ) -> Self {
         self.retry_observer = Some(observer);
+        self
+    }
+
+    /// Called after projection and authentication, immediately before HTTP dispatch.
+    pub fn with_attempt_observer(mut self, observer: &'a (dyn Fn() + Sync)) -> Self {
+        self.attempt_observer = Some(observer);
         self
     }
 
@@ -355,6 +363,9 @@ impl<'a> NativeRouter<'a> {
             }
             let mut request_headers = headers.as_ref().expect("resolved headers").clone();
             request_headers.insert("Content-Encoding".to_owned(), "zstd".to_owned());
+            if let Some(observer) = self.attempt_observer {
+                observer();
+            }
             let opened = timeout_at(
                 deadline,
                 self.client.open(
@@ -536,6 +547,9 @@ impl<'a> NativeRouter<'a> {
             .map_err(|error| NativeHttpError::router(error.status(), error.to_string()))?;
         let mut request_headers = resolve_headers(false)?;
         request_headers.insert("Content-Encoding".to_owned(), "zstd".to_owned());
+        if let Some(observer) = self.attempt_observer {
+            observer();
+        }
         let response = self
             .client
             .open(

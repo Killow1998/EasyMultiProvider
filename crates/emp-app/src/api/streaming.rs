@@ -198,6 +198,9 @@ enum RelayEvent {
 
 /// Decode the next upstream event for one relay turn.
 trait RelaySource {
+    fn reported_model(&self) -> Option<&str> {
+        None
+    }
     fn next(
         &mut self,
         runtime: &tokio::runtime::Runtime,
@@ -245,6 +248,9 @@ struct ExternalRelay {
 }
 
 impl RelaySource for ExternalRelay {
+    fn reported_model(&self) -> Option<&str> {
+        self.upstream.reported_model.as_deref()
+    }
     fn next(
         &mut self,
         runtime: &tokio::runtime::Runtime,
@@ -309,6 +315,7 @@ fn relay_stream(
     let mut started = false;
     loop {
         let event = source.next(runtime, monitor.as_mut());
+        usage.reported_model(source.reported_model());
         let terminal = relay_terminal(&event);
         let completed = terminal
             && match &event {

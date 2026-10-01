@@ -117,6 +117,7 @@ fn open_external_stream_with_monitor(
             .with_protocol(protocol)
             .map_err(ExternalStreamOpenError::Route)?;
         for attempt in 0..3 {
+            crate::services::observation::request_started(state, &candidate, body, incoming);
             let opened = crate::services::disconnect::raced(
                 &state.backend.transport.runtime,
                 monitor.as_deref_mut(),
@@ -125,6 +126,7 @@ fn open_external_stream_with_monitor(
             let opened = match opened {
                 DisconnectRace::Ready(result) => result,
                 DisconnectRace::Disconnected => {
+                    crate::services::observation::request_cancelled(state, &candidate, incoming);
                     return Ok(CancellableExternalStreamOpen::Disconnected);
                 }
             };
@@ -143,7 +145,7 @@ fn open_external_stream_with_monitor(
                         crate::services::failures::external_retry_delay(&error, attempt, &candidate)
                     {
                         crate::services::observation::retry_scheduled(
-                            &state.backend.diagnostics,
+                            state,
                             &request_id,
                             attempt,
                             delay,
@@ -159,6 +161,9 @@ fn open_external_stream_with_monitor(
                             DisconnectRace::Disconnected => false,
                         };
                         if !delay_elapsed {
+                            crate::services::observation::request_cancelled(
+                                state, &candidate, incoming,
+                            );
                             return Ok(CancellableExternalStreamOpen::Disconnected);
                         }
                         continue;
@@ -167,7 +172,7 @@ fn open_external_stream_with_monitor(
                         && emp_transport::protocol_fallback_allowed(error.status(), false, false)
                     {
                         crate::services::observation::retry_scheduled(
-                            &state.backend.diagnostics,
+                            state,
                             &request_id,
                             attempt,
                             std::time::Duration::ZERO,

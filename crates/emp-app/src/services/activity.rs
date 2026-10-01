@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
+mod requests;
 
 pub(crate) const ACTIVITY_RECENT_FOR_SECONDS: u64 = 60;
 const ACTIVITY_RETENTION_SECONDS: u64 = 300;
@@ -80,6 +81,7 @@ struct RouteActivity {
 struct ActivityState {
     revision: u64,
     routes: BTreeMap<ActivityIdentity, RouteActivity>,
+    requests: requests::Requests,
 }
 
 /// Activity is deliberately separate from quota revisions: SSE subscribers
@@ -196,7 +198,53 @@ impl ActivityService {
             "observed_at": observed_at,
             "recent_for_seconds": ACTIVITY_RECENT_FOR_SECONDS,
             "routes": routes,
+            "requests": state.requests.snapshot(observed_at),
         })
+    }
+
+    pub(crate) fn observe_request(
+        &self,
+        event: &Value,
+        identity: Option<&ActivityIdentity>,
+        finished: bool,
+        wake_revision: &Mutex<u64>,
+        wake_condition: &Condvar,
+    ) {
+        self.update_requests(wake_revision, wake_condition, |requests| {
+            requests.observe(event, identity, finished, unix_seconds())
+        });
+    }
+
+    pub(crate) fn request_retry(
+        &self,
+        request_id: &Value,
+        reason: &str,
+        status: u16,
+        wake_revision: &Mutex<u64>,
+        wake_condition: &Condvar,
+    ) {
+        self.update_requests(wake_revision, wake_condition, |requests| {
+            requests.retry(request_id, reason, status, unix_seconds())
+        });
+    }
+
+    fn update_requests(
+        &self,
+        wake_revision: &Mutex<u64>,
+        wake_condition: &Condvar,
+        update: impl FnOnce(&mut requests::Requests) -> bool,
+    ) {
+        let wake = wake_revision.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let changed = update(&mut state.requests);
+        if changed {
+            state.revision = state.revision.wrapping_add(1);
+        }
+        drop(state);
+        drop(wake);
+        if changed {
+            wake_condition.notify_all();
+        }
     }
 
     fn finish(

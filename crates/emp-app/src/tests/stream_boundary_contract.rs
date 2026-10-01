@@ -312,6 +312,16 @@ fn auto_protocol_falls_back_only_after_explicit_endpoint_rejection() {
         ],
         ["/v1/chat/completions", "/v1/responses"]
     );
+    let snapshot = server
+        .state
+        .backend
+        .activity
+        .snapshot(crate::util::system_now() as u64);
+    let receipt = &snapshot["requests"][0];
+    assert_eq!(receipt["attempts"], 2);
+    assert_eq!(receipt["state"], "completed");
+    assert_eq!(receipt["response_model"], "upstream-model");
+    assert_eq!(receipt["retries"][0]["reason"], "protocol_rejection");
     assert_saved_protocol_observation(&directory, &server, "responses");
     server.shutdown().expect("shutdown");
     worker.join().expect("join complete fallback upstream");
@@ -351,6 +361,16 @@ fn auto_protocol_falls_back_only_after_explicit_endpoint_rejection() {
         ],
         ["/v1/chat/completions", "/v1/responses"]
     );
+    let snapshot = server
+        .state
+        .backend
+        .activity
+        .snapshot(crate::util::system_now() as u64);
+    let receipt = &snapshot["requests"][0];
+    assert_eq!(receipt["attempts"], 2);
+    assert_eq!(receipt["state"], "completed");
+    assert_eq!(receipt["response_model"], "upstream-model");
+    assert_eq!(receipt["retries"][0]["reason"], "protocol_rejection");
     assert_saved_protocol_observation(&directory, &server, "responses");
     server.shutdown().expect("shutdown");
     worker.join().expect("join stream fallback upstream");
@@ -387,6 +407,15 @@ fn external_pre_output_retry_is_single_and_route_local() {
         ],
         ["/v1/chat/completions", "/v1/chat/completions"]
     );
+    let snapshot = server
+        .state
+        .backend
+        .activity
+        .snapshot(crate::util::system_now() as u64);
+    let receipt = &snapshot["requests"][0];
+    assert_eq!(receipt["attempts"], 2);
+    assert_eq!(receipt["state"], "completed");
+    assert_eq!(receipt["retries"][0]["reason"], "rate_limit");
     server.shutdown().expect("shutdown");
     worker.join().expect("join complete retry upstream");
     assert_retry_journal(&directory);
@@ -418,6 +447,15 @@ fn external_pre_output_retry_is_single_and_route_local() {
         ],
         ["/v1/chat/completions", "/v1/chat/completions"]
     );
+    let snapshot = server
+        .state
+        .backend
+        .activity
+        .snapshot(crate::util::system_now() as u64);
+    let receipt = &snapshot["requests"][0];
+    assert_eq!(receipt["attempts"], 2);
+    assert_eq!(receipt["state"], "completed");
+    assert_eq!(receipt["retries"][0]["reason"], "rate_limit");
     server.shutdown().expect("shutdown");
     worker.join().expect("join stream retry upstream");
     assert_retry_journal(&directory);

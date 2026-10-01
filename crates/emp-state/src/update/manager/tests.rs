@@ -8,6 +8,8 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod retry;
+
 #[cfg(unix)]
 fn candidate_script(root: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -223,18 +225,10 @@ fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets(
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .unwrap();
-        let mut request = Vec::new();
-        let mut buffer = [0_u8; 512];
-        while !request.windows(4).any(|chunk| chunk == b"\r\n\r\n") {
-            let count = stream.read(&mut buffer).unwrap();
-            assert_ne!(count, 0);
-            request.extend_from_slice(&buffer[..count]);
-        }
-        stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        retry::serve_responses(listener, vec![
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec();
+            4
+        ])
     });
     let endpoints = UpdateEndpoints::for_source(&base, format!("{base}/latest"));
     let manager = UpdateManager::with_endpoints(
@@ -253,16 +247,18 @@ fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets(
         digest: "a".repeat(64),
     });
     manager.start("install").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(12);
     while manager.snapshot().state != "error" && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    server.join().unwrap();
+    assert_eq!(server.join().unwrap(), 4);
     let snapshot = manager.snapshot();
     assert_eq!(snapshot.error, "update_failed");
     let receipt = snapshot.failure.unwrap();
     assert_eq!(receipt.stage, "download_package");
     assert_eq!(receipt.http_status, Some(503));
+    assert_eq!(receipt.retry_count, 3);
+    assert_eq!(receipt.retry_limit, 3);
     assert_eq!(std::fs::read(&binary).unwrap(), b"original executable");
     assert!(!std::fs::read_dir(root.path()).unwrap().any(|entry| {
         entry
@@ -276,7 +272,10 @@ fn failed_download_receipt_survives_staging_cleanup_and_restart_without_secrets(
     assert!(!raw.contains(&base));
     let reopened =
         UpdateManager::with_endpoints(binary, args, "0.12.6", endpoints, || Ok(())).unwrap();
-    assert_eq!(reopened.snapshot().failure.unwrap().http_status, Some(503));
+    let receipt = reopened.snapshot().failure.unwrap();
+    assert_eq!(receipt.http_status, Some(503));
+    assert_eq!(receipt.retry_count, 3);
+    assert_eq!(receipt.retry_limit, 3);
 }
 
 #[cfg(unix)]

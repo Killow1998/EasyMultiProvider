@@ -6,7 +6,7 @@ use crate::http::response::{
     body_error_response, cross_origin_response, json_error_response, response, status_text,
     unauthorized_response,
 };
-use crate::services::accounts::{account_catalog_headers, native_auth_document};
+use crate::services::accounts::{account_catalog_headers, native_auth_document, quota_owner_key};
 use crate::util::system_now;
 use emp_state::usage::{account_owner, ledger::UsageLedger};
 use serde_json::{Value, json};
@@ -30,7 +30,27 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
     if !UsageLedger::valid_period(start, end, &category) {
         return invalid();
     }
-    let Ok(mut payload) = state.backend.usage.ledger.query(start, end, &category, now) else {
+    let account_id = query_values(request.target, "account_id").first().cloned();
+    let result = match account_id {
+        Some(id) => {
+            let Ok(owner) = quota_owner_key(state, &id) else {
+                return json_error_response(
+                    404,
+                    status_text(404),
+                    "Account usage is unavailable",
+                    None,
+                    &[],
+                );
+            };
+            state
+                .backend
+                .usage
+                .ledger
+                .query_owner(start, end, &owner, now)
+        }
+        None => state.backend.usage.ledger.query(start, end, &category, now),
+    };
+    let Ok(mut payload) = result else {
         return json_error_response(
             503,
             status_text(503),

@@ -10,6 +10,14 @@ GitHub-provided SHA-256 digest, and checks the packaged `--version` before any
 replacement. Redirects must remain HTTPS on GitHub's release asset hosts. No
 account credentials or conversation data are sent to GitHub.
 
+Release checks and package downloads retry temporary connection failures,
+timeouts, incomplete downloads, and HTTP 408/500/502/503/504 responses up to
+three additional times after the first attempt. Retries wait one, two, then
+four seconds; the update dialog displays the retry count. Each download starts
+from an empty staging file and must pass the same size and checksum checks.
+Permission failures, full disks, rejected requests, checksum failures and
+installation/replacement failures are not automatically retried.
+
 The updater stages beside the installed file or app. Windows replaces `EMP.exe`,
 Linux reads only the regular `EMP/EMP` member of the tar archive, and macOS mounts
 the DMG read-only and copies `EMP.app` without following symlinks. Source
@@ -88,9 +96,13 @@ information, or request data.
 The most recent failed attempt is also saved as `state/update-last-error.json`
 beside the user configuration. This one small file is overwritten on the next
 failure and survives cleanup of a failed staging directory. It records the
-failed stage and available HTTP status, system error number or child exit code;
+failed stage, retry count and available HTTP status, system error number or child exit code;
 it does not store exception text, URLs, arguments, account data or credentials.
-The update dialog shows the failure stage. If the receipt cannot be saved, the
+The update dialog shows the failure stage and suggests relevant next steps:
+check network/proxy access after a connection failure, free disk space when
+storage is full, or check folder permissions and system protection when writes
+are denied. Possible causes are suggestions, not a diagnosis of the network.
+If the receipt cannot be saved, the
 same fixed fields remain in the process console and current management state.
 
 The source tests cover release selection, URL boundaries, checksums, archive

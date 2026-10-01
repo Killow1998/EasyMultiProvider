@@ -149,6 +149,8 @@ pub struct CompleteResponse {
     pub status: u16,
     pub content_type: String,
     pub body: Value,
+    /// Model declared by the upstream before Codex-facing projection.
+    pub reported_model: Option<String>,
 }
 
 /// An upstream response forwarded without decoding or protocol projection.
@@ -188,6 +190,7 @@ enum StreamProjection {
 #[derive(Debug)]
 pub struct ExternalStream {
     pub request_started: std::time::Instant,
+    pub reported_model: Option<String>,
     response: Option<HttpResponse>,
     parser: Option<SseJsonParser>,
     projection: StreamProjection,
@@ -200,6 +203,17 @@ pub struct ExternalStream {
     finished: bool,
     failure: Option<RouterError>,
     ids: ProjectionIds,
+}
+
+fn reported_model(body: &Value) -> Option<String> {
+    [body, &body["response"], &body["message"]]
+        .into_iter()
+        .find_map(|value| {
+            value["model"]
+                .as_str()
+                .filter(|model| !model.is_empty() && model.len() <= 512)
+                .map(str::to_owned)
+        })
 }
 
 pub struct ExternalRouter<'a> {

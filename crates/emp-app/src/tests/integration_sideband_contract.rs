@@ -83,3 +83,43 @@ fn startup_migrates_active_v2_native_lease_and_restores_user_sideband() {
         assert!(restored.contains("openai_base_url = \"native\""));
     }
 }
+
+#[test]
+fn startup_activates_a_clean_native_configuration_by_default_and_respects_opt_out() {
+    for enabled in [None, Some(false), Some(true)] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = canonical_root(&directory);
+        let catalog = root.join("catalog.json");
+        std::fs::write(&catalog, br#"{"models":[{"slug":"example-native","visibility":"list","supported_in_api":true}]}"#).unwrap();
+        let config = root.join("config.json");
+        let mut configuration = json!({"native_catalog_path":catalog});
+        if let Some(enabled) = enabled {
+            configuration["auto_enable_on_start"] = json!(enabled);
+        }
+        std::fs::write(&config, serde_json::to_vec(&configuration).unwrap()).unwrap();
+        let codex = root.join("codex");
+        std::fs::create_dir(&codex).unwrap();
+        std::fs::write(codex.join("config.toml"), "openai_base_url = \"native\"\n").unwrap();
+        let server = ServerHandle::start_with_config_options(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+            &config,
+            "missing-test-codex",
+            codex.join("auth.json"),
+        )
+        .unwrap();
+        crate::services::startup::reconcile(&server.state).unwrap();
+        let status = server.state.backend.integration.manager.status().unwrap();
+        assert_eq!(
+            status.state == "active",
+            enabled.unwrap_or(true),
+            "{}",
+            status.state
+        );
+        server.shutdown().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(codex.join("config.toml")).unwrap(),
+            "openai_base_url = \"native\"\n"
+        );
+    }
+}

@@ -46,11 +46,15 @@ fn configuration_normalization_matches_frozen_fixture() {
             .as_object_mut()
             .expect("normalized object")
             .remove("catalog_show_context");
-        assert_eq!(
-            python_compatible, case["expected"],
-            "case: {}",
-            case["name"]
-        );
+        // These three defaults intentionally changed after the Python baseline.
+        for key in ["auto_enable_on_start", "auto_review_fallback"] {
+            python_compatible.as_object_mut().unwrap().remove(key);
+        }
+        let mut expected = case["expected"].clone();
+        if !case["input"]["subscription_search"]["enabled"].is_boolean() {
+            expected["subscription_search"]["enabled"] = json!(true);
+        }
+        assert_eq!(python_compatible, expected, "case: {}", case["name"]);
     }
     for case in fixture["invalid"]
         .as_array()
@@ -83,6 +87,20 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
     let defaults = normalize_configuration(None).expect("defaults");
     assert_eq!(defaults["port"], 4200);
     assert_eq!(defaults["catalog_show_context"], true);
+    for input in [None, Some(json!({}))] {
+        let defaults = normalize_configuration(input.as_ref()).unwrap();
+        assert_eq!(defaults["auto_enable_on_start"], true);
+        assert_eq!(defaults["auto_review_fallback"], true);
+        assert_eq!(defaults["subscription_search"]["enabled"], true);
+    }
+    let disabled = normalize_configuration(Some(&json!({
+        "auto_enable_on_start":false, "auto_review_fallback":false,
+        "subscription_search":{"enabled":false}
+    })))
+    .unwrap();
+    assert_eq!(disabled["auto_enable_on_start"], false);
+    assert_eq!(disabled["auto_review_fallback"], false);
+    assert_eq!(disabled["subscription_search"]["enabled"], false);
 
     let hidden = normalize_configuration(Some(&json!({"catalog_show_context": false})))
         .expect("explicit display preference");
@@ -90,4 +108,21 @@ fn normalization_rejects_non_object_and_bad_types_with_stable_fragments() {
     let error = normalize_configuration(Some(&json!({"catalog_show_context": "false"})))
         .expect_err("context display preference must be boolean");
     assert!(error.to_string().contains("catalog_show_context"));
+}
+
+#[test]
+fn application_preferences_survive_web_save_and_reject_non_booleans() {
+    let current = normalize_configuration(Some(&json!({
+        "auto_enable_on_start": true, "auto_review_fallback": false
+    })))
+    .unwrap();
+    let public =
+        emp_state::public_configuration_with_file_status(&current, &Default::default(), |_| false)
+            .unwrap();
+    let saved = emp_state::merge_web_update(&current, &public).unwrap();
+    assert_eq!(saved["auto_enable_on_start"], true);
+    assert_eq!(saved["auto_review_fallback"], false);
+    for key in ["auto_enable_on_start", "auto_review_fallback"] {
+        assert!(normalize_configuration(Some(&json!({key: "false"}))).is_err());
+    }
 }

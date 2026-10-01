@@ -39,7 +39,7 @@ fn search_and_runtime_selection_match_fixture() {
     );
     assert_eq!(
         normalize_subscription_search(Some(&Value::Null)).expect("null search"),
-        json!({"enabled": false, "account_id": ""})
+        json!({"enabled": true, "account_id": ""})
     );
     assert_eq!(
         normalize_codex_runtime_sources(Some(&Value::Null)).expect("null sources"),

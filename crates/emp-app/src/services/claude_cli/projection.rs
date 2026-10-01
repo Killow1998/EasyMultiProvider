@@ -297,6 +297,7 @@ pub(super) fn response_from_cli(
         .map_err(|_| ClaudeCliError::Failure("claude_cli_tool_projection_failed"))?;
     response_json_stream_events(response.clone(), ids, true).map_err(ClaudeCliError::Router)?;
     Ok(CompleteResponse {
+        reported_model: None,
         status: provider_status,
         content_type: "application/json".to_owned(),
         body: response,

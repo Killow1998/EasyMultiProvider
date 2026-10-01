@@ -265,7 +265,13 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<TcpStrea
             .keys()
             .map(String::as_str)
             .collect::<Vec<_>>(),
-        ["observed_at", "recent_for_seconds", "revision", "routes"]
+        [
+            "observed_at",
+            "recent_for_seconds",
+            "requests",
+            "revision",
+            "routes"
+        ]
     );
     assert_eq!(
         read_sse_frame(&mut reader),

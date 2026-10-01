@@ -361,6 +361,15 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
     let path = request.raw_path();
     let same_origin = same_origin(request, state.port);
     if request.method == RequestMethod::Get
+        && let Some(bytes) = crate::web::script_response(path)
+    {
+        return if same_origin {
+            bytes
+        } else {
+            cross_origin_response("cross-origin Web UI request rejected")
+        };
+    }
+    if request.method == RequestMethod::Get
         && (path == "/v1/models" || path.starts_with("/v1/models/"))
     {
         if !same_origin {

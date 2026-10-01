@@ -275,6 +275,22 @@ impl UsageLedger {
             && (category == "all" || CATEGORIES.contains(&category))
     }
     pub fn query(&self, start: f64, end: f64, category: &str, now: f64) -> Result<Value> {
+        self.query_selected(start, end, category, now, None)
+    }
+    pub fn query_owner(&self, start: f64, end: f64, owner: &str, now: f64) -> Result<Value> {
+        if owner.is_empty() {
+            return Err(UsageError);
+        }
+        self.query_selected(start, end, "all", now, Some(owner))
+    }
+    fn query_selected(
+        &self,
+        start: f64,
+        end: f64,
+        category: &str,
+        now: f64,
+        owner: Option<&str>,
+    ) -> Result<Value> {
         if !Self::valid_period(start, end, category) {
             return Err(UsageError);
         }
@@ -283,6 +299,10 @@ impl UsageLedger {
         if category != "all" {
             selection.push_str(" AND category = ?");
             parameters.push(SqlValue::Text(category.into()));
+        }
+        if let Some(owner) = owner {
+            selection.push_str(" AND owner = ?");
+            parameters.push(SqlValue::Text(owner.into()));
         }
         let aggregate = TOKEN_FIELDS
             .iter()
@@ -326,10 +346,18 @@ impl UsageLedger {
             ),
             &parameters,
         )?;
-        let first: Option<f64> =
-            connection.query_row("SELECT MIN(observed_at) FROM usage_events", [], |row| {
-                row.get(0)
-            })?;
+        let first: Option<f64> = match owner {
+            Some(owner) => connection.query_row(
+                "SELECT MIN(observed_at) FROM usage_events WHERE owner = ?",
+                params![owner],
+                |row| row.get(0),
+            )?,
+            None => {
+                connection.query_row("SELECT MIN(observed_at) FROM usage_events", [], |row| {
+                    row.get(0)
+                })?
+            }
+        };
         let uncorrelated: i64 = connection.query_row(
             "SELECT COUNT(*) FROM selected_usage WHERE origin='realtime' AND usage_turn=''",
             [],

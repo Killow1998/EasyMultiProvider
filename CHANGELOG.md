@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.12.8 (2026-10-01)
+
+- Combine account identity, subscription plan, Credit and reset count into one
+  compact summary. Open account details to view recorded model/token usage and
+  API-equivalent cost, save an alias, choose a reset or remove an imported account.
+  Keep Edit, Refresh and Trend aligned across all account rows.
+- Group automatic activation, external-model Codex web search and automatic-review
+  account fallback in Settings. Enable all three by default, retain saved opt-outs
+  and fix sliding-switch track height and circle alignment at different browser zoom levels.
+- Use eye buttons to show or hide models, matching the rest of the management UI.
+- Open recent request details from account, Provider and model activity dots.
+  Show the selected model, actual target, upstream-declared model, duration,
+  dispatch count and retry timeline through the existing event stream.
+  Keep conversations and credentials out of these bounded in-memory receipts.
+- Retry temporary release-check and download failures up to three additional
+  times. Display retry progress and specific failure stages with relevant recovery
+  steps. Restart partial downloads from zero and retain size/checksum validation;
+  do not retry installation, permission or checksum failures.
+
 ## 0.12.7 (2026-09-30)
 
 - Keep known subscription models routable when a refreshed catalog omits them,
