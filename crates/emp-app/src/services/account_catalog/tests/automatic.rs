@@ -1,7 +1,7 @@
 use crate::lifecycle::ServerHandle;
 use base64::Engine as _;
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +59,7 @@ impl RefreshCatalogFixture {
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                     .expect("refresh request timeout");
                 let mut request = String::new();
+                let mut input = None;
                 {
                     let mut reader = BufReader::new(stream.try_clone().expect("clone refresh"));
                     loop {
@@ -69,6 +70,26 @@ impl RefreshCatalogFixture {
                         if line == "\r\n" {
                             break;
                         }
+                    }
+                    if request.starts_with("POST ") {
+                        let header = |name: &str| {
+                            request.lines().find_map(|line| {
+                                let (key, value) = line.split_once(':')?;
+                                key.eq_ignore_ascii_case(name).then(|| value.trim())
+                            })
+                        };
+                        let length: usize = header("content-length").unwrap().parse().unwrap();
+                        let mut body = vec![0; length];
+                        reader.read_exact(&mut body).expect("native request body");
+                        let body = emp_transport::decode_content(
+                            body,
+                            header("content-encoding").unwrap_or(""),
+                            4 * 1024 * 1024,
+                            None,
+                        )
+                        .expect("decode native request");
+                        input = Some(serde_json::from_slice::<Value>(&body).unwrap());
+                        request.push_str(std::str::from_utf8(&body).unwrap());
                     }
                 }
                 request_sender
@@ -89,15 +110,23 @@ impl RefreshCatalogFixture {
                 } else {
                     "unknown-account-model"
                 };
-                let body = serde_json::to_vec(&json!({"models":[{
-                    "slug":model,
-                    "display_name":model,
-                    "context_window":262144,
-                    "supports_reasoning_summaries":true,
-                    "capabilities":{"parallel_tools":true},
-                    "schema_marker":{"origin":"authenticated-models-route"}
-                }]}))
-                .expect("refresh catalog JSON");
+                let response = input.map_or_else(
+                    || {
+                        json!({"models":[{
+                            "slug":model,
+                            "display_name":model,
+                            "context_window":262144,
+                            "supports_reasoning_summaries":true,
+                            "capabilities":{"parallel_tools":true},
+                            "schema_marker":{"origin":"authenticated-models-route"}
+                        }]})
+                    },
+                    |input| {
+                        json!({"id":"resp_fixture", "object":"response",
+                    "status":"completed", "model":input["model"], "output":[]})
+                    },
+                );
+                let body = serde_json::to_vec(&response).expect("refresh catalog JSON");
                 write!(stream,"HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",body.len()).expect("refresh head");
                 if status == 200 {
                     stream.write_all(&body).expect("refresh body");
@@ -214,6 +243,84 @@ fn http_request(
 fn http_json(wire: &str) -> Value {
     serde_json::from_str(wire.split_once("\r\n\r\n").expect("HTTP response body").1)
         .expect("HTTP JSON")
+}
+
+#[test]
+fn partial_native_catalog_refresh_keeps_a_known_model_routable() {
+    let upstream = RefreshCatalogFixture::start(false);
+    let directory = tempfile::Builder::new()
+        .prefix("emp-native-partial-catalog-")
+        .tempdir()
+        .unwrap();
+    let (server, _) = start_server(&directory, &upstream.address, "0.159.2");
+    let native_path = directory.path().join("native.json");
+    std::fs::write(
+        &native_path,
+        serde_json::to_vec(&json!({"models":[{
+            "slug":"future-native", "display_name":"Future native",
+            "supported_in_api":true, "context_window":262144
+        }]}))
+        .unwrap(),
+    )
+    .unwrap();
+    {
+        let mut config = server.state.backend.configuration.config.lock().unwrap();
+        config["accounts"] = json!([]);
+        config["native_catalog_path"] = json!(native_path);
+    }
+    std::fs::write(
+        &server.state.backend.accounts.native_auth_path,
+        serde_json::to_vec(&json!({"tokens":{"access_token":"native-secret",
+            "account_id":"native-owner"}}))
+        .unwrap(),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        crate::services::account_catalog::request_refresh(&server.state, true);
+        let request = upstream.take_request();
+        assert!(request.starts_with("GET /v1/models?client_version=0.159.2"));
+        assert!(
+            server
+                .state
+                .catalog_refresh
+                .wait_until_idle(std::time::Duration::from_secs(10))
+        );
+        let catalog = http_json(&http_request(
+            &server,
+            "GET",
+            "/v1/models?client_version=0.159.2",
+            &[],
+            false,
+        ));
+        assert!(
+            catalog["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["slug"] == "future-native")
+        );
+        let input = json!({"model":"future-native", "stream":false,
+            "input":[{"role":"user", "content":"Continue the existing conversation."}]});
+        let response = http_request(
+            &server,
+            "POST",
+            "/v1/responses",
+            &serde_json::to_vec(&input).unwrap(),
+            true,
+        );
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert_eq!(http_json(&response)["status"], "completed");
+        let forwarded = upstream.take_request();
+        assert!(forwarded.starts_with("POST /v1/responses"));
+        assert!(forwarded.contains("Continue the existing conversation."));
+        assert!(forwarded.contains("future-native"));
+        assert!(
+            forwarded
+                .to_ascii_lowercase()
+                .contains("authorization: bearer native-secret")
+        );
+    }
+    server.shutdown().expect("shutdown");
 }
 
 #[test]
