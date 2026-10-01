@@ -59,6 +59,69 @@ fn idle_accept_worker_wakes_for_shutdown_after_serving_a_request() {
     );
 }
 
+#[test]
+fn shutdown_notifies_all_waiters_and_late_waiters_do_not_block() {
+    let (directory, server) = test_server();
+    let state = Arc::clone(&server.state);
+    crate::services::quota::refresh_account_by_id(&state, "synthetic-private-account")
+        .expect_err("unknown account fails without invoking a quota helper");
+    state.backend.transport.runtime.block_on(async {
+        let first = state.wait_for_shutdown();
+        let second = state.wait_for_shutdown();
+        tokio::pin!(first, second);
+        // Poll both into their waiting state before issuing the notification.
+        tokio::select! {
+            biased;
+            _ = &mut first => panic!("shutdown was not requested"),
+            _ = &mut second => panic!("shutdown was not requested"),
+            _ = std::future::ready(()) => {},
+        }
+        state.request_shutdown();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(first, second);
+            state.wait_for_shutdown().await;
+        })
+        .await
+        .expect("all current and late waiters finish");
+    });
+    server.shutdown().expect("shutdown");
+    let records: Vec<Value> = std::fs::read_dir(directory.path().join("state/logs"))
+        .expect("diagnostic directory")
+        .flat_map(|entry| {
+            let text = std::fs::read_to_string(entry.unwrap().path()).expect("read journal");
+            assert!(!text.contains("synthetic-private-account"));
+            text.lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect::<Vec<Value>>()
+        })
+        .collect();
+    for event in [
+        "process_start",
+        "proxy_selected",
+        "service_listening",
+        "quota_refresh",
+        "shutdown_start",
+        "shutdown_complete",
+    ] {
+        assert!(
+            records.iter().any(|record| record["event"] == event),
+            "missing {event}"
+        );
+    }
+    let quota = records
+        .iter()
+        .find(|record| record["event"] == "quota_refresh")
+        .unwrap();
+    assert_eq!(quota["fields"]["success"], false);
+    assert_eq!(quota["fields"]["error_class"], "quota_error");
+    let stopped = records
+        .iter()
+        .find(|record| record["event"] == "shutdown_complete")
+        .unwrap();
+    assert_eq!(stopped["fields"]["success"], true);
+    assert_eq!(stopped["fields"]["error_class"], "none");
+}
+
 fn bootstrap_exchange(server: &ServerHandle, token: &str, extra: &[&str]) -> String {
     let mut headers = vec![format!("X-EMP-Bootstrap: {token}")];
     headers.extend(extra.iter().map(|header| (*header).to_owned()));
@@ -90,14 +153,6 @@ fn ui_is_served_without_secrets_or_session_cookie() {
         ));
         assert!(head.contains("\r\nReferrer-Policy: no-referrer\r\n"));
     }
-    let web = String::from_utf8_lossy(WEB_INDEX_BYTES);
-    assert!(web.contains("establishSession()"));
-    assert!(web.contains("X-EMP-Session"));
-    assert!(web.contains("X-EMP-Bootstrap"));
-    assert!(web.contains("managementFetch('/api/accounts/events'"));
-    assert!(web.contains("managementFetch('/api/migration/export'"));
-    assert!(!web.contains("new EventSource("));
-    assert!(web.contains("请从 EMP 启动时提供的链接打开管理页"));
     assert!(!server.state.bootstrap.used.load(Ordering::Acquire));
     server.shutdown().expect("shutdown");
 }

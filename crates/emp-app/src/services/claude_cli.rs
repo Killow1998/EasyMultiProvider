@@ -117,6 +117,11 @@ fn failure_details(code: &'static str) -> (u16, &'static str, &'static str) {
             "claude_cli_unknown_tool_proposal",
             "Claude Code proposed a tool that is not available in this request",
         ),
+        "claude_cli_transcript_mismatch" => (
+            502,
+            "claude_cli_transcript_mismatch",
+            "Claude Code changed the conversation format; EMP could not forward the request",
+        ),
         _ => (502, code, "Claude Code CLI request failed"),
     }
 }
@@ -198,13 +203,31 @@ pub(crate) fn execute_complete(
     ids: &ProjectionIds,
     monitor: Option<&mut DisconnectMonitor>,
 ) -> Result<ClaudeCliResult, ClaudeCliError> {
-    if state.shutdown.load(Ordering::Acquire) {
-        return Err(ClaudeCliError::ShuttingDown);
+    let started = Instant::now();
+    let result = (|| {
+        if state.shutdown.load(Ordering::Acquire) {
+            return Err(ClaudeCliError::ShuttingDown);
+        }
+        preflight_input(body)?;
+        let executable = emp_codex::installed_cli::resolve_claude_cli()
+            .ok_or(ClaudeCliError::Failure("claude_cli_unavailable"))?;
+        execute_complete_with_cli(state, route, body, incoming, ids, &executable, monitor)
+    })();
+    if let Err(error) = &result {
+        let (status, code) = match error {
+            ClaudeCliError::Failure(code) => (failure_details(code).0, *code),
+            ClaudeCliError::Router(error) => (error.status(), error.error_class().as_str()),
+            ClaudeCliError::Disconnected => (499, "client_disconnected"),
+            ClaudeCliError::ShuttingDown => (503, "server_shutting_down"),
+        };
+        state.backend.diagnostics.journal.event(
+            "warning",
+            "claude_cli_request_failed",
+            &json!({"status":status,"error_code":code,
+                "duration_ms":started.elapsed().as_millis() as u64}),
+        );
     }
-    preflight_input(body)?;
-    let executable = emp_codex::installed_cli::resolve_claude_cli()
-        .ok_or(ClaudeCliError::Failure("claude_cli_unavailable"))?;
-    execute_complete_with_cli(state, route, body, incoming, ids, &executable, monitor)
+    result
 }
 
 fn execute_complete_with_cli(

@@ -1,6 +1,9 @@
 //! Complete Anthropic response projection and its usage/tool helpers.
 
-use super::*;
+use super::stream::AnthropicIds;
+use super::{AnthropicError, required_upstream_string, upstream_error};
+use serde_json::{Map, Value, json};
+use std::collections::BTreeSet;
 
 fn token_count(value: Option<&Value>) -> Option<u64> {
     match value {
@@ -13,7 +16,7 @@ fn token_count(value: Option<&Value>) -> Option<u64> {
 
 /// Project Anthropic input, cache, and output usage into Responses usage fields.
 pub fn anthropic_usage(usage: &Value) -> Value {
-    let Some(usage) = object(usage) else {
+    let Some(usage) = usage.as_object() else {
         return Value::Object(Map::new());
     };
     let mut result = Map::new();
@@ -31,7 +34,7 @@ pub fn anthropic_usage(usage: &Value) -> Value {
             let mut details = Map::new();
             details.insert("cached_tokens".to_owned(), json!(read));
             details.insert("cache_creation_tokens".to_owned(), json!(written));
-            if let Some(creation) = usage.get("cache_creation").and_then(object)
+            if let Some(creation) = usage.get("cache_creation").and_then(Value::as_object)
                 && creation.contains_key("ephemeral_1h_input_tokens")
             {
                 details.insert(
@@ -73,7 +76,7 @@ pub(super) fn incomplete_reason(
 
 pub(super) fn tool_arguments(value: Option<&Value>) -> Result<String, AnthropicError> {
     let default = Value::Object(Map::new());
-    let Some(value) = object(value.unwrap_or(&default)) else {
+    let Some(value) = value.unwrap_or(&default).as_object() else {
         return Err(upstream_error(
             "Anthropic upstream returned invalid tool input",
         ));
@@ -109,7 +112,7 @@ pub(super) fn custom_tool_input(arguments: &str) -> String {
     }
 }
 
-/// Project a Responses request into Anthropic Messages.
+/// Build a completed assistant output item.
 pub(super) fn output_message(id: &str, text: &str) -> Value {
     serde_json::json!({
         "id": id, "type": "message", "status": "completed", "role": "assistant",
@@ -127,20 +130,15 @@ pub fn response_from_anthropic(
     custom_names: &[&str],
     ids: &mut AnthropicIds,
 ) -> Result<Value, AnthropicError> {
-    let Some(root) = object(value) else {
+    let Some(root) = value.as_object() else {
         return Err(upstream_error(
             "Anthropic upstream returned invalid content",
         ));
     };
-    let is_truthy = |value: &Value| match value {
-        Value::Null | Value::Bool(false) => false,
-        Value::Bool(true) => true,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    };
-    if root.get("error").is_some_and(is_truthy) {
+    if root
+        .get("error")
+        .is_some_and(|value| super::python_truthy(Some(value)))
+    {
         return Err(upstream_error("Anthropic upstream returned an error"));
     }
     let mut output = Vec::new();
@@ -155,7 +153,7 @@ pub fn response_from_anthropic(
         .ok_or_else(|| upstream_error("Anthropic upstream returned invalid content"))?;
     let mut call_ids = BTreeSet::new();
     for block in content {
-        let Some(block) = object(block) else {
+        let Some(block) = block.as_object() else {
             return Err(upstream_error(
                 "Anthropic upstream returned invalid content",
             ));

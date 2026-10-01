@@ -1,7 +1,10 @@
 //! Incremental Responses SSE projection and custom tool state.
 
+use super::response::project_response;
 use super::response::{custom_tool_ids, custom_tool_input, project_reasoning_item};
-use super::*;
+use super::{PortableProjectionError, error, python_string};
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn python_truthy(value: &Value) -> bool {
     match value {
@@ -55,7 +58,8 @@ impl PortableStreamProjector {
     }
 
     pub fn project(&mut self, event: &Value) -> Result<Option<Value>, PortableProjectionError> {
-        let mut projected = object(event)
+        let mut projected = event
+            .as_object()
             .ok_or_else(|| error(0, "event", "invalid_response_output"))?
             .clone();
         let mut event_type = python_or_string(projected.get("type")).to_ascii_lowercase();

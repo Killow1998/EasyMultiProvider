@@ -1,4 +1,5 @@
-use super::*;
+use emp_history::VisibleItem;
+use serde_json::{Map, Value, json};
 
 pub(super) fn visible_payload(record: &Map<String, Value>) -> Option<Map<String, Value>> {
     let kind = token(record.get("type"));

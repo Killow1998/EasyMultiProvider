@@ -42,8 +42,9 @@ pub use websocket::{
     ClientWebSocket, ClientWebSocketError, WebSocketConnection, WebSocketError, websocket_accept,
 };
 pub use websocket_pump::{
-    ClientWebSocketPump, DEFAULT_PUMP_CHANNEL_CAPACITY, DEFAULT_WEBSOCKET_MESSAGE_BYTES,
-    PumpCommand, PumpEvent, WebSocketPoll, WebSocketPumpConfig,
+    ClientWebSocketPump, ConfirmationError, DEFAULT_PUMP_CHANNEL_CAPACITY,
+    DEFAULT_WEBSOCKET_MESSAGE_BYTES, PumpCommand, PumpEvent, WebSocketPoll, WebSocketPumpConfig,
+    WriteReceipt,
 };
 
 pub const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;

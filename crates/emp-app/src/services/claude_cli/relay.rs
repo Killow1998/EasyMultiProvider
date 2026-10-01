@@ -291,11 +291,30 @@ fn normalize_cli_system_messages(body: &mut Value) -> bool {
             Some("user") if user_message.is_none() => user_message = Some(message.clone()),
             Some("user") | Some("assistant") => return false,
             Some("system") => {
-                if message
-                    .as_object()
-                    .is_none_or(|object| object.len() != 2 || !object.contains_key("content"))
+                let Some(fields) = message.as_object() else {
+                    return false;
+                };
+                if !fields.contains_key("content")
+                    || fields
+                        .keys()
+                        .any(|key| !matches!(key.as_str(), "role" | "content" | "output_config"))
                 {
                     return false;
+                }
+                // Some CLI models repeat the request's effort on their date
+                // reminder. Discard only that identical duplicate; the actual
+                // request setting remains at the Anthropic top level.
+                if let Some(output_config) = fields.get("output_config") {
+                    let Some(settings) = output_config.as_object() else {
+                        return false;
+                    };
+                    if settings.len() != 1
+                        || !settings.get("effort").is_some_and(Value::is_string)
+                        || settings.get("effort")
+                            != body.get("output_config").and_then(|v| v.get("effort"))
+                    {
+                        return false;
+                    }
                 }
                 match message.get("content") {
                     Some(Value::String(text)) => {
@@ -671,6 +690,58 @@ mod tests {
                 body, original,
                 "rejected normalization must not mutate input"
             );
+        }
+    }
+
+    #[test]
+    fn normalize_cli_system_messages_preserves_the_request_effort_duplicate() {
+        let mut body = serde_json::json!({
+            "output_config":{"effort":"low"},
+            "system":[{"type":"text","text":"EMP instruction"}],
+            "messages":[
+                {"role":"user","content":"exact transcript"},
+                {"role":"system","content":[{
+                    "type":"text","text":"Today's date is 2026-09-30.",
+                    "cache_control":{"type":"ephemeral"}
+                }],"output_config":{"effort":"low"}}
+            ]
+        });
+        assert!(normalize_cli_system_messages(&mut body));
+        assert_eq!(body["output_config"], serde_json::json!({"effort":"low"}));
+        assert_eq!(
+            body["messages"],
+            serde_json::json!([
+                {"role":"user","content":"exact transcript"}
+            ])
+        );
+        assert_eq!(body["system"][1]["text"], "Today's date is 2026-09-30.");
+        assert_eq!(body["system"][1]["cache_control"]["type"], "ephemeral");
+
+        for (top, nested) in [
+            (serde_json::Value::Null, serde_json::json!({"effort":"low"})),
+            (
+                serde_json::json!({"effort":"high"}),
+                serde_json::json!({"effort":"low"}),
+            ),
+            (
+                serde_json::json!({"effort":"low"}),
+                serde_json::json!({"effort":"low","extra":true}),
+            ),
+            (
+                serde_json::json!({"effort":1}),
+                serde_json::json!({"effort":1}),
+            ),
+        ] {
+            let mut rejected = serde_json::json!({
+                "output_config":top,
+                "messages":[
+                    {"role":"user","content":"exact transcript"},
+                    {"role":"system","content":"date reminder","output_config":nested}
+                ]
+            });
+            let original = rejected.clone();
+            assert!(!normalize_cli_system_messages(&mut rejected));
+            assert_eq!(rejected, original);
         }
     }
 

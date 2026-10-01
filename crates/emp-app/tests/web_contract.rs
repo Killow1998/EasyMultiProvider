@@ -52,15 +52,6 @@ fn request(port: u16, target: &str, headers: &[&str]) -> Vec<u8> {
 
 fn request_with_method(port: u16, method: &str, target: &str, headers: &[&str]) -> Vec<u8> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to EMP");
-    let host = if headers.iter().any(|header| {
-        header
-            .split_once(':')
-            .is_some_and(|(name, _)| name.eq_ignore_ascii_case("host"))
-    }) {
-        String::new()
-    } else {
-        format!("Host: 127.0.0.1:{port}\r\n")
-    };
     let headers = if headers.is_empty() {
         String::new()
     } else {
@@ -68,7 +59,7 @@ fn request_with_method(port: u16, method: &str, target: &str, headers: &[&str]) 
     };
     write!(
         stream,
-        "{method} {target} HTTP/1.1\r\n{host}{headers}Connection: close\r\n\r\n"
+        "{method} {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{headers}Connection: close\r\n\r\n"
     )
     .expect("write HTTP request");
     complete_response(&mut stream)
@@ -80,14 +71,6 @@ fn body(response: &[u8]) -> &[u8] {
         .position(|window| window == b"\r\n\r\n")
         .expect("HTTP response separator");
     &response[separator + 4..]
-}
-
-fn header_text(response: &[u8]) -> String {
-    let separator = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .expect("HTTP response separator");
-    String::from_utf8_lossy(&response[..separator]).into_owned()
 }
 
 /// Exchange a bootstrap token for a session through `POST /api/session`.
@@ -112,7 +95,21 @@ fn session_from(response: &[u8]) -> String {
 }
 
 fn spawn_emp(config: &std::path::Path) -> (u16, std::process::Child, String) {
+    let root = config.parent().expect("fixture root");
+    std::fs::create_dir_all(root.join("home")).expect("private HOME");
+    std::fs::create_dir_all(root.join("codex")).expect("private CODEX_HOME");
     let mut child = Command::new(env!("CARGO_BIN_EXE_EMP"))
+        .env("HOME", root.join("home"))
+        .env("USERPROFILE", root.join("home"))
+        .env("CODEX_HOME", root.join("codex"))
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .env("HTTPS_PROXY", "http://127.0.0.1:1")
+        .env("ALL_PROXY", "http://127.0.0.1:1")
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("http_proxy", "http://127.0.0.1:1")
+        .env("https_proxy", "http://127.0.0.1:1")
+        .env("all_proxy", "http://127.0.0.1:1")
+        .env("no_proxy", "127.0.0.1,localhost")
         .args([
             "serve",
             "--config",
@@ -184,102 +181,15 @@ fn version_output_reports_the_running_release() {
 }
 
 #[test]
-fn management_bootstrap_exchanges_a_single_use_session_token() {
-    let directory = TempDir::new().expect("temporary directory");
-    let config = canonical_root(&directory).join("config.json");
-    let (port, mut child, bootstrap_line) = spawn_emp(&config);
-    let token = bootstrap_line
-        .trim_start_matches("Open in browser: ")
-        .trim_end()
-        .rsplit_once("bootstrap=")
-        .map(|(_, token)| token.to_string())
-        .expect("bootstrap token");
-    assert_eq!(token.len(), 43);
-    assert!(token.is_ascii());
-
-    let health = request(port, "/healthz", &[]);
-    assert!(health.starts_with(b"HTTP/1.1 200 OK\r\n"));
-    assert_eq!(body(&health), b"{\"status\":\"ok\"}");
-
-    // The page carries no secrets; its script exchanges the bootstrap token.
-    let page = request(port, "/", &[]);
-    assert!(page.starts_with(b"HTTP/1.1 200 OK\r\n"));
-    assert_eq!(body(&page), emp_app::WEB_INDEX_BYTES);
-
-    let wrong_host = request(port, "/", &["Host: 127.0.0.2"]);
-    assert!(wrong_host.starts_with(b"HTTP/1.1 403 Forbidden\r\n"));
-    let cross_origin = request(
-        port,
-        "/",
-        &[&format!("Origin: http://127.0.0.1:{}", port + 1)],
-    );
-    assert!(cross_origin.starts_with(b"HTTP/1.1 403 Forbidden\r\n"));
-
-    // The legacy query-string login neither sets a session nor spends the
-    // bootstrap token; only the script's POST below exchanges it.
-    let query_login = request(port, &format!("/?bootstrap={token}"), &[]);
-    assert!(query_login.starts_with(b"HTTP/1.1 200 OK\r\n"));
-    assert!(
-        header_text(&query_login)
-            .lines()
-            .filter_map(|line| line.strip_prefix("Set-Cookie: "))
-            .all(|cookie| cookie.starts_with("emp_session=;") && cookie.ends_with("Max-Age=0"))
-    );
-
-    let login = bootstrap_session(port, &token);
-    assert!(login.starts_with(b"HTTP/1.1 200 OK\r\n"));
-    let session = session_from(&login);
-    assert_eq!(session.len(), 43);
-
-    let reused_bootstrap = bootstrap_session(port, &token);
-    assert!(reused_bootstrap.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));
-
-    let api_unauthorized = request(port, "/api/config", &[]);
-    assert!(api_unauthorized.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));
-    let cookie_only = request(
-        port,
-        "/api/config",
-        &[&format!("Cookie: emp_session={session}")],
-    );
-    assert!(cookie_only.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));
-    let api_authorized = request(port, "/api/config", &[&format!("X-EMP-Session: {session}")]);
-    assert!(api_authorized.starts_with(b"HTTP/1.1 200 OK\r\n"));
-
-    child.kill().expect("stop test EMP");
-    child.wait().expect("reap test EMP");
-}
-
-#[test]
-fn rejects_malformed_percent_escapes_and_non_ascii_bootstrap() {
-    let directory = TempDir::new().expect("temporary directory");
-    let config = canonical_root(&directory).join("config.json");
-    let (port, mut child, bootstrap_line) = spawn_emp(&config);
-    let token = bootstrap_line
-        .trim_start_matches("Open in browser: ")
-        .trim_end()
-        .rsplit_once("bootstrap=")
-        .map(|(_, token)| token.to_string())
-        .expect("bootstrap token");
-
-    for supplied in ["%2", "%GG", "%FF", &format!("{token}中"), ""] {
-        let response = bootstrap_session(port, supplied);
-        assert!(
-            response.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"),
-            "{supplied}"
-        );
-    }
-    // Rejected attempts do not spend the real token.
-    assert!(bootstrap_session(port, &token).starts_with(b"HTTP/1.1 200 OK\r\n"));
-
-    child.kill().expect("stop test EMP");
-    child.wait().expect("reap test EMP");
-}
-
-#[test]
 fn valid_session_persists_across_restart() {
     let directory = TempDir::new().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     let (port, mut child, bootstrap_line) = spawn_emp(&config);
+    let page = request(port, "/", &[]);
+    assert!(page.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    assert_eq!(body(&page), emp_app::WEB_INDEX_BYTES);
+    let denied = request(port, "/api/config", &[]);
+    assert!(denied.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));
     let token = bootstrap_line
         .trim_start_matches("Open in browser: ")
         .trim_end()

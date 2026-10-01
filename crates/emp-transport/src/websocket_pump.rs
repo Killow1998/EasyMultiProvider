@@ -6,6 +6,10 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+mod confirmation;
+use confirmation::QueuedCommand;
+pub use confirmation::{ConfirmationError, WriteReceipt};
+
 pub const DEFAULT_WEBSOCKET_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 pub const DEFAULT_PUMP_CHANNEL_CAPACITY: usize = 8;
 pub const MAX_PUMP_CHANNEL_CAPACITY: usize = 64;
@@ -466,9 +470,10 @@ impl FrameDecoder {
 
 /// A bounded command/event boundary around one worker-owned upstream socket.
 pub struct ClientWebSocketPump {
-    command_tx: SyncSender<PumpCommand>,
+    command_tx: SyncSender<QueuedCommand>,
     event_rx: Receiver<PumpEvent>,
     worker: Option<JoinHandle<()>>,
+    next_receipt: u64,
 }
 
 impl fmt::Debug for ClientWebSocketPump {
@@ -507,15 +512,33 @@ impl ClientWebSocketPump {
             command_tx,
             event_rx,
             worker: Some(worker),
+            next_receipt: 1,
         })
     }
 
     pub fn try_send(&self, command: PumpCommand) -> Result<(), TrySendError<PumpCommand>> {
-        self.command_tx.try_send(command)
+        self.command_tx
+            .try_send(QueuedCommand::plain(command))
+            .map_err(|error| match error {
+                TrySendError::Full(queued) => TrySendError::Full(queued.command),
+                TrySendError::Disconnected(queued) => TrySendError::Disconnected(queued.command),
+            })
     }
 
-    pub fn try_send_text(&self, text: String) -> Result<(), TrySendError<PumpCommand>> {
-        self.try_send(PumpCommand::Text(text))
+    pub fn try_send_confirmed_text(
+        &mut self,
+        text: String,
+    ) -> Result<WriteReceipt, TrySendError<PumpCommand>> {
+        let id = self.next_receipt;
+        self.next_receipt = self.next_receipt.wrapping_add(1);
+        let (command, receipt) = QueuedCommand::confirmed_text(id, text);
+        self.command_tx
+            .try_send(command)
+            .map_err(|error| match error {
+                TrySendError::Full(queued) => TrySendError::Full(queued.command),
+                TrySendError::Disconnected(queued) => TrySendError::Disconnected(queued.command),
+            })?;
+        Ok(receipt)
     }
 
     pub fn recv_timeout(&self, timeout: Duration) -> Result<PumpEvent, mpsc::RecvTimeoutError> {
@@ -530,10 +553,12 @@ impl ClientWebSocketPump {
         if self.worker.is_none() {
             return;
         }
-        let _ = self.command_tx.send(PumpCommand::Close {
-            code,
-            reason: reason.to_owned(),
-        });
+        let _ = self
+            .command_tx
+            .send(QueuedCommand::plain(PumpCommand::Close {
+                code,
+                reason: reason.to_owned(),
+            }));
         self.join_worker();
     }
 
@@ -558,26 +583,33 @@ impl Drop for ClientWebSocketPump {
 
 fn pump_worker(
     mut client: ClientWebSocket,
-    command_rx: Receiver<PumpCommand>,
+    command_rx: Receiver<QueuedCommand>,
     event_tx: SyncSender<PumpEvent>,
 ) {
     let mut pending_event = None;
     loop {
         match command_rx.try_recv() {
-            Ok(PumpCommand::Text(text)) => {
-                if let Err(error) = client.send_text(&text) {
-                    let _ = event_tx.try_send(PumpEvent::Failure {
-                        status: error.status(),
-                    });
-                    client.close();
+            Ok(queued) => match &queued.command {
+                PumpCommand::Text(text) => {
+                    let result = client.send_text(text);
+                    queued.acknowledge(
+                        text.len(),
+                        result.as_ref().copied().map_err(|error| error.status()),
+                    );
+                    if let Err(error) = result {
+                        let _ = event_tx.try_send(PumpEvent::Failure {
+                            status: error.status(),
+                        });
+                        client.close();
+                        return;
+                    }
+                }
+                PumpCommand::Close { code, reason } => {
+                    client.close_with(*code, reason);
+                    let _ = event_tx.try_send(PumpEvent::Closed { code: Some(*code) });
                     return;
                 }
-            }
-            Ok(PumpCommand::Close { code, reason }) => {
-                client.close_with(code, &reason);
-                let _ = event_tx.try_send(PumpEvent::Closed { code: Some(code) });
-                return;
-            }
+            },
             Err(TryRecvError::Disconnected) => {
                 client.close();
                 return;

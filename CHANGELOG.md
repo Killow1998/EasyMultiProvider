@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.12.7 (2026-09-30)
+
+- Keep known subscription models routable when a refreshed catalog omits them,
+  so existing conversations do not fail with a local unknown-model error.
+  Isolate retained metadata by account and backend, and prefer fresh model settings.
+- Fix Claude requests rejected before forwarding when Claude Code repeats its
+  reasoning effort on a system reminder. Preserve the request setting and exact
+  conversation checks; reject conflicting settings and unexpected fields.
+- Record Claude CLI failures with their specific error code, HTTP status and
+  duration, without storing conversations or credentials.
+- Separate history, context preparation, protocol projection, integration and
+  WebSocket handling into focused modules; remove unused core scaffolding.
+- Confirm queued internal writes and expose history-scan acknowledgement and
+  completion through the existing event stream. Keep scheduled quota refreshes.
+- Extend content-free diagnostics for HTTP completion, routing retries,
+  cancellation, worker admission and startup failures.
+- Compact account identity, Credit and reset controls without hiding the main
+  actions. Size shared credit amounts to the visible accounts.
+
 ## 0.12.6 (2026-09-30)
 
 - Save the latest update failure with its stage, HTTP status or available system

@@ -217,7 +217,7 @@ fn sideband_without_native_subscription_is_rejected_after_caller_auth() {
 
 #[test]
 fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
-    let (_fixture, _app_directory, idle_upstream, server) = server_fixture(true);
+    let (_fixture, app_directory, idle_upstream, server) = server_fixture(true);
     let fake = FakeSideband::start();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind direct handler");
     let address = listener.local_addr().unwrap();
@@ -333,6 +333,33 @@ fn sideband_relays_raw_frames_ping_close_and_coalesced_first_frame() {
     assert_eq!(server.state.connection_admission.active_websockets(), 0);
     assert!(idle_upstream.no_request());
     server.shutdown().expect("shutdown server");
+    let records = super::internal_events_contract::journal(app_directory.path());
+    let admitted: Vec<_> = records
+        .iter()
+        .filter(|record| record["event"] == "command_admitted")
+        .collect();
+    assert_eq!(admitted.len(), 2);
+    for command in admitted {
+        assert!(
+            command["fields"]["connection_id"]
+                .as_str()
+                .is_some_and(|id| id.len() == 16)
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["event"] == "command_confirmed"
+                    && record["fields"]["connection_id"] == command["fields"]["connection_id"]
+                    && record["fields"]["command_id"] == command["fields"]["command_id"])
+                .count(),
+            1
+        );
+    }
+    assert!(
+        !serde_json::to_string(&records)
+            .unwrap()
+            .contains("native-secret")
+    );
 }
 
 #[test]

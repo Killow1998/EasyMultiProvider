@@ -118,19 +118,19 @@ button[data-icon]{display:inline-flex}
 .entity-card-actions button{min-width:74px}
 .entity-card-actions button:disabled{min-width:74px}
 .entity-card-quota{min-width:0}
-.quota-credit{display:flex;flex-direction:column;align-items:flex-start;gap:5px;margin:0;width:258px;font-size:11px;line-height:1.2}
-.credit-controls{display:grid;grid-template-columns:148px 110px;width:100%;align-items:stretch}
-.credit-controls .credit-badge{display:grid;grid-template-columns:18px auto minmax(0,1fr);height:32px;min-height:32px;padding:0 8px}
-.credit-controls .credit-badge strong{text-align:right;white-space:nowrap}
+.quota-credit{display:flex;flex-direction:column;align-items:flex-start;gap:5px;margin:0;font-size:11px;line-height:1.2}
+.credit-controls{display:inline-flex;align-items:stretch}
+.credit-controls .credit-badge{display:grid;grid-template-columns:18px auto auto;height:32px;min-height:32px;padding:0 8px}
+.credit-controls .credit-badge strong{width:var(--account-credit-width,1ch);text-align:right;white-space:nowrap}
 .credit-controls.has-reset .credit-badge{border-radius:8px 0 0 8px}
 .credit-details{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .quota-credit span{display:inline-flex;overflow-wrap:anywhere}
 .credit-badge,.credit-monthly{align-items:center;gap:6px;min-height:28px;padding:4px 8px;border:1px solid var(--border);border-radius:8px;background:var(--panel)}
 .credit-mark{align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:linear-gradient(145deg,#f7d66d,#d99b16);box-shadow:inset 0 0 0 2px rgba(255,255,255,.45);color:#5f4100;font-size:10px;font-weight:800}
 .credit-badge strong,.credit-monthly strong{font-size:12px;color:var(--text);font-variant-numeric:tabular-nums}
-.quota-credit .reset-credit-button{grid-column:2;height:32px;min-height:32px;min-width:0;width:110px;margin:0;padding:0 8px;justify-content:center;border-radius:8px;font-size:11px}
+.quota-credit .reset-credit-button{height:32px;min-height:32px;min-width:0;margin:0;padding:0 8px;justify-content:center;border-radius:8px;font-size:11px}
 .credit-controls.has-balance .reset-credit-button{border-radius:0 8px 8px 0;border-left:0}
-.reset-credit-button strong{min-width:2ch;text-align:right;font-variant-numeric:tabular-nums}
+.reset-credit-button strong{width:var(--account-reset-width,1ch);text-align:right;font-variant-numeric:tabular-nums}
 .credit-warning{align-items:center;min-height:28px;padding:4px 8px;border:1px solid var(--danger);border-radius:8px;background:var(--danger-soft);color:var(--danger-text)}
 .account-identity{display:inline-flex;align-items:stretch;min-width:0;max-width:100%;font-size:11px;font-weight:650;white-space:nowrap}
 .account-identity-id,.subscription-plan{display:inline-flex;align-items:center;min-height:22px;padding:2px 8px;border:1px solid var(--border-strong)}
@@ -140,12 +140,12 @@ button[data-icon]{display:inline-flex}
 .plan-free{--plan-color:#94a3b8}.plan-go{--plan-color:#2bb5a6}.plan-plus{--plan-color:#4c8bea}.plan-prolite{--plan-color:#d9c98f}.plan-pro{--plan-color:#f2b705}.plan-business{--plan-color:#9b7ad8}.plan-unknown{--plan-color:#94a3b8}
 .account-list{container-type:inline-size;container-name:accounts;--account-action-width:80px}
 html[lang="en"] .account-list{--account-action-width:108px}
-.account-card{grid-template-columns:minmax(0,1fr) 258px auto;grid-template-rows:auto auto;align-items:center;gap:7px 12px;padding:10px 12px}
+.account-card{grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;align-items:center;gap:7px 12px;padding:10px 12px}
 .account-card .entity-card-main{grid-column:1;grid-row:1;min-width:0}
-.account-card > .quota-credit{grid-column:2;grid-row:1;justify-self:center}
+.account-card-heading{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .account-card .entity-card-quota{display:grid;grid-column:1/-1;grid-row:2;gap:7px;min-width:0}
-.account-card .entity-card-actions{display:grid;grid-template-columns:repeat(4,var(--account-action-width));grid-column:3;grid-row:1;gap:5px;padding:0;border:0;justify-self:end}
-.account-card .entity-card-actions button,.account-card .entity-card-actions button:disabled{width:100%;min-width:0;height:32px;min-height:32px;margin:0;padding:0 8px;justify-content:center}
+.account-card .entity-card-actions{display:flex;flex-wrap:nowrap;grid-column:2;grid-row:1;gap:5px;padding:0;border:0;justify-self:end;justify-content:flex-end}
+.account-card .entity-card-actions button,.account-card .entity-card-actions button:disabled{width:var(--account-action-width);min-width:0;height:32px;min-height:32px;margin:0;padding:0 8px;justify-content:center}
 .account-card .entity-card-subtitle{margin-top:3px}
 .account-card .entity-card-status{margin-top:4px}
 .account-card .quota-stack{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:10px;max-width:none;min-width:0}
@@ -316,9 +316,9 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .quota-history-navigation button[hidden]{display:none}
 .modal:has(.period-picker){width:min(1080px,100%)}
 @media(max-width:760px){.period-custom input{min-width:0;width:100%}.period-custom label{flex:1 1 140px}}
-@container accounts (max-width:920px){.account-card{grid-template-columns:minmax(0,1fr) 258px;grid-template-rows:auto auto auto}.account-card .entity-card-actions{grid-column:1/-1;grid-row:2}.account-card .entity-card-quota{grid-row:3}}
-@container accounts (max-width:540px){.account-card{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto auto;padding:10px}.account-card > .quota-credit{grid-column:1;grid-row:2}.account-card .entity-card-actions{grid-row:3;grid-template-columns:repeat(4,minmax(0,1fr));width:100%}.account-card .entity-card-quota{grid-row:4}}
-@container accounts (max-width:400px){.account-card .entity-card-actions{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container accounts (max-width:920px){.account-card{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto}.account-card .entity-card-actions{grid-column:1;grid-row:2}.account-card .entity-card-quota{grid-row:3}}
+@container accounts (max-width:540px){.account-card{padding:10px}.account-card .entity-card-actions{width:100%}.account-card .entity-card-actions button{width:calc((100% - 15px)/4)}}
+@container accounts (max-width:400px){.account-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.account-card .entity-card-actions button{width:100%}}
 </style>
 </head>
 <body>
@@ -647,7 +647,7 @@ async function loadUsage(background = false) {
       result.start = Math.max(0, first.getTime()/1000); $('usage_start').value = usageLocalInput(first);
     }
     usagePayload = result; status.textContent = ''; renderUsage();
-    if (result.history?.running || result.history?.queued) usagePoll = setTimeout(() => { if ($('usage_status') === status) loadUsage(true); }, 1500);
+    if (!quotaEventsConnected && (result.history?.running || result.history?.queued)) usagePoll = setTimeout(() => { if ($('usage_status') === status) loadUsage(true); }, 1500);
   } catch (error) { if (id === usageRequest && $('usage_status') === status) status.textContent = error.message; }
 }
 function usagePeriods() {
@@ -1597,26 +1597,27 @@ function renderAccounts() {
     const duplicateCurrent = a.duplicate && a.duplicate_of === '当前 Codex 登录';
     const duplicateText = a.duplicate ? (duplicateCurrent ? tr('与当前 Codex 登录重复；模型显示由原生账户管理','Duplicates the current Codex login; model visibility is managed by Native') : `${tr('与','Duplicates ')}${esc(a.duplicate_of)}${tr('重复；不生成重复前缀模型','; duplicate prefixed routes are omitted')}`) : '';
     const status = a.native ? (a.credential_set ? '' : tr('未检测到 .codex 登录','No .codex login detected')) : (a.credential_status === 'invalid' ? tr('登录已失效','Sign-in expired') : (a.credential_set ? '' : tr('未导入凭据','No credentials')));
-    const remove = a.native ? '<span class="account-delete-slot" aria-hidden="true"></span>' : `<button class="danger" data-icon="trash" data-ui-action="account-remove" data-id="${esc(a.id)}">${tr('删除','Delete')}</button>`;
+    const remove = a.native ? '' : `<button class="danger" data-icon="trash" data-ui-action="account-remove" data-id="${esc(a.id)}">${tr('删除','Delete')}</button>`;
     const edit = duplicateCurrent ? `<button class="secondary" data-icon="edit" disabled title="${esc(tr('模型显示由原生账户管理','Model visibility is managed by Native'))}">${tr('编辑','Edit')}</button>` : `<button class="secondary" data-icon="edit" data-ui-action="account-edit" data-id="${esc(a.id)}">${tr('编辑','Edit')}</button>`;
-    const titleText = a.native ? tr('当前 Codex 登录','Current Codex login') : String(a.name || a.id);
+    const titleText = a.native ? 'Native' : String(a.name || a.id);
     const accountLabel = String(a.quota && a.quota.account_label || '');
     const nativeDetail = a.native ? tr('使用 .codex 当前登录','Using current .codex login') : '';
     const hoverText = [accountLabel, nativeDetail].filter(Boolean).join(' · ');
     const hover = hoverText ? ` title="${esc(hoverText)}"` : '';
     const titleHasId = !a.native && titleText === String(a.id);
-    const title = titleHasId ? '' : `<strong${a.native ? hover : ''}>${esc(titleText)}</strong>`;
+    const title = a.native || titleHasId ? '' : `<strong>${esc(titleText)}</strong>`;
     const identity = accountIdentityHtml(a, hover);
     const statusHtml = status || duplicateText ? `<div class="entity-card-status">${status}${status && duplicateText ? '<br>' : ''}${duplicateText ? `<span class="muted">${duplicateText}</span>` : ''}</div>` : '';
     const activity = activityIndicatorHtml('account', a.native ? '@native' : a.id, titleText);
     return `<article class="entity-card account-card${duplicateCurrent ? ' account-duplicate' : ''}">
-      <div class="entity-card-main"><div class="entity-card-title">${activity}${title}${identity}</div>${statusHtml}</div>
-      ${creditHtml(a)}
+      <div class="entity-card-main"><div class="account-card-heading"><div class="entity-card-title">${activity}${title}${identity}</div>${creditHtml(a)}</div>${statusHtml}</div>
       <div class="entity-card-quota">${quotaMetersHtml(a, busy, animateQuota)}${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</div>
       <div class="entity-card-actions">${remove}${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} data-ui-action="account-refresh" data-id="${esc(a.id)}">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" data-ui-action="account-quota-history" data-id="${esc(a.id)}">${tr('趋势','Trend')}</button></div>
     </article>`;
   }).join('');
-  $('accounts').innerHTML = `<div class="entity-list account-list">${rows}</div>`;
+  const creditWidth = accounts.reduce((width, account) => Math.max(width, account.quota?.credits?.unlimited === true ? 1 : integerCredit(account.quota?.credits?.balance ?? 0).length), 1);
+  const resetWidth = accounts.reduce((width, account) => Math.max(width, String(resetCreditCount(account)).length), 1);
+  $('accounts').innerHTML = `<div class="entity-list account-list" style="--account-credit-width:${creditWidth}ch;--account-reset-width:${resetWidth}ch">${rows}</div>`;
   quotaAnimationAccounts.clear();
   updateActivityDots();
 }
@@ -1696,6 +1697,7 @@ function processManagementEventFrame(frame) {
     else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
   }
   if (eventType === 'quota-updated') requestQuotaSync();
+  else if (eventType === 'usage-updated') void loadUsage(true);
   else if (eventType === 'integration-updated') void integrationUpdated();
   else if (eventType === 'activity-updated' && data.length) {
     try { applyActivitySnapshot(JSON.parse(data.join('\n'))); } catch (_) {}
@@ -1833,7 +1835,7 @@ function creditHtml(account) {
   else if (credit.balance !== undefined) controls.push(`<span class="credit-badge" title="${esc(tr('可用 Credit','Available credit'))}"><span class="credit-mark">C</span><span>Credit</span><strong>${esc(integerCredit(credit.balance))}</strong></span>`);
   if (credit.individual_limit && typeof credit.individual_limit.remaining_percent === 'number') details.push(`<span class="credit-monthly"><span>${tr('月额度','Monthly')}</span><strong>${esc(credit.individual_limit.remaining_percent)}%</strong></span>`);
   const resetCount = resetCreditCount(account);
-  if (resetCount > 0) controls.push(`<button type="button" class="secondary reset-credit-button" data-icon="refresh" data-ui-action="account-reset-credits" data-id="${esc(account.id)}" title="${esc(tr('查看重置机会与到期时间','View reset opportunities and expiry'))}">${tr('重置额度','Resets')} <strong>${esc(resetCount)}</strong></button>`);
+  if (resetCount > 0) controls.push(`<button type="button" class="secondary reset-credit-button" data-icon="refresh" data-ui-action="account-reset-credits" data-id="${esc(account.id)}" title="${esc(tr('查看重置机会与到期时间','View reset opportunities and expiry'))}">${tr('重置','Reset')} <strong>${esc(resetCount)}</strong></button>`);
   if (credit.spend_control_reached === true) details.push(`<span class="credit-warning">${tr('已达消费上限','Spend limit reached')}</span>`);
   const hasBalance = credit.unlimited === true || credit.balance !== undefined;
   const primary = controls.length ? `<div class="credit-controls${hasBalance ? ' has-balance' : ''}${resetCount > 0 ? ' has-reset' : ''}">${controls.join('')}</div>` : '';

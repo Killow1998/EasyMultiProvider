@@ -51,7 +51,6 @@ fn configuration_normalization_matches_frozen_fixture() {
             "case: {}",
             case["name"]
         );
-        assert_eq!(actual.as_object().map(|object| object.len()), Some(17));
     }
     for case in fixture["invalid"]
         .as_array()

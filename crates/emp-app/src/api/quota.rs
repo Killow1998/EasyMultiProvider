@@ -91,9 +91,11 @@ pub(crate) fn serve_quota_events(
     }
     let integration = &state.backend.integration.watch.revision;
     let activity = &state.backend.activity;
+    let usage = &state.backend.usage.event_revision;
     let mut observed_revision = u64::MAX;
     let mut observed_integration = u64::MAX;
     let mut observed_activity = u64::MAX;
+    let mut observed_usage = u64::MAX;
     loop {
         if state.shutdown.load(Ordering::Acquire) {
             break;
@@ -109,6 +111,7 @@ pub(crate) fn serve_quota_events(
                 *revision == observed_revision
                     && integration.load(Ordering::Acquire) == observed_integration
                     && activity.revision() == observed_activity
+                    && usage.load(Ordering::Acquire) == observed_usage
                     && !state.shutdown.load(Ordering::Acquire)
             },
         ) {
@@ -131,6 +134,7 @@ pub(crate) fn serve_quota_events(
             frame.extend_from_slice(b"event: integration-updated\ndata: {}\n\n");
         }
         let activity_now = activity.revision();
+        let usage_now = usage.load(Ordering::Acquire);
         if activity_now != observed_activity {
             let snapshot = activity.snapshot(system_now().max(0.0) as u64);
             if let Ok(activity_frame) =
@@ -139,12 +143,16 @@ pub(crate) fn serve_quota_events(
                 frame.extend_from_slice(&activity_frame);
             }
         }
+        if usage_now != observed_usage {
+            frame.extend_from_slice(b"event: usage-updated\ndata: {}\n\n");
+        }
         if frame.is_empty() {
             frame.extend_from_slice(b": keep-alive\n\n");
         }
         observed_revision = current;
         observed_integration = integration_now;
         observed_activity = activity_now;
+        observed_usage = usage_now;
         if stream.write_all(&frame).is_err() || stream.flush().is_err() {
             break;
         }
@@ -236,7 +244,18 @@ pub(crate) fn management_quota_request(
                 );
             }
         };
-        let outcome = match consume_quota_reset_for_account(state, &account, key, credit_id) {
+        let consumed = consume_quota_reset_for_account(state, &account, key, credit_id);
+        let journal = &state.backend.diagnostics.journal;
+        journal.event(
+            if consumed.is_ok() { "info" } else { "warning" },
+            "quota_reset",
+            &serde_json::json!({
+                "account": journal.pseudonym(&account),
+                "success": consumed.is_ok(),
+                "error_class": consumed.as_ref().err().map(|error| error.code()),
+            }),
+        );
+        let outcome = match consumed {
             Ok(outcome) => outcome,
             Err(error) => {
                 let status = if error.code() == "quota_reset_invalid_request" {

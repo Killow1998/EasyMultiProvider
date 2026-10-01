@@ -4,7 +4,7 @@ name = "emp-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Shared value types and injectable runtime interfaces for EMP."
+description = "Immutable route identities and bounded catalog values for EMP."
 
 [dependencies]
 serde = { workspace = true }

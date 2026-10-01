@@ -66,6 +66,7 @@ mod config_api_contract;
 mod conversation_http_contract;
 mod conversation_switch_contract;
 mod integration_sideband_contract;
+mod internal_events_contract;
 mod management_http_contract;
 mod native_api_contract;
 mod performance_contract;
@@ -265,6 +266,10 @@ fn open_quota_events(server: &ServerHandle, session: &str) -> BufReader<TcpStrea
             .map(String::as_str)
             .collect::<Vec<_>>(),
         ["observed_at", "recent_for_seconds", "revision", "routes"]
+    );
+    assert_eq!(
+        read_sse_frame(&mut reader),
+        "event: usage-updated\ndata: {}\n"
     );
     reader
 }

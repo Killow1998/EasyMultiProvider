@@ -262,7 +262,7 @@ fn update_configuration(request: Request<'_>, state: &ServerState, incoming: &Va
     drop(current);
     crate::services::account_catalog::request_refresh(state, false);
     // The usage worker applies changed pricing aliases and re-prices old rows.
-    state.backend.usage.queue_scan();
+    let _ = state.backend.usage.queue_scan(state);
     crate::services::runtime::mark_active_pending(state, "EMP configuration changed");
     read_management_request(request, state)
 }

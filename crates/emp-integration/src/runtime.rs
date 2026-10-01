@@ -1,5 +1,6 @@
 //! Python-compatible durable runtime accounting and offline status projection.
-use crate::{IntegrationError, now};
+use crate::IntegrationError;
+use crate::storage::now;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;

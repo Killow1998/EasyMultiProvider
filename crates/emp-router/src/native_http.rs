@@ -164,11 +164,48 @@ fn compact_endpoint(provider: &Map<String, Value>) -> Result<String, NativeHttpE
 
 pub struct NativeRouter<'a> {
     client: &'a HttpClient,
+    retry_observer: Option<&'a (dyn Fn(NativeRetryDecision) + Sync)>,
+}
+
+#[derive(Clone, Copy)]
+pub enum NativeRetryReason {
+    Network,
+    AccountRefresh,
+    ReasoningFallback,
+}
+#[derive(Clone, Copy)]
+pub struct NativeRetryDecision {
+    pub reason: NativeRetryReason,
+    pub status: u16,
+    pub retry: bool,
 }
 
 impl<'a> NativeRouter<'a> {
     pub fn new(client: &'a HttpClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            retry_observer: None,
+        }
+    }
+
+    /// Report decisions without depending on an application logger or exposing
+    /// request bodies, account credentials or upstream error text.
+    pub fn with_retry_observer(
+        mut self,
+        observer: &'a (dyn Fn(NativeRetryDecision) + Sync),
+    ) -> Self {
+        self.retry_observer = Some(observer);
+        self
+    }
+
+    fn retry_decision(&self, reason: NativeRetryReason, status: u16, retry: bool) {
+        if let Some(observer) = self.retry_observer {
+            observer(NativeRetryDecision {
+                reason,
+                status,
+                retry,
+            });
+        }
     }
 
     pub fn prepare_websocket(
@@ -346,6 +383,15 @@ impl<'a> NativeRouter<'a> {
                                 | HttpTransportErrorKind::ReadTimeout
                         )
                     {
+                        self.retry_decision(
+                            NativeRetryReason::Network,
+                            if kind == HttpTransportErrorKind::Network {
+                                503
+                            } else {
+                                504
+                            },
+                            true,
+                        );
                         continue;
                     }
                     return Err(match kind {
@@ -393,10 +439,17 @@ impl<'a> NativeRouter<'a> {
                         .get("auth_mode")
                         .and_then(Value::as_str)
                         == Some("account")
-                    && let Ok(refreshed) = resolve_headers(true)
                 {
-                    headers = Some(refreshed);
-                    continue;
+                    let refreshed = resolve_headers(true);
+                    self.retry_decision(
+                        NativeRetryReason::AccountRefresh,
+                        status,
+                        refreshed.is_ok(),
+                    );
+                    if let Ok(refreshed) = refreshed {
+                        headers = Some(refreshed);
+                        continue;
+                    }
                 }
                 if allow_retries
                     && attempt == 0
@@ -404,6 +457,7 @@ impl<'a> NativeRouter<'a> {
                     && payload.get("reasoning_effort").is_some()
                     && String::from_utf8_lossy(&raw).contains("reasoning_effort")
                 {
+                    self.retry_decision(NativeRetryReason::ReasoningFallback, status, true);
                     payload
                         .as_object_mut()
                         .expect("request object")

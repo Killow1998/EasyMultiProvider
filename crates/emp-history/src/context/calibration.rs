@@ -1,5 +1,6 @@
 //! Reuse persisted, identity-bound observations when reporting and budgeting context.
-use super::{SAFETY_RESERVE_TOKENS, context_window, positive_integer};
+use super::SAFETY_RESERVE_TOKENS;
+use super::budget::{context_window, positive_integer};
 use emp_core::capability_view::safe_id;
 use emp_core::{deployment_identity, endpoint_fingerprint};
 use serde_json::{Map, Value, json};

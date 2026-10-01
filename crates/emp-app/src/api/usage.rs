@@ -105,7 +105,7 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
             }
         }
     }
-    payload["history"] = state.backend.usage.history.status();
+    payload["history"] = state.backend.usage.status();
     json_response(200, &payload)
 }
 pub(crate) fn scan(
@@ -127,8 +127,12 @@ pub(crate) fn scan(
     if let Err(error) = read_json_body(stream, request, prefix, state) {
         return body_error_response(error);
     }
-    state.backend.usage.queue_scan();
-    json_response(202, &state.backend.usage.history.status())
+    let Some(id) = state.backend.usage.queue_scan(state) else {
+        return json_error_response(503, status_text(503), "EMP is shutting down", None, &[]);
+    };
+    let mut status = state.backend.usage.status();
+    status["command_id"] = json!(id);
+    json_response(202, &status)
 }
 fn invalid() -> Vec<u8> {
     json_error_response(

@@ -150,6 +150,90 @@ Start with cohesive modules; introduce emp-observability or emp-update only
 when actual dependency boundaries justify a crate. Additional architecture
 must not block working product behavior.
 
+### Maintenance boundaries
+
+The implemented boundaries below preserve the existing CLI and HTTP entry points.
+They separate decisions from I/O and connection state, so a local change has
+a local verification target rather than automatically requiring every suite.
+
+| Area | Modules and ownership | Focused verification |
+| --- | --- | --- |
+| Visible history preparation | `anchor.rs`: validated request identity; `preparation.rs`: checkpoint decoding and prefix reconstruction; `tool_pairs.rs`: call/output pairing; `wire.rs`: visible item projection; `lib.rs`: durable types and public exports | `cargo test -p emp-history`; `cargo test -p emp-app --lib tests::conversation_` |
+| Codex rollout reader | `history/location.rs`: lookup and containment; `source.rs`/`lines.rs`: bounded plain/zstd I/O; `scan.rs`: identity and ordinal evidence; `replay.rs`/`reverse.rs`: visible reconstruction and checkpoint selection | `cargo test -p emp-codex --test history_contract`; `cargo test -p emp-codex --lib history::` |
+| Context preparation | `context/budget.rs`: assessment; `estimate.rs`: payload cost; `calibration.rs`: observations; `compaction.rs`: orchestration; `compaction/units.rs`: tool-pair boundaries; `summary.rs`: bounded map/reduce | `cargo test -p emp-history`; `cargo test -p emp-app --lib tests::conversation_` |
+| WebSocket transport | `websocket/network.rs`: TCP/TLS and proxy handshakes; `compression.rs`: RFC 7692; `client.rs`: upstream lifecycle; `downstream.rs`: consumer frames | `cargo test -p emp-transport --lib --test websocket --test websocket_pump` |
+| Codex configuration ownership | `fields.rs`: pure TOML comparison/editing; `manager.rs`: enable/restore; `storage.rs`: lease transitions and persistence; `files.rs`: bounded config I/O | `cargo test -p emp-integration`; `cargo test -p emp-app --test user_journeys codex_integration_enable_and_restore_preserve_user_toml` |
+| Responses WebSocket endpoint | `api/websocket.rs`: authentication, admission and turn preparation; `native_socket.rs`: upstream reuse and previous-response ownership; `http_stream.rs`: native/external HTTP streaming; `claude.rs`: single-step Claude projection | `cargo test -p emp-app --lib native_api_contract`; activity/capacity contracts; installed-CLI WebSocket contract when the CLI is available |
+| Anthropic and portable Responses projections | Each projection's `request.rs` assembles top-level controls, `input.rs` owns content/history, and `tools.rs` owns schema/namespace mapping. Response and stream modules import only their concrete dependencies. Anthropic `stream/blocks.rs` handles admission/deltas and `completion.rs` closes blocks; the parent retains one stream state and terminal policy | `cargo test -p emp-protocol --lib --test anthropic_projection --test anthropic_stream --test portable_responses`; the real-server Anthropic tool and Chat response journeys |
+
+Production imports name concrete dependencies; internal helpers remain private
+to their owning module. A downstream connection owns its `NativeSession`, and
+each prepared `Turn` keeps the existing immutable route/configuration snapshot.
+The activity guard survives native WebSocket-to-HTTP fallback. Native and
+external stream handlers remain explicit because their metadata, owner and
+protocol-observation policies differ; no generic stream adapter is needed.
+
+The cleanup also replaces database-candidate sorting with maximum selection,
+centralizes paginated-history validation, and hides the incremental estimator's
+fields behind its existing operations. Long-conversation tests retain active
+turn/tool-pair preservation and bounded summary-call assertions rather than a
+machine-dependent elapsed-time threshold. Constructor/getter-only duplication
+was removed; frame, error, cancellation, lineage and recovery contracts remain.
+The reader's 32 contracts and native endpoint's 14 contracts are grouped into
+smaller files with shared fixtures and unchanged test bodies.
+Projection-only `object()` aliases were removed in favor of `Value::as_object`,
+and complete Anthropic responses reuse the existing JSON truthiness rule rather
+than duplicating it. Protocol field allowlists, limits and error categories did
+not change. The seven history-preparation tests remain with unchanged bodies.
+
+Changing a module's public contract or its resource ownership still requires
+the listed consumer contracts. A module split does not remove integration
+dependencies, prove a performance improvement, or require a live-service restart.
+
+The unused initial `emp-core` request/observation records and injectable clock,
+randomness and permissive-memory interfaces were removed with their self-tests.
+No runtime consumer used them: immutable route resolution remains in `emp-core`,
+actual request admission remains in `emp-transport`, and request observations
+remain in the application service. Frozen capability fixtures retain all cases;
+duplicate vector conversions and duplicate bootstrap matrices were reduced.
+The cross-platform executable still verifies page delivery and session restart,
+while the session-boundary suite owns malformed-header and origin checks.
+
+Shutdown uses one atomic state plus an asynchronous notification, shared by
+normal exit, the page's quit action and update handoff. Waiters register before
+checking state to avoid a lost notification. Usage, catalog, quota sampler and
+quota SSE shutdown notifications also take the mutex used by their waiters.
+Focused checks are the app's `shutdown_` and quota-event contracts, catalog
+refresh contracts, and executable quit/update journeys.
+
+The current flow remains hybrid, with scheduling separate from delivery:
+
+- State-change notifications use revisions and `Condvar` / `Notify`; producers
+  publish the new state before waking registered consumers. Quota, integration,
+  activity and usage updates share the management SSE connection.
+- Direct commands keep their typed `Result` return. Queued commands needing a
+  reply have an admission result followed by worker feedback. A sideband write
+  has its own reply channel and validates the command ID, UTF-8 byte length and
+  socket-write result. Payload ownership and existing protocol validation
+  preserve the message; no content hash verifies communication. This receipt
+  confirms a local write, not a remote model's acceptance.
+- History scans expose requested, worker-acknowledged and completed generations.
+  Requests queued before a scan starts may coalesce; requests arriving during
+  it remain pending for the next scan. Completion means the scan returned;
+  numeric read errors and cancellation remain distinct from success. Shutdown
+  rejects new scan commands. The UI receives scan progress through SSE and
+  retains timer-based fallback when its event connection is unavailable.
+- External quota sampling, catalog reconciliation/expiry, filesystem history
+  discovery and price refresh retain their schedules. Manual history-scan
+  events wake only the scan worker; they do not interrupt price-refresh backoff.
+  Shutdown wakes both workers. CLI child/disconnect and realtime socket handling
+  still use bounded polling. A reconciliation timeout or SSE heartbeat is not
+  itself a fresh upstream request.
+
+There is no general message bus or new dependency framework. Event delivery
+uses the existing ownership boundaries and standard channels. Journal coverage
+and explicit instrumentation limits are in `docs/diagnostic-journal-spec.md`.
+
 ## Compatibility oracle
 
 The `contracts/` tree records four independent contract levels:
