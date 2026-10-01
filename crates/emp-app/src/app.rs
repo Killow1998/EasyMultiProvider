@@ -32,6 +32,7 @@ use tokio::runtime::Runtime;
 
 pub(crate) struct ServerState {
     pub(crate) shutdown: Arc<AtomicBool>,
+    pub(crate) shutdown_wake: Arc<tokio::sync::Notify>,
     pub(crate) catalog_refresh: crate::services::account_catalog::CatalogRefreshState,
     pub(crate) sessions: Arc<SessionStore>,
     pub(crate) connection_admission: crate::services::connection_admission::ConnectionAdmission,
@@ -41,6 +42,24 @@ pub(crate) struct ServerState {
     pub(crate) base_url: String,
     pub(crate) updates: crate::services::updates::UpdateState,
     pub(crate) auto_review_cooldowns: Arc<Mutex<BTreeMap<String, std::time::Instant>>>,
+}
+
+impl ServerState {
+    pub(crate) fn request_shutdown(&self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.shutdown_wake.notify_waiters();
+    }
+
+    pub(crate) async fn wait_for_shutdown(&self) {
+        // Register before checking the flag: shutdown may race this waiter.
+        let notified = self.shutdown_wake.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            notified.await;
+        }
+    }
 }
 
 pub(crate) struct BackendState {

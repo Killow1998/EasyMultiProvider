@@ -44,7 +44,6 @@ use crate::web::ui_response;
 use std::io::Write;
 use std::net::Shutdown;
 use std::net::TcpStream;
-use std::sync::atomic::Ordering;
 
 pub(crate) fn handle_connection(
     mut stream: TcpStream,
@@ -351,7 +350,7 @@ pub(crate) fn handle_connection(
     }
     let _ = stream.shutdown(Shutdown::Write);
     if stop_after_write {
-        state.shutdown.store(true, Ordering::Release);
+        state.request_shutdown();
     }
 }
 

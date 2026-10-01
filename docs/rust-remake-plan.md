@@ -152,7 +152,7 @@ must not block working product behavior.
 
 ### Maintenance boundaries
 
-The implemented boundaries below preserve the existing public entry points.
+The implemented boundaries below preserve the existing CLI and HTTP entry points.
 They separate decisions from I/O and connection state, so a local change has
 a local verification target rather than automatically requiring every suite.
 
@@ -189,6 +189,30 @@ not change. The seven history-preparation tests remain with unchanged bodies.
 Changing a module's public contract or its resource ownership still requires
 the listed consumer contracts. A module split does not remove integration
 dependencies, prove a performance improvement, or require a live-service restart.
+
+The unused initial `emp-core` request/observation records and injectable clock,
+randomness and permissive-memory interfaces were removed with their self-tests.
+No runtime consumer used them: immutable route resolution remains in `emp-core`,
+actual request admission remains in `emp-transport`, and request observations
+remain in the application service. Frozen capability fixtures retain all cases;
+duplicate vector conversions and duplicate bootstrap matrices were reduced.
+The cross-platform executable still verifies page delivery and session restart,
+while the session-boundary suite owns malformed-header and origin checks.
+
+Shutdown uses one atomic state plus an asynchronous notification, shared by
+normal exit, the page's quit action and update handoff. Waiters register before
+checking state to avoid a lost notification. Usage, catalog, quota sampler and
+quota SSE shutdown notifications also take the mutex used by their waiters.
+Focused checks are the app's `shutdown_` and quota-event contracts, catalog
+refresh contracts, and executable quit/update journeys.
+
+The current flow remains hybrid. Quota, integration and activity changes push
+revision notifications through the management SSE connection. External quota
+sampling, catalog reconciliation/expiry, filesystem history scans and price
+refresh still use timers; CLI child/disconnect and realtime socket handling
+also retain bounded polling. A reconciliation timeout or SSE heartbeat is not
+itself a fresh upstream request. Journal coverage and remaining instrumentation
+gaps are recorded in `docs/diagnostic-journal-spec.md`.
 
 ## Compatibility oracle
 

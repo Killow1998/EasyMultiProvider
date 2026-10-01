@@ -188,8 +188,13 @@ impl Journal {
             journal.prune(&mut writer);
             Ok(())
         })();
-        if opened.is_err() {
+        if let Err(error) = opened {
             writer.file = None;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "EMP diagnostic journal unavailable ({:?}); forwarding remains available",
+                error.kind()
+            );
         }
         drop(writer);
         journal
@@ -297,8 +302,13 @@ impl Journal {
             }
             Ok(())
         })();
-        if result.is_err() {
+        if let Err(error) = result {
             writer.file = None;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "EMP diagnostic journal stopped ({:?}); forwarding remains available",
+                error.kind()
+            );
         }
     }
     pub fn read_routes(&self, limit: usize) -> Vec<Value> {

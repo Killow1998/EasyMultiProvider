@@ -458,6 +458,16 @@ pub(crate) fn refresh_account_by_id(
     account_id: &str,
 ) -> Result<Value, QuotaError> {
     let result = refresh_account_by_id_inner(state, account_id);
+    let journal = &state.backend.diagnostics.journal;
+    journal.event(
+        if result.is_ok() { "info" } else { "warning" },
+        "quota_refresh",
+        &serde_json::json!({
+            "account": journal.pseudonym(account_id),
+            "success": result.is_ok(),
+            "error_class": result.as_ref().err().map(|error| error.code()),
+        }),
+    );
     notify_quota_update(
         state,
         account_id,

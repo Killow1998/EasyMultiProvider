@@ -6,7 +6,6 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 pub(crate) struct RefreshSource {
@@ -138,12 +137,36 @@ pub(crate) fn fetch_and_persist(
     state: &ServerState,
     source: &RefreshSource,
 ) -> FetchAndPersistOutcome {
+    let outcome = fetch_and_persist_inner(state, source);
+    let (result, status) = match &outcome {
+        FetchAndPersistOutcome::Persisted(_) => ("persisted", None),
+        FetchAndPersistOutcome::UpstreamError(error) => ("upstream_error", Some(error.status())),
+        FetchAndPersistOutcome::Stopped => ("cancelled", None),
+        FetchAndPersistOutcome::PersistenceError(PersistError::RuntimeChanged) => {
+            ("runtime_changed", None)
+        }
+        FetchAndPersistOutcome::PersistenceError(PersistError::SourceChanged) => {
+            ("source_changed", None)
+        }
+        FetchAndPersistOutcome::PersistenceError(PersistError::Internal) => {
+            ("persistence_error", None)
+        }
+    };
+    let journal = &state.backend.diagnostics.journal;
+    journal.event(
+        if matches!(result, "upstream_error" | "persistence_error") { "warning" } else { "info" },
+        "catalog_refresh",
+        &serde_json::json!({"source": journal.pseudonym(&source.id), "result": result, "http_status": status}),
+    );
+    outcome
+}
+
+fn fetch_and_persist_inner(state: &ServerState, source: &RefreshSource) -> FetchAndPersistOutcome {
     let request = fetch_catalog(&state.backend.transport.client, source);
-    let shutdown = Arc::clone(&state.shutdown);
     let fetched = state.backend.transport.runtime.block_on(async move {
         tokio::select! {
             biased;
-            _ = wait_for_shutdown(shutdown) => None,
+            _ = state.wait_for_shutdown() => None,
             result = request => Some(result),
         }
     });
@@ -160,12 +183,6 @@ pub(crate) fn fetch_and_persist(
     match persist_fetched_catalog(state, source, catalog) {
         Ok(persisted) => FetchAndPersistOutcome::Persisted(persisted),
         Err(error) => FetchAndPersistOutcome::PersistenceError(error),
-    }
-}
-
-async fn wait_for_shutdown(shutdown: Arc<std::sync::atomic::AtomicBool>) {
-    while !shutdown.load(Ordering::Acquire) {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
 

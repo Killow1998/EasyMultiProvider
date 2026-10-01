@@ -236,7 +236,18 @@ pub(crate) fn management_quota_request(
                 );
             }
         };
-        let outcome = match consume_quota_reset_for_account(state, &account, key, credit_id) {
+        let consumed = consume_quota_reset_for_account(state, &account, key, credit_id);
+        let journal = &state.backend.diagnostics.journal;
+        journal.event(
+            if consumed.is_ok() { "info" } else { "warning" },
+            "quota_reset",
+            &serde_json::json!({
+                "account": journal.pseudonym(&account),
+                "success": consumed.is_ok(),
+                "error_class": consumed.as_ref().err().map(|error| error.code()),
+            }),
+        );
+        let outcome = match consumed {
             Ok(outcome) => outcome,
             Err(error) => {
                 let status = if error.code() == "quota_reset_invalid_request" {

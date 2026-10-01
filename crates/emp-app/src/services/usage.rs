@@ -38,6 +38,7 @@ impl UsageState {
         self.wake.notify_all();
     }
     pub(crate) fn stop(&self) {
+        let _guard = self.revision.lock().expect("usage wakeup");
         self.history.stop.store(true, Ordering::Release);
         self.wake.notify_all();
     }
@@ -113,16 +114,33 @@ pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandl
     Ok(vec![history, prices])
 }
 fn refresh_prices(state: &ServerState) -> bool {
-    let fetched=state.backend.transport.runtime.block_on(async{
-        let operation=async {
-            let response=state.backend.transport.client.open(emp_transport::HttpMethod::Get,PRICE_URL,BTreeMap::from([("User-Agent".into(),"EMP-price-catalog".into()),("Accept".into(),"application/json".into())]),None,false).await.ok()?;
-            if !(200..300).contains(&response.status()){return None;}
-            let raw=response.read_limited(16*1024*1024).await.ok()?;
+    let fetched = state.backend.transport.runtime.block_on(async {
+        let operation = async {
+            let response = state
+                .backend
+                .transport
+                .client
+                .open(
+                    emp_transport::HttpMethod::Get,
+                    PRICE_URL,
+                    BTreeMap::from([
+                        ("User-Agent".into(), "EMP-price-catalog".into()),
+                        ("Accept".into(), "application/json".into()),
+                    ]),
+                    None,
+                    false,
+                )
+                .await
+                .ok()?;
+            if !(200..300).contains(&response.status()) {
+                return None;
+            }
+            let raw = response.read_limited(16 * 1024 * 1024).await.ok()?;
             normalize_prices(&serde_json::from_slice::<Value>(&raw).ok()?).ok()
         };
         tokio::select! {
             result=tokio::time::timeout(Duration::from_secs(20),operation)=>result.ok().flatten(),
-            _=async {while !state.shutdown.load(Ordering::Acquire){tokio::time::sleep(Duration::from_millis(25)).await;}}=>None,
+            _=state.wait_for_shutdown()=>None,
         }
     });
     let Some(prices) = fetched else {

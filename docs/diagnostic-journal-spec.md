@@ -2,6 +2,26 @@
 
 Status: normative for implementation
 
+## Current Rust coverage
+
+This specification describes the target; not every event below is implemented.
+The current backend writes completed route observations, browser phase reports,
+process start/proxy/listener events, startup reconciliation, shutdown start/result,
+quota refresh/reset outcomes and catalog refresh outcomes. Catalog outcomes cover
+both manual and background refresh, including cancellation and stale-source
+rejection. Account/source identities in these records are run-local pseudonyms;
+error fields use fixed classes or status codes rather than raw exception text.
+Update failures also have separate durable phase/error receipts.
+
+General management-request start/end records, detailed retry/admission events
+and failures before journal construction remain instrumentation gaps. Listener
+readiness is recorded when the listener workers start; startup reconciliation
+follows in the executable's startup path, so it can appear after readiness.
+Journal setup/write failure reports its I/O kind once on stderr, without a path
+or arbitrary exception message. Logging failure never stops forwarding; journal
+writes remain disabled for that run after failure, rather than silently claiming
+that later operations were persisted.
+
 ## Objective
 
 EMP persists a bounded, structured diagnostic journal so a later bug report can

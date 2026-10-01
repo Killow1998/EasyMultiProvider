@@ -21,55 +21,35 @@ fn capability_model_values_match_frozen_fixture() {
         .expect("modality cases")
     {
         let input = case.get("input");
+        for (actual, known, source) in [
+            (
+                normalize_input_modalities(input),
+                input_modalities_known(input),
+                input_modalities_metadata_source(input),
+            ),
+            (
+                normalize_output_modalities(input),
+                output_modalities_known(input),
+                output_modalities_metadata_source(input),
+            ),
+        ] {
+            assert_eq!(json!(actual), case["expected"], "{case}");
+            assert_eq!(known, case["known"], "{case}");
+            assert_eq!(
+                source,
+                case["metadata_source"].as_str().expect("source"),
+                "{case}"
+            );
+        }
         assert_eq!(
-            normalize_input_modalities(input),
-            case["expected"]
-                .as_array()
-                .expect("input modality expected")
-                .iter()
-                .map(|value| value.as_str().expect("string value").to_owned())
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            normalize_output_modalities(input),
-            case["expected"]
-                .as_array()
-                .expect("output modality expected")
-                .iter()
-                .map(|value| value.as_str().expect("string value").to_owned())
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(input_modalities_known(input), case["known"]);
-        assert_eq!(output_modalities_known(input), case["known"]);
-        assert_eq!(
-            input_modalities_metadata_source(input),
-            case["metadata_source"].as_str().expect("input source")
-        );
-        assert_eq!(
-            output_modalities_metadata_source(input),
-            case["metadata_source"].as_str().expect("output source")
-        );
-        assert_eq!(
-            codex_input_modalities(input),
-            case["codex"]
-                .as_array()
-                .expect("Codex modalities")
-                .iter()
-                .map(|value| value.as_str().expect("string value").to_owned())
-                .collect::<Vec<_>>()
+            json!(codex_input_modalities(input)),
+            case["codex"],
+            "{case}"
         );
     }
     for case in fixture["protocols"].as_array().expect("protocol cases") {
         let normalized = normalize_supported_protocols(case.get("input"));
-        assert_eq!(
-            normalized,
-            case["expected"]
-                .as_array()
-                .expect("protocol expected")
-                .iter()
-                .map(|value| value.as_str().expect("string value").to_owned())
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(json!(normalized), case["expected"], "{case}");
         assert_eq!(supported_protocols_known(case.get("input")), case["known"]);
     }
     for case in fixture["reasoning_levels"]
@@ -77,13 +57,9 @@ fn capability_model_values_match_frozen_fixture() {
         .expect("reasoning cases")
     {
         assert_eq!(
-            normalize_reasoning_levels(case.get("input")),
-            case["expected"]
-                .as_array()
-                .expect("reasoning expected")
-                .iter()
-                .map(|value| value.as_str().expect("string value").to_owned())
-                .collect::<Vec<_>>()
+            json!(normalize_reasoning_levels(case.get("input"))),
+            case["expected"],
+            "{case}"
         );
     }
 }

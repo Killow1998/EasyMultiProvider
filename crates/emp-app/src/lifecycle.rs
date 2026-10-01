@@ -269,6 +269,7 @@ impl ServerHandle {
         let listener = TcpListener::bind((host, port))?;
         let local_addr = listener.local_addr()?;
         let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_wake = Arc::new(tokio::sync::Notify::new());
         let sessions = Arc::new(SessionStore::new(session, session_path));
         let mut random = [0_u8; WEB_SESSION_TOKEN_BYTES];
         getrandom::getrandom(&mut random).map_err(|_| AppError::RandomUnavailable)?;
@@ -279,9 +280,11 @@ impl ServerHandle {
             startup_options.open_browser,
             startup_options.markers.rolled_back,
             Arc::clone(&shutdown),
+            Arc::clone(&shutdown_wake),
         );
         let state = Arc::new(ServerState {
             shutdown,
+            shutdown_wake,
             catalog_refresh: crate::services::account_catalog::CatalogRefreshState::default(),
             sessions,
             connection_admission: ConnectionAdmission::new(startup_options.admission),
@@ -296,6 +299,17 @@ impl ServerHandle {
             updates,
             auto_review_cooldowns: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         });
+        let journal = &state.backend.diagnostics.journal;
+        journal.event("info", "process_start", &serde_json::json!({
+            "version": crate::VERSION, "platform": std::env::consts::OS, "pid": std::process::id(),
+        }));
+        journal.event(
+            "info",
+            "proxy_selected",
+            &serde_json::json!({
+                "source": state.backend.transport.support_network.source_at_startup,
+            }),
+        );
         let workers = Arc::new(Mutex::new(Vec::new()));
         let handle = Self {
             local_addr,
@@ -309,6 +323,11 @@ impl ServerHandle {
         }
         handle.add_quota_sampler()?;
         handle.add_runtime_watch()?;
+        handle.state.backend.diagnostics.journal.event(
+            "info",
+            "service_listening",
+            &serde_json::json!({"port": local_addr.port()}),
+        );
         Ok(handle)
     }
 
@@ -451,7 +470,13 @@ impl ServerHandle {
     }
 
     fn reconcile_startup(&self) {
-        if crate::services::startup::reconcile(&self.state).is_err() {
+        let result = crate::services::startup::reconcile(&self.state);
+        self.state.backend.diagnostics.journal.event(
+            if result.is_ok() { "info" } else { "warning" },
+            "startup_reconcile",
+            &serde_json::json!({"success": result.is_ok()}),
+        );
+        if result.is_err() {
             eprintln!(
                 "EMP integration recovery is unavailable; inspect integration status before applying changes"
             );
@@ -459,8 +484,30 @@ impl ServerHandle {
     }
 
     pub fn shutdown(self) -> Result<(), AppError> {
+        let diagnostics = Arc::clone(&self.state.backend.diagnostics);
+        diagnostics
+            .journal
+            .event("info", "shutdown_start", &serde_json::json!({}));
+        let result = self.shutdown_inner();
+        diagnostics.journal.event(
+            if result.is_ok() { "info" } else { "error" },
+            "shutdown_complete",
+            &serde_json::json!({
+                "success": result.is_ok(),
+                "error_class": match &result {
+                    Ok(()) => "none",
+                    Err(AppError::CredentialsUnsaved(_)) => "credentials_unsaved",
+                    Err(AppError::NativeRestoreBlocked(_)) => "native_restore_blocked",
+                    Err(_) => "shutdown_failed",
+                },
+            }),
+        );
+        result
+    }
+
+    fn shutdown_inner(self) -> Result<(), AppError> {
         let installing = self.state.updates.snapshot().state == "installing";
-        self.state.shutdown.store(true, Ordering::Release);
+        self.state.request_shutdown();
         self.state.catalog_refresh.stop();
         let admitted_work_drained = if let Some(gate) = self
             .state
@@ -486,12 +533,15 @@ impl ServerHandle {
         let _ = credential_operations.close_and_drain(Duration::ZERO);
         let _ = TcpStream::connect_timeout(&self.local_addr, Duration::from_millis(100));
         self.state.backend.usage.stop();
-        self.state.backend.accounts.quota_condition.notify_all();
-        self.state
-            .backend
-            .accounts
-            .quota_sampler_condition
-            .notify_all();
+        let accounts = &self.state.backend.accounts;
+        // The same mutex must cover the condition check and notification,
+        // otherwise shutdown can arrive just before a worker starts waiting.
+        if let Ok(_revision) = accounts.quota_revision.lock() {
+            accounts.quota_condition.notify_all();
+        }
+        if let Ok(_wait) = accounts.quota_sampler_wait.lock() {
+            accounts.quota_sampler_condition.notify_all();
+        }
         crate::services::runtime::stop_watch(&self.state);
         let workers = match Arc::try_unwrap(self.workers) {
             Ok(workers) => workers,
@@ -594,11 +644,7 @@ pub(crate) fn run_server(
         }
         emp_state::update::worker::mark_ready(crate::VERSION, markers.ready_path.clone())
             .map_err(std::io::Error::other)?;
-        let requested = async {
-            while !server.state.shutdown.load(Ordering::Acquire) {
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-        };
+        let requested = server.state.wait_for_shutdown();
         tokio::select! {
             _ = terminate.recv() => {},
             _ = interrupt.recv() => {},

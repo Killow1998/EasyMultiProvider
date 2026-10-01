@@ -107,7 +107,9 @@ impl CatalogRefreshState {
     }
 
     pub(crate) fn stop(&self) {
-        self.wake.notify_all();
+        if let Ok(_queue) = self.queue.lock() {
+            self.wake.notify_all();
+        }
     }
 
     pub(crate) fn mark_catalog_publication_pending(&self) {

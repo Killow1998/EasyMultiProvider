@@ -91,16 +91,12 @@ impl fmt::Display for OpaqueJsonError {
 
 impl std::error::Error for OpaqueJsonError {}
 
-/// Validation failures for shared route and request records.
+/// Validation failures for immutable route records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
     EmptyField(&'static str),
     InvalidFingerprint,
     InvalidDeploymentIdentity,
-    InvalidRequestId,
-    InvalidDeadline,
-    InvalidUrl,
-    InvalidStatus,
     OpaqueJson(OpaqueJsonError),
 }
 
@@ -112,12 +108,6 @@ impl fmt::Display for ValidationError {
             Self::InvalidDeploymentIdentity => {
                 f.write_str("deployment identity contains unsupported characters")
             }
-            Self::InvalidRequestId => f.write_str("request id must be 16 lowercase hex characters"),
-            Self::InvalidDeadline => f.write_str("request deadline precedes received time"),
-            Self::InvalidUrl => {
-                f.write_str("prepared request URL must use http, https, ws, or wss")
-            }
-            Self::InvalidStatus => f.write_str("public failure status must be 100 through 599"),
             Self::OpaqueJson(error) => write!(f, "{error}"),
         }
     }

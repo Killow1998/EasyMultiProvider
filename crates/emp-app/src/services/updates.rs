@@ -41,28 +41,9 @@ impl UpdateState {
         open_browser: bool,
         installation_rolled_back: bool,
         shutdown: Arc<AtomicBool>,
+        shutdown_wake: Arc<tokio::sync::Notify>,
     ) -> Self {
         let endpoints = test_endpoints().unwrap_or_default();
-        Self::with_endpoints(
-            config,
-            version,
-            address,
-            open_browser,
-            shutdown,
-            endpoints,
-            installation_rolled_back,
-        )
-    }
-
-    pub(crate) fn with_endpoints(
-        _config: &Path,
-        version: &str,
-        address: std::net::SocketAddr,
-        open_browser: bool,
-        shutdown: Arc<AtomicBool>,
-        endpoints: UpdateEndpoints,
-        installation_rolled_back: bool,
-    ) -> Self {
         let gate = Arc::new(Gate {
             state: Mutex::new(GateState {
                 active: 0,
@@ -88,12 +69,13 @@ impl UpdateState {
         let handoff_shutdown = Arc::clone(&shutdown);
         let handoff = move || -> UpdateResult<()> {
             handoff_shutdown.store(true, Ordering::Release);
+            shutdown_wake.notify_waiters();
             Ok(())
         };
         let mut restart_args = vec![
             "serve".to_owned(),
             "--config".to_owned(),
-            _config.to_string_lossy().into_owned(),
+            config.to_string_lossy().into_owned(),
             "--host".to_owned(),
             address.ip().to_string(),
             "--port".to_owned(),
