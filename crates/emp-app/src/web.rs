@@ -7,6 +7,19 @@ use crate::http::response::response;
 /// drift during the rewrite.
 pub const WEB_INDEX_BYTES: &[u8] = include_bytes!("../web/index.html");
 
+pub(crate) fn script_response(path: &str) -> Option<Vec<u8>> {
+    let bytes: &[u8] = match path {
+        "/assets/request-details.js" => include_bytes!("../web/request-details.js"),
+        _ => return None,
+    };
+    Some(response(
+        "HTTP/1.1 200 OK",
+        "text/javascript; charset=utf-8",
+        bytes,
+        &[("Cache-Control", "no-store")],
+    ))
+}
+
 /// Serve the UI without authentication. It contains no secrets: the script
 /// exchanges the single-use bootstrap token for a session kept in origin-scoped
 /// storage. Any cookie left by older releases is expired.

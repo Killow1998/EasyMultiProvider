@@ -131,7 +131,9 @@ fn default_configuration() -> Value {
         "catalog_show_context": true,
         "catalog_presentations": {},
         "catalog_family_presentations": {},
-        "subscription_search": {"enabled": false, "account_id": ""},
+        "subscription_search": {"enabled": true, "account_id": ""},
+        "auto_enable_on_start": true,
+        "auto_review_fallback": true,
         "codex_runtime_sources": ["auto"],
         "pricing_aliases": {},
     })
@@ -577,7 +579,7 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         normalize_codex_runtime_sources(Some(&serde_json::json!(["auto"])))?
     };
 
-    Ok(serde_json::json!({
+    let mut normalized = serde_json::json!({
         "host": host,
         "port": port,
         "native_catalog_path": native_catalog_path,
@@ -595,5 +597,14 @@ pub fn normalize_configuration(raw: Option<&Value>) -> ConfigResult<Value> {
         "subscription_search": subscription_search,
         "codex_runtime_sources": codex_runtime_sources,
         "pricing_aliases": pricing_aliases,
-    }))
+    });
+    // Unset settings start enabled; explicit user choices remain authoritative.
+    for key in ["auto_enable_on_start", "auto_review_fallback"] {
+        normalized[key] = match raw.get(key) {
+            None => Value::Bool(true),
+            Some(Value::Bool(value)) => Value::Bool(*value),
+            Some(_) => return Err(ConfigError::new(format!("{key} must be boolean"))),
+        };
+    }
+    Ok(normalized)
 }

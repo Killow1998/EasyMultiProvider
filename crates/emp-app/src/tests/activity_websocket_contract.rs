@@ -101,13 +101,16 @@ impl Drop for HeldActivityUpstream {
     }
 }
 
-fn next_activity_snapshot(reader: &mut BufReader<TcpStream>) -> Value {
+fn next_activity_snapshot(reader: &mut BufReader<TcpStream>, in_flight: u64) -> Value {
     loop {
         let frame = read_sse_frame(reader);
         let Some(data) = frame.strip_prefix("event: activity-updated\ndata: ") else {
             continue;
         };
-        return serde_json::from_str(data.trim()).expect("activity snapshot JSON");
+        let snapshot: Value = serde_json::from_str(data.trim()).expect("activity snapshot JSON");
+        if snapshot["routes"][0]["in_flight"] == in_flight {
+            return snapshot;
+        }
     }
 }
 
@@ -175,19 +178,19 @@ fn websocket_idle_connection_is_inactive_and_each_turn_has_its_own_activity() {
     let (path, _, body) = upstream.next_request();
     assert_eq!(path, "/v1/responses");
     assert_eq!(body["stream"], true);
-    assert_one_active_route(&next_activity_snapshot(&mut activity));
+    assert_one_active_route(&next_activity_snapshot(&mut activity, 1));
     upstream.release_one();
     receive_completed_turn(&mut socket);
-    assert_one_finished_route(&next_activity_snapshot(&mut activity));
+    assert_one_finished_route(&next_activity_snapshot(&mut activity, 0));
 
     send_turn(&mut socket, "second activity turn");
     let (path, _, body) = upstream.next_request();
     assert_eq!(path, "/v1/responses");
     assert_eq!(body["stream"], true);
-    assert_one_active_route(&next_activity_snapshot(&mut activity));
+    assert_one_active_route(&next_activity_snapshot(&mut activity, 1));
     upstream.release_one();
     receive_completed_turn(&mut socket);
-    assert_one_finished_route(&next_activity_snapshot(&mut activity));
+    assert_one_finished_route(&next_activity_snapshot(&mut activity, 0));
 
     drop(socket);
     drop(activity);

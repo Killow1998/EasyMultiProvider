@@ -12,14 +12,25 @@ pub(crate) mod http;
 mod shape;
 
 pub(crate) fn retry_scheduled(
-    diagnostics: &emp_state::diagnostics::Diagnostics,
+    state: &ServerState,
     request_id: &Value,
     attempt: usize,
     delay: std::time::Duration,
     error: &emp_router::RouterError,
     fallback: bool,
 ) {
-    diagnostics.journal.event(
+    state.backend.activity.request_retry(
+        request_id,
+        if fallback {
+            "protocol_rejection"
+        } else {
+            error.error_class().as_str()
+        },
+        error.status(),
+        &state.backend.accounts.quota_revision,
+        &state.backend.accounts.quota_condition,
+    );
+    state.backend.diagnostics.journal.event(
         "info",
         "model_retry_scheduled",
         &json!({
@@ -42,7 +53,46 @@ pub(crate) fn request_tokens_per_second(output_tokens: &Value, duration_ms: &Val
     (rate > 0.0 && rate <= 1_000_000.0).then(|| (rate * 100.0).round_ties_even() / 100.0)
 }
 
-pub(crate) struct Observation {
+pub(crate) fn request_started(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    body: &Value,
+    incoming: &BTreeMap<String, String>,
+) {
+    let event = json!({
+        "request_id":incoming.iter().find(|(name, _)| name.eq_ignore_ascii_case("x-emp-request-id")).map(|(_, value)| value),
+        "dispatch_started":true, "client_model":body["model"], "upstream_model":route.upstream_model,
+        "resolved_protocol":route.protocol,
+        "transport":if body["stream"]==true { "sse" } else { "http" },
+    });
+    state.backend.activity.observe_request(
+        &event,
+        crate::services::activity::ActivityIdentity::from_route(route).as_ref(),
+        false,
+        &state.backend.accounts.quota_revision,
+        &state.backend.accounts.quota_condition,
+    );
+}
+
+pub(crate) fn request_cancelled(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    incoming: &BTreeMap<String, String>,
+) {
+    let event = json!({"request_id":incoming.iter().find(|(name, _)| name.eq_ignore_ascii_case("x-emp-request-id")).map(|(_, value)| value),
+        "error_class":"client_disconnect","success":false});
+    state.backend.activity.observe_request(
+        &event,
+        crate::services::activity::ActivityIdentity::from_route(route).as_ref(),
+        true,
+        &state.backend.accounts.quota_revision,
+        &state.backend.accounts.quota_condition,
+    );
+}
+
+pub(crate) struct Observation<'a> {
+    state: &'a ServerState,
+    identity: Option<crate::services::activity::ActivityIdentity>,
     ledger: Arc<UsageLedger>,
     diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
     auto_review_cooldowns: Arc<Mutex<std::collections::BTreeMap<String, std::time::Instant>>>,
@@ -52,9 +102,9 @@ pub(crate) struct Observation {
     event: Value,
     finalized: bool,
 }
-impl Observation {
+impl<'a> Observation<'a> {
     pub(crate) fn new(
-        state: &ServerState,
+        state: &'a ServerState,
         route: &ResolvedRoute,
         body: &Value,
         incoming: &BTreeMap<String, String>,
@@ -103,7 +153,17 @@ impl Observation {
             "request_id":record["request_id"], "protocol":record["protocol"], "transport":record["transport"],
             "provider_id":record["provider_id"], "model_id":record["model_id"], "route":operation,
         }));
+        let identity = crate::services::activity::ActivityIdentity::from_route(route);
+        state.backend.activity.observe_request(
+            &event,
+            identity.as_ref(),
+            false,
+            &state.backend.accounts.quota_revision,
+            &state.backend.accounts.quota_condition,
+        );
         Self {
+            state,
+            identity,
             diagnostics: Arc::clone(&state.backend.diagnostics),
             auto_review_cooldowns: Arc::clone(&state.auto_review_cooldowns),
             started: Instant::now(),
@@ -123,11 +183,16 @@ impl Observation {
             .get("response")
             .filter(|value| value.is_object())
             .unwrap_or(event);
-        if let Some(model) = response["model"].as_str().filter(|s| !s.is_empty()) {
-            self.event["response_model"] = json!(model);
-            self.event["response_model_source"] = json!("upstream_response");
+        if self.event["dialect"] == "codex_native" {
+            self.reported_model(response["model"].as_str().filter(|s| !s.is_empty()));
         }
         let kind = event["type"].as_str().unwrap_or("");
+        if let Some(status) = response["status"]
+            .as_str()
+            .filter(|status| matches!(*status, "completed" | "failed" | "incomplete"))
+        {
+            self.event["response_status"] = json!(status);
+        }
         let (output, tool) = crate::services::events::stream_event_activity(event);
         if output {
             self.event["output_emitted"] = json!(true);
@@ -185,11 +250,34 @@ impl Observation {
         self.started = started;
         self
     }
+    pub(crate) fn reported_model(&mut self, model: Option<&str>) {
+        if let Some(model) = model
+            && self.event["response_model"] != model
+        {
+            self.event["response_model"] = json!(model);
+            self.event["response_model_source"] = json!("upstream_response");
+            self.publish(false);
+        }
+    }
+    pub(crate) fn dispatch(&self) {
+        let mut event = self.event.clone();
+        event["dispatch_started"] = json!(true);
+        self.state.backend.activity.observe_request(
+            &event,
+            self.identity.as_ref(),
+            false,
+            &self.state.backend.accounts.quota_revision,
+            &self.state.backend.accounts.quota_condition,
+        );
+    }
     pub(crate) fn candidate(&mut self, route: &ResolvedRoute) {
         self.event["resolved_protocol"] = json!(route.protocol);
         self.event["dialect"] = json!(route.dialect);
         self.event["endpoint_fingerprint"] = json!(route.endpoint_fingerprint);
         self.event["deployment_identity"] = json!(route.deployment_identity);
+        self.event["upstream_model"] = json!(route.upstream_model);
+        self.identity = crate::services::activity::ActivityIdentity::from_route(route);
+        self.publish(false);
     }
     pub(crate) fn retry(
         &mut self,
@@ -203,7 +291,7 @@ impl Observation {
             self.event["fallback_reason"] = json!("protocol_rejection");
         }
         retry_scheduled(
-            &self.diagnostics,
+            self.state,
             &self.event["request_id"],
             attempt,
             delay,
@@ -213,6 +301,7 @@ impl Observation {
     }
     pub(crate) fn transport(mut self, transport: &str) -> Self {
         self.event["transport"] = json!(transport);
+        self.publish(false);
         self
     }
     pub(crate) fn status(&mut self, status: u16, error: &str) {
@@ -275,8 +364,19 @@ impl Observation {
             self.observe_auto_review();
             self.ledger.record(&self.event, system_now());
             self.diagnostics.record(&self.event);
+            self.publish(true);
             self.finalized = true;
         }
+    }
+
+    fn publish(&self, finished: bool) {
+        self.state.backend.activity.observe_request(
+            &self.event,
+            self.identity.as_ref(),
+            finished,
+            &self.state.backend.accounts.quota_revision,
+            &self.state.backend.accounts.quota_condition,
+        );
     }
 
     fn observe_auto_review(&self) {
@@ -313,7 +413,7 @@ impl Observation {
         }
     }
 }
-impl Drop for Observation {
+impl Drop for Observation<'_> {
     fn drop(&mut self) {
         self.finish();
     }

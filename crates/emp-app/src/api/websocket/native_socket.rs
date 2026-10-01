@@ -204,6 +204,7 @@ impl NativeSession {
                 &state.backend.accounts.quota_revision,
                 &state.backend.accounts.quota_condition,
             ));
+            usage.dispatch();
             if client.send_json(&plan.payload).is_err() {
                 *native_upstream = None;
                 *last_native_response_id = None;

@@ -65,6 +65,7 @@ main{max-width:1360px}.workspace-layout{display:grid;grid-template-columns:minma
 .cache-performance{margin-top:18px}.cache-performance h3{margin-bottom:6px}.cache-performance p{font-size:13px}.cache-model{margin-top:8px;border:1px solid var(--border);border-radius:6px;padding:10px 12px}.cache-model>summary{cursor:pointer;overflow-wrap:anywhere}.cache-model>summary span{margin-right:12px}.cache-periods{max-height:280px;overflow:auto}.cache-periods table{font-size:13px;min-width:450px}.cache-periods th{position:sticky;top:0;background:var(--panel)}.cache-model p{margin:10px 0}
 .usage-filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:12px 0}.usage-filters label{flex:1;min-width:145px}.usage-filters input,.usage-filters select{margin-top:4px}.usage-totals{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}.usage-total{background:var(--panel-soft);border:1px solid var(--border);border-radius:6px;padding:14px}.usage-total strong{display:block;font-size:25px;font-variant-numeric:tabular-nums}.usage-total span{color:var(--muted);font-size:12px}.usage-chart{width:100%;height:190px;display:block}.usage-chart text{fill:var(--muted);font-size:12px}.usage-chart rect{fill:var(--accent);cursor:pointer}.usage-chart rect:hover,.usage-chart rect:focus{fill:var(--success);outline:none}.usage-table{overflow:auto;max-height:370px}.usage-table table{font-size:12px;min-width:620px}.usage-table td small{display:block;color:var(--muted)}.usage-table td{font-variant-numeric:tabular-nums}.usage-notice{font-size:12px;color:var(--muted);margin:10px 0}.usage-warning{color:var(--warning)}
 .pricing-aliases{width:100%;border-collapse:collapse;margin:6px 0}.pricing-aliases td{padding:4px 6px;vertical-align:middle}.pricing-aliases td small{display:block}.pricing-aliases input:not([type=checkbox]){width:100%}
+
 </style>
 <style>
 button,.repo-link{display:inline-flex;align-items:center;justify-content:center;gap:6px;box-sizing:border-box;height:36px;min-height:36px;margin:0;padding:0 12px;border-radius:8px;font-family:inherit;font-size:14px;font-weight:500;line-height:1;white-space:nowrap;flex:0 0 auto;text-decoration:none}
@@ -103,6 +104,8 @@ button[data-icon]{display:inline-flex}
 .entity-card-title .pill{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .request-activity{position:relative;display:inline-grid;place-items:center;flex:none;width:18px;height:18px;border-radius:4px;vertical-align:middle;outline:none}
 .request-activity:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.request-activity{min-height:18px;min-width:18px;padding:0;border:0;background:transparent;box-shadow:none;margin:0;cursor:pointer}
+.request-activity:hover{background:var(--accent-soft)}
 .request-activity::before{content:"";width:9px;height:9px;border:1px solid var(--border-strong);border-radius:50%;background:var(--muted);box-sizing:border-box}
 .request-activity[data-activity-state="active"]::before{border-color:#16b85e;background:#22d976;animation:request-dot-pulse 1.2s ease-in-out infinite}
 .request-activity[data-activity-state="active"]::after{content:"";position:absolute;width:11px;height:11px;border:1px solid #16c76a;border-radius:50%;animation:request-dot-ring 1.2s ease-out infinite}
@@ -118,25 +121,7 @@ button[data-icon]{display:inline-flex}
 .entity-card-actions button{min-width:74px}
 .entity-card-actions button:disabled{min-width:74px}
 .entity-card-quota{min-width:0}
-.quota-credit{display:flex;flex-direction:column;align-items:flex-start;gap:5px;margin:0;font-size:11px;line-height:1.2}
-.credit-controls{display:inline-flex;align-items:stretch}
-.credit-controls .credit-badge{display:grid;grid-template-columns:18px auto auto;height:32px;min-height:32px;padding:0 8px}
-.credit-controls .credit-badge strong{width:var(--account-credit-width,1ch);text-align:right;white-space:nowrap}
-.credit-controls.has-reset .credit-badge{border-radius:8px 0 0 8px}
-.credit-details{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.quota-credit span{display:inline-flex;overflow-wrap:anywhere}
-.credit-badge,.credit-monthly{align-items:center;gap:6px;min-height:28px;padding:4px 8px;border:1px solid var(--border);border-radius:8px;background:var(--panel)}
-.credit-mark{align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:linear-gradient(145deg,#f7d66d,#d99b16);box-shadow:inset 0 0 0 2px rgba(255,255,255,.45);color:#5f4100;font-size:10px;font-weight:800}
-.credit-badge strong,.credit-monthly strong{font-size:12px;color:var(--text);font-variant-numeric:tabular-nums}
-.quota-credit .reset-credit-button{height:32px;min-height:32px;min-width:0;margin:0;padding:0 8px;justify-content:center;border-radius:8px;font-size:11px}
-.credit-controls.has-balance .reset-credit-button{border-radius:0 8px 8px 0;border-left:0}
-.reset-credit-button strong{width:var(--account-reset-width,1ch);text-align:right;font-variant-numeric:tabular-nums}
-.credit-warning{align-items:center;min-height:28px;padding:4px 8px;border:1px solid var(--danger);border-radius:8px;background:var(--danger-soft);color:var(--danger-text)}
-.account-identity{display:inline-flex;align-items:stretch;min-width:0;max-width:100%;font-size:11px;font-weight:650;white-space:nowrap}
-.account-identity-id,.subscription-plan{display:inline-flex;align-items:center;min-height:22px;padding:2px 8px;border:1px solid var(--border-strong)}
-.account-identity-id{max-width:180px;overflow:hidden;border-radius:999px;text-overflow:ellipsis;background:var(--accent-soft);color:var(--text)}
-.account-identity.has-plan .account-identity-id{border-radius:999px 0 0 999px}
-.subscription-plan{--plan-color:#94a3b8;margin-left:-1px;border-color:var(--plan-color);border-radius:0 999px 999px 0;background:color-mix(in srgb,var(--plan-color) 18%,var(--panel));color:var(--text)}
+.credit-mark{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:linear-gradient(145deg,#f7d66d,#d99b16);box-shadow:inset 0 0 0 2px rgba(255,255,255,.45);color:#5f4100;font-size:10px;font-weight:800}
 .plan-free{--plan-color:#94a3b8}.plan-go{--plan-color:#2bb5a6}.plan-plus{--plan-color:#4c8bea}.plan-prolite{--plan-color:#d9c98f}.plan-pro{--plan-color:#f2b705}.plan-business{--plan-color:#9b7ad8}.plan-unknown{--plan-color:#94a3b8}
 .account-list{container-type:inline-size;container-name:accounts;--account-action-width:80px}
 html[lang="en"] .account-list{--account-action-width:108px}
@@ -190,7 +175,6 @@ html[lang="en"] .account-list{--account-action-width:108px}
 .model-card .entity-card-subtitle code{word-break:normal}
 .model-card .entity-card-meta{grid-column:1/-1;grid-row:2;min-width:0;margin-top:0;line-height:1.35;white-space:normal;overflow-wrap:anywhere}
 .model-card .visibility{display:inline-flex;grid-column:2;grid-row:1;align-items:center;gap:5px;margin:0;color:var(--text);font-size:12px;white-space:nowrap}
-.model-card .visibility input{width:auto;margin:0}
 .model-card .entity-card-actions{grid-column:3;grid-row:1;flex-wrap:nowrap;gap:5px;padding:0;border:0}
 .model-card .entity-card-actions button,.model-card .entity-card-actions button:disabled{height:32px;min-height:32px;min-width:0;padding:0 8px;font-size:12px;white-space:nowrap}
 .provider-model-group{border:0;padding:0;margin:18px 0 0}
@@ -316,9 +300,67 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .quota-history-navigation button[hidden]{display:none}
 .modal:has(.period-picker){width:min(1080px,100%)}
 @media(max-width:760px){.period-custom input{min-width:0;width:100%}.period-custom label{flex:1 1 140px}}
-@container accounts (max-width:920px){.account-card{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto}.account-card .entity-card-actions{grid-column:1;grid-row:2}.account-card .entity-card-quota{grid-row:3}}
+@container accounts (max-width:720px){.account-card{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto}.account-card .entity-card-actions{grid-column:1;grid-row:2}.account-card .entity-card-quota{grid-row:3}}
+@container accounts (max-width:840px){html[lang="en"] .account-card{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto}html[lang="en"] .account-card .entity-card-actions{grid-column:1;grid-row:2}html[lang="en"] .account-card .entity-card-quota{grid-row:3}}
 @container accounts (max-width:540px){.account-card{padding:10px}.account-card .entity-card-actions{width:100%}.account-card .entity-card-actions button{width:calc((100% - 15px)/4)}}
 @container accounts (max-width:400px){.account-card .entity-card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.account-card .entity-card-actions button{width:100%}}
+.account-summary{display:inline-flex;align-items:stretch;gap:0;height:32px;max-width:100%;min-width:0;padding:0;border:1px solid var(--border-strong);border-radius:8px;background:var(--panel);color:var(--text);overflow:hidden;white-space:nowrap}
+.account-summary .account-segment{display:inline-flex;align-items:center;gap:6px;padding:0 8px;flex:none;font-size:12px;font-variant-numeric:tabular-nums}
+.account-summary .account-segment+.account-segment{border-left:1px solid var(--border)}
+.account-summary .account-name{flex:0 1 auto;min-width:0;max-width:160px;background:var(--accent-soft);font-weight:650}
+.account-summary .account-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.account-summary .subscription-plan{margin:0;min-height:0;border:0;border-left:1px solid var(--plan-color);border-radius:0;background:color-mix(in srgb,var(--plan-color) 18%,var(--panel))}
+.account-card .entity-card-title{min-width:0;flex:1;flex-wrap:nowrap}
+.account-card:last-child{border-bottom:1px solid transparent}
+.account-card-heading{flex-wrap:nowrap}
+.account-card .quota-meter{min-height:48px}
+.ui-icon{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.account-info-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:18px}
+.account-info-grid>div{display:flex;flex-direction:column;min-width:0}
+.account-info-label{color:var(--muted);font-size:12px;line-height:16px;margin-bottom:4px}
+.account-alias-edit,.account-value-row{display:flex;align-items:center;gap:8px;min-height:40px;flex:1;min-width:0}
+.account-alias-edit input{flex:1;min-width:0;width:auto;margin:0;height:36px}
+.account-alias-edit button{padding:0;width:36px;height:36px;min-width:36px;justify-content:center;margin:0}
+.account-value-row .account-value{flex:1;min-width:0;overflow-wrap:anywhere;font-size:13px}
+.account-value small{display:block;color:var(--muted)}
+.account-value-row button{height:36px;margin:0;flex:none}
+.account-usage .usage-table{overflow:auto}
+.settings-list{min-width:0}
+.setting-row{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:14px 0;border-bottom:1px solid var(--border)}
+.setting-switch{--switch-width:36px;--switch-height:22px;--switch-inset:3px;position:relative;flex:none;width:var(--switch-width);min-width:var(--switch-width);max-width:var(--switch-width);height:var(--switch-height);min-height:var(--switch-height);max-height:var(--switch-height);margin:0;padding:0;border:0;border-radius:99px;background:var(--border-strong);box-shadow:none}
+.setting-switch::before{content:"";position:absolute;left:var(--switch-inset);top:var(--switch-inset);width:calc(var(--switch-height) - 2 * var(--switch-inset));height:calc(var(--switch-height) - 2 * var(--switch-inset));border-radius:50%;background:#fff;transition:left .15s}
+.setting-switch:hover{background:var(--border-strong)}
+.setting-switch[aria-checked=true]{background:var(--accent)}
+.setting-switch[aria-checked=true]::before{left:calc(var(--switch-width) - var(--switch-height) + var(--switch-inset))}
+.setting-switch[aria-checked=true]:hover{background:var(--accent-hover)}
+.setting-switch:disabled{opacity:.5}
+.request-receipt{border:1px solid var(--border);border-radius:9px;background:var(--panel);padding:15px;margin-bottom:12px}
+.request-receipt:last-child{margin-bottom:0}
+.request-receipt-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.request-receipt-head time{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.request-state{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--muted)}
+.request-state::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.request-state[data-state=completed]{color:#218346}.request-state[data-state=active]{color:var(--accent)}.request-state[data-state=failed]{color:var(--danger-text)}
+.request-route{display:grid;grid-template-columns:minmax(0,1fr) 20px minmax(0,1fr);gap:12px;align-items:stretch}
+.request-route-node{min-width:0;padding:11px 12px;border:1px solid var(--border);border-radius:7px;background:var(--panel-soft);display:grid;align-content:start;gap:5px}
+.request-route-node>small{font-size:11px;color:var(--muted)}.request-route-node strong{font-size:13px;overflow-wrap:anywhere}.request-route-node code{font-size:12px;overflow-wrap:anywhere}
+.request-route-arrow{align-self:center;text-align:center;color:var(--muted);font-size:18px}
+.request-summary{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;margin-top:12px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.request-summary strong{font-weight:500;color:var(--text)}
+.request-retries{margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}.request-retries h3{margin:0 0 10px;font-size:12px;font-weight:600}
+.request-timeline{margin:0;padding:0;list-style:none}.request-timeline li{position:relative;margin-left:4px;padding:0 0 12px 17px;border-left:1px solid var(--border);font-size:12px;display:flex;justify-content:space-between;gap:12px}
+.request-timeline li::before{content:"";position:absolute;left:-4px;top:4px;width:7px;height:7px;border:1px solid var(--border-strong);border-radius:50%;background:var(--panel)}
+.request-timeline li:last-child{border-left-color:transparent;padding-bottom:0}.request-timeline time{flex:none;color:var(--muted);font-variant-numeric:tabular-nums;font-size:11px}
+.request-returned{margin-top:10px;font-size:12px;color:var(--muted);overflow-wrap:anywhere}.request-returned code{font-size:12px}
+.request-error{margin:10px 0 0;font-size:12px;color:var(--danger-text)}
+@media(max-width:500px){.request-route{grid-template-columns:minmax(0,1fr);gap:7px}.request-route-arrow{transform:rotate(90deg);line-height:16px}.request-receipt{padding:12px}.setting-row{gap:10px}}
+.setting-row:last-child{border-bottom:0}
+.setting-row>div{min-width:0}
+.setting-title{font-weight:600;font-size:13px}
+.setting-help{margin:5px 0 0;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.model-card button.visibility{padding:0 8px;height:32px;border:1px solid var(--border-strong);border-radius:8px;background:var(--panel)}
+@container accounts (max-width:840px){html[lang="en"] .account-card{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto}html[lang="en"] .account-card .entity-card-actions{grid-column:1;grid-row:2}html[lang="en"] .account-card .entity-card-quota{grid-row:3}}
+@media(max-width:560px){.account-info-grid{grid-template-columns:minmax(0,1fr)}.account-summary .account-segment{padding:0 6px;gap:4px}.account-summary .account-name{max-width:140px}}
 </style>
 </head>
 <body>
@@ -327,6 +369,7 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
   <div class="page-brand"><div class="brand-title"><h1 aria-label="EMP"><svg id="emp_logo" class="dot-logo" aria-hidden="true"></svg></h1><span id="emp_version" class="brand-version"></span></div><p data-i18n="subtitle">管理 Codex 的账号和模型。</p></div>
   <div class="page-header-controls">
     <div class="header-group">
+      <button type="button" class="secondary" data-icon="settings" onclick="openSettings()" data-i18n="settings_menu">设置</button>
       <button type="button" class="secondary" data-icon="upload" onclick="selectMigrationFile()" data-i18n="import_emp">导入数据</button>
       <button type="button" class="secondary" data-icon="download" onclick="exportMigration()" data-i18n="export_emp">导出数据</button>
       <input id="migration_file" type="file" hidden accept=".emp,application/octet-stream" onchange="migrationFileChosen(this)">
@@ -353,7 +396,6 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
   <p id="integration_summary" class="muted" hidden></p>
   <div class="integration-actions">
     <div class="action-group"><span class="action-group-label" data-i18n="emp_scope">EMP</span><div class="toolbar"><button id="integration_toggle" data-icon="check" data-action="enable" onclick="confirmIntegrationAction(this.dataset.action)" data-i18n="enable_codex" disabled>启用 EMP</button><button class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">性能</button><button class="secondary" data-icon="usage" onclick="openUsage()" data-i18n="usage">用量与估算</button></div></div>
-    <div class="action-group search-toggle"><span class="action-group-label" data-i18n="search_scope">工具</span><label class="inline-check"><input id="subscription_search_enabled" type="checkbox" onchange="saveSubscriptionSearch()"><span data-i18n="enable_subscription_search">联网搜索</span></label></div>
   </div>
 </div>
 </section>
@@ -411,6 +453,7 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
   </div>
 </div>
 
+<script src="/assets/request-details.js"></script>
 <script>
 const SESSION_STORAGE_KEY = 'emp_management_session_v1';
 let sessionToken = '';
@@ -464,10 +507,10 @@ function managementFetch(path, options = {}) {
 }
 const translations = {
   'zh-CN': {
-    subtitle:'管理 Codex 的账号和模型。', settings_menu:'设置与数据', language_label:'语言', theme_label:'外观', quit_emp:'退出 EMP', more_actions:'更多操作', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', diagnostics:'性能与健康', usage:'用量与估算', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', accounts_title:'Subscription 账号', import_account:'导入账号', refresh_quotas:'刷新余量', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
+    subtitle:'管理 Codex 的账号和模型。', settings_menu:'设置', language_label:'语言', theme_label:'外观', quit_emp:'退出 EMP', more_actions:'更多操作', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', diagnostics:'性能与健康', usage:'用量与估算', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', accounts_title:'Subscription 账号', import_account:'导入账号', refresh_quotas:'刷新余量', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
   },
   en: {
-    subtitle:'Manage Codex accounts and models.', settings_menu:'Settings & data', language_label:'Language', theme_label:'Appearance', quit_emp:'Quit EMP', more_actions:'More actions', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', diagnostics:'Performance & health', usage:'Usage & estimates', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', accounts_title:'Subscription accounts', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
+    subtitle:'Manage Codex accounts and models.', settings_menu:'Settings', language_label:'Language', theme_label:'Appearance', quit_emp:'Quit EMP', more_actions:'More actions', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', diagnostics:'Performance & health', usage:'Usage & estimates', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', accounts_title:'Subscription accounts', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
   }
 };
 Object.assign(translations['zh-CN'], {client_scope:'客户端', emp_scope:'EMP', search_scope:'工具'});
@@ -1039,22 +1082,33 @@ function openCatalogDisplayEditor(family) {
   });
 }
 
-function renderSubscriptionSearch() {
-  const setting = state.subscription_search || {enabled:false, account_id:''};
-  const enabled = $('subscription_search_enabled');
-  if (!enabled) return;
-  enabled.checked = setting.enabled === true;
+function openSettings() {
+  const available = (state.accounts || []).some(account => account.enabled !== false && account.credential_set && account.credential_status !== 'invalid' && !account.duplicate);
+  const settings = [
+    {id:'auto_enable_on_start', enabled:state.auto_enable_on_start !== false, label:tr('打开 EMP 后自动启动','Start EMP automatically'), help:tr('打开应用后直接启用 EMP。','Enable EMP when the app opens.')},
+    {id:'subscription_search', enabled:state.subscription_search?.enabled !== false, label:tr('外部模型使用 Codex 联网搜索','Codex web search for external models'), help:tr('外部模型搜索时，调用 Codex 订阅账号的联网搜索。','Use a Codex subscription for external model web searches.')},
+    {id:'auto_review_fallback', enabled:state.auto_review_fallback !== false, disabled:!available, label:tr('自动审查路由','Auto-review routing'), help:tr('原生订阅无额度时，自动审查路由至其他订阅账号。','Route auto-review to another subscription when Native runs out of quota.')}
+  ];
+  openModal(t('settings_menu'), `<div class="settings-list">${settings.map(setting => `<div class="setting-row"><div><div class="setting-title" id="setting-${setting.id}-label">${esc(setting.label)}</div><p class="setting-help" id="setting-${setting.id}-help" title="${esc(setting.help)}">${esc(setting.help)}</p></div><button type="button" class="setting-switch" role="switch" aria-checked="${setting.enabled}" aria-labelledby="setting-${setting.id}-label" aria-describedby="setting-${setting.id}-help" data-ui-action="setting-toggle" data-id="${setting.id}" ${setting.disabled ? 'disabled' : ''}></button></div>`).join('')}</div>`, '', null);
 }
-async function saveSubscriptionSearch() {
-  const candidate = cloneState();
-  candidate.subscription_search = {
-    enabled: $('subscription_search_enabled').checked,
-    account_id: ''
-  };
-  await persistState(tr('设置已保存；可在集成状态中检查 Codex 当前加载的模型目录。','Settings saved. Use the integration status to check Codex’s loaded model catalog.'), candidate);
+async function toggleSetting(element) {
+  if (element.disabled) return;
+  const enabled = element.getAttribute('aria-checked') !== 'true';
+  const candidate = cloneState(), key = element.dataset.id;
+  if (key === 'subscription_search') candidate.subscription_search = {enabled, account_id:''};
+  else if (['auto_enable_on_start','auto_review_fallback'].includes(key)) candidate[key] = enabled;
+  else return;
+  const controls = [...$('modal_body').querySelectorAll('.setting-switch')].map(button => ({button,disabled:button.disabled}));
+  controls.forEach(({button}) => button.disabled = true);
+  try {
+    await persistState(tr('设置已保存','Settings saved'), candidate);
+    element.setAttribute('aria-checked', String(enabled));
+  } catch (error) { if (element.isConnected) $('modal_status').textContent = error.message; }
+  finally { controls.forEach(({button,disabled}) => button.disabled = disabled); }
 }
+
 function fill() {
-  drawLogo(); applyTranslations(); if (latestUpdateInfo) renderUpdateHint(latestUpdateInfo); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderSubscriptionSearch(); renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels(); updateActivityDots();
+  drawLogo(); applyTranslations(); if (latestUpdateInfo) renderUpdateHint(latestUpdateInfo); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderCatalogDisplay(); renderAccounts(); renderProviders(); renderModels(); updateActivityDots();
 }
 async function load() {
   applyPreferences(); drawLogo();
@@ -1465,12 +1519,26 @@ function subscriptionPlanLabel(value) {
   return ({free:'Free',go:'Go',plus:'Plus',prolite:'Pro Lite',pro:'Pro',business:'Business'})[key] || String(value || '').replace(/[_-]+/g,' ').replace(/\b\w/g, letter => letter.toUpperCase());
 }
 function subscriptionPlanColor(value) { return ({free:'#94a3b8',go:'#2bb5a6',plus:'#4c8bea',prolite:'#d9c98f',pro:'#f2b705',business:'#9b7ad8'})[subscriptionPlanKey(value)] || '#94a3b8'; }
-function accountIdentityHtml(account, hover = '') {
-  const key = quotaHasThirtyDayWindow(account) ? 'free' : subscriptionPlanKey(account.quota && account.quota.plan_type);
-  const label = account.native ? 'Native' : String(account.id || '');
-  const planLabel = key === 'free' ? 'Free' : subscriptionPlanLabel(account.quota && account.quota.plan_type);
-  const plan = key ? `<span class="subscription-plan plan-${key}">${esc(planLabel)}</span>` : '';
-  return `<span class="account-identity${key ? ' has-plan' : ''}"><span class="account-identity-id"${hover}>${esc(label)}</span>${plan}</span>`;
+function uiIcon(name) {
+  const paths = {
+    refresh:'<path d="M17 7a7 7 0 0 0-12-2L2 8m0-5v5h5M3 13a7 7 0 0 0 12 2l3-3m0 5v-5h-5"/>',
+    eye:'<path d="M2 10s3-6 8-6 8 6 8 6-3 6-8 6-8-6-8-6z"/><circle cx="10" cy="10" r="2.5"/>',
+    'eye-off':'<path d="m3 3 14 14M7 4.5A9 9 0 0 1 10 4c5 0 8 6 8 6a14 14 0 0 1-2 3M4.3 6A17 17 0 0 0 2 10s3 6 8 6a9 9 0 0 0 4-1M8 8a2.8 2.8 0 0 0 4 4"/>',
+    save:'<path d="M3 2h11l3 3v13H3zM6 2v5h7V2M6 18v-7h8v7"/>',
+    check:'<path d="m4 10 4 4 8-8"/>'
+  };
+  return `<svg class="ui-icon" viewBox="0 0 20 20" aria-hidden="true">${paths[name] || ''}</svg>`;
+}
+function accountSummaryHtml(account, hoverText = '') {
+  const key = quotaHasThirtyDayWindow(account) ? 'free' : subscriptionPlanKey(account.quota?.plan_type);
+  const label = account.native ? 'Native' : String(account.name || account.id || '');
+  const plan = key ? `<span class="account-segment subscription-plan plan-${key}">${esc(key === 'free' ? 'Free' : subscriptionPlanLabel(account.quota?.plan_type))}</span>` : '';
+  const credit = account.quota?.credits;
+  const balance = credit?.unlimited === true ? '∞' : credit?.balance !== undefined ? integerCredit(credit.balance) : null;
+  const credits = balance === null ? '' : `<span class="account-segment" title="${esc(tr('可用余额','Available credits'))}"><span class="credit-mark" aria-hidden="true">C</span><strong>${esc(balance)}</strong></span>`;
+  const resets = resetCreditCount(account);
+  const reset = resets > 0 ? `<span class="account-segment" title="${esc(tr('可用重置次数','Available resets'))}">${uiIcon('refresh')}<strong>${esc(resets)}</strong></span>` : '';
+  return `<button type="button" class="account-summary" data-ui-action="account-details" data-id="${esc(account.id)}" aria-haspopup="dialog" aria-label="${esc(label+' · '+tr('查看账号信息','View account details'))}" title="${esc(hoverText || label)}"><span class="account-segment account-name"><span>${esc(label)}</span></span>${plan}${credits}${reset}</button>`;
 }
 
 function activityNowSeconds() { return Date.now() / 1000 + activityClockOffsetSeconds; }
@@ -1510,7 +1578,7 @@ function activityIndicatorHtml(kind, id, label, modelIds = []) {
     ? `data-activity-models="${esc(JSON.stringify(modelIds))}"`
     : `data-activity-id="${esc(id)}"`;
   const description = activityDescription(label, {inFlight:0,lastFinished:null,recent:false});
-  return `<span class="request-activity" data-activity-kind="${esc(kind)}" ${attributes} data-activity-label="${esc(label)}" data-activity-state="inactive" role="img" tabindex="0" aria-label="${esc(description)}" title="${esc(description)}"></span>`;
+  return `<button type="button" class="request-activity" data-ui-action="activity-details" data-activity-kind="${esc(kind)}" ${attributes} data-activity-label="${esc(label)}" data-activity-state="inactive" aria-haspopup="dialog" aria-label="${esc(description)}" title="${esc(description)}"></button>`;
 }
 function activitySummaryForIndicator(element) {
   const kind = element.dataset.activityKind;
@@ -1570,7 +1638,7 @@ function normalizeActivitySnapshot(value) {
       || !safeInteger(item.in_flight) || !((item.last_finished === null) || safeInteger(item.last_finished, 1))) continue;
     routes.push({model_id:item.model_id, provider_id:item.provider_id, account_id:item.account_id, in_flight:item.in_flight, last_finished:item.last_finished});
   }
-  return {revision:value.revision, observed_at:value.observed_at, recent_for_seconds:value.recent_for_seconds, routes};
+  return {revision:value.revision, observed_at:value.observed_at, recent_for_seconds:value.recent_for_seconds, routes,requests:normalizeRequestReceipts(value.requests)};
 }
 function applyActivitySnapshot(value) {
   const snapshot = normalizeActivitySnapshot(value);
@@ -1581,12 +1649,15 @@ function applyActivitySnapshot(value) {
   activityClockOffsetSeconds = snapshot.observed_at - Date.now() / 1000;
   updateActivityDots();
   rescheduleActivityExpiry();
+  refreshActivityDetails();
 }
 function clearActivityConfidence() {
   if (!activitySnapshot) return;
   activitySnapshot = {...activitySnapshot, routes:activitySnapshot.routes.map(route => route.in_flight === 0 ? route : {...route, in_flight:0})};
+  activitySnapshot.requests = (activitySnapshot.requests || []).map(record => record.state === 'active' ? {...record,state:'disconnected'} : record);
   updateActivityDots();
   rescheduleActivityExpiry();
+  refreshActivityDetails();
 }
 
 function renderAccounts() {
@@ -1597,27 +1668,21 @@ function renderAccounts() {
     const duplicateCurrent = a.duplicate && a.duplicate_of === '当前 Codex 登录';
     const duplicateText = a.duplicate ? (duplicateCurrent ? tr('与当前 Codex 登录重复；模型显示由原生账户管理','Duplicates the current Codex login; model visibility is managed by Native') : `${tr('与','Duplicates ')}${esc(a.duplicate_of)}${tr('重复；不生成重复前缀模型','; duplicate prefixed routes are omitted')}`) : '';
     const status = a.native ? (a.credential_set ? '' : tr('未检测到 .codex 登录','No .codex login detected')) : (a.credential_status === 'invalid' ? tr('登录已失效','Sign-in expired') : (a.credential_set ? '' : tr('未导入凭据','No credentials')));
-    const remove = a.native ? '' : `<button class="danger" data-icon="trash" data-ui-action="account-remove" data-id="${esc(a.id)}">${tr('删除','Delete')}</button>`;
     const edit = duplicateCurrent ? `<button class="secondary" data-icon="edit" disabled title="${esc(tr('模型显示由原生账户管理','Model visibility is managed by Native'))}">${tr('编辑','Edit')}</button>` : `<button class="secondary" data-icon="edit" data-ui-action="account-edit" data-id="${esc(a.id)}">${tr('编辑','Edit')}</button>`;
     const titleText = a.native ? 'Native' : String(a.name || a.id);
     const accountLabel = String(a.quota && a.quota.account_label || '');
     const nativeDetail = a.native ? tr('使用 .codex 当前登录','Using current .codex login') : '';
     const hoverText = [accountLabel, nativeDetail].filter(Boolean).join(' · ');
-    const hover = hoverText ? ` title="${esc(hoverText)}"` : '';
-    const titleHasId = !a.native && titleText === String(a.id);
-    const title = a.native || titleHasId ? '' : `<strong>${esc(titleText)}</strong>`;
-    const identity = accountIdentityHtml(a, hover);
+    const identity = accountSummaryHtml(a, hoverText);
     const statusHtml = status || duplicateText ? `<div class="entity-card-status">${status}${status && duplicateText ? '<br>' : ''}${duplicateText ? `<span class="muted">${duplicateText}</span>` : ''}</div>` : '';
     const activity = activityIndicatorHtml('account', a.native ? '@native' : a.id, titleText);
     return `<article class="entity-card account-card${duplicateCurrent ? ' account-duplicate' : ''}">
-      <div class="entity-card-main"><div class="account-card-heading"><div class="entity-card-title">${activity}${title}${identity}</div>${creditHtml(a)}</div>${statusHtml}</div>
+      <div class="entity-card-main"><div class="account-card-heading"><div class="entity-card-title">${activity}${identity}</div></div>${statusHtml}</div>
       <div class="entity-card-quota">${quotaMetersHtml(a, busy, animateQuota)}${error ? `<div class="refresh-error">${tr('刷新失败','Refresh failed')}: ${esc(error)}</div>` : ''}</div>
-      <div class="entity-card-actions">${remove}${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} data-ui-action="account-refresh" data-id="${esc(a.id)}">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" data-ui-action="account-quota-history" data-id="${esc(a.id)}">${tr('趋势','Trend')}</button></div>
+      <div class="entity-card-actions">${edit}<button class="secondary" data-icon="refresh" ${busy || !a.credential_set ? 'disabled' : ''} data-ui-action="account-refresh" data-id="${esc(a.id)}">${busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh')}</button><button class="secondary" data-icon="chart" data-ui-action="account-quota-history" data-id="${esc(a.id)}">${tr('趋势','Trend')}</button></div>
     </article>`;
   }).join('');
-  const creditWidth = accounts.reduce((width, account) => Math.max(width, account.quota?.credits?.unlimited === true ? 1 : integerCredit(account.quota?.credits?.balance ?? 0).length), 1);
-  const resetWidth = accounts.reduce((width, account) => Math.max(width, String(resetCreditCount(account)).length), 1);
-  $('accounts').innerHTML = `<div class="entity-list account-list" style="--account-credit-width:${creditWidth}ch;--account-reset-width:${resetWidth}ch">${rows}</div>`;
+  $('accounts').innerHTML = `<div class="entity-list account-list">${rows}</div>`;
   quotaAnimationAccounts.clear();
   updateActivityDots();
 }
@@ -1697,7 +1762,7 @@ function processManagementEventFrame(frame) {
     else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
   }
   if (eventType === 'quota-updated') requestQuotaSync();
-  else if (eventType === 'usage-updated') void loadUsage(true);
+  else if (eventType === 'usage-updated') { void loadUsage(true); void refreshAccountDetailsUsage(); }
   else if (eventType === 'integration-updated') void integrationUpdated();
   else if (eventType === 'activity-updated' && data.length) {
     try { applyActivitySnapshot(JSON.parse(data.join('\n'))); } catch (_) {}
@@ -1827,19 +1892,45 @@ function resetAttemptKey(accountId, creditId) {
   resetAttempts.set(accountId,{creditId,key});
   return key;
 }
-function creditHtml(account) {
-  const credit = account?.quota?.credits; if (!credit) return '';
-  const controls = [];
-  const details = [];
-  if (credit.unlimited === true) controls.push(`<span class="credit-badge" title="${esc(tr('可用 Credit','Available credit'))}"><span class="credit-mark">C</span><span>Credit</span><strong>∞</strong></span>`);
-  else if (credit.balance !== undefined) controls.push(`<span class="credit-badge" title="${esc(tr('可用 Credit','Available credit'))}"><span class="credit-mark">C</span><span>Credit</span><strong>${esc(integerCredit(credit.balance))}</strong></span>`);
-  if (credit.individual_limit && typeof credit.individual_limit.remaining_percent === 'number') details.push(`<span class="credit-monthly"><span>${tr('月额度','Monthly')}</span><strong>${esc(credit.individual_limit.remaining_percent)}%</strong></span>`);
-  const resetCount = resetCreditCount(account);
-  if (resetCount > 0) controls.push(`<button type="button" class="secondary reset-credit-button" data-icon="refresh" data-ui-action="account-reset-credits" data-id="${esc(account.id)}" title="${esc(tr('查看重置机会与到期时间','View reset opportunities and expiry'))}">${tr('重置','Reset')} <strong>${esc(resetCount)}</strong></button>`);
-  if (credit.spend_control_reached === true) details.push(`<span class="credit-warning">${tr('已达消费上限','Spend limit reached')}</span>`);
-  const hasBalance = credit.unlimited === true || credit.balance !== undefined;
-  const primary = controls.length ? `<div class="credit-controls${hasBalance ? ' has-balance' : ''}${resetCount > 0 ? ' has-reset' : ''}">${controls.join('')}</div>` : '';
-  return controls.length || details.length ? `<div class="quota-credit">${primary}${details.length ? `<div class="credit-details">${details.join('')}</div>` : ''}</div>` : '';
+let accountDetailsRequest = 0;
+let accountDetailsId = '';
+function findAccount(id) { return [state.native_account, ...(state.accounts || [])].filter(Boolean).find(account => account.id === id); }
+async function openAccountDetails(id) {
+  const account = findAccount(id); if (!account) return;
+  const name = account.native ? 'Native' : account.name || account.id;
+  const mail = account.quota?.account_label || '';
+  const alias = account.native ? '<div class="account-alias-edit">Native</div>' : `<div class="account-alias-edit"><input id="account_alias" value="${esc(name)}" aria-label="${esc(tr('别名','Alias'))}"><button type="button" class="secondary" id="account_alias_save" data-ui-action="account-alias-save" data-id="${esc(id)}" title="${esc(tr('保存别名','Save alias'))}" aria-label="${esc(tr('保存别名','Save alias'))}">${uiIcon('save')}</button></div>`;
+  const remove = account.native ? '' : `<button type="button" class="danger" data-icon="trash" data-ui-action="account-remove" data-id="${esc(id)}">${tr('移除','Remove')}</button>`;
+  const credit = account.quota?.credits;
+  const monthly = credit?.individual_limit?.remaining_percent;
+  const reset = resetCreditCount(account) > 0 ? `<button type="button" class="secondary" data-icon="refresh" data-ui-action="account-reset-credits" data-id="${esc(id)}">${tr('选择重置','Choose reset')} · ${resetCreditCount(account)}</button>` : '';
+  openModal(tr('账号信息','Account details'), `<div class="account-info-grid"><div><span class="account-info-label">${tr('别名','Alias')}</span>${alias}</div><div><span class="account-info-label">${tr('账号','Account')}</span><div class="account-value-row"><div class="account-value">${esc(mail || id)}${mail ? `<small>${esc(id)}</small>` : ''}</div>${remove}</div></div><div><span class="account-info-label">${tr('登录信息','Sign-in')}</span><span class="account-value">${account.native ? tr('本机 Codex 登录','Local Codex sign-in') : tr('已导入的 Codex 登录信息','Imported Codex sign-in')} · ${account.credential_set ? tr('已保存','Saved') : tr('未检测到','Not detected')}</span></div><div><span class="account-info-label">${tr('订阅','Subscription')}</span><span class="account-value">${esc(subscriptionPlanLabel(account.quota?.plan_type) || '—')}</span></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr('月额度','Monthly quota')} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr('已达消费上限','Spend limit reached')}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr('正在读取用量…','Loading usage…')}</p></div>${reset}`, '', null);
+  accountDetailsId = id;
+  await refreshAccountDetailsUsage();
+}
+async function refreshAccountDetailsUsage() {
+  const id = accountDetailsId;
+  if (!id || !$('account_usage')) return;
+  const generation = ++accountDetailsRequest;
+  try {
+    const data = await api('/api/usage?account_id='+encodeURIComponent(id)+'&start=0&end='+Date.now()/1000);
+    if (generation !== accountDetailsRequest || !$('account_usage')) return;
+    const totals = data.totals;
+    const missingPrices = (data.issues || []).some(issue => issue.requests > 0);
+    const cost = row => row.priced_requests && (row.cost_nanos > 0 || !missingPrices) ? usageMoney(row.cost_nanos) : '—';
+    const rows = data.groups.map(row => `<tr><td>${esc(row.model)}</td><td>${row.input_reports ? usageNumber(row.input_tokens) : '—'}</td><td>${row.output_reports ? usageNumber(row.output_tokens) : '—'}</td><td>${cost(row)}</td></tr>`).join('');
+    $('account_usage').innerHTML = `<h3>${tr('已记录用量','Recorded usage')}</h3><div class="usage-totals"><div class="usage-total"><span>Tokens</span><strong>${totals.input_reports || totals.output_reports ? usageNumber(totals.input_tokens+totals.output_tokens) : '—'}</strong></div><div class="usage-total"><span>${tr('API 等价估算 · USD','API equivalent · USD')}</span><strong>${cost(totals)}</strong></div></div><p class="muted">${usageNumber(totals.priced_requests)} / ${usageNumber(totals.requests)} ${tr('次请求已计价','requests priced')}${data.first_record_at ? ' · '+tr('开始记录 ','Recorded since ')+utcDateTimeText(data.first_record_at) : ''}</p>${missingPrices ? `<p class="muted">${tr('部分模型未定价，估算仅包含已知价格的用量。','Some model prices are unavailable; the estimate includes known prices only.')}</p>` : ''}<div class="usage-table"><table><thead><tr><th>${tr('模型','Model')}</th><th>${tr('输入','Input')}</th><th>${tr('输出','Output')}</th><th>USD</th></tr></thead><tbody>${rows || `<tr><td colspan="4">${tr('暂无用量记录','No usage recorded')}</td></tr>`}</tbody></table></div>`;
+  } catch (error) { if (generation === accountDetailsRequest && $('account_usage')) $('account_usage').textContent = error.message; }
+}
+async function saveAccountAlias(element) {
+  const candidate = cloneState(), account = candidate.accounts.find(item => item.id === element.dataset.id);
+  if (!account) return;
+  const name = $('account_alias').value.trim();
+  if (!name) { $('modal_status').textContent = tr('请输入别名','Enter an alias'); return; }
+  account.name = name; element.disabled = true;
+  try { await persistState(tr('别名已保存','Alias saved'), candidate); element.innerHTML = uiIcon('check'); }
+  catch (error) { $('modal_status').textContent = error.message; }
+  finally { element.disabled = false; }
 }
 function openResetCredits(accountId) {
   const account = [...(state.native_account ? [state.native_account] : []),...(state.accounts || [])].find(item => item.id === accountId);
@@ -1848,13 +1939,11 @@ function openResetCredits(accountId) {
   const selectable = entries.filter(item => item.status === 'available' && typeof item.id === 'string' && item.id.length > 0);
   const prior = resetAttempts.get(accountId);
   const selectedIndex = Math.max(0, prior ? selectable.findIndex(item => item.id === prior.creditId) : 0);
-  const cards = entries.map((item,index) => {
-    const expires = utcDateTimeText(item.expires_at), remaining = resetCountdownText(item.expires_at), granted = utcDateTimeText(item.granted_at);
-    const title = item.title || tr(`重置机会 ${index + 1}`,`Reset opportunity ${index + 1}`);
-    const status = item.status ? `<span class="pill">${esc(item.status)}</span>` : '';
+  const cards = entries.map(item => {
+    const expires = utcDateTimeText(item.expires_at), remaining = resetCountdownText(item.expires_at);
     const choiceIndex = selectable.indexOf(item);
-    const choice = choiceIndex >= 0 ? `<label class="reset-credit-choice"><input type="radio" name="reset_credit_choice" value="${choiceIndex}"${choiceIndex === selectedIndex ? ' checked' : ''}><strong>${esc(title)}</strong></label>` : `<strong>${esc(title)}</strong>`;
-    return `<article class="reset-credit-card"><header>${choice}${status}</header>${item.description ? `<p>${esc(item.description)}</p>` : ''}${granted ? `<div class="reset-credit-time"><time>${tr('获得','Granted')} · ${esc(granted)}</time></div>` : ''}<div class="reset-credit-time"><time>${expires ? `${tr('到期','Expires')} · ${esc(expires)}` : tr('未提供到期时间','No expiry provided')}</time>${remaining ? `<strong data-reset-countdown="${esc(item.expires_at)}">${esc(remaining)}</strong>` : ''}</div></article>`;
+    const choice = choiceIndex >= 0 ? `<input type="radio" name="reset_credit_choice" value="${choiceIndex}" aria-label="${esc(expires || tr('重置机会','Reset opportunity'))}"${choiceIndex === selectedIndex ? ' checked' : ''}>` : '';
+    return `<label class="reset-credit-card reset-credit-choice">${choice}<span class="reset-credit-time"><time>${expires ? `${tr('到期','Expires')} · ${esc(expires)}` : tr('未提供到期时间','No expiry provided')}</time>${remaining ? `<strong data-reset-countdown="${esc(item.expires_at)}">${esc(remaining)}</strong>` : ''}</span></label>`;
   }).join('');
   const fallback = !selectable.length ? `<p class="muted">${entries.length ? tr('没有可选择的机会明细；OpenAI 会选择下一个可用机会。','No selectable credit details were returned; OpenAI will choose the next available opportunity.') : tr('OpenAI 只返回了可用次数，未返回每次机会的到期明细；OpenAI 会选择下一个可用机会。','OpenAI returned only the available count; it will choose the next available opportunity.')}</p>` : '';
   const body = `<div class="reset-credit-note"><p><strong>${tr('使用后会发生什么','What happens after use')}</strong><br>${tr('使用一次重置机会会重置符合资格的 Codex 额度周期；新的额度与下一次刷新时间由 OpenAI 返回，EMP 会在使用后重新读取。','Using one opportunity resets the eligible Codex quota windows. OpenAI returns the new quota and next refresh time, which EMP must read again after use.')}</p></div><div class="reset-credit-summary">${tr('可用机会','Available opportunities')} <strong>${esc(resetCreditCount(account))}</strong></div><div class="reset-credit-list">${cards}</div>${fallback}`;
@@ -1869,10 +1958,9 @@ function openResetCredits(accountId) {
   refreshResetCountdowns();
 }
 function confirmResetCredit(account,credit) {
-  const title = credit?.title || (credit ? tr('所选重置机会','Selected reset opportunity') : tr('由 OpenAI 选择下一个可用机会','OpenAI chooses the next available opportunity'));
   const expires = credit ? utcDateTimeText(credit.expires_at) : '';
-  const granted = credit ? utcDateTimeText(credit.granted_at) : '';
-  const body = `<div class="reset-credit-note"><p><strong>${tr('请再次确认','Please confirm again')}</strong><br>${tr('账户','Account')}：${esc(account.name || account.id)}<br>${tr('使用机会','Opportunity')}：${esc(title)}${granted ? `<br>${tr('获得','Granted')}：${esc(granted)}` : ''}${expires ? `<br>${tr('到期','Expires')}：${esc(expires)}` : ''}</p></div><p class="muted">${tr('确认后会消耗一次重置机会，重置 OpenAI 判定为符合资格的额度周期。此操作无法撤销。','Confirming spends one reset opportunity and resets the quota windows OpenAI considers eligible. This cannot be undone.')}</p><button type="button" class="secondary" id="reset_choice_back">${tr('返回选择','Change selection')}</button>`;
+  const remaining = credit ? resetCountdownText(credit.expires_at) : '';
+  const body = `<div class="reset-credit-note"><p><strong>${tr('请再次确认','Please confirm again')}</strong><br>${tr('账号','Account')}：${esc(account.name || account.id)}${expires ? `<br>${tr('到期','Expires')}：${esc(expires)}` : ''}${remaining ? `<br>${esc(remaining)}` : ''}</p></div><p class="muted">${tr('确认后会消耗一次重置机会，同时重置额度与刷新时间。此操作无法撤销。','Confirming uses one reset opportunity and resets both the quota and its refresh time. This cannot be undone.')}</p><button type="button" class="secondary" id="reset_choice_back">${tr('返回选择','Change selection')}</button>`;
   openModal(tr('确认重置额度','Confirm quota reset'),body,tr('确认并使用重置','Confirm and use reset'),async () => {
     const payload = {idempotency_key:resetAttemptKey(account.id,credit?.id || null)};
     if (credit) payload.credit_id = credit.id;
@@ -2168,7 +2256,7 @@ function quotaErrorText(error, id) {
 }
 async function refreshAccount(id, announce = true) { if (refreshingAccounts.has(id)) return false; const before = state.native_account?.id === id ? state.native_account : state.accounts.find(a => a.id === id); const previousQuota = accountQuotaSignature(before); refreshingAccounts.add(id); delete refreshErrors[id]; renderAccounts(); try { const result = await api('/api/accounts/' + encodeURIComponent(id) + '/quota', {method:'POST', body:'{}'}); if (previousQuota !== accountQuotaSignature(result.account)) quotaAnimationAccounts.add(id); if (state.native_account?.id === id) state.native_account = result.account; else { const index = state.accounts.findIndex(a => a.id === id); if (index >= 0) state.accounts[index] = result.account; } if (announce) notice(tr('账户余量已刷新','Account quota refreshed')); return true; } catch (error) { const message = quotaErrorText(error, id); refreshErrors[id] = message; if (error.payload?.error?.code === 'quota_auth_required' && state.native_account?.id !== id) { const account = state.accounts.find(a => a.id === id); if (account) account.credential_status = 'invalid'; } if (announce) notice(tr('刷新失败','Refresh failed') + ': ' + message, true); return false; } finally { refreshingAccounts.delete(id); renderAccounts(); } }
 async function refreshAllAccounts() { const accounts = [...(state.native_account?.credential_set ? [state.native_account] : []), ...(state.accounts || [])]; if (!accounts.length) return notice(tr('还没有可刷新账户','No refreshable accounts'), true); const button = $('refresh_all'); button.disabled = true; try { const results = await Promise.all(accounts.map(a => refreshAccount(a.id, false))); const failed = accounts.filter((_, index) => !results[index]); notice(failed.length ? tr(`刷新完成：成功 ${accounts.length - failed.length} 个，失败 ${failed.length} 个`,`Refresh complete: ${accounts.length - failed.length} succeeded, ${failed.length} failed`) : tr('全部账户余量已刷新','All account quotas refreshed'), Boolean(failed.length)); } finally { button.disabled = false; } }
-async function removeAccount(id) { if (!confirm(tr(`删除账户 ${id} 的本地加密凭据？不会撤销远端 Token。`,`Delete local encrypted credentials for ${id}? This does not revoke the remote token.`))) return; try { await api('/api/accounts/' + encodeURIComponent(id), {method:'DELETE'}); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); notice(tr('账户本地凭据已删除','Local account credentials deleted')); } catch (error) { notice(error.message, true); } }
+async function removeAccount(id) { if (!confirm(tr(`移除账号 ${id}？`,`Remove account ${id}?`))) return; try { await api('/api/accounts/' + encodeURIComponent(id), {method:'DELETE'}); state = await api('/api/config'); await api('/api/catalog/refresh', {method:'POST', body:'{}'}); fill(); await loadIntegration(); closeModal(); notice(tr('账号已移除','Account removed')); } catch (error) { notice(error.message, true); } }
 
 function renderProviders() {
   const providers = state.providers || [];
@@ -2317,7 +2405,7 @@ function editClaudeProvider(provider) {
 function chooseOfficialProvider(key) {
   const preset = officialProviders[key]; const existing = (state.providers || []).find(p => p.id === preset.id);
   if (existing?.execution_backend === 'claude_cli') return editClaudeProvider(existing);
-  const keyField = preset.auth_mode === 'forward' ? `<p class="muted">${tr('该 Provider 会转发当前 Codex 进程携带的登录态，不保存 API Key。','This Provider forwards the active Codex login and does not store an API Key.')}</p>` : `<label>API Key${existing && existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : ''}<input id="modal_provider_key" type="password" placeholder="${tr('输入 API Key','Enter API Key')}"></label>`;
+  const keyField = preset.auth_mode === 'forward' ? `<p class="muted">${tr('使用 Codex 登录','Use Codex sign-in')}</p>` : `<label>API Key${existing && existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : ''}<input id="modal_provider_key" type="password" placeholder="${tr('输入 API Key','Enter API Key')}"></label>`;
   openModal(tr('配置 ','Configure ') + preset.name, `<p class="muted">Endpoint: <code>${esc(preset.base_url)}</code><br>${tr('协议','Protocol')}: ${esc(protocolLabel(preset.protocol))}<br>${tr('认证','Authentication')}: ${esc(authLabel(preset.auth_mode))}</p>${keyField}`, tr('保存 Provider','Save Provider'), async () => {
     const keyValue = preset.auth_mode === 'forward' ? '' : $('modal_provider_key').value.trim(); if (preset.auth_mode !== 'forward' && !keyValue && !(existing && existing.api_key_set)) throw new Error(tr('请填写 API Key','Enter an API Key'));
     await saveProvider(Object.assign({}, preset, {api_key:keyValue})); closeModal();
@@ -2365,7 +2453,7 @@ function renderModels() {
         <div class="entity-card-main"><div class="entity-card-title">${activity}<strong>${esc(displayName)}</strong></div>
         <div class="entity-card-subtitle"><code>${esc(m.id)}</code></div></div>
         <div class="entity-card-meta">${tr('思考强度','Reasoning effort')} ${esc(reasoning)}${capabilities ? ' · ' + capabilities : ''}${formatDate(m.created_at) ? ' · ' + formatDate(m.created_at) : ''}</div>
-        <label class="visibility"><input type="checkbox" ${m.enabled ? 'checked' : ''} data-ui-action="model-toggle" data-id="${esc(m.id)}"> ${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</label>
+        <button type="button" class="secondary visibility" aria-pressed="${Boolean(m.enabled)}" title="${esc(m.enabled ? tr('隐藏此模型','Hide this model') : tr('显示此模型','Show this model'))}" data-ui-action="model-toggle" data-id="${esc(m.id)}">${uiIcon(m.enabled ? 'eye' : 'eye-off')}${m.enabled ? tr('已显示','Visible') : tr('已隐藏','Hidden')}</button>
         <div class="entity-card-actions"><button class="secondary" data-icon="edit" data-ui-action="model-edit" data-id="${esc(m.id)}">${tr('编辑','Edit')}</button><button class="secondary" data-icon="test" data-ui-action="model-test" data-id="${esc(m.id)}">${tr('测试','Test')}</button><button class="danger" data-icon="trash" data-ui-action="model-remove" data-id="${esc(m.id)}">${tr('删除','Delete')}</button></div>
       </article>`;
     }).join('');
@@ -2509,8 +2597,8 @@ async function testModelAudio(id) {
 }
 
 function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryLoading = false; quotaHistoryRequest++; }
-function openModal(title, body, submitLabel, submit) { stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; const handler = async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { if (button.onclick === handler) { button.disabled = false; button.textContent = label; } else if (button.onclick === null) button.disabled = false; } }; button.onclick = submit ? handler : null; $('modal_backdrop').classList.remove('hidden'); }
-function closeModal() { subscriptionEditor = null; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
+function openModal(title, body, submitLabel, submit) { activityDetailsSelection = null; accountDetailsRequest++; accountDetailsId = ''; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; const handler = async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { if (button.onclick === handler) { button.disabled = false; button.textContent = label; } else if (button.onclick === null) button.disabled = false; } }; button.onclick = submit ? handler : null; $('modal_backdrop').classList.remove('hidden'); }
+function closeModal() { activityDetailsSelection = null; accountDetailsRequest++; accountDetailsId = ''; subscriptionEditor = null; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 
 let updatePollTimer = null;
 let updatePollGeneration = 0;
@@ -2529,7 +2617,44 @@ function updateErrorLabel(code) {
     unsupported_platform:tr('此平台暂不支持自动更新。','Automatic updates are not available for this platform.'),
     install_rolled_back:tr('新版本未能启动，已恢复旧版本。','The new version could not start. The previous version has been restored.'),
   };
-  return messages[code] || tr('更新失败，当前版本未受影响，请重试。','Update failed; the current version is unchanged. Please retry.');
+  return messages[code] || tr('更新未完成。请稍后重新检查更新；如果仍然失败，可从官方发布页下载安装包。','The update did not finish. Check again later; if it still fails, download the installer from the official release page.');
+}
+function updateFailureAdvice(failure) {
+  const codeAdvice = {
+    checksum_mismatch:tr('安装包内容与发布信息不符，可能下载损坏。请重新下载；若仍失败，请检查代理或网络缓存。','The package does not match the release, possibly because the download was corrupted. Download again; if it persists, check your proxy or network cache.'),
+    invalid_release:tr('收到的版本信息格式不正确，可能下载服务或代理返回了其他页面。请检查网络后重新检查更新。','The release information is invalid; the service or proxy may have returned a different page. Check the network and check for updates again.'),
+    invalid_package_size:tr('安装包大小不符合发布信息。请重新检查更新并下载官方安装包。','The package size does not match the release. Check for updates again and download the official installer.'),
+    version_mismatch:tr('安装包中的版本与发布信息不符。请重新检查更新并下载官方安装包。','The package version does not match the release. Check for updates again and download the official installer.'),
+    invalid_download_url:tr('安装包链接未通过安全检查。请重新检查更新，或从官方发布页下载安装包。','The package link failed the security check. Check for updates again or download from the official release page.'),
+  };
+  if (codeAdvice[failure.error]) return codeAdvice[failure.error];
+  if (failure.stage === 'parse_release' && failure.error === 'update_failed') return codeAdvice.invalid_release;
+  const networkStages = ['check_release','read_release','download_package'];
+  const reasonAdvice = {
+    incomplete_download:tr('安装包未下载完整，可能网络或代理连接中途断开。请检查连接后重新检查更新。','The package download was incomplete; the network or proxy may have disconnected. Check the connection and check for updates again.'),
+    timeout:tr('连接超时，可能网络较慢、代理不可用或下载服务暂时无响应。请检查网络与代理后重试。','The connection timed out. The network may be slow, the proxy unavailable, or the download service unresponsive. Check the network and proxy, then retry.'),
+    PermissionDenied:tr('无法写入安装文件。请确认安装目录可写，并检查系统防护是否阻止 EMP 更新。','The installation files could not be written. Check folder permissions and whether system protection is blocking the update.'),
+    StorageFull:tr('磁盘空间不足。请释放安装目录所在磁盘的空间后重试。','The disk is full. Free space on the installation drive and retry.'),
+  };
+  if (reasonAdvice[failure.reason]) return reasonAdvice[failure.reason];
+  if (networkStages.includes(failure.stage)) {
+    if ([10054,104,54].includes(failure.os_error)) return tr('连接被中途断开，可能网络不稳定、代理断线或安全软件拦截。请检查网络与代理后重试。','The connection was reset. Possible causes include an unstable network, a disconnected proxy, or security software blocking the connection. Check the network and proxy, then retry.');
+    if ([403,429].includes(failure.http_status)) return tr('下载请求被拒绝，可能触发访问限制或请求过于频繁。请稍后重试，并检查代理与网络访问规则。','The download request was rejected, possibly by access restrictions or rate limits. Try later and check proxy/network access rules.');
+    if (failure.http_status === 404) return tr('安装包暂时不存在，可能尚未发布完整或已移除。请稍后重新检查更新。','The package is unavailable; publication may be incomplete or the asset removed. Check for updates again later.');
+    if (failure.http_status >= 500) return tr('下载服务暂时不可用，也可能代理无法连接 GitHub。请稍后重试或检查代理。','The download service is temporarily unavailable, or the proxy cannot reach GitHub. Try later or check the proxy.');
+    return tr('无法完成网络请求，可能网络、代理、DNS 或安全连接出现问题。请确认能访问官方发布页后重试。','The network request could not complete. Possible causes include network, proxy, DNS or secure-connection issues. Check access to the official release page and retry.');
+  }
+  if ([28,112].includes(failure.os_error)) return reasonAdvice.StorageFull;
+  if ([5,13].includes(failure.os_error)) return reasonAdvice.PermissionDenied;
+  const stageAdvice = {
+    write_package:tr('无法保存安装包。请检查磁盘空间、目录权限及文件是否被占用。','The package could not be saved. Check disk space, folder permissions and whether the file is in use.'),
+    sync_package:tr('安装包无法写入磁盘。请检查磁盘空间及存储设备状态。','The package could not be flushed to disk. Check disk space and storage health.'),
+    extract_package:tr('安装包无法解包。请重新下载，并检查磁盘空间与系统防护提示。','The package could not be extracted. Download again and check disk space and system-protection messages.'),
+    verify_version:tr('新版程序无法正常运行。请检查系统防护提示，并确认使用对应系统的官方安装包。','The new executable could not run correctly. Check system-protection messages and use the official package for your operating system.'),
+    wait_worker:tr('更新程序未能就绪。请检查系统防护提示及安装目录权限后重试。','The updater did not become ready. Check system-protection messages and installation permissions, then retry.'),
+  };
+  if (stageAdvice[failure.stage]) return stageAdvice[failure.stage];
+  return updateErrorLabel(failure.error);
 }
 function updateFailureLabel(info) {
   const failure = info.failure;
@@ -2544,7 +2669,8 @@ function updateFailureLabel(info) {
   if (!failure || (failure.error !== info.error && info.error !== 'install_rolled_back') || !stages[failure.stage]) return updateErrorLabel(info.error);
   const reasons = {timeout:tr('连接超时','connection timed out'), connection:tr('连接失败','connection failed'), PermissionDenied:tr('没有写入权限','permission denied'), StorageFull:tr('磁盘空间不足','disk full')};
   const detail = reasons[failure.reason] || (failure.http_status ? `HTTP ${failure.http_status}` : Number.isInteger(failure.os_error) ? tr(`系统错误 ${failure.os_error}`,`system error ${failure.os_error}`) : Number.isInteger(failure.exit_code) ? tr(`程序退出码 ${failure.exit_code}`,`exit code ${failure.exit_code}`) : '');
-  return tr(`${stages[failure.stage]}时失败`, `Update failed while ${stages[failure.stage]}`) + (detail ? `：${detail}` : '') + (info.error === 'install_rolled_back' ? tr('，已恢复旧版。', '. The previous version has been restored.') : '。');
+  const retries = Number.isInteger(failure.retry_count) && failure.retry_count > 0 ? tr(`已自动重试 ${failure.retry_count} 次。`, `Automatically retried ${failure.retry_count} times. `) : '';
+  return retries + tr(`${stages[failure.stage]}时失败`, `Update failed while ${stages[failure.stage]}`) + (detail ? tr(`：${detail}`, `: ${detail}`) : '') + tr('。 ', '. ') + updateFailureAdvice(failure) + (info.error === 'install_rolled_back' ? tr(' 已恢复旧版。', ' The previous version has been restored.') : '');
 }
 function renderUpdateHint(info) {
   latestUpdateInfo = info;
@@ -2587,6 +2713,7 @@ function renderUpdate(info) {
     error:updateFailureLabel(info),
   };
   $('update_status').textContent = labels[info.state] || labels.idle;
+  if (['checking','downloading'].includes(info.state) && info.retry_count > 0) $('update_status').textContent += tr(` 正在自动重试 ${info.retry_count}/${info.retry_limit}。`, ` Retrying automatically ${info.retry_count}/${info.retry_limit}.`);
   $('update_version').textContent = tr(`当前版本 v${info.current_version}`,`Current version: ${info.current_version}`);
   $('update_progress').hidden = !['downloading','verifying'].includes(info.state);
   $('update_progress').value = Number(info.progress) || 0;
@@ -2640,12 +2767,16 @@ function dynamicActionElement(target) {
 function runDynamicUiAction(element) {
   const id = element.dataset.id || '';
   switch (element.dataset.uiAction) {
+    case 'activity-details': openActivityDetails(element); return true;
     case 'usage-zoom': {
       const start = Number(element.dataset.start), end = Number(element.dataset.end);
       if (Number.isFinite(start) && Number.isFinite(end) && end > start) zoomUsage(start, end);
       return true;
     }
     case 'catalog-display-editor': openCatalogDisplayEditor(id); return true;
+    case 'setting-toggle': toggleSetting(element); return true;
+    case 'account-details': openAccountDetails(id); return true;
+    case 'account-alias-save': saveAccountAlias(element); return true;
     case 'account-remove': removeAccount(id); return true;
     case 'account-edit': editAccount(id); return true;
     case 'account-refresh': refreshAccount(id); return true;
@@ -2665,7 +2796,7 @@ function runDynamicUiAction(element) {
     case 'claude-local-choose': openLocalClaudeSubscriptionForm((state.providers || []).find(provider => provider.id === id) || {}); return true;
     case 'claude-cpa-choose': openClaudeCpaForm((state.providers || []).find(provider => provider.id === id) || {}); return true;
     case 'claude-change-connection': openClaudeConnectionChooser((state.providers || []).find(provider => provider.id === id) || {}); return true;
-    case 'model-toggle': toggleModel(id, element.checked); return true;
+    case 'model-toggle': toggleModel(id, element.getAttribute('aria-pressed') !== 'true'); return true;
     case 'model-edit': openManualModelModal(id); return true;
     case 'model-test': testModel(id); return true;
     case 'modality-test': MODALITY_TESTS[id]?.(); return true;
@@ -2676,11 +2807,11 @@ function runDynamicUiAction(element) {
 }
 function handleDynamicUiClick(event) {
   const element = dynamicActionElement(event.target);
-  if (element && !['model-toggle','period-edit'].includes(element.dataset.uiAction)) runDynamicUiAction(element);
+  if (element && !element.disabled && element.dataset.uiAction !== 'period-edit') runDynamicUiAction(element);
 }
 function handleDynamicUiChange(event) {
   const element = dynamicActionElement(event.target);
-  if (['model-toggle','period-edit'].includes(element?.dataset.uiAction)) runDynamicUiAction(element);
+  if (element?.dataset.uiAction === 'period-edit') runDynamicUiAction(element);
 }
 function handleDynamicUiKeydown(event) {
   if (event.key !== 'Enter' && event.key !== ' ') return;

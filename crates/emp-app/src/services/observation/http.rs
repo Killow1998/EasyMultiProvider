@@ -149,6 +149,7 @@ fn safe_path(path: &str) -> String {
         | "/api/models/metadata"
         | "/api/models/vision-test-image"
         | "/api/providers/discover"
+        | "/assets/request-details.js"
         | "/api/quit"
         | "/api/request-limits"
         | "/api/runtime/claude-cli"

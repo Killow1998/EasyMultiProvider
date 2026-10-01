@@ -176,6 +176,7 @@ pub(super) fn serve_external(
             monitor.as_mut(),
             upstream.next_event(),
         );
+        usage.reported_model(upstream.reported_model.as_deref());
         match polled {
             DisconnectRace::Disconnected => {
                 usage.disconnected();

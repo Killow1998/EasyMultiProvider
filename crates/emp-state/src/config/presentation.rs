@@ -177,7 +177,7 @@ pub fn normalize_catalog_presentations(raw: Option<&Value>) -> ConfigResult<Valu
     Ok(Value::Object(result))
 }
 
-/// Normalize automatic subscription search exactly like Python.
+/// Normalize subscription search, keeping explicit choices and enabling new settings.
 pub fn normalize_subscription_search(raw: Option<&Value>) -> ConfigResult<Value> {
     let raw = match raw {
         None | Some(Value::Null) => None,
@@ -187,7 +187,7 @@ pub fn normalize_subscription_search(raw: Option<&Value>) -> ConfigResult<Value>
         }
     };
     let enabled = match raw.and_then(|value| value.get("enabled")) {
-        None => false,
+        None => true,
         Some(Value::Bool(value)) => *value,
         Some(_) => {
             return Err(ConfigError::new(

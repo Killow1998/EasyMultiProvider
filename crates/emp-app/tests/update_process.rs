@@ -186,6 +186,7 @@ enum FakeReleaseMode {
     InvalidJson,
     ReleaseError,
     PackageError,
+    TemporaryPackageError,
 }
 
 fn release_server_with_mode(
@@ -210,8 +211,11 @@ fn release_server_with_mode(
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut handled = 0;
         let expected_requests = match mode {
-            FakeReleaseMode::InvalidJson | FakeReleaseMode::ReleaseError => 2,
-            FakeReleaseMode::Valid | FakeReleaseMode::PackageError => 4,
+            FakeReleaseMode::InvalidJson => 2,
+            FakeReleaseMode::ReleaseError => 8,
+            FakeReleaseMode::Valid => 4,
+            FakeReleaseMode::PackageError => 10,
+            FakeReleaseMode::TemporaryPackageError => 6,
         };
         while handled < expected_requests && Instant::now() < deadline {
             let (mut stream, _) = match listener.accept() {
@@ -250,7 +254,9 @@ fn release_server_with_mode(
                     FakeReleaseMode::ReleaseError => {
                         stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
                     }
-                    FakeReleaseMode::Valid | FakeReleaseMode::PackageError => {
+                    FakeReleaseMode::Valid
+                    | FakeReleaseMode::PackageError
+                    | FakeReleaseMode::TemporaryPackageError => {
                         write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", metadata.len()).unwrap();
                         stream.write_all(&metadata).unwrap();
                     }
@@ -258,7 +264,9 @@ fn release_server_with_mode(
             } else if path == format!("/releases/download/v{version}/{name}") {
                 write!(stream, "HTTP/1.1 302 Found\r\nLocation: {artifact_redirect}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
             } else if path == format!("/assets/{name}") {
-                if matches!(mode, FakeReleaseMode::PackageError) {
+                if matches!(mode, FakeReleaseMode::PackageError)
+                    || (matches!(mode, FakeReleaseMode::TemporaryPackageError) && handled == 3)
+                {
                     stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
                 } else {
                     write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", package.len()).unwrap();
@@ -640,7 +648,9 @@ fn start_authenticated_emp_with_api(
 fn fake_release_http_install_replaces_running_process_and_preserves_config() {
     let temp = TempDir::new().unwrap();
     let package = create_package(temp.path());
-    let (repository, release_server) = release_server(package);
+    let digest = format!("{:x}", Sha256::digest(&package));
+    let (repository, release_server) =
+        release_server_with_mode(package, digest, FakeReleaseMode::TemporaryPackageError);
     let mut emp = start_authenticated_emp(temp.path(), &repository, false);
 
     let idle = request(emp.port, "GET", "/api/updates", Some(&emp.session), None);
@@ -680,6 +690,7 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
     let mut delete_during_update = None;
     let mut config_during_update = None;
     let mut auth_during_update = None;
+    let mut observed_retry = false;
     while Instant::now() < gate_deadline && emp.process.0.try_wait().unwrap().is_none() {
         let snapshot = body_json(&request(
             emp.port,
@@ -688,6 +699,10 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
             Some(&emp.session),
             None,
         ));
+        if snapshot["state"] == "downloading" && snapshot["retry_count"] == 1 {
+            assert_eq!(snapshot["retry_limit"], 3);
+            observed_retry = true;
+        }
         if matches!(snapshot["state"].as_str(), Some("waiting" | "installing")) {
             let quit = request(
                 emp.port,
@@ -735,6 +750,10 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
     assert!(
         observed_closed_gate,
         "waiting update drains ordinary POST requests"
+    );
+    assert!(
+        observed_retry,
+        "the management API exposes the automatic retry"
     );
     let health = request(emp.port, "GET", "/healthz", None, None);
     assert_eq!(

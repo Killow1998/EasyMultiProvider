@@ -1,6 +1,7 @@
 //! Release discovery, verified download, and handoff to the replacement worker.
 pub(super) mod diagnostics;
 mod operations;
+mod retry;
 pub use diagnostics::UpdateDiagnostic;
 #[cfg(test)]
 mod tests;
@@ -30,6 +31,8 @@ pub struct Snapshot {
     pub current_version: String,
     pub latest_version: Option<String>,
     pub progress: u8,
+    pub retry_count: u8,
+    pub retry_limit: u8,
     pub error: String,
     pub supported: bool,
     pub manual_update: String,
@@ -168,6 +171,8 @@ impl UpdateManager {
             current_version: version.to_owned(),
             latest_version: None,
             progress: 0,
+            retry_count: 0,
+            retry_limit: retry::MAX_RETRIES,
             error: if installation_rolled_back {
                 "install_rolled_back".to_owned()
             } else {
@@ -183,6 +188,8 @@ impl UpdateManager {
         let mut client_builder = Client::builder()
             .https_only(!endpoints.allow_loopback_http)
             .redirect(reqwest::redirect::Policy::none())
+            // One owner for the visible retry budget, including body failures.
+            .retry(reqwest::retry::never())
             .connect_timeout(Duration::from_secs(20))
             .timeout(Duration::from_secs(600))
             .user_agent(format!("EMP/{version}"));
@@ -222,6 +229,8 @@ impl UpdateManager {
                 current_version: String::new(),
                 latest_version: None,
                 progress: 0,
+                retry_count: 0,
+                retry_limit: retry::MAX_RETRIES,
                 error: "update_failed".to_owned(),
                 supported: false,
                 manual_update: String::new(),

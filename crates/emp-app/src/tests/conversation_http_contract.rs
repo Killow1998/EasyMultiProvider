@@ -41,6 +41,20 @@ fn complete_chat_request_crosses_the_real_server_boundary() {
     assert_eq!(response_body["status"], "completed");
     assert_eq!(response_body["output"][0]["content"][0]["text"], "answer");
 
+    let snapshot = server
+        .state
+        .backend
+        .activity
+        .snapshot(crate::util::system_now() as u64);
+    let receipt = &snapshot["requests"][0];
+    assert_eq!(receipt["model_id"], "demo/model");
+    assert_eq!(receipt["upstream_model"], "upstream-model");
+    assert_eq!(receipt["response_model"], "upstream-model");
+    assert_eq!(receipt["state"], "completed");
+    assert_eq!(receipt["attempts"], 1);
+    assert!(!receipt.to_string().contains("hello"));
+    assert!(!receipt.to_string().contains("upstream-secret"));
+
     let (path, headers, upstream_body) = upstream.observed();
     assert_eq!(path, "/v1/chat/completions");
     assert_eq!(headers["authorization"], "Bearer upstream-secret");

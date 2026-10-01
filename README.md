@@ -200,7 +200,7 @@ control changes catalog labels, not context windows or request limits.
 
 ## Codex compatibility
 
-The current source version is **v0.12.7**.
+The current source version is **v0.12.8**.
 
 EMP supports Codex CLI, desktop App and IDE extension installations without a
 universal minimum engine version. Each operation depends on the interfaces that
@@ -250,10 +250,16 @@ launcher when your active work permits it. There is no background polling.
 
 The local Web UI is organized around four main areas:
 
-- **Accounts** — import subscription credentials, edit display names and prefixes, refresh quota, view quota history, and control model visibility.
+- **Accounts** — use the compact account summary to view model/token usage and API-equivalent cost, save an alias, choose a reset or remove an imported account. Edit, Refresh and Trend stay visible in each row.
 - **Providers** — configure supported services or a custom Provider.
 - **Models** — discover, import, test, edit, hide, or remove Provider models.
 - **Codex integration** — apply the EMP catalog to Codex or restore native Codex routing.
+
+The header **Settings** button groups automatic activation, Codex web search for
+external models, and automatic-review routing to another subscription when
+Native runs out of quota. All three start enabled; saved choices are retained.
+Click an activity dot to view recent request targets, returned models, timings,
+actual dispatch counts and retries.
 
 EMP automatically detects proxy settings from its launch environment or operating system.
 

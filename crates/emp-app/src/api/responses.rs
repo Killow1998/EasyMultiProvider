@@ -501,6 +501,7 @@ pub(crate) fn responses_request(
         };
         usage.candidate(&candidate);
         for attempt in 0..3 {
+            usage.dispatch();
             if activity_guard.is_none() {
                 activity_guard = Some(state.backend.activity.begin(
                     crate::services::activity::ActivityIdentity::from_route(&route),
@@ -516,6 +517,7 @@ pub(crate) fn responses_request(
             {
                 Ok(result) => {
                     usage.http_status(result.status);
+                    usage.reported_model(result.reported_model.as_deref());
                     usage.observe(&result.body);
                     if result.body["status"] == "completed" {
                         crate::services::context::record(state, &candidate, &body, true);

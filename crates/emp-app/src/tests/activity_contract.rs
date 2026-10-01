@@ -291,7 +291,7 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
     assert_eq!(path, "/v1/responses");
 
     let active = next_activity_snapshot(&mut events, |snapshot| {
-        only_route(snapshot)["in_flight"] == 2
+        snapshot["routes"][0]["in_flight"] == 2
     });
     let route = only_route(&active);
     assert_public_route_shape(route);
@@ -323,8 +323,8 @@ fn held_http_requests_report_public_route_and_concurrent_count_then_finish() {
     );
 
     let finished = next_activity_snapshot(&mut events, |snapshot| {
-        only_route(snapshot)["in_flight"] == 0
-            && only_route(snapshot)["last_finished"].as_u64().is_some()
+        snapshot["routes"][0]["in_flight"] == 0
+            && snapshot["routes"][0]["last_finished"].as_u64().is_some()
     });
     assert_eq!(only_route(&finished)["in_flight"], 0);
     assert!(only_route(&finished)["last_finished"].as_u64().is_some());
@@ -348,7 +348,7 @@ fn upstream_error_finishes_the_activity_guard() {
     assert_eq!(path, "/v1/responses");
 
     let active = next_activity_snapshot(&mut events, |snapshot| {
-        only_route(snapshot)["in_flight"] == 1
+        snapshot["routes"][0]["in_flight"] == 1
     });
     assert_eq!(only_route(&active)["model_id"], "demo/model");
     upstream.release(
@@ -360,8 +360,8 @@ fn upstream_error_finishes_the_activity_guard() {
     assert!(!response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
 
     let finished = next_activity_snapshot(&mut events, |snapshot| {
-        only_route(snapshot)["in_flight"] == 0
-            && only_route(snapshot)["last_finished"].as_u64().is_some()
+        snapshot["routes"][0]["in_flight"] == 0
+            && snapshot["routes"][0]["last_finished"].as_u64().is_some()
     });
     assert_eq!(only_route(&finished)["in_flight"], 0);
     server.shutdown().expect("shutdown activity test server");
@@ -387,7 +387,7 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
     assert_eq!(path, "/v1/responses");
 
     let active = next_activity_snapshot(&mut events, |snapshot| {
-        only_route(snapshot)["in_flight"] == 1
+        snapshot["routes"][0]["in_flight"] == 1
     });
     assert_eq!(only_route(&active)["model_id"], "demo/model");
     drop(downstream);
@@ -399,8 +399,8 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
         "downstream cancellation did not close the pending upstream request"
     );
     let finished = next_activity_snapshot(&mut events, |snapshot| {
-        only_route(snapshot)["in_flight"] == 0
-            && only_route(snapshot)["last_finished"].as_u64().is_some()
+        snapshot["routes"][0]["in_flight"] == 0
+            && snapshot["routes"][0]["last_finished"].as_u64().is_some()
     });
     assert_eq!(only_route(&finished)["in_flight"], 0);
     server.shutdown().expect("shutdown activity test server");

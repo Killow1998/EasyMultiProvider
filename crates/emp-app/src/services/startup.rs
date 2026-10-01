@@ -75,5 +75,38 @@ pub(crate) fn reconcile(state: &ServerState) -> Result<(), ()> {
             mark_pending(state, "emp", "EMP configuration applied")?;
         }
     }
+    // Automatic activation may apply only to a clean native configuration. Recovery
+    // conflicts and leases owned by another listener retain the existing guard.
+    let auto_enable = state
+        .backend
+        .configuration
+        .config
+        .lock()
+        .map_err(|_| ())?
+        .get("auto_enable_on_start")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    let current = manager.status().map_err(|_| ())?;
+    if auto_enable
+        && result.ok()
+        && matches!(current.state.as_str(), "native" | "restored")
+        && matches!(current.relation.as_str(), "unleased" | "original")
+    {
+        let enabled = match super::integration::enable::apply(state) {
+            Ok(enabled) => enabled,
+            // A fresh install with no discovered models stays available for setup.
+            Err(super::integration::enable::EnableError::EmptyCatalog) => return Ok(()),
+            Err(super::integration::enable::EnableError::Unavailable(_)) => return Err(()),
+        };
+        if !enabled.ok() {
+            return Err(());
+        }
+        if super::integration::sync_search(state).is_err() {
+            let _ = manager.restore();
+            return Err(());
+        }
+        integration.owned.store(true, Ordering::Release);
+        mark_pending(state, "emp", "EMP configuration applied")?;
+    }
     Ok(())
 }

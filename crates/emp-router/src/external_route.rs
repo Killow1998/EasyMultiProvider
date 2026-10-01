@@ -127,6 +127,7 @@ impl<'a> ExternalRouter<'a> {
         Ok(CompleteResponse {
             status,
             content_type,
+            reported_model: reported_model(&upstream),
             body: tools
                 .restore_response(projected)
                 .map_err(tool_response_error)?,
@@ -382,6 +383,7 @@ impl<'a> ExternalRouter<'a> {
         }
         let mut stream = ExternalStream {
             request_started,
+            reported_model: None,
             response: Some(response),
             parser: Some(SseJsonParser::new()),
             projection,

@@ -140,6 +140,9 @@ impl ExternalStream {
     }
 
     fn consume_json(&mut self, value: Value, frame: ChatFrame) -> Result<(), RouterError> {
+        if let Some(model) = reported_model(&value) {
+            self.reported_model = Some(model);
+        }
         match &mut self.projection {
             StreamProjection::Chat(projector) => {
                 self.pending.extend(

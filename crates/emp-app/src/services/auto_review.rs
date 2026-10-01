@@ -80,7 +80,11 @@ pub(crate) fn automatic_review_candidates(
             cooling: cooling.contains("@native"),
         });
     }
-    if let Some(accounts) = config.get("accounts").and_then(Value::as_array) {
+    if let Some(accounts) = config
+        .get("accounts")
+        .filter(|_| config.get("auto_review_fallback") != Some(&Value::Bool(false)))
+        .and_then(Value::as_array)
+    {
         for (order, account) in accounts.iter().enumerate() {
             let Some(account) = account.as_object() else {
                 continue;

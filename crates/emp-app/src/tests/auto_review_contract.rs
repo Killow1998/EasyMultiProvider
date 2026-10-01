@@ -555,3 +555,69 @@ fn observation_failure_and_success_update_the_next_request_candidates() {
     };
     assert_eq!(after_success.provider_id, "review-account");
 }
+
+#[test]
+fn disabled_auto_review_fallback_keeps_review_on_native() {
+    let mut config = json!({"accounts":[{"id":"backup", "auth_file":"backup.enc",
+        "quota":{"rate_limits":{"primary":{"usedPercent":0}}}}]});
+    let exhausted = json!({"rate_limits":{"primary":{"usedPercent":100}}});
+    let candidates = |config: &Value, native| {
+        automatic_review_candidates(
+            config.as_object().unwrap(),
+            Some(&exhausted),
+            native,
+            &BTreeSet::new(),
+        )
+    };
+    assert_eq!(candidates(&config, true), ["backup"]);
+    config["auto_review_fallback"] = json!(false);
+    assert_eq!(candidates(&config, true), ["@native"]);
+    assert!(candidates(&config, false).is_empty());
+    config["auto_review_fallback"] = json!(true);
+    assert_eq!(candidates(&config, true), ["backup"]);
+}
+
+#[test]
+fn account_detail_usage_and_settings_round_trip_over_http() {
+    let accounts = [json!({"id":"example","name":"Example","prefix":"example","enabled":true})];
+    let (_directory, server, _) = make_review_server("http://127.0.0.1:9/v1", &accounts, None);
+    let session = super::session_header(&server);
+    let config_reply = super::request(&server, "/api/config", &[&session]);
+    let mut config: Value =
+        serde_json::from_str(config_reply.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    config["auto_review_fallback"] = json!(false);
+    config["auto_enable_on_start"] = json!(true);
+    let reply = super::post(
+        &server,
+        "/api/config",
+        &serde_json::to_vec(&config).unwrap(),
+        &[&session],
+    );
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    let saved =
+        emp_state::load_configuration(Some(&server.state.backend.configuration.config_path))
+            .unwrap();
+    assert_eq!(saved["auto_review_fallback"], false);
+    assert_eq!(saved["auto_enable_on_start"], true);
+    let owner = crate::services::accounts::quota_owner_key(&server.state, "example").unwrap();
+    for (identity, tokens) in [(owner.as_str(), 100), ("account:other", 999)] {
+        server.state.backend.usage.ledger.record(&json!({"route":"responses", "usage_category":"subscription",
+            "usage_owner":identity, "upstream_model":"example-model", "input_tokens":tokens, "output_tokens":5}), 120.0);
+    }
+    let reply = super::request(
+        &server,
+        "/api/usage?account_id=example&start=0&end=1000",
+        &[&session],
+    );
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    let usage: Value = serde_json::from_str(reply.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(usage["totals"]["input_tokens"], 100);
+    assert_eq!(usage["totals"]["requests"], 1);
+    let missing = super::request(
+        &server,
+        "/api/usage?account_id=unknown&start=0&end=1000",
+        &[&session],
+    );
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+    server.shutdown().unwrap();
+}
