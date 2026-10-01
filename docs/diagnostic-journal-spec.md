@@ -11,6 +11,9 @@ quota refresh/reset outcomes and catalog refresh outcomes. Catalog outcomes cove
 both manual and background refresh, including cancellation and stale-source
 rejection. Account/source identities in these records are run-local pseudonyms;
 error fields use fixed classes or status codes rather than raw exception text.
+Partial catalog refreshes record the count of known model descriptors retained
+for the same account/backend. Claude CLI failures record their fixed error code,
+HTTP status and duration, including failures before upstream forwarding.
 Update failures also have separate durable phase/error receipts.
 
 Every admitted HTTP handler now has paired start/completion records, including
