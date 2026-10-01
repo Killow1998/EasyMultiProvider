@@ -310,11 +310,25 @@ fn installed_cli_surfaces_cpa_401_and_429_once_with_retry_after() {
     let mut failures = Vec::new();
     for (status, retry_after) in [(401, None), (429, Some(2))] {
         let cpa = RecordingCpa::replying(status, retry_after);
-        let (_directory, server) = claude_server(&cpa.base_url());
+        let (directory, server) = claude_server(&cpa.base_url());
         let request = serde_json::to_vec(&request_body(false)).expect("Responses JSON");
         let reply = bounded_post(&server, &request, CLI_CASE_BUDGET);
         let cpa_requests = cpa.finish();
         server.shutdown().expect("shutdown isolated EMP server");
+        let events = super::internal_events_contract::journal(directory.path());
+        let failures_logged = events
+            .iter()
+            .filter(|event| event["event"] == "claude_cli_request_failed")
+            .collect::<Vec<_>>();
+        assert_eq!(failures_logged.len(), 1);
+        assert_eq!(failures_logged[0]["fields"]["status"], status);
+        assert!(failures_logged[0]["fields"]["error_code"].is_string());
+        assert!(failures_logged[0]["fields"]["duration_ms"].is_u64());
+        assert!(
+            !serde_json::to_string(&events)
+                .unwrap()
+                .contains("private fake CPA detail")
+        );
 
         if reply.status != status {
             failures.push(format!(
