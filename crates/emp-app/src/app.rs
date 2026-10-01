@@ -85,24 +85,8 @@ impl BackendState {
         config_path: &Path,
         codex_binary: &str,
         native_auth_path: PathBuf,
-    ) -> Result<Self, AppError> {
-        Self::new_inner(config_path, codex_binary, native_auth_path, None)
-    }
-
-    pub(crate) fn new_with_http_client(
-        config_path: &Path,
-        codex_binary: &str,
-        native_auth_path: PathBuf,
-        client: HttpClient,
-    ) -> Result<Self, AppError> {
-        Self::new_inner(config_path, codex_binary, native_auth_path, Some(client))
-    }
-
-    fn new_inner(
-        config_path: &Path,
-        codex_binary: &str,
-        native_auth_path: PathBuf,
         http_client_override: Option<HttpClient>,
+        diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
     ) -> Result<Self, AppError> {
         let mut config = load_configuration(Some(config_path))?;
         let state_root = config_path
@@ -168,7 +152,7 @@ impl BackendState {
         .with_lock_path(codex_home.join("easy-multi-provider/integration/lease.lock"));
         Ok(Self {
             usage: crate::services::usage::UsageState::new(&state_root),
-            diagnostics: Arc::new(emp_state::diagnostics::Diagnostics::new(&state_root)),
+            diagnostics,
             configuration: ConfigurationState {
                 config: Mutex::new(config),
                 discovery_lock: Mutex::new(()),

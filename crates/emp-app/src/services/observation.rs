@@ -8,7 +8,28 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
+pub(crate) mod http;
 mod shape;
+
+pub(crate) fn retry_scheduled(
+    diagnostics: &emp_state::diagnostics::Diagnostics,
+    request_id: &Value,
+    attempt: usize,
+    delay: std::time::Duration,
+    error: &emp_router::RouterError,
+    fallback: bool,
+) {
+    diagnostics.journal.event(
+        "info",
+        "model_retry_scheduled",
+        &json!({
+            "request_id":emp_state::diagnostics::schema::id(request_id),
+            "attempt":attempt + 1, "delay_ms":delay.as_millis() as u64,
+            "status":error.status(), "error_class":error.error_class().as_str(),
+            "protocol_fallback":fallback,
+        }),
+    );
+}
 
 pub(crate) fn request_tokens_per_second(output_tokens: &Value, duration_ms: &Value) -> Option<f64> {
     let tokens = output_tokens
@@ -74,6 +95,14 @@ impl Observation {
             .as_object_mut()
             .unwrap()
             .extend(shape::facts(body, incoming).as_object().unwrap().clone());
+        let record = emp_state::diagnostics::schema::route_record(
+            &event,
+            &state.backend.diagnostics.journal,
+        );
+        state.backend.diagnostics.journal.event("info", "model_operation_started", &json!({
+            "request_id":record["request_id"], "protocol":record["protocol"], "transport":record["transport"],
+            "provider_id":record["provider_id"], "model_id":record["model_id"], "route":operation,
+        }));
         Self {
             diagnostics: Arc::clone(&state.backend.diagnostics),
             auto_review_cooldowns: Arc::clone(&state.auto_review_cooldowns),
@@ -155,6 +184,32 @@ impl Observation {
     pub(crate) fn started_at(mut self, started: Instant) -> Self {
         self.started = started;
         self
+    }
+    pub(crate) fn candidate(&mut self, route: &ResolvedRoute) {
+        self.event["resolved_protocol"] = json!(route.protocol);
+        self.event["dialect"] = json!(route.dialect);
+        self.event["endpoint_fingerprint"] = json!(route.endpoint_fingerprint);
+        self.event["deployment_identity"] = json!(route.deployment_identity);
+    }
+    pub(crate) fn retry(
+        &mut self,
+        attempt: usize,
+        delay: std::time::Duration,
+        error: &emp_router::RouterError,
+        fallback: bool,
+    ) {
+        if fallback {
+            self.event["protocol_decision"] = json!("fallback_rejection");
+            self.event["fallback_reason"] = json!("protocol_rejection");
+        }
+        retry_scheduled(
+            &self.diagnostics,
+            &self.event["request_id"],
+            attempt,
+            delay,
+            error,
+            fallback,
+        );
     }
     pub(crate) fn transport(mut self, transport: &str) -> Self {
         self.event["transport"] = json!(transport);

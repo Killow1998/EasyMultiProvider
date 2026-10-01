@@ -41,7 +41,6 @@ use crate::services::quota::QuotaHistoryResponseError;
 use crate::services::quota::quota_history_response;
 use crate::util::system_now;
 use crate::web::ui_response;
-use std::io::Write;
 use std::net::Shutdown;
 use std::net::TcpStream;
 
@@ -50,28 +49,29 @@ pub(crate) fn handle_connection(
     state: &ServerState,
     mut request_permit: Option<ConnectionPermit>,
 ) {
+    let mut observation = crate::services::observation::http::HttpObservation::new(state);
     if stream.set_nonblocking(false).is_err()
         || stream.set_nodelay(true).is_err()
         || stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT)).is_err()
     {
+        observation.failure("socket_setup_failed");
         return;
     }
     let raw = match read_request_head(&mut stream) {
         Some(raw) => raw,
         None => {
-            let _ = stream.write_all(&bad_request_response());
-            let _ = stream.flush();
+            observation.write_response(&mut stream, &bad_request_response());
             let _ = stream.shutdown(Shutdown::Write);
             return;
         }
     };
     let mut stop_after_write = false;
     let Some(request) = parse_request(&raw.head) else {
-        let _ = stream.write_all(&bad_request_response());
-        let _ = stream.flush();
+        observation.write_response(&mut stream, &bad_request_response());
         let _ = stream.shutdown(Shutdown::Write);
         return;
     };
+    observation.received(request);
     let path = request.raw_path();
     if request.method == RequestMethod::Get && path == "/api/accounts/events" {
         // This long-lived management stream carries no Codex traffic. Keeping
@@ -345,8 +345,7 @@ pub(crate) fn handle_connection(
         }
     };
     if let Some(response) = response {
-        let _ = stream.write_all(&response);
-        let _ = stream.flush();
+        observation.write_response(&mut stream, &response);
     }
     let _ = stream.shutdown(Shutdown::Write);
     if stop_after_write {

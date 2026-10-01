@@ -201,6 +201,48 @@ impl ServerHandle {
     }
 
     fn start_with_config_options_inner(context: StartupContext<'_>) -> Result<Self, AppError> {
+        let config_path = emp_state::config::resolve_user_path(context.config_path);
+        let diagnostics = Arc::new(emp_state::diagnostics::Diagnostics::new(
+            &config_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("state"),
+        ));
+        diagnostics.journal.event(
+            "info",
+            "process_start",
+            &serde_json::json!({
+                "version":crate::VERSION, "platform":std::env::consts::OS, "pid":std::process::id(),
+            }),
+        );
+        let result = Self::start_recorded(context, Arc::clone(&diagnostics));
+        if let Err(error) = &result {
+            diagnostics.journal.event(
+                "warning",
+                "startup_failure",
+                &serde_json::json!({
+                    "error_class":match error {
+                        AppError::HostNotLoopback => "host_not_loopback",
+                        AppError::ServiceOwned => "service_owned",
+                        AppError::WebSession(_) => "web_session_error",
+                        AppError::Config(_) => "config_error",
+                        AppError::Filesystem(_) => "filesystem_error",
+                        AppError::Io(_) => "io_error",
+                        AppError::Transport(_) => "transport_error",
+                        AppError::RequestLimits(_) => "request_limits_error",
+                        AppError::RandomUnavailable => "random_unavailable",
+                        _ => "startup_error",
+                    },
+                }),
+            );
+        }
+        result
+    }
+
+    fn start_recorded(
+        context: StartupContext<'_>,
+        diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
+    ) -> Result<Self, AppError> {
         let StartupContext {
             host,
             port,
@@ -231,15 +273,13 @@ impl ServerHandle {
         let session_path = web_session_path(config_path)?;
         let session =
             load_or_create_web_session(&session_path, now).map_err(AppError::WebSession)?;
-        let backend = match http_client_override {
-            Some(client) => BackendState::new_with_http_client(
-                config_path,
-                codex_binary,
-                native_auth_path,
-                client,
-            )?,
-            None => BackendState::new(config_path, codex_binary, native_auth_path)?,
-        };
+        let backend = BackendState::new(
+            config_path,
+            codex_binary,
+            native_auth_path,
+            http_client_override,
+            diagnostics,
+        )?;
         Self::start_with_session(
             host,
             port,
@@ -300,9 +340,6 @@ impl ServerHandle {
             auto_review_cooldowns: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         });
         let journal = &state.backend.diagnostics.journal;
-        journal.event("info", "process_start", &serde_json::json!({
-            "version": crate::VERSION, "platform": std::env::consts::OS, "pid": std::process::id(),
-        }));
         journal.event(
             "info",
             "proxy_selected",
@@ -317,12 +354,19 @@ impl ServerHandle {
             workers,
             _service_owner: service_owner,
         };
-        handle.add_worker(listener)?;
-        if startup_options.enable_catalog_refresh_worker {
-            handle.add_catalog_refresh_worker()?;
+        let started = (|| {
+            handle.add_worker(listener)?;
+            if startup_options.enable_catalog_refresh_worker {
+                handle.add_catalog_refresh_worker()?;
+            }
+            handle.add_quota_sampler()?;
+            handle.add_runtime_watch()?;
+            Ok::<(), AppError>(())
+        })();
+        if let Err(error) = started {
+            let _ = handle.shutdown();
+            return Err(error);
         }
-        handle.add_quota_sampler()?;
-        handle.add_runtime_watch()?;
         handle.state.backend.diagnostics.journal.event(
             "info",
             "service_listening",
@@ -350,14 +394,18 @@ impl ServerHandle {
                             let Some(request_permit) =
                                 request_state.connection_admission.acquire_request()
                             else {
+                                request_state.backend.diagnostics.journal.event("warning", "request_rejected", &serde_json::json!({"transport":"http", "reason":"connection_capacity"}));
                                 drop(stream);
                                 continue;
                             };
-                            let _ = thread::Builder::new()
+                            let diagnostics = Arc::clone(&state.backend.diagnostics);
+                            if thread::Builder::new()
                                 .name("emp-request".to_string())
                                 .spawn(move || {
                                     handle_connection(stream, &request_state, Some(request_permit));
-                                });
+                                }).is_err() {
+                                diagnostics.journal.event("warning", "request_rejected", &serde_json::json!({"transport":"http", "reason":"worker_spawn_failed"}));
+                            }
                         }
                         Err(_) => break,
                     }
@@ -592,7 +640,7 @@ pub(crate) fn run_server(
         open_browser,
         markers.clone(),
     )?;
-    {
+    let prepared = (|| {
         let mut config = server
             .state
             .backend
@@ -602,14 +650,25 @@ pub(crate) fn run_server(
             .map_err(|_| AppError::ServerStopped)?;
         config["host"] = serde_json::json!(host.to_string());
         config["port"] = serde_json::json!(port);
+        drop(config);
+        server.reconcile_startup();
+        let usage_workers = crate::services::usage::workers(&server.state)?;
+        server
+            .workers
+            .lock()
+            .map_err(|_| AppError::ServerStopped)?
+            .extend(usage_workers);
+        Ok::<(), AppError>(())
+    })();
+    if let Err(error) = prepared {
+        server.state.backend.diagnostics.journal.event(
+            "warning",
+            "startup_failure",
+            &serde_json::json!({"stage":"background_workers", "error_class":"startup_error"}),
+        );
+        let _ = server.shutdown();
+        return Err(error);
     }
-    server.reconcile_startup();
-    let usage_workers = crate::services::usage::workers(&server.state)?;
-    server
-        .workers
-        .lock()
-        .map_err(|_| AppError::ServerStopped)?
-        .extend(usage_workers);
     let result = server.state.backend.transport.runtime.block_on(async {
         // Register before announcing readiness, so immediate termination is safe.
         #[cfg(unix)]

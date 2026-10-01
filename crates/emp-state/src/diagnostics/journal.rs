@@ -267,7 +267,9 @@ impl Journal {
         }
     }
     pub fn event(&self, level: &str, name: &str, fields: &Value) {
-        let mut writer = self.writer.lock().expect("diagnostic journal");
+        let Ok(mut writer) = self.writer.lock() else {
+            return;
+        };
         if writer.file.is_none() {
             return;
         }

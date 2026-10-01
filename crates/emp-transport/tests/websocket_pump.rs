@@ -1,6 +1,5 @@
 use emp_transport::{
-    ClientWebSocket, ClientWebSocketPump, PumpCommand, PumpEvent, WebSocketPumpConfig,
-    websocket_accept,
+    ClientWebSocket, ClientWebSocketPump, PumpEvent, WebSocketPumpConfig, websocket_accept,
 };
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -107,11 +106,17 @@ fn pump_preserves_raw_text_pongs_and_propagates_close_once() {
         PumpEvent::Text(text) => assert_eq!(text, raw_upstream),
         event => panic!("unexpected pump event: {event:?}"),
     }
-    pump.try_send(PumpCommand::Text(raw_downstream.to_owned()))
+    let receipt = pump
+        .try_send_confirmed_text(raw_downstream.to_owned())
         .unwrap();
     assert_eq!(
         pump.recv_timeout(Duration::from_secs(2)).unwrap(),
         PumpEvent::Closed { code: Some(1000) }
+    );
+    assert!(
+        receipt
+            .try_result()
+            .expect("write receipt matches this command")
     );
     let start = Instant::now();
     pump.join();

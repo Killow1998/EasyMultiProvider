@@ -206,13 +206,33 @@ quota SSE shutdown notifications also take the mutex used by their waiters.
 Focused checks are the app's `shutdown_` and quota-event contracts, catalog
 refresh contracts, and executable quit/update journeys.
 
-The current flow remains hybrid. Quota, integration and activity changes push
-revision notifications through the management SSE connection. External quota
-sampling, catalog reconciliation/expiry, filesystem history scans and price
-refresh still use timers; CLI child/disconnect and realtime socket handling
-also retain bounded polling. A reconciliation timeout or SSE heartbeat is not
-itself a fresh upstream request. Journal coverage and remaining instrumentation
-gaps are recorded in `docs/diagnostic-journal-spec.md`.
+The current flow remains hybrid, with scheduling separate from delivery:
+
+- State-change notifications use revisions and `Condvar` / `Notify`; producers
+  publish the new state before waking registered consumers. Quota, integration,
+  activity and usage updates share the management SSE connection.
+- Direct commands keep their typed `Result` return. Queued commands needing a
+  reply have an admission result followed by worker feedback. A sideband write
+  has its own reply channel and validates the command ID, UTF-8 byte length and
+  socket-write result. Payload ownership and existing protocol validation
+  preserve the message; no content hash verifies communication. This receipt
+  confirms a local write, not a remote model's acceptance.
+- History scans expose requested, worker-acknowledged and completed generations.
+  Requests queued before a scan starts may coalesce; requests arriving during
+  it remain pending for the next scan. Completion means the scan returned;
+  numeric read errors and cancellation remain distinct from success. Shutdown
+  rejects new scan commands. The UI receives scan progress through SSE and
+  retains timer-based fallback when its event connection is unavailable.
+- External quota sampling, catalog reconciliation/expiry, filesystem history
+  discovery and price refresh retain their schedules. Manual history-scan
+  events wake only the scan worker; they do not interrupt price-refresh backoff.
+  Shutdown wakes both workers. CLI child/disconnect and realtime socket handling
+  still use bounded polling. A reconciliation timeout or SSE heartbeat is not
+  itself a fresh upstream request.
+
+There is no general message bus or new dependency framework. Event delivery
+uses the existing ownership boundaries and standard channels. Journal coverage
+and explicit instrumentation limits are in `docs/diagnostic-journal-spec.md`.
 
 ## Compatibility oracle
 

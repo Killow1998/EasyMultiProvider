@@ -13,10 +13,34 @@ rejection. Account/source identities in these records are run-local pseudonyms;
 error fields use fixed classes or status codes rather than raw exception text.
 Update failures also have separate durable phase/error receipts.
 
-General management-request start/end records, detailed retry/admission events
-and failures before journal construction remain instrumentation gaps. Listener
-readiness is recorded when the listener workers start; startup reconciliation
-follows in the executable's startup path, so it can appear after readiness.
+Every admitted HTTP handler now has paired start/completion records, including
+malformed requests, authentication rejection, socket setup/write failures and
+panic unwinding. Static route names are retained; query strings, arbitrary
+paths and account/model/call identifiers in paths are omitted or masked.
+Buffered responses record their actual status. Stream handlers that write
+directly to the socket leave the outer HTTP status unknown; model observations
+retain their own terminal outcome. A handler returning is not proof of a
+completed model response, and a socket write is not proof of remote execution.
+
+External HTTP/SSE/WebSocket-open retries and protocol fallback record the
+request ID, attempt, delay and fixed failure class. Native reconnect,
+account-refresh and reasoning fallback record the decision, including a failed
+refresh that does not retry. Retries do not add extra usage-ledger entries.
+Connection admission and worker-spawn rejection, sideband command admission /
+write confirmation / failure, history scan queue / start / completion, and
+price-refresh start / result are also recorded. Scan records use a local command
+generation and numeric counts; they omit rollout paths and conversation data.
+Sideband receipts pair an opaque connection ID with the local command ID;
+the final outstanding receipt is checked after the socket worker exits.
+
+The journal is created before session/backend construction, so configuration,
+service ownership, vault, transport and listener startup failures have fixed
+classes. Worker startup failure attempts cleanup of workers already created.
+Failures before configuration-path resolution and unrecoverable process
+termination cannot be covered by an initialized journal. Individual low-level
+framing steps are not journal events. Listener readiness is recorded when the
+listener workers start; startup reconciliation follows in the executable's
+startup path, so it can appear after readiness.
 Journal setup/write failure reports its I/O kind once on stderr, without a path
 or arbitrary exception message. Logging failure never stops forwarding; journal
 writes remain disabled for that run after failure, rather than silently claiming

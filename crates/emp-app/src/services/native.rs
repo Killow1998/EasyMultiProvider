@@ -107,6 +107,30 @@ fn plaintext_collaboration(config: &Value) -> bool {
         })
 }
 
+fn observe_retry(
+    state: &ServerState,
+    incoming: &BTreeMap<String, String>,
+    decision: emp_router::native_http::NativeRetryDecision,
+) {
+    use emp_router::native_http::NativeRetryReason;
+    let request_id = incoming
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-emp-request-id"))
+        .map(|(_, value)| value);
+    state.backend.diagnostics.journal.event(
+        "info",
+        "native_retry_decision",
+        &serde_json::json!({
+            "request_id":emp_state::diagnostics::schema::id(&serde_json::json!(request_id)),
+            "status":decision.status, "retry":decision.retry, "reason":match decision.reason {
+                NativeRetryReason::Network => "network",
+                NativeRetryReason::AccountRefresh => "account_refresh",
+                NativeRetryReason::ReasoningFallback => "reasoning_fallback",
+            },
+        }),
+    );
+}
+
 fn error_response(mut error: NativeHttpError) -> Vec<u8> {
     error.headers.remove("x-models-etag");
     let headers = error
@@ -233,7 +257,8 @@ pub(crate) fn complete(
     incoming: &BTreeMap<String, String>,
 ) -> Vec<u8> {
     let started = std::time::Instant::now();
-    let router = NativeRouter::new(&state.backend.transport.client);
+    let on_retry = |decision| observe_retry(state, incoming, decision);
+    let router = NativeRouter::new(&state.backend.transport.client).with_retry_observer(&on_retry);
     let mut usage_owner = String::new();
     let result = state
         .backend
@@ -306,7 +331,8 @@ pub(crate) fn compact(
     incoming: &BTreeMap<String, String>,
 ) -> Vec<u8> {
     let started = std::time::Instant::now();
-    let router = NativeRouter::new(&state.backend.transport.client);
+    let on_retry = |decision| observe_retry(state, incoming, decision);
+    let router = NativeRouter::new(&state.backend.transport.client).with_retry_observer(&on_retry);
     let mut usage_owner = String::new();
     let result = state
         .backend

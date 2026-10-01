@@ -647,7 +647,7 @@ async function loadUsage(background = false) {
       result.start = Math.max(0, first.getTime()/1000); $('usage_start').value = usageLocalInput(first);
     }
     usagePayload = result; status.textContent = ''; renderUsage();
-    if (result.history?.running || result.history?.queued) usagePoll = setTimeout(() => { if ($('usage_status') === status) loadUsage(true); }, 1500);
+    if (!quotaEventsConnected && (result.history?.running || result.history?.queued)) usagePoll = setTimeout(() => { if ($('usage_status') === status) loadUsage(true); }, 1500);
   } catch (error) { if (id === usageRequest && $('usage_status') === status) status.textContent = error.message; }
 }
 function usagePeriods() {
@@ -1697,6 +1697,7 @@ function processManagementEventFrame(frame) {
     else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
   }
   if (eventType === 'quota-updated') requestQuotaSync();
+  else if (eventType === 'usage-updated') void loadUsage(true);
   else if (eventType === 'integration-updated') void integrationUpdated();
   else if (eventType === 'activity-updated' && data.length) {
     try { applyActivitySnapshot(JSON.parse(data.join('\n'))); } catch (_) {}

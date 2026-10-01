@@ -242,9 +242,6 @@ impl UsageHistoryScanner {
     pub fn status(&self) -> Value {
         self.status.lock().expect("usage history status").clone()
     }
-    pub fn queued(&self) {
-        self.status.lock().expect("usage history status")["queued"] = json!(true);
-    }
     fn increment(&self, key: &str) {
         let mut state = self.status.lock().expect("usage history status");
         state[key] = json!(state[key].as_u64().unwrap_or(0) + 1);

@@ -75,6 +75,7 @@ pub(crate) fn prepare_sideband(
         None => return Err(plain_error(400, "invalid Sec-WebSocket-Key")),
     };
     let Some(permit) = state.connection_admission.acquire_websocket() else {
+        state.backend.diagnostics.journal.event("warning", "request_rejected", &serde_json::json!({"transport":"websocket", "reason":"connection_capacity", "route":"realtime_sideband"}));
         return Err(json_error_response(
             503,
             status_text(503),
@@ -283,13 +284,33 @@ fn serve_realtime_sideband_with_connector(
     }
 
     let mut pending_command = None;
+    let mut pending_confirmation: Option<emp_transport::WriteReceipt> = None;
+    let connection_id = crate::util::random_hex(8).ok();
     let mut relay_finished = false;
     while !relay_finished {
-        if let Some(command) = pending_command.take() {
-            match pump.try_send(command) {
-                Ok(()) => {}
-                Err(TrySendError::Full(command)) => pending_command = Some(command),
-                Err(TrySendError::Disconnected(_)) => {
+        if let Some(receipt) = &pending_confirmation {
+            match observe_confirmation(state, &connection_id, receipt) {
+                Ok(true) => {
+                    pending_confirmation = None;
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    pending_confirmation = None;
+                    downstream.close(1011, "native sideband write was not confirmed");
+                    break;
+                }
+            }
+        }
+        if pending_confirmation.is_none()
+            && let Some(text) = pending_command.take()
+        {
+            match pump.try_send_confirmed_text(text) {
+                Ok(receipt) => {
+                    state.backend.diagnostics.journal.event("info", "command_admitted", &serde_json::json!({"connection_id":connection_id, "command_id":receipt.id(), "operation":"sideband_write"}));
+                    pending_confirmation = Some(receipt);
+                }
+                Err(TrySendError::Full(PumpCommand::Text(text))) => pending_command = Some(text),
+                Err(_) => {
                     downstream.close(1011, "native sideband disconnected");
                     break;
                 }
@@ -349,7 +370,7 @@ fn serve_realtime_sideband_with_connector(
                 }
             },
             Ok(WebSocketPoll::Text(text)) => {
-                pending_command = Some(PumpCommand::Text(text));
+                pending_command = Some(text);
             }
             Ok(WebSocketPoll::Ping(payload)) => {
                 if downstream.send_pong(&payload).is_err() {
@@ -371,6 +392,35 @@ fn serve_realtime_sideband_with_connector(
         }
     }
     shutdown_pump(&mut pump, 1000, "");
+    if let Some(receipt) = pending_confirmation {
+        // A close can arrive before the relay next polls the reply. Joining
+        // the socket owner above makes this a final result, not queue admission.
+        let _ = observe_confirmation(state, &connection_id, &receipt);
+    }
+}
+
+fn observe_confirmation(
+    state: &ServerState,
+    connection_id: &Option<String>,
+    receipt: &emp_transport::WriteReceipt,
+) -> Result<bool, emp_transport::ConfirmationError> {
+    use emp_transport::ConfirmationError;
+    let result = receipt.try_result();
+    let (level, event, class) = match result {
+        Ok(false) => return result,
+        Ok(true) => ("info", "command_confirmed", "none"),
+        Err(error) => (
+            "warning",
+            "command_failed",
+            match error {
+                ConfirmationError::WorkerStopped => "worker_stopped",
+                ConfirmationError::InvalidReceipt => "invalid_receipt",
+                ConfirmationError::WriteFailed(_) => "write_failed",
+            },
+        ),
+    };
+    state.backend.diagnostics.journal.event(level, event, &serde_json::json!({"connection_id":connection_id, "command_id":receipt.id(), "operation":"sideband_write", "error_class":class}));
+    result
 }
 
 fn relay_event(

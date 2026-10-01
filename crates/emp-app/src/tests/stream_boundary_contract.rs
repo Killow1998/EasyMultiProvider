@@ -366,7 +366,7 @@ fn external_pre_output_retry_is_single_and_route_local() {
         .expect("complete Chat body");
     let (base_url, paths, worker) =
         two_attempt_upstream(429, Some(0), "application/json", complete_body);
-    let (_directory, server) = configured_server(&base_url);
+    let (directory, server) = configured_server(&base_url);
     let complete_request = serde_json::to_vec(&json!({
         "model":"demo/model", "stream":false,
         "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
@@ -389,6 +389,7 @@ fn external_pre_output_retry_is_single_and_route_local() {
     );
     server.shutdown().expect("shutdown");
     worker.join().expect("join complete retry upstream");
+    assert_retry_journal(&directory);
 
     let stream_body = upstream_sse(&[
         json!({"id":"chat_upstream","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":null}]}),
@@ -396,7 +397,7 @@ fn external_pre_output_retry_is_single_and_route_local() {
     ]);
     let (base_url, paths, worker) =
         two_attempt_upstream(429, Some(0), "text/event-stream", stream_body);
-    let (_directory, server) = configured_server(&base_url);
+    let (directory, server) = configured_server(&base_url);
     let stream_request = serde_json::to_vec(&json!({
         "model":"demo/model", "stream":true,
         "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
@@ -419,6 +420,31 @@ fn external_pre_output_retry_is_single_and_route_local() {
     );
     server.shutdown().expect("shutdown");
     worker.join().expect("join stream retry upstream");
+    assert_retry_journal(&directory);
+}
+
+fn assert_retry_journal(directory: &TempDir) {
+    let records = super::internal_events_contract::journal(directory.path());
+    let retries: Vec<_> = records
+        .iter()
+        .filter(|record| record["event"] == "model_retry_scheduled")
+        .collect();
+    assert_eq!(retries.len(), 1);
+    assert_eq!(retries[0]["fields"]["status"], 429);
+    assert_eq!(retries[0]["fields"]["protocol_fallback"], false);
+    let observations: Vec<_> = records
+        .iter()
+        .filter(|record| record["event"] == "route_observation")
+        .collect();
+    assert_eq!(
+        observations.len(),
+        1,
+        "retry must not double-count the completed turn"
+    );
+    assert_eq!(
+        retries[0]["fields"]["request_id"],
+        observations[0]["fields"]["request_id"]
+    );
 }
 
 #[test]

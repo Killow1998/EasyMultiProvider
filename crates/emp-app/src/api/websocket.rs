@@ -125,6 +125,11 @@ pub(crate) fn serve_responses_websocket(
         Err(_) => return,
     };
     let Some(_websocket_permit) = state.connection_admission.acquire_websocket() else {
+        state.backend.diagnostics.journal.event(
+            "warning",
+            "request_rejected",
+            &serde_json::json!({"transport":"websocket", "reason":"connection_capacity"}),
+        );
         websocket.close(1013, "too many websocket connections");
         return;
     };

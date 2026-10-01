@@ -482,6 +482,15 @@ pub(crate) fn responses_request(
     let started = std::time::Instant::now();
     let router = ExternalRouter::new(&state.backend.transport.client);
     let candidates = protocol_candidates(&route);
+    let mut usage = crate::services::observation::Observation::new(
+        state,
+        &route,
+        &body,
+        &incoming,
+        None,
+        "responses",
+    )
+    .started_at(started);
     let mut activity_guard = None;
     'candidate: for (index, protocol) in candidates.iter().copied().enumerate() {
         let candidate = match route.with_protocol(protocol) {
@@ -490,6 +499,7 @@ pub(crate) fn responses_request(
                 return ResponsesRequestResult::Buffered(route_resolution_response(error));
             }
         };
+        usage.candidate(&candidate);
         for attempt in 0..3 {
             if activity_guard.is_none() {
                 activity_guard = Some(state.backend.activity.begin(
@@ -505,15 +515,6 @@ pub(crate) fn responses_request(
                 .block_on(router.execute_complete(&candidate, &body, &incoming, &ids))
             {
                 Ok(result) => {
-                    let mut usage = crate::services::observation::Observation::new(
-                        state,
-                        &candidate,
-                        &body,
-                        &incoming,
-                        None,
-                        "responses",
-                    )
-                    .started_at(started);
                     usage.http_status(result.status);
                     usage.observe(&result.body);
                     if result.body["status"] == "completed" {
@@ -544,29 +545,23 @@ pub(crate) fn responses_request(
                         crate::services::context::record(state, &candidate, &body, false);
                     }
                     if let Some(delay) = external_retry_delay(&error, attempt, &candidate) {
+                        usage.retry(attempt, delay, &error, false);
                         thread::sleep(delay);
                         continue;
                     }
                     if index + 1 < candidates.len()
                         && protocol_fallback_allowed(error.status(), false, false)
                     {
+                        usage.retry(attempt, std::time::Duration::ZERO, &error, true);
                         continue 'candidate;
                     }
-                    let mut usage = crate::services::observation::Observation::new(
-                        state,
-                        &candidate,
-                        &body,
-                        &incoming,
-                        None,
-                        "responses",
-                    )
-                    .started_at(started);
                     usage.router_error(&error);
                     return ResponsesRequestResult::Buffered(router_error_response(error));
                 }
             }
         }
     }
+    usage.status(503, "router_error");
     ResponsesRequestResult::Buffered(json_error_response(
         503,
         status_text(503),

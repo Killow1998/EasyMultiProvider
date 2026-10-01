@@ -106,6 +106,12 @@ fn open_external_stream_with_monitor(
 ) -> Result<CancellableExternalStreamOpen, ExternalStreamOpenError> {
     let router = emp_router::ExternalRouter::new(&state.backend.transport.client);
     let candidates = emp_router::protocol_candidates(route);
+    let request_id = serde_json::json!(
+        incoming
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("x-emp-request-id"))
+            .map(|(_, value)| value)
+    );
     'candidate: for (index, protocol) in candidates.iter().copied().enumerate() {
         let candidate = route
             .with_protocol(protocol)
@@ -136,6 +142,14 @@ fn open_external_stream_with_monitor(
                     if let Some(delay) =
                         crate::services::failures::external_retry_delay(&error, attempt, &candidate)
                     {
+                        crate::services::observation::retry_scheduled(
+                            &state.backend.diagnostics,
+                            &request_id,
+                            attempt,
+                            delay,
+                            &error,
+                            false,
+                        );
                         let delay_elapsed = match crate::services::disconnect::raced(
                             &state.backend.transport.runtime,
                             monitor.as_deref_mut(),
@@ -152,6 +166,14 @@ fn open_external_stream_with_monitor(
                     if index + 1 < candidates.len()
                         && emp_transport::protocol_fallback_allowed(error.status(), false, false)
                     {
+                        crate::services::observation::retry_scheduled(
+                            &state.backend.diagnostics,
+                            &request_id,
+                            attempt,
+                            std::time::Duration::ZERO,
+                            &error,
+                            true,
+                        );
                         continue 'candidate;
                     }
                     let mut usage = crate::services::observation::Observation::new(

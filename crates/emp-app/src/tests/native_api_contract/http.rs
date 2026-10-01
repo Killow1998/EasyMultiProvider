@@ -338,7 +338,7 @@ for line in sys.stdin:
         print(json.dumps({'id':request['id'],'result':{'rateLimits':{'limitId':'codex','primary':{'usedPercent':7}}}}),flush=True)
 "#).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let (_directory, server, auth_path) = account_server(&successful, script.to_str().unwrap());
+    let (directory, server, auth_path) = account_server(&successful, script.to_str().unwrap());
     let cookie = session_header(&server);
     let body = serde_json::to_vec(&json!({"model":"demo/upstream","input":"hello","stream":false}))
         .unwrap();
@@ -370,7 +370,14 @@ for line in sys.stdin:
     server.shutdown().unwrap();
 
     let failed = RefreshUpstream::start(1);
-    let (_directory, server, _) = account_server(&failed, "missing-test-codex");
+    let decisions: Vec<_> = crate::tests::internal_events_contract::journal(directory.path())
+        .into_iter()
+        .filter(|record| record["event"] == "native_retry_decision")
+        .collect();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0]["fields"]["reason"], "account_refresh");
+    assert_eq!(decisions[0]["fields"]["retry"], true);
+    let (directory, server, _) = account_server(&failed, "missing-test-codex");
     let cookie = session_header(&server);
     let response = post(
         &server,
@@ -387,6 +394,12 @@ for line in sys.stdin:
         "Bearer original-secret"
     );
     server.shutdown().unwrap();
+    let decisions: Vec<_> = crate::tests::internal_events_contract::journal(directory.path())
+        .into_iter()
+        .filter(|record| record["event"] == "native_retry_decision")
+        .collect();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0]["fields"]["retry"], false);
 }
 
 #[test]
@@ -400,7 +413,7 @@ fn native_endpoint_matches_retry_and_terminal_error_decisions() {
         ("network", 200, 2),
     ] {
         let upstream = ScenarioUpstream::start(case, attempts);
-        let (_directory, server) = forward_server(&upstream.base_url());
+        let (directory, server) = forward_server(&upstream.base_url());
         let cookie = session_header(&server);
         let mut body = json!({"model":"upstream","input":"hello","stream":false});
         if case == "reasoning" {
@@ -414,6 +427,22 @@ fn native_endpoint_matches_retry_and_terminal_error_decisions() {
         );
         let status: u16 = wire.split_whitespace().nth(1).unwrap().parse().unwrap();
         assert_eq!(status, expected_status, "scenario {case}: {wire}");
+        let decisions: Vec<_> = crate::tests::internal_events_contract::journal(directory.path())
+            .into_iter()
+            .filter(|record| record["event"] == "native_retry_decision")
+            .collect();
+        assert_eq!(decisions.len(), attempts - 1, "scenario {case}");
+        if let Some(decision) = decisions.first() {
+            assert_eq!(decision["fields"]["retry"], true);
+            assert_eq!(
+                decision["fields"]["reason"],
+                if case == "reasoning" {
+                    "reasoning_fallback"
+                } else {
+                    "network"
+                }
+            );
+        }
         if case == "rate" {
             assert!(response_parts(&wire).0.contains("Retry-After: 2\r\n"));
         }
