@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.9 (2026-10-02)
+
+- Match account Credit and reset-count numbers to the 12px quota percentages,
+  preventing account-title styles from enlarging them.
+
 ## 0.12.8 (2026-10-01)
 
 - Combine account identity, subscription plan, Credit and reset count into one
