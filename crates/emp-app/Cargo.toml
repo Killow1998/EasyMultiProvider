@@ -11,6 +11,7 @@ name = "EMP"
 path = "src/main.rs"
 
 [dependencies]
+hotpath = { version = "=0.28.3", optional = true, default-features = false }
 base64 = "0.22"
 emp-codex = { path = "../emp-codex" }
 emp-core = { path = "../emp-core" }
@@ -22,6 +23,8 @@ emp-state = { path = "../emp-state" }
 emp-transport = { path = "../emp-transport" }
 getrandom = "0.2.17"
 libc = "0.2.189"
+polling = { version = "=3.11.0", default-features = false }
+serde.workspace = true
 serde_json = { workspace = true }
 sha2 = "0.10.9"
 shlex = "2.0.1"
@@ -29,6 +32,10 @@ tempfile = "3.27"
 time = { version = "0.3.55", features = ["formatting"] }
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 url = "2.5.7"
+
+[features]
+hotpath = ["dep:hotpath", "hotpath/hotpath", "emp-transport/hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
 
 [lib]
 path = "src/lib.rs"

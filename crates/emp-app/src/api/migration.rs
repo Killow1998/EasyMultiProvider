@@ -15,7 +15,6 @@ use crate::http::response::unauthorized_response;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use emp_state::ExportGroups;
-use emp_state::apply_migration_import;
 use emp_state::decrypt_migration_bundle;
 use emp_state::export_migration_bundle_with_summary;
 use serde_json::Value;
@@ -118,7 +117,7 @@ pub(crate) fn management_migration_request(
             }
             None => None,
         };
-        let config = match state.backend.configuration.config.lock() {
+        let config = match state.backend.configuration.read() {
             Ok(config) => config.clone(),
             Err(_) => {
                 return json_error_response(
@@ -197,20 +196,9 @@ pub(crate) fn management_migration_request(
     // Same-identity accounts in the bundle replace stored credentials; keep
     // quota refreshes, rotated-credential flushes and other configuration
     // writers out while that happens.
-    let imported = crate::services::accounts::replacing_account_credentials(state, |config| {
-        let imported = apply_migration_import(
-            config,
-            decrypted,
-            &state.backend.configuration.config_path,
-            &state.backend.configuration.vault,
-        );
-        if let Ok((updated, _)) = &imported {
-            *config = updated.clone();
-        }
-        imported
-    });
+    let imported = crate::services::accounts::import_account_bundle(state, decrypted);
     let summary = match imported {
-        Some(Ok((_, summary))) => summary,
+        Some(Ok(summary)) => summary,
         Some(Err(error)) => {
             return json_error_response(400, status_text(400), &error.to_string(), None, &[]);
         }

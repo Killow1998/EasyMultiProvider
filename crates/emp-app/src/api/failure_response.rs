@@ -1,20 +1,59 @@
-//! Services failures.
+//! Preserve the distinct HTTP, SSE and WebSocket error contracts.
 
 use crate::http::response::response;
 use crate::http::response::status_text;
-use emp_core::ResolvedRoute;
+use crate::services::external::ExternalRequestError;
 use emp_core::RouteResolutionError;
 use emp_router::RouterError;
 use emp_router::RouterErrorKind;
 use emp_transport::FailureClass;
-use emp_transport::FailurePhase;
-use emp_transport::UpstreamFailure;
-use emp_transport::external_backoff_delay;
-use emp_transport::external_http_retry_allowed;
 use emp_transport::normalize_error_class;
 use emp_transport::public_failure_message;
 use serde_json::Value;
-use std::time::Duration;
+
+pub(crate) fn external_complete_error(error: ExternalRequestError) -> Vec<u8> {
+    external_http_error(error, router_error_response)
+}
+
+pub(crate) fn external_open_error(error: ExternalRequestError) -> Vec<u8> {
+    external_http_error(error, |error| pre_output_router_error_response(&error))
+}
+
+fn external_http_error(
+    error: ExternalRequestError,
+    router_response: impl FnOnce(RouterError) -> Vec<u8>,
+) -> Vec<u8> {
+    match error {
+        ExternalRequestError::Router(error) => router_response(error),
+        ExternalRequestError::Route(error) => route_resolution_response(error),
+        ExternalRequestError::Disconnected => Vec::new(),
+        ExternalRequestError::Unsupported => crate::http::response::json_error_response(
+            503,
+            status_text(503),
+            "provider protocol is unsupported",
+            Some("router_error"),
+            &[],
+        ),
+    }
+}
+
+pub(crate) fn external_websocket_error(error: ExternalRequestError) -> Value {
+    match error {
+        ExternalRequestError::Router(error) => websocket_router_error(&error),
+        ExternalRequestError::Route(error) => serde_json::json!({
+            "type":"error", "status":error.status(),
+            "error":{"code":"router_error","message":error.to_string()}
+        }),
+        ExternalRequestError::Unsupported => serde_json::json!({
+            "type":"error", "status":503,
+            "error":{"code":"router_error","message":"provider protocol is unsupported"}
+        }),
+        ExternalRequestError::Disconnected => serde_json::json!({
+            "type":"error", "status":499,
+            "error":{"code":"client_disconnected","message":"client disconnected"}
+        }),
+    }
+}
 
 pub(crate) fn route_resolution_response(error: RouteResolutionError) -> Vec<u8> {
     let error_class = if error.status() >= 500 {
@@ -259,30 +298,4 @@ pub(crate) fn pre_output_router_error_response(error: &RouterError) -> Vec<u8> {
         &body,
         &headers,
     )
-}
-
-pub(crate) fn external_retry_delay(
-    error: &RouterError,
-    attempt: usize,
-    route: &ResolvedRoute,
-) -> Option<Duration> {
-    let failure = UpstreamFailure {
-        error_class: error.error_class(),
-        status: error.status(),
-        phase: FailurePhase::TerminalValidation,
-        terminal_event: false,
-        failure_reason: error.failure_reason().map(str::to_owned),
-        retry_after_seconds: error.retry_after_seconds(),
-    };
-    let free_route = route
-        .upstream_model
-        .trim()
-        .to_ascii_lowercase()
-        .ends_with(":free");
-    external_http_retry_allowed(&failure, attempt, false, false, free_route).then(|| {
-        failure
-            .retry_after_seconds
-            .map(Duration::from_secs)
-            .unwrap_or_else(|| external_backoff_delay(attempt))
-    })
 }

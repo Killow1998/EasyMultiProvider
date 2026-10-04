@@ -337,7 +337,6 @@ impl ServerHandle {
             port: local_addr.port(),
             base_url: format!("http://{local_addr}/v1"),
             updates,
-            auto_review_cooldowns: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         });
         let journal = &state.backend.diagnostics.journal;
         journal.event(
@@ -584,9 +583,7 @@ impl ServerHandle {
         let accounts = &self.state.backend.accounts;
         // The same mutex must cover the condition check and notification,
         // otherwise shutdown can arrive just before a worker starts waiting.
-        if let Ok(_revision) = accounts.quota_revision.lock() {
-            accounts.quota_condition.notify_all();
-        }
+        self.state.backend.management_events.close();
         if let Ok(_wait) = accounts.quota_sampler_wait.lock() {
             accounts.quota_sampler_condition.notify_all();
         }
@@ -641,16 +638,12 @@ pub(crate) fn run_server(
         markers.clone(),
     )?;
     let prepared = (|| {
-        let mut config = server
+        server
             .state
             .backend
             .configuration
-            .config
-            .lock()
+            .set_listener(host, port)
             .map_err(|_| AppError::ServerStopped)?;
-        config["host"] = serde_json::json!(host.to_string());
-        config["port"] = serde_json::json!(port);
-        drop(config);
         server.reconcile_startup();
         let usage_workers = crate::services::usage::workers(&server.state)?;
         server

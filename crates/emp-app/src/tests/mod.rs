@@ -1,4 +1,6 @@
 //! Tests.
+#[cfg(feature = "hotpath")]
+mod hotpath_profile;
 use crate::api::quota::QUOTA_EVENT_SLOT_LIMIT;
 use base64::engine::general_purpose::STANDARD;
 
@@ -565,7 +567,7 @@ fn assert_saved_protocol_observation(directory: &TempDir, server: &ServerHandle,
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .expect("config lock");
     assert_eq!(config["providers"][0]["resolved_protocol"], expected);

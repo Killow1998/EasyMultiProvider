@@ -62,8 +62,7 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
     let config = state
         .backend
         .configuration
-        .config
-        .lock()
+        .read()
         .ok()
         .map(|config| config.clone())
         .unwrap_or(json!({}));

@@ -7,6 +7,7 @@ license.workspace = true
 description = "Bounded transport primitives for EMP."
 
 [dependencies]
+hotpath = { version = "=0.28.3", optional = true, default-features = false }
 base64 = "0.22"
 flate2 = { version = "1.1", features = ["zlib-rs"] }
 getrandom = "0.2.17"
@@ -21,6 +22,9 @@ sha2 = "0.10.9"
 tokio = { version = "1.53.1", features = ["time"] }
 url = "2.5.7"
 zstd = "0.13"
+
+[features]
+hotpath = ["dep:hotpath", "hotpath/hotpath"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

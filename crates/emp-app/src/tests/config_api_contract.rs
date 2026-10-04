@@ -10,7 +10,7 @@ fn settings_save_rejects_invalid_state_and_preserves_credentials_across_restart(
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .expect("config")
         .clone();
@@ -180,7 +180,7 @@ fn startup_and_save_move_duplicate_visibility_to_native_without_touching_auth() 
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .expect("config")
         .clone();
@@ -266,7 +266,7 @@ fn failed_config_commit_restores_provider_secret_and_keeps_memory_snapshot() {
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .expect("config")
         .clone();
@@ -297,7 +297,7 @@ fn failed_config_commit_restores_provider_secret_and_keeps_memory_snapshot() {
             .state
             .backend
             .configuration
-            .config
+            .test_config()
             .lock()
             .expect("config"),
         before

@@ -10,6 +10,7 @@ use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::http::response::unauthorized_response;
+use crate::services::account_catalog::CatalogRefreshError;
 use crate::services::accounts::import_account_state;
 use std::net::TcpStream;
 
@@ -46,7 +47,15 @@ pub(crate) fn management_account_request(
                 &serde_json::to_vec(&payload).expect("subscription models"),
                 &[],
             ),
-            Err(response) => response,
+            Err(CatalogRefreshError::Upstream(error)) => {
+                crate::api::failure_response::router_error_response(error)
+            }
+            Err(CatalogRefreshError::Invalid(message)) => {
+                json_error_response(400, status_text(400), message, None, &[])
+            }
+            Err(CatalogRefreshError::Internal) => {
+                json_error_response(500, status_text(500), "internal server error", None, &[])
+            }
         };
     }
     match import_account_state(state, &body) {

@@ -1,5 +1,9 @@
 //! Api compact.
 
+use crate::api::failure_response::request_router_error_response;
+use crate::api::failure_response::route_resolution_response;
+use crate::api::history_response::destination_error_response;
+use crate::api::history_response::history_http_error;
 use crate::app::ServerState;
 use crate::http::auth::proxy_allowed;
 use crate::http::auth::same_origin;
@@ -9,23 +13,16 @@ use crate::http::response::body_error_response;
 use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
-use crate::services::accounts::account_catalog_headers;
 use crate::services::compaction::external_compaction_response;
-use crate::services::failures::request_router_error_response;
-use crate::services::failures::route_resolution_response;
-use crate::services::history::destination_error_response;
-use crate::services::history::history_http_error;
 use crate::services::history::prepare_destination_context;
 use crate::services::history::prepare_history;
 use crate::services::native;
-use crate::services::providers::hydrate_provider_keys;
 use crate::services::providers::persist_protocol_observation;
-use crate::services::request_preparation::prepare_external_request;
+use crate::services::request_preparation::{
+    PreparedRequest, RequestOperation, RequestPreparationError, prepare_request,
+};
 use crate::util::projection_ids;
 use crate::util::random_hex;
-use emp_codex::subscription_route_model;
-use emp_core::resolve_route;
-use serde_json::Value;
 use std::collections::BTreeMap;
 use std::net::TcpStream;
 
@@ -54,40 +51,19 @@ pub(crate) fn compact_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
-    let Some(model) = body
-        .get("model")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    else {
-        return request_router_error_response(400, "request.model is required");
-    };
-    let mut config = match state.backend.configuration.config.lock() {
-        Ok(config) => config.clone(),
+    let PreparedRequest {
+        config,
+        route,
+        mut body,
+    } = match prepare_request(state, body, RequestOperation::Compact) {
+        Ok(prepared) => prepared,
+        Err(RequestPreparationError::ModelRequired) => {
+            return request_router_error_response(400, "request.model is required");
+        }
+        Err(RequestPreparationError::Route(error)) => return route_resolution_response(error),
         Err(_) => {
             return json_error_response(500, status_text(500), "internal server error", None, &[]);
         }
-    };
-    hydrate_provider_keys(&mut config, &state.backend.configuration.vault);
-    if let Some(config) = config.as_object_mut() {
-        config.insert(
-            "_native_auth_path".to_owned(),
-            Value::String(
-                state
-                    .backend
-                    .accounts
-                    .native_auth_path
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-        );
-    }
-    let route = match resolve_route(&config, model, |config, slug, account| {
-        subscription_route_model(config, slug, account, |account| {
-            account_catalog_headers(account, &state.backend.configuration.vault)
-        })
-    }) {
-        Ok(route) => route,
-        Err(error) => return route_resolution_response(error),
     };
     let mut incoming = request
         .headers
@@ -99,12 +75,6 @@ pub(crate) fn compact_request(
     if let Ok(id) = random_hex(8) {
         incoming.insert("X-EMP-Request-ID".to_owned(), id);
     }
-    let (route, mut body) = match prepare_external_request(&config, route, body) {
-        Ok(prepared) => prepared,
-        Err(_) => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
-        }
-    };
     body = match prepare_history(state, &route, body, &incoming) {
         Ok(body) => body,
         Err(error) => return history_http_error(&error),
@@ -118,13 +88,13 @@ pub(crate) fn compact_request(
         Err(error) => return destination_error_response(error),
     };
     if route.dialect == emp_core::Dialect::CodexNative {
-        return native::compact(
+        return crate::api::native_response::complete_response(native::compact(
             state,
             &route,
             &config,
             body.as_object().expect("validated request object"),
             &incoming,
-        );
+        ));
     }
     let ids = match projection_ids() {
         Ok(ids) => ids,
@@ -132,7 +102,7 @@ pub(crate) fn compact_request(
             return json_error_response(500, status_text(500), "internal server error", None, &[]);
         }
     };
-    let mut usage = crate::services::observation::Observation::new(
+    let mut usage = crate::services::request_outcome::RequestOutcome::new(
         state, &route, &body, &incoming, None, "compact",
     );
     let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
@@ -140,7 +110,7 @@ pub(crate) fn compact_request(
         match external_compaction_response(state, &route, &body, &incoming, &ids, monitor.as_mut())
         {
             Ok(result) => result,
-            Err(error) => return error,
+            Err(error) => return crate::api::history_response::compaction_error_response(error),
         };
     usage.observe(&compacted);
     persist_protocol_observation(state, &candidate);

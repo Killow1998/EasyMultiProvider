@@ -434,7 +434,14 @@ fn codex_integration_enable_and_restore_preserve_user_toml() {
 fn empty_model_picker_cannot_enable_integration() {
     let upstream = Upstream::start();
     let workspace = Workspace::with_routes(&upstream);
+    // Exercise a rejected manual activation from Native. With automatic
+    // activation enabled, the initial non-empty catalog already owns a lease.
+    let mut initial: Value =
+        serde_json::from_slice(&std::fs::read(&workspace.config_path).unwrap()).unwrap();
+    initial["auto_enable_on_start"] = json!(false);
+    workspace.write_config(initial);
     let emp = workspace.start();
+    assert_eq!(workspace.read_codex_config(), ORIGINAL_CODEX_CONFIG);
     let mut config = emp.get("/api/config").json();
     config["models"] = json!([]);
     let saved = emp.post("/api/config", &config);

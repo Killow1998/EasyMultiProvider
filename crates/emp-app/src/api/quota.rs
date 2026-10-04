@@ -20,34 +20,13 @@ use crate::util::system_now;
 use serde_json::Value;
 use std::io::Write;
 use std::net::TcpStream;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-pub(crate) const QUOTA_EVENT_SLOT_LIMIT: usize = 4;
+#[cfg(test)]
+pub(crate) use crate::services::management_events::SUBSCRIBER_LIMIT as QUOTA_EVENT_SLOT_LIMIT;
 
 const QUOTA_EVENT_KEEP_ALIVE: Duration = Duration::from_secs(15);
-
-struct QuotaEventSlot<'a> {
-    active: &'a AtomicUsize,
-}
-
-impl QuotaEventSlot<'_> {
-    fn acquire(active: &AtomicUsize) -> Option<QuotaEventSlot<'_>> {
-        active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                (count < QUOTA_EVENT_SLOT_LIMIT).then_some(count + 1)
-            })
-            .ok()
-            .map(|_| QuotaEventSlot { active })
-    }
-}
-
-impl Drop for QuotaEventSlot<'_> {
-    fn drop(&mut self) {
-        self.active.fetch_sub(1, Ordering::AcqRel);
-    }
-}
 
 pub(crate) fn serve_quota_events(
     stream: &mut TcpStream,
@@ -66,7 +45,7 @@ pub(crate) fn serve_quota_events(
         let _ = stream.flush();
         return;
     }
-    let Some(_slot) = QuotaEventSlot::acquire(&state.backend.accounts.quota_event_slots) else {
+    let Some(mut subscription) = state.backend.management_events.subscribe() else {
         let response = json_error_response(
             503,
             status_text(503),
@@ -89,70 +68,39 @@ pub(crate) fn serve_quota_events(
     {
         return;
     }
-    let integration = &state.backend.integration.watch.revision;
-    let activity = &state.backend.activity;
-    let usage = &state.backend.usage.event_revision;
-    let mut observed_revision = u64::MAX;
-    let mut observed_integration = u64::MAX;
-    let mut observed_activity = u64::MAX;
-    let mut observed_usage = u64::MAX;
-    loop {
-        if state.shutdown.load(Ordering::Acquire) {
+    while !state.shutdown.load(Ordering::Acquire) {
+        let Some(changes) = subscription.next(QUOTA_EVENT_KEEP_ALIVE) else {
             break;
-        }
-        let revision = match state.backend.accounts.quota_revision.lock() {
-            Ok(revision) => revision,
-            Err(_) => break,
         };
-        let (revision, _) = match state.backend.accounts.quota_condition.wait_timeout_while(
-            revision,
-            QUOTA_EVENT_KEEP_ALIVE,
-            |revision| {
-                *revision == observed_revision
-                    && integration.load(Ordering::Acquire) == observed_integration
-                    && activity.revision() == observed_activity
-                    && usage.load(Ordering::Acquire) == observed_usage
-                    && !state.shutdown.load(Ordering::Acquire)
-            },
-        ) {
-            Ok(result) => result,
-            Err(_) => break,
-        };
-        let current = *revision;
-        drop(revision);
         if state.shutdown.load(Ordering::Acquire)
             || !state.sessions.contains(session.as_deref(), system_now())
         {
             break;
         }
         let mut frame = Vec::new();
-        if current != observed_revision {
+        if changes.quota {
             frame.extend_from_slice(b"event: quota-updated\ndata: {}\n\n");
         }
-        let integration_now = integration.load(Ordering::Acquire);
-        if integration_now != observed_integration {
+        if changes.integration {
             frame.extend_from_slice(b"event: integration-updated\ndata: {}\n\n");
         }
-        let activity_now = activity.revision();
-        let usage_now = usage.load(Ordering::Acquire);
-        if activity_now != observed_activity {
-            let snapshot = activity.snapshot(system_now().max(0.0) as u64);
+        if changes.activity {
+            let snapshot = state
+                .backend
+                .activity
+                .snapshot(system_now().max(0.0) as u64);
             if let Ok(activity_frame) =
                 crate::services::events::sse_frame("activity-updated", &snapshot)
             {
                 frame.extend_from_slice(&activity_frame);
             }
         }
-        if usage_now != observed_usage {
+        if changes.usage {
             frame.extend_from_slice(b"event: usage-updated\ndata: {}\n\n");
         }
         if frame.is_empty() {
             frame.extend_from_slice(b": keep-alive\n\n");
         }
-        observed_revision = current;
-        observed_integration = integration_now;
-        observed_activity = activity_now;
-        observed_usage = usage_now;
         if stream.write_all(&frame).is_err() || stream.flush().is_err() {
             break;
         }
@@ -190,21 +138,16 @@ pub(crate) fn management_quota_request(
     };
     let account = percent_decode(raw_account, false);
     let known_account = account == "@native"
-        || state
-            .backend
-            .configuration
-            .config
-            .lock()
-            .is_ok_and(|config| {
-                config
-                    .get("accounts")
-                    .and_then(Value::as_array)
-                    .is_some_and(|accounts| {
-                        accounts.iter().any(|candidate| {
-                            candidate.get("id").and_then(Value::as_str) == Some(account.as_str())
-                        })
+        || state.backend.configuration.read().is_ok_and(|config| {
+            config
+                .get("accounts")
+                .and_then(Value::as_array)
+                .is_some_and(|accounts| {
+                    accounts.iter().any(|candidate| {
+                        candidate.get("id").and_then(Value::as_str) == Some(account.as_str())
                     })
-            });
+                })
+        });
     if !known_account {
         return json_error_response(
             503,

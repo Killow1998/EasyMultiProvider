@@ -1,6 +1,5 @@
 //! Refresh one subscription's entitlements, checking ownership before persistence.
 use crate::app::ServerState;
-use crate::http::response::{json_error_response, status_text};
 use serde_json::{Value, json};
 use std::time::Instant;
 
@@ -8,17 +7,16 @@ mod pipeline;
 mod refresh_state;
 mod worker;
 
-use crate::services::failures::router_error_response;
 use pipeline::{
     FetchAndPersistOutcome, PersistError, RefreshSource, fetch_and_persist, publish_pending_catalog,
 };
 pub(crate) use refresh_state::CatalogRefreshState;
 pub(crate) use worker::{request_refresh, run as run_refresh_worker};
-fn invalid(message: &str) -> Vec<u8> {
-    json_error_response(400, status_text(400), message, None, &[])
-}
-fn internal() -> Vec<u8> {
-    json_error_response(500, status_text(500), "internal server error", None, &[])
+#[derive(Debug)]
+pub(crate) enum CatalogRefreshError {
+    Invalid(&'static str),
+    Internal,
+    Upstream(emp_router::RouterError),
 }
 fn read_account_cache(path: &std::path::Path) -> Option<Value> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
@@ -29,15 +27,17 @@ fn read_account_cache(path: &std::path::Path) -> Option<Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
-pub(crate) fn refresh(state: &ServerState, id: &str) -> Result<Value, Vec<u8>> {
-    let _poll = state.catalog_refresh.poll_gate().ok_or_else(internal)?;
+pub(crate) fn refresh(state: &ServerState, id: &str) -> Result<Value, CatalogRefreshError> {
+    let _poll = state
+        .catalog_refresh
+        .poll_gate()
+        .ok_or(CatalogRefreshError::Internal)?;
     let (config, generation) = {
         let current = state
             .backend
             .configuration
-            .config
-            .lock()
-            .map_err(|_| internal())?;
+            .read()
+            .map_err(|_| CatalogRefreshError::Internal)?;
         let generation = if id == "@native" {
             0
         } else {
@@ -48,7 +48,9 @@ pub(crate) fn refresh(state: &ServerState, id: &str) -> Result<Value, Vec<u8>> {
     let base = config["codex_base_url"]
         .as_str()
         .filter(|base| !base.is_empty())
-        .ok_or_else(|| invalid("Subscription backend is unavailable"))?;
+        .ok_or(CatalogRefreshError::Invalid(
+            "Subscription backend is unavailable",
+        ))?;
     // Version probing may prepare a signed desktop-engine snapshot. Do it
     // explicitly here, after releasing the configuration mutex; persistence
     // only reads the already verified observation and checks its identity.
@@ -58,16 +60,18 @@ pub(crate) fn refresh(state: &ServerState, id: &str) -> Result<Value, Vec<u8>> {
         .integration
         .inventory
         .selected_trusted_version()
-        .ok_or_else(|| {
-            invalid("Codex engine version is unavailable; model refresh was not started")
-        })?;
+        .ok_or(CatalogRefreshError::Invalid(
+            "Codex engine version is unavailable; model refresh was not started",
+        ))?;
     let source = (if id == "@native" {
         RefreshSource::native(state, &config, base, client_version)
     } else {
         let account = config["accounts"]
             .as_array()
             .and_then(|accounts| accounts.iter().find(|account| account["id"] == id))
-            .ok_or_else(|| invalid("Subscription account is unavailable"))?;
+            .ok_or(CatalogRefreshError::Invalid(
+                "Subscription account is unavailable",
+            ))?;
         RefreshSource::account(
             state,
             &config,
@@ -78,24 +82,26 @@ pub(crate) fn refresh(state: &ServerState, id: &str) -> Result<Value, Vec<u8>> {
             false,
         )
     })
-    .ok_or_else(|| invalid("Subscription credentials are unavailable"))?;
+    .ok_or(CatalogRefreshError::Invalid(
+        "Subscription credentials are unavailable",
+    ))?;
     let persisted = match fetch_and_persist(state, &source) {
         FetchAndPersistOutcome::Persisted(persisted) => persisted,
         FetchAndPersistOutcome::UpstreamError(error) => {
-            return Err(router_error_response(error));
+            return Err(CatalogRefreshError::Upstream(error));
         }
         FetchAndPersistOutcome::PersistenceError(error) => {
             return Err(match error {
-                PersistError::RuntimeChanged => {
-                    invalid("Codex runtime changed during model refresh; retry")
-                }
+                PersistError::RuntimeChanged => CatalogRefreshError::Invalid(
+                    "Codex runtime changed during model refresh; retry",
+                ),
                 PersistError::SourceChanged => {
-                    invalid("Subscription changed during model refresh; retry")
+                    CatalogRefreshError::Invalid("Subscription changed during model refresh; retry")
                 }
-                PersistError::Internal => internal(),
+                PersistError::Internal => CatalogRefreshError::Internal,
             });
         }
-        FetchAndPersistOutcome::Stopped => return Err(internal()),
+        FetchAndPersistOutcome::Stopped => return Err(CatalogRefreshError::Internal),
     };
     state.catalog_refresh.mark_fresh(
         &source.id,
@@ -103,7 +109,7 @@ pub(crate) fn refresh(state: &ServerState, id: &str) -> Result<Value, Vec<u8>> {
         source.generation,
         Instant::now(),
     );
-    publish_pending_catalog(state).map_err(|_| internal())?;
+    publish_pending_catalog(state).map_err(|_| CatalogRefreshError::Internal)?;
     Ok(
         json!({"models":emp_codex::management_views::subscription_model_options(&persisted.catalog)}),
     )

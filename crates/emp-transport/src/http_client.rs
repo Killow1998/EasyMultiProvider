@@ -359,6 +359,7 @@ impl HttpClient {
         Ok(HttpResponse::new(response, plan, started_at))
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn client_for(
         &self,
         plan: &RequestPlan,

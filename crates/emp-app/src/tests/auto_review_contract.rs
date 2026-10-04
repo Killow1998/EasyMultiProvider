@@ -5,7 +5,7 @@ use crate::http::request::{parse_request, read_request_head};
 use crate::lifecycle::ServerHandle;
 use crate::services::accounts::account_catalog_headers;
 use crate::services::auto_review::{automatic_review_candidates, resolve_auto_review_route};
-use crate::services::observation::Observation;
+use crate::services::request_outcome::RequestOutcome;
 use emp_codex::{account_auth_headers, native_catalog_owner, subscription_route_model};
 use emp_core::{ResolvedRoute, RouteResolutionError};
 use serde_json::{Value, json};
@@ -169,7 +169,9 @@ fn set_cooldowns(server: &ServerHandle, cooldowns: &Value) {
         .collect();
     *server
         .state
-        .auto_review_cooldowns
+        .backend
+        .auto_review
+        .test_cooldowns()
         .lock()
         .expect("cooldown lock") = next;
 }
@@ -189,7 +191,7 @@ fn auto_review_selects_candidates_by_headroom_and_cooldown() {
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .expect("config lock")
         .clone();
@@ -278,6 +280,32 @@ fn auto_review_selects_candidates_by_headroom_and_cooldown() {
             }
         }
     }
+}
+
+#[test]
+fn compact_keeps_the_requested_account_even_when_review_would_choose_another() {
+    let upstream = OneShotUpstream::start(json!({
+        "id":"compact-review", "object":"response.compaction", "output":[]
+    }));
+    let accounts = vec![
+        json!({"id":"requested","prefix":"requested","enabled":true,
+            "quota":{"rate_limits":{"primary":{"usedPercent":100}}}}),
+        json!({"id":"available","prefix":"available","enabled":true,
+            "quota":{"rate_limits":{"primary":{"usedPercent":0}}}}),
+    ];
+    let (_directory, server, _) = make_review_server(&upstream.base_url(), &accounts, None);
+    let wire = post(
+        &server,
+        "/v1/responses/compact",
+        br#"{"model":"requested/codex-auto-review","input":"history"}"#,
+        &[&session_header(&server)],
+    );
+    assert!(wire.starts_with("HTTP/1.1 200 OK\r\n"), "{wire}");
+    let (path, headers, body) = upstream.observed();
+    assert_eq!(path, "/v1/responses/compact");
+    assert_eq!(body["model"], "codex-auto-review");
+    assert_eq!(headers["authorization"], "Bearer requested-token");
+    server.shutdown().expect("shutdown");
 }
 
 #[cfg(unix)]
@@ -491,7 +519,7 @@ fn observation_failure_and_success_update_the_next_request_candidates() {
         resolve_shared_route(&server, &mut config, "codex-auto-review").expect("initial route")
     };
     assert_eq!(route.provider_id, "codex-native");
-    let mut failed = Observation::new(
+    let mut failed = RequestOutcome::new(
         &server.state,
         &route,
         &model,
@@ -517,7 +545,7 @@ fn observation_failure_and_success_update_the_next_request_candidates() {
     };
     assert_eq!(after_failure.provider_id, "review-account");
 
-    let mut succeeded = Observation::new(
+    let mut succeeded = RequestOutcome::new(
         &server.state,
         &after_failure,
         &model,
@@ -525,16 +553,25 @@ fn observation_failure_and_success_update_the_next_request_candidates() {
         None,
         "responses",
     );
-    server.state.auto_review_cooldowns.lock().unwrap().insert(
-        "review-account".to_owned(),
-        std::time::Instant::now() + Duration::from_secs(300),
-    );
+    server
+        .state
+        .backend
+        .auto_review
+        .test_cooldowns()
+        .lock()
+        .unwrap()
+        .insert(
+            "review-account".to_owned(),
+            std::time::Instant::now() + Duration::from_secs(300),
+        );
     succeeded.observe(&json!({"type":"response.completed","response":{"status":"completed"}}));
     succeeded.finish();
     assert!(
         !server
             .state
-            .auto_review_cooldowns
+            .backend
+            .auto_review
+            .test_cooldowns()
             .lock()
             .unwrap()
             .contains_key("review-account")

@@ -1,5 +1,8 @@
 //! Downstream SSE delivery and cancellation.
 
+use crate::api::failure_response::pre_output_failure_response;
+use crate::api::failure_response::pre_output_router_error_response;
+use crate::api::failure_response::stream_failure_value;
 use crate::app::ServerState;
 use crate::http::response::SECURITY_HEADERS;
 use crate::http::response::json_error_response;
@@ -9,10 +12,6 @@ use crate::services::disconnect::DisconnectRace;
 use crate::services::events::sse_frame;
 use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
-use crate::services::failures::pre_output_failure_response;
-use crate::services::failures::pre_output_router_error_response;
-use crate::services::failures::route_resolution_response;
-use crate::services::failures::stream_failure_value;
 use crate::services::native;
 use crate::services::providers::persist_protocol_observation;
 use crate::util::random_hex;
@@ -81,34 +80,18 @@ pub(crate) fn serve_external_stream(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), Vec<u8>> {
-    let monitor = DisconnectMonitor::start(downstream).ok();
-    let (upstream, candidate, monitor) = match monitor {
-        Some(mut monitor) => {
-            let opened = crate::services::providers::open_external_stream_cancellable(
-                state,
-                route,
-                body,
-                incoming,
-                ids,
-                &mut monitor,
-            )
-            .map_err(external_open_error_response)?;
-            match opened {
-                crate::services::providers::CancellableExternalStreamOpen::Opened(
-                    upstream,
-                    candidate,
-                ) => (*upstream, candidate, Some(monitor)),
-                crate::services::providers::CancellableExternalStreamOpen::Disconnected => {
-                    return Ok(());
-                }
-            }
-        }
-        None => {
-            let (upstream, candidate) =
-                crate::services::providers::open_external_stream(state, route, body, incoming, ids)
-                    .map_err(external_open_error_response)?;
-            (upstream, candidate, None)
-        }
+    let mut monitor = DisconnectMonitor::start(downstream).ok();
+    let (upstream, candidate) = match crate::services::external::open_stream(
+        state,
+        route,
+        body,
+        incoming,
+        ids,
+        monitor.as_mut(),
+    ) {
+        Ok(opened) => opened,
+        Err(crate::services::external::ExternalRequestError::Disconnected) => return Ok(()),
+        Err(error) => return Err(crate::api::failure_response::external_open_error(error)),
     };
     let completed = relay_external_stream(
         downstream, state, &candidate, body, incoming, upstream, monitor,
@@ -117,26 +100,6 @@ pub(crate) fn serve_external_stream(
         persist_protocol_observation(state, &candidate);
     }
     Ok(())
-}
-
-fn external_open_error_response(
-    error: crate::services::providers::ExternalStreamOpenError,
-) -> Vec<u8> {
-    match error {
-        crate::services::providers::ExternalStreamOpenError::Router(error) => {
-            pre_output_router_error_response(&error)
-        }
-        crate::services::providers::ExternalStreamOpenError::Route(error) => {
-            route_resolution_response(error)
-        }
-        crate::services::providers::ExternalStreamOpenError::Unsupported => json_error_response(
-            503,
-            status_text(503),
-            "provider protocol is unsupported",
-            Some("router_error"),
-            &[],
-        ),
-    }
 }
 
 pub(crate) fn serve_native_stream(
@@ -158,19 +121,22 @@ pub(crate) fn serve_native_stream(
             incoming,
             ids,
             &mut monitor,
-        )? {
+        )
+        .map_err(crate::api::native_response::error_response)?
+        {
             native::CancellableNativeStreamOpen::Opened(upstream) => (*upstream, Some(monitor)),
             native::CancellableNativeStreamOpen::Disconnected => return Ok(()),
         },
         None => (
-            native::open_stream(
+            native::open_stream_result(
                 state,
                 route,
                 config,
                 body.as_object().expect("validated request object"),
                 incoming,
                 ids,
-            )?,
+            )
+            .map_err(crate::api::native_response::error_response)?,
             None,
         ),
     };
@@ -299,7 +265,7 @@ fn relay_stream(
         usage_owner,
         started_at,
     } = context;
-    let mut usage = crate::services::observation::Observation::new(
+    let mut usage = crate::services::request_outcome::RequestOutcome::new(
         state,
         route,
         body,
@@ -468,4 +434,23 @@ fn relay_external_stream(
         ExternalRelay { upstream },
         monitor,
     )
+}
+
+pub(crate) fn generated_response_stream(
+    response_value: Value,
+    ids: &ProjectionIds,
+) -> Result<Vec<u8>, Vec<u8>> {
+    let events = emp_router::response_json_stream_events(response_value, ids, false)
+        .map_err(crate::api::failure_response::router_error_response)?;
+    let mut output = Vec::new();
+    for event in events {
+        let event_type = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("message");
+        output.extend(sse_frame(event_type, &event).map_err(|_| {
+            json_error_response(500, status_text(500), "internal server error", None, &[])
+        })?);
+    }
+    Ok(output)
 }

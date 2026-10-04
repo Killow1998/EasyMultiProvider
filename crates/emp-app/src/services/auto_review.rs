@@ -1,10 +1,11 @@
+mod state;
+pub(crate) use state::ReviewState;
+
 use crate::app::ServerState;
-use crate::services::accounts::{account_catalog_headers, regular_file};
-use emp_codex::subscription_route_model;
+use crate::services::accounts::regular_file;
 use emp_core::{ResolvedRoute, RouteResolutionError, RouteSource, resolved_route_from_parts};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
-use std::time::Instant;
 
 const AUTO_REVIEW_MODEL_ID: &str = "codex-auto-review";
 const DEFAULT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
@@ -39,19 +40,7 @@ pub(crate) fn resolve_auto_review_route(
         .lock()
         .ok()
         .and_then(|quota| quota.clone());
-    let now = Instant::now();
-    let cooling = state
-        .auto_review_cooldowns
-        .lock()
-        .ok()
-        .map(|cooldowns| {
-            cooldowns
-                .iter()
-                .filter(|(_, until)| **until > now)
-                .map(|(account_id, _)| account_id.clone())
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
+    let cooling = state.backend.auto_review.cooling();
     let candidates = automatic_review_candidates(
         config_object,
         native_quota.as_ref(),
@@ -203,9 +192,12 @@ fn route_from_candidates(
     let accounts = config.get("accounts").and_then(Value::as_array);
     for account_id in order.iter().filter_map(Value::as_str) {
         if account_id == "@native" {
-            let Some(mut model) =
-                subscription_route_model(config, AUTO_REVIEW_MODEL_ID, None, |_| None)
-            else {
+            let Some(mut model) = crate::services::catalog::subscription_model(
+                state,
+                config,
+                AUTO_REVIEW_MODEL_ID,
+                None,
+            ) else {
                 continue;
             };
             set_review_route_model(&mut model, requested_model);
@@ -254,11 +246,12 @@ fn route_from_candidates(
         {
             continue;
         }
-        let Some(mut model) =
-            subscription_route_model(config, AUTO_REVIEW_MODEL_ID, Some(account), |account| {
-                account_catalog_headers(account, &state.backend.configuration.vault)
-            })
-        else {
+        let Some(mut model) = crate::services::catalog::subscription_model(
+            state,
+            config,
+            AUTO_REVIEW_MODEL_ID,
+            Some(account),
+        ) else {
             continue;
         };
         set_review_route_model(&mut model, requested_model);

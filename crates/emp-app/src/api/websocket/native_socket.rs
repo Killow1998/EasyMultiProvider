@@ -1,8 +1,8 @@
 //! Native upstream connection reuse, incremental ownership and HTTP fallback.
 use super::Turn;
+use crate::api::failure_response::{safe_failure_reason, stream_error_code};
 use crate::app::ServerState;
 use crate::services::events::terminal_stream_event;
-use crate::services::failures::{safe_failure_reason, stream_error_code};
 use crate::services::{activity::ActivityGuard, native};
 use crate::util::random_hex;
 use emp_router::native_metadata::native_response_headers;
@@ -190,7 +190,7 @@ impl NativeSession {
                     }
             }
             let owner = emp_state::usage::account_owner(&plan.headers);
-            let mut usage = crate::services::observation::Observation::new(
+            let mut usage = crate::services::request_outcome::RequestOutcome::new(
                 state,
                 route,
                 &Value::Object(request_body.clone()),
@@ -201,8 +201,6 @@ impl NativeSession {
             .transport("websocket");
             native_turn_activity = Some(state.backend.activity.begin(
                 crate::services::activity::ActivityIdentity::from_route(route),
-                &state.backend.accounts.quota_revision,
-                &state.backend.accounts.quota_condition,
             ));
             usage.dispatch();
             if client.send_json(&plan.payload).is_err() {

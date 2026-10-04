@@ -1,4 +1,5 @@
 //! Util.
+pub(crate) mod spaced_json;
 
 use crate::error::AppError;
 use emp_router::ProjectionIds;
@@ -43,3 +44,15 @@ pub(crate) fn python_truthy(value: Option<&Value>) -> bool {
         Some(Value::Object(value)) => !value.is_empty(),
     }
 }
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub(crate) fn release_large_temporary_pages(size: usize) {
+    if size >= emp_transport::REQUEST_GROWTH_QUANTUM {
+        // The parsed value or projected request owns its text. Return pages
+        // from its now-free temporary before another large projection.
+        unsafe { libc::malloc_trim(0) };
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+pub(crate) fn release_large_temporary_pages(_size: usize) {}

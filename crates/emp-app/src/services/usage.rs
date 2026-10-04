@@ -9,10 +9,7 @@ use emp_state::usage::{
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{
-    Arc, Condvar, Mutex,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, Condvar, Mutex, atomic::Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -20,7 +17,7 @@ pub(crate) struct UsageState {
     pub(crate) ledger: Arc<UsageLedger>,
     pub(crate) history: UsageHistoryScanner,
     progress: Mutex<ScanProgress>,
-    pub(crate) event_revision: AtomicU64,
+    events: Arc<super::management_events::ManagementEvents>,
     scan_wake: Condvar,
     price_wake: Condvar,
 }
@@ -31,7 +28,10 @@ struct ScanProgress {
     completed: u64,
 }
 impl UsageState {
-    pub(crate) fn new(root: &Path) -> Self {
+    pub(crate) fn new(
+        root: &Path,
+        events: Arc<super::management_events::ManagementEvents>,
+    ) -> Self {
         let prices = Arc::new(PriceCatalog::new(
             root.join("api_prices.json"),
             system_now(),
@@ -40,7 +40,7 @@ impl UsageState {
             ledger: Arc::new(UsageLedger::new(root.join("usage.sqlite3"), prices)),
             history: UsageHistoryScanner::default(),
             progress: Mutex::new(ScanProgress::default()),
-            event_revision: AtomicU64::new(0),
+            events,
             scan_wake: Condvar::new(),
             price_wake: Condvar::new(),
         }
@@ -59,7 +59,7 @@ impl UsageState {
         );
         self.scan_wake.notify_all();
         drop(progress);
-        self.notify_scan(state);
+        self.notify_scan();
         Some(id)
     }
     pub(crate) fn status(&self) -> Value {
@@ -88,19 +88,10 @@ impl UsageState {
                 "errors":summary["errors"], "cancelled":self.history.stop.load(Ordering::Acquire) || state.shutdown.load(Ordering::Acquire),
             }),
         );
-        self.notify_scan(state);
+        self.notify_scan();
     }
-    fn notify_scan(&self, state: &ServerState) {
-        // Use the SSE wait mutex to prevent a notification falling between its
-        // predicate check and sleep. No quota change is implied by this event.
-        let _guard = state
-            .backend
-            .accounts
-            .quota_revision
-            .lock()
-            .expect("event wakeup");
-        self.event_revision.fetch_add(1, Ordering::Release);
-        state.backend.accounts.quota_condition.notify_all();
+    fn notify_scan(&self) {
+        self.events.publish(super::management_events::Change::Usage);
     }
     pub(crate) fn stop(&self) {
         let _guard = self.progress.lock().expect("usage wakeup");
@@ -149,8 +140,7 @@ pub(crate) fn workers(state: &Arc<ServerState>) -> std::io::Result<Vec<JoinHandl
                 let config = history_state
                     .backend
                     .configuration
-                    .config
-                    .lock()
+                    .read()
                     .ok()
                     .map(|config| config.clone())
                     .unwrap_or(json!({}));

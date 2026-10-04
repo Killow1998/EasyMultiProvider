@@ -16,9 +16,7 @@ use emp_codex::quota::read_native_login_quota;
 use emp_codex::quota::run_quota_query_persisting;
 use emp_codex::quota::run_quota_reset_persisting;
 use emp_codex::quota_history::QuotaHistoryError;
-use emp_state::load_configuration;
 use emp_state::same_account_auth;
-use emp_state::save_configuration;
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
@@ -37,10 +35,10 @@ fn save_account_quota_state(
     let mut config = state
         .backend
         .configuration
-        .config
-        .lock()
+        .edit()
         .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?;
-    let Some(account) = config
+    let mut updated = config.clone();
+    let Some(account) = updated
         .get_mut("accounts")
         .and_then(Value::as_array_mut)
         .and_then(|accounts| {
@@ -67,13 +65,8 @@ fn save_account_quota_state(
     if let Some(quota) = quota {
         account["quota"] = quota.clone();
     }
-    save_configuration(
-        &config,
-        Some(&state.backend.configuration.config_path),
-        &state.backend.configuration.vault,
-    )
-    .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?;
-    *config = load_configuration(Some(&state.backend.configuration.config_path))
+    config
+        .commit(&updated)
         .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?;
     drop(config);
     account_public_snapshot(state, account_id)
@@ -126,8 +119,7 @@ impl<'a> AccountCredentials<'a> {
         let target = state
             .backend
             .configuration
-            .config
-            .lock()
+            .read()
             .ok()
             .and_then(|config| {
                 config
@@ -229,8 +221,7 @@ pub(crate) fn flush_pending_rotations(state: &ServerState) -> usize {
     let owners = state
         .backend
         .configuration
-        .config
-        .lock()
+        .read()
         .ok()
         .and_then(|config| config.get("accounts").and_then(Value::as_array).cloned())
         .unwrap_or_default()
@@ -343,8 +334,7 @@ pub(crate) fn migrate_legacy_quota_history(state: &ServerState) {
     let accounts = state
         .backend
         .configuration
-        .config
-        .lock()
+        .read()
         .ok()
         .and_then(|config| config.get("accounts").and_then(Value::as_array).cloned())
         .unwrap_or_default();
@@ -445,8 +435,7 @@ fn refresh_account_by_id_inner(state: &ServerState, account_id: &str) -> Result<
     let config = state
         .backend
         .configuration
-        .config
-        .lock()
+        .read()
         .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?
         .clone();
     record_quota_snapshot(state, account_id, &quota);
@@ -560,8 +549,7 @@ fn quota_sample_targets(state: &ServerState) -> Vec<String> {
     let Some(config) = state
         .backend
         .configuration
-        .config
-        .lock()
+        .read()
         .ok()
         .map(|config| config.clone())
     else {

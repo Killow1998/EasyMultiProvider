@@ -1,9 +1,6 @@
 //! Destination-model compaction and portable summaries.
 
 use crate::app::ServerState;
-use crate::http::response::response;
-use crate::services::failures::route_resolution_response;
-use crate::services::failures::router_error_response;
 use crate::util::random_hex;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE;
@@ -20,6 +17,12 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 const MAX_EXTERNAL_COMPACTION_SUMMARY_CHARS: usize = 256 * 1024;
+
+pub(crate) enum CompactionError {
+    InvalidSummary(&'static str),
+    Route(emp_core::RouteResolutionError),
+    Execution(SummaryExecutionError),
+}
 
 pub(crate) enum SummaryExecutionError {
     Router(RouterError),
@@ -41,9 +44,7 @@ pub(crate) fn execute_summary_request(
         return match crate::services::claude_cli::execute_complete(
             state, route, body, incoming, ids, monitor,
         ) {
-            Ok(crate::services::claude_cli::ClaudeCliResult::Completed(completion)) => {
-                Ok((completion.response, completion.route))
-            }
+            Ok(completion) => Ok((completion.response, completion.route)),
             Err(crate::services::claude_cli::ClaudeCliError::Router(error)) => {
                 Err(SummaryExecutionError::Router(error))
             }
@@ -148,20 +149,20 @@ pub(crate) fn response_output_text(value: &Value) -> Option<String> {
 pub(crate) fn external_compaction_from_summary(
     body: &Value,
     summary: &str,
-) -> Result<Value, Vec<u8>> {
+) -> Result<Value, CompactionError> {
     if summary.trim().is_empty() {
-        return Err(external_compaction_error("summary_empty"));
+        return Err(CompactionError::InvalidSummary("summary_empty"));
     }
     if summary.chars().count() > MAX_EXTERNAL_COMPACTION_SUMMARY_CHARS {
-        return Err(external_compaction_error("summary_too_large"));
+        return Err(CompactionError::InvalidSummary("summary_too_large"));
     }
     let encoded = URL_SAFE.encode(summary.as_bytes());
     let item_id = random_hex(16)
         .map(|value| format!("cmp_{value}"))
-        .map_err(|_| external_compaction_error("invalid_response"))?;
+        .map_err(|_| CompactionError::InvalidSummary("invalid_response"))?;
     let response_id = random_hex(16)
         .map(|value| format!("resp_{value}"))
-        .map_err(|_| external_compaction_error("invalid_response"))?;
+        .map_err(|_| CompactionError::InvalidSummary("invalid_response"))?;
     let created_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -181,20 +182,6 @@ pub(crate) fn external_compaction_from_summary(
     }))
 }
 
-fn external_compaction_error(reason: &str) -> Vec<u8> {
-    let message = format!("external_compaction_failed: reason={reason}");
-    let body = serde_json::to_vec(&serde_json::json!({
-        "error": {
-            "code":"external_compaction_failed",
-            "type":"external_compaction_failed",
-            "message":message,
-            "failure_reason":reason
-        }
-    }))
-    .expect("external compaction error is serializable");
-    response("HTTP/1.1 502 Bad Gateway", "application/json", &body, &[])
-}
-
 pub(crate) fn external_compaction_response(
     state: &ServerState,
     route: &ResolvedRoute,
@@ -202,19 +189,17 @@ pub(crate) fn external_compaction_response(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     mut monitor: Option<&mut crate::services::disconnect::DisconnectMonitor>,
-) -> Result<(Value, ResolvedRoute), Vec<u8>> {
+) -> Result<(Value, ResolvedRoute), CompactionError> {
     let summary_body = compaction_summary_body(body);
     let candidates = protocol_candidates(route);
     let mut activity_guard = None;
     for (index, protocol) in candidates.iter().copied().enumerate() {
         let candidate = route
             .with_protocol(protocol)
-            .map_err(route_resolution_response)?;
+            .map_err(CompactionError::Route)?;
         if activity_guard.is_none() {
             activity_guard = Some(state.backend.activity.begin(
                 crate::services::activity::ActivityIdentity::from_route(route),
-                &state.backend.accounts.quota_revision,
-                &state.backend.accounts.quota_condition,
             ));
         }
         match execute_summary_request(
@@ -227,7 +212,7 @@ pub(crate) fn external_compaction_response(
         ) {
             Ok((result, executed_route)) => {
                 let Some(summary) = response_output_text(&result.body) else {
-                    return Err(external_compaction_error("summary_empty"));
+                    return Err(CompactionError::InvalidSummary("summary_empty"));
                 };
                 return external_compaction_from_summary(body, &summary)
                     .map(|compacted| (compacted, executed_route));
@@ -239,11 +224,12 @@ pub(crate) fn external_compaction_response(
                 continue;
             }
             Err(SummaryExecutionError::Router(error)) => {
-                return Err(router_error_response(error));
+                return Err(CompactionError::Execution(SummaryExecutionError::Router(
+                    error,
+                )));
             }
-            Err(SummaryExecutionError::ClaudeCli(error)) => return Err(error.http_response()),
-            Err(SummaryExecutionError::Disconnected) => return Err(Vec::new()),
+            Err(error) => return Err(CompactionError::Execution(error)),
         }
     }
-    Err(external_compaction_error("invalid_response"))
+    Err(CompactionError::InvalidSummary("invalid_response"))
 }

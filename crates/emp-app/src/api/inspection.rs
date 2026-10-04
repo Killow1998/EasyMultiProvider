@@ -17,7 +17,7 @@ pub(crate) fn read_request(request: Request<'_>, state: &ServerState) -> Vec<u8>
             vec![("Cache-Control", "no-store")],
         ),
         "/api/capabilities" => {
-            let config = match state.backend.configuration.config.lock() {
+            let config = match state.backend.configuration.read() {
                 Ok(config) => config.clone(),
                 Err(_) => {
                     return json_error_response(

@@ -83,7 +83,7 @@ pub(crate) fn serve_realtime_call(
     headers.insert("Content-Type".to_owned(), "application/json".to_owned());
     headers.insert("Accept".to_owned(), "application/sdp".to_owned());
     headers.insert("User-Agent".to_owned(), format!("EMP/{VERSION}"));
-    let base_url = match state.backend.configuration.config.lock() {
+    let base_url = match state.backend.configuration.read() {
         Ok(config) => config
             .get("codex_base_url")
             .and_then(Value::as_str)

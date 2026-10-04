@@ -2,6 +2,9 @@
 
 Status: the Rust backend is the shipped implementation. The Python backend is
 frozen, and the Rust test suite no longer compares against it.
+For the current ownership assessment and refactoring sequence, see
+[Architecture assessment](architecture.md). This document retains the migration
+plan and its historical acceptance evidence.
 The verified-state tables below are the historical 2026-09-25 baseline;
 they do not establish acceptance of the later security repairs.
 

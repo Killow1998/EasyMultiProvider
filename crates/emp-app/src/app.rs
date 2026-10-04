@@ -3,8 +3,8 @@ use crate::error::AppError;
 use crate::services::accounts::AccountState;
 use crate::services::accounts::duplicate_accounts;
 use crate::services::activity::ActivityService;
+use crate::services::configuration::ConfigurationState;
 use crate::services::integration::IntegrationState;
-use crate::services::providers::ConfigurationState;
 use crate::util::{random_hex, system_now};
 use emp_state::{load_configuration, save_configuration};
 use emp_transport::{
@@ -27,7 +27,6 @@ use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
 use tokio::runtime::Runtime;
 
 pub(crate) struct ServerState {
@@ -41,7 +40,6 @@ pub(crate) struct ServerState {
     pub(crate) port: u16,
     pub(crate) base_url: String,
     pub(crate) updates: crate::services::updates::UpdateState,
-    pub(crate) auto_review_cooldowns: Arc<Mutex<BTreeMap<String, std::time::Instant>>>,
 }
 
 impl ServerState {
@@ -67,6 +65,8 @@ pub(crate) struct BackendState {
     pub(crate) transport: TransportState,
     pub(crate) accounts: AccountState,
     pub(crate) activity: ActivityService,
+    pub(crate) auto_review: crate::services::auto_review::ReviewState,
+    pub(crate) management_events: Arc<crate::services::management_events::ManagementEvents>,
     pub(crate) integration: IntegrationState,
     pub(crate) usage: crate::services::usage::UsageState,
     pub(crate) diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
@@ -74,7 +74,7 @@ pub(crate) struct BackendState {
 
 pub(crate) struct TransportState {
     pub(crate) client: HttpClient,
-    pub(crate) support_network: crate::api::support_report::NetworkSnapshot,
+    pub(crate) support_network: crate::services::network_evidence::NetworkSnapshot,
     pub(crate) runtime: Runtime,
     pub(crate) request_limits: Arc<RequestLimits>,
     pub(crate) native_connections: crate::services::native_connections::NativeConnections,
@@ -115,7 +115,7 @@ impl BackendState {
             config = load_configuration(Some(config_path))?;
         }
         let proxy_snapshot = ProxyEnvironment::capture_current();
-        let support_network = crate::api::support_report::NetworkSnapshot::capture(
+        let support_network = crate::services::network_evidence::NetworkSnapshot::capture(
             &proxy_snapshot.environment,
             proxy_snapshot.source,
         );
@@ -150,15 +150,15 @@ impl BackendState {
         )
         .map_err(|_| AppError::ServerStopped)?
         .with_lock_path(codex_home.join("easy-multi-provider/integration/lease.lock"));
+        let management_events =
+            Arc::new(crate::services::management_events::ManagementEvents::default());
         Ok(Self {
-            usage: crate::services::usage::UsageState::new(&state_root),
+            usage: crate::services::usage::UsageState::new(
+                &state_root,
+                Arc::clone(&management_events),
+            ),
             diagnostics,
-            configuration: ConfigurationState {
-                config: Mutex::new(config),
-                discovery_lock: Mutex::new(()),
-                config_path: config_path.to_path_buf(),
-                vault,
-            },
+            configuration: ConfigurationState::new(config, config_path.to_path_buf(), vault),
             transport: TransportState {
                 client,
                 support_network,
@@ -174,15 +174,14 @@ impl BackendState {
                 quota_refresh_errors: Mutex::new(BTreeMap::new()),
                 quota_refresh_locks: Mutex::new(BTreeMap::new()),
                 quota_history: QuotaHistoryStore::new(state_root.join("quota_history.sqlite3")),
-                quota_revision: Mutex::new(0),
-                quota_condition: Condvar::new(),
-                quota_event_slots: AtomicUsize::new(0),
                 quota_sampler_wait: Mutex::new(()),
                 quota_sampler_condition: Condvar::new(),
                 pending_rotations: Mutex::new(BTreeMap::new()),
                 credential_operations: Default::default(),
             },
-            activity: ActivityService::default(),
+            activity: ActivityService::new(Arc::clone(&management_events)),
+            auto_review: Default::default(),
+            management_events,
             integration: IntegrationState::new(integration, codex_home, codex_binary),
         })
     }

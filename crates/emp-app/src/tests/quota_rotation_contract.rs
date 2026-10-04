@@ -149,6 +149,44 @@ for line in sys.stdin:
         1
     );
 
+    // A failed re-import or removal must roll back its credential files and
+    // retain the rotated token. Clearing pending state before the config
+    // commit would discard the only usable credential.
+    let original_file = std::fs::read(&auth_path).unwrap();
+    let original_config = server.state.backend.configuration.snapshot().unwrap();
+    let saved_config = root.join("config.saved.json");
+    std::fs::rename(&config_path, &saved_config).unwrap();
+    std::fs::create_dir(&config_path).unwrap();
+    assert!(
+        crate::services::accounts::import_account_state(
+            &server.state,
+            &json!({"id":"rotating", "prefix":"rotating", "auth_json":{
+                "tokens":{"access_token":"replacement", "account_id":"upstream"}
+            }})
+        )
+        .is_err()
+    );
+    assert!(crate::services::accounts::delete_account_state(&server.state, "rotating").is_err());
+    assert_eq!(std::fs::read(&auth_path).unwrap(), original_file);
+    assert_eq!(
+        server.state.backend.configuration.snapshot().unwrap(),
+        original_config
+    );
+    assert_eq!(
+        server
+            .state
+            .backend
+            .accounts
+            .pending_rotations
+            .lock()
+            .unwrap()
+            .get(auth_path.to_str().unwrap())
+            .unwrap()["tokens"]["access_token"],
+        "rotated"
+    );
+    std::fs::remove_dir(&config_path).unwrap();
+    std::fs::rename(&saved_config, &config_path).unwrap();
+
     // Writable again: the pending credential reaches disk and is cleared.
     fail_saves(false);
     let (status, body) = status_and_body(post(
