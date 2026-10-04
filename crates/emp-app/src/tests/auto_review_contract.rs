@@ -1,6 +1,4 @@
-use super::canonical_root;
-#[cfg(unix)]
-use super::{OneShotUpstream, post, session_header};
+use super::{OneShotUpstream, canonical_root, post, session_header};
 use crate::http::request::{parse_request, read_request_head};
 use crate::lifecycle::ServerHandle;
 use crate::services::accounts::account_catalog_headers;
