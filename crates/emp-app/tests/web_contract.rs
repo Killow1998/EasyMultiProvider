@@ -188,6 +188,23 @@ fn valid_session_persists_across_restart() {
     let page = request(port, "/", &[]);
     assert!(page.starts_with(b"HTTP/1.1 200 OK\r\n"));
     assert_eq!(body(&page), emp_app::WEB_INDEX_BYTES);
+    // Fetch the shipped page's actual assets through the same listener used by
+    // the browser. Feature extraction must not leave a working HTML shell with
+    // missing scripts/styles or require a login to render the sign-in page.
+    let page_html = std::str::from_utf8(body(&page)).expect("UTF-8 page");
+    for suffix in page_html.split("\"/assets/").skip(1) {
+        let asset = format!("/assets/{}", suffix.split('"').next().expect("asset path"));
+        let received = request(port, &asset, &[]);
+        assert!(received.starts_with(b"HTTP/1.1 200 OK\r\n"), "{asset}");
+        let text = std::str::from_utf8(&received).expect("UTF-8 asset");
+        let mime = if asset.ends_with(".css") {
+            "text/css"
+        } else {
+            "text/javascript"
+        };
+        assert!(text.contains(mime), "{asset}: wrong content type");
+        assert!(!body(&received).is_empty(), "{asset}: empty asset");
+    }
     let denied = request(port, "/api/config", &[]);
     assert!(denied.starts_with(b"HTTP/1.1 401 Unauthorized\r\n"));
     let token = bootstrap_line

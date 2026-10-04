@@ -203,8 +203,7 @@ pub(crate) fn persist_fetched_catalog(
     let current = state
         .backend
         .configuration
-        .config
-        .lock()
+        .read()
         .map_err(|_| PersistError::Internal)?;
     if current.get("codex_base_url").and_then(Value::as_str) != Some(&source.base) {
         return Err(PersistError::SourceChanged);

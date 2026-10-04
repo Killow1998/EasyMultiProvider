@@ -361,7 +361,7 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
     let path = request.raw_path();
     let same_origin = same_origin(request, state.port);
     if request.method == RequestMethod::Get
-        && let Some(bytes) = crate::web::script_response(path)
+        && let Some(bytes) = crate::web::asset_response(path)
     {
         return if same_origin {
             bytes

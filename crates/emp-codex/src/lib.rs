@@ -186,39 +186,41 @@ pub fn account_catalog<F>(
 where
     F: FnMut(&Map<String, Value>) -> Option<BTreeMap<String, String>>,
 {
+    cached_account_catalog(config, account, account_headers)
+        .unwrap_or_else(|| load_native_catalog_from_map(config))
+}
+
+/// Read only an identity- and backend-matched account cache. Callers composing
+/// several accounts can supply one request-local native fallback snapshot.
+pub fn cached_account_catalog<F>(
+    config: &Map<String, Value>,
+    account: &Map<String, Value>,
+    account_headers: &mut F,
+) -> Option<Value>
+where
+    F: FnMut(&Map<String, Value>) -> Option<BTreeMap<String, String>>,
+{
     let candidate = account
         .get("auth_file")
         .and_then(Value::as_str)
         .filter(|path| !path.is_empty())
         .and_then(|path| Path::new(path).parent())
         .map(|parent| parent.join("models_cache.json"));
-    let Some(path) = candidate else {
-        return load_native_catalog_from_map(config);
-    };
-    let Ok(metadata) = fs::symlink_metadata(&path) else {
-        return load_native_catalog_from_map(config);
-    };
+    let path = candidate?;
+    let metadata = fs::symlink_metadata(&path).ok()?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() > MAX_ACCOUNT_CATALOG_BYTES
     {
-        return load_native_catalog_from_map(config);
+        return None;
     }
-    let Some(cached) = read_catalog(&path) else {
-        return load_native_catalog_from_map(config);
-    };
-    let Some(headers) = account_headers(account) else {
-        return load_native_catalog_from_map(config);
-    };
+    let cached = read_catalog(&path)?;
+    let headers = account_headers(account)?;
     let owner_matches = cached.get("account_owner").and_then(Value::as_str)
         == Some(native_catalog_owner(&headers).as_str());
     let base_matches = cached.get("base_url").unwrap_or(&Value::Null)
         == config.get("codex_base_url").unwrap_or(&Value::Null);
-    if owner_matches && base_matches {
-        cached
-    } else {
-        load_native_catalog_from_map(config)
-    }
+    (owner_matches && base_matches).then_some(cached)
 }
 
 pub fn native_catalog_path(config: &Map<String, Value>) -> PathBuf {

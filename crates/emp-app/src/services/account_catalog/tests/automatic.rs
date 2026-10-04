@@ -182,7 +182,7 @@ fn add_account(server: &ServerHandle, id: &str, prefix: &str, token: &str) -> Pa
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .expect("config lock");
     let auth_path =
@@ -264,7 +264,13 @@ fn partial_native_catalog_refresh_keeps_a_known_model_routable() {
     )
     .unwrap();
     {
-        let mut config = server.state.backend.configuration.config.lock().unwrap();
+        let mut config = server
+            .state
+            .backend
+            .configuration
+            .test_config()
+            .lock()
+            .unwrap();
         config["accounts"] = json!([]);
         config["native_catalog_path"] = json!(native_path);
     }

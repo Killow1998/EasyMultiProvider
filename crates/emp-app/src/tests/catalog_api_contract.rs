@@ -241,7 +241,7 @@ fn metadata_server_with_http_client(
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .expect("metadata config lock")
         .get_mut("providers")
@@ -268,7 +268,7 @@ fn catalog_http_serves_models_discovery_metadata_and_account_routes() {
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .expect("config lock")
         .as_object_mut()
@@ -818,7 +818,7 @@ fn selection_rolls_back_config_and_keys_if_catalog_destination_is_unsafe() {
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .expect("config lock");
     assert_eq!(config["models"].as_array().map(Vec::len), Some(1));

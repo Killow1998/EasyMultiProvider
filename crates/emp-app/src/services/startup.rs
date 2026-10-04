@@ -80,8 +80,7 @@ pub(crate) fn reconcile(state: &ServerState) -> Result<(), ()> {
     let auto_enable = state
         .backend
         .configuration
-        .config
-        .lock()
+        .read()
         .map_err(|_| ())?
         .get("auto_enable_on_start")
         .and_then(serde_json::Value::as_bool)

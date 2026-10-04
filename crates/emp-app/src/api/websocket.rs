@@ -1,25 +1,22 @@
 //! Responses WebSocket turns and upstream connection ownership.
 
+use crate::api::failure_response::websocket_router_error;
+use crate::api::history_response::history_stream_error;
 use crate::app::ServerState;
 use crate::http::auth::proxy_allowed;
 use crate::http::auth::same_origin;
 use crate::http::request::Request;
 use crate::http::response::json_error_response;
 use crate::http::response::status_text;
-use crate::services::accounts::account_catalog_headers;
-use crate::services::auto_review::resolve_auto_review_route;
 use crate::services::catalog::response_catalog_etag;
-use crate::services::failures::websocket_router_error;
 use crate::services::history::DestinationPrepareError;
-use crate::services::history::history_stream_error;
 use crate::services::history::prepare_destination_context;
 use crate::services::history::prepare_history;
-use crate::services::providers::hydrate_provider_keys;
-use crate::services::request_preparation::prepare_external_request;
+use crate::services::request_preparation::{
+    PreparedRequest, RequestOperation, RequestPreparationError, prepare_request,
+};
 use crate::util::projection_ids;
 use crate::util::random_hex;
-use emp_codex::subscription_route_model;
-use emp_core::resolve_route;
 use emp_history::HistoryError;
 use emp_transport::FailureClass;
 use emp_transport::WebSocketConnection;
@@ -169,67 +166,46 @@ pub(crate) fn serve_responses_websocket(
         }
         let etag = response_catalog_etag(state).unwrap_or_default();
         if websocket.send_json(&serde_json::json!({"type":"codex.response.metadata","headers":{"x-models-etag":etag}})).is_err(){return;}
-        let Some(model) = request_body
-            .get("model")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        else {
-            let _=websocket.send_json(&serde_json::json!({"type":"error","status":400,"error":{"code":"invalid_request","message":"request.model is required"}}));
-            continue;
-        };
-        let mut config = match state.backend.configuration.config.lock() {
-            Ok(config) => config.clone(),
-            Err(_) => {
-                let _=websocket.send_json(&serde_json::json!({"type":"error","status":500,"error":{"code":"internal_error","message":"internal server error"}}));
-                continue;
-            }
-        };
-        hydrate_provider_keys(&mut config, &state.backend.configuration.vault);
-        if let Some(config) = config.as_object_mut() {
-            config.insert(
-                "_native_auth_path".to_owned(),
-                Value::String(
-                    state
-                        .backend
-                        .accounts
-                        .native_auth_path
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-            );
-        }
-        let route = match resolve_auto_review_route(state, &mut config, model).unwrap_or_else(
-            || {
-                resolve_route(&config, model, |config, slug, account| {
-                    subscription_route_model(config, slug, account, |account| {
-                        account_catalog_headers(account, &state.backend.configuration.vault)
-                    })
-                })
-            },
+        let (config, route, mut request_body) = match prepare_request(
+            state,
+            Value::Object(request_body),
+            RequestOperation::Responses,
         ) {
-            Ok(route) => route,
-            Err(error) => {
-                let _=websocket.send_json(&serde_json::json!({"type":"error","status":error.status(),"error":{"code":"router_error","message":error.to_string()}}));
+            Ok(PreparedRequest {
+                config,
+                route,
+                body: Value::Object(body),
+            }) => (config, route, body),
+            Err(RequestPreparationError::ModelRequired) => {
+                let _ = websocket.send_json(&serde_json::json!({
+                    "type":"error", "status":400,
+                    "error":{"code":"invalid_request","message":"request.model is required"}
+                }));
+                continue;
+            }
+            Err(RequestPreparationError::Route(error)) => {
+                let _ = websocket.send_json(&serde_json::json!({
+                    "type":"error", "status":error.status(),
+                    "error":{"code":"router_error","message":error.to_string()}
+                }));
+                continue;
+            }
+            Ok(_) | Err(_) => {
+                let _ = websocket.send_json(&serde_json::json!({
+                    "type":"error", "status":500,
+                    "error":{"code":"internal_error","message":"internal server error"}
+                }));
                 continue;
             }
         };
-        let (route, mut request_body) =
-            match prepare_external_request(&config, route, Value::Object(request_body)) {
-                Ok((route, Value::Object(body))) => (route, body),
-                Ok(_) | Err(_) => {
-                    let _ = websocket.send_json(&serde_json::json!({
-                        "type":"error",
-                        "status":500,
-                        "error":{"code":"internal_error","message":"internal server error"}
-                    }));
-                    continue;
-                }
-            };
         if crate::services::claude_cli::selected(&route)
             && let Err(error) =
                 crate::services::claude_cli::preflight_input(&Value::Object(request_body.clone()))
         {
-            if websocket.send_json(&error.websocket_value()).is_err() {
+            if websocket
+                .send_json(&crate::api::claude_response::websocket_value(&error))
+                .is_err()
+            {
                 return;
             }
             continue;
@@ -309,7 +285,10 @@ pub(crate) fn serve_responses_websocket(
                 continue;
             }
             Err(DestinationPrepareError::ClaudeCli(error)) => {
-                if websocket.send_json(&error.websocket_value()).is_err() {
+                if websocket
+                    .send_json(&crate::api::claude_response::websocket_value(&error))
+                    .is_err()
+                {
                     return;
                 }
                 continue;

@@ -421,7 +421,13 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     // Also when only full configuration validation rejects it: the prefix
     // names an existing provider.
     {
-        let mut config = server.state.backend.configuration.config.lock().unwrap();
+        let mut config = server
+            .state
+            .backend
+            .configuration
+            .test_config()
+            .lock()
+            .unwrap();
         config["providers"] = json!([{"id": "deepseek", "base_url": "https://example.test/v1"}]);
         *config = emp_state::normalize_configuration(Some(&config)).unwrap();
     }
@@ -450,7 +456,7 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
             .state
             .backend
             .configuration
-            .config
+            .test_config()
             .lock()
             .unwrap()
             .clone(),
@@ -501,7 +507,7 @@ fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
             .state
             .backend
             .configuration
-            .config
+            .test_config()
             .lock()
             .unwrap()
             .clone(),
@@ -597,7 +603,7 @@ fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .unwrap()
         .clone();
@@ -711,7 +717,9 @@ fn account_import_during_credential_replacement_is_not_lost() {
                 "an import completed while the replacement held the configuration"
             );
             // The migration's own change to the configuration it was given.
-            config["accounts"][0]["name"] = json!("renamed-by-migration");
+            let mut updated = config.clone();
+            updated["accounts"][0]["name"] = json!("renamed-by-migration");
+            config.commit(&updated).expect("commit migration change");
         })
         .expect("replacement runs");
     });
@@ -723,7 +731,7 @@ fn account_import_during_credential_replacement_is_not_lost() {
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .unwrap()
         .clone();
@@ -783,7 +791,7 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
     blocker
         .execute_batch("BEGIN EXCLUSIVE")
         .expect("pause history writes");
-    let configuration = &server.state.backend.configuration.config;
+    let configuration = &server.state.backend.configuration.test_config();
     let (reimport, rival) = thread::scope(|scope| {
         let reimport = scope.spawn(|| {
             import_account_state(&server.state, &body("demo", "team-b", "upstream-demo-2"))

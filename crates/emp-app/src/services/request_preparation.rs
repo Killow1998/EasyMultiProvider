@@ -5,7 +5,10 @@
 //! route snapshot paired so projection, context checks, and forwarding observe
 //! the same capability decision without persisting internal markers.
 
-use emp_core::{Dialect, OpaqueJson, Protocol, ResolvedRoute};
+use crate::app::ServerState;
+use crate::services::auto_review::resolve_auto_review_route;
+use crate::services::providers::hydrate_provider_keys;
+use emp_core::{Dialect, OpaqueJson, Protocol, ResolvedRoute, RouteResolutionError, resolve_route};
 use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,14 +28,82 @@ impl SummaryPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum RequestPreparationError {
+    ModelRequired,
+    ConfigurationUnavailable,
+    Route(RouteResolutionError),
     ModelSnapshotTooLarge,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RequestOperation {
+    Responses,
+    Compact,
+}
+
+pub(crate) struct PreparedRequest {
+    pub(crate) config: Value,
+    pub(crate) route: ResolvedRoute,
+    pub(crate) body: Value,
+}
+
+/// Freeze routing and presentation together before any history replay or I/O.
+/// Compact deliberately resolves the requested account directly; auto-review
+/// fallback belongs only to Responses turns. Wire errors and WebSocket
+/// continuation state remain with their respective adapters.
+pub(crate) fn prepare_request(
+    state: &ServerState,
+    body: Value,
+    operation: RequestOperation,
+) -> Result<PreparedRequest, RequestPreparationError> {
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or(RequestPreparationError::ModelRequired)?;
+    let mut config = state
+        .backend
+        .configuration
+        .read()
+        .map_err(|_| RequestPreparationError::ConfigurationUnavailable)?
+        .clone();
+    hydrate_provider_keys(&mut config, &state.backend.configuration.vault);
+    if let Some(config) = config.as_object_mut() {
+        config.insert(
+            "_native_auth_path".to_owned(),
+            Value::String(
+                state
+                    .backend
+                    .accounts
+                    .native_auth_path
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        );
+    }
+    let automatic = match operation {
+        RequestOperation::Responses => resolve_auto_review_route(state, &mut config, model),
+        RequestOperation::Compact => None,
+    };
+    let route = automatic
+        .unwrap_or_else(|| {
+            resolve_route(&config, model, |config, slug, account| {
+                crate::services::catalog::subscription_model(state, config, slug, account)
+            })
+        })
+        .map_err(RequestPreparationError::Route)?;
+    let (route, body) = prepare_external_request(&config, route, body)?;
+    Ok(PreparedRequest {
+        config,
+        route,
+        body,
+    })
 }
 
 /// Apply Python's external reasoning-summary policy exactly once to an owned
 /// body and its frozen route. Native routes keep both inputs untouched.
-pub(crate) fn prepare_external_request(
+fn prepare_external_request(
     config: &Value,
     mut route: ResolvedRoute,
     mut body: Value,

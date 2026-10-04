@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.12.10 (2026-10-04)
+
+- Reduce request and stream teardown delays by starting disconnect monitoring
+  only when needed and waking its worker immediately when a request ends.
+  Preserve cancellation, unread socket data and the previous socket timeout.
+- Reduce SSE serialization and request-size accounting allocations with a shared
+  JSON writer. Add optional local profiling; normal builds keep it disabled.
+- Unify request preparation and external HTTP/SSE/WebSocket retry handling while
+  preserving protocol fallback, retry limits, native response fields and
+  conversation behavior.
+- Preserve pending rotated credentials when account reimport or removal cannot
+  be committed. Configuration, credential files and published state retain their
+  transaction and rollback boundaries.
+- Separate configuration, catalog, request outcomes and management notifications
+  into focused modules. Reuse catalog inputs within each operation without
+  introducing a stale response cache.
+- Split the management page's client, settings, request details, diagnostics and
+  styles into embedded assets. Ignore late diagnostic responses after closing
+  the dialog; retain the existing appearance and controls.
+
 ## 0.12.9 (2026-10-02)
 
 - Match account Credit and reset-count numbers to the 12px quota percentages,

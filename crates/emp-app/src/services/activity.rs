@@ -1,9 +1,10 @@
 //! Bounded, process-local request activity for management views.
 
+use super::management_events::{Change, ManagementEvents};
 use emp_core::{ResolvedRoute, RouteSource};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::sync::{Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 mod requests;
 
@@ -84,36 +85,35 @@ struct ActivityState {
     requests: requests::Requests,
 }
 
-/// Activity is deliberately separate from quota revisions: SSE subscribers
-/// share the wake condition, but an activity change never changes quota data.
+/// Request activity owns its state and publishes a change after each mutation.
 #[derive(Default)]
 pub(crate) struct ActivityService {
     state: Mutex<ActivityState>,
+    events: Arc<ManagementEvents>,
 }
 
 pub(crate) struct ActivityGuard<'a> {
     service: &'a ActivityService,
     identity: Option<ActivityIdentity>,
-    wake_revision: &'a Mutex<u64>,
-    wake_condition: &'a Condvar,
 }
 
 impl ActivityService {
+    pub(crate) fn new(events: Arc<ManagementEvents>) -> Self {
+        Self {
+            state: Mutex::default(),
+            events,
+        }
+    }
+
     /// Begin tracking one dispatched upstream request. The caller owns this
     /// guard through response completion, stream termination, or cancellation.
-    pub(crate) fn begin<'a>(
-        &'a self,
-        identity: Option<ActivityIdentity>,
-        wake_revision: &'a Mutex<u64>,
-        wake_condition: &'a Condvar,
-    ) -> ActivityGuard<'a> {
+    pub(crate) fn begin<'a>(&'a self, identity: Option<ActivityIdentity>) -> ActivityGuard<'a> {
         let identity = identity.filter(|identity| {
             valid_public_id(&identity.model_id)
                 && identity.provider_id.as_deref().is_none_or(valid_public_id)
                 && identity.account_id.as_deref().is_none_or(valid_public_id)
         });
         let mut tracked_identity = None;
-        let wake_guard = wake_revision.lock().unwrap_or_else(PoisonError::into_inner);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let now = unix_seconds();
         let mut changed = prune_expired(&mut state, now);
@@ -150,24 +150,14 @@ impl ActivityService {
             state.revision = state.revision.wrapping_add(1);
         }
         drop(state);
-        drop(wake_guard);
         if changed {
-            wake_condition.notify_all();
+            self.events.publish(Change::Activity);
         }
 
         ActivityGuard {
             service: self,
             identity: tracked_identity,
-            wake_revision,
-            wake_condition,
         }
-    }
-
-    pub(crate) fn revision(&self) -> u64 {
-        self.state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .revision
     }
 
     /// Return a compact public snapshot. Old finished rows are retained only
@@ -207,53 +197,29 @@ impl ActivityService {
         event: &Value,
         identity: Option<&ActivityIdentity>,
         finished: bool,
-        wake_revision: &Mutex<u64>,
-        wake_condition: &Condvar,
     ) {
-        self.update_requests(wake_revision, wake_condition, |requests| {
+        self.update_requests(|requests| {
             requests.observe(event, identity, finished, unix_seconds())
         });
     }
 
-    pub(crate) fn request_retry(
-        &self,
-        request_id: &Value,
-        reason: &str,
-        status: u16,
-        wake_revision: &Mutex<u64>,
-        wake_condition: &Condvar,
-    ) {
-        self.update_requests(wake_revision, wake_condition, |requests| {
-            requests.retry(request_id, reason, status, unix_seconds())
-        });
+    pub(crate) fn request_retry(&self, request_id: &Value, reason: &str, status: u16) {
+        self.update_requests(|requests| requests.retry(request_id, reason, status, unix_seconds()));
     }
 
-    fn update_requests(
-        &self,
-        wake_revision: &Mutex<u64>,
-        wake_condition: &Condvar,
-        update: impl FnOnce(&mut requests::Requests) -> bool,
-    ) {
-        let wake = wake_revision.lock().unwrap_or_else(PoisonError::into_inner);
+    fn update_requests(&self, update: impl FnOnce(&mut requests::Requests) -> bool) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let changed = update(&mut state.requests);
         if changed {
             state.revision = state.revision.wrapping_add(1);
         }
         drop(state);
-        drop(wake);
         if changed {
-            wake_condition.notify_all();
+            self.events.publish(Change::Activity);
         }
     }
 
-    fn finish(
-        &self,
-        identity: &ActivityIdentity,
-        wake_revision: &Mutex<u64>,
-        wake_condition: &Condvar,
-    ) {
-        let wake_guard = wake_revision.lock().unwrap_or_else(PoisonError::into_inner);
+    fn finish(&self, identity: &ActivityIdentity) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(activity) = state.routes.get_mut(identity)
             && activity.in_flight > 0
@@ -262,8 +228,7 @@ impl ActivityService {
             activity.last_finished = Some(unix_seconds());
             state.revision = state.revision.wrapping_add(1);
             drop(state);
-            drop(wake_guard);
-            wake_condition.notify_all();
+            self.events.publish(Change::Activity);
         }
     }
 }
@@ -271,8 +236,7 @@ impl ActivityService {
 impl Drop for ActivityGuard<'_> {
     fn drop(&mut self) {
         if let Some(identity) = &self.identity {
-            self.service
-                .finish(identity, self.wake_revision, self.wake_condition);
+            self.service.finish(identity);
         }
     }
 }
@@ -312,12 +276,10 @@ mod tests {
     #[test]
     fn guard_counts_concurrent_requests_and_records_finish() {
         let service = ActivityService::default();
-        let wake_revision = Mutex::new(0);
-        let wake_condition = Condvar::new();
         let identity = identity("model-a", Some("account-a"));
 
-        let first = service.begin(Some(identity.clone()), &wake_revision, &wake_condition);
-        let second = service.begin(Some(identity.clone()), &wake_revision, &wake_condition);
+        let first = service.begin(Some(identity.clone()));
+        let second = service.begin(Some(identity.clone()));
         let active = service.snapshot(unix_seconds());
         assert_eq!(active["routes"][0]["in_flight"], 2);
         assert_eq!(active["routes"][0]["account_id"], "account-a");
@@ -336,13 +298,7 @@ mod tests {
     #[test]
     fn active_snapshot_keeps_only_public_fields() {
         let service = ActivityService::default();
-        let wake_revision = Mutex::new(0);
-        let wake_condition = Condvar::new();
-        let _guard = service.begin(
-            Some(identity("visible-model", Some("@native"))),
-            &wake_revision,
-            &wake_condition,
-        );
+        let _guard = service.begin(Some(identity("visible-model", Some("@native"))));
         let snapshot = service.snapshot(unix_seconds());
         assert_eq!(snapshot["recent_for_seconds"], ACTIVITY_RECENT_FOR_SECONDS);
         assert_eq!(snapshot["routes"][0]["model_id"], "visible-model");
@@ -370,16 +326,8 @@ mod tests {
     #[test]
     fn route_storage_stays_bounded_when_every_tracked_route_is_active() {
         let service = ActivityService::default();
-        let wake_revision = Mutex::new(0);
-        let wake_condition = Condvar::new();
         let guards = (0..=MAX_ACTIVITY_ROUTES)
-            .map(|index| {
-                service.begin(
-                    Some(identity(&format!("model-{index}"), None)),
-                    &wake_revision,
-                    &wake_condition,
-                )
-            })
+            .map(|index| service.begin(Some(identity(&format!("model-{index}"), None))))
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -398,9 +346,7 @@ mod tests {
         assert!(ActivityIdentity::new("x".repeat(MAX_PUBLIC_ID_BYTES + 1), None, None).is_none());
 
         let service = ActivityService::default();
-        let wake_revision = Mutex::new(0);
-        let wake_condition = Condvar::new();
-        let guard = service.begin(None, &wake_revision, &wake_condition);
+        let guard = service.begin(None);
         assert_eq!(
             service.snapshot(unix_seconds())["routes"]
                 .as_array()
@@ -409,7 +355,7 @@ mod tests {
             0
         );
         drop(guard);
-        assert_eq!(service.revision(), 0);
+        assert_eq!(service.snapshot(unix_seconds())["revision"], 0);
     }
 
     #[test]

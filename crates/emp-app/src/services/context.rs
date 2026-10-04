@@ -6,7 +6,7 @@ use serde_json::Value;
 pub(crate) fn payload(state: &ServerState, route: &ResolvedRoute, body: &Value) -> Option<Value> {
     if route.dialect == emp_core::Dialect::CodexNative {
         let body = body.as_object()?;
-        let config = state.backend.configuration.config.lock().ok()?.clone();
+        let config = state.backend.configuration.read().ok()?.clone();
         let plaintext = config["providers"]
             .as_array()
             .into_iter()
@@ -43,7 +43,7 @@ pub(crate) fn record_payload(
         return;
     };
     let configuration = &state.backend.configuration;
-    let Ok(mut current) = configuration.config.lock() else {
+    let Ok(mut current) = configuration.edit() else {
         return;
     };
     let mut updated = current.clone();
@@ -79,16 +79,7 @@ pub(crate) fn record_payload(
         "context_calibrations".into(),
         observed["context_calibrations"].clone(),
     );
-    if emp_state::save_configuration(
-        &updated,
-        Some(&configuration.config_path),
-        &configuration.vault,
-    )
-    .is_ok()
-        && let Ok(saved) = emp_state::load_configuration(Some(&configuration.config_path))
-    {
-        *current = saved;
-    }
+    let _ = current.commit(&updated);
 }
 
 pub(crate) fn outcome(event: &Value) -> Option<bool> {

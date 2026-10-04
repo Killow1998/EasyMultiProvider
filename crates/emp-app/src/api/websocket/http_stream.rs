@@ -1,9 +1,9 @@
 //! HTTP/SSE fallback and external streams delivered through the downstream WebSocket.
 use super::{Turn, TurnResult};
+use crate::api::failure_response::{stream_failure_value, websocket_router_error};
 use crate::app::ServerState;
 use crate::services::disconnect::DisconnectRace;
 use crate::services::events::{stream_event_activity, terminal_stream_event};
-use crate::services::failures::{stream_failure_value, websocket_router_error};
 use crate::services::{activity::ActivityGuard, native};
 use crate::util::random_hex;
 use emp_transport::WebSocketConnection;
@@ -27,11 +27,12 @@ pub(super) fn serve_native(
     } = turn;
     let mut sent_output = false;
     let _activity_guard = native_turn_activity.take().unwrap_or_else(|| {
-        state.backend.activity.begin(
-            crate::services::activity::ActivityIdentity::from_route(route),
-            &state.backend.accounts.quota_revision,
-            &state.backend.accounts.quota_condition,
-        )
+        state
+            .backend
+            .activity
+            .begin(crate::services::activity::ActivityIdentity::from_route(
+                route,
+            ))
     });
     let mut upstream = match native::open_stream_result(
         state,
@@ -60,7 +61,7 @@ pub(super) fn serve_native(
     {
         return TurnResult::Closed;
     }
-    let mut usage = crate::services::observation::Observation::new(
+    let mut usage = crate::services::request_outcome::RequestOutcome::new(
         state,
         route,
         &Value::Object(request_body.clone()),
@@ -129,36 +130,29 @@ pub(super) fn serve_external(
         ..
     } = turn;
     let mut sent_output = false;
-    let _activity_guard = state.backend.activity.begin(
-        crate::services::activity::ActivityIdentity::from_route(route),
-        &state.backend.accounts.quota_revision,
-        &state.backend.accounts.quota_condition,
-    );
-    let (mut upstream, candidate) = match crate::services::providers::open_external_stream(
+    let _activity_guard =
+        state
+            .backend
+            .activity
+            .begin(crate::services::activity::ActivityIdentity::from_route(
+                route,
+            ));
+    let (mut upstream, candidate) = match crate::services::external::open_stream(
         state,
         route,
         &Value::Object(request_body.clone()),
         request_headers,
         ids,
+        None,
     ) {
         Ok(result) => result,
         Err(error) => {
-            let event = match error {
-                crate::services::providers::ExternalStreamOpenError::Router(error) => {
-                    websocket_router_error(&error)
-                }
-                crate::services::providers::ExternalStreamOpenError::Route(error) => {
-                    serde_json::json!({"type":"error","status":error.status(),"error":{"code":"router_error","message":error.to_string()}})
-                }
-                crate::services::providers::ExternalStreamOpenError::Unsupported => {
-                    serde_json::json!({"type":"error","status":503,"error":{"code":"router_error","message":"provider protocol is unsupported"}})
-                }
-            };
+            let event = crate::api::failure_response::external_websocket_error(error);
             let _ = websocket.send_json(&event);
             return TurnResult::Finished;
         }
     };
-    let mut usage = crate::services::observation::Observation::new(
+    let mut usage = crate::services::request_outcome::RequestOutcome::new(
         state,
         &candidate,
         &Value::Object(request_body.clone()),

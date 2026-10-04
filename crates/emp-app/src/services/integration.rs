@@ -333,8 +333,7 @@ impl IntegrationState {
 }
 
 pub(crate) fn sync_search(state: &ServerState) -> Result<(), ()> {
-    let enabled = state.backend.configuration.config.lock().map_err(|_| ())?["subscription_search"]
-        ["enabled"]
+    let enabled = state.backend.configuration.read().map_err(|_| ())?["subscription_search"]["enabled"]
         == true;
     state
         .backend

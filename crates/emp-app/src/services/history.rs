@@ -1,13 +1,10 @@
 //! History reconstruction and destination context preparation.
 
 use crate::app::ServerState;
-use crate::http::response::response;
 use crate::services::compaction::compaction_summary_body;
 use crate::services::compaction::has_trailing_compaction_trigger;
 use crate::services::compaction::response_output_text;
-use crate::services::failures::router_error_response;
 use crate::util::projection_ids;
-use crate::util::random_hex;
 use emp_core::ResolvedRoute;
 use emp_history::HistoryError;
 use emp_router::RouterError;
@@ -16,54 +13,6 @@ use emp_router::protocol_candidates;
 use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-
-fn history_error_message(error: &HistoryError) -> &'static str {
-    match error.reason() {
-        "thread_missing" | "thread_identity_missing" => {
-            "This task's local history is unavailable. For a Side chat, continue in the original task or start a new task."
-        }
-        "state_database_missing" | "database_missing" => {
-            "Local Codex history was not found. Use the same Codex data directory as your client."
-        }
-        _ => "History reconstruction failed. Continue in the original task or start a new task.",
-    }
-}
-
-fn history_error_detail(error: &HistoryError) -> Value {
-    serde_json::json!({
-        "type":"invalid_request_error",
-        "code":"invalid_prompt",
-        "message":history_error_message(error),
-        "error_class":"history_reconstruction_failed",
-        "reason":error.reason()
-    })
-}
-
-pub(crate) fn history_http_error(error: &HistoryError) -> Vec<u8> {
-    let body = serde_json::to_vec(&serde_json::json!({
-        "error": {
-            "code":"history_reconstruction_failed",
-            "message":history_error_message(error),
-            "error_class":"history_reconstruction_failed",
-            "reason":error.reason()
-        }
-    }))
-    .expect("history error is serializable");
-    response("HTTP/1.1 409 Conflict", "application/json", &body, &[])
-}
-
-pub(crate) fn history_stream_error(error: &HistoryError) -> Value {
-    let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
-    serde_json::json!({
-        "type":"response.failed",
-        "response":{
-            "id":id,
-            "object":"response",
-            "status":"failed",
-            "error":history_error_detail(error)
-        }
-    })
-}
 
 pub(crate) fn prepare_history(
     state: &ServerState,
@@ -156,7 +105,7 @@ pub(crate) fn prepare_destination_context(
         .and_then(|tokens| tokens.checked_mul(2))
         .and_then(|bytes| usize::try_from(bytes).ok())
     {
-        crate::http::request::release_large_temporary_pages(bytes);
+        crate::util::release_large_temporary_pages(bytes);
     }
     if !assessment.blocked() {
         return Ok(body);
@@ -178,8 +127,6 @@ pub(crate) fn prepare_destination_context(
             if activity_guard.is_none() {
                 activity_guard = Some(state.backend.activity.begin(
                     crate::services::activity::ActivityIdentity::from_route(&candidate),
-                    &state.backend.accounts.quota_revision,
-                    &state.backend.accounts.quota_condition,
                 ));
             }
             match crate::services::compaction::execute_summary_request(
@@ -222,33 +169,6 @@ pub(crate) fn prepare_destination_context(
         return Err(DestinationPrepareError::Context(final_assessment.into()));
     }
     Ok(compacted)
-}
-
-pub(crate) fn destination_error_response(error: DestinationPrepareError) -> Vec<u8> {
-    match error {
-        DestinationPrepareError::Router(error) => router_error_response(error),
-        DestinationPrepareError::ClaudeCli(error) => error.http_response(),
-        DestinationPrepareError::Disconnected => Vec::new(),
-        DestinationPrepareError::History(reason) => history_http_error(&HistoryError::new(reason)),
-        DestinationPrepareError::Context(assessment) => {
-            let estimate = assessment
-                .input_estimate
-                .map_or_else(|| "unknown".to_owned(), |value| value.to_string());
-            let limit = assessment
-                .safe_input_limit
-                .map_or_else(|| "unknown".to_owned(), |value| value.to_string());
-            let body = serde_json::json!({"error":{
-                "code":"context_length_exceeded", "type":"context_length_exceeded",
-                "message":format!("context length exceeded: estimated input {estimate} tokens, safe input limit {limit}; provider {}, model {}; next action: reduce input or use native remote compaction", assessment.provider_id, assessment.model_id)
-            }});
-            response(
-                "HTTP/1.1 413 Payload Too Large",
-                "application/json",
-                &serde_json::to_vec(&body).expect("context error JSON"),
-                &[],
-            )
-        }
-    }
 }
 
 #[cfg(test)]

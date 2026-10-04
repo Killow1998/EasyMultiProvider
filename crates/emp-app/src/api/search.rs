@@ -1,6 +1,7 @@
 //! Api search.
 
 use crate::VERSION;
+use crate::api::failure_response::request_router_error_response;
 use crate::app::ServerState;
 use crate::http::auth::proxy_allowed;
 use crate::http::auth::same_origin;
@@ -11,7 +12,6 @@ use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::services::accounts::native_auth_document;
-use crate::services::failures::request_router_error_response;
 use crate::util::random_hex;
 use emp_codex::account_auth_headers;
 use emp_transport::HttpMethod;
@@ -45,7 +45,7 @@ pub(crate) fn native_search_request(
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
-    let config = match state.backend.configuration.config.lock() {
+    let config = match state.backend.configuration.read() {
         Ok(config) => config.clone(),
         Err(_) => {
             return json_error_response(500, status_text(500), "internal server error", None, &[]);

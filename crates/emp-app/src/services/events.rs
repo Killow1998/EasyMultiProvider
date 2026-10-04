@@ -1,38 +1,14 @@
 //! Services events.
 
-use crate::http::response::json_error_response;
-use crate::http::response::status_text;
-use crate::services::failures::router_error_response;
-use emp_router::ProjectionIds;
-use emp_router::response_json_stream_events;
 use serde_json::Value;
 
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn sse_frame(event: &str, body: &Value) -> Result<Vec<u8>, serde_json::Error> {
-    let compact = serde_json::to_vec(body)?;
-    let mut data = Vec::with_capacity(compact.len() + compact.len() / 8);
-    let mut in_string = false;
-    let mut escaped = false;
-    for byte in compact {
-        data.push(byte);
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-        } else if byte == b'"' {
-            in_string = true;
-        } else if matches!(byte, b',' | b':') {
-            data.push(b' ');
-        }
-    }
-    let mut frame = Vec::with_capacity(event.len() + data.len() + 16);
+    let mut frame = Vec::with_capacity(event.len() + 128);
     frame.extend_from_slice(b"event: ");
     frame.extend_from_slice(event.as_bytes());
     frame.extend_from_slice(b"\ndata: ");
-    frame.extend_from_slice(&data);
+    crate::util::spaced_json::write(&mut frame, body)?;
     frame.extend_from_slice(b"\n\n");
     Ok(frame)
 }
@@ -105,23 +81,4 @@ pub(crate) fn terminal_stream_event(event: &Value) -> bool {
                 "response.completed" | "response.incomplete" | "response.failed" | "error"
             )
         })
-}
-
-pub(crate) fn generated_response_stream(
-    response_value: Value,
-    ids: &ProjectionIds,
-) -> Result<Vec<u8>, Vec<u8>> {
-    let events =
-        response_json_stream_events(response_value, ids, false).map_err(router_error_response)?;
-    let mut output = Vec::new();
-    for event in events {
-        let event_type = event
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("message");
-        output.extend(sse_frame(event_type, &event).map_err(|_| {
-            json_error_response(500, status_text(500), "internal server error", None, &[])
-        })?);
-    }
-    Ok(output)
 }

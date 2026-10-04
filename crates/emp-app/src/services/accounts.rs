@@ -1,6 +1,5 @@
 //! Account credentials, persistence and public snapshots.
 use emp_codex::quota_history::QuotaHistoryStore;
-use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::app::ServerState;
@@ -10,11 +9,9 @@ use emp_codex::quota::QuotaError;
 use emp_state::FileTransaction;
 use emp_state::VaultStore;
 use emp_state::duplicate_account_status;
-use emp_state::load_configuration;
 use emp_state::normalize_account;
 use emp_state::normalize_configuration;
 use emp_state::public_configuration_with_file_status;
-use emp_state::save_configuration_in_transaction;
 use emp_state::validate_auth_json;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -70,7 +67,7 @@ pub(crate) fn native_account_snapshot(state: &ServerState, config: &Value) -> Va
 }
 
 pub(crate) fn accounts_snapshot(state: &ServerState) -> Option<Value> {
-    let config = state.backend.configuration.config.lock().ok()?.clone();
+    let config = state.backend.configuration.read().ok()?.clone();
     let duplicates = duplicate_accounts(
         &config,
         &state.backend.configuration.vault,
@@ -202,8 +199,7 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
     let mut config = state
         .backend
         .configuration
-        .config
-        .lock()
+        .edit()
         .map_err(|_| "internal server error".to_owned())?;
     let (auth_path, mut updated) = prepare(&config)?;
     if configured(&config) {
@@ -217,52 +213,30 @@ pub(crate) fn import_account_state(state: &ServerState, body: &Value) -> Result<
         .unwrap_or_else(|| Path::new("."))
         .join("config.toml");
     let mut transaction = FileTransaction::new();
-    let operation = (|| -> Result<Value, String> {
-        transaction
-            .remember(&auth_path)
-            .map_err(|error| error.to_string())?;
-        transaction
-            .remember(&config_toml)
-            .map_err(|error| error.to_string())?;
-        state
-            .backend
-            .configuration
-            .vault
-            .write_encrypted_json(&auth_path, &auth)
-            .map_err(|error| error.to_string())?;
-        forget_pending_rotation(state, &auth_path);
-        emp_state::atomic_write_private_state(
-            &config_toml,
-            b"cli_auth_credentials_store = \"file\"\n",
-        )
+    transaction
+        .remember(&auth_path)
         .map_err(|error| error.to_string())?;
-        let duplicates = duplicate_accounts(
-            &updated,
-            &state.backend.configuration.vault,
-            &state.backend.accounts.native_auth_path,
-        );
-        (updated, _) = emp_state::migrate_duplicate_native_visibility(&updated, &duplicates);
-        save_configuration_in_transaction(
-            &updated,
-            Some(&state.backend.configuration.config_path),
-            &state.backend.configuration.vault,
-            &mut transaction,
-        )
+    transaction
+        .remember(&config_toml)
         .map_err(|error| error.to_string())?;
-        load_configuration(Some(&state.backend.configuration.config_path))
-            .map_err(|error| error.to_string())
-    })();
-    let committed = match operation {
-        Ok(config) => {
-            transaction.commit();
-            config
-        }
-        Err(error) => {
-            let _ = transaction.rollback();
-            return Err(error);
-        }
-    };
-    *config = committed;
+    state
+        .backend
+        .configuration
+        .vault
+        .write_encrypted_json(&auth_path, &auth)
+        .map_err(|error| error.to_string())?;
+    emp_state::atomic_write_private_state(&config_toml, b"cli_auth_credentials_store = \"file\"\n")
+        .map_err(|error| error.to_string())?;
+    let duplicates = duplicate_accounts(
+        &updated,
+        &state.backend.configuration.vault,
+        &state.backend.accounts.native_auth_path,
+    );
+    (updated, _) = emp_state::migrate_duplicate_native_visibility(&updated, &duplicates);
+    config
+        .commit_files(&updated, transaction)
+        .map_err(|error| error.to_string())?;
+    forget_pending_rotation(state, &auth_path);
     state.catalog_refresh.account_changed(account_id);
     drop(config);
     notify_quota_update(state, account_id, None);
@@ -279,8 +253,7 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
     let mut config = state
         .backend
         .configuration
-        .config
-        .lock()
+        .edit()
         .map_err(|_| "internal server error".to_owned())?;
     let current = config.clone();
     let accounts = current
@@ -335,46 +308,38 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
         .unwrap_or_else(|| Path::new("."))
         .join("config.toml");
     let mut transaction = FileTransaction::new();
-    let operation = (|| -> Result<Value, String> {
-        transaction
-            .remember(&expected)
-            .map_err(|error| error.to_string())?;
-        transaction
-            .remember(&config_toml)
-            .map_err(|error| error.to_string())?;
-        save_configuration_in_transaction(
-            &updated,
-            Some(&state.backend.configuration.config_path),
-            &state.backend.configuration.vault,
-            &mut transaction,
-        )
+    transaction
+        .remember(&expected)
         .map_err(|error| error.to_string())?;
-        forget_pending_rotation(state, &expected);
-        for path in [&expected, &config_toml] {
-            match std::fs::remove_file(path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.to_string()),
-            }
+    transaction
+        .remember(&config_toml)
+        .map_err(|error| error.to_string())?;
+    for path in [&expected, &config_toml] {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
         }
-        load_configuration(Some(&state.backend.configuration.config_path))
-            .map_err(|error| error.to_string())
-    })();
-    let committed = match operation {
-        Ok(config) => {
-            transaction.commit();
-            config
-        }
-        Err(error) => {
-            let _ = transaction.rollback();
-            return Err(error);
-        }
-    };
-    *config = committed;
+    }
+    config
+        .commit_files(&updated, transaction)
+        .map_err(|error| error.to_string())?;
+    forget_pending_rotation(state, &expected);
     state.catalog_refresh.account_changed(account_id);
     drop(config);
     notify_quota_update(state, account_id, None);
     Ok(())
+}
+
+/// Import an already decrypted bundle under the account and configuration
+/// ownership rules. HTTP callers do not acquire locks or publish snapshots.
+pub(crate) fn import_account_bundle(
+    state: &ServerState,
+    decrypted: emp_state::migration::DecryptedMigration,
+) -> Option<
+    Result<emp_state::migration::MigrationImportSummary, emp_state::migration::MigrationError>,
+> {
+    replacing_account_credentials(state, |config| config.import_migration(decrypted))
 }
 
 /// Run `replace`, which may rewrite configured accounts' stored credentials
@@ -384,9 +349,9 @@ pub(crate) fn delete_account_state(state: &ServerState, account_id: &str) -> Res
 /// is unlocked. Rotated credentials whose stored file it rewrote are
 /// dropped: the replacement is the user's explicit choice, and a flush must
 /// not overwrite it later.
-pub(crate) fn replacing_account_credentials<T>(
+pub(super) fn replacing_account_credentials<T>(
     state: &ServerState,
-    replace: impl FnOnce(&mut Value) -> T,
+    replace: impl FnOnce(&mut super::configuration::ConfigurationEdit<'_>) -> T,
 ) -> Option<T> {
     let configured_ids = |config: &Value| {
         let mut ids = config
@@ -403,8 +368,8 @@ pub(crate) fn replacing_account_credentials<T>(
         ids.dedup();
         ids
     };
-    let configuration = &state.backend.configuration.config;
-    let mut account_ids = configured_ids(&*configuration.lock().ok()?);
+    let configuration = &state.backend.configuration;
+    let mut account_ids = configured_ids(&configuration.snapshot().ok()?);
     loop {
         // Refresh locks before the configuration lock, the order quota
         // refreshes use.
@@ -416,7 +381,7 @@ pub(crate) fn replacing_account_credentials<T>(
             .iter()
             .map(|lock| lock.lock().ok())
             .collect::<Option<Vec<_>>>()?;
-        let mut config = configuration.lock().ok()?;
+        let mut config = configuration.edit().ok()?;
         // An account added between listing and locking would run
         // unprotected: lock again until every configured account is held.
         let current_ids = configured_ids(&config);
@@ -472,9 +437,6 @@ pub(crate) struct AccountState {
     pub(crate) quota_refresh_errors: Mutex<BTreeMap<String, String>>,
     pub(crate) quota_refresh_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
     pub(crate) quota_history: QuotaHistoryStore,
-    pub(crate) quota_revision: Mutex<u64>,
-    pub(crate) quota_condition: Condvar,
-    pub(crate) quota_event_slots: AtomicUsize,
     pub(crate) quota_sampler_wait: Mutex<()>,
     pub(crate) quota_sampler_condition: Condvar,
     /// Rotated credentials whose durable save failed, keyed by encrypted
@@ -548,7 +510,11 @@ pub(crate) fn duplicate_accounts(
     native_auth_path: &Path,
 ) -> BTreeMap<String, String> {
     let native = native_auth_document(native_auth_path);
-    let credentials = config
+    duplicate_account_status(native.as_ref(), &account_credentials(config, vault))
+}
+
+pub(super) fn account_credentials(config: &Value, vault: &VaultStore) -> Vec<(String, Value)> {
+    config
         .get("accounts")
         .and_then(Value::as_array)
         .into_iter()
@@ -564,8 +530,7 @@ pub(crate) fn duplicate_accounts(
                 .ok()
                 .map(|auth| (id.to_owned(), auth))
         })
-        .collect::<Vec<_>>();
-    duplicate_account_status(native.as_ref(), &credentials)
+        .collect()
 }
 
 pub(crate) fn quota_owner_key(state: &ServerState, account_id: &str) -> Result<String, QuotaError> {
@@ -575,8 +540,7 @@ pub(crate) fn quota_owner_key(state: &ServerState, account_id: &str) -> Result<S
     let config = state
         .backend
         .configuration
-        .config
-        .lock()
+        .read()
         .map_err(|_| QuotaError::new("Codex account quota check failed", "quota_error"))?
         .clone();
     quota_owner_key_in(state, &config, account_id)
@@ -634,10 +598,8 @@ pub(crate) fn quota_owner_key_in(
 }
 
 pub(crate) fn notify_quota_update(state: &ServerState, account_id: &str, error: Option<&str>) {
-    if error.is_none_or(str::is_empty)
-        && let Ok(mut cooldowns) = state.auto_review_cooldowns.lock()
-    {
-        cooldowns.remove(account_id);
+    if error.is_none_or(str::is_empty) {
+        state.backend.auto_review.clear(account_id);
     }
     if let Ok(mut errors) = state.backend.accounts.quota_refresh_errors.lock() {
         match error {
@@ -649,10 +611,10 @@ pub(crate) fn notify_quota_update(state: &ServerState, account_id: &str, error: 
             }
         }
     }
-    if let Ok(mut revision) = state.backend.accounts.quota_revision.lock() {
-        *revision = revision.wrapping_add(1);
-        state.backend.accounts.quota_condition.notify_all();
-    }
+    state
+        .backend
+        .management_events
+        .publish(super::management_events::Change::Quota);
 }
 
 pub(crate) fn quota_refresh_lock(state: &ServerState, account_id: &str) -> Option<Arc<Mutex<()>>> {

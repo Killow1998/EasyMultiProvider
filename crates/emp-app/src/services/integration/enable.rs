@@ -14,8 +14,7 @@ pub(crate) fn apply(state: &ServerState) -> Result<IntegrationResult, EnableErro
     let config = state
         .backend
         .configuration
-        .config
-        .lock()
+        .read()
         .map_err(|_| EnableError::Unavailable(503))?
         .clone();
     let catalog = server_catalog(state, &config);

@@ -87,7 +87,7 @@ fn migration_export_and_import_cross_the_authenticated_http_boundary() {
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .unwrap()
         .clone();
@@ -130,7 +130,7 @@ fn account_import_and_delete_keep_credentials_managed_and_private() {
         .state
         .backend
         .configuration
-        .config
+        .test_config()
         .lock()
         .unwrap()
         .clone();
@@ -152,7 +152,13 @@ fn account_import_and_delete_keep_credentials_managed_and_private() {
     assert!(!auth_path.exists());
     assert!(!auth_path.parent().unwrap().join("config.toml").exists());
     assert!(
-        server.state.backend.configuration.config.lock().unwrap()["accounts"]
+        server
+            .state
+            .backend
+            .configuration
+            .test_config()
+            .lock()
+            .unwrap()["accounts"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -379,6 +385,7 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
     })).unwrap()).unwrap();
     std::fs::write(root.join("config.toml"), b"").unwrap();
     // Codex is running, still on the catalog it loaded before EMP was applied.
+    let original_native_config = std::fs::read(root.join("config.toml")).unwrap();
     let codex_models = Arc::new(Mutex::new(Vec::new()));
     let (refresh_requests, catalog_requests) =
         fake_codex_backend(&root, Arc::clone(&codex_models), false);
@@ -587,7 +594,9 @@ fn codex_reaching_emp_reports_the_loaded_catalog_without_page_polling() {
             .load(std::sync::atomic::Ordering::Acquire)
     );
     let restored_config = std::fs::read_to_string(root.join("config.toml")).unwrap();
-    assert_eq!(restored_config.as_bytes(), native_config_before_check);
+    // The earlier direct manager.restore() restored routing fields only.
+    // Explicit restore also removes the separately leased search settings.
+    assert_eq!(restored_config.as_bytes(), original_native_config);
     assert!(!restored_config.contains("model_catalog_json"));
     server.shutdown().unwrap();
     std::fs::remove_dir(&runtime_path).unwrap();

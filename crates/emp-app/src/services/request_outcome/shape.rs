@@ -109,38 +109,22 @@ pub(super) fn facts(body: &Value, headers: &BTreeMap<String, String>) -> Value {
     result["parent_thread_id"] = metadata["forked_from_thread_id"].clone();
     result
 }
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(super) fn request_bytes(body: &Value) -> usize {
     let mut counter = RequestJsonCounter::default();
-    serde_json::to_writer(&mut counter, body).expect("JSON Value serialization is infallible");
-    counter.serialized_bytes.saturating_add(counter.separators)
+    crate::util::spaced_json::write(&mut counter, body)
+        .expect("JSON Value serialization is infallible");
+    counter.serialized_bytes
 }
 
 #[derive(Default)]
 struct RequestJsonCounter {
     serialized_bytes: usize,
-    separators: usize,
-    quoted: bool,
-    escaped: bool,
 }
 
 impl Write for RequestJsonCounter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.serialized_bytes = self.serialized_bytes.saturating_add(bytes.len());
-        for byte in bytes {
-            if self.quoted {
-                if self.escaped {
-                    self.escaped = false;
-                } else if *byte == b'\\' {
-                    self.escaped = true;
-                } else if *byte == b'"' {
-                    self.quoted = false;
-                }
-            } else if *byte == b'"' {
-                self.quoted = true;
-            } else if *byte == b',' || *byte == b':' {
-                self.separators = self.separators.saturating_add(1);
-            }
-        }
         Ok(bytes.len())
     }
 
@@ -151,9 +135,8 @@ impl Write for RequestJsonCounter {
 
 #[cfg(test)]
 mod tests {
-    use super::{RequestJsonCounter, request_bytes};
+    use super::request_bytes;
     use serde_json::{Value, json};
-    use std::io::Write;
 
     fn materialized_reference(body: &Value) -> usize {
         let compact = body.to_string();
@@ -202,19 +185,5 @@ mod tests {
         let body =
             json!({"input":[{"type":"message","content":[{"type":"input_text","text":text}]}]});
         assert_eq!(request_bytes(&body), materialized_reference(&body));
-    }
-
-    #[test]
-    fn request_byte_counter_keeps_escape_state_across_write_chunks() {
-        let encoded = br#"{"text":"comma, colon: quote \" still quoted","nested":{"x":1}}"#;
-        let body: Value = serde_json::from_slice(encoded).unwrap();
-        let mut counter = RequestJsonCounter::default();
-        for chunk in encoded.chunks(3) {
-            counter.write_all(chunk).unwrap();
-        }
-        assert_eq!(
-            counter.serialized_bytes.saturating_add(counter.separators),
-            materialized_reference(&body)
-        );
     }
 }

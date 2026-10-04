@@ -1,8 +1,6 @@
 //! Native credential selection and request forwarding.
 
 use crate::app::ServerState;
-use crate::http::response::response;
-use crate::http::response::status_text;
 use crate::services::accounts::native_auth_document;
 use crate::services::catalog::response_catalog_etag;
 use crate::services::disconnect::DisconnectMonitor;
@@ -11,10 +9,10 @@ use crate::services::quota::refresh_account_serialized;
 use emp_codex::account_auth_headers;
 use emp_core::ResolvedRoute;
 use emp_router::ProjectionIds;
-use emp_router::native_http::NativeHttpError;
 use emp_router::native_http::NativeRouter;
 use emp_router::native_http::NativeStream;
 use emp_router::native_http::NativeWebSocketPlan;
+use emp_router::native_http::{NativeCompleteResponse, NativeHttpError};
 use emp_router::native_request::NativeAuth;
 use emp_router::native_request::request_headers;
 use serde_json::Map;
@@ -126,8 +124,6 @@ fn observe_retry(
                 NativeRetryReason::ReasoningFallback => "reasoning_fallback",
             },
             decision.status,
-            &state.backend.accounts.quota_revision,
-            &state.backend.accounts.quota_condition,
         );
     }
     state.backend.diagnostics.journal.event(
@@ -144,37 +140,11 @@ fn observe_retry(
     );
 }
 
-fn error_response(mut error: NativeHttpError) -> Vec<u8> {
-    error.headers.remove("x-models-etag");
-    let headers = error
-        .headers
-        .iter()
-        .map(|(name, value)| (name.as_str(), value.as_str()))
-        .collect::<Vec<_>>();
-    response(
-        &format!("HTTP/1.1 {} {}", error.status, status_text(error.status)),
-        "application/json",
-        &serde_json::to_vec(&error.body).expect("safe native error JSON"),
-        &headers,
-    )
-}
-
 fn replace_catalog_etag(state: &ServerState, headers: &mut BTreeMap<String, String>) {
     headers.remove("x-models-etag");
     if let Some(etag) = response_catalog_etag(state) {
         headers.insert("X-Models-Etag".to_owned(), etag);
     }
-}
-
-pub(crate) fn open_stream(
-    state: &ServerState,
-    route: &ResolvedRoute,
-    config: &Value,
-    body: &Map<String, Value>,
-    incoming: &BTreeMap<String, String>,
-    ids: &ProjectionIds,
-) -> Result<NativeStream, Vec<u8>> {
-    open_stream_result(state, route, config, body, incoming, ids).map_err(error_response)
 }
 
 pub(crate) fn open_stream_result(
@@ -206,9 +176,8 @@ pub(crate) fn open_stream_cancellable(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
     monitor: &mut DisconnectMonitor,
-) -> Result<CancellableNativeStreamOpen, Vec<u8>> {
+) -> Result<CancellableNativeStreamOpen, NativeHttpError> {
     open_stream_result_with_monitor(state, route, config, body, incoming, ids, Some(monitor))
-        .map_err(error_response)
 }
 
 fn open_stream_result_with_monitor(
@@ -261,7 +230,7 @@ fn open_stream_result_with_monitor(
             Ok(CancellableNativeStreamOpen::Opened(Box::new(stream)))
         }
         Err(error) => {
-            let mut observation = crate::services::observation::Observation::new(
+            let mut observation = crate::services::request_outcome::RequestOutcome::new(
                 state,
                 route,
                 &Value::Object(body.clone()),
@@ -282,7 +251,7 @@ pub(crate) fn complete(
     config: &Value,
     body: &Map<String, Value>,
     incoming: &BTreeMap<String, String>,
-) -> Vec<u8> {
+) -> Result<NativeCompleteResponse, NativeHttpError> {
     let started = std::time::Instant::now();
     let on_retry = |decision| observe_retry(state, incoming, decision);
     let on_attempt = || {
@@ -312,7 +281,7 @@ pub(crate) fn complete(
                 Ok(headers)
             },
         ));
-    let mut usage = crate::services::observation::Observation::new(
+    let mut usage = crate::services::request_outcome::RequestOutcome::new(
         state,
         route,
         &Value::Object(body.clone()),
@@ -335,17 +304,7 @@ pub(crate) fn complete(
             }
             // EMP's current catalog identity supersedes an upstream's catalog.
             replace_catalog_etag(state, &mut result.headers);
-            let headers = result
-                .headers
-                .iter()
-                .map(|(name, value)| (name.as_str(), value.as_str()))
-                .collect::<Vec<_>>();
-            response(
-                &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
-                &result.content_type,
-                &result.body,
-                &headers,
-            )
+            Ok(result)
         }
         Err(error) => {
             usage.native_error(&error);
@@ -355,7 +314,7 @@ pub(crate) fn complete(
                 &Value::Object(body.clone()),
                 &serde_json::json!({"type":"error","error":error.body["error"]}),
             );
-            error_response(error)
+            Err(error)
         }
     }
 }
@@ -366,7 +325,7 @@ pub(crate) fn compact(
     config: &Value,
     body: &Map<String, Value>,
     incoming: &BTreeMap<String, String>,
-) -> Vec<u8> {
+) -> Result<NativeCompleteResponse, NativeHttpError> {
     let started = std::time::Instant::now();
     let on_retry = |decision| observe_retry(state, incoming, decision);
     let on_attempt = || {
@@ -395,7 +354,7 @@ pub(crate) fn compact(
                 Ok(headers)
             },
         ));
-    let mut usage = crate::services::observation::Observation::new(
+    let mut usage = crate::services::request_outcome::RequestOutcome::new(
         state,
         route,
         &Value::Object(body.clone()),
@@ -411,21 +370,11 @@ pub(crate) fn compact(
                 usage.observe(&value);
             }
             replace_catalog_etag(state, &mut result.headers);
-            let headers = result
-                .headers
-                .iter()
-                .map(|(name, value)| (name.as_str(), value.as_str()))
-                .collect::<Vec<_>>();
-            response(
-                &format!("HTTP/1.1 {} {}", result.status, status_text(result.status)),
-                &result.content_type,
-                &result.body,
-                &headers,
-            )
+            Ok(result)
         }
         Err(error) => {
             usage.native_error(&error);
-            error_response(error)
+            Err(error)
         }
     }
 }

@@ -1,3 +1,4 @@
+#[cfg_attr(feature = "hotpath", hotpath::main)]
 fn main() -> std::process::ExitCode {
     match emp_app::run() {
         Ok(code) => code,

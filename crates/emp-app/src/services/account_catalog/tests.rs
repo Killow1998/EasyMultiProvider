@@ -228,9 +228,10 @@ fn model_refresh_rechecks_account_ownership_after_the_upstream_request() {
     catalog.release.as_ref().unwrap().send(()).unwrap();
 
     let response = refresh_worker.join().expect("join refresh worker");
-    let response = String::from_utf8(response.expect_err("owner change must reject stale refresh"))
-        .expect("error response JSON");
-    assert!(response.contains("Subscription changed during model refresh; retry"));
+    assert!(matches!(
+        response.expect_err("owner change must reject stale refresh"),
+        CatalogRefreshError::Invalid("Subscription changed during model refresh; retry")
+    ));
     assert!(
         !auth_path
             .parent()
@@ -252,11 +253,13 @@ fn missing_engine_version_preserves_cached_catalog_and_refuses_refresh() {
     let cached = br#"{"models":[{"slug":"preserved"}]}"#;
     std::fs::write(&cache, cached).unwrap();
     let response = refresh(&server.state, "demo");
-    let response = String::from_utf8(response.expect_err("no synthetic client version")).unwrap();
-    assert!(
-        response.contains("Codex engine version is unavailable"),
-        "{response}"
-    );
+    assert!(matches!(
+        response.expect_err("no synthetic client version"),
+        CatalogRefreshError::Invalid(
+            "Codex engine version is unavailable; model refresh was not started"
+        )
+    ));
     assert_eq!(std::fs::read(&cache).unwrap(), cached);
     server.shutdown().unwrap();
 }
+use super::CatalogRefreshError;

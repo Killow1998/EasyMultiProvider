@@ -86,7 +86,7 @@ fn refresh_due_sources(state: &ServerState, force: bool) {
 }
 
 fn refresh_sources(state: &ServerState) -> Vec<RefreshSource> {
-    let (config, generations) = match state.backend.configuration.config.lock() {
+    let (config, generations) = match state.backend.configuration.read() {
         Ok(config) => {
             let config = config.clone();
             let generations = config

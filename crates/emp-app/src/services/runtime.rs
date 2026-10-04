@@ -5,7 +5,7 @@ use emp_codex::runtime_probe::{RuntimeSyncResult, observe};
 use emp_integration::runtime::{RuntimeStore, offline_snapshot};
 use serde_json::{Value, json};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -99,8 +99,7 @@ pub(crate) fn sync_runtime(
     let config = state
         .backend
         .configuration
-        .config
-        .lock()
+        .read()
         .map_err(|_| "configuration is unavailable".to_owned())?
         .clone();
     let catalog = server_catalog(state, &config);
@@ -219,13 +218,7 @@ pub(crate) fn helper_binary(
 }
 
 pub(crate) fn mark_pending(state: &ServerState, target: &str, detail: &str) -> Result<(), ()> {
-    let config = state
-        .backend
-        .configuration
-        .config
-        .lock()
-        .map_err(|_| ())?
-        .clone();
+    let config = state.backend.configuration.read().map_err(|_| ())?.clone();
     let catalog = server_catalog(state, &config);
     let expected = catalog["models"]
         .as_array()
@@ -291,7 +284,6 @@ const CODEX_RECHECK_GAP: Duration = Duration::from_secs(30);
 pub(crate) struct RuntimeWatch {
     pending: Mutex<bool>,
     wake: Condvar,
-    pub(crate) revision: AtomicU64,
 }
 
 /// Codex just reached EMP, so it may have restarted with EMP's settings.
@@ -368,10 +360,10 @@ pub(crate) fn watch_runtime(state: &ServerState) {
         }
         last_check = Some(Instant::now());
         if checked.is_some_and(|result| before != result.state) {
-            watch.revision.fetch_add(1, Ordering::AcqRel);
-            if let Ok(_revision) = state.backend.accounts.quota_revision.lock() {
-                state.backend.accounts.quota_condition.notify_all();
-            }
+            state
+                .backend
+                .management_events
+                .publish(super::management_events::Change::Integration);
         }
     }
 }
