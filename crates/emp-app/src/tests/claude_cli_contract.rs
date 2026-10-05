@@ -357,7 +357,7 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
     let sse = post_stream(
         &sse_server,
         "/v1/responses",
-        &serde_json::to_vec(&json!({"model":"demo/model","stream":true,"input":"stream request"}))
+        &serde_json::to_vec(&json!({"model":"demo/model","stream":true,"input":"stream request","reasoning":{"effort":null}}))
             .expect("SSE request"),
         &[&session_header(&sse_server)],
     );
@@ -369,6 +369,10 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
     assert_eq!(path, "/v1/messages");
     assert_eq!(body["model"], "sonnet");
     assert_eq!(body["stream"], true);
+    assert_eq!(
+        user_transcript(&body)["reasoning"].get("effort"),
+        Some(&Value::Null)
+    );
     sse_server.shutdown().expect("shutdown SSE server");
 
     let ws_upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({

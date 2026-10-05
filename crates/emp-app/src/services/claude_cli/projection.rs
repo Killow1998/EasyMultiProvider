@@ -132,6 +132,11 @@ pub(super) fn effort(body: &Value) -> Result<Option<&'static str>, &'static str>
     else {
         return Ok(None);
     };
+    // Responses represents an absent optional effort as either omission or
+    // JSON null. Neither requests a CLI override; the string "none" does.
+    if value.is_null() {
+        return Ok(None);
+    }
     match value.as_str() {
         Some("low") => Ok(Some("low")),
         Some("medium") => Ok(Some("medium")),
@@ -139,6 +144,30 @@ pub(super) fn effort(body: &Value) -> Result<Option<&'static str>, &'static str>
         Some("xhigh") => Ok(Some("xhigh")),
         Some("max") => Ok(Some("max")),
         _ => Err("unsupported_reasoning_effort"),
+    }
+}
+
+pub(super) fn effort_diagnostic(body: &Value) -> &'static str {
+    match body
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+    {
+        None => "omitted",
+        Some(Value::Null) => "null",
+        Some(Value::String(value)) => match value.as_str() {
+            "none" => "none",
+            "minimal" => "minimal",
+            "low" => "low",
+            "medium" => "medium",
+            "high" => "high",
+            "xhigh" => "xhigh",
+            "max" => "max",
+            _ => "unknown_string",
+        },
+        Some(Value::Bool(_)) => "boolean",
+        Some(Value::Number(_)) => "number",
+        Some(Value::Array(_)) => "array",
+        Some(Value::Object(_)) => "object",
     }
 }
 
@@ -646,6 +675,67 @@ mod tests {
                 "claude_cli_invalid_structured_output"
             ))
         ));
+    }
+
+    #[test]
+    fn nullable_effort_means_no_override_and_explicit_values_keep_their_meaning() {
+        for body in [
+            json!({}),
+            json!({"reasoning":null}),
+            json!({"reasoning":{}}),
+            json!({"reasoning":{"effort":null}}),
+        ] {
+            assert_eq!(effort(&body), Ok(None), "optional effort: {body}");
+        }
+        for value in ["low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(
+                effort(&json!({"reasoning":{"effort":value}})),
+                Ok(Some(value))
+            );
+        }
+        for value in [
+            json!("none"),
+            json!("minimal"),
+            json!("disabled"),
+            json!("unknown"),
+            json!(""),
+            json!(0),
+            json!(false),
+            json!([]),
+            json!({}),
+        ] {
+            assert_eq!(
+                effort(&json!({"reasoning":{"effort":value}})),
+                Err("unsupported_reasoning_effort")
+            );
+        }
+    }
+
+    #[test]
+    fn effort_diagnostics_report_only_known_enums_or_types() {
+        assert_eq!(effort_diagnostic(&json!({})), "omitted");
+        assert_eq!(
+            effort_diagnostic(&json!({"reasoning":{"effort":null}})),
+            "null"
+        );
+        for value in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(
+                effort_diagnostic(&json!({"reasoning":{"effort":value}})),
+                value
+            );
+        }
+        for (value, label) in [
+            (json!("private arbitrary input"), "unknown_string"),
+            (json!(false), "boolean"),
+            (json!(0), "number"),
+            (json!(["private input"]), "array"),
+            (json!({"private":"input"}), "object"),
+        ] {
+            assert_eq!(
+                effort_diagnostic(&json!({"reasoning":{"effort":value}})),
+                label
+            );
+        }
     }
 
     #[test]

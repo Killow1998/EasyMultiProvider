@@ -142,27 +142,38 @@ mod tests {
     #[test]
     fn claude_failures_identify_the_selected_cli_model_and_distinct_safe_boundary() {
         let route = route();
-        for (reason, code, boundary, cause) in [
+        for (reason, status, code, boundary, cause) in [
+            (
+                "unsupported_reasoning_effort",
+                400,
+                "unsupported_reasoning_effort",
+                "before starting Claude Code CLI",
+                "reasoning.effort",
+            ),
             (
                 "claude_cli_system_format_mismatch",
+                502,
                 "claude_cli_transcript_mismatch",
                 "before EMP forwarded the request",
                 "system messages",
             ),
             (
                 "claude_cli_content_mismatch",
+                502,
                 "claude_cli_transcript_mismatch",
                 "before EMP forwarded the request",
                 "user transcript",
             ),
             (
                 "claude_cli_process_failed",
+                502,
                 "claude_cli_process_failed",
                 "while running Claude Code CLI",
                 "exited",
             ),
             (
                 "claude_cli_result_error",
+                502,
                 "claude_cli_result_error",
                 "while reading the Claude Code result",
                 "failed result",
@@ -171,9 +182,10 @@ mod tests {
             let error = ClaudeCliError::Failure(reason);
             let http = String::from_utf8(http_response_for_route(&error, &route)).unwrap();
             let (head, body) = http.split_once("\r\n\r\n").unwrap();
-            assert!(head.starts_with("HTTP/1.1 502 "));
+            assert!(head.starts_with(&format!("HTTP/1.1 {status} ")));
             let http: Value = serde_json::from_str(body).unwrap();
             let ws = websocket_value_for_route(&error, &route);
+            assert_eq!(ws["status"], status);
             assert_eq!(http["error"]["code"], code);
             assert_eq!(ws["error"]["code"], code);
             for value in [&http["error"]["message"], &ws["error"]["message"]] {

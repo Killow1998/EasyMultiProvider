@@ -59,7 +59,7 @@ pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'stati
         "unsupported_reasoning_effort" => (
             400,
             "unsupported_reasoning_effort",
-            "reasoning effort is not supported by Claude Code CLI",
+            "EMP's Claude Code CLI adapter does not support this reasoning.effort; use low, medium, high, xhigh, max, or omit the optional value",
         ),
         "unsupported_input_modality" => (
             400,
@@ -144,6 +144,7 @@ pub(crate) fn failure_stage(error: &ClaudeCliError) -> &'static str {
     match error {
         ClaudeCliError::Disconnected | ClaudeCliError::ShuttingDown => "cancelled",
         ClaudeCliError::Router(_) => "upstream_request",
+        ClaudeCliError::Failure("unsupported_reasoning_effort") => "input_validation",
         ClaudeCliError::Failure(code) if code.starts_with("claude_cli_relay_") => "relay_request",
         ClaudeCliError::Failure(
             "claude_cli_system_format_mismatch"

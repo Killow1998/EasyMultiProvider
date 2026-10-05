@@ -99,6 +99,10 @@ pub(crate) fn claude_message(route: &ResolvedRoute, cause: &str, stage: &str) ->
         .filter(|name| !name.is_empty())
         .unwrap_or(&route.provider_id);
     let (boundary, progress) = match stage {
+        "input_validation" => (
+            "while EMP validated the request before starting Claude Code CLI",
+            "No request was sent upstream.",
+        ),
         "relay_validation" | "relay_request" => (
             "before EMP forwarded the request",
             "No assistant output was delivered.",

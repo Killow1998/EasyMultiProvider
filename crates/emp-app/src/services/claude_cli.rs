@@ -94,6 +94,7 @@ pub(crate) fn execute_complete(
                 "provider_id":route.provider_id,
                 "model_id":route.requested_model,
                 "upstream_model":route.upstream_model,
+                "reasoning_effort":projection::effort_diagnostic(body),
                 "duration_ms":started.elapsed().as_millis() as u64}),
         );
     }
