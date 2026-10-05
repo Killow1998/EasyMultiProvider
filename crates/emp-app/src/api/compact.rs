@@ -81,7 +81,7 @@ pub(crate) fn compact_request(
     observation.phase(Phase::PrepareHistory);
     body = match prepare_history(state, &route, body, &incoming) {
         Ok(body) => body,
-        Err(error) => return history_http_error(&error),
+        Err(error) => return history_http_error(&error, observation),
     };
     observation.phase(Phase::PrepareDestination);
     let destination_context = {
@@ -90,7 +90,7 @@ pub(crate) fn compact_request(
     };
     body = match destination_context {
         Ok(body) => body,
-        Err(error) => return destination_error_response(error),
+        Err(error) => return destination_error_response(error, observation),
     };
     observation.phase(Phase::Execute);
     if route.dialect == emp_core::Dialect::CodexNative {

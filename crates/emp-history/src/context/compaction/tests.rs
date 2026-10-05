@@ -185,6 +185,33 @@ fn compaction_keeps_summary_and_unit_failure_reasons() {
 }
 
 #[test]
+fn invalid_budget_input_and_oversized_summary_have_precise_reasons() {
+    assert_eq!(
+        compact_with(&json!({}), &Map::new(), 0, |_| unreachable!()),
+        Err("compaction_budget_invalid")
+    );
+    assert_eq!(
+        compact_with(&Value::Null, &Map::new(), 1000, |_| unreachable!()),
+        Err("invalid_history_projection")
+    );
+    // Several small units exceed the final budget while each map request still
+    // fits with the summary prompt. A single oversized unit fails earlier.
+    let mut input = vec![message(&"x".repeat(500)); 5];
+    input.push(message("active"));
+    let body = json!({"model":"m", "max_output_tokens":64,
+        "input":input, "_emp_active_input_start":5});
+    let budget = estimate_json_tokens(&input_view_value(&body)).unwrap() - 1;
+    let mut calls = 0;
+    let error = compact_with(&body, &Map::new(), budget, |_| {
+        calls += 1;
+        Ok("summary ".repeat(1000))
+    })
+    .unwrap_err();
+    assert_eq!(error, "compaction_result_over_budget");
+    assert_eq!(calls, 1);
+}
+
+#[test]
 fn compaction_rejects_unbounded_work() {
     let mut input = (0..MAX_COMPACTION_UNITS + 1)
         .map(|_| message("u"))

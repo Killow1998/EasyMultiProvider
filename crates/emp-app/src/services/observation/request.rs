@@ -2,6 +2,7 @@
 //! account state or usage accounting. A receipt ends at the downstream boundary;
 //! model outcomes keep their existing, separate upstream/accounting boundary.
 use emp_core::ResolvedRoute;
+use emp_history::HistoryError;
 use emp_state::diagnostics::Diagnostics;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -120,6 +121,29 @@ impl RequestObservation {
         self.diagnostics
             .journal
             .event("info", "request_route_selected", &Value::Object(fields));
+    }
+
+    /// Record the local failure before delivery, independently of whether the
+    /// client socket accepts the error. Never infer history failures from
+    /// arbitrary upstream JSON or normal previous-response fallback events.
+    pub(crate) fn history_failed(&mut self, error: &HistoryError) {
+        let diagnostic = error.diagnostic();
+        let failure = json!({
+            "category":diagnostic.category, "reason":diagnostic.reason,
+            "phase":self.phase.name(),
+        });
+        self.fields["history_failure"] = failure;
+        self.diagnostics.journal.event(
+            "warning",
+            "history_reconstruction_failed",
+            &json!({
+                "request_id":self.fields["request_id"],
+                "connection_id":self.fields["connection_id"],
+                "category":diagnostic.category, "reason":diagnostic.reason,
+                "phase":self.phase.name(),
+                "elapsed_ms":self.started.elapsed().as_millis() as u64,
+            }),
+        );
     }
 
     /// Return the original result unchanged; observation cannot change control flow.
@@ -347,6 +371,63 @@ mod tests {
             ),
         ] {
             assert_eq!(reasoning_effort(body.get("reasoning")), expected);
+        }
+    }
+
+    #[test]
+    fn history_reason_survives_a_failed_write_and_unknown_text_is_not_logged() {
+        for (reason, category, expected) in [
+            (
+                "compaction_summary_missing",
+                "checkpoint",
+                "compaction_summary_missing",
+            ),
+            (
+                "private_history_content",
+                "unknown",
+                "history_reason_unknown",
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let diagnostics = Arc::new(Diagnostics::new(&root.path().canonicalize().unwrap()));
+            let mut receipt = RequestObservation::new(
+                diagnostics,
+                Some("0123456789abcdef".into()),
+                None,
+                "sse",
+                "responses",
+            );
+            receipt.phase(Phase::PrepareHistory);
+            receipt.history_failed(&HistoryError::new(reason));
+            let write: std::io::Result<()> = Err(std::io::ErrorKind::BrokenPipe.into());
+            assert_eq!(
+                receipt
+                    .event_type_written("response.failed", write)
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::BrokenPipe
+            );
+            drop(receipt);
+            let records = records(root.path());
+            let failure = records
+                .iter()
+                .find(|r| r["event"] == "history_reconstruction_failed")
+                .unwrap();
+            let done = records
+                .iter()
+                .find(|r| r["event"] == "request_finished")
+                .unwrap();
+            assert_eq!(
+                failure["fields"]["request_id"],
+                done["fields"]["request_id"]
+            );
+            assert_eq!(failure["fields"]["reason"], expected);
+            assert_eq!(
+                done["fields"]["history_failure"],
+                json!({"phase":"prepare_history", "category":category, "reason":expected})
+            );
+            assert_eq!(done["fields"]["delivery"], "write_failed");
+            assert!(!serde_json::to_string(&records).unwrap().contains("private"));
         }
     }
 }

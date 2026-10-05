@@ -49,14 +49,14 @@ where
             REDUCE_PROMPT,
             safe_budget,
             output_limit,
-            "history_compaction_failed",
+            "summary_reduce_unit_too_large",
         )?;
         if chunks.len() >= summaries.len() {
-            return Err("history_compaction_failed");
+            return Err("summary_reduce_not_converging");
         }
         summaries = run(chunks, REDUCE_PROMPT)?;
     }
-    summaries.pop().ok_or("history_compaction_failed")
+    summaries.pop().ok_or("summary_result_missing")
 }
 
 fn pack(

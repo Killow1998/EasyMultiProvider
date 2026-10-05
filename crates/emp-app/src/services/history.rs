@@ -94,11 +94,11 @@ pub(crate) fn prepare_destination_context(
             .into_iter()
             .next()
             .ok_or(DestinationPrepareError::History(
-                "history_compaction_failed",
+                "destination_protocol_missing",
             ))?;
     let candidate = route
         .with_protocol(protocol)
-        .map_err(|_| DestinationPrepareError::History("history_compaction_failed"))?;
+        .map_err(|_| DestinationPrepareError::History("destination_protocol_invalid"))?;
     let assessment = assess_destination_context(&candidate, context_guard_body(&body).as_ref())?;
     if let Some(bytes) = assessment
         .input_estimate
@@ -122,7 +122,12 @@ pub(crate) fn prepare_destination_context(
         |summary_body| {
             let ids = match projection_ids() {
                 Ok(ids) => ids,
-                Err(_) => return Err(()),
+                Err(_) => {
+                    summary_failure = Some(DestinationPrepareError::History(
+                        "summary_request_id_failed",
+                    ));
+                    return Err(());
+                }
             };
             if activity_guard.is_none() {
                 activity_guard = Some(state.backend.activity.begin(
@@ -137,7 +142,10 @@ pub(crate) fn prepare_destination_context(
                 &ids,
                 monitor.as_deref_mut(),
             ) {
-                Ok((result, _)) => response_output_text(&result.body).ok_or(()),
+                Ok((result, _)) => response_output_text(&result.body).ok_or_else(|| {
+                    summary_failure =
+                        Some(DestinationPrepareError::History("summary_output_missing"));
+                }),
                 Err(error) => {
                     summary_failure = Some(match error {
                         crate::services::compaction::SummaryExecutionError::Router(error) => {

@@ -3,46 +3,43 @@ use crate::api::failure_response::{route_resolution_response, router_error_respo
 use crate::http::response::response;
 use crate::services::compaction::{CompactionError, SummaryExecutionError};
 use crate::services::history::DestinationPrepareError;
+use crate::services::observation::request::RequestObservation;
 use crate::util::random_hex;
 use emp_history::HistoryError;
 use serde_json::Value;
 
-fn history_error_message(error: &HistoryError) -> &'static str {
-    match error.reason() {
-        "thread_missing" | "thread_identity_missing" => {
-            "This task's local history is unavailable. For a Side chat, continue in the original task or start a new task."
-        }
-        "state_database_missing" | "database_missing" => {
-            "Local Codex history was not found. Use the same Codex data directory as your client."
-        }
-        _ => "History reconstruction failed. Continue in the original task or start a new task.",
-    }
-}
-
 fn history_error_detail(error: &HistoryError) -> Value {
+    let diagnostic = error.diagnostic();
     serde_json::json!({
         "type":"invalid_request_error",
         "code":"invalid_prompt",
-        "message":history_error_message(error),
+        "message":diagnostic.message(),
         "error_class":"history_reconstruction_failed",
-        "reason":error.reason()
+        "reason":diagnostic.reason,
+        "category":diagnostic.category
     })
 }
 
-pub(crate) fn history_http_error(error: &HistoryError) -> Vec<u8> {
+pub(crate) fn history_http_error(
+    error: &HistoryError,
+    observation: &mut RequestObservation,
+) -> Vec<u8> {
+    observation.history_failed(error);
+    let mut detail = history_error_detail(error);
+    detail["code"] = "history_reconstruction_failed".into();
+    detail.as_object_mut().unwrap().remove("type");
     let body = serde_json::to_vec(&serde_json::json!({
-        "error": {
-            "code":"history_reconstruction_failed",
-            "message":history_error_message(error),
-            "error_class":"history_reconstruction_failed",
-            "reason":error.reason()
-        }
+        "error": detail
     }))
     .expect("history error is serializable");
     response("HTTP/1.1 409 Conflict", "application/json", &body, &[])
 }
 
-pub(crate) fn history_stream_error(error: &HistoryError) -> Value {
+pub(crate) fn history_stream_error(
+    error: &HistoryError,
+    observation: &mut RequestObservation,
+) -> Value {
+    observation.history_failed(error);
     let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
     serde_json::json!({
         "type":"response.failed",
@@ -55,14 +52,19 @@ pub(crate) fn history_stream_error(error: &HistoryError) -> Value {
     })
 }
 
-pub(crate) fn destination_error_response(error: DestinationPrepareError) -> Vec<u8> {
+pub(crate) fn destination_error_response(
+    error: DestinationPrepareError,
+    observation: &mut RequestObservation,
+) -> Vec<u8> {
     match error {
         DestinationPrepareError::Router(error) => router_error_response(error),
         DestinationPrepareError::ClaudeCli(error) => {
             crate::api::claude_response::http_response(&error)
         }
         DestinationPrepareError::Disconnected => Vec::new(),
-        DestinationPrepareError::History(reason) => history_http_error(&HistoryError::new(reason)),
+        DestinationPrepareError::History(reason) => {
+            history_http_error(&HistoryError::new(reason), observation)
+        }
         DestinationPrepareError::Context(assessment) => {
             let estimate = assessment
                 .input_estimate
@@ -109,5 +111,63 @@ pub(crate) fn compaction_error_response(error: CompactionError) -> Vec<u8> {
             crate::api::claude_response::http_response(&error)
         }
         CompactionError::Execution(SummaryExecutionError::Disconnected) => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+    use std::sync::Arc;
+    #[test]
+    fn destination_failure_records_its_actual_phase_and_survives_disabled_logging() {
+        use super::destination_error_response;
+        use crate::services::history::DestinationPrepareError;
+        use crate::services::observation::request::{Phase, RequestObservation};
+        for disabled in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().canonicalize().unwrap();
+            if disabled {
+                std::fs::write(path.join("logs"), "block journal directory").unwrap();
+            }
+            let diagnostics = Arc::new(emp_state::diagnostics::Diagnostics::new(&path));
+            let mut receipt = RequestObservation::new(
+                diagnostics,
+                Some("0123456789abcdef".into()),
+                None,
+                "http",
+                "responses",
+            );
+            receipt.phase(Phase::PrepareDestination);
+            let response = destination_error_response(
+                DestinationPrepareError::History("summary_output_missing"),
+                &mut receipt,
+            );
+            drop(receipt);
+            let text = String::from_utf8(response).unwrap();
+            assert!(text.starts_with("HTTP/1.1 409"));
+            let body: Value = serde_json::from_str(text.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(body["error"]["category"], "destination_compaction");
+            assert_eq!(body["error"]["reason"], "summary_output_missing");
+            if !disabled {
+                let records: Vec<Value> = std::fs::read_dir(path.join("logs"))
+                    .unwrap()
+                    .flat_map(|entry| {
+                        std::fs::read_to_string(entry.unwrap().path())
+                            .unwrap()
+                            .lines()
+                            .map(|line| serde_json::from_str(line).unwrap())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                let done = records
+                    .iter()
+                    .find(|r| r["event"] == "request_finished")
+                    .unwrap();
+                assert_eq!(
+                    done["fields"]["history_failure"]["phase"],
+                    "prepare_destination"
+                );
+            }
+        }
     }
 }

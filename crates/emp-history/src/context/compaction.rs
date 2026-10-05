@@ -21,9 +21,9 @@ where
     F: FnMut(&Value) -> Result<String, ()>,
 {
     if safe_budget == 0 {
-        return Err("history_compaction_failed");
+        return Err("compaction_budget_invalid");
     }
-    let root = body.as_object().ok_or("history_compaction_failed")?;
+    let root = body.as_object().ok_or("invalid_history_projection")?;
     let mut projected = root.clone();
     let active_start = projected
         .remove(crate::ACTIVE_INPUT_START)
@@ -144,7 +144,7 @@ where
     if estimate_json_tokens(&input_view_value(&result))
         .is_none_or(|estimate| estimate > safe_budget)
     {
-        return Err("history_compaction_failed");
+        return Err("compaction_result_over_budget");
     }
     Ok(result)
 }

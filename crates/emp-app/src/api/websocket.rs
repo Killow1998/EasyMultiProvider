@@ -257,7 +257,8 @@ pub(crate) fn serve_responses_websocket(
             match emp_history::request_history_anchor(&request_body, &request_headers) {
                 Ok(anchor) => (anchor.thread_id, anchor.window_id),
                 Err(error) => {
-                    let _ = websocket.send_json(&history_stream_error(&error));
+                    let failed = history_stream_error(&error, websocket.observation);
+                    let _ = websocket.send_json(&failed);
                     continue;
                 }
             };
@@ -274,13 +275,15 @@ pub(crate) fn serve_responses_websocket(
                 Ok(Value::Object(body)) => body,
                 Ok(_) => {
                     let error = HistoryError::new("invalid_history_projection");
-                    if websocket.send_json(&history_stream_error(&error)).is_err() {
+                    let failed = history_stream_error(&error, websocket.observation);
+                    if websocket.send_json(&failed).is_err() {
                         return;
                     }
                     continue;
                 }
                 Err(error) => {
-                    if websocket.send_json(&history_stream_error(&error)).is_err() {
+                    let failed = history_stream_error(&error, websocket.observation);
+                    if websocket.send_json(&failed).is_err() {
                         return;
                     }
                     continue;
@@ -303,7 +306,8 @@ pub(crate) fn serve_responses_websocket(
             Ok(Value::Object(body)) => body,
             Ok(_) => {
                 let error = HistoryError::new("invalid_history_projection");
-                if websocket.send_json(&history_stream_error(&error)).is_err() {
+                let failed = history_stream_error(&error, websocket.observation);
+                if websocket.send_json(&failed).is_err() {
                     return;
                 }
                 continue;
@@ -330,10 +334,9 @@ pub(crate) fn serve_responses_websocket(
             }
             Err(DestinationPrepareError::Disconnected) => return,
             Err(DestinationPrepareError::History(reason)) => {
-                if websocket
-                    .send_json(&history_stream_error(&HistoryError::new(reason)))
-                    .is_err()
-                {
+                let failed =
+                    history_stream_error(&HistoryError::new(reason), websocket.observation);
+                if websocket.send_json(&failed).is_err() {
                     return;
                 }
                 continue;

@@ -67,6 +67,7 @@ mod claude_local_login_contract;
 mod config_api_contract;
 mod conversation_http_contract;
 mod conversation_switch_contract;
+mod history_diagnostic_contract;
 mod integration_sideband_contract;
 mod internal_events_contract;
 mod management_http_contract;

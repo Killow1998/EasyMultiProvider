@@ -49,7 +49,7 @@ fn tool_key(item: &VisibleItem) -> Result<(String, String), HistoryError> {
         .call_id
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| HistoryError::new("portable_checkpoint_invalid"))?;
+        .ok_or_else(|| HistoryError::new("tool_call_identity_missing"))?;
     let family = if item
         .raw_type
         .as_deref()
