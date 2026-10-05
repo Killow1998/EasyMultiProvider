@@ -542,10 +542,44 @@ fn quit_from_the_page_stops_the_process() {
     let upstream = Upstream::start();
     let workspace = Workspace::with_routes(&upstream);
     let mut emp = workspace.start();
+    let enabled = emp.post("/api/integration/enable", &json!({"confirm_reload": true}));
+    assert_eq!(enabled.status, 200, "{}", enabled.text());
+    assert!(
+        workspace
+            .read_codex_config()
+            .contains(&format!("http://127.0.0.1:{}/v1", emp.port))
+    );
     let response = emp.post("/api/quit", &json!({}));
     assert_eq!(response.status, 200, "{}", response.text());
     assert_eq!(response.json(), json!({"status": "stopping"}));
-    assert_eq!(emp.wait_exit(), Some(0));
+    assert_eq!(
+        emp.wait_exit_with_timeout(std::time::Duration::from_secs(30)),
+        Some(0)
+    );
+    let restored = workspace.read_codex_config();
+    let content_lines = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(
+        content_lines(&restored),
+        content_lines(ORIGINAL_CODEX_CONFIG)
+    );
+    let mut config: Value =
+        serde_json::from_slice(&std::fs::read(&workspace.config_path).unwrap()).unwrap();
+    config["auto_enable_on_start"] = json!(false);
+    workspace.write_config(config);
+    let mut restarted = workspace.start();
+    assert_eq!(restarted.get("/api/config").status, 200);
+    assert_eq!(workspace.read_codex_config(), restored);
+    assert_eq!(restarted.post("/api/quit", &json!({})).status, 200);
+    assert_eq!(
+        restarted.wait_exit_with_timeout(std::time::Duration::from_secs(30)),
+        Some(0)
+    );
+    upstream.assert_idle();
 }
 
 fn rollout_record(kind: &str, payload: Value, second: u32) -> String {

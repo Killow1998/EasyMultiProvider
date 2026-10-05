@@ -638,13 +638,18 @@ impl Emp {
 
     /// Wait for the process to exit and return its exit code.
     pub fn wait_exit(&mut self) -> Option<i32> {
-        for _ in 0..800 {
+        self.wait_exit_with_timeout(Duration::from_secs(8))
+    }
+
+    pub fn wait_exit_with_timeout(&mut self, timeout: Duration) -> Option<i32> {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
             if let Some(status) = self.child.try_wait().expect("poll EMP") {
                 return status.code();
             }
             thread::sleep(Duration::from_millis(10));
         }
-        panic!("EMP did not exit within 8 seconds");
+        panic!("EMP did not exit within {timeout:?}");
     }
 
     /// Graceful stop (SIGTERM), as a user closing the service would do.
