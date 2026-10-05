@@ -140,15 +140,17 @@ pub(super) fn read_native_auth(path: &Path) -> Result<Value, QuotaError> {
     Ok(auth)
 }
 
-pub(super) fn run_isolated_quota_process(
+pub(super) fn run_isolated_quota_process<'a>(
     auth: &Value,
     binary: &TrustedBinary,
-    timeout: Duration,
+    control: impl Into<QuotaControl<'a>>,
     allow_refresh: bool,
     reset_idempotency_key: Option<&str>,
     reset_credit_id: Option<&str>,
     mut persist_rotation: Option<PersistRotation<'_>>,
 ) -> Result<QuotaProcessResult, QuotaError> {
+    let control = control.into();
+    control.check()?;
     sweep_stale_credential_directories(&env::temp_dir(), SystemTime::now());
     let directory = tempfile::Builder::new()
         .prefix(CREDENTIAL_DIRECTORY_PREFIX)
@@ -173,7 +175,8 @@ pub(super) fn run_isolated_quota_process(
         .current_dir(directory.path())
         .env_clear()
         .env("CODEX_HOME", directory.path())
-        .env("HOME", home_dir())
+        .env("HOME", directory.path())
+        .env("USERPROFILE", directory.path())
         .env("PATH", env::var_os("PATH").unwrap_or_default())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -200,7 +203,7 @@ pub(super) fn run_isolated_quota_process(
     let mut child = command.spawn().map_err(|_| quota_check_failed())?;
     let result = query_child(
         &mut child,
-        timeout,
+        control,
         allow_refresh,
         reset_idempotency_key,
         reset_credit_id,
@@ -229,13 +232,6 @@ pub(super) fn run_isolated_quota_process(
         },
         refreshed_auth,
     })
-}
-
-fn home_dir() -> PathBuf {
-    env::var_os("HOME")
-        .or_else(|| env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_default()
 }
 
 /// Temporary `CODEX_HOME` directories hold a decrypted `auth.json` while one
@@ -294,6 +290,7 @@ fn write_private(path: &Path, value: &[u8]) -> Result<(), QuotaError> {
 enum ProcessLine {
     Line(String),
     Encoding,
+    TooLarge,
     Read,
     End,
 }
@@ -302,25 +299,38 @@ fn stdout_reader(stdout: impl Read + Send + 'static) -> (Receiver<ProcessLine>, 
     let (sender, receiver) = mpsc::channel();
     let worker = thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
+        const MAX_OUTPUT: usize = 4 * 1024 * 1024;
+        let mut received = 0usize;
         loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
+            let mut bytes = Vec::new();
+            match reader
+                .by_ref()
+                .take((MAX_OUTPUT - received + 1) as u64)
+                .read_until(b'\n', &mut bytes)
+            {
                 Ok(0) => {
                     let _ = sender.send(ProcessLine::End);
                     return;
                 }
-                Ok(_) => {
+                Ok(count) => {
+                    received += count;
+                    if received > MAX_OUTPUT {
+                        let _ = sender.send(ProcessLine::TooLarge);
+                        return;
+                    }
+                    let line = match String::from_utf8(bytes) {
+                        Ok(line) => line,
+                        Err(_) => {
+                            let _ = sender.send(ProcessLine::Encoding);
+                            return;
+                        }
+                    };
                     if sender.send(ProcessLine::Line(line)).is_err() {
                         return;
                     }
                 }
-                Err(error) => {
-                    let kind = if error.kind() == std::io::ErrorKind::InvalidData {
-                        ProcessLine::Encoding
-                    } else {
-                        ProcessLine::Read
-                    };
-                    let _ = sender.send(kind);
+                Err(_) => {
+                    let _ = sender.send(ProcessLine::Read);
                     return;
                 }
             }
@@ -331,7 +341,7 @@ fn stdout_reader(stdout: impl Read + Send + 'static) -> (Receiver<ProcessLine>, 
 
 fn query_child(
     child: &mut Child,
-    timeout: Duration,
+    control: QuotaControl<'_>,
     allow_refresh: bool,
     reset_idempotency_key: Option<&str>,
     reset_credit_id: Option<&str>,
@@ -343,7 +353,7 @@ fn query_child(
         let _ = std::io::copy(&mut BufReader::new(stderr), &mut std::io::sink());
     });
     let mut stdin = child.stdin.take().ok_or_else(quota_check_failed)?;
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now() + control.timeout;
     let requests = [
         json!({
             "id": 1,
@@ -383,7 +393,15 @@ fn query_child(
             let Some(id) = request.get("id").and_then(Value::as_i64) else {
                 continue;
             };
-            wait_for_response(&receiver, deadline, id, &request["method"], &mut output)?;
+            control.check()?;
+            wait_for_response(
+                &receiver,
+                deadline,
+                control,
+                id,
+                &request["method"],
+                &mut output,
+            )?;
         }
         Ok(output)
     })();
@@ -391,33 +409,38 @@ fn query_child(
     if result.is_err() {
         let _ = child.kill();
     }
+    // Enforce process exit before joining readers: a helper that ignores EOF
+    // must not strand the refresh lock and shutdown drain indefinitely.
+    let cleanup = finish_child(child);
     let _ = stdout_worker.join();
     let _ = stderr_worker.join();
-    result
+    result.and_then(|output| cleanup.map(|()| output))
 }
 
 fn wait_for_response(
     receiver: &Receiver<ProcessLine>,
     deadline: Instant,
+    control: QuotaControl<'_>,
     request_id: i64,
     method: &Value,
     output: &mut String,
 ) -> Result<(), QuotaError> {
     loop {
+        control.check()?;
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             return Err(QuotaError::new(
                 "Codex account quota check timed out",
                 "quota_timeout",
             ));
         };
-        let line = match receiver.recv_timeout(remaining) {
+        let wait = if control.cancelled.is_some() {
+            remaining.min(Duration::from_millis(100))
+        } else {
+            remaining
+        };
+        let line = match receiver.recv_timeout(wait) {
             Ok(line) => line,
-            Err(RecvTimeoutError::Timeout) => {
-                return Err(QuotaError::new(
-                    "Codex account quota check timed out",
-                    "quota_timeout",
-                ));
-            }
+            Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => {
                 return Err(QuotaError::new(
                     "Codex did not return account rate limits",
@@ -427,6 +450,12 @@ fn wait_for_response(
         };
         let line = match line {
             ProcessLine::Line(line) => line,
+            ProcessLine::TooLarge => {
+                return Err(QuotaError::new(
+                    "Codex quota output exceeded its byte budget",
+                    "quota_output_too_large",
+                ));
+            }
             ProcessLine::Encoding => {
                 return Err(QuotaError::new(
                     "Codex app-server output is not valid UTF-8",

@@ -8,6 +8,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -43,6 +44,35 @@ const INHERITED_ENVIRONMENT: &[&str] = &[
     "NODE_EXTRA_CA_CERTS",
 ];
 type PersistRotation<'a> = &'a mut dyn FnMut(&Value) -> Result<(), QuotaError>;
+
+#[derive(Clone, Copy)]
+pub struct QuotaControl<'a> {
+    pub timeout: Duration,
+    pub cancelled: Option<&'a AtomicBool>,
+}
+impl From<Duration> for QuotaControl<'_> {
+    fn from(timeout: Duration) -> Self {
+        Self {
+            timeout,
+            cancelled: None,
+        }
+    }
+}
+impl QuotaControl<'_> {
+    fn check(self) -> Result<(), QuotaError> {
+        if self
+            .cancelled
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+        {
+            Err(QuotaError::new(
+                "Quota check was cancelled",
+                "quota_cancelled",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaError {
@@ -89,13 +119,13 @@ pub struct QuotaProcessResult {
 }
 
 /// Query the live native Codex login without modifying its auth file.
-pub fn read_native_login_quota(
+pub fn read_native_login_quota<'a>(
     auth_path: &Path,
     codex_binary: &str,
-    timeout: Duration,
+    control: impl Into<QuotaControl<'a>>,
 ) -> Result<Value, QuotaError> {
     let auth = read_native_auth(auth_path)?;
-    run_quota_query(&auth, codex_binary, timeout, false).map(|result| result.quota)
+    run_quota_query(&auth, codex_binary, control, false).map(|result| result.quota)
 }
 
 /// Execute a quota read in an isolated Codex home.
@@ -103,10 +133,10 @@ pub fn read_native_login_quota(
 /// A changed auth document is returned to the caller. The native-login helper
 /// deliberately discards it; imported-account state decides whether and how to
 /// persist it through EMP's encrypted vault.
-pub fn run_quota_query(
+pub fn run_quota_query<'a>(
     auth: &Value,
     codex_binary: &str,
-    timeout: Duration,
+    control: impl Into<QuotaControl<'a>>,
     allow_refresh: bool,
 ) -> Result<QuotaProcessResult, QuotaError> {
     if account_auth_headers(auth).is_none() {
@@ -115,16 +145,18 @@ pub fn run_quota_query(
             "quota_error",
         ));
     }
+    let control = control.into();
+    control.check()?;
     let trusted = TrustedBinary::resolve(codex_binary)?;
-    run_isolated_quota_process(auth, &trusted, timeout, allow_refresh, None, None, None)
+    run_isolated_quota_process(auth, &trusted, control, allow_refresh, None, None, None)
 }
 
 /// Execute an imported-account quota read and save token rotation before a
 /// later RPC error is returned to the caller.
-pub fn run_quota_query_persisting<F>(
+pub fn run_quota_query_persisting<'a, F>(
     auth: &Value,
     codex_binary: &str,
-    timeout: Duration,
+    control: impl Into<QuotaControl<'a>>,
     allow_refresh: bool,
     mut persist: F,
 ) -> Result<Value, QuotaError>
@@ -137,6 +169,8 @@ where
             "quota_error",
         ));
     }
+    let control = control.into();
+    control.check()?;
     let trusted = TrustedBinary::resolve(codex_binary)?;
     let mut persist_rotation = |value: &Value| {
         persist(value).map_err(|()| {
@@ -149,7 +183,7 @@ where
     run_isolated_quota_process(
         auth,
         &trusted,
-        timeout,
+        control,
         allow_refresh,
         None,
         None,
@@ -521,6 +555,98 @@ mod tests {
     use super::*;
 
     #[test]
+    fn helper_output_and_ignored_eof_are_bounded() {
+        for oversized in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let script = root.path().join("fake-codex");
+            let program = if oversized {
+                "#!/usr/bin/env python3\nimport sys\nsys.stdout.write('x' * (5 * 1024 * 1024)); sys.stdout.flush()\n"
+            } else {
+                "#!/usr/bin/env python3\nimport json, sys, time\nfor line in sys.stdin:\n r = json.loads(line)\n if 'id' in r: print(json.dumps({'id':r['id'], 'result':{}}), flush=True)\ntime.sleep(60)\n"
+            };
+            fs::write(&script, program).unwrap();
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+            let start = Instant::now();
+            let error = run_quota_query(
+                &json!({"tokens":{"access_token":"fixture", "account_id":"fixture"}}),
+                script.to_str().unwrap(),
+                Duration::from_secs(3),
+                false,
+            )
+            .unwrap_err();
+            assert!(start.elapsed() < Duration::from_secs(8));
+            assert_eq!(
+                error.code(),
+                if oversized {
+                    "quota_output_too_large"
+                } else {
+                    "quota_error"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn cancelling_a_quota_read_still_persists_a_rotated_credential() {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("fake-codex");
+        let marker = script.with_extension("ready");
+        fs::write(
+            &script,
+            r#"#!/usr/bin/env python3
+import json, os, pathlib, sys, time
+for line in sys.stdin:
+    r = json.loads(line)
+    if 'id' not in r: continue
+    if r['method'] == 'account/read':
+        auth_path = pathlib.Path(os.environ['CODEX_HOME']) / 'auth.json'
+        auth = json.loads(auth_path.read_text())
+        auth['tokens']['access_token'] = 'rotated-fixture'
+        auth_path.write_text(json.dumps(auth))
+    if r['method'] == 'account/rateLimits/read':
+        pathlib.Path(sys.argv[0]).with_suffix('.ready').write_text('ready')
+        time.sleep(30)
+    print(json.dumps({'id':r['id'], 'result':{}}), flush=True)
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let auth = json!({"tokens":{"access_token":"fixture", "account_id":"fixture"}});
+        let mut saved = None;
+        thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                run_quota_query_persisting(
+                    &auth,
+                    script.to_str().unwrap(),
+                    QuotaControl {
+                        timeout: Duration::from_secs(10),
+                        cancelled: Some(&cancelled),
+                    },
+                    false,
+                    |auth| {
+                        saved = Some(auth.clone());
+                        Ok(())
+                    },
+                )
+            });
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !marker.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert!(marker.exists());
+            let started = Instant::now();
+            cancelled.store(true, Ordering::Release);
+            assert_eq!(
+                worker.join().unwrap().unwrap_err().code(),
+                "quota_cancelled"
+            );
+            assert!(started.elapsed() < Duration::from_secs(3));
+        });
+        assert_eq!(saved.unwrap()["tokens"]["access_token"], "rotated-fixture");
+    }
+
+    #[test]
     fn reset_credit_projection_preserves_only_usable_ids() {
         let source = json!({"credits": [
             {"id": " opaque ID ", "status": "available", "private": "drop"},
@@ -550,6 +676,12 @@ import configparser, json, os, pathlib, sys
 
 home = pathlib.Path(os.environ["CODEX_HOME"])
 assert pathlib.Path.cwd().samefile(home)
+assert pathlib.Path(os.environ["HOME"]).samefile(home)
+assert pathlib.Path(os.environ["USERPROFILE"]).samefile(home)
+assert home.stat().st_mode & 0o077 == 0
+assert (home / "auth.json").stat().st_mode & 0o077 == 0
+with pathlib.Path(sys.argv[0]).with_suffix('.homes').open('a') as record:
+    record.write(str(home) + '\n')
 assert sys.argv[1:] == ["app-server", "--stdio"]
 config = configparser.ConfigParser()
 config.read_string("[root]\n" + (home / "config.toml").read_text())
@@ -631,6 +763,12 @@ for line in sys.stdin:
             .expect("selected quota reset"),
             "reset"
         );
+        let homes = fs::read_to_string(script.with_extension("homes")).unwrap();
+        let homes: std::collections::BTreeSet<_> = homes.lines().collect();
+        assert_eq!(homes.len(), 3, "each helper must have its own private home");
+        for home in homes {
+            assert!(!Path::new(home).exists(), "helper home was not removed");
+        }
         let invalid =
             validated_reset_idempotency_key("retry-me").expect_err("non-UUID idempotency key");
         assert_eq!(invalid.code(), "quota_reset_invalid_request");
