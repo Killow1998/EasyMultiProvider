@@ -270,3 +270,35 @@ fn claude_picker_receives_all_efforts_and_images_after_loading_sparse_saved_mode
         .collect();
     assert_eq!(efforts, ["low", "medium", "high", "xhigh", "max"]);
 }
+
+#[test]
+fn claude_46_picker_recovers_legal_efforts_and_default_from_unknown_saved_capabilities() {
+    let config = emp_state::normalize_configuration(Some(&json!({
+        "providers":[{"id":"cpa","base_url":"https://cpa.example.invalid/v1",
+            "execution_backend":"claude_cli","protocol":"anthropic_messages"}],
+        "models":(["claude-opus-4-6", "claude-sonnet-4-6"].map(|id| json!({
+            "id":format!("cpa/{id}"), "provider":"cpa", "upstream_id":id,
+            "supports_reasoning":null, "reasoning_levels":[], "reasoning_control":"",
+            "capability_sources":{"reasoning_levels":{"source":"unknown"}}
+        })))
+    })))
+    .unwrap();
+    let catalog = build_catalog(
+        &config,
+        &json!({"models":[]}),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+    for model in catalog["models"].as_array().unwrap() {
+        let levels: Vec<_> = model["supported_reasoning_levels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|level| level["effort"].as_str().unwrap())
+            .collect();
+        assert_eq!(levels, ["low", "medium", "high", "max"]);
+        assert_eq!(model["default_reasoning_level"], "medium");
+        assert!(levels.contains(&model["default_reasoning_level"].as_str().unwrap()));
+    }
+    assert_eq!(catalog["models"].as_array().unwrap().len(), 2);
+}

@@ -10,6 +10,7 @@ use crate::services::accounts::{
     duplicate_accounts, notify_quota_update, quota_owner_key, quota_refresh_lock,
 };
 use crate::util::system_now;
+use emp_codex::quota::QuotaControl;
 use emp_codex::quota::QuotaError;
 use emp_codex::quota::consume_native_quota_reset;
 use emp_codex::quota::read_native_login_quota;
@@ -24,6 +25,13 @@ use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+
+fn quota_control(state: &ServerState) -> QuotaControl<'_> {
+    QuotaControl {
+        timeout: Duration::from_secs(45),
+        cancelled: Some(&state.shutdown),
+    }
+}
 
 fn save_account_quota_state(
     state: &ServerState,
@@ -364,7 +372,7 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
         run_quota_query_persisting(
             auth,
             &crate::services::runtime::helper_binary(state)?,
-            Duration::from_secs(45),
+            quota_control(state),
             allow_refresh,
             |refreshed| credentials.persist(refreshed),
         )
@@ -376,7 +384,7 @@ fn refresh_imported_account(state: &ServerState, account_id: &str) -> Result<Val
         return match read_native_login_quota(
             &state.backend.accounts.native_auth_path,
             &crate::services::runtime::helper_binary(state)?,
-            Duration::from_secs(45),
+            quota_control(state),
         ) {
             Ok(quota) => {
                 save_account_quota_state(state, account_id, &auth_file, "valid", Some(&quota))
@@ -422,7 +430,7 @@ fn refresh_account_by_id_inner(state: &ServerState, account_id: &str) -> Result<
     let quota = read_native_login_quota(
         &state.backend.accounts.native_auth_path,
         &crate::services::runtime::helper_binary(state)?,
-        Duration::from_secs(45),
+        quota_control(state),
     )?;
     if let Ok(mut current) = state.backend.accounts.native_quota.lock() {
         *current = Some(quota.clone());

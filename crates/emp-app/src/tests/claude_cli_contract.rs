@@ -2,6 +2,10 @@
 use super::*;
 
 fn claude_server(base_url: &str) -> (TempDir, ServerHandle) {
+    claude_server_with_model(base_url, "sonnet")
+}
+
+fn claude_server_with_model(base_url: &str, upstream_model: &str) -> (TempDir, ServerHandle) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     std::fs::write(
@@ -13,7 +17,7 @@ fn claude_server(base_url: &str) -> (TempDir, ServerHandle) {
                 "api_key":"upstream-secret", "execution_backend":"claude_cli"
             }],
             "models": [{
-                "id":"demo/model", "provider":"demo", "upstream_id":"sonnet",
+                "id":"demo/model", "provider":"demo", "upstream_id":upstream_model,
                 "enabled":true
             }]
         }))
@@ -245,6 +249,79 @@ impl Drop for SummaryUpstream {
 
 #[test]
 #[ignore = "requires an installed trusted Claude Code CLI on PATH"]
+fn installed_cli_claude_46_rejects_none_then_preserves_history_with_caller_selected_medium() {
+    assert!(emp_codex::installed_cli::resolve_claude_cli().is_some());
+    for model in ["claude-opus-4-6", "claude-sonnet-4-6"] {
+        let upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({
+            "answer":"same history accepted", "tool_calls":[]
+        }))]);
+        let (_directory, server) = claude_server_with_model(&upstream.base_url(), model);
+        let mut request = json!({
+            "model":"demo/model", "stream":false, "reasoning":{"effort":"none"},
+            "input":[
+                {"role":"user","content":"synthetic first turn"},
+                {"type":"function_call","call_id":"previous","name":"read","arguments":"{}"},
+                {"type":"function_call_output","call_id":"previous","output":"exact result\nquote \" café"},
+                {"role":"user","content":"continue with the same history"}
+            ],
+            "tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]
+        });
+        let original_input = request["input"].clone();
+        let rejected = post(
+            &server,
+            "/v1/responses",
+            &serde_json::to_vec(&request).unwrap(),
+            &[&session_header(&server)],
+        );
+        assert!(rejected.starts_with("HTTP/1.1 400 "), "{rejected}");
+        let error: Value =
+            serde_json::from_str(rejected.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(error["error"]["code"], "unsupported_reasoning_effort");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("EMP received reasoning.effort=\"none\"")
+        );
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Select a supported effort level offered for this model")
+        );
+        assert!(
+            upstream.observed.try_recv().is_err(),
+            "rejected effort must not reach CPA"
+        );
+
+        // The caller explicitly changes its effort; EMP never rewrites none or retries it.
+        request["reasoning"]["effort"] = json!("medium");
+        let accepted = post(
+            &server,
+            "/v1/responses",
+            &serde_json::to_vec(&request).unwrap(),
+            &[&session_header(&server)],
+        );
+        assert!(accepted.starts_with("HTTP/1.1 200 "), "{accepted}");
+        let result: Value =
+            serde_json::from_str(accepted.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            result["output"][0]["content"][0]["text"],
+            "same history accepted"
+        );
+        let (_, _, forwarded) = upstream.observed();
+        assert_eq!(forwarded["model"], model);
+        assert_eq!(forwarded["output_config"]["effort"], "medium");
+        let transcript = user_transcript(&forwarded);
+        assert_eq!(transcript["input"], original_input);
+        assert_eq!(transcript["tools"], request["tools"]);
+        assert_eq!(transcript["reasoning"]["effort"], "medium");
+        server.shutdown().expect("shutdown 4.6 server");
+    }
+}
+
+#[test]
+#[ignore = "requires an installed trusted Claude Code CLI on PATH"]
 fn installed_cli_forwards_one_messages_request_and_only_projects_structured_output() {
     // The actual CLI process runs with a temporary HOME and dummy auth token.
     // Every CPA response is local synthetic SSE; no upstream credentials exist.
@@ -327,18 +404,16 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
     assert_eq!(upstream_body["stream"], true);
     assert_eq!(upstream_body["messages"].as_array().unwrap().len(), 1);
     assert_eq!(upstream_body["messages"][0]["role"], "user");
-    assert!(
-        upstream_body["system"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|block| {
-                block["text"].as_str().is_some_and(|text| {
-                    text.starts_with("<system-reminder>\nToday's date is ")
-                        && text.ends_with(".\n</system-reminder>")
-                })
-            })
-    );
+    // The CLI may send its date reminder as text or as an empty system
+    // message carrying only the already-matched effort. Neither shape may
+    // alter the user transcript or remove EMP's system instruction.
+    assert!(upstream_body["system"].as_array().is_some_and(|blocks| {
+        blocks.iter().any(|block| {
+            block["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("one-request compatibility bridge"))
+        })
+    }));
     assert_eq!(upstream_body["tools"].as_array().unwrap().len(), 1);
     assert_eq!(upstream_body["tools"][0]["name"], "StructuredOutput");
     let transcript = user_transcript(&upstream_body);
@@ -359,7 +434,7 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
     let sse = post_stream(
         &sse_server,
         "/v1/responses",
-        &serde_json::to_vec(&json!({"model":"demo/model","stream":true,"input":"stream request"}))
+        &serde_json::to_vec(&json!({"model":"demo/model","stream":true,"input":"stream request","reasoning":{"effort":null}}))
             .expect("SSE request"),
         &[&session_header(&sse_server)],
     );
@@ -371,6 +446,10 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
     assert_eq!(path, "/v1/messages");
     assert_eq!(body["model"], "sonnet");
     assert_eq!(body["stream"], true);
+    assert_eq!(
+        user_transcript(&body)["reasoning"].get("effort"),
+        Some(&Value::Null)
+    );
     sse_server.shutdown().expect("shutdown SSE server");
 
     let ws_upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({

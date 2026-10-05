@@ -203,7 +203,9 @@ pub(crate) fn serve_responses_websocket(
                 crate::services::claude_cli::preflight_input(&Value::Object(request_body.clone()))
         {
             if websocket
-                .send_json(&crate::api::claude_response::websocket_value(&error))
+                .send_json(&crate::api::claude_response::websocket_value_for_route(
+                    &error, &route,
+                ))
                 .is_err()
             {
                 return;
@@ -286,7 +288,9 @@ pub(crate) fn serve_responses_websocket(
             }
             Err(DestinationPrepareError::ClaudeCli(error)) => {
                 if websocket
-                    .send_json(&crate::api::claude_response::websocket_value(&error))
+                    .send_json(&crate::api::claude_response::websocket_value_for_route(
+                        &error, &route,
+                    ))
                     .is_err()
                 {
                     return;

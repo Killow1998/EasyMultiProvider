@@ -115,11 +115,9 @@ fn handle_request(
             .map_err(|_| ClaudeCliError::Failure("claude_cli_relay_write_failed"))?;
         return Ok(None);
     }
-    if !normalize_cli_system_messages(&mut request.body)
-        || !messages_match(&request.body, expected_user_content)
-    {
+    if let Err(code) = validate_transcript(&mut request.body, expected_user_content) {
         write_error(&mut stream, 400, "invalid_request");
-        return Err(ClaudeCliError::Failure("claude_cli_transcript_mismatch"));
+        return Err(ClaudeCliError::Failure(code));
     }
     if !has_only_structured_output_carrier(&request.body) {
         write_error(&mut stream, 400, "invalid_request");
@@ -153,6 +151,19 @@ fn handle_request(
     Ok(Some(RelayResult {
         status: routed.status,
     }))
+}
+
+fn validate_transcript(
+    body: &mut Value,
+    expected_user_content: &ExpectedUserContent,
+) -> Result<(), &'static str> {
+    if !normalize_cli_system_messages(body) {
+        return Err("claude_cli_system_format_mismatch");
+    }
+    if !messages_match(body, expected_user_content) {
+        return Err("claude_cli_content_mismatch");
+    }
+    Ok(())
 }
 
 fn read_accepted_request(stream: &mut TcpStream) -> Result<RelayRequest, ClaudeCliError> {
@@ -320,7 +331,12 @@ fn normalize_cli_system_messages(body: &mut Value) -> bool {
                     Some(Value::String(text)) => {
                         moved_system_blocks.push(serde_json::json!({"type":"text","text":text}));
                     }
-                    Some(Value::Array(blocks)) if !blocks.is_empty() => {
+                    // Current CLI versions may send an empty system content
+                    // block solely to repeat the already-validated effort.
+                    // It carries no transcript content to discard.
+                    Some(Value::Array(blocks))
+                        if !blocks.is_empty() || fields.contains_key("output_config") =>
+                    {
                         if blocks.iter().any(|block| {
                             block.get("type").and_then(Value::as_str) != Some("text")
                                 || !block.get("text").is_some_and(Value::is_string)
@@ -563,6 +579,32 @@ mod tests {
     }
 
     #[test]
+    fn transcript_validation_distinguishes_system_shape_from_content_mismatch() {
+        let expected = ExpectedUserContent::Text(b"synthetic transcript".to_vec());
+        let valid = serde_json::json!({
+            "stream":true,
+            "messages":[{"role":"system","content":"date reminder"},
+                        {"role":"user","content":"synthetic transcript"}]
+        });
+        assert!(validate_transcript(&mut valid.clone(), &expected).is_ok());
+        let mut system_shape = valid.clone();
+        system_shape["messages"][0]["content"] =
+            serde_json::json!([{"type":"tool_use","name":"Bash"}]);
+        let unchanged = system_shape.clone();
+        assert_eq!(
+            validate_transcript(&mut system_shape, &expected),
+            Err("claude_cli_system_format_mismatch")
+        );
+        assert_eq!(system_shape, unchanged);
+        let mut changed_content = valid;
+        changed_content["messages"][1]["content"] = "other content".into();
+        assert_eq!(
+            validate_transcript(&mut changed_content, &expected),
+            Err("claude_cli_content_mismatch")
+        );
+    }
+
+    #[test]
     fn relay_requires_exact_ordered_text_and_media_blocks() {
         let expected = vec![
             serde_json::json!({"type":"text","text":"item 0 image part 1 follows"}),
@@ -741,6 +783,43 @@ mod tests {
             });
             let original = rejected.clone();
             assert!(!normalize_cli_system_messages(&mut rejected));
+            assert_eq!(rejected, original);
+        }
+    }
+
+    #[test]
+    fn empty_cli_system_content_is_allowed_only_for_matching_effort_metadata() {
+        let expected = ExpectedUserContent::Text(b"exact transcript".to_vec());
+        let mut body = serde_json::json!({
+            "stream":true,
+            "output_config":{"effort":"low"},
+            "system":[{"type":"text","text":"existing instruction"}],
+            "messages":[
+                {"role":"user","content":"exact transcript"},
+                {"role":"system","content":[],"output_config":{"effort":"low"}}
+            ]
+        });
+        assert_eq!(validate_transcript(&mut body, &expected), Ok(()));
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(body["system"][0]["text"], "existing instruction");
+
+        for mut rejected in [
+            serde_json::json!({
+                "stream":true,"output_config":{"effort":"low"},
+                "messages":[{"role":"user","content":"exact transcript"},
+                            {"role":"system","content":[]}]
+            }),
+            serde_json::json!({
+                "stream":true,"output_config":{"effort":"low"},
+                "messages":[{"role":"user","content":"exact transcript"},
+                            {"role":"system","content":[],"output_config":{"effort":"high"}}]
+            }),
+        ] {
+            let original = rejected.clone();
+            assert_eq!(
+                validate_transcript(&mut rejected, &expected),
+                Err("claude_cli_system_format_mismatch")
+            );
             assert_eq!(rejected, original);
         }
     }

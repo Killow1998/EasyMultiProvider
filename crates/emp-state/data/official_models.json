@@ -1214,6 +1214,60 @@
     },
     {
       "provider_key": "anthropic",
+      "model_id": "claude-opus-4-6",
+      "display_name": "Claude Opus 4.6",
+      "reviewed_at": "2026-10-05",
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "reasoning_control": "effort",
+      "aliases": [],
+      "sources_by_field": {
+        "supports_reasoning": [
+          "https://code.claude.com/docs/en/model-config#adjust-effort-level"
+        ],
+        "reasoning_levels": [
+          "https://code.claude.com/docs/en/model-config#adjust-effort-level",
+          "https://platform.claude.com/docs/en/build-with-claude/effort"
+        ],
+        "reasoning_control": [
+          "https://platform.claude.com/docs/en/build-with-claude/effort"
+        ]
+      }
+    },
+    {
+      "provider_key": "anthropic",
+      "model_id": "claude-sonnet-4-6",
+      "display_name": "Claude Sonnet 4.6",
+      "reviewed_at": "2026-10-05",
+      "supports_reasoning": true,
+      "reasoning_levels": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "reasoning_control": "effort",
+      "aliases": [],
+      "sources_by_field": {
+        "supports_reasoning": [
+          "https://code.claude.com/docs/en/model-config#adjust-effort-level"
+        ],
+        "reasoning_levels": [
+          "https://code.claude.com/docs/en/model-config#adjust-effort-level",
+          "https://platform.claude.com/docs/en/build-with-claude/effort"
+        ],
+        "reasoning_control": [
+          "https://platform.claude.com/docs/en/build-with-claude/effort"
+        ]
+      }
+    },
+    {
+      "provider_key": "anthropic",
       "model_id": "claude-opus-5-5",
       "display_name": "Claude Opus 5.5",
       "reviewed_at": "2026-09-30",

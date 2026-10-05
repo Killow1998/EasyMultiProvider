@@ -77,6 +77,29 @@ pub(crate) fn quit_request(
             false,
         );
     }
+    // An old listener's lease may be applied but not owned by this process.
+    // Keep the service available when shutdown cannot safely restore it.
+    let native = state
+        .backend
+        .integration
+        .manager
+        .status()
+        .is_ok_and(|status| {
+            matches!(status.state.as_str(), "native" | "restored")
+                && matches!(status.relation.as_str(), "unleased" | "original")
+        });
+    if !native {
+        return (
+            json_error_response(
+                409,
+                status_text(409),
+                "Codex integration is still applied or unresolved. Use Restore Native or resolve the configuration conflict before exiting EMP",
+                Some("native_restore_unresolved"),
+                &[],
+            ),
+            false,
+        );
+    }
     restore_gate.keep_closed();
     (
         response(

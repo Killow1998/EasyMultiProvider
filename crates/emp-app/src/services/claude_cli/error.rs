@@ -49,17 +49,22 @@ pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'stati
         "claude_cli_local_request_failed" => (
             502,
             "claude_cli_local_request_failed",
-            "Claude Code could not complete this local subscription request; check Claude Code sign-in and retry",
+            "Claude Code could not complete this local subscription request; check selected model access and local sign-in, then inspect EMP diagnostics",
         ),
         "claude_cli_timeout" => (
             504,
             "claude_cli_timeout",
             "Claude Code CLI request timed out",
         ),
+        "unsupported_reasoning_effort_none" => (
+            400,
+            "unsupported_reasoning_effort",
+            "EMP received reasoning.effort=\"none\"; the Claude Code CLI adapter cannot safely disable thinking for this route. Select a supported effort level offered for this model and retry",
+        ),
         "unsupported_reasoning_effort" => (
             400,
             "unsupported_reasoning_effort",
-            "reasoning effort is not supported by Claude Code CLI",
+            "EMP's Claude Code CLI adapter does not support this reasoning.effort; use low, medium, high, xhigh, max, or omit the optional value",
         ),
         "unsupported_input_modality" => (
             400,
@@ -89,8 +94,82 @@ pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'stati
         "claude_cli_transcript_mismatch" => (
             502,
             "claude_cli_transcript_mismatch",
-            "Claude Code changed the conversation format; EMP could not forward the request",
+            "EMP could not verify the Claude Code request transcript; check the selected model and retry, then inspect EMP diagnostics",
+        ),
+        "claude_cli_system_format_mismatch" => (
+            502,
+            "claude_cli_transcript_mismatch",
+            "EMP could not safely normalize Claude Code system messages; check CLI compatibility and inspect EMP diagnostics",
+        ),
+        "claude_cli_content_mismatch" => (
+            502,
+            "claude_cli_transcript_mismatch",
+            "EMP could not verify that Claude Code preserved the user transcript; check CLI compatibility and inspect EMP diagnostics",
+        ),
+        "claude_cli_process_failed" => (
+            502,
+            "claude_cli_process_failed",
+            "Claude Code CLI exited without a successful result; check the configured model and Claude Code access, then inspect EMP diagnostics",
+        ),
+        "claude_cli_stdin_failed" => (
+            502,
+            "claude_cli_stdin_failed",
+            "Claude Code CLI closed its input before EMP finished sending the request; check the configured model and inspect EMP diagnostics",
+        ),
+        "claude_cli_output_too_large" => (
+            502,
+            "claude_cli_output_too_large",
+            "Claude Code CLI exceeded EMP's bounded output limit; inspect EMP diagnostics",
+        ),
+        "claude_cli_result_error" => (
+            502,
+            "claude_cli_result_error",
+            "Claude Code CLI returned a failed result; check model access and inspect EMP diagnostics",
+        ),
+        "claude_cli_missing_structured_output" => (
+            502,
+            "claude_cli_missing_structured_output",
+            "Claude Code CLI returned no structured result for this model; check CLI compatibility and inspect EMP diagnostics",
+        ),
+        "claude_cli_invalid_output" => (
+            502,
+            "claude_cli_invalid_output",
+            "Claude Code CLI output could not be parsed; check CLI compatibility and inspect EMP diagnostics",
+        ),
+        "claude_cli_no_provider_response" => (
+            502,
+            "claude_cli_no_provider_response",
+            "Claude Code CLI did not send an inference request through EMP's relay; check CLI compatibility and inspect EMP diagnostics",
         ),
         _ => (502, code, "Claude Code CLI request failed"),
+    }
+}
+
+pub(crate) fn failure_stage(error: &ClaudeCliError) -> &'static str {
+    match error {
+        ClaudeCliError::Disconnected | ClaudeCliError::ShuttingDown => "cancelled",
+        ClaudeCliError::Router(_) => "upstream_request",
+        ClaudeCliError::Failure(
+            "unsupported_reasoning_effort" | "unsupported_reasoning_effort_none",
+        ) => "input_validation",
+        ClaudeCliError::Failure(code) if code.starts_with("claude_cli_relay_") => "relay_request",
+        ClaudeCliError::Failure(
+            "claude_cli_system_format_mismatch"
+            | "claude_cli_content_mismatch"
+            | "claude_cli_transcript_mismatch"
+            | "claude_cli_tools_not_disabled",
+        ) => "relay_validation",
+        ClaudeCliError::Failure(
+            "claude_cli_process_failed" | "claude_cli_spawn_failed" | "claude_cli_stdin_failed",
+        ) => "cli_process",
+        ClaudeCliError::Failure("claude_cli_local_request_failed") => "cli_execution",
+        ClaudeCliError::Failure("claude_cli_output_too_large") => "cli_output",
+        ClaudeCliError::Failure(
+            "claude_cli_result_error"
+            | "claude_cli_missing_structured_output"
+            | "claude_cli_invalid_output",
+        ) => "cli_result",
+        ClaudeCliError::Failure("claude_cli_timeout") => "cli_timeout",
+        ClaudeCliError::Failure(_) => "unknown",
     }
 }
