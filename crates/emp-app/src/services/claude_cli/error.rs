@@ -56,6 +56,11 @@ pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'stati
             "claude_cli_timeout",
             "Claude Code CLI request timed out",
         ),
+        "unsupported_reasoning_effort_none" => (
+            400,
+            "unsupported_reasoning_effort",
+            "EMP received reasoning.effort=\"none\"; the Claude Code CLI adapter cannot safely disable thinking for this route. Select a supported effort level offered for this model and retry",
+        ),
         "unsupported_reasoning_effort" => (
             400,
             "unsupported_reasoning_effort",
@@ -144,7 +149,9 @@ pub(crate) fn failure_stage(error: &ClaudeCliError) -> &'static str {
     match error {
         ClaudeCliError::Disconnected | ClaudeCliError::ShuttingDown => "cancelled",
         ClaudeCliError::Router(_) => "upstream_request",
-        ClaudeCliError::Failure("unsupported_reasoning_effort") => "input_validation",
+        ClaudeCliError::Failure(
+            "unsupported_reasoning_effort" | "unsupported_reasoning_effort_none",
+        ) => "input_validation",
         ClaudeCliError::Failure(code) if code.starts_with("claude_cli_relay_") => "relay_request",
         ClaudeCliError::Failure(
             "claude_cli_system_format_mismatch"

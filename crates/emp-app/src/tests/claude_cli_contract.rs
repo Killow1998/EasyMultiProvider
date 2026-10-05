@@ -2,6 +2,10 @@
 use super::*;
 
 fn claude_server(base_url: &str) -> (TempDir, ServerHandle) {
+    claude_server_with_model(base_url, "sonnet")
+}
+
+fn claude_server_with_model(base_url: &str, upstream_model: &str) -> (TempDir, ServerHandle) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     std::fs::write(
@@ -13,7 +17,7 @@ fn claude_server(base_url: &str) -> (TempDir, ServerHandle) {
                 "api_key":"upstream-secret", "execution_backend":"claude_cli"
             }],
             "models": [{
-                "id":"demo/model", "provider":"demo", "upstream_id":"sonnet",
+                "id":"demo/model", "provider":"demo", "upstream_id":upstream_model,
                 "enabled":true
             }]
         }))
@@ -240,6 +244,79 @@ impl Drop for SummaryUpstream {
         if let Some(worker) = self.worker.take() {
             worker.join().expect("join summary CPA");
         }
+    }
+}
+
+#[test]
+#[ignore = "requires an installed trusted Claude Code CLI on PATH"]
+fn installed_cli_claude_46_rejects_none_then_preserves_history_with_caller_selected_medium() {
+    assert!(emp_codex::installed_cli::resolve_claude_cli().is_some());
+    for model in ["claude-opus-4-6", "claude-sonnet-4-6"] {
+        let upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({
+            "answer":"same history accepted", "tool_calls":[]
+        }))]);
+        let (_directory, server) = claude_server_with_model(&upstream.base_url(), model);
+        let mut request = json!({
+            "model":"demo/model", "stream":false, "reasoning":{"effort":"none"},
+            "input":[
+                {"role":"user","content":"synthetic first turn"},
+                {"type":"function_call","call_id":"previous","name":"read","arguments":"{}"},
+                {"type":"function_call_output","call_id":"previous","output":"exact result\nquote \" café"},
+                {"role":"user","content":"continue with the same history"}
+            ],
+            "tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]
+        });
+        let original_input = request["input"].clone();
+        let rejected = post(
+            &server,
+            "/v1/responses",
+            &serde_json::to_vec(&request).unwrap(),
+            &[&session_header(&server)],
+        );
+        assert!(rejected.starts_with("HTTP/1.1 400 "), "{rejected}");
+        let error: Value =
+            serde_json::from_str(rejected.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(error["error"]["code"], "unsupported_reasoning_effort");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("EMP received reasoning.effort=\"none\"")
+        );
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Select a supported effort level offered for this model")
+        );
+        assert!(
+            upstream.observed.try_recv().is_err(),
+            "rejected effort must not reach CPA"
+        );
+
+        // The caller explicitly changes its effort; EMP never rewrites none or retries it.
+        request["reasoning"]["effort"] = json!("medium");
+        let accepted = post(
+            &server,
+            "/v1/responses",
+            &serde_json::to_vec(&request).unwrap(),
+            &[&session_header(&server)],
+        );
+        assert!(accepted.starts_with("HTTP/1.1 200 "), "{accepted}");
+        let result: Value =
+            serde_json::from_str(accepted.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            result["output"][0]["content"][0]["text"],
+            "same history accepted"
+        );
+        let (_, _, forwarded) = upstream.observed();
+        assert_eq!(forwarded["model"], model);
+        assert_eq!(forwarded["output_config"]["effort"], "medium");
+        let transcript = user_transcript(&forwarded);
+        assert_eq!(transcript["input"], original_input);
+        assert_eq!(transcript["tools"], request["tools"]);
+        assert_eq!(transcript["reasoning"]["effort"], "medium");
+        server.shutdown().expect("shutdown 4.6 server");
     }
 }
 

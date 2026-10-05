@@ -144,6 +144,13 @@ mod tests {
         let route = route();
         for (reason, status, code, boundary, cause) in [
             (
+                "unsupported_reasoning_effort_none",
+                400,
+                "unsupported_reasoning_effort",
+                "before starting Claude Code CLI",
+                "EMP received reasoning.effort=\"none\"",
+            ),
+            (
                 "unsupported_reasoning_effort",
                 400,
                 "unsupported_reasoning_effort",

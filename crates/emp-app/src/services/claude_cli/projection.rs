@@ -143,6 +143,7 @@ pub(super) fn effort(body: &Value) -> Result<Option<&'static str>, &'static str>
         Some("high") => Ok(Some("high")),
         Some("xhigh") => Ok(Some("xhigh")),
         Some("max") => Ok(Some("max")),
+        Some("none") => Err("unsupported_reasoning_effort_none"),
         _ => Err("unsupported_reasoning_effort"),
     }
 }
@@ -693,8 +694,11 @@ mod tests {
                 Ok(Some(value))
             );
         }
+        assert_eq!(
+            effort(&json!({"reasoning":{"effort":"none"}})),
+            Err("unsupported_reasoning_effort_none")
+        );
         for value in [
-            json!("none"),
             json!("minimal"),
             json!("disabled"),
             json!("unknown"),
