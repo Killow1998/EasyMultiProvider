@@ -159,6 +159,7 @@ for line in sys.stdin:
     std::fs::create_dir(&config_path).unwrap();
     assert!(
         crate::services::accounts::import_account_state(
+            None,
             &server.state,
             &json!({"id":"rotating", "prefix":"rotating", "auth_json":{
                 "tokens":{"access_token":"replacement", "account_id":"upstream"}
@@ -166,7 +167,9 @@ for line in sys.stdin:
         )
         .is_err()
     );
-    assert!(crate::services::accounts::delete_account_state(&server.state, "rotating").is_err());
+    assert!(
+        crate::services::accounts::delete_account_state(None, &server.state, "rotating").is_err()
+    );
     assert_eq!(std::fs::read(&auth_path).unwrap(), original_file);
     assert_eq!(
         server.state.backend.configuration.snapshot().unwrap(),

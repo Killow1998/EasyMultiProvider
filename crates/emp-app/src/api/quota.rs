@@ -13,11 +13,7 @@ use crate::http::response::not_found_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::http::response::unauthorized_response;
-use crate::services::accounts::quota_refresh_lock;
-use crate::services::quota::consume_quota_reset_for_account;
-use crate::services::quota::refresh_account_by_id;
 use crate::util::system_now;
-use serde_json::Value;
 use std::io::Write;
 use std::net::TcpStream;
 use std::sync::atomic::Ordering;
@@ -137,110 +133,46 @@ pub(crate) fn management_quota_request(
         Err(error) => return body_error_response(error),
     };
     let account = percent_decode(raw_account, false);
-    let known_account = account == "@native"
-        || state.backend.configuration.read().is_ok_and(|config| {
-            config
-                .get("accounts")
-                .and_then(Value::as_array)
-                .is_some_and(|accounts| {
-                    accounts.iter().any(|candidate| {
-                        candidate.get("id").and_then(Value::as_str) == Some(account.as_str())
-                    })
-                })
-        });
-    if !known_account {
-        return json_error_response(
+    use crate::services::quota::commands::{self, CommandError};
+    match commands::execute(request.observation_id, state, &account, reset, &body) {
+        Ok(payload) => response(
+            "HTTP/1.1 200 OK",
+            "application/json",
+            &serde_json::to_vec(&payload).expect("quota command result"),
+            &[],
+        ),
+        Err(CommandError::Internal) => {
+            json_error_response(500, status_text(500), "internal server error", None, &[])
+        }
+        Err(CommandError::UnknownAccount(account)) => json_error_response(
             503,
             status_text(503),
             &format!("unknown account: {account}"),
             Some("quota_error"),
             &[],
-        );
-    }
-    let refresh_lock = match quota_refresh_lock(state, &account) {
-        Some(lock) => lock,
-        None => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
+        ),
+        Err(CommandError::InvalidCredit) => json_error_response(
+            400,
+            status_text(400),
+            "reset credit id is invalid",
+            Some("quota_reset_invalid_request"),
+            &[],
+        ),
+        Err(CommandError::Reset(error)) => {
+            let status = if error.code() == "quota_reset_invalid_request" {
+                400
+            } else {
+                503
+            };
+            json_error_response(
+                status,
+                status_text(status),
+                &error.to_string(),
+                Some(error.code()),
+                &[],
+            )
         }
-    };
-    let _refresh_guard = match refresh_lock.lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
-        }
-    };
-    if reset {
-        let key = body
-            .get("idempotency_key")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let credit_id = match body.get("credit_id") {
-            None => None,
-            Some(Value::String(value)) => Some(value.as_str()),
-            _ => {
-                return json_error_response(
-                    400,
-                    status_text(400),
-                    "reset credit id is invalid",
-                    Some("quota_reset_invalid_request"),
-                    &[],
-                );
-            }
-        };
-        let consumed = consume_quota_reset_for_account(state, &account, key, credit_id);
-        let journal = &state.backend.diagnostics.journal;
-        journal.event(
-            if consumed.is_ok() { "info" } else { "warning" },
-            "quota_reset",
-            &serde_json::json!({
-                "account": journal.pseudonym(&account),
-                "success": consumed.is_ok(),
-                "error_class": consumed.as_ref().err().map(|error| error.code()),
-            }),
-        );
-        let outcome = match consumed {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                let status = if error.code() == "quota_reset_invalid_request" {
-                    400
-                } else {
-                    503
-                };
-                return json_error_response(
-                    status,
-                    status_text(status),
-                    &error.to_string(),
-                    Some(error.code()),
-                    &[],
-                );
-            }
-        };
-        let (account_snapshot, refresh_error) = match refresh_account_by_id(state, &account) {
-            Ok(snapshot) => (snapshot, Value::Null),
-            Err(error) => (
-                Value::Null,
-                serde_json::json!({
-                    "code": error.code(),
-                    "message": error.to_string(),
-                }),
-            ),
-        };
-        let response_body = serde_json::to_vec(&serde_json::json!({
-            "outcome": outcome,
-            "account": account_snapshot,
-            "refresh_error": refresh_error,
-        }))
-        .expect("quota reset result is serializable");
-        return response("HTTP/1.1 200 OK", "application/json", &response_body, &[]);
-    }
-    let refreshed = refresh_account_by_id(state, &account);
-    match refreshed {
-        Ok(account_snapshot) => {
-            let body = serde_json::to_vec(&serde_json::json!({"account": account_snapshot}))
-                .expect("account snapshot is serializable");
-            response("HTTP/1.1 200 OK", "application/json", &body, &[])
-        }
-        Err(error) => json_error_response(
+        Err(CommandError::Refresh(error)) => json_error_response(
             503,
             status_text(503),
             &error.to_string(),

@@ -66,11 +66,13 @@ pub(crate) fn handle_connection(
         }
     };
     let mut stop_after_write = false;
-    let Some(request) = parse_request(&raw.head) else {
+    let observation_id = observation.request_id().map(str::to_owned);
+    let Some(mut request) = parse_request(&raw.head) else {
         observation.write_response(&mut stream, &bad_request_response());
         let _ = stream.shutdown(Shutdown::Write);
         return;
     };
+    request.observation_id = observation_id.as_deref();
     observation.received(request);
     let path = request.raw_path();
     if request.method == RequestMethod::Get && path == "/api/accounts/events" {
@@ -513,7 +515,7 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
                     return not_found_response();
                 }
                 let account_id = percent_decode(raw_account, false);
-                return match delete_account_state(state, &account_id) {
+                return match delete_account_state(request.observation_id, state, &account_id) {
                     Ok(()) => {
                         let body = serde_json::to_vec(&serde_json::json!({"status":"ok"})).unwrap();
                         response("HTTP/1.1 200 OK", "application/json", &body, &[])

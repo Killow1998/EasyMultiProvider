@@ -107,6 +107,43 @@ write, privacy and forwarding with an unavailable journal. Existing native,
 Claude, cancellation and stream contracts verify that transport behavior is
 preserved. No live-provider or desktop acceptance is implied by these fixtures.
 
+## Management operation receipts
+
+Account import/delete, migration import/export, settings/context preferences, provider discovery/metadata,
+local/subscription catalog refresh, explicit quota read/reset, integration
+commands and quit preparation now produce `operation_started`,
+`operation_stage_started`, `operation_stage_finished` and `operation_finished`.
+They share an operation ID and, for HTTP callers, the connection owner's trusted
+request ID. Direct service calls have a null HTTP parent. No incoming correlation
+header is trusted. Existing HTTP receipts independently record response status
+and local write failure.
+
+Fields use fixed operation/stage/fact names, run-local pseudonymous subjects,
+numeric generations and tri-state `checks`: true means the stated comparison
+matched, false means it did not, null means unobserved. Absent checks were not
+reached. `outcome=completed` means the existing command contract returned
+success, not that all effects are verified. Runtime comparison uses only the
+existing observation actually performed by that command; a previous live snapshot
+is not promoted into a fresh check. The client effect remains unknown.
+For example, a preference can be saved before catalog publication fails; an
+explicit quota reset can return a valid `no_credit` outcome; a successful reset
+can be followed by a failed read without causing a second reset. These facts
+must not be flattened into a single success flag.
+
+The observer owns no business state and cannot retry, select, gate or probe.
+It returns each stage's result unchanged, emits a final record on normal/early
+return or panic unwinding, and tolerates an unavailable journal. Stage durations
+include the existing operation's waits. Abrupt termination and log loss can
+leave partial evidence. No body, credential, config snapshot, path or arbitrary
+error is accepted by the receipt API.
+
+Existing background catalog receipts now include source generation; generated
+catalog publication has a separate `catalog_publication` success/failure event.
+A request to the coalescing catalog worker does not identify a one-to-one job or
+prove that worker completion occurred. Configuration receipts retain the usage
+scan command ID for correlation with existing worker records. Full ownership
+and scope are in [Backend workflows](backend-workflows.md).
+
 ## Objective
 
 EMP persists a bounded, structured diagnostic journal so a later bug report can

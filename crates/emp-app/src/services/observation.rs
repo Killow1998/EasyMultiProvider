@@ -1,4 +1,5 @@
 //! Usage, diagnostics and activity reporting; request outcomes own routing feedback.
+pub(crate) mod operation;
 use crate::app::ServerState;
 use crate::util::system_now;
 use emp_core::ResolvedRoute;

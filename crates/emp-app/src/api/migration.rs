@@ -12,15 +12,8 @@ use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::http::response::unauthorized_response;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
-use emp_state::ExportGroups;
-use emp_state::decrypt_migration_bundle;
-use emp_state::export_migration_bundle_with_summary;
 use serde_json::Value;
 use std::net::TcpStream;
-
-const MIN_EXPORT_PASSWORD_UTF8_BYTES: usize = 12;
 
 pub(crate) fn management_migration_request(
     stream: &mut TcpStream,
@@ -56,10 +49,6 @@ pub(crate) fn management_migration_request(
         .expect("export confirmation is JSON serializable");
         return response("HTTP/1.1 200 OK", "application/json", &body, &[]);
     }
-    let password = body
-        .get("password")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
     if request.raw_path() == "/api/migration/export" {
         // Exports carry every credential, so each one needs a fresh
         // confirmation issued by a separate request just before it.
@@ -80,154 +69,38 @@ pub(crate) fn management_migration_request(
                 &[],
             );
         }
-        if password.len() < MIN_EXPORT_PASSWORD_UTF8_BYTES {
-            return json_error_response(
-                400,
-                status_text(400),
-                "migration export password must contain at least 12 UTF-8 bytes",
-                Some("migration_password_too_short"),
-                &[],
-            );
-        }
-        let group_values = body.get("groups").and_then(Value::as_array);
-        let groups = match group_values {
-            Some(values) => {
-                let Some(values) = values.iter().map(Value::as_str).collect::<Option<Vec<_>>>()
-                else {
-                    return json_error_response(
-                        400,
-                        status_text(400),
-                        "select at least one valid export category",
-                        None,
-                        &[],
-                    );
-                };
-                match ExportGroups::from_list(&values) {
-                    Ok(groups) => Some(groups),
-                    Err(error) => {
-                        return json_error_response(
-                            400,
-                            status_text(400),
-                            &error.to_string(),
-                            None,
-                            &[],
-                        );
-                    }
-                }
-            }
-            None => None,
+        return match crate::services::migration::export(request.observation_id, state, &body) {
+            Ok(exported) => response(
+                "HTTP/1.1 200 OK",
+                "application/octet-stream",
+                &exported.bundle,
+                &[
+                    ("Cache-Control", "no-store"),
+                    ("Content-Disposition", "attachment; filename=\"EMP.emp\""),
+                    ("X-EMP-Export-Summary", &exported.summary.to_string()),
+                ],
+            ),
+            Err(error) => migration_error(error),
         };
-        let config = match state.backend.configuration.read() {
-            Ok(config) => config.clone(),
-            Err(_) => {
-                return json_error_response(
-                    500,
-                    status_text(500),
-                    "internal server error",
-                    None,
-                    &[],
-                );
-            }
-        };
-        let (bundle, summary) = match export_migration_bundle_with_summary(
-            &config,
-            password,
-            &state.backend.configuration.vault,
-            groups.as_ref(),
-            Some(&state.backend.accounts.native_auth_path),
-        ) {
-            Ok(result) => result,
-            Err(error) => {
-                return json_error_response(400, status_text(400), &error.to_string(), None, &[]);
-            }
-        };
-        let summary = serde_json::json!({
-            "accounts":summary.accounts,
-            "providers":summary.providers,
-            "models":summary.models,
-            "groups":summary.groups,
-            "native_login_included":summary.native_login_included,
-            "native_login_missing":summary.native_login_missing,
-        })
-        .to_string();
-        return response(
+    }
+    match crate::services::migration::import(request.observation_id, state, &body) {
+        Ok(body) => response(
             "HTTP/1.1 200 OK",
-            "application/octet-stream",
-            &bundle,
-            &[
-                ("Cache-Control", "no-store"),
-                ("Content-Disposition", "attachment; filename=\"EMP.emp\""),
-                ("X-EMP-Export-Summary", &summary),
-            ],
-        );
-    }
-    let Some(encoded) = body
-        .get("bundle")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    else {
-        return json_error_response(
-            400,
-            status_text(400),
-            "migration bundle is required",
-            None,
+            "application/json",
+            &serde_json::to_vec(&body).expect("migration response is serializable"),
             &[],
-        );
-    };
-    let bundle = match STANDARD.decode(encoded) {
-        Ok(bundle) => bundle,
-        Err(_) => {
-            return json_error_response(
-                400,
-                status_text(400),
-                "migration bundle is not valid base64",
-                None,
-                &[],
-            );
-        }
-    };
-    // Decrypting (scrypt) needs no configuration; keep it outside the locks.
-    let decrypted = match decrypt_migration_bundle(&bundle, password) {
-        Ok(decrypted) => decrypted,
-        Err(error) => {
-            return json_error_response(400, status_text(400), &error.to_string(), None, &[]);
-        }
-    };
-    // Same-identity accounts in the bundle replace stored credentials; keep
-    // quota refreshes, rotated-credential flushes and other configuration
-    // writers out while that happens.
-    let imported = crate::services::accounts::import_account_bundle(state, decrypted);
-    let summary = match imported {
-        Some(Ok(summary)) => summary,
-        Some(Err(error)) => {
-            return json_error_response(400, status_text(400), &error.to_string(), None, &[]);
-        }
-        None => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
-        }
-    };
-    let (catalog_path, _) = match crate::services::catalog::refresh_catalog(state) {
-        Ok(result) => result,
-        Err(()) => {
-            return json_error_response(500, status_text(500), "internal server error", None, &[]);
-        }
-    };
-    let catalog_path = catalog_path.to_string_lossy().into_owned();
-    let mut body = serde_json::json!({
-        "status":"ok",
-        "accounts":summary.accounts,
-        "providers":summary.providers,
-        "models":summary.models,
-        "catalog_path":catalog_path,
-    });
-    if summary.renamed_accounts > 0 {
-        body.as_object_mut()
-            .expect("migration response is an object")
-            .insert(
-                "renamed_accounts".to_owned(),
-                Value::from(summary.renamed_accounts),
-            );
+        ),
+        Err(error) => migration_error(error),
     }
-    let body = serde_json::to_vec(&body).expect("migration response is serializable");
-    response("HTTP/1.1 200 OK", "application/json", &body, &[])
+}
+
+fn migration_error(error: crate::services::migration::MigrationError) -> Vec<u8> {
+    match error {
+        crate::services::migration::MigrationError::Invalid { message, code } => {
+            json_error_response(400, status_text(400), &message, code, &[])
+        }
+        crate::services::migration::MigrationError::Internal => {
+            json_error_response(500, status_text(500), "internal server error", None, &[])
+        }
+    }
 }

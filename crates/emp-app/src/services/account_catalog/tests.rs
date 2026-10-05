@@ -155,7 +155,7 @@ fn model_refresh_uses_each_selected_runtime_version_for_query_and_user_agent() {
         assert_eq!(inventory_snapshot["helper_source"], "configured");
         assert_eq!(observed_version.as_deref(), Some(version));
 
-        let result = refresh(&server.state, "demo").expect("refresh subscription catalog");
+        let result = refresh(None, &server.state, "demo").expect("refresh subscription catalog");
         assert!(result["models"].is_array());
         let request = catalog.requests.recv().expect("catalog request");
         assert!(
@@ -208,7 +208,7 @@ fn model_refresh_rechecks_account_ownership_after_the_upstream_request() {
         Some("0.159.2")
     );
     let state = std::sync::Arc::clone(&server.state);
-    let refresh_worker = thread::spawn(move || refresh(&state, "demo"));
+    let refresh_worker = thread::spawn(move || refresh(None, &state, "demo"));
     let request = catalog
         .requests
         .recv_timeout(std::time::Duration::from_secs(5))
@@ -252,7 +252,7 @@ fn missing_engine_version_preserves_cached_catalog_and_refuses_refresh() {
     let cache = auth_path.parent().unwrap().join("models_cache.json");
     let cached = br#"{"models":[{"slug":"preserved"}]}"#;
     std::fs::write(&cache, cached).unwrap();
-    let response = refresh(&server.state, "demo");
+    let response = refresh(None, &server.state, "demo");
     assert!(matches!(
         response.expect_err("no synthetic client version"),
         CatalogRefreshError::Invalid(

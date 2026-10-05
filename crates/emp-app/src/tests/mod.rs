@@ -70,6 +70,7 @@ mod conversation_switch_contract;
 mod integration_sideband_contract;
 mod internal_events_contract;
 mod management_http_contract;
+mod management_operation_contract;
 mod native_api_contract;
 mod performance_contract;
 mod quota_management_contract;

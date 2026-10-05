@@ -1,5 +1,10 @@
 # Architecture assessment and refactoring direction
 
+For the current whole-backend ownership contract, before/after diagrams and
+acceptance checklist, see [Backend workflows](backend-workflows.md). The
+assessment below records the earlier passes; availability gates, cooldowns and
+recovery probes are outside the passive-observation refactor.
+
 Assessment date: 2026-10-04. The findings describe the 0.12.9 source plus the
 local profiling changes. The first ownership pass is implemented locally.
 The continuation below deepens external request execution and error presentation.

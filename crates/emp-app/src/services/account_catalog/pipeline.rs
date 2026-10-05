@@ -156,7 +156,7 @@ pub(crate) fn fetch_and_persist(
     journal.event(
         if matches!(result, "upstream_error" | "persistence_error") { "warning" } else { "info" },
         "catalog_refresh",
-        &serde_json::json!({"source": journal.pseudonym(&source.id), "result": result, "http_status": status}),
+        &serde_json::json!({"source": journal.pseudonym(&source.id), "result": result, "http_status": status, "source_generation":source.generation}),
     );
     outcome
 }
@@ -363,7 +363,13 @@ pub(crate) fn publish_pending_catalog(state: &ServerState) -> Result<(), ()> {
         return Ok(());
     }
     state.catalog_refresh.mark_catalog_publication_pending();
-    crate::services::catalog::refresh_catalog(state).map(|_| ())
+    let result = crate::services::catalog::refresh_catalog(state).map(|_| ());
+    state.backend.diagnostics.journal.event(
+        if result.is_ok() { "info" } else { "warning" },
+        "catalog_publication",
+        &serde_json::json!({"success":result.is_ok()}),
+    );
+    result
 }
 
 #[cfg(test)]

@@ -83,7 +83,35 @@ impl ServerHandle {
         port: u16,
         config_path: &Path,
     ) -> Result<Self, AppError> {
-        Self::start_with_config_options(host, port, config_path, "codex", codex_auth_path())
+        // Test fixtures must not borrow the developer's native credentials,
+        // integration lease or generated model catalog. Explicit integration
+        // fixtures can still provide their own home through the options API.
+        let codex_home = config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("codex");
+        let server = Self::start_with_config_options(
+            host,
+            port,
+            config_path,
+            "missing-test-codex",
+            codex_home.join("auth.json"),
+        )?;
+        let defaults = emp_state::normalize_configuration(None)?;
+        {
+            let mut config = server
+                .state
+                .backend
+                .configuration
+                .test_config()
+                .lock()
+                .unwrap();
+            if config["native_catalog_path"] == defaults["native_catalog_path"] {
+                config["native_catalog_path"] =
+                    serde_json::json!(codex_home.join("models_cache.json"));
+            }
+        }
+        Ok(server)
     }
 
     #[cfg(test)]
