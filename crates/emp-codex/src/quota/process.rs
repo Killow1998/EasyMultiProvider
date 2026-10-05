@@ -2,6 +2,11 @@
 
 use super::*;
 
+mod child;
+mod pipe;
+use child::QuotaChild;
+use pipe::CancellablePipe;
+
 #[derive(Debug)]
 pub(super) struct TrustedBinary {
     executable: crate::PreparedExecutable,
@@ -200,7 +205,7 @@ pub(super) fn run_isolated_quota_process<'a>(
             command.env(key, value);
         }
     }
-    let mut child = command.spawn().map_err(|_| quota_check_failed())?;
+    let mut child = QuotaChild::spawn(&mut command).map_err(|_| quota_check_failed())?;
     let result = query_child(
         &mut child,
         control,
@@ -208,7 +213,9 @@ pub(super) fn run_isolated_quota_process<'a>(
         reset_idempotency_key,
         reset_credit_id,
     );
-    let cleanup = finish_child(&mut child);
+    // Stop every helper before reading its final auth file, including errors
+    // that occur before query_child has started its pipe readers.
+    drop(child);
     let refreshed_auth = fs::read(&auth_path)
         .ok()
         .filter(|raw| raw.len() <= MAX_AUTH_BYTES as usize)
@@ -217,13 +224,7 @@ pub(super) fn run_isolated_quota_process<'a>(
     if let (Some(persist), Some(refreshed)) = (&mut persist_rotation, &refreshed_auth) {
         persist(refreshed)?;
     }
-    let output = match result {
-        Ok(output) => {
-            cleanup?;
-            output
-        }
-        Err(error) => return Err(error),
-    };
+    let output = result?;
     Ok(QuotaProcessResult {
         quota: if reset_idempotency_key.is_some() {
             json!({"outcome": reset_outcome(&output, 3)?})
@@ -340,19 +341,28 @@ fn stdout_reader(stdout: impl Read + Send + 'static) -> (Receiver<ProcessLine>, 
 }
 
 fn query_child(
-    child: &mut Child,
+    child: &mut QuotaChild,
     control: QuotaControl<'_>,
     allow_refresh: bool,
     reset_idempotency_key: Option<&str>,
     reset_credit_id: Option<&str>,
 ) -> Result<String, QuotaError> {
-    let stdout = child.stdout.take().ok_or_else(quota_check_failed)?;
-    let stderr = child.stderr.take().ok_or_else(quota_check_failed)?;
+    let stop_readers = std::sync::Arc::new(AtomicBool::new(false));
+    let stdout = CancellablePipe::new(
+        child.process.stdout.take().ok_or_else(quota_check_failed)?,
+        stop_readers.clone(),
+    )
+    .map_err(|_| quota_check_failed())?;
+    let stderr = CancellablePipe::new(
+        child.process.stderr.take().ok_or_else(quota_check_failed)?,
+        stop_readers.clone(),
+    )
+    .map_err(|_| quota_check_failed())?;
+    let mut stdin = child.process.stdin.take().ok_or_else(quota_check_failed)?;
     let (receiver, stdout_worker) = stdout_reader(stdout);
     let stderr_worker = thread::spawn(move || {
         let _ = std::io::copy(&mut BufReader::new(stderr), &mut std::io::sink());
     });
-    let mut stdin = child.stdin.take().ok_or_else(quota_check_failed)?;
     let deadline = Instant::now() + control.timeout;
     let requests = [
         json!({
@@ -407,11 +417,13 @@ fn query_child(
     })();
     drop(stdin);
     if result.is_err() {
-        let _ = child.kill();
+        child.stop();
     }
     // Enforce process exit before joining readers: a helper that ignores EOF
     // must not strand the refresh lock and shutdown drain indefinitely.
-    let cleanup = finish_child(child);
+    let cleanup = child.finish().map_err(|_| quota_check_failed());
+    // Even a detached descendant retaining a pipe cannot strand these joins.
+    stop_readers.store(true, Ordering::Release);
     let _ = stdout_worker.join();
     let _ = stderr_worker.join();
     result.and_then(|output| cleanup.map(|()| output))
@@ -505,27 +517,6 @@ fn wait_for_response(
             ));
         }
         return Ok(());
-    }
-}
-
-fn finish_child(child: &mut Child) -> Result<(), QuotaError> {
-    let deadline = Instant::now() + PROCESS_EXIT_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                return if status.success() {
-                    Ok(())
-                } else {
-                    Err(quota_check_failed())
-                };
-            }
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-            Ok(None) | Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(quota_check_failed());
-            }
-        }
     }
 }
 
