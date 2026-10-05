@@ -1,6 +1,9 @@
 //! HTTP/SSE fallback and external streams delivered through the downstream WebSocket.
 use super::{Turn, TurnResult};
-use crate::api::failure_response::{stream_failure_value, websocket_router_error};
+use crate::api::failure_response::{
+    stream_failure_value, stream_failure_value_for_route, websocket_router_error,
+    websocket_router_error_for_route,
+};
 use crate::app::ServerState;
 use crate::services::disconnect::DisconnectRace;
 use crate::services::events::{stream_event_activity, terminal_stream_event};
@@ -199,10 +202,11 @@ pub(super) fn serve_external(
             DisconnectRace::Ready(Err(error)) => {
                 if sent_output {
                     let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
-                    let failure = stream_failure_value(&error, &id);
+                    let failure = stream_failure_value_for_route(&error, &id, &candidate, true);
                     let _ = websocket.send_json(&failure);
                 } else {
-                    let _ = websocket.send_json(&websocket_router_error(&error));
+                    let _ =
+                        websocket.send_json(&websocket_router_error_for_route(&error, &candidate));
                 }
                 break;
             }

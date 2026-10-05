@@ -327,18 +327,16 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
     assert_eq!(upstream_body["stream"], true);
     assert_eq!(upstream_body["messages"].as_array().unwrap().len(), 1);
     assert_eq!(upstream_body["messages"][0]["role"], "user");
-    assert!(
-        upstream_body["system"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|block| {
-                block["text"].as_str().is_some_and(|text| {
-                    text.starts_with("<system-reminder>\nToday's date is ")
-                        && text.ends_with(".\n</system-reminder>")
-                })
-            })
-    );
+    // The CLI may send its date reminder as text or as an empty system
+    // message carrying only the already-matched effort. Neither shape may
+    // alter the user transcript or remove EMP's system instruction.
+    assert!(upstream_body["system"].as_array().is_some_and(|blocks| {
+        blocks.iter().any(|block| {
+            block["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("one-request compatibility bridge"))
+        })
+    }));
     assert_eq!(upstream_body["tools"].as_array().unwrap().len(), 1);
     assert_eq!(upstream_body["tools"][0]["name"], "StructuredOutput");
     let transcript = user_transcript(&upstream_body);

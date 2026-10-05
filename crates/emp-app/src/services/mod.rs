@@ -8,6 +8,7 @@ pub(crate) mod configuration;
 pub(crate) mod connection_admission;
 pub(crate) mod events;
 pub(crate) mod external;
+pub(crate) mod failure_feedback;
 pub(crate) mod history;
 pub(crate) mod integration;
 pub(crate) mod management_events;

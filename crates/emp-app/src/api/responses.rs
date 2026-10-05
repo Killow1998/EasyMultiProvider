@@ -95,9 +95,9 @@ pub(crate) fn responses_request(
     if crate::services::claude_cli::selected(&route)
         && let Err(error) = crate::services::claude_cli::preflight_input(&body)
     {
-        return ResponsesRequestResult::Buffered(crate::api::claude_response::http_response(
-            &error,
-        ));
+        return ResponsesRequestResult::Buffered(
+            crate::api::claude_response::http_response_for_route(&error, &route),
+        );
     }
     let ids = match projection_ids() {
         Ok(ids) => ids,
@@ -240,7 +240,7 @@ pub(crate) fn responses_request(
                         usage.http_status(503);
                     }
                     return ResponsesRequestResult::Buffered(
-                        crate::api::claude_response::http_response(&error),
+                        crate::api::claude_response::http_response_for_route(&error, &route),
                     );
                 }
             }
@@ -354,7 +354,7 @@ pub(crate) fn responses_request(
                     }
                 }
                 return ResponsesRequestResult::Buffered(
-                    crate::api::claude_response::http_response(&error),
+                    crate::api::claude_response::http_response_for_route(&error, &route),
                 );
             }
         };
