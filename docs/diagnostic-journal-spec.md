@@ -78,9 +78,12 @@ tool payload, arbitrary effort string, credential or raw error is collected.
 Delivery has four states: `terminal_written`, `partial`, `write_failed`, and
 `not_observed`. A terminal error can be written successfully. A successful
 local socket write does not prove that the client received or processed it.
-`downstream_terminal` records the kind of individually observed stream event;
-buffered HTTP and pre-generated SSE can leave that kind unknown while recording
-their complete local write. The outer HTTP status remains unknown for SSE and
+`downstream_terminal` records the kind of stream terminal written, including
+pre-generated history errors, compaction and Claude responses. Buffered HTTP
+leaves that stream kind unknown while recording its complete local write.
+An empty cancellation response records `no_response` in the HTTP receipt and
+does not count a write or change the model receipt's requested transport.
+The outer HTTP status remains unknown for SSE and
 WebSocket writes, as before. `requested_transport` keeps the input's delivery
 preference when an early stream failure instead returns buffered HTTP; the
 receipt's `transport` and `response_status` then describe that HTTP response.

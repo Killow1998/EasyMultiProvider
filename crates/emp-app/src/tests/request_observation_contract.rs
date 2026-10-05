@@ -2,6 +2,93 @@
 use super::internal_events_contract::journal;
 use super::*;
 
+#[test]
+fn cancelled_compaction_does_not_claim_a_terminal_write() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let (accepted, ready) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        receive_upstream_request(&mut stream);
+        accepted.send(()).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut byte = [0];
+        matches!(stream.read(&mut byte), Ok(0))
+    });
+    let (root, server) = configured_server(&format!("http://{address}/v1"));
+    let downstream = open_post_stream(
+        &server,
+        "/v1/responses",
+        br#"{"model":"demo/model","input":[{"role":"user","content":"synthetic input"},{"type":"compaction_trigger"}],"stream":true}"#,
+        &[&session_header(&server)],
+    );
+    ready.recv_timeout(Duration::from_secs(3)).unwrap();
+    drop(downstream);
+    let upstream_closed = worker.join().unwrap();
+    let records = finished(root.path(), 1);
+    server.shutdown().unwrap();
+    assert!(upstream_closed);
+    let done = records
+        .iter()
+        .find(|r| r["event"] == "request_finished")
+        .unwrap();
+    assert_eq!(done["fields"]["terminal_written"], false, "{done}");
+    assert_eq!(done["fields"]["writes_completed"], 0, "{done}");
+    assert_eq!(done["fields"]["transport"], "sse", "{done}");
+    assert_eq!(done["fields"]["delivery"], "not_observed", "{done}");
+    let http = records
+        .iter()
+        .find(|r| r["event"] == "http_request_completed")
+        .unwrap();
+    assert_eq!(http["fields"]["result"], "no_response", "{http}");
+    assert!(http["fields"]["status"].is_null(), "{http}");
+}
+
+#[test]
+fn history_sse_failure_is_recorded_as_failed() {
+    let (root, server) = configured_server("http://127.0.0.1:1/v1");
+    let reply = post_stream(
+        &server,
+        "/v1/responses",
+        br#"{"model":"demo/model","stream":true,"input":[{"type":"compaction","encrypted_content":"opaque-fixture"}]}"#,
+        &[&session_header(&server)],
+    );
+    let records = finished(root.path(), 1);
+    server.shutdown().unwrap();
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    assert!(reply.contains("event: response.failed"), "{reply}");
+    let done = records
+        .iter()
+        .find(|r| r["event"] == "request_finished")
+        .unwrap();
+    assert_eq!(done["fields"]["delivery"], "terminal_written");
+    assert_eq!(done["fields"]["downstream_terminal"], "failed", "{done}");
+}
+
+#[test]
+fn generated_compaction_sse_records_its_actual_terminal_event() {
+    let upstream = OneShotUpstream::start(chat_answer());
+    let (root, server) = configured_server(&upstream.base_url());
+    let reply = post_stream(
+        &server,
+        "/v1/responses",
+        br#"{"model":"demo/model","input":[{"role":"user","content":"synthetic input"},{"type":"compaction_trigger"}],"stream":true}"#,
+        &[&session_header(&server)],
+    );
+    let _ = upstream.observed();
+    let records = finished(root.path(), 1);
+    server.shutdown().unwrap();
+    assert!(reply.contains("event: response.completed"), "{reply}");
+    let done = records
+        .iter()
+        .find(|r| r["event"] == "request_finished")
+        .unwrap();
+    assert_eq!(done["fields"]["delivery"], "terminal_written");
+    assert_eq!(done["fields"]["downstream_terminal"], "completed", "{done}");
+}
+
 fn finished(root: &Path, count: usize) -> Vec<Value> {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {

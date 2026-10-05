@@ -71,6 +71,13 @@ impl HttpObservation {
     }
 
     pub(crate) fn write_response(&mut self, stream: &mut impl Write, bytes: &[u8]) {
+        // Cancellation can return an empty buffer before response headers.
+        // Writing zero bytes is not evidence of a delivered HTTP response.
+        if bytes.is_empty() {
+            self.fields["response_bytes"] = json!(0);
+            self.fields["result"] = json!("no_response");
+            return;
+        }
         self.fields["status"] = json!(
             bytes
                 .get(..12)

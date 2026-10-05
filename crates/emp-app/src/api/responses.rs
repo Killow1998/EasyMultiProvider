@@ -144,7 +144,7 @@ pub(crate) fn responses_request(
             };
             let mut downstream = ObservedSse::new(stream, observation);
             let _ = downstream.head();
-            let _ = downstream.frames(&[frame], true);
+            let _ = downstream.frames(&[frame], "response.failed");
             return ResponsesRequestResult::Streamed;
         }
         Err(error) => return ResponsesRequestResult::Buffered(history_http_error(&error)),
@@ -161,7 +161,7 @@ pub(crate) fn responses_request(
             if let Ok(frame) = sse_frame("response.failed", &failed) {
                 let mut downstream = ObservedSse::new(stream, observation);
                 let _ = downstream.head();
-                let _ = downstream.frames(&[frame], true);
+                let _ = downstream.frames(&[frame], "response.failed");
             }
             return ResponsesRequestResult::Streamed;
         }
@@ -264,12 +264,13 @@ pub(crate) fn responses_request(
         usage.finish();
         persist_protocol_observation(state, &candidate);
         if python_truthy(body.get("stream")) {
-            let stream_body = match generated_response_stream(compacted, &ids) {
+            let (stream_body, last_event) = match generated_response_stream(compacted, &ids) {
                 Ok(body) => body,
                 Err(error) => return ResponsesRequestResult::Buffered(error),
             };
             let mut downstream = ObservedSse::new(stream, observation);
-            if downstream.head().is_err() || downstream.frames(&[stream_body], true).is_err() {
+            if downstream.head().is_err() || downstream.frames(&[stream_body], &last_event).is_err()
+            {
                 return ResponsesRequestResult::Streamed;
             }
             return ResponsesRequestResult::Streamed;
@@ -374,12 +375,13 @@ pub(crate) fn responses_request(
         }
         crate::services::providers::persist_protocol_observation(state, route);
         if stream_requested {
-            let stream_body = match generated_response_stream(response_value, &ids) {
+            let (stream_body, last_event) = match generated_response_stream(response_value, &ids) {
                 Ok(body) => body,
                 Err(error) => return ResponsesRequestResult::Buffered(error),
             };
             let mut downstream = ObservedSse::new(stream, observation);
-            if downstream.head().is_err() || downstream.frames(&[stream_body], true).is_err() {
+            if downstream.head().is_err() || downstream.frames(&[stream_body], &last_event).is_err()
+            {
                 return ResponsesRequestResult::Streamed;
             }
             return ResponsesRequestResult::Streamed;

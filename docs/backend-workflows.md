@@ -20,7 +20,7 @@ routes, confirmations, source selection, retries and error contracts remain.
 | `emp-protocol` | Responses/Chat/Anthropic projection and stream state | Keep the concrete protocol machines; do not impose one universal wire pipeline. |
 | `emp-transport` | Connections, TLS/proxy policy, limits, framing and socket lifecycle | Executors use the existing transport; wire adapters own downstream delivery evidence. |
 
-The crate manifests are unchanged. No library depends on `emp-app`. The useful
+Crate dependency directions are unchanged. No library depends on `emp-app`. The useful
 consolidation is complete-operation ownership in the application, not merging
 independent protocol, persistence and transport implementations into one crate.
 
@@ -89,7 +89,7 @@ flowchart TD
 | `services/migration` | After existing one-use export authorization: encrypt; or decode/decrypt → commit account bundle → publish catalog | Bundle commit and later catalog publication have separate receipts. Passwords and bundles never enter observation. |
 | `services/quota/commands` | Validate account → hold existing account lock → read quota, or explicitly reset then read quota | Reset outcome (`reset`, no credit, nothing to reset, already redeemed) and follow-up read are separate. A failed follow-up read does not cause another reset. |
 | `services/integration/commands` | Confirm as before → hold operation lock → apply/restore → search step → existing runtime observation → summary | Saved configuration target, observed catalog match/mismatch/unknown and unobservable routing/desktop effect remain separate. Existing rollback and stop-after-response policy is preserved. |
-| `services/shutdown` | Check update and active-work constraints → restore owned integration → return readiness | Readiness is not proof of process exit, client receipt or desktop recovery. HTTP/lifecycle owners perform delivery and stopping. |
+| `services/shutdown` | Check update and active-work constraints → restore owned integration → verify native configuration → return readiness | An applied or unresolved previous listener lease keeps EMP running. Readiness is not proof of process exit, client receipt or desktop recovery. HTTP/lifecycle owners perform delivery and stopping. |
 
 Updates, usage scans, startup and shutdown workers retain their existing
 phase/command receipts and lifecycle owners. Migration commands retain the existing

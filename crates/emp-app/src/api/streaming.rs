@@ -94,9 +94,9 @@ impl<'a> ObservedSse<'a> {
         self.observation
             .written(write_stream_head_with_headers(self.stream, headers), false)
     }
-    pub(crate) fn frames(&mut self, frames: &[Vec<u8>], terminal: bool) -> std::io::Result<()> {
+    pub(crate) fn frames(&mut self, frames: &[Vec<u8>], last_event: &str) -> std::io::Result<()> {
         self.observation
-            .written(write_stream_frames(self.stream, frames), terminal)
+            .event_type_written(last_event, write_stream_frames(self.stream, frames))
     }
     fn event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
         self.observation
@@ -471,9 +471,16 @@ fn relay_external_stream(
 pub(crate) fn generated_response_stream(
     response_value: Value,
     ids: &ProjectionIds,
-) -> Result<Vec<u8>, Vec<u8>> {
+) -> Result<(Vec<u8>, String), Vec<u8>> {
     let events = emp_router::response_json_stream_events(response_value, ids, false)
         .map_err(crate::api::failure_response::router_error_response)?;
+    // Retain the terminal type while events are available. Receipts neither
+    // reparse the wire bytes nor clone the response and its possibly large output.
+    let last_event = events
+        .last()
+        .and_then(|event| event["type"].as_str())
+        .unwrap_or_default()
+        .to_owned();
     let mut output = Vec::new();
     for event in events {
         let event_type = event
@@ -484,5 +491,5 @@ pub(crate) fn generated_response_stream(
             json_error_response(500, status_text(500), "internal server error", None, &[])
         })?);
     }
-    Ok(output)
+    Ok((output, last_event))
 }

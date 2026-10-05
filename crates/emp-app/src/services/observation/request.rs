@@ -142,11 +142,19 @@ impl RequestObservation {
         event: &Value,
         result: Result<T, E>,
     ) -> Result<T, E> {
-        let terminal = match event["type"].as_str() {
-            Some("response.completed") => Some("completed"),
-            Some("response.incomplete") => Some("incomplete"),
-            Some("response.failed") => Some("failed"),
-            Some("error") => Some("error"),
+        self.event_type_written(event["type"].as_str().unwrap_or_default(), result)
+    }
+
+    pub(crate) fn event_type_written<T, E>(
+        &mut self,
+        event_type: &str,
+        result: Result<T, E>,
+    ) -> Result<T, E> {
+        let terminal = match event_type {
+            "response.completed" => Some("completed"),
+            "response.incomplete" => Some("incomplete"),
+            "response.failed" => Some("failed"),
+            "error" => Some("error"),
             _ => None,
         };
         if result.is_ok()
