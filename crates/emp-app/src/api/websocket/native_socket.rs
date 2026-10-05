@@ -2,9 +2,11 @@
 use super::Turn;
 use crate::api::failure_response::{safe_failure_reason, stream_error_code};
 use crate::app::ServerState;
+use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
 use crate::services::{activity::ActivityGuard, native};
 use crate::util::random_hex;
+use emp_core::ResolvedRoute;
 use emp_router::native_metadata::native_response_headers;
 use emp_transport::{ClientWebSocket, FailureClass, public_failure_message};
 use serde_json::Value;
@@ -40,6 +42,29 @@ pub(super) fn native_stream_error_value(
         error["failure_reason"] = Value::String(safe_failure_reason(reason));
     }
     serde_json::json!({"type":"response.failed","response":{"id":response_id,"object":"response","status":"failed","error":error}})
+}
+
+fn native_stream_error_value_for_route(
+    status: u16,
+    error_class: FailureClass,
+    failure_reason: Option<&str>,
+    response_id: &str,
+    route: &ResolvedRoute,
+    output_started: bool,
+) -> Value {
+    let mut event = native_stream_error_value(status, error_class, failure_reason, response_id);
+    event["response"]["error"]["message"] = Value::String(format!(
+        "HTTP {status}: {}",
+        crate::services::failure_feedback::message(
+            route,
+            error_class,
+            failure_reason,
+            status,
+            output_started,
+            None,
+        )
+    ));
+    event
 }
 
 fn native_websocket_identity_headers(
@@ -206,8 +231,14 @@ impl NativeSession {
                 *native_upstream = None;
                 *last_native_response_id = None;
                 let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
-                let error =
-                    native_stream_error_value(502, FailureClass::Network, Some("network"), &id);
+                let error = native_stream_error_value_for_route(
+                    502,
+                    FailureClass::Network,
+                    Some("network"),
+                    &id,
+                    route,
+                    false,
+                );
                 let _ = websocket.send_json(&error);
                 return NativeTurnResult::Finished;
             }
@@ -216,6 +247,7 @@ impl NativeSession {
             let mut completed_id = None;
             let mut projected_error = false;
             let mut received_upstream_event = false;
+            let mut delivered_output = false;
             while let Ok(Some(event)) = client.receive_json() {
                 received_upstream_event = true;
                 let event = match plan.project_event(&event) {
@@ -249,6 +281,7 @@ impl NativeSession {
                 if websocket.send_json(&event).is_err() {
                     return NativeTurnResult::Closed;
                 }
+                delivered_output |= stream_event_activity(&event).0;
                 if terminal {
                     break;
                 }
@@ -287,11 +320,13 @@ impl NativeSession {
                     let _=websocket.send_json(&serde_json::json!({"type":"error","error":{"code":"previous_response_not_found","message":"Previous response was not found. Retrying the full request."}}));
                 } else {
                     let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
-                    let error = native_stream_error_value(
+                    let error = native_stream_error_value_for_route(
                         502,
                         FailureClass::StreamIncomplete,
                         Some("stream_incomplete"),
                         &id,
+                        route,
+                        delivered_output,
                     );
                     let _ = websocket.send_json(&error);
                 }

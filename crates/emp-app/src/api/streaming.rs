@@ -1,8 +1,8 @@
 //! Downstream SSE delivery and cancellation.
 
 use crate::api::failure_response::pre_output_failure_response;
-use crate::api::failure_response::pre_output_router_error_response;
-use crate::api::failure_response::stream_failure_value;
+use crate::api::failure_response::pre_output_router_error_response_for_route;
+use crate::api::failure_response::stream_failure_value_for_route;
 use crate::app::ServerState;
 use crate::http::response::SECURITY_HEADERS;
 use crate::http::response::json_error_response;
@@ -334,13 +334,13 @@ fn relay_stream(
             RelayEvent::Failure(error) => {
                 usage.router_error(&error);
                 if !started {
-                    return Err(pre_output_router_error_response(&error));
+                    return Err(pre_output_router_error_response_for_route(&error, route));
                 }
                 let response_id = match random_hex(16) {
                     Ok(value) => format!("resp_{value}"),
                     Err(_) => return Ok(false),
                 };
-                let failure = stream_failure_value(&error, &response_id);
+                let failure = stream_failure_value_for_route(&error, &response_id, route, true);
                 if let Ok(frame) = sse_frame("response.failed", &failure) {
                     let _ = downstream.event(&failure, &[frame]);
                 }
@@ -376,7 +376,7 @@ fn relay_stream(
                     }
                     continue;
                 }
-                if failed && let Some(response) = pre_output_failure_response(&event_body) {
+                if failed && let Some(response) = pre_output_failure_response(&event_body, route) {
                     return Err(response);
                 }
                 let (output_emitted, tool_activity) = stream_event_activity(&event_body);

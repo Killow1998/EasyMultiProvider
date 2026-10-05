@@ -393,7 +393,13 @@ pub fn public_failure_message(
         | FailureClass::LocalDeadline
         | FailureClass::Upstream504
         | FailureClass::Timeout => "The upstream request timed out.".to_owned(),
-        FailureClass::RateLimit => "The upstream rate limit was reached.".to_owned(),
+        FailureClass::RateLimit => match reason.as_deref() {
+            Some("quota_exhausted") => {
+                "The upstream error indicates insufficient quota or credits.".to_owned()
+            }
+            Some("upstream_capacity") => "The upstream reported limited capacity.".to_owned(),
+            _ => "The upstream rate limit was reached.".to_owned(),
+        },
         FailureClass::Auth => "The upstream rejected the account credentials.".to_owned(),
         FailureClass::StreamIncomplete => {
             "The upstream stream ended without a valid completion event.".to_owned()

@@ -46,6 +46,23 @@ pub(crate) fn prepare_quit(
             };
             return Err(ShutdownError { code, message });
         }
+        // A previous listener can own an applied lease. Restoring only our
+        // lease is not sufficient evidence that Codex can run without EMP.
+        let native = receipt
+            .step("verify_native_configuration", || {
+                state.backend.integration.manager.status()
+            })
+            .is_ok_and(|status| {
+                matches!(status.state.as_str(), "native" | "restored")
+                    && matches!(status.relation.as_str(), "unleased" | "original")
+            });
+        receipt.check("native_configuration_restored", Some(native));
+        if !native {
+            return Err(ShutdownError {
+                code: Some("native_restore_unresolved"),
+                message: "Codex integration is still applied or unresolved. Use Restore Native or resolve the configuration conflict before exiting EMP",
+            });
+        }
         restore_gate.keep_closed();
         receipt.fact("service_shutdown", "ready_after_response");
         receipt.check("desktop_effect_verified", None);

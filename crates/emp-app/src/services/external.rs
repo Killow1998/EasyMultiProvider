@@ -14,7 +14,7 @@ use std::ops::AsyncFnMut;
 use std::time::{Duration, Instant};
 
 pub(crate) enum ExternalRequestError {
-    Router(RouterError),
+    Router(RouterError, Box<ResolvedRoute>),
     Route(RouteResolutionError),
     Unsupported,
     Disconnected,
@@ -186,7 +186,7 @@ impl Execution<'_> {
                     RequestOutcome::new(state, &candidate, body, incoming, None, "responses")
                         .router_error(&error);
                 }
-                return Err(ExternalRequestError::Router(error));
+                return Err(ExternalRequestError::Router(error, Box::new(candidate)));
             }
         }
         if let Some(outcome) = outcome {

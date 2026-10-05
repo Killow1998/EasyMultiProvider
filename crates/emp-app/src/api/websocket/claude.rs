@@ -67,7 +67,9 @@ pub(super) fn serve(
                 usage.router_error(router_error);
             }
             if websocket
-                .send_json(&crate::api::claude_response::websocket_value(&error))
+                .send_json(&crate::api::claude_response::websocket_value_for_route(
+                    &error, route,
+                ))
                 .is_err()
             {
                 return TurnResult::Closed;

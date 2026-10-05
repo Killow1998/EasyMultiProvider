@@ -288,6 +288,68 @@ fn integration_api_applies_and_shutdown_restores_only_owned_codex_fields() {
     assert!(restored.contains("[features]\nweb_search = true"));
 }
 
+#[test]
+fn quit_keeps_service_available_when_an_old_listener_lease_is_not_owned() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical_root(&directory);
+    let config = root.join("emp-config.json");
+    std::fs::write(&config, br#"{"auto_enable_on_start":false}"#).unwrap();
+    let codex_config = root.join("config.toml");
+    let original = b"# native settings\n[features]\nweb_search = true\n";
+    std::fs::write(&codex_config, original).unwrap();
+    let server = ServerHandle::start_with_config_options(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        &config,
+        "missing-test-codex",
+        root.join("auth.json"),
+    )
+    .unwrap();
+    let integration = &server.state.backend.integration;
+    assert!(
+        integration
+            .manager
+            .enable("http://127.0.0.1:1/v1", None, true)
+            .unwrap()
+            .ok()
+    );
+    crate::services::startup::reconcile(&server.state).unwrap();
+    assert!(!integration.owned.load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(
+        *integration.startup_conflicts.lock().unwrap(),
+        vec!["listener_mismatch"]
+    );
+    let applied = std::fs::read(&codex_config).unwrap();
+    let session = session_header(&server);
+    let quit = post(&server, "/api/quit", b"{}", &[&session]);
+    assert!(quit.starts_with("HTTP/1.1 409 "), "{quit}");
+    assert!(quit.contains("native_restore_unresolved"), "{quit}");
+    assert_eq!(std::fs::read(&codex_config).unwrap(), applied);
+    assert!(request(&server, "/healthz", &[]).starts_with("HTTP/1.1 200 OK\r\n"));
+
+    let restored = post(
+        &server,
+        "/api/integration/restore",
+        br#"{"confirm_reload":true}"#,
+        &[&session],
+    );
+    assert!(restored.starts_with("HTTP/1.1 200 OK\r\n"), "{restored}");
+    let restored_config = std::fs::read_to_string(&codex_config).unwrap();
+    assert_eq!(
+        restored_config
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>(),
+        std::str::from_utf8(original)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(integration.manager.status().unwrap().state, "restored");
+    server.shutdown().unwrap();
+}
+
 /// Answers `model/list` on the Codex control socket with whatever list the test sets.
 #[cfg(unix)]
 fn fake_codex_backend(

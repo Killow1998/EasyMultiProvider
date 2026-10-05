@@ -229,7 +229,7 @@ fn open_stream_result_with_monitor(
             replace_catalog_etag(state, &mut stream.headers);
             Ok(CancellableNativeStreamOpen::Opened(Box::new(stream)))
         }
-        Err(error) => {
+        Err(mut error) => {
             let mut observation = crate::services::request_outcome::RequestOutcome::new(
                 state,
                 route,
@@ -240,6 +240,7 @@ fn open_stream_result_with_monitor(
             )
             .started_at(started);
             observation.native_error(&error);
+            crate::services::failure_feedback::annotate_native(&mut error, route);
             Err(error)
         }
     }
@@ -306,7 +307,7 @@ pub(crate) fn complete(
             replace_catalog_etag(state, &mut result.headers);
             Ok(result)
         }
-        Err(error) => {
+        Err(mut error) => {
             usage.native_error(&error);
             crate::services::context::record_event(
                 state,
@@ -314,6 +315,7 @@ pub(crate) fn complete(
                 &Value::Object(body.clone()),
                 &serde_json::json!({"type":"error","error":error.body["error"]}),
             );
+            crate::services::failure_feedback::annotate_native(&mut error, route);
             Err(error)
         }
     }
@@ -372,8 +374,9 @@ pub(crate) fn compact(
             replace_catalog_etag(state, &mut result.headers);
             Ok(result)
         }
-        Err(error) => {
+        Err(mut error) => {
             usage.native_error(&error);
+            crate::services::failure_feedback::annotate_native(&mut error, route);
             Err(error)
         }
     }

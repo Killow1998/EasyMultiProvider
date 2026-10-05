@@ -3,6 +3,8 @@
 use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::services::external::ExternalRequestError;
+use crate::services::failure_feedback;
+use emp_core::ResolvedRoute;
 use emp_core::RouteResolutionError;
 use emp_router::RouterError;
 use emp_router::RouterErrorKind;
@@ -12,19 +14,23 @@ use emp_transport::public_failure_message;
 use serde_json::Value;
 
 pub(crate) fn external_complete_error(error: ExternalRequestError) -> Vec<u8> {
-    external_http_error(error, router_error_response)
+    external_http_error(error, |error, route| {
+        router_error_response_for_route(error, &route)
+    })
 }
 
 pub(crate) fn external_open_error(error: ExternalRequestError) -> Vec<u8> {
-    external_http_error(error, |error| pre_output_router_error_response(&error))
+    external_http_error(error, |error, route| {
+        pre_output_router_error_response_for_route(&error, &route)
+    })
 }
 
 fn external_http_error(
     error: ExternalRequestError,
-    router_response: impl FnOnce(RouterError) -> Vec<u8>,
+    router_response: impl FnOnce(RouterError, Box<ResolvedRoute>) -> Vec<u8>,
 ) -> Vec<u8> {
     match error {
-        ExternalRequestError::Router(error) => router_response(error),
+        ExternalRequestError::Router(error, route) => router_response(error, route),
         ExternalRequestError::Route(error) => route_resolution_response(error),
         ExternalRequestError::Disconnected => Vec::new(),
         ExternalRequestError::Unsupported => crate::http::response::json_error_response(
@@ -39,7 +45,9 @@ fn external_http_error(
 
 pub(crate) fn external_websocket_error(error: ExternalRequestError) -> Value {
     match error {
-        ExternalRequestError::Router(error) => websocket_router_error(&error),
+        ExternalRequestError::Router(error, route) => {
+            websocket_router_error_for_route(&error, &route)
+        }
         ExternalRequestError::Route(error) => serde_json::json!({
             "type":"error", "status":error.status(),
             "error":{"code":"router_error","message":error.to_string()}
@@ -98,7 +106,32 @@ pub(crate) fn request_router_error_response(status: u16, message: &str) -> Vec<u
     )
 }
 
+fn routed_message(error: &RouterError, route: &ResolvedRoute, output_started: bool) -> String {
+    let detail = (error.kind() != RouterErrorKind::Upstream
+        && error.kind() != RouterErrorKind::Transport)
+        .then(|| error.to_string());
+    failure_feedback::message(
+        route,
+        error.error_class(),
+        error.failure_reason(),
+        error.status(),
+        output_started,
+        detail.as_deref(),
+    )
+}
+
 pub(crate) fn router_error_response(error: RouterError) -> Vec<u8> {
+    router_error_response_with_route(error, None)
+}
+
+pub(crate) fn router_error_response_for_route(
+    error: RouterError,
+    route: &ResolvedRoute,
+) -> Vec<u8> {
+    router_error_response_with_route(error, Some(route))
+}
+
+fn router_error_response_with_route(error: RouterError, route: Option<&ResolvedRoute>) -> Vec<u8> {
     let failure_reason = error.failure_reason().map(str::to_owned);
     let error_class = error.error_class().as_str();
     let code = if error_class == "rate_limit" {
@@ -111,11 +144,14 @@ pub(crate) fn router_error_response(error: RouterError) -> Vec<u8> {
     let mut detail = serde_json::json!({
         "code": code,
         "type": error_class,
-        "message": if error.kind() == RouterErrorKind::Upstream {
-            public_failure_message(error.error_class(), error.failure_reason(), error.status())
-        } else {
-            error.to_string()
-        },
+        "message": route.map_or_else(
+            || if error.kind() == RouterErrorKind::Upstream {
+                public_failure_message(error.error_class(), error.failure_reason(), error.status())
+            } else {
+                error.to_string()
+            },
+            |route| routed_message(&error, route, false),
+        ),
     });
     if let Some(reason) = failure_reason {
         detail["failure_reason"] = Value::String(reason);
@@ -168,13 +204,34 @@ pub(crate) fn safe_failure_reason(value: &str) -> String {
 }
 
 pub(crate) fn stream_failure_value(error: &RouterError, response_id: &str) -> Value {
+    stream_failure_value_with_route(error, response_id, None, false)
+}
+
+pub(crate) fn stream_failure_value_for_route(
+    error: &RouterError,
+    response_id: &str,
+    route: &ResolvedRoute,
+    output_started: bool,
+) -> Value {
+    stream_failure_value_with_route(error, response_id, Some(route), output_started)
+}
+
+fn stream_failure_value_with_route(
+    error: &RouterError,
+    response_id: &str,
+    route: Option<&ResolvedRoute>,
+    output_started: bool,
+) -> Value {
     let error_class = error.error_class();
     let mut detail = serde_json::json!({
         "code": stream_error_code(error_class),
         "message": format!(
             "HTTP {}: {}",
             error.status(),
-            public_failure_message(error_class, error.failure_reason(), error.status())
+            route.map_or_else(
+                || public_failure_message(error_class, error.failure_reason(), error.status()),
+                |route| routed_message(error, route, output_started),
+            )
         ),
         "status": error.status(),
         "error_class": error_class.as_str(),
@@ -216,7 +273,18 @@ pub(crate) fn websocket_router_error(error: &RouterError) -> Value {
     })
 }
 
-pub(crate) fn pre_output_failure_response(event: &Value) -> Option<Vec<u8>> {
+pub(crate) fn websocket_router_error_for_route(
+    error: &RouterError,
+    route: &ResolvedRoute,
+) -> Value {
+    let failure = stream_failure_value_for_route(error, "resp_websocket_error", route, false);
+    serde_json::json!({
+        "type":"error", "status":error.status(),
+        "error":failure["response"]["error"]
+    })
+}
+
+pub(crate) fn pre_output_failure_response(event: &Value, route: &ResolvedRoute) -> Option<Vec<u8>> {
     if event.get("type").and_then(Value::as_str) != Some("response.failed") {
         return None;
     }
@@ -241,7 +309,9 @@ pub(crate) fn pre_output_failure_response(event: &Value) -> Option<Vec<u8>> {
     let mut detail = serde_json::json!({
         "type": error_class_name,
         "code": code,
-        "message": public_failure_message(error_class, failure_reason, status),
+        "message": failure_feedback::message(
+            route, error_class, failure_reason, status, false, None,
+        ),
         "param": Value::Null,
     });
     if let Some(reason) = failure_reason {
@@ -265,12 +335,25 @@ pub(crate) fn pre_output_failure_response(event: &Value) -> Option<Vec<u8>> {
     ))
 }
 
-pub(crate) fn pre_output_router_error_response(error: &RouterError) -> Vec<u8> {
+pub(crate) fn pre_output_router_error_response_for_route(
+    error: &RouterError,
+    route: &ResolvedRoute,
+) -> Vec<u8> {
+    pre_output_router_error_response_with_route(error, Some(route))
+}
+
+fn pre_output_router_error_response_with_route(
+    error: &RouterError,
+    route: Option<&ResolvedRoute>,
+) -> Vec<u8> {
     let error_class = error.error_class();
     let mut detail = serde_json::json!({
         "type": error_class.as_str(),
         "code": stream_error_code(error_class),
-        "message": public_failure_message(error_class, error.failure_reason(), error.status()),
+        "message": route.map_or_else(
+            || public_failure_message(error_class, error.failure_reason(), error.status()),
+            |route| routed_message(error, route, false),
+        ),
         "param": Value::Null,
     });
     if let Some(reason) = error.failure_reason()

@@ -445,6 +445,13 @@ fn native_endpoint_matches_retry_and_terminal_error_decisions() {
         }
         if case == "rate" {
             assert!(response_parts(&wire).0.contains("Retry-After: 2\r\n"));
+            let error =
+                serde_json::from_slice::<Value>(response_parts(&wire).1).unwrap()["error"].clone();
+            assert_eq!(error["code"], "rate_limit_exceeded");
+            let message = error["message"].as_str().unwrap();
+            assert!(message.contains("Selected source 'native' and model 'upstream'"));
+            assert!(message.contains("rate limit"));
+            assert!(!message.contains("insufficient quota"));
         }
         let requests = upstream.requests(attempts);
         if case == "reasoning" {

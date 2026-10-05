@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 mod error;
-pub(crate) use error::{ClaudeCliError, failure_details};
+pub(crate) use error::{ClaudeCliError, failure_details, failure_stage};
 
 const CHILD_POLL: Duration = Duration::from_millis(25);
 
@@ -90,6 +90,11 @@ pub(crate) fn execute_complete(
             "warning",
             "claude_cli_request_failed",
             &json!({"request_id":crate::services::observation::request::request_id(incoming),"status":status,"error_code":code,
+                "stage":failure_stage(error),
+                "provider_id":route.provider_id,
+                "model_id":route.requested_model,
+                "upstream_model":route.upstream_model,
+                "reasoning_effort":projection::effort_diagnostic(body),
                 "duration_ms":started.elapsed().as_millis() as u64}),
         );
     }
