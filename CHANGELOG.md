@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.11 (2026-10-05)
+
+- Bound quota queries and cancel their isolated Codex helpers cleanly, including
+  launcher children that retain output pipes. Preserve rotated credentials when
+  a query times out or is cancelled.
+- Keep EMP available when Codex settings still point to an older or unresolved
+  EMP listener, so native restoration can finish before exit.
+- Explain failures for the selected provider and model while preserving HTTP
+  status, retry limits and the user's route choice.
+- Restore Claude 4.6 reasoning levels, accept an omitted or null effort, and
+  handle compatible Claude CLI system reminders without losing tool history.
+  Explain unsupported explicit effort values before forwarding.
+- Correlate request and management-operation diagnostics across their stages.
+  Distinguish saved settings, upstream outcomes and response delivery; do not
+  report a cancelled empty response as delivered, and record the actual final
+  event for generated SSE responses.
+
 ## 0.12.10 (2026-10-04)
 
 - Reduce request and stream teardown delays by starting disconnect monitoring
