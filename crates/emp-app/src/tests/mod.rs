@@ -77,6 +77,7 @@ mod quota_rotation_contract;
 mod quota_workspace_contract;
 mod realtime_contract;
 mod realtime_sideband_contract;
+mod request_observation_contract;
 mod session_boundary_contract;
 mod stream_boundary_contract;
 mod websocket_capacity_contract;

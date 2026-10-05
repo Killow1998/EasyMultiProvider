@@ -191,7 +191,7 @@ fn open_stream_result_with_monitor(
 ) -> Result<CancellableNativeStreamOpen, NativeHttpError> {
     let started = std::time::Instant::now();
     let on_attempt = || {
-        crate::services::observation::request_started(
+        crate::services::observation::execution_attempt(
             state,
             route,
             &Value::Object(body.clone()),
@@ -255,7 +255,7 @@ pub(crate) fn complete(
     let started = std::time::Instant::now();
     let on_retry = |decision| observe_retry(state, incoming, decision);
     let on_attempt = || {
-        crate::services::observation::request_started(
+        crate::services::observation::execution_attempt(
             state,
             route,
             &Value::Object(body.clone()),
@@ -329,7 +329,7 @@ pub(crate) fn compact(
     let started = std::time::Instant::now();
     let on_retry = |decision| observe_retry(state, incoming, decision);
     let on_attempt = || {
-        crate::services::observation::request_started(
+        crate::services::observation::execution_attempt(
             state,
             route,
             &Value::Object(body.clone()),

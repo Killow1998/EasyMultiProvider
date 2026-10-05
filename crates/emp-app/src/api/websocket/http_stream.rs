@@ -6,14 +6,13 @@ use crate::services::disconnect::DisconnectRace;
 use crate::services::events::{stream_event_activity, terminal_stream_event};
 use crate::services::{activity::ActivityGuard, native};
 use crate::util::random_hex;
-use emp_transport::WebSocketConnection;
 use serde_json::Value;
 use std::net::TcpStream;
 
 pub(super) fn serve_native(
     state: &ServerState,
     turn: &Turn,
-    websocket: &mut WebSocketConnection<'_, TcpStream>,
+    websocket: &mut super::ObservedWebSocket<'_, '_>,
     monitor_stream: Option<&TcpStream>,
     mut native_turn_activity: Option<ActivityGuard<'_>>,
 ) -> TurnResult {
@@ -119,7 +118,7 @@ pub(super) fn serve_native(
 pub(super) fn serve_external(
     state: &ServerState,
     turn: &Turn,
-    websocket: &mut WebSocketConnection<'_, TcpStream>,
+    websocket: &mut super::ObservedWebSocket<'_, '_>,
     monitor_stream: Option<&TcpStream>,
 ) -> TurnResult {
     let Turn {

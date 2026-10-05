@@ -188,6 +188,7 @@ pub(crate) fn handle_connection(
                     raw.body_prefix,
                     state,
                     system_now(),
+                    observation.request_id(),
                 );
                 None
             }
@@ -307,14 +308,21 @@ pub(crate) fn handle_connection(
                     raw.body_prefix,
                     state,
                     system_now(),
+                    observation.model.as_mut().expect("model HTTP observation"),
                 ))
             }
             Some(request)
                 if request.method == RequestMethod::Post
                     && request.raw_path() == "/v1/responses" =>
             {
-                match responses_request(&mut stream, request, raw.body_prefix, state, system_now())
-                {
+                match responses_request(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                    observation.model.as_mut().expect("model HTTP observation"),
+                ) {
                     ResponsesRequestResult::Buffered(response) => Some(response),
                     ResponsesRequestResult::Streamed => None,
                 }

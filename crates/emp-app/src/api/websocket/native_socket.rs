@@ -6,10 +6,9 @@ use crate::services::events::terminal_stream_event;
 use crate::services::{activity::ActivityGuard, native};
 use crate::util::random_hex;
 use emp_router::native_metadata::native_response_headers;
-use emp_transport::{ClientWebSocket, FailureClass, WebSocketConnection, public_failure_message};
+use emp_transport::{ClientWebSocket, FailureClass, public_failure_message};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::TcpStream;
 use std::time::Duration;
 
 #[derive(Default)]
@@ -70,7 +69,7 @@ impl NativeSession {
         &mut self,
         state: &'a ServerState,
         turn: &Turn,
-        websocket: &mut WebSocketConnection<'_, TcpStream>,
+        websocket: &mut super::ObservedWebSocket<'_, '_>,
     ) -> NativeTurnResult<'a> {
         let Turn {
             route,

@@ -17,12 +17,12 @@ use crate::services::compaction::external_compaction_response;
 use crate::services::history::prepare_destination_context;
 use crate::services::history::prepare_history;
 use crate::services::native;
+use crate::services::observation::request::{Phase, RequestObservation};
 use crate::services::providers::persist_protocol_observation;
 use crate::services::request_preparation::{
     PreparedRequest, RequestOperation, RequestPreparationError, prepare_request,
 };
 use crate::util::projection_ids;
-use crate::util::random_hex;
 use std::collections::BTreeMap;
 use std::net::TcpStream;
 
@@ -32,6 +32,7 @@ pub(crate) fn compact_request(
     body_prefix: Vec<u8>,
     state: &ServerState,
     now: f64,
+    observation: &mut RequestObservation,
 ) -> Vec<u8> {
     if !proxy_allowed(request, state, now) {
         let status = if same_origin(request, state.port) {
@@ -47,10 +48,13 @@ pub(crate) fn compact_request(
             &[],
         );
     }
+    observation.phase(Phase::ReadBody);
     let body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,
         Err(error) => return body_error_response(error),
     };
+    observation.body(body.get("reasoning"), body.get("stream"));
+    observation.phase(Phase::ResolveRoute);
     let PreparedRequest {
         config,
         route,
@@ -65,20 +69,21 @@ pub(crate) fn compact_request(
             return json_error_response(500, status_text(500), "internal server error", None, &[]);
         }
     };
-    let mut incoming = request
+    observation.selected(&route);
+    let incoming = request
         .headers
         .lines()
         .skip(1)
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
         .collect::<BTreeMap<_, _>>();
-    if let Ok(id) = random_hex(8) {
-        incoming.insert("X-EMP-Request-ID".to_owned(), id);
-    }
+    let incoming = observation.headers(incoming);
+    observation.phase(Phase::PrepareHistory);
     body = match prepare_history(state, &route, body, &incoming) {
         Ok(body) => body,
         Err(error) => return history_http_error(&error),
     };
+    observation.phase(Phase::PrepareDestination);
     let destination_context = {
         let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
         prepare_destination_context(state, &route, body, &incoming, monitor.as_mut())
@@ -87,6 +92,7 @@ pub(crate) fn compact_request(
         Ok(body) => body,
         Err(error) => return destination_error_response(error),
     };
+    observation.phase(Phase::Execute);
     if route.dialect == emp_core::Dialect::CodexNative {
         return crate::api::native_response::complete_response(native::compact(
             state,

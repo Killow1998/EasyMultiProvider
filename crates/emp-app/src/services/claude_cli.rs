@@ -73,7 +73,7 @@ pub(crate) fn execute_complete(
         preflight_input(body)?;
         let executable = emp_codex::installed_cli::resolve_claude_cli()
             .ok_or(ClaudeCliError::Failure("claude_cli_unavailable"))?;
-        crate::services::observation::request_started(state, route, body, incoming);
+        crate::services::observation::execution_attempt(state, route, body, incoming);
         execute_complete_with_cli(state, route, body, incoming, ids, &executable, monitor)
     })();
     if let Err(error) = &result {
@@ -89,7 +89,7 @@ pub(crate) fn execute_complete(
         state.backend.diagnostics.journal.event(
             "warning",
             "claude_cli_request_failed",
-            &json!({"status":status,"error_code":code,
+            &json!({"request_id":crate::services::observation::request::request_id(incoming),"status":status,"error_code":code,
                 "duration_ms":started.elapsed().as_millis() as u64}),
         );
     }

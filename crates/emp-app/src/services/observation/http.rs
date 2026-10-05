@@ -10,6 +10,7 @@ pub(crate) struct HttpObservation {
     diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
     started: Instant,
     fields: Value,
+    pub(crate) model: Option<super::request::RequestObservation>,
 }
 
 impl HttpObservation {
@@ -24,10 +25,29 @@ impl HttpObservation {
             diagnostics: Arc::clone(&state.backend.diagnostics),
             started: Instant::now(),
             fields,
+            model: None,
         }
     }
 
     pub(crate) fn received(&mut self, request: Request<'_>) {
+        if request.method == RequestMethod::Post
+            && matches!(
+                request.raw_path(),
+                "/v1/responses" | "/v1/responses/compact"
+            )
+        {
+            self.model = Some(super::request::RequestObservation::new(
+                Arc::clone(&self.diagnostics),
+                self.request_id().map(str::to_owned),
+                None,
+                "http",
+                if request.raw_path().ends_with("/compact") {
+                    "compact"
+                } else {
+                    "responses"
+                },
+            ));
+        }
         self.fields["method"] = json!(match request.method {
             RequestMethod::Get => "GET",
             RequestMethod::Head => "HEAD",
@@ -63,13 +83,17 @@ impl HttpObservation {
             Some(500..=599) => "failed",
             _ => "responded",
         });
-        if stream
-            .write_all(bytes)
-            .and_then(|()| stream.flush())
-            .is_err()
-        {
+        let result = stream.write_all(bytes).and_then(|()| stream.flush());
+        if result.is_err() {
             self.failure("write_failed");
         }
+        if let Some(model) = &mut self.model {
+            model.http_response(&self.fields["status"], result);
+        }
+    }
+
+    pub(crate) fn request_id(&self) -> Option<&str> {
+        self.fields["request_id"].as_str()
     }
 
     pub(crate) fn failure(&mut self, class: &'static str) {

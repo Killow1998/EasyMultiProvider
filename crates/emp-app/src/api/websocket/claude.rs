@@ -3,14 +3,13 @@ use super::{Turn, TurnResult};
 use crate::api::failure_response::websocket_router_error;
 use crate::app::ServerState;
 use crate::services::events::terminal_stream_event;
-use emp_transport::WebSocketConnection;
 use serde_json::Value;
 use std::net::TcpStream;
 
 pub(super) fn serve(
     state: &ServerState,
     turn: &Turn,
-    websocket: &mut WebSocketConnection<'_, TcpStream>,
+    websocket: &mut super::ObservedWebSocket<'_, '_>,
     monitor_stream: Option<&TcpStream>,
 ) -> TurnResult {
     let Turn {
