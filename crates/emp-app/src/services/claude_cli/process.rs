@@ -774,22 +774,24 @@ mod tests {
 
         let mut command = Command::new("sh");
         command
-            .args(["-c", "(sleep 10) & exit 0"])
+            // Consume the submitted input before exiting so this exercises
+            // descendant pipe cleanup, not a race with the stdin writer.
+            .args(["-c", "cat >/dev/null; (sleep 10) & exit 0"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
         let cancelled = AtomicBool::new(false);
         let started = Instant::now();
-        assert!(
+        assert_eq!(
             run_with_timeout(
                 command,
                 Arc::from(&b"input"[..]),
                 &cancelled,
                 Duration::from_secs(2),
                 || None
-            )
-            .is_ok()
+            ),
+            Ok(Vec::new())
         );
         assert!(
             started.elapsed() < Duration::from_secs(2),
