@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
+pub(crate) mod discovery;
 mod selection;
 mod sources;
 pub(crate) use selection::select_models;
@@ -103,4 +104,25 @@ pub(crate) fn subscription_model(
     emp_codex::subscription_route_model(config, slug, account, |account| {
         account_catalog_headers(account, &state.backend.configuration.vault)
     })
+}
+
+/// The existing refresh button publishes locally, then schedules subscription
+/// refresh. Scheduling is not evidence of background completion or client load.
+pub(crate) fn refresh_for_management(
+    request_id: Option<&str>,
+    state: &ServerState,
+) -> Result<(PathBuf, usize), ()> {
+    crate::services::observation::operation::observe(
+        &state.backend.diagnostics,
+        request_id,
+        "catalog_refresh",
+        |receipt| {
+            let result = receipt.step("publish_catalog", || refresh_catalog(state))?;
+            receipt.check("catalog_published", Some(true));
+            crate::services::account_catalog::request_refresh(state, false);
+            receipt.fact("subscription_refresh", "scheduled");
+            receipt.check("runtime_catalog_matches_target", None);
+            Ok(result)
+        },
+    )
 }

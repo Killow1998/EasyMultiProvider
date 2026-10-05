@@ -504,6 +504,22 @@ fn assert_retry_journal(directory: &TempDir) {
     assert_eq!(retries.len(), 1);
     assert_eq!(retries[0]["fields"]["status"], 429);
     assert_eq!(retries[0]["fields"]["protocol_fallback"], false);
+    let attempts: Vec<_> = records
+        .iter()
+        .filter(|record| record["event"] == "model_attempt_started")
+        .collect();
+    assert_eq!(
+        attempts.len(),
+        2,
+        "the existing retry sends twice, without replaying output"
+    );
+    for attempt in attempts {
+        assert_eq!(
+            attempt["fields"]["request_id"],
+            retries[0]["fields"]["request_id"]
+        );
+        assert_eq!(attempt["fields"]["provider_id"], "demo");
+    }
     let observations: Vec<_> = records
         .iter()
         .filter(|record| record["event"] == "route_observation")

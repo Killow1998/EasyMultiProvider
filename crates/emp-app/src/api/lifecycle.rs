@@ -7,7 +7,6 @@ use crate::http::response::{
     unauthorized_response,
 };
 use std::net::TcpStream;
-use std::time::Duration;
 
 pub(crate) fn quit_request(
     stream: &mut TcpStream,
@@ -31,76 +30,12 @@ pub(crate) fn quit_request(
     if let Err(error) = read_json_body(stream, request, body_prefix, state) {
         return (body_error_response(error), false);
     }
-    if matches!(
-        state.updates.snapshot().state.as_str(),
-        "downloading" | "verifying" | "waiting" | "installing"
-    ) {
+    if let Err(error) = crate::services::shutdown::prepare_quit(request.observation_id, state) {
         return (
-            json_error_response(
-                409,
-                status_text(409),
-                "Wait for the update to finish before exiting EMP",
-                None,
-                &[],
-            ),
+            json_error_response(409, status_text(409), error.message, error.code, &[]),
             false,
         );
     }
-    let Some(restore_gate) = state
-        .connection_admission
-        .quiesce(1, Duration::from_secs(15))
-    else {
-        return (
-            json_error_response(
-                409,
-                status_text(409),
-                "Finish active Codex requests and WebSockets, then retry shutdown",
-                Some("active_conversations"),
-                &[],
-            ),
-            false,
-        );
-    };
-    if let Err(error) = state.backend.integration.restore_owned() {
-        let (code, message) = match error {
-            crate::error::AppError::NativeRestoreBlocked(reason) => (
-                Some(reason),
-                crate::services::integration::restore_error_message(reason),
-            ),
-            _ => (
-                None,
-                "Native configuration could not be restored; EMP is still running",
-            ),
-        };
-        return (
-            json_error_response(409, status_text(409), message, code, &[]),
-            false,
-        );
-    }
-    // An old listener's lease may be applied but not owned by this process.
-    // Keep the service available when shutdown cannot safely restore it.
-    let native = state
-        .backend
-        .integration
-        .manager
-        .status()
-        .is_ok_and(|status| {
-            matches!(status.state.as_str(), "native" | "restored")
-                && matches!(status.relation.as_str(), "unleased" | "original")
-        });
-    if !native {
-        return (
-            json_error_response(
-                409,
-                status_text(409),
-                "Codex integration is still applied or unresolved. Use Restore Native or resolve the configuration conflict before exiting EMP",
-                Some("native_restore_unresolved"),
-                &[],
-            ),
-            false,
-        );
-    }
-    restore_gate.keep_closed();
     (
         response(
             "HTTP/1.1 200 OK",

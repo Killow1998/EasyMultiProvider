@@ -13,6 +13,7 @@ use crate::services::events::sse_frame;
 use crate::services::events::stream_event_activity;
 use crate::services::events::terminal_stream_event;
 use crate::services::native;
+use crate::services::observation::request::RequestObservation;
 use crate::services::providers::persist_protocol_observation;
 use crate::util::random_hex;
 use emp_core::ResolvedRoute;
@@ -72,15 +73,46 @@ pub(crate) fn write_stream_frames(
     stream.flush()
 }
 
+/// A downstream writer and its passive receipt travel together. The writer
+/// returns every original I/O result, leaving decisions to the existing relay.
+pub(crate) struct ObservedSse<'a> {
+    stream: &'a mut TcpStream,
+    observation: &'a mut RequestObservation,
+}
+impl<'a> ObservedSse<'a> {
+    pub(crate) fn new(stream: &'a mut TcpStream, observation: &'a mut RequestObservation) -> Self {
+        Self {
+            stream,
+            observation,
+        }
+    }
+    pub(crate) fn head(&mut self) -> std::io::Result<()> {
+        self.observation
+            .written(write_stream_head(self.stream), false)
+    }
+    fn head_with_headers(&mut self, headers: &BTreeMap<String, String>) -> std::io::Result<()> {
+        self.observation
+            .written(write_stream_head_with_headers(self.stream, headers), false)
+    }
+    pub(crate) fn frames(&mut self, frames: &[Vec<u8>], last_event: &str) -> std::io::Result<()> {
+        self.observation
+            .event_type_written(last_event, write_stream_frames(self.stream, frames))
+    }
+    fn event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
+        self.observation
+            .event_written(event, write_stream_frames(self.stream, frames))
+    }
+}
+
 pub(crate) fn serve_external_stream(
-    downstream: &mut TcpStream,
+    downstream: ObservedSse<'_>,
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), Vec<u8>> {
-    let mut monitor = DisconnectMonitor::start(downstream).ok();
+    let mut monitor = DisconnectMonitor::start(downstream.stream).ok();
     let (upstream, candidate) = match crate::services::external::open_stream(
         state,
         route,
@@ -103,7 +135,7 @@ pub(crate) fn serve_external_stream(
 }
 
 pub(crate) fn serve_native_stream(
-    downstream: &mut TcpStream,
+    downstream: ObservedSse<'_>,
     state: &ServerState,
     route: &ResolvedRoute,
     config: &Value,
@@ -111,7 +143,7 @@ pub(crate) fn serve_native_stream(
     incoming: &BTreeMap<String, String>,
     ids: &ProjectionIds,
 ) -> Result<(), Vec<u8>> {
-    let monitor = DisconnectMonitor::start(downstream).ok();
+    let monitor = DisconnectMonitor::start(downstream.stream).ok();
     let (upstream, monitor) = match monitor {
         Some(mut monitor) => match native::open_stream_cancellable(
             state,
@@ -240,7 +272,7 @@ impl RelaySource for ExternalRelay {
 
 /// Shared relay inputs that do not change per upstream flavor.
 struct RelayContext<'a> {
-    downstream: &'a mut TcpStream,
+    downstream: ObservedSse<'a>,
     state: &'a ServerState,
     route: &'a ResolvedRoute,
     body: &'a Value,
@@ -256,7 +288,7 @@ fn relay_stream(
     monitor: Option<DisconnectMonitor>,
 ) -> Result<bool, Vec<u8>> {
     let RelayContext {
-        downstream,
+        mut downstream,
         state,
         route,
         body,
@@ -274,7 +306,7 @@ fn relay_stream(
         "responses",
     )
     .started_at(started_at);
-    let mut monitor = monitor.or_else(|| DisconnectMonitor::start(downstream).ok());
+    let mut monitor = monitor.or_else(|| DisconnectMonitor::start(downstream.stream).ok());
     let runtime = &state.backend.transport.runtime;
     let mut pending = Vec::<Vec<u8>>::new();
     let mut pending_bytes = 0_usize;
@@ -310,7 +342,7 @@ fn relay_stream(
                 };
                 let failure = stream_failure_value_for_route(&error, &response_id, route, true);
                 if let Ok(frame) = sse_frame("response.failed", &failure) {
-                    let _ = write_stream_frames(downstream, &[frame]);
+                    let _ = downstream.event(&failure, &[frame]);
                 }
                 return Ok(false);
             }
@@ -335,7 +367,7 @@ fn relay_stream(
                     Some("response.failed" | "error")
                 );
                 if started {
-                    if write_stream_frames(downstream, &[frame]).is_err() {
+                    if downstream.event(&event_body, &[frame]).is_err() {
                         return Ok(false);
                     }
                     if terminal {
@@ -363,11 +395,11 @@ fn relay_stream(
                 }
                 if output_emitted || tool_activity || terminal {
                     let head_ok = if response_headers.is_empty() {
-                        write_stream_head(downstream).is_ok()
+                        downstream.head().is_ok()
                     } else {
-                        write_stream_head_with_headers(downstream, response_headers).is_ok()
+                        downstream.head_with_headers(response_headers).is_ok()
                     };
-                    if !head_ok || write_stream_frames(downstream, &pending).is_err() {
+                    if !head_ok || downstream.event(&event_body, &pending).is_err() {
                         return Ok(false);
                     }
                     started = true;
@@ -383,7 +415,7 @@ fn relay_stream(
 }
 
 fn relay_native_stream(
-    downstream: &mut TcpStream,
+    downstream: ObservedSse<'_>,
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
@@ -411,7 +443,7 @@ fn relay_native_stream(
 }
 
 fn relay_external_stream(
-    downstream: &mut TcpStream,
+    downstream: ObservedSse<'_>,
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
@@ -439,9 +471,16 @@ fn relay_external_stream(
 pub(crate) fn generated_response_stream(
     response_value: Value,
     ids: &ProjectionIds,
-) -> Result<Vec<u8>, Vec<u8>> {
+) -> Result<(Vec<u8>, String), Vec<u8>> {
     let events = emp_router::response_json_stream_events(response_value, ids, false)
         .map_err(crate::api::failure_response::router_error_response)?;
+    // Retain the terminal type while events are available. Receipts neither
+    // reparse the wire bytes nor clone the response and its possibly large output.
+    let last_event = events
+        .last()
+        .and_then(|event| event["type"].as_str())
+        .unwrap_or_default()
+        .to_owned();
     let mut output = Vec::new();
     for event in events {
         let event_type = event
@@ -452,5 +491,5 @@ pub(crate) fn generated_response_stream(
             json_error_response(500, status_text(500), "internal server error", None, &[])
         })?);
     }
-    Ok(output)
+    Ok((output, last_event))
 }

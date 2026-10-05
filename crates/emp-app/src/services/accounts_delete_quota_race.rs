@@ -242,6 +242,7 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
 
     let import = |id: &str, upstream_id: &str, access_token: &str| {
         import_account_state(
+            None,
             &server.state,
             &json!({
                 "id": id,
@@ -273,7 +274,7 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
         .quota_history
         .append_snapshot(&original_owner, &quota, 2_000_100)
         .expect("record original quota sample");
-    delete_account_state(&server.state, "demo").expect("delete original account");
+    delete_account_state(None, &server.state, "demo").expect("delete original account");
 
     import("demo-restored", "upstream-account-a", "rotated-token");
     assert_eq!(
@@ -288,7 +289,7 @@ fn quota_history_follows_upstream_identity_across_delete_and_reimport() {
         .query(&original_owner, "1h", 2_000_200)
         .expect("query restored quota history");
     assert_eq!(restored["series"][0]["points"].as_array().unwrap().len(), 1);
-    delete_account_state(&server.state, "demo-restored").expect("delete restored account");
+    delete_account_state(None, &server.state, "demo-restored").expect("delete restored account");
 
     import("demo", "upstream-account-b", "other-account-token");
     let other_owner = quota_owner_key(&server.state, "demo").expect("other quota owner");
@@ -339,6 +340,7 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     .expect("start legacy quota history state");
     let import = |id: &str, upstream_id: &str| {
         import_account_state(
+            None,
             &server.state,
             &json!({"id": id, "name": id, "prefix": id,
                 "auth_json": {"tokens": {"access_token": format!("{id}-token"), "account_id": upstream_id}}}),
@@ -393,7 +395,7 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     history
         .append_snapshot("demo", &sample(50), 2_000_700)
         .unwrap();
-    delete_account_state(&server.state, "demo").expect("delete demo");
+    delete_account_state(None, &server.state, "demo").expect("delete demo");
     assert_eq!(points(&owner), 3);
     import("demo", "someone-else");
     let other = quota_owner_key(&server.state, "demo").unwrap();
@@ -410,6 +412,7 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     import("team-a", "upstream-team-a");
     assert!(
         import_account_state(
+            None,
             &server.state,
             &json!({"id": "demo", "name": "demo", "prefix": "team-a",
                 "auth_json": {"tokens": {"access_token": "demo-token", "account_id": "third-identity"}}}),
@@ -433,6 +436,7 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     }
     assert!(
         import_account_state(
+            None,
             &server.state,
             &json!({"id": "demo", "name": "demo", "prefix": "deepseek",
                 "auth_json": {"tokens": {"access_token": "demo-token", "account_id": "third-identity"}}}),
@@ -465,7 +469,7 @@ fn legacy_local_key_history_moves_to_the_verified_identity_once_or_is_settled() 
     )
     .unwrap();
     std::fs::write(&owner_auth, b"not a vault document").unwrap();
-    delete_account_state(&server.state, "demo").expect("delete unreadable demo");
+    delete_account_state(None, &server.state, "demo").expect("delete unreadable demo");
     assert_eq!(points("demo"), 0);
     import("demo", "fourth-identity");
     let fourth = quota_owner_key(&server.state, "demo").unwrap();
@@ -501,7 +505,7 @@ fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
         json!({"id": "demo", "name": "demo", "prefix": "demo",
             "auth_json": {"tokens": {"access_token": token, "account_id": "upstream-demo"}}})
     };
-    import_account_state(&server.state, &body("first")).expect("first import");
+    import_account_state(None, &server.state, &body("first")).expect("first import");
     let auth_path = emp_state::account_auth_path(
         &server
             .state
@@ -533,7 +537,7 @@ fn account_import_waits_for_the_refresh_lock_and_drops_older_rotations() {
     let (done_tx, done_rx) = mpsc::channel();
     thread::scope(|scope| {
         scope.spawn(|| {
-            import_account_state(&server.state, &body("second")).expect("second import");
+            import_account_state(None, &server.state, &body("second")).expect("second import");
             done_tx.send(()).unwrap();
         });
         assert!(
@@ -586,7 +590,7 @@ fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
         json!({"id": "demo", "name": "demo", "prefix": "demo",
             "auth_json": {"tokens": {"access_token": "token", "account_id": upstream}}})
     };
-    import_account_state(&server.state, &body("upstream-demo")).expect("import demo");
+    import_account_state(None, &server.state, &body("upstream-demo")).expect("import demo");
     // Legacy rows exist, but neither adoption nor deletion can reach them.
     let history_path = server
         .state
@@ -597,8 +601,8 @@ fn account_id_is_not_freed_while_its_legacy_history_cannot_be_settled() {
         .to_path_buf();
     std::fs::write(&history_path, b"not a sqlite database").expect("break quota history");
 
-    assert!(delete_account_state(&server.state, "demo").is_err());
-    assert!(import_account_state(&server.state, &body("someone-else")).is_err());
+    assert!(delete_account_state(None, &server.state, "demo").is_err());
+    assert!(import_account_state(None, &server.state, &body("someone-else")).is_err());
     let config = server
         .state
         .backend
@@ -642,7 +646,7 @@ fn credential_replacement_also_locks_accounts_added_while_it_waited() {
         json!({"id": id, "name": id, "prefix": id,
             "auth_json": {"tokens": {"access_token": format!("{id}-token"), "account_id": format!("upstream-{id}")}}})
     };
-    import_account_state(&server.state, &body("a")).expect("import a");
+    import_account_state(None, &server.state, &body("a")).expect("import a");
     let lock_a = super::quota_refresh_lock(&server.state, "a").unwrap();
     let guard_a = lock_a.lock().unwrap();
     let (locked_tx, locked_rx) = mpsc::channel();
@@ -663,7 +667,7 @@ fn credential_replacement_also_locks_accounts_added_while_it_waited() {
         // The replacement listed only `a` and now waits for its lock; `b`
         // is added in the meantime.
         thread::sleep(Duration::from_millis(100));
-        import_account_state(&server.state, &body("b")).expect("import b");
+        import_account_state(None, &server.state, &body("b")).expect("import b");
         drop(guard_a);
         let (accounts, held) = locked_rx
             .recv_timeout(Duration::from_secs(10))
@@ -702,13 +706,13 @@ fn account_import_during_credential_replacement_is_not_lost() {
         json!({"id": id, "name": id, "prefix": id,
             "auth_json": {"tokens": {"access_token": format!("{id}-token"), "account_id": format!("upstream-{id}")}}})
     };
-    import_account_state(&server.state, &body("a")).expect("import a");
+    import_account_state(None, &server.state, &body("a")).expect("import a");
     let (imported_tx, imported_rx) = mpsc::channel();
     thread::scope(|scope| {
         super::replacing_account_credentials(&server.state, |config| {
             scope.spawn(|| {
                 imported_tx
-                    .send(import_account_state(&server.state, &body("b")).is_ok())
+                    .send(import_account_state(None, &server.state, &body("b")).is_ok())
                     .unwrap();
             });
             thread::sleep(Duration::from_millis(200));
@@ -776,7 +780,7 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
         json!({"id": id, "name": id, "prefix": prefix,
             "auth_json": {"tokens": {"access_token": format!("{id}-token"), "account_id": upstream}}})
     };
-    import_account_state(&server.state, &body("demo", "demo", "upstream-demo"))
+    import_account_state(None, &server.state, &body("demo", "demo", "upstream-demo"))
         .expect("import demo");
     let history = &server.state.backend.accounts.quota_history;
     history
@@ -794,7 +798,11 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
     let configuration = &server.state.backend.configuration.test_config();
     let (reimport, rival) = thread::scope(|scope| {
         let reimport = scope.spawn(|| {
-            import_account_state(&server.state, &body("demo", "team-b", "upstream-demo-2"))
+            import_account_state(
+                None,
+                &server.state,
+                &body("demo", "team-b", "upstream-demo-2"),
+            )
         });
         // Wait until the reimport holds the configuration (it is then
         // settling, blocked on the history database).
@@ -803,7 +811,11 @@ fn a_concurrent_prefix_change_cannot_reject_a_reimport_after_its_history_was_set
             thread::sleep(Duration::from_millis(5));
         }
         let rival = scope.spawn(|| {
-            import_account_state(&server.state, &body("team-a", "team-b", "upstream-team-a"))
+            import_account_state(
+                None,
+                &server.state,
+                &body("team-a", "team-b", "upstream-team-a"),
+            )
         });
         thread::sleep(Duration::from_millis(200));
         blocker

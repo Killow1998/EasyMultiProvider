@@ -1,5 +1,10 @@
 # Architecture assessment and refactoring direction
 
+For the current whole-backend ownership contract, before/after diagrams and
+acceptance checklist, see [Backend workflows](backend-workflows.md). The
+assessment below records the earlier passes; availability gates, cooldowns and
+recovery probes are outside the passive-observation refactor.
+
 Assessment date: 2026-10-04. The findings describe the 0.12.9 source plus the
 local profiling changes. The first ownership pass is implemented locally.
 The continuation below deepens external request execution and error presentation.
@@ -140,6 +145,23 @@ request's terminal result. It updates auto-review eligibility through
 `ReviewState`, then submits content-free usage/diagnostic evidence. The
 observation reporter no longer decides routing cooldowns or owns their locks.
 Network evidence lives below the HTTP support-report adapter.
+
+[`RequestObservation`](../crates/emp-app/src/services/observation/request.rs)
+separately owns a client request's passive receipt, from entry through the last
+downstream write. It receives only diagnostic storage, safe route facts, named
+phases and write results; it has no routing, retry, account or usage controls.
+HTTP Responses and Compact borrow the entry owner's receipt. Each WebSocket
+turn owns a new receipt and an observed sender, linked to the connection receipt.
+The same server-generated request ID links preparation, executor attempts,
+existing model outcomes and downstream delivery. Early rejection also has a
+receipt, even when no model outcome exists.
+
+This separation matters when an upstream terminal event is received but writing
+it to the client fails. `RequestOutcome` preserves the upstream result and its
+single accounting entry; `RequestObservation` records the failed write. It does
+not reinterpret success, update eligibility, replay output or switch sources.
+The [journal contract](diagnostic-journal-spec.md#request-receipt-contract)
+defines what each observation proves and the remaining unknowns.
 
 Native complete/compact forwarding now returns the existing structured result
 (status, raw body, content type and preserved headers). The native API renderer

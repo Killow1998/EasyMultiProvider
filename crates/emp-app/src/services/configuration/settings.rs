@@ -6,65 +6,102 @@ use emp_state::{canonicalize_private_paths, merge_web_update};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) fn update(state: &ServerState, incoming: &Value) -> Result<(), ChangeError> {
-    let mut current = state
-        .backend
-        .configuration
-        .edit()
-        .map_err(|_| ChangeError::Unavailable)?;
-    let mut updated = merge_web_update(&current, incoming).map_err(ChangeError::invalid)?;
-    canonicalize_private_paths(&mut updated, &state.backend.configuration.config_path)
-        .map_err(ChangeError::invalid)?;
-    let sources = catalog_sources(state, &updated);
-    let updated = sources
-        .validate_update(&updated, &current)
-        .map_err(ChangeError::invalid)?;
-    let before = current.clone();
-    current
-        .commit(&updated)
-        .map_err(|_| ChangeError::Unavailable)?;
-    for id in changed_account_ids(&before, &current) {
-        state.catalog_refresh.account_changed(&id);
-    }
-    drop(current);
-    crate::services::account_catalog::request_refresh(state, false);
-    // The usage worker applies changed pricing aliases and re-prices old rows.
-    let _ = state.backend.usage.queue_scan(state);
-    crate::services::runtime::mark_active_pending(state, "EMP configuration changed");
-    Ok(())
+pub(crate) fn update(
+    request_id: Option<&str>,
+    state: &ServerState,
+    incoming: &Value,
+) -> Result<(), ChangeError> {
+    crate::services::observation::operation::observe(
+        &state.backend.diagnostics,
+        request_id,
+        "configuration_update",
+        |receipt| {
+            let mut current = state
+                .backend
+                .configuration
+                .edit()
+                .map_err(|_| ChangeError::Unavailable)?;
+            let mut updated = merge_web_update(&current, incoming).map_err(ChangeError::invalid)?;
+            canonicalize_private_paths(&mut updated, &state.backend.configuration.config_path)
+                .map_err(ChangeError::invalid)?;
+            let sources = catalog_sources(state, &updated);
+            let updated = sources
+                .validate_update(&updated, &current)
+                .map_err(ChangeError::invalid)?;
+            let before = current.clone();
+            receipt
+                .step("commit_configuration", || current.commit(&updated))
+                .map_err(|_| ChangeError::Unavailable)?;
+            receipt.check("configuration_committed", Some(true));
+            for id in changed_account_ids(&before, &current) {
+                state.catalog_refresh.account_changed(&id);
+            }
+            drop(current);
+            crate::services::account_catalog::request_refresh(state, false);
+            // The usage worker applies changed pricing aliases and re-prices old rows.
+            receipt.fact("subscription_refresh", "requested");
+            if let Ok(id) = receipt.step("queue_usage_scan", || {
+                state.backend.usage.queue_scan(state).ok_or(())
+            }) {
+                receipt.number("usage_scan_command_id", id);
+            }
+            receipt.check("runtime_catalog_matches_target", None);
+            crate::services::runtime::mark_active_pending(state, "EMP configuration changed");
+            Ok(())
+        },
+    )
 }
 
 pub(crate) fn context_preference(
+    request_id: Option<&str>,
     state: &ServerState,
     incoming: &Value,
 ) -> Result<bool, ChangeError> {
-    let object = incoming
-        .as_object()
-        .filter(|object| object.len() == 1)
-        .ok_or_else(|| {
-            ChangeError::invalid(
-                "catalog preference request must contain only catalog_show_context",
-            )
-        })?;
-    let show_context = object
-        .get("catalog_show_context")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| ChangeError::invalid("catalog_show_context must be boolean"))?;
-    let mut current = state
-        .backend
-        .configuration
-        .edit()
-        .map_err(|_| ChangeError::Unavailable)?;
-    let mut updated = current.clone();
-    updated["catalog_show_context"] = Value::Bool(show_context);
-    current
-        .commit(&updated)
-        .map_err(|_| ChangeError::Unavailable)?;
-    drop(current);
-    let refreshed = refresh_catalog(state);
-    crate::services::account_catalog::request_refresh(state, false);
-    refreshed.map_err(|_| ChangeError::Unavailable)?;
-    Ok(show_context)
+    crate::services::observation::operation::observe(
+        &state.backend.diagnostics,
+        request_id,
+        "catalog_preference",
+        |receipt| {
+            let object = incoming
+                .as_object()
+                .filter(|object| object.len() == 1)
+                .ok_or_else(|| {
+                    ChangeError::invalid(
+                        "catalog preference request must contain only catalog_show_context",
+                    )
+                })?;
+            let show_context = object
+                .get("catalog_show_context")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| ChangeError::invalid("catalog_show_context must be boolean"))?;
+            let mut current = state
+                .backend
+                .configuration
+                .edit()
+                .map_err(|_| ChangeError::Unavailable)?;
+            let mut updated = current.clone();
+            updated["catalog_show_context"] = Value::Bool(show_context);
+            receipt
+                .step("commit_configuration", || current.commit(&updated))
+                .map_err(|_| ChangeError::Unavailable)?;
+            receipt.check("configuration_committed", Some(true));
+            receipt.check(
+                "preference_matches_saved",
+                current
+                    .get("catalog_show_context")
+                    .and_then(Value::as_bool)
+                    .map(|actual| actual == show_context),
+            );
+            drop(current);
+            let refreshed = receipt.step("publish_catalog", || refresh_catalog(state));
+            crate::services::account_catalog::request_refresh(state, false);
+            receipt.fact("subscription_refresh", "requested");
+            refreshed.map_err(|_| ChangeError::Unavailable)?;
+            receipt.check("catalog_published", Some(true));
+            receipt.check("runtime_catalog_matches_target", None);
+            Ok(show_context)
+        },
+    )
 }
 
 fn changed_account_ids(before: &Value, after: &Value) -> BTreeSet<String> {

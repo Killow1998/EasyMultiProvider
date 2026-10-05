@@ -5,11 +5,10 @@ use crate::api::failure_response::route_resolution_response;
 use crate::api::history_response::destination_error_response;
 use crate::api::history_response::history_http_error;
 use crate::api::history_response::history_stream_error;
+use crate::api::streaming::ObservedSse;
 use crate::api::streaming::generated_response_stream;
 use crate::api::streaming::serve_external_stream;
 use crate::api::streaming::serve_native_stream;
-use crate::api::streaming::write_stream_frames;
-use crate::api::streaming::write_stream_head;
 use crate::app::ServerState;
 use crate::http::auth::proxy_allowed;
 use crate::http::auth::same_origin;
@@ -26,13 +25,13 @@ use crate::services::history::DestinationPrepareError;
 use crate::services::history::prepare_destination_context;
 use crate::services::history::prepare_history;
 use crate::services::native;
+use crate::services::observation::request::{Phase, RequestObservation};
 use crate::services::providers::persist_protocol_observation;
 use crate::services::request_preparation::{
     PreparedRequest, RequestOperation, RequestPreparationError, prepare_request,
 };
 use crate::util::projection_ids;
 use crate::util::python_truthy;
-use crate::util::random_hex;
 use emp_history::HistoryError;
 use std::collections::BTreeMap;
 use std::net::TcpStream;
@@ -48,6 +47,7 @@ pub(crate) fn responses_request(
     body_prefix: Vec<u8>,
     state: &ServerState,
     now: f64,
+    observation: &mut RequestObservation,
 ) -> ResponsesRequestResult {
     if !proxy_allowed(request, state, now) {
         let status = if same_origin(request, state.port) {
@@ -63,10 +63,13 @@ pub(crate) fn responses_request(
             &[],
         ));
     }
+    observation.phase(Phase::ReadBody);
     let body = match read_json_body(stream, request, body_prefix, state) {
         Ok(body) => body,
         Err(error) => return ResponsesRequestResult::Buffered(body_error_response(error)),
     };
+    observation.body(body.get("reasoning"), body.get("stream"));
+    observation.phase(Phase::ResolveRoute);
     let PreparedRequest {
         config,
         route,
@@ -92,6 +95,8 @@ pub(crate) fn responses_request(
             ));
         }
     };
+    observation.selected(&route);
+    observation.phase(Phase::ValidateInput);
     if crate::services::claude_cli::selected(&route)
         && let Err(error) = crate::services::claude_cli::preflight_input(&body)
     {
@@ -111,27 +116,16 @@ pub(crate) fn responses_request(
             ));
         }
     };
-    let request_id = match random_hex(8) {
-        Ok(value) => value,
-        Err(_) => {
-            return ResponsesRequestResult::Buffered(json_error_response(
-                500,
-                status_text(500),
-                "internal server error",
-                None,
-                &[],
-            ));
-        }
-    };
-    let mut incoming: BTreeMap<String, String> = request
+    let incoming: BTreeMap<String, String> = request
         .headers
         .lines()
         .skip(1)
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
         .collect();
-    incoming.insert("X-EMP-Request-ID".to_owned(), request_id);
+    let incoming = observation.headers(incoming);
     let stream_requested = python_truthy(body.get("stream"));
+    observation.phase(Phase::PrepareHistory);
     body = match prepare_history(state, &route, body, &incoming) {
         Ok(body) => body,
         Err(error) if stream_requested => {
@@ -148,12 +142,14 @@ pub(crate) fn responses_request(
                     ));
                 }
             };
-            let _ = write_stream_head(stream);
-            let _ = write_stream_frames(stream, &[frame]);
+            let mut downstream = ObservedSse::new(stream, observation);
+            let _ = downstream.head();
+            let _ = downstream.frames(&[frame], "response.failed");
             return ResponsesRequestResult::Streamed;
         }
         Err(error) => return ResponsesRequestResult::Buffered(history_http_error(&error)),
     };
+    observation.phase(Phase::PrepareDestination);
     let destination_context = {
         let mut monitor = crate::services::disconnect::DisconnectMonitor::start(stream).ok();
         prepare_destination_context(state, &route, body, &incoming, monitor.as_mut())
@@ -163,8 +159,9 @@ pub(crate) fn responses_request(
         Err(DestinationPrepareError::History(reason)) if stream_requested => {
             let failed = history_stream_error(&HistoryError::new(reason));
             if let Ok(frame) = sse_frame("response.failed", &failed) {
-                let _ = write_stream_head(stream);
-                let _ = write_stream_frames(stream, &[frame]);
+                let mut downstream = ObservedSse::new(stream, observation);
+                let _ = downstream.head();
+                let _ = downstream.frames(&[frame], "response.failed");
             }
             return ResponsesRequestResult::Streamed;
         }
@@ -173,6 +170,7 @@ pub(crate) fn responses_request(
             return ResponsesRequestResult::Buffered(destination_error_response(error));
         }
     };
+    observation.phase(Phase::Execute);
     if route.dialect != emp_core::Dialect::CodexNative && has_trailing_compaction_trigger(&body) {
         let started = std::time::Instant::now();
         let mut usage = crate::services::request_outcome::RequestOutcome::new(
@@ -266,12 +264,12 @@ pub(crate) fn responses_request(
         usage.finish();
         persist_protocol_observation(state, &candidate);
         if python_truthy(body.get("stream")) {
-            let stream_body = match generated_response_stream(compacted, &ids) {
+            let (stream_body, last_event) = match generated_response_stream(compacted, &ids) {
                 Ok(body) => body,
                 Err(error) => return ResponsesRequestResult::Buffered(error),
             };
-            if write_stream_head(stream).is_err()
-                || write_stream_frames(stream, &[stream_body]).is_err()
+            let mut downstream = ObservedSse::new(stream, observation);
+            if downstream.head().is_err() || downstream.frames(&[stream_body], &last_event).is_err()
             {
                 return ResponsesRequestResult::Streamed;
             }
@@ -377,12 +375,12 @@ pub(crate) fn responses_request(
         }
         crate::services::providers::persist_protocol_observation(state, route);
         if stream_requested {
-            let stream_body = match generated_response_stream(response_value, &ids) {
+            let (stream_body, last_event) = match generated_response_stream(response_value, &ids) {
                 Ok(body) => body,
                 Err(error) => return ResponsesRequestResult::Buffered(error),
             };
-            if write_stream_head(stream).is_err()
-                || write_stream_frames(stream, &[stream_body]).is_err()
+            let mut downstream = ObservedSse::new(stream, observation);
+            if downstream.head().is_err() || downstream.frames(&[stream_body], &last_event).is_err()
             {
                 return ResponsesRequestResult::Streamed;
             }
@@ -416,8 +414,15 @@ pub(crate) fn responses_request(
             let _activity_guard = state.backend.activity.begin(
                 crate::services::activity::ActivityIdentity::from_route(&route),
             );
-            return match serve_native_stream(stream, state, &route, &config, &body, &incoming, &ids)
-            {
+            return match serve_native_stream(
+                ObservedSse::new(stream, observation),
+                state,
+                &route,
+                &config,
+                &body,
+                &incoming,
+                &ids,
+            ) {
                 Ok(()) => ResponsesRequestResult::Streamed,
                 Err(response) => ResponsesRequestResult::Buffered(response),
             };
@@ -447,7 +452,14 @@ pub(crate) fn responses_request(
                 .begin(crate::services::activity::ActivityIdentity::from_route(
                     &route,
                 ));
-        return match serve_external_stream(stream, state, &route, &body, &incoming, &ids) {
+        return match serve_external_stream(
+            ObservedSse::new(stream, observation),
+            state,
+            &route,
+            &body,
+            &incoming,
+            &ids,
+        ) {
             Ok(()) => ResponsesRequestResult::Streamed,
             Err(response) => ResponsesRequestResult::Buffered(response),
         };

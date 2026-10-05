@@ -12,6 +12,7 @@ use crate::services::catalog::response_catalog_etag;
 use crate::services::history::DestinationPrepareError;
 use crate::services::history::prepare_destination_context;
 use crate::services::history::prepare_history;
+use crate::services::observation::request::{Phase, RequestObservation};
 use crate::services::request_preparation::{
     PreparedRequest, RequestOperation, RequestPreparationError, prepare_request,
 };
@@ -31,6 +32,18 @@ mod http_stream;
 mod native_socket;
 
 use native_socket::{NativeSession, NativeTurnResult, native_stream_error_value};
+
+/// The downstream sender owns delivery evidence; upstream accounting is separate.
+struct ObservedWebSocket<'a, 'stream> {
+    inner: &'a mut WebSocketConnection<'stream, TcpStream>,
+    observation: &'a mut RequestObservation,
+}
+impl ObservedWebSocket<'_, '_> {
+    fn send_json(&mut self, event: &Value) -> Result<(), emp_transport::WebSocketError> {
+        self.observation
+            .event_written(event, self.inner.send_json(event))
+    }
+}
 
 struct Turn {
     config: Value,
@@ -52,6 +65,7 @@ pub(crate) fn serve_responses_websocket(
     body_prefix: Vec<u8>,
     state: &ServerState,
     now: f64,
+    connection_id: Option<&str>,
 ) {
     if !proxy_allowed(request, state, now) {
         let status = if same_origin(request, state.port) {
@@ -140,6 +154,18 @@ pub(crate) fn serve_responses_websocket(
                 return;
             }
         };
+        let mut observation = RequestObservation::new(
+            std::sync::Arc::clone(&state.backend.diagnostics),
+            random_hex(8).ok(),
+            connection_id,
+            "websocket",
+            "responses",
+        );
+        let mut websocket = ObservedWebSocket {
+            inner: &mut websocket,
+            observation: &mut observation,
+        };
+        websocket.observation.phase(Phase::ReadBody);
         let Some(_permit) = state.updates.enter() else {
             let _ = websocket.send_json(&serde_json::json!({
                 "type":"error",
@@ -155,6 +181,9 @@ pub(crate) fn serve_responses_websocket(
                 continue;
             }
         };
+        websocket
+            .observation
+            .body(request_body.get("reasoning"), request_body.get("stream"));
         if request_body
             .remove("type")
             .and_then(|value| value.as_str().map(str::to_owned))
@@ -166,6 +195,7 @@ pub(crate) fn serve_responses_websocket(
         }
         let etag = response_catalog_etag(state).unwrap_or_default();
         if websocket.send_json(&serde_json::json!({"type":"codex.response.metadata","headers":{"x-models-etag":etag}})).is_err(){return;}
+        websocket.observation.phase(Phase::ResolveRoute);
         let (config, route, mut request_body) = match prepare_request(
             state,
             Value::Object(request_body),
@@ -198,6 +228,8 @@ pub(crate) fn serve_responses_websocket(
                 continue;
             }
         };
+        websocket.observation.selected(&route);
+        websocket.observation.phase(Phase::ValidateInput);
         if crate::services::claude_cli::selected(&route)
             && let Err(error) =
                 crate::services::claude_cli::preflight_input(&Value::Object(request_body.clone()))
@@ -219,10 +251,8 @@ pub(crate) fn serve_responses_websocket(
                 continue;
             }
         };
-        let mut request_headers = incoming.clone();
-        if let Ok(id) = random_hex(8) {
-            request_headers.insert("X-EMP-Request-ID".to_owned(), id);
-        }
+        let request_headers = websocket.observation.headers(incoming.clone());
+        websocket.observation.phase(Phase::PrepareHistory);
         let request_scope =
             match emp_history::request_history_anchor(&request_body, &request_headers) {
                 Ok(anchor) => (anchor.thread_id, anchor.window_id),
@@ -256,6 +286,7 @@ pub(crate) fn serve_responses_websocket(
                     continue;
                 }
             };
+        websocket.observation.phase(Phase::PrepareDestination);
         let destination_context = {
             let mut monitor = monitor_stream.as_ref().and_then(|probe| {
                 crate::services::disconnect::DisconnectMonitor::start(probe).ok()
@@ -321,6 +352,7 @@ pub(crate) fn serve_responses_websocket(
                 continue;
             }
         };
+        websocket.observation.phase(Phase::Execute);
         let mut turn = Turn {
             config,
             route,

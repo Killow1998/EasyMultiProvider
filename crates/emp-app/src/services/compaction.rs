@@ -56,6 +56,12 @@ pub(crate) fn execute_summary_request(
     }
 
     let router = ExternalRouter::new(&state.backend.transport.client);
+    let mut event = Value::Object(crate::services::observation::request::route_fields(
+        route,
+        &state.backend.diagnostics,
+    ));
+    event["request_id"] = crate::services::observation::request::request_id(incoming);
+    crate::services::observation::record_attempt(state, &event, "summary_dispatch");
     match crate::services::disconnect::raced(
         &state.backend.transport.runtime,
         monitor,

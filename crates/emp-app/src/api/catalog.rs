@@ -13,11 +13,9 @@ use crate::http::response::json_error_response;
 use crate::http::response::response;
 use crate::http::response::status_text;
 use crate::http::response::unauthorized_response;
-use crate::services::catalog::refresh_catalog;
+use crate::services::catalog::refresh_for_management;
 use crate::services::catalog::server_catalog;
 use emp_codex::preserve_native_catalog;
-use emp_router::discovery::discover_models;
-use emp_state::provider_api_key;
 use serde_json::Value;
 use serde_json::json;
 use std::net::TcpStream;
@@ -44,139 +42,60 @@ pub(crate) fn management_request(
         return update_configuration(request, state, &body);
     }
     if request.raw_path() == "/api/catalog/context-preference" {
-        return update_catalog_context_preference(state, &body);
+        return update_catalog_context_preference(request, state, &body);
     }
     if request.raw_path() == "/api/catalog/refresh" {
-        let (path, model_count) = match refresh_catalog(state) {
+        let (path, model_count) = match refresh_for_management(request.observation_id, state) {
             Ok(result) => result,
             Err(()) => return internal_error(),
         };
-        crate::services::account_catalog::request_refresh(state, false);
         return json_response(
             &json!({"status":"ok","catalog_path":path,"model_count":model_count}),
         );
     }
-    if request.raw_path() == "/api/models/metadata" {
-        let Some(provider_id) = body.get("provider").and_then(Value::as_str) else {
-            return config_error("provider and model are required");
-        };
-        let Some(mut model) = body.get("model").and_then(Value::as_str).map(str::to_owned) else {
-            return config_error("provider and model are required");
-        };
-        let mut provider = {
-            let config = match state.backend.configuration.read() {
-                Ok(config) => config,
-                Err(_) => return internal_error(),
-            };
-            let Some(provider) = config
-                .get("providers")
-                .and_then(Value::as_array)
-                .and_then(|providers| {
-                    providers.iter().find(|provider| {
-                        provider.get("id").and_then(Value::as_str) == Some(provider_id)
-                    })
-                })
-                .filter(|provider| provider.get("enabled") != Some(&Value::Bool(false)))
-            else {
-                return config_error(&format!("provider is missing or disabled: {provider_id}"));
-            };
-            provider.clone()
-        };
-        if let Some(upstream) = model.strip_prefix(&format!("{provider_id}/")) {
-            model = upstream.to_owned();
+    let metadata = request.raw_path() == "/api/models/metadata";
+    let result = if metadata {
+        crate::services::catalog::discovery::metadata(request.observation_id, state, &body)
+    } else {
+        crate::services::catalog::discovery::discover(request.observation_id, state, &body)
+    };
+    match result {
+        Ok(value) => json_response(&value),
+        Err(crate::services::catalog::discovery::DiscoveryError::Invalid(message)) => {
+            config_error(&message)
         }
-        provider["api_key"] = json!(provider_api_key(
-            &provider,
-            &state.backend.configuration.vault
-        ));
-        let Some(provider) = provider.as_object() else {
-            return internal_error();
-        };
-        let result =
-            state
-                .backend
-                .transport
-                .runtime
-                .block_on(emp_router::discovery::model_metadata(
-                    &state.backend.transport.client,
-                    provider,
-                    &model,
-                ));
-        return match result {
-            Ok(value) => json_response(&value),
-            Err(error) if error.status() == 500 && error.to_string() == "internal server error" => {
+        Err(crate::services::catalog::discovery::DiscoveryError::Unavailable) => internal_error(),
+        Err(crate::services::catalog::discovery::DiscoveryError::Upstream(error)) if metadata => {
+            if error.status() == 500 && error.to_string() == "internal server error" {
                 internal_error()
+            } else {
+                metadata_error_response(error)
             }
-            Err(error) => metadata_error_response(error),
-        };
-    }
-    let Some(provider_id) = body
-        .get("provider")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    else {
-        return config_error("provider is required");
-    };
-    let mut provider = {
-        let config = match state.backend.configuration.read() {
-            Ok(config) => config,
-            Err(_) => return internal_error(),
-        };
-        let Some(provider) = config
-            .get("providers")
-            .and_then(Value::as_array)
-            .and_then(|providers| {
-                providers.iter().find(|provider| {
-                    provider.get("id").and_then(Value::as_str) == Some(provider_id)
-                })
-            })
-            .filter(|provider| provider.get("enabled") != Some(&Value::Bool(false)))
-        else {
-            return config_error(&format!("provider is missing or disabled: {provider_id}"));
-        };
-        provider.clone()
-    };
-    provider["api_key"] = json!(provider_api_key(
-        &provider,
-        &state.backend.configuration.vault
-    ));
-    let discovered = {
-        let _guard = match state.backend.configuration.discovery_lock.lock() {
-            Ok(guard) => guard,
-            Err(_) => return internal_error(),
-        };
-        match state.backend.transport.runtime.block_on(discover_models(
-            &state.backend.transport.client,
-            provider.as_object().expect("normalized provider"),
-        )) {
-            Ok(models) => models,
-            Err(error) => return router_error_response(error),
         }
-    };
-    let Some(selected) = body.get("selected").filter(|value| !value.is_null()) else {
-        return json_response(
-            &json!({"provider":provider_id,"protocol":provider["protocol"],"available":discovered.len(),"models":discovered,"added":0}),
-        );
-    };
-    match crate::services::catalog::select_models(state, provider_id, &discovered, selected) {
-        Ok(selected) => json_response(&json!({
-            "provider":provider_id,"protocol":provider["protocol"],"available":selected.available,
-            "added":selected.added,"hidden":selected.hidden,"catalog_path":selected.catalog_path,
-            "model_count":selected.model_count,
-        })),
-        Err(error) => change_error(error),
+        Err(crate::services::catalog::discovery::DiscoveryError::Upstream(error)) => {
+            router_error_response(error)
+        }
     }
 }
 
 fn update_configuration(request: Request<'_>, state: &ServerState, incoming: &Value) -> Vec<u8> {
-    match crate::services::configuration::settings::update(state, incoming) {
+    match crate::services::configuration::settings::update(request.observation_id, state, incoming)
+    {
         Ok(()) => read_management_request(request, state),
         Err(error) => change_error(error),
     }
 }
 
-fn update_catalog_context_preference(state: &ServerState, incoming: &Value) -> Vec<u8> {
-    match crate::services::configuration::settings::context_preference(state, incoming) {
+fn update_catalog_context_preference(
+    request: Request<'_>,
+    state: &ServerState,
+    incoming: &Value,
+) -> Vec<u8> {
+    match crate::services::configuration::settings::context_preference(
+        request.observation_id,
+        state,
+        incoming,
+    ) {
         Ok(show_context) => json_response(&json!({"catalog_show_context":show_context})),
         Err(error) => change_error(error),
     }

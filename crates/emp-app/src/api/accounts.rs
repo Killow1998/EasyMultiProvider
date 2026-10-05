@@ -40,7 +40,7 @@ pub(crate) fn management_account_request(
         .and_then(|path| path.strip_suffix("/models/refresh"))
     {
         let id = crate::http::request::percent_decode(id, false);
-        return match crate::services::account_catalog::refresh(state, &id) {
+        return match crate::services::account_catalog::refresh(request.observation_id, state, &id) {
             Ok(payload) => response(
                 "HTTP/1.1 200 OK",
                 "application/json",
@@ -58,7 +58,7 @@ pub(crate) fn management_account_request(
             }
         };
     }
-    match import_account_state(state, &body) {
+    match import_account_state(request.observation_id, state, &body) {
         Ok(account) => {
             let body = serde_json::to_vec(&serde_json::json!({"account":account})).unwrap();
             response("HTTP/1.1 200 OK", "application/json", &body, &[])

@@ -127,7 +127,7 @@ impl Execution<'_> {
                         )
                     });
                 } else {
-                    observation::request_started(state, &candidate, body, incoming);
+                    observation::execution_attempt(state, &candidate, body, incoming);
                 }
                 let result = match raced(
                     &state.backend.transport.runtime,

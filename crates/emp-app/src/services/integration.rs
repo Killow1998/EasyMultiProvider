@@ -1,4 +1,5 @@
 //! Services integration.
+pub(crate) mod commands;
 pub(crate) mod enable;
 use emp_integration::IntegrationManager;
 use std::sync::atomic::AtomicBool;

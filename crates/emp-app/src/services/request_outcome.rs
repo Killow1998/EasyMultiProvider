@@ -1,5 +1,6 @@
-//! Completion state for one routed operation. Each terminal outcome updates
-//! routing eligibility, usage/diagnostics and management activity exactly once.
+//! Upstream outcome/accounting for one routed operation. Each terminal outcome
+//! updates existing routing feedback, usage and activity exactly once. Downstream
+//! delivery belongs to the passive request receipt and cannot rewrite this result.
 use crate::app::ServerState;
 use crate::services::observation::{request_tokens_per_second, retry_scheduled};
 use emp_core::ResolvedRoute;
@@ -177,6 +178,7 @@ impl<'a> RequestOutcome<'a> {
     pub(crate) fn dispatch(&self) {
         let mut event = self.event.clone();
         event["dispatch_started"] = json!(true);
+        crate::services::observation::record_attempt(self.state, &event, "router_dispatch");
         self.state
             .backend
             .activity
