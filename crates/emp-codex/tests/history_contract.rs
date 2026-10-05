@@ -20,6 +20,8 @@ const MODEL: &str = "gpt-native";
 
 #[path = "history_contract/bounds.rs"]
 mod bounds;
+#[path = "history_contract/committed_checkpoint.rs"]
+mod committed_checkpoint;
 #[path = "history_contract/fast_replay.rs"]
 mod fast_replay;
 #[path = "history_contract/fork.rs"]

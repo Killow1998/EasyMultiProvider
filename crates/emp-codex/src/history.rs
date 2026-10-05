@@ -141,31 +141,52 @@ impl HistoryReader for CodexHomeHistoryReader {
         anchor: &HistoryAnchor,
         compaction: &Map<String, Value>,
     ) -> Result<HistorySnapshot, HistoryError> {
-        match self.read_visible_history(anchor) {
-            Ok(snapshot) => return Ok(snapshot),
+        let source_thread = match self.read_visible_history(anchor) {
+            Ok(snapshot)
+                if snapshot.items.iter().any(|item| {
+                    matches!(
+                        item.kind.as_str(),
+                        "compaction_summary" | "compaction_marker"
+                    )
+                }) =>
+            {
+                return Ok(snapshot);
+            }
+            // A durable checkpoint may have been committed before its turn
+            // later failed. Ordinary resume filtering excludes that turn,
+            // but the client's exact checkpoint still owns its visible prefix.
+            // Reuse the identity-checked replay used by forks; never invent a
+            // summary or include the failed suffix after that checkpoint.
+            Ok(_) => anchor
+                .thread_id
+                .as_deref()
+                .ok_or_else(|| HistoryError::new("thread_identity_missing"))?,
             Err(error)
                 if !matches!(error.reason(), "thread_missing" | "thread_mismatch")
                     || anchor.forked_from_thread_id.is_none() =>
             {
                 return Err(error);
             }
-            Err(_) => {}
-        }
-        let parent = anchor
-            .forked_from_thread_id
-            .as_deref()
-            .ok_or_else(|| HistoryError::new("thread_missing"))?;
-        if parent == anchor.thread_id.as_deref().unwrap_or_default() || !uuid_shape(parent) {
-            return Err(HistoryError::new("fork_parent_invalid"));
-        }
+            Err(_) => {
+                let parent = anchor
+                    .forked_from_thread_id
+                    .as_deref()
+                    .ok_or_else(|| HistoryError::new("thread_missing"))?;
+                if parent == anchor.thread_id.as_deref().unwrap_or_default() || !uuid_shape(parent)
+                {
+                    return Err(HistoryError::new("fork_parent_invalid"));
+                }
+                parent
+            }
+        };
         let database = self.latest_state_database()?;
-        let location = locate(&database, parent)?;
-        let parent_anchor = HistoryAnchor {
-            thread_id: Some(parent.to_owned()),
+        let location = locate(&database, source_thread)?;
+        let checkpoint_anchor = HistoryAnchor {
+            thread_id: Some(source_thread.to_owned()),
             ..HistoryAnchor::default()
         };
         let mut snapshot = self.read_rollout(
-            &parent_anchor,
+            &checkpoint_anchor,
             &location,
             ReplayContext {
                 exact_compaction: Some(compaction),
