@@ -160,12 +160,14 @@ fn decode_portable_items(root: &Map<String, Value>) -> Result<Map<String, Value>
         let Some(encoded) = encoded.strip_prefix(COMPACTION_PREFIX) else {
             continue;
         };
-        let summary = URL_SAFE
+        let bytes = URL_SAFE
             .decode(encoded)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .filter(|summary| !summary.trim().is_empty())
-            .ok_or_else(|| HistoryError::new("portable_checkpoint_invalid"))?;
+            .map_err(|_| HistoryError::new("portable_checkpoint_encoding_invalid"))?;
+        let summary = String::from_utf8(bytes)
+            .map_err(|_| HistoryError::new("portable_checkpoint_utf8_invalid"))?;
+        if summary.trim().is_empty() {
+            return Err(HistoryError::new("portable_checkpoint_empty"));
+        }
         *item = message("user", &format!("{CHECKPOINT_PREFIX}\n\n{summary}"));
         latest = Some(index);
     }

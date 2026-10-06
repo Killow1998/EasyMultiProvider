@@ -138,7 +138,34 @@ fn portable_compaction_decodes_without_a_reader_and_native_passes_opaque() {
     ]});
     let error = prepare(&corrupt, &BTreeMap::new(), true, &Reader(Vec::new()))
         .expect_err("corrupt portable summary");
-    assert_eq!(error.reason(), "portable_checkpoint_invalid");
+    assert_eq!(error.reason(), "portable_checkpoint_encoding_invalid");
+}
+
+#[test]
+fn checkpoint_decoding_and_tool_pair_failures_are_distinct() {
+    for (encoded, reason) in [
+        ("!!!", "portable_checkpoint_encoding_invalid"),
+        ("_w==", "portable_checkpoint_utf8_invalid"),
+        ("ICA=", "portable_checkpoint_empty"),
+    ] {
+        for native in [false, true] {
+            let body = json!({"input":[{"type":"compaction", "encrypted_content":format!("emp1:{encoded}")}]});
+            let error = prepare(&body, &BTreeMap::new(), native, &Reader(Vec::new())).unwrap_err();
+            assert_eq!(error.reason(), reason);
+            assert_eq!(error.diagnostic().category, "checkpoint");
+        }
+    }
+    let error = emp_history::build_compaction_replacement(&[
+        VisibleItem::new(
+            "tool_call",
+            json!({"name":"synthetic_tool", "arguments":"private-arguments"}),
+        ),
+        VisibleItem::new("compaction_marker", Value::Null),
+    ])
+    .unwrap_err();
+    assert_eq!(error.reason(), "tool_call_identity_missing");
+    assert_eq!(error.diagnostic().category, "projection");
+    assert!(!error.diagnostic().message().contains("private-arguments"));
 }
 
 #[test]

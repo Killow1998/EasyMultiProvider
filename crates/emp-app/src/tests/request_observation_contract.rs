@@ -89,7 +89,7 @@ fn generated_compaction_sse_records_its_actual_terminal_event() {
     assert_eq!(done["fields"]["downstream_terminal"], "completed", "{done}");
 }
 
-fn finished(root: &Path, count: usize) -> Vec<Value> {
+pub(super) fn finished(root: &Path, count: usize) -> Vec<Value> {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         let records = journal(root);

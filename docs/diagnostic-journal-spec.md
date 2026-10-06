@@ -110,6 +110,61 @@ write, privacy and forwarding with an unavailable journal. Existing native,
 Claude, cancellation and stream contracts verify that transport behavior is
 preserved. No live-provider or desktop acceptance is implied by these fixtures.
 
+## History failure diagnosis
+
+Local history preparation and destination-compaction rejections in Responses
+HTTP/SSE, Compact and Responses WebSocket emit `history_reconstruction_failed`
+before the downstream error write. It records the EMP request ID, optional
+connection ID, actual request phase, elapsed milliseconds, category and a fixed
+reason code. `request_finished.history_failure` retains the same phase, category
+and reason even when the client write fails. The failure receipt is evidence of
+a local rejection, not proof that an error reached the client or that no earlier
+internal summary call occurred.
+
+| Category | Examples / failed responsibility |
+| --- | --- |
+| `anchor` | Missing task/turn identity, conflicting metadata, unmatched turn. |
+| `storage` | Missing database/task/file, unreadable or changed source, unsafe source location. |
+| `replay` | Invalid record JSON/compression, missing or regressing ordinal, incompatible history mode. |
+| `lineage` | Fork parent cycle, ambiguous parent source, truncated inherited prefix. |
+| `checkpoint` | Missing/ambiguous checkpoint match, missing boundary/summary, invalid replacement, corrupt portable checkpoint. |
+| `projection` | Invalid projected request or tool record without a call ID. |
+| `destination_compaction` | Invalid budget/protocol, summary call/output failure, non-converging reduction, result still over budget. |
+| `unknown` | Unrecognized reason, recorded only as `history_reason_unknown`. |
+
+`emp-history` owns this vocabulary. API error details add `category` and keep the
+specific `reason`; the client-visible `message` includes both and category-specific
+guidance so clients that display only text still expose the cause. Existing HTTP
+409 and streaming `response.failed` / `invalid_prompt` contracts are preserved.
+Only allowlisted codes enter messages and receipts; arbitrary error text is not
+made safe merely by stripping punctuation. No record, summary, checkpoint value,
+tool payload, source path or request metadata is logged by this observer.
+
+Previously shared codes are refined without changing the rejection conditions:
+
+- `portable_checkpoint_invalid`: invalid Base64 becomes
+  `portable_checkpoint_encoding_invalid`, invalid UTF-8 becomes
+  `portable_checkpoint_utf8_invalid`, and blank text becomes
+  `portable_checkpoint_empty`. Missing tool IDs become `tool_call_identity_missing`.
+- `history_compaction_failed`: invalid budget, invalid projected input, missing or
+  invalid destination protocol, an oversized reduce unit, non-converging reduction,
+  missing summary result and a final result over budget now have separate codes.
+- `summary_call_failed`: local request-ID creation and missing usable output become
+  `summary_request_id_failed` and `summary_output_missing`. Actual router/CLI failures
+  keep their existing error contracts and model observations.
+
+Normal `previous_response_not_found` full-request fallback is not a history failure
+and cannot inherit a prior WebSocket turn's receipt. Classification is passive: it
+does not change history selection, retry, eligibility, context limits or accounting.
+Native/external router failures and explicit upstream compaction errors continue to
+use their existing transport error contracts; this receipt covers local
+`HistoryError` / `DestinationPrepareError::History` rejections.
+
+Synthetic acceptance covers the four API paths, identical wire/log reasons, zero
+model attempts for preparation rejection, per-turn isolation, failed downstream
+writes, unknown-reason privacy and disabled-journal behavior. These are local
+fixtures, not live-provider or desktop acceptance.
+
 ## Management operation receipts
 
 Account import/delete, migration import/export, settings/context preferences, provider discovery/metadata,

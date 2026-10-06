@@ -7,6 +7,8 @@ use serde_json::{Map, Value};
 use std::fmt;
 
 pub mod context;
+mod diagnostic;
+pub use diagnostic::HistoryDiagnostic;
 
 pub const ACTIVE_INPUT_START: &str = "_emp_active_input_start";
 const COMPACTION_PREFIX: &str = "emp1:";

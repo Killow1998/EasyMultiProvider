@@ -129,7 +129,7 @@ pub(crate) fn responses_request(
     body = match prepare_history(state, &route, body, &incoming) {
         Ok(body) => body,
         Err(error) if stream_requested => {
-            let failed = history_stream_error(&error);
+            let failed = history_stream_error(&error, observation);
             let frame = match sse_frame("response.failed", &failed) {
                 Ok(frame) => frame,
                 Err(_) => {
@@ -147,7 +147,9 @@ pub(crate) fn responses_request(
             let _ = downstream.frames(&[frame], "response.failed");
             return ResponsesRequestResult::Streamed;
         }
-        Err(error) => return ResponsesRequestResult::Buffered(history_http_error(&error)),
+        Err(error) => {
+            return ResponsesRequestResult::Buffered(history_http_error(&error, observation));
+        }
     };
     observation.phase(Phase::PrepareDestination);
     let destination_context = {
@@ -157,7 +159,7 @@ pub(crate) fn responses_request(
     body = match destination_context {
         Ok(body) => body,
         Err(DestinationPrepareError::History(reason)) if stream_requested => {
-            let failed = history_stream_error(&HistoryError::new(reason));
+            let failed = history_stream_error(&HistoryError::new(reason), observation);
             if let Ok(frame) = sse_frame("response.failed", &failed) {
                 let mut downstream = ObservedSse::new(stream, observation);
                 let _ = downstream.head();
@@ -167,7 +169,10 @@ pub(crate) fn responses_request(
         }
         Err(DestinationPrepareError::Disconnected) => return ResponsesRequestResult::Streamed,
         Err(error) => {
-            return ResponsesRequestResult::Buffered(destination_error_response(error));
+            return ResponsesRequestResult::Buffered(destination_error_response(
+                error,
+                observation,
+            ));
         }
     };
     observation.phase(Phase::Execute);
