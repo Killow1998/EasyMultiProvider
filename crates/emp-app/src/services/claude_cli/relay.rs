@@ -5,6 +5,7 @@ use crate::services::claude_cli::ClaudeCliError;
 use emp_core::ResolvedRoute;
 use emp_router::{ExternalRouter, PassthroughResponse};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -416,6 +417,15 @@ fn messages_match(body: &Value, expected: &ExpectedUserContent) -> bool {
 }
 
 fn matches_expected_blocks(actual: &[Value], expected: &[Value]) -> bool {
+    // Claude Code adds prompt-cache breakpoints to native content blocks.
+    // Compare without this transport metadata, but forward the original body.
+    let Some(actual) = actual
+        .iter()
+        .map(without_cli_cache_marker)
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
     let mut actual_index = 0;
     let mut deferred_resizes = Vec::new();
     for expected_block in expected {
@@ -452,6 +462,29 @@ fn matches_expected_blocks(actual: &[Value], expected: &[Value]) -> bool {
         .all(|((expected_image, actual_image), note)| {
             super::image_geometry::matches_resize(expected_image, actual_image, note)
         })
+}
+
+fn without_cli_cache_marker(block: &Value) -> Option<Cow<'_, Value>> {
+    let Some(cache) = block.get("cache_control") else {
+        return Some(Cow::Borrowed(block));
+    };
+    // Only the documented cache breakpoint shape is independent of content:
+    // https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+    let cache = cache.as_object()?;
+    if !matches!(
+        block.get("type").and_then(Value::as_str),
+        Some("text" | "image" | "document")
+    ) || cache.get("type").and_then(Value::as_str) != Some("ephemeral")
+        || cache.keys().any(|key| key != "type" && key != "ttl")
+        || cache
+            .get("ttl")
+            .is_some_and(|ttl| !matches!(ttl.as_str(), Some("5m" | "1h")))
+    {
+        return None;
+    }
+    let mut comparison = block.clone();
+    comparison.as_object_mut()?.remove("cache_control");
+    Some(Cow::Owned(comparison))
 }
 
 fn block_matches(expected: &Value, actual: &Value) -> bool {
@@ -550,6 +583,92 @@ fn write_error(stream: &mut TcpStream, status: u16, code: &str) {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+
+    #[test]
+    fn relay_accepts_cli_cache_markers_without_changing_forwarded_content() {
+        let expected = vec![
+            serde_json::json!({"type":"text","text":"{\"codex_responses_metadata\":{\"stream\":false}}"}),
+            serde_json::json!({"type":"image","source":{"type":"url","url":"https://images.invalid/a.png"}}),
+            serde_json::json!({"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"fixture"}}),
+            serde_json::json!({"type":"text","text":"{\"codex_item_index\":1,\"item\":{\"role\":\"user\",\"content\":\"continue\",\"cache_control\":\"opaque user data\"}}"}),
+        ];
+        for index in 0..expected.len() {
+            for cache in [
+                serde_json::json!({"type":"ephemeral"}),
+                serde_json::json!({"type":"ephemeral","ttl":"5m"}),
+                serde_json::json!({"type":"ephemeral","ttl":"1h"}),
+            ] {
+                let mut actual = expected.clone();
+                actual[index]["cache_control"] = cache;
+                let mut body = serde_json::json!({
+                    "stream":true,"messages":[{"role":"user","content":actual}]
+                });
+                let original = body.clone();
+                assert_eq!(
+                    validate_transcript(&mut body, &ExpectedUserContent::Blocks(expected.clone())),
+                    Ok(())
+                );
+                assert_eq!(
+                    body, original,
+                    "cache markers must still reach the provider"
+                );
+            }
+        }
+
+        let mut cached = expected.clone();
+        cached.last_mut().unwrap()["cache_control"] = serde_json::json!({"type":"ephemeral"});
+        for (index, field, replacement) in [
+            (0, "text", serde_json::json!("changed transcript")),
+            (
+                1,
+                "source",
+                serde_json::json!({"type":"url","url":"https://images.invalid/other.png"}),
+            ),
+            (
+                2,
+                "source",
+                serde_json::json!({"type":"base64","media_type":"application/pdf","data":"changed"}),
+            ),
+            (
+                3,
+                "text",
+                serde_json::json!(
+                    "{\"codex_item_index\":1,\"item\":{\"role\":\"user\",\"content\":\"continue\",\"cache_control\":\"changed\"}}"
+                ),
+            ),
+            (3, "annotations", serde_json::json!({"unexpected":true})),
+        ] {
+            let mut changed = cached.clone();
+            changed[index][field] = replacement;
+            assert!(!matches_expected_blocks(&changed, &expected));
+        }
+        let mut reordered = cached.clone();
+        reordered.swap(0, 1);
+        assert!(!matches_expected_blocks(&reordered, &expected));
+        assert!(!matches_expected_blocks(&cached[..3], &expected));
+        cached.push(serde_json::json!({"type":"text","text":"extra"}));
+        assert!(!matches_expected_blocks(&cached, &expected));
+    }
+
+    #[test]
+    fn relay_rejects_unknown_or_malformed_cli_cache_markers() {
+        let expected = vec![serde_json::json!({"type":"text","text":"exact text"})];
+        for cache in [
+            serde_json::Value::Null,
+            serde_json::json!("ephemeral"),
+            serde_json::json!({}),
+            serde_json::json!({"ttl":"5m"}),
+            serde_json::json!({"type":"persistent"}),
+            serde_json::json!({"type":"ephemeral","ttl":"24h"}),
+            serde_json::json!({"type":"ephemeral","ttl":null}),
+            serde_json::json!({"type":"ephemeral","ttl":300}),
+            serde_json::json!({"type":"ephemeral","extra":"unbound"}),
+        ] {
+            let mut actual = expected.clone();
+            actual[0]["cache_control"] = cache;
+            assert!(!matches_expected_blocks(&actual, &expected));
+        }
+    }
 
     #[test]
     fn relay_accepts_only_the_exact_single_transcript_and_structured_carrier() {

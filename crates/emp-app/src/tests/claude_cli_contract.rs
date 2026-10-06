@@ -537,6 +537,16 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
 #[test]
 #[ignore = "requires an installed trusted Claude Code CLI on PATH"]
 fn installed_cli_forwards_images_and_documents_with_ordered_tool_history() {
+    assert_cli_forwards_images_and_documents_with_ordered_tool_history("sonnet");
+}
+
+#[test]
+#[ignore = "requires an installed trusted Claude Code CLI on PATH"]
+fn installed_cli_opus_55_forwards_images_and_documents_with_ordered_tool_history() {
+    assert_cli_forwards_images_and_documents_with_ordered_tool_history("claude-opus-5-5");
+}
+
+fn assert_cli_forwards_images_and_documents_with_ordered_tool_history(model: &str) {
     assert!(
         emp_codex::installed_cli::resolve_claude_cli().is_some(),
         "trusted Claude Code CLI must be on PATH"
@@ -556,7 +566,7 @@ fn installed_cli_forwards_images_and_documents_with_ordered_tool_history() {
     let upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({
         "answer":"multimodal path accepted", "tool_calls":[]
     }))]);
-    let (_directory, server) = claude_server(&upstream.base_url());
+    let (_directory, server) = claude_server_with_model(&upstream.base_url(), model);
     let request_body = json!({
         "model":"demo/model",
         "stream":false,
@@ -596,10 +606,12 @@ fn installed_cli_forwards_images_and_documents_with_ordered_tool_history() {
     let (path, headers, messages_request) = upstream.observed();
     assert_eq!(path, "/v1/messages");
     assert_eq!(headers["authorization"], "Bearer upstream-secret");
-    assert_eq!(messages_request["model"], "sonnet");
+    assert_eq!(messages_request["model"], model);
     assert_eq!(messages_request["stream"], true);
     assert_eq!(messages_request["messages"].as_array().unwrap().len(), 1);
     assert_eq!(messages_request["messages"][0]["role"], "user");
+    // Bare CLI versions can omit the date reminder and send only empty
+    // system-role effort metadata. The EMP bridge instruction must remain.
     assert!(
         messages_request["system"]
             .as_array()
@@ -607,8 +619,7 @@ fn installed_cli_forwards_images_and_documents_with_ordered_tool_history() {
             .iter()
             .any(|block| {
                 block["text"].as_str().is_some_and(|text| {
-                    text.starts_with("<system-reminder>\nToday's date is ")
-                        && text.ends_with(".\n</system-reminder>")
+                    text.starts_with("You are a one-request compatibility bridge for Codex.")
                 })
             })
     );
