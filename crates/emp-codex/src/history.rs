@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 use std::path::PathBuf;
 use visible::{token, uuid_shape};
 
+mod checkpoint;
 mod lines;
 mod location;
 mod read;
@@ -141,26 +142,14 @@ impl HistoryReader for CodexHomeHistoryReader {
         anchor: &HistoryAnchor,
         compaction: &Map<String, Value>,
     ) -> Result<HistorySnapshot, HistoryError> {
-        let source_thread = match self.read_visible_history(anchor) {
-            Ok(snapshot)
-                if snapshot.items.iter().any(|item| {
-                    matches!(
-                        item.kind.as_str(),
-                        "compaction_summary" | "compaction_marker"
-                    )
-                }) =>
-            {
-                return Ok(snapshot);
-            }
-            // A durable checkpoint may have been committed before its turn
-            // later failed. Ordinary resume filtering excludes that turn,
-            // but the client's exact checkpoint still owns its visible prefix.
-            // Reuse the identity-checked replay used by forks; never invent a
-            // summary or include the failed suffix after that checkpoint.
-            Ok(_) => anchor
-                .thread_id
-                .as_deref()
-                .ok_or_else(|| HistoryError::new("thread_identity_missing"))?,
+        let (source_thread, resumed) = match self.read_visible_history(anchor) {
+            Ok(snapshot) => (
+                anchor
+                    .thread_id
+                    .as_deref()
+                    .ok_or_else(|| HistoryError::new("thread_identity_missing"))?,
+                Some(snapshot),
+            ),
             Err(error)
                 if !matches!(error.reason(), "thread_missing" | "thread_mismatch")
                     || anchor.forked_from_thread_id.is_none() =>
@@ -176,23 +165,34 @@ impl HistoryReader for CodexHomeHistoryReader {
                 {
                     return Err(HistoryError::new("fork_parent_invalid"));
                 }
-                parent
+                (parent, None)
             }
         };
         let database = self.latest_state_database()?;
         let location = locate(&database, source_thread)?;
-        let checkpoint_anchor = HistoryAnchor {
-            thread_id: Some(source_thread.to_owned()),
-            ..HistoryAnchor::default()
-        };
-        let mut snapshot = self.read_rollout(
-            &checkpoint_anchor,
-            &location,
-            ReplayContext {
-                exact_compaction: Some(compaction),
-                ..ReplayContext::resume()
-            },
-        )?;
+        let legacy = location.mode == "legacy";
+        let mut snapshot =
+            match self.read_committed_checkpoint(&database, location, source_thread, compaction) {
+                Ok(snapshot) => snapshot,
+                // Older, non-paginated rollouts can store a visible summary without
+                // the remote checkpoint identity. Preserve that existing contract.
+                // Paginated histories must resolve the requested durable checkpoint:
+                // an older visible summary does not authorize dropping newer work.
+                Err(error) if legacy && error.reason() == "compaction_identity_missing" => {
+                    match resumed.filter(|snapshot| {
+                        snapshot.items.iter().any(|item| {
+                            matches!(
+                                item.kind.as_str(),
+                                "compaction_summary" | "compaction_marker"
+                            )
+                        })
+                    }) {
+                        Some(snapshot) => snapshot,
+                        None => return Err(error),
+                    }
+                }
+                Err(error) => return Err(error),
+            };
         snapshot.thread_id = anchor.thread_id.clone().unwrap_or_default();
         Ok(snapshot)
     }

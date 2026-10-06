@@ -90,3 +90,149 @@ fn failed_turn_recovery_requires_a_unique_matching_checkpoint() {
         );
     }
 }
+
+#[test]
+fn committed_checkpoint_recovery_does_not_reuse_an_older_summary() {
+    let mut earlier = checkpoint("earlier successful summary");
+    earlier["ordinal"] = json!(3);
+    let mut records = vec![
+        meta(),
+        started(1, "earlier-success"),
+        user(2, "earlier work"),
+        earlier,
+        completed(4, "earlier-success"),
+    ];
+    records.extend(
+        failed_turn_checkpoint()
+            .into_iter()
+            .skip(1)
+            .map(|mut record| {
+                record["ordinal"] = json!(record["ordinal"].as_u64().unwrap() + 4);
+                record
+            }),
+    );
+    let directory = build_home(&records);
+    let reader = CodexHomeHistoryReader::new(directory.path());
+    let request = json!({"input":[
+        {"type":"compaction","encrypted_content":"fixture-committed-checkpoint"},
+        {"role":"user","content":"continue after checkpoint"}
+    ],"client_metadata":{"x-codex-turn-metadata":json!({"thread_id":THREAD,"turn_id":TURN}).to_string()}});
+    let prepared = emp_history::prepare_owned(request, &BTreeMap::new(), false, &reader).unwrap();
+    let text = prepared.to_string();
+    assert!(text.contains("earlier successful summary"), "{text}");
+    assert!(
+        text.contains("visible work before the committed checkpoint"),
+        "{text}"
+    );
+    assert!(!text.contains("failed suffix"), "{text}");
+
+    let unknown = json!({"type":"compaction","encrypted_content":"unknown-checkpoint"});
+    assert_eq!(
+        reader
+            .read_compaction_history(&anchor(), unknown.as_object().unwrap())
+            .unwrap_err()
+            .reason(),
+        "compaction_identity_missing"
+    );
+    let mut duplicate = records[8].clone();
+    duplicate["ordinal"] = json!(15);
+    records.push(duplicate);
+    write_rollout(directory.path(), &records);
+    let requested = json!({"type":"compaction","encrypted_content":"fixture-committed-checkpoint"});
+    assert_eq!(
+        reader
+            .read_compaction_history(&anchor(), requested.as_object().unwrap())
+            .unwrap_err()
+            .reason(),
+        "compaction_identity_ambiguous"
+    );
+}
+
+#[test]
+fn committed_child_checkpoint_recovery_preserves_inherited_history() {
+    let directory = tempdir().unwrap();
+    let parent_path = directory
+        .path()
+        .join(format!("sessions/2026/09/27/{PARENT}.jsonl"));
+    write_records(
+        &parent_path,
+        &[
+            session_meta(PARENT, "paginated"),
+            started(1, "parent-success"),
+            user(2, "inherited work before the fork"),
+            completed(3, "parent-success"),
+            user(4, "parent work after the fork must stay hidden"),
+        ],
+    );
+    let mut records = failed_turn_checkpoint();
+    records[0]["payload"]["history_base"] = json!({
+        "thread_id":PARENT, "end_ordinal_exclusive":4
+    });
+    let path = write_rollout(directory.path(), &records);
+    state_database(directory.path(), &path);
+    let reader = CodexHomeHistoryReader::new(directory.path());
+    let request = json!({"input":[
+        {"type":"compaction","encrypted_content":"fixture-committed-checkpoint"},
+        {"role":"user","content":"continue child"}
+    ],"client_metadata":{"x-codex-turn-metadata":json!({"thread_id":THREAD,"turn_id":TURN}).to_string()}});
+    let prepared = emp_history::prepare_owned(request, &BTreeMap::new(), false, &reader).unwrap();
+    let text = prepared.to_string();
+    assert!(text.contains("inherited work before the fork"), "{text}");
+    assert!(
+        text.contains("visible work before the committed checkpoint"),
+        "{text}"
+    );
+    assert!(!text.contains("after the fork must stay hidden"), "{text}");
+    assert!(!text.contains("failed suffix"), "{text}");
+}
+
+#[test]
+fn inherited_committed_checkpoint_recovery_stops_at_the_fork() {
+    let directory = tempdir().unwrap();
+    let parent_path = directory
+        .path()
+        .join(format!("sessions/2026/09/27/{PARENT}.jsonl"));
+    let mut parent_records = failed_turn_checkpoint();
+    parent_records[0]["payload"]["id"] = json!(PARENT);
+    let mut later = parent_records[4].clone();
+    later["ordinal"] = json!(11);
+    later["payload"]["replacement_history"][0]["encrypted_content"] = json!("post-fork-checkpoint");
+    parent_records.push(later);
+    write_records(&parent_path, &parent_records);
+    let child_meta = json!({"ordinal":0,"type":"session_meta","payload":{
+        "id":THREAD, "history_mode":"paginated",
+        "history_base":{"thread_id":PARENT,"end_ordinal_exclusive":5}
+    }});
+    let path = write_rollout(
+        directory.path(),
+        &[
+            child_meta,
+            started(1, "child-success"),
+            user(2, "child's visible tail"),
+            completed(3, "child-success"),
+            started(4, TURN),
+        ],
+    );
+    state_database(directory.path(), &path);
+    let reader = CodexHomeHistoryReader::new(directory.path());
+    let request = json!({"input":[
+        {"type":"compaction","encrypted_content":"fixture-committed-checkpoint"},
+        {"role":"user","content":"child's visible tail"}
+    ],"client_metadata":{"x-codex-turn-metadata":json!({"thread_id":THREAD,"turn_id":TURN}).to_string()}});
+    let prepared = emp_history::prepare_owned(request, &BTreeMap::new(), false, &reader).unwrap();
+    let text = prepared.to_string();
+    assert!(
+        text.contains("visible work before the committed checkpoint"),
+        "{text}"
+    );
+    assert_eq!(text.matches("child's visible tail").count(), 1, "{text}");
+    assert!(!text.contains("failed suffix"), "{text}");
+    let unavailable = json!({"type":"compaction","encrypted_content":"post-fork-checkpoint"});
+    assert_eq!(
+        reader
+            .read_compaction_history(&anchor(), unavailable.as_object().unwrap())
+            .unwrap_err()
+            .reason(),
+        "compaction_identity_missing"
+    );
+}
