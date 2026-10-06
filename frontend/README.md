@@ -1,8 +1,8 @@
 # EMP connection frontend
 
 An independent Web UI and standalone product page on the exact v0.12.11 backend
-baseline `a568d005b4fc32793ec8e06db7d5891324a1c142`. All work is currently local,
-unstaged and uncommitted at the user's request.
+baseline `a568d005b4fc32793ec8e06db7d5891324a1c142`. This branch provides the
+frontend source for review; it has no independent installer or release.
 
 See [build and preview instructions](site/BUILD.md).
 

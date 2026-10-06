@@ -1,6 +1,6 @@
 # EMP independent frontend preview
 
-This preview is local source work. It has not been committed, pushed, published,
+This branch delivers the frontend source for review. It has not been published
 or packaged as an installer. Upstream release downloads do **not** contain this UI.
 
 Backend baseline: v0.12.11, commit
