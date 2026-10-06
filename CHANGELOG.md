@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.12 (2026-10-05)
+
+- Fix Claude CLI requests returning 502 when prompt-cache markers are added to
+  image or document histories. Preserve the original content, tool order and
+  cache metadata while validating the conversation.
+- Restore the correct conversation checkpoint after compaction followed by a
+  failed turn. Retain inherited parent history within the fork boundary, and
+  prevent an older summary from replacing newer committed work.
+- Let Codex start with an external-only model catalog before a native catalog
+  has been observed. Preserve settings supplied by available native catalogs.
+- Record specific history-recovery and compaction failure reasons across HTTP,
+  SSE and WebSocket diagnostics without recording conversations or credentials.
+
 ## 0.12.11 (2026-10-05)
 
 - Bound quota queries and cancel their isolated Codex helpers cleanly, including
