@@ -228,6 +228,12 @@ pub(crate) fn family_identity(model: &Value, fallback: &str) -> String {
 fn external_entry(model: &Value, template: &Value, provider: &Value) -> Value {
     let claude_cli = text(provider, "execution_backend") == "claude_cli";
     let mut entry = Map::new();
+    // Codex requires this even before a native catalog has been observed.
+    // Match its unknown-model fallback; a supplied template takes precedence.
+    entry.insert(
+        "truncation_policy".to_owned(),
+        json!({"mode":"bytes", "limit":10_000}),
+    );
     for field in [
         "base_instructions",
         "shell_type",

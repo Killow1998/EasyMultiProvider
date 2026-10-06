@@ -11,7 +11,7 @@ fn external_catalog_keeps_coding_template_without_native_entitlements() {
     let native = json!({"models":[{
         "slug":"native", "base_instructions":"coding", "model_messages":{"tools":"safe","unknown_future":"private"},
         "available_access_programs":["native entitlement"],"supports_reasoning_summary_parameter":true,
-        "multi_agent_version":"orchestrator"
+        "multi_agent_version":"orchestrator", "truncation_policy":{"mode":"tokens","limit":12000}
     }]});
     let catalog = build_catalog(&config, &native, &BTreeMap::new(), &BTreeMap::new());
     let external = catalog["models"]
@@ -27,6 +27,32 @@ fn external_catalog_keeps_coding_template_without_native_entitlements() {
     assert_eq!(external["multi_agent_version"], Value::Null);
     assert_eq!(external["model_messages"], json!({"tools":"safe"}));
     assert_eq!(external["supported_reasoning_levels"], json!([]));
+    assert_eq!(
+        external["truncation_policy"],
+        native["models"][0]["truncation_policy"]
+    );
+}
+
+#[test]
+fn external_catalog_without_a_native_template_has_codex_required_truncation_policy() {
+    let config = json!({
+        "providers":[{"id":"demo","execution_backend":"claude_cli"}],
+        "models":[{"id":"demo/sonnet","provider":"demo"}]
+    });
+    for native in [json!({"models":[]}), json!({"models":[{"slug":"native"}]})] {
+        let catalog = build_catalog(&config, &native, &BTreeMap::new(), &BTreeMap::new());
+        let model = catalog["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["slug"] == "demo/sonnet")
+            .unwrap();
+        // Codex model_info_from_slug uses 10,000 bytes for unknown models.
+        assert_eq!(
+            model["truncation_policy"],
+            json!({"mode":"bytes","limit":10000})
+        );
+    }
 }
 
 #[test]
