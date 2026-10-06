@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="EMP 让你在一个 Codex 中选择自己的多个 ChatGPT 账号和模型服务。独立前端预览，基于原版 v0.12.11。">
+  <meta name="color-scheme" content="light dark">
+  <title>EMP — 你的账号，一个 Codex。</title>
+  <link rel="icon" href="assets/emp.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<header class="site-header"><a class="wordmark" href="#" aria-label="EMP 首页"><img src="assets/emp.svg" width="67" height="29" alt="EMP"></a><nav aria-label="主导航"><a href="#how">如何使用</a><a href="#questions">常见问题</a><a href="#get">获取 EMP</a></nav><div class="header-end"><button id="theme" aria-label="切换深浅色" title="切换深浅色">◐</button><a class="github-link" href="https://github.com/Killow1998/EasyMultiProvider">上游 GitHub <span aria-hidden="true">↗</span></a></div></header>
+<main id="main">
+  <section class="hero">
+    <div class="hero-copy"><p class="eyebrow">EASY MULTI PROVIDER</p><h1>你的账号。<br>一个 <span>Codex。</span></h1><p class="lead">接入你自己的多个账号，<br>在熟悉的模型列表里，选择这次要用的那个。</p><div class="hero-actions"><a class="button primary" href="#get">获取前端预览</a><a class="text-link" href="#how">看看如何连接</a></div><p class="edition">独立前端预览 <span>·</span> 原版后端 v0.12.11</p></div>
+    <div class="hero-surface" aria-label="账号、EMP 与 Codex 的配置关系示例">
+      <div class="surface-top"><span class="mini-wordmark">EMP / CONNECTIONS</span><span class="demo-label">演示数据</span></div>
+      <div class="hero-map">
+        <div class="demo-sources"><span class="diagram-label">你的来源</span><button class="demo-source selected" data-demo="work"><span class="avatar">工<img src="assets/openai.svg" alt="ChatGPT" width="16" height="16"></span><span><strong>工作账号</strong><small>ChatGPT</small></span><span class="added">已添加</span></button><button class="demo-source" data-demo="personal"><span class="avatar">个<img src="assets/openai.svg" alt="ChatGPT" width="16" height="16"></span><span><strong>个人账号</strong><small>ChatGPT</small></span><span class="added">已添加</span></button><button class="demo-source" data-demo="service"><span class="avatar service-avatar"><img src="assets/anthropic.svg" alt="Anthropic" width="23" height="23"></span><span><strong>研究服务</strong><small>Anthropic API</small></span><span class="added">已添加</span></button></div>
+        <div class="demo-bus" aria-hidden="true"><svg viewBox="0 0 88 216" preserveAspectRatio="none"><path d="M0 40 C50 40 38 108 88 108 M0 108H88 M0 176C50 176 38 108 88 108"/></svg></div>
+        <div class="demo-hub"><div class="hub-square"><img src="assets/emp.svg" width="53" height="23" alt="EMP"></div><span>本机接入</span></div>
+        <span class="demo-out" aria-hidden="true"></span>
+        <div class="demo-codex"><img src="assets/openai.svg" alt="" width="29" height="29"><strong>Codex</strong><small>在这里选模型</small></div>
+      </div>
+      <div class="model-example"><div><span class="diagram-label">在 Codex 中找到</span><strong id="demo-model">工作账号 · GPT</strong><code id="demo-route">work / gpt-…</code></div><span class="picker-mark" aria-hidden="true">⌘</span></div>
+      <p class="surface-footnote">点击示例来源，了解模型的归属。这里不连接真实账号。</p>
+    </div>
+  </section>
+  <div class="manifesto"><span>你选择账号。</span><span>EMP 整理接入。</span><span>工作留在 Codex。</span></div>
+  <section class="how section" id="how"><div class="section-heading"><p class="eyebrow">FROM ACCOUNT TO CONVERSATION</p><h2>三步，把来源放进模型列表。</h2><p>添加与应用分开进行。每一步，都能看到它确认了什么。</p></div><div class="steps">
+    <article><span class="step-number">01</span><h3>添加自己的来源</h3><p>给账号起一个熟悉的名字，导入 Codex 登录文件。模型服务则使用已有的地址与密钥。</p><div class="step-example"><img src="assets/openai.svg" alt="" width="20" height="20"><span>ChatGPT 账号</span><span class="file-type">auth.json</span></div></article>
+    <article><span class="step-number">02</span><h3>让 Codex 加载目录</h3><p>确认后应用 EMP。查看设置与模型目录的状态；如果目录仍旧，先完成活动对话，再重新打开 Codex。</p><div class="step-example"><span class="status-dot"></span><span>设置已保存</span><span class="separator">/</span><span class="muted">目录待确认</span></div></article>
+    <article><span class="step-number">03</span><h3>在对话里选择模型</h3><p>回到 Codex，选择具体来源的具体模型。不同对话可以有各自的选择，不设全局“当前账号”。</p><div class="step-example"><span class="tiny-avatar">工</span><span>工作账号 · GPT</span><span class="selected-mark">✓</span></div></article>
+  </div></section>
+  <section class="conversation section"><div class="conversation-copy"><p class="eyebrow">A NAME YOU RECOGNIZE</p><h2>这次用哪个账号，<br>看名字就知道。</h2><p>一个账号处理日常工作，另一个用于研究。来源昵称帮助你辨认模型，稳定路由仍保留在详情里。</p><p class="small-copy">例如在 Codex 模型选择器中，从「工作账号 · GPT」选择到「个人账号 · GPT」。EMP 管理页负责管理来源；点击这里的头像不会改变正在进行的对话。</p></div><div class="picker-example" aria-label="示意模型选择器"><div class="picker-heading"><img src="assets/openai.svg" alt="" width="24" height="24"><span>Codex</span><span class="demo-label">操作示意</span></div><p>选择模型</p><div class="picker-option"><span class="tiny-avatar">工</span><strong>工作账号 · GPT</strong><span>✓</span></div><div class="picker-option"><span class="tiny-avatar">个</span><strong>个人账号 · GPT</strong></div><div class="picker-option"><img src="assets/anthropic.svg" alt="" width="22" height="22"><strong>研究服务 · Claude</strong></div><div class="picker-bottom">实际模型名称由你的账号和已导入目录决定。</div></div></section>
+  <section class="truth-note"><span class="note-marker">i</span><p><strong>状态要说清，工作才安心。</strong>目录匹配只确认共享模型目录。本版前端不会把它当作真实请求成功、上下文连续或恢复原生成功的证明。切换后的行为仍取决于原版后端与 Codex。</p></section>
+  <section class="section questions" id="questions"><div class="section-heading"><p class="eyebrow">BEFORE YOU START</p><h2>几件值得先知道的事。</h2></div><div class="faq-list">
+    <details><summary>ChatGPT 登录文件在哪里？</summary><p>通常是已登录 Codex 的用户目录下 <code>.codex/auth.json</code>。自定义 <code>CODEX_HOME</code> 时使用对应目录。EMP 支持 JSON 登录文件及重命名的备份文件。它包含凭据，只应导入你信任的本机 EMP，不要公开上传。</p></details>
+    <details><summary>添加账号后，需要重新打开 Codex 吗？</summary><p>先看接入状态。账号已保存和模型目录已加载是两件事。如果界面提示目录待加载，完成活动对话后再重新打开 Codex；如仍未加载，请手动检查目录并查看诊断。本版不承诺零重启。</p></details>
+    <details><summary>关闭管理页，会退出 EMP 吗？</summary><p>不会。关闭浏览器页只是收起管理界面，EMP 进程继续运行。需要退出时，使用明确的“退出 EMP”操作。本轮没有桌面窗口或托盘。</p></details>
+    <details><summary>如何恢复原生 Codex？</summary><p>先完成活动对话并关闭 Codex，再在接入详情里选择“恢复原生并退出”。原版后端尝试处理历史和恢复配置后停止。界面显示“停止中”或断开连接，不等于已经验证恢复成功；需要查看进程与日志，再打开 Codex 确认。</p></details>
+    <details><summary>已有账号的 ID 和路由会改变吗？</summary><p>不会迁移或重写已有 ID、别名、前缀或绑定。新账号可以先填昵称，前端为技术标识提供无冲突的默认值。具体模型仍由你在 Codex 中选择。</p></details>
+  </div></section>
+  <section class="get-section" id="get"><div><p class="eyebrow">GET EMP</p><h2>从你的第一个账号开始。</h2><p>本次提供独立前端源码预览，后端固定为原版 v0.12.11。<br>目前没有包含这套界面的独立安装包。</p></div><div class="download-panel"><span class="edition-label">FRONTEND PREVIEW · SOURCE</span><h3>获取源码并构建</h3><p>使用当前本地 checkout 构建。这套前端尚未提交或发布。</p><a class="button primary" href="BUILD.md">查看构建与预览说明</a><a class="source-link" href="https://github.com/Killow1998/EasyMultiProvider/tree/a568d005b4fc32793ec8e06db7d5891324a1c142">查看原版 v0.12.11 基线</a><p class="download-footnote">原版上游安装包不包含这次前端改造。自动更新仍使用上游渠道，可能覆盖本预览。</p></div></section>
+</main>
+<footer class="site-footer"><div class="footer-brand"><img src="assets/emp.svg" alt="EMP" width="55" height="24"><span>Easy Multi Provider</span></div><div><a href="BUILD.md">构建文档</a><a href="https://github.com/Killow1998/EasyMultiProvider/blob/a568d005b4fc32793ec8e06db7d5891324a1c142/README.md">原版文档</a><a href="https://github.com/Killow1998/EasyMultiProvider/blob/a568d005b4fc32793ec8e06db7d5891324a1c142/LICENSE">MIT</a></div><p>独立前端预览。EMP 与 OpenAI、Anthropic 无隶属关系。</p></footer>
+<script src="site.js"></script>
+</body>
+</html>
