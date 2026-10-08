@@ -8,8 +8,15 @@ pub const WEB_INDEX_BYTES: &[u8] = include_bytes!("../web/index.html");
 
 pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
     let bytes: &[u8] = match path {
+        "/assets/service-list.js" => include_bytes!("../web/service-list.js"),
+        "/assets/service-chooser.js" => include_bytes!("../web/service-chooser.js"),
+        "/assets/service-icons.js" => include_bytes!("../web/service-icons.js"),
+        "/assets/service-list.css" => include_bytes!("../web/service-list.css"),
+        "/assets/model-settings.js" => include_bytes!("../web/model-settings.js"),
+        "/assets/account-import.js" => include_bytes!("../web/account-import.js"),
         "/assets/request-details.js" => include_bytes!("../web/request-details.js"),
         "/assets/management-client.js" => include_bytes!("../web/management-client.js"),
+        "/assets/quota-display.js" => include_bytes!("../web/quota-display.js"),
         "/assets/settings.js" => include_bytes!("../web/settings.js"),
         "/assets/diagnostics.js" => include_bytes!("../web/diagnostics.js"),
         "/assets/style.css" => include_bytes!("../web/style.css"),

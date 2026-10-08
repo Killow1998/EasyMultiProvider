@@ -30,7 +30,7 @@ EMP 在本机运行，主要解决两件事：
 时使用导入的账号，选中 `deepseek/deepseek-v4-pro` 时使用 DeepSeek API Key。编码任务、
 权限和工具仍由 Codex 管理。EMP 在本机统一管理模型列表、加密凭据和账号额度。
 
-当前源码版本为 `v0.12.12`。
+当前源码版本为 `v0.12.13`。
 
 ## 功能
 
@@ -48,10 +48,12 @@ EMP 在本机运行，主要解决两件事：
   新公开模型无需等待 EMP 发布或手动编辑模型列表。
 - 在模型、Provider 和 Subscription 账户旁查看请求活动：活动点标记进行中的请求，
   提示文字显示数量；近期状态表示刚完成的请求并会自动过期；事件流断开时会清除活动状态。
-- 通过 Web UI 添加官方或自建 Provider。
+- 通过一个“添加服务”入口管理 Codex 订阅、Claude Code 和 API 服务。
+  Codex 订阅支持粘贴 auth.json 内容或选择文件导入。
+- 在服务列表刷新本机 Claude 订阅额度、查看趋势，在“设置”中切换剩余或已用额度。
 - 通过已安装的 Claude Code CLI 使用 Claude：可复用当前操作系统用户的 Claude Code
   登录，也可连接兼容 Claude Code 的 CPA Base URL 和 API Key。本地登录模型需通过
-  “Add model”手动添加别名或完整模型 ID。工具调用由 Codex 执行，回复在生成完成后显示。
+  “模型设置”更新 Claude Code 模型列表并选择要加入 Codex 的模型。列表保存在本地，仍可手动添加模型。工具调用由 Codex 执行，回复在生成完成后显示。
 - 只有当 Claude 模型的已配置能力和所选上游都支持时，才会转发图片输入和受支持的内联文档内容。
 - 拉取 Provider 模型，自由选择导入模型，修改上下文窗口，执行测试并隐藏
   不常用模型。
@@ -94,8 +96,7 @@ Unix 上还会查找 `NVM_DIR`、`$XDG_CONFIG_HOME/nvm`、`~/.config/nvm` 和 `~
 支持这些平台上 CLI、IDE 插件和桌面 App 的已知安装布局。
 
 EMP 不会停止或重启你正在使用的 Codex 后端。余量查询使用独立的 CLI 辅助进程，
-不会打开桌面 App。点“将 EMP 应用于 Codex”后，集成卡片会分别显示
-已保存的设置和正在运行的 Codex 加载的模型目录。如果目录仍是旧的，请在当前工作
+不会打开桌面 App。点“启用 EMP”后，顶部状态显示 Codex 版本和 EMP 模型加载状态。如果目录仍是旧的，请在当前工作
 允许时，通过平时使用的启动器重启 Codex，然后再次检查目录。
 
 Codex 下次连到 EMP（拉取模型列表或发起对话）时，EMP 会通过本地控制通道读取
@@ -246,20 +247,21 @@ EMP v0.9.0 至 v0.9.9 使用同一种加密迁移格式。当前版本可以导�
 
 终端会输出一个一次性浏览器地址。打开后：
 
-1. 导入 Codex Subscription 账户，或者添加 API Provider。
-2. 拉取 Provider 模型并选择需要导入的模型。
+1. 点击 **添加服务**，导入 Codex 订阅账号，或添加 Claude Code、API 服务。
+   导入 Codex 订阅时，可粘贴 auth.json 内容或选择文件。
+2. 打开服务的 **模型设置**，更新模型列表、勾选并保存。之后直接使用保存的列表；
+   需要获取最新模型时，点击 **更新模型列表**。
 3. 按需调整模型显示状态或上下文窗口。
-4. 点击 **将 EMP 应用于 Codex**。
+4. 点击 **启用 EMP**。
 5. 正常启动 Codex，通过 `/model` 或 App 模型菜单选择模型。
 
-使用 Claude 时，在 Web UI 中选择 **Add Provider → Claude**，再选 **Local Claude subscription** 或 **CPA**。两种方式都需要安装 Claude Code CLI。
+使用 Claude 时，在 Web UI 中点击 **添加服务**，在 **Claude Code** 分组选择 **本机订阅** 或 **CPA**。两种方式都需要安装 Claude Code CLI。
 
-- **Local Claude subscription** 使用当前操作系统用户的 Claude Code 订阅登录。每次请求前，EMP 会检查 Claude.ai 订阅登录；CLI API Key 和 Console 登录不适用于本机模式。若需登录，请在 Claude Code 中登录。使用 **Add model** 手动添加别名或完整模型 ID，即可在 Codex 模型选择器中选择。
+- **Local Claude subscription** 使用当前操作系统用户的 Claude Code 订阅登录。每次请求前，EMP 会检查 Claude.ai 订阅登录；CLI API Key 和 Console 登录不适用于本机模式。若需登录，请在 Claude Code 中登录。打开 **模型设置**，点击 **更新模型列表**，勾选并保存即可加入 Codex 模型选择器。之后可以直接使用保存的列表，也可通过 **手动添加模型** 补充别名或完整 ID。
 - **CPA** 使用兼容 Claude Code 的 CPA Base URL 和 API Key。直接连接 Anthropic API 时，请另加 **Anthropic API** Provider。
 
 只有当前原生账号时，可以跳过导入账号和 Provider：在“Native → 编辑”
-中隐藏模型，在“模型显示”中修改显示名称，保存后点击“将 EMP 应用于
-Codex”。至少保留一个可见模型，显示名称不会改变模型 ID。
+中隐藏模型，在“模型显示”中修改显示名称，保存后点击“启用 EMP”。至少保留一个可见模型，显示名称不会改变模型 ID。
 
 使用 ChatGPT 登录时，受支持的 Codex 客户端可在运行期间获取模型目录变更。
 目录变更会在后续请求时生效；若新模型尚未显示，可重新打开模型菜单查看。

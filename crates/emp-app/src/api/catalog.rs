@@ -65,6 +65,10 @@ pub(crate) fn management_request(
             config_error(&message)
         }
         Err(crate::services::catalog::discovery::DiscoveryError::Unavailable) => internal_error(),
+        Err(crate::services::catalog::discovery::DiscoveryError::LocalCli(code)) => {
+            let (status, code, message) = crate::services::claude_cli::failure_details(code);
+            json_error_response(status, status_text(status), message, Some(code), &[])
+        }
         Err(crate::services::catalog::discovery::DiscoveryError::Upstream(error)) if metadata => {
             if error.status() == 500 && error.to_string() == "internal server error" {
                 internal_error()
@@ -168,6 +172,26 @@ pub(crate) fn read_management_request(request: Request<'_>, state: &ServerState)
     if request.raw_path() == "/api/config" {
         return match crate::services::catalog::public_configuration(state, &config) {
             Ok(public) => json_response(&public),
+            Err(_) => internal_error(),
+        };
+    }
+    if let Some(id) = request
+        .raw_path()
+        .strip_prefix("/api/providers/")
+        .and_then(|path| path.strip_suffix("/models"))
+    {
+        return match crate::services::catalog::discovery::saved_models(
+            state,
+            &percent_decode(id, false),
+        ) {
+            Ok(value) => json_response(&value),
+            Err(crate::services::catalog::discovery::DiscoveryError::Invalid(message)) => {
+                config_error(&message)
+            }
+            Err(crate::services::catalog::discovery::DiscoveryError::LocalCli(code)) => {
+                let (status, code, message) = crate::services::claude_cli::failure_details(code);
+                json_error_response(status, status_text(status), message, Some(code), &[])
+            }
             Err(_) => internal_error(),
         };
     }

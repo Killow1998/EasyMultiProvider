@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -76,7 +77,7 @@ pub(super) struct CommandConfig<'a> {
     pub(super) working_directory: &'a Path,
 }
 
-pub(super) struct AuthStatusCommandConfig<'a> {
+pub(super) struct LocalCommandConfig<'a> {
     pub(super) executable: &'a Path,
     pub(super) child_path: &'a OsStr,
     pub(super) home: &'a Path,
@@ -123,7 +124,11 @@ pub(super) fn command(config: CommandConfig<'_>) -> Command {
         temp,
         working_directory,
     } = config;
-    let output_format = input_format.output_arg();
+    let output_format = if matches!(mode, InvocationMode::LocalLogin { .. }) {
+        "stream-json"
+    } else {
+        input_format.output_arg()
+    };
     let mut command = Command::new(executable);
     command
         .env_clear()
@@ -187,7 +192,7 @@ pub(super) fn command(config: CommandConfig<'_>) -> Command {
     if let Some(effort) = effort {
         command.args(["--effort", effort]);
     }
-    if matches!(input_format, InputFormat::StreamJson) {
+    if output_format == "stream-json" {
         command.arg("--verbose");
     }
     command
@@ -221,8 +226,8 @@ pub(super) fn command(config: CommandConfig<'_>) -> Command {
     command
 }
 
-pub(super) fn auth_status_command(config: AuthStatusCommandConfig<'_>) -> Command {
-    let AuthStatusCommandConfig {
+fn local_command(config: LocalCommandConfig<'_>) -> Command {
+    let LocalCommandConfig {
         executable,
         child_path,
         home,
@@ -261,9 +266,6 @@ pub(super) fn auth_status_command(config: AuthStatusCommandConfig<'_>) -> Comman
             "project",
             "--settings",
             "{\"disableAllHooks\":true}",
-            "auth",
-            "status",
-            "--json",
         ])
         .current_dir(working_directory)
         .stdin(Stdio::piped())
@@ -288,6 +290,57 @@ pub(super) fn auth_status_command(config: AuthStatusCommandConfig<'_>) -> Comman
     command
 }
 
+pub(super) fn auth_status_command(config: LocalCommandConfig<'_>) -> Command {
+    let mut command = local_command(config);
+    command.args(["auth", "status", "--json"]);
+    command
+}
+
+pub(super) fn control_command(config: LocalCommandConfig<'_>) -> Command {
+    let mut command = local_command(config);
+    command.args([
+        "--print",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--mcp-config",
+        "{\"mcpServers\":{}}",
+        "--disable-slash-commands",
+        "--no-session-persistence",
+    ]);
+    command
+}
+
+pub(super) fn run_quota(
+    command: Command,
+    cancelled: &AtomicBool,
+    cancellation: impl FnMut() -> Option<CancellationReason>,
+) -> Result<Vec<u8>, &'static str> {
+    // Control messages only: closing stdin completes the bounded query, without an inference turn.
+    let input = b"{\"type\":\"control_request\",\"request_id\":\"emp-init\",\"request\":{\"subtype\":\"initialize\"}}\n{\"type\":\"control_request\",\"request_id\":\"emp-quota\",\"request\":{\"subtype\":\"get_usage\",\"skip_behaviors\":true}}\n";
+    run_control(command, input, cancelled, cancellation)
+}
+
+pub(super) fn run_control(
+    command: Command,
+    input: &[u8],
+    cancelled: &AtomicBool,
+    cancellation: impl FnMut() -> Option<CancellationReason>,
+) -> Result<Vec<u8>, &'static str> {
+    run_with_timeout(
+        command,
+        Arc::from(input),
+        cancelled,
+        Duration::from_secs(20),
+        cancellation,
+    )
+}
+
 #[derive(Default)]
 struct BoundedOutput {
     bytes: Vec<u8>,
@@ -309,6 +362,24 @@ pub(super) fn run(
     )
 }
 
+pub(super) fn run_observed(
+    command: Command,
+    input: Arc<[u8]>,
+    cancelled: &AtomicBool,
+    cancellation_requested: impl FnMut() -> Option<CancellationReason>,
+    inspect_output: impl FnOnce(&[u8]),
+) -> Result<Vec<u8>, &'static str> {
+    run_with_timeout_policy(
+        command,
+        input,
+        cancelled,
+        CLI_TIMEOUT,
+        false,
+        cancellation_requested,
+        inspect_output,
+    )
+}
+
 pub(super) fn run_auth_status(
     command: Command,
     cancelled: &AtomicBool,
@@ -321,6 +392,7 @@ pub(super) fn run_auth_status(
         AUTH_STATUS_TIMEOUT,
         true,
         cancellation_requested,
+        |_| {},
     )
 }
 
@@ -344,6 +416,7 @@ fn run_with_timeout(
         timeout,
         false,
         cancellation_requested,
+        |_| {},
     )
 }
 
@@ -354,6 +427,7 @@ fn run_with_timeout_policy(
     timeout: Duration,
     allow_nonzero_exit: bool,
     mut cancellation_requested: impl FnMut() -> Option<CancellationReason>,
+    inspect_output: impl FnOnce(&[u8]),
 ) -> Result<Vec<u8>, &'static str> {
     thread::scope(|scope| {
         let child = command.spawn().map_err(|_| "claude_cli_spawn_failed")?;
@@ -427,6 +501,7 @@ fn run_with_timeout_policy(
         if !input_ok {
             return Err("claude_cli_stdin_failed");
         }
+        inspect_output(&stdout.bytes);
         if !allow_nonzero_exit && !status.is_some_and(|status| status.success()) {
             return Err("claude_cli_process_failed");
         }
@@ -679,7 +754,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let working_directory = dir.path().join("empty-workspace");
         std::fs::create_dir(&working_directory).expect("private working directory");
-        let command = auth_status_command(AuthStatusCommandConfig {
+        let command = auth_status_command(LocalCommandConfig {
             executable: Path::new("/bin/true"),
             child_path: OsStr::new("/usr/bin:/bin"),
             home: dir.path(),

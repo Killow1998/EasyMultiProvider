@@ -81,28 +81,29 @@ Keep the EMP process running while using it.
 
 ### 3. Add what you want to use
 
-In the Web UI, either:
+Open **Add service** in the Web UI to:
 
 - import another Codex / ChatGPT subscription account,
 - add an API Provider,
 - or keep only the current native Codex login and use EMP for model visibility and display settings.
 
-For an API Provider, pull the upstream model list, choose the models you want, and optionally edit their context windows.
+For an API Provider, open **Model settings**, update its model list, select models and save. The list stays available for later selections; **Update model list** refreshes it. You can edit each model's context window.
 
-For Claude, choose **Add Provider → Claude**, then **Local Claude subscription**
-or **CPA**. Both routes require the installed Claude Code CLI.
+For Claude, open **Add service** and choose **Local subscription** or **CPA**
+in the **Claude Code** section. Both routes require the installed Claude Code CLI.
 
 - **Local Claude subscription** reuses the Claude Code subscription sign-in for
   the current OS user. Before each request, EMP checks for a Claude.ai subscription
   sign-in; CLI API-key and Console auth do not qualify for this mode. If needed,
-  sign in through Claude Code. Add model aliases or full IDs with **Add model** to
-  choose them in Codex's model picker.
+  sign in through Claude Code. Open **Model settings**, click **Update model list**,
+  select models and save to add them to Codex's model picker. **Add model manually**
+  remains available for additional aliases or full IDs.
 - **CPA** uses a Claude-Code-compatible CPA Base URL and API key. For direct
   Anthropic API access, add the separate **Anthropic API** Provider.
 
-### 4. Apply EMP to Codex
+### 4. Enable EMP
 
-Click **Apply EMP to Codex**. The status line shows your Codex version and
+Click **Enable EMP**. The status line shows your Codex version and
 **EMP models loaded** once the model list is ready. If it asks you to reopen
 Codex, finish your current work and open Codex again.
 
@@ -134,11 +135,17 @@ a new model is not visible yet.
   Codex catalog responses. EMP refreshes automatically, keeps the last good cache
   when refresh fails, and preserves visibility, aliases, and context overrides.
   A newly exposed model needs no EMP release or manual model-list edit.
-- Add official or custom Providers through the Web UI.
+- Add Codex subscriptions, Claude Code connections and API Providers through
+  one **Add service** entry. Import Codex auth.json by pasting its contents or
+  selecting the file.
+- View local Claude subscription quota and trends alongside Codex accounts;
+  choose remaining or used amounts in **Settings**.
 - Route Claude requests through the installed Claude Code CLI using either the
   current OS user's Claude Code sign-in or a compatible CPA Base URL and API key.
-  Add local-login model aliases or full IDs manually with **Add model**. Codex
-  executes tool calls, and replies are buffered until generation finishes.
+  For local sign-in, open **Model settings**, update the list from Claude Code,
+  and select models to add to Codex. Saved lists can be reused; **Add model manually**
+  remains available for manual entries. Codex executes tool calls, and replies
+  are buffered until generation finishes.
 - Forward image inputs and supported inline document content only for Claude
   models whose configured capabilities and selected upstream support them.
 - Discover Provider models, import only the ones you want, test them, edit context limits, hide them, or remove them.
@@ -200,7 +207,7 @@ control changes catalog labels, not context windows or request limits.
 
 ## Codex compatibility
 
-The current source version is **v0.12.12**.
+The current source version is **v0.12.13**.
 
 EMP supports Codex CLI, desktop App and IDE extension installations without a
 universal minimum engine version. Each operation depends on the interfaces that

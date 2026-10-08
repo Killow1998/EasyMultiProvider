@@ -575,3 +575,229 @@ fn local_login_rejects_api_key_auth_status_before_inference() {
     );
     assert_no_inference_requests(fixture);
 }
+
+#[test]
+fn local_cli_quota_reaches_management_views_without_extra_inference() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical_root(&directory);
+    let home = root.join("home");
+    let config_dir = home.join(".claude");
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    let cli = bin.join("claude");
+    let counter = root.join("inference-count");
+    let model_queries = root.join("model-query-count");
+    let models_unavailable = root.join("models-unavailable");
+    let now = crate::util::system_now() as u64;
+    let event = json!({"type":"rate_limit_event","rate_limit_info":{
+        "status":"allowed","unifiedWindows":{
+            "five_hour":{"utilization":0.24,"resetsAt":now+3600},
+            "seven_day":{"utilization":0.13,"resetsAt":now+86400}
+        }, "private_field":"must-not-be-public"}});
+    let result = json!({"type":"result","is_error":false,"structured_output":{"answer":"quota fixture","tool_calls":[]}});
+    let reset = time::OffsetDateTime::from_unix_timestamp((now + 3600) as i64)
+        .unwrap()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let usage = json!({"type":"control_response","response":{"request_id":"emp-quota","subtype":"success","response":{
+        "rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":25,"resets_at":reset},"seven_day":{"utilization":14,"resets_at":reset}}
+    }}});
+    let models = json!({"type":"control_response","response":{"request_id":"emp-models","subtype":"success","response":{
+        "models":[{"value":"model-alias","displayName":"Fixture model","resolvedModel":"fixture-canonical-id",
+            "supportsEffort":true,"supportedEffortLevels":["low","high"],"private_field":"must-not-be-public"}],
+        "account":{"email":"fixture@example.invalid","private_field":"must-not-be-public"}
+    }}});
+    std::fs::write(&cli, format!(r#"#!/bin/sh
+set -eu
+if [ "${{5-}}" = auth ] && [ "${{6-}}" = status ]; then
+ printf '%s\n' '{{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"fixture@example.invalid","orgId":"test-org"}}'
+ exit 0
+fi
+case " $* " in *' --output-format stream-json '*) ;; *) exit 2;; esac
+input=$(cat)
+case " $* " in
+ *' --json-schema '*) ;;
+ *) case "$input" in
+ *'"subtype":"get_usage"'*) printf '%s\n' {}; exit 0;;
+ *'"request_id":"emp-models"'*)
+   printf 'one\n' >> {}
+   [ ! -f {} ] || exit 3
+   printf '%s\n' {}; exit 0;;
+ *) exit 3;; esac;;
+esac
+printf 'one\n' >> {}
+printf '%s\n' {} {}
+"#, shell_quote(&usage.to_string()), shell_quote(&model_queries.to_string_lossy()), shell_quote(&models_unavailable.to_string_lossy()), shell_quote(&models.to_string()), shell_quote(&counter.to_string_lossy()), shell_quote(&event.to_string()), shell_quote(&result.to_string()))).unwrap();
+    set_executable(&cli);
+    let _environment = TestProcessEnvironment::install(&bin, &home, &config_dir);
+    let config = root.join("config.json");
+    std::fs::write(&config, json!({
+        "providers":[{"id":"local","name":"Local Claude","base_url":"","protocol":"anthropic_messages","auth_mode":"claude_login","execution_backend":"claude_cli"}],
+        "models":[{"id":"local/model","provider":"local","upstream_id":"example-model"}]
+    }).to_string()).unwrap();
+    let server =
+        ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config).unwrap();
+    let initial = response_value(&request(
+        &server,
+        "/api/accounts",
+        &[&session_header(&server)],
+    ));
+    assert!(initial["claude_quota"].is_null());
+    let response = post(
+        &server,
+        "/v1/responses",
+        &serde_json::to_vec(&json!({"model":"local/model","stream":false,"input":"test quota"}))
+            .unwrap(),
+        &[&session_header(&server)],
+    );
+    assert_eq!(request_status(&response), 200, "{response}");
+    assert_eq!(
+        response_value(&response)["output"][0]["content"][0]["text"],
+        "quota fixture"
+    );
+    for endpoint in ["/api/accounts", "/api/config"] {
+        let snapshot = request(&server, endpoint, &[&session_header(&server)]);
+        let quota = response_value(&snapshot)["claude_quota"].clone();
+        assert_eq!(
+            quota["rate_limits_by_limit_id"]["claude"]["primary"]["used_percent"],
+            24.0
+        );
+        assert_eq!(
+            quota["rate_limits_by_limit_id"]["claude"]["secondary"]["used_percent"],
+            13.0
+        );
+        assert!(!snapshot.contains("must-not-be-public"));
+        assert!(!snapshot.contains("fixture@example.invalid"));
+    }
+    let denied = post(&server, "/api/providers/local/quota", b"{}", &[]);
+    assert_eq!(request_status(&denied), 401);
+    let refreshed = post(
+        &server,
+        "/api/providers/local/quota",
+        b"{}",
+        &[&session_header(&server)],
+    );
+    assert_eq!(request_status(&refreshed), 200, "{refreshed}");
+    assert_eq!(
+        response_value(&refreshed)["quota"]["rate_limits_by_limit_id"]["claude"]["primary"]["used_percent"],
+        25.0
+    );
+    let history = request(
+        &server,
+        "/api/providers/local/quota-history",
+        &[&session_header(&server)],
+    );
+    assert_eq!(request_status(&history), 200, "{history}");
+    let history = response_value(&history);
+    assert_eq!(history["series"][0]["points"][0]["remaining_percent"], 75.0);
+    assert!(!history.to_string().contains("fixture@example.invalid"));
+    assert_eq!(std::fs::read_to_string(&counter).unwrap(), "one\n");
+    let discovery = json!({"provider":"local"}).to_string();
+    assert_eq!(
+        request_status(&post(
+            &server,
+            "/api/providers/discover",
+            discovery.as_bytes(),
+            &[]
+        )),
+        401
+    );
+    assert!(!model_queries.exists());
+    let listed = post(
+        &server,
+        "/api/providers/discover",
+        discovery.as_bytes(),
+        &[&session_header(&server)],
+    );
+    assert_eq!(request_status(&listed), 200, "{listed}");
+    let listed = response_value(&listed);
+    assert_eq!(listed["models"][0]["upstream_id"], "model-alias");
+    assert_eq!(
+        listed["models"][0]["reasoning_levels"],
+        json!(["low", "high"])
+    );
+    assert!(!listed.to_string().contains("private_field"));
+    assert!(!listed.to_string().contains("fixture@example.invalid"));
+    let selected = post(
+        &server,
+        "/api/providers/discover",
+        json!({"provider":"local","selected":["model-alias"],"cached":true})
+            .to_string()
+            .as_bytes(),
+        &[&session_header(&server)],
+    );
+    assert_eq!(request_status(&selected), 200, "{selected}");
+    let config_view = response_value(&request(
+        &server,
+        "/api/config",
+        &[&session_header(&server)],
+    ));
+    assert!(
+        config_view["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["id"] == "local/model-alias")
+    );
+    let picker = response_value(&request(&server, "/v1/models", &[]));
+    assert!(
+        picker["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["id"] == "local/model-alias")
+    );
+    std::fs::write(&models_unavailable, b"unavailable").unwrap();
+    let failed = post(
+        &server,
+        "/api/providers/discover",
+        discovery.as_bytes(),
+        &[&session_header(&server)],
+    );
+    assert_eq!(request_status(&failed), 502, "{failed}");
+    let saved = response_value(&request(
+        &server,
+        "/api/providers/local/models",
+        &[&session_header(&server)],
+    ));
+    assert_eq!(saved["cached"], true);
+    assert_eq!(saved["models"], listed["models"]);
+    assert_eq!(
+        std::fs::read_to_string(&model_queries).unwrap(),
+        "one\none\n"
+    );
+    assert_eq!(std::fs::read_to_string(&counter).unwrap(), "one\n");
+    server.shutdown().unwrap();
+    let server =
+        ServerHandle::start_with_config(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, &config).unwrap();
+    let saved = response_value(&request(
+        &server,
+        "/api/providers/local/models",
+        &[&session_header(&server)],
+    ));
+    assert_eq!(saved["models"], listed["models"]);
+    assert_eq!(
+        std::fs::read_to_string(&model_queries).unwrap(),
+        "one\none\n"
+    );
+    std::fs::write(&cli, "#!/bin/sh\nprintf '%s\\n' '{\"loggedIn\":true,\"authMethod\":\"api_key\",\"apiProvider\":\"firstParty\"}'\n").unwrap();
+    let denied = post(
+        &server,
+        "/api/providers/discover",
+        discovery.as_bytes(),
+        &[&session_header(&server)],
+    );
+    assert_eq!(request_status(&denied), 403, "{denied}");
+    assert_eq!(
+        response_value(&denied)["error"]["code"],
+        "claude_cli_subscription_required"
+    );
+    let saved = response_value(&request(
+        &server,
+        "/api/providers/local/models",
+        &[&session_header(&server)],
+    ));
+    assert_eq!(saved["models"], listed["models"]);
+    server.shutdown().unwrap();
+}

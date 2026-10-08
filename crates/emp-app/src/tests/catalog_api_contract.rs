@@ -626,6 +626,10 @@ fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
     let config_path = root.join("config.json");
     let original = std::fs::read(&config_path).expect("config bytes");
     let cookie = session_header(&server);
+    assert!(request(&server, "/api/providers/demo/models", &[]).starts_with("HTTP/1.1 401"));
+    let empty = parsed_body(&request(&server, "/api/providers/demo/models", &[&cookie]));
+    assert_eq!(empty["cached"], false);
+    assert!(upstream.requests.try_recv().is_err());
     let preview = post(
         &server,
         "/api/providers/discover",
@@ -639,11 +643,26 @@ fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
     assert_eq!(preview["added"], 0);
     assert_eq!(std::fs::read(&config_path).expect("config"), original);
     upstream.observed();
+    let saved = parsed_body(&request(&server, "/api/providers/demo/models", &[&cookie]));
+    assert_eq!(saved["models"], preview["models"]);
+    assert_eq!(saved["cached"], true);
+    let lists = root.join("provider-model-lists");
+    let list = std::fs::read_dir(lists)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert!(
+        !String::from_utf8(std::fs::read(&list).unwrap())
+            .unwrap()
+            .contains("synthetic-test-key")
+    );
 
     let selected = post(
         &server,
         "/api/providers/discover",
-        br#"{"provider":"demo","selected":["new"]}"#,
+        br#"{"provider":"demo","selected":["new"],"cached":true}"#,
         &[&cookie],
     );
     assert!(selected.starts_with("HTTP/1.1 200"), "{selected}");
@@ -651,7 +670,10 @@ fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
     assert_eq!(selected["added"], 1);
     assert_eq!(selected["hidden"], 1);
     assert_eq!(selected["model_count"], 2);
-    upstream.observed();
+    assert!(
+        upstream.requests.try_recv().is_err(),
+        "selection must use the saved list"
+    );
     let generated = root
         .join("codex")
         .join("easy-multi-provider")
@@ -719,6 +741,67 @@ fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
         )),
         catalog
     );
+    let saved_after_restart = parsed_body(&request(
+        &restarted,
+        "/api/providers/demo/models",
+        &[&cookie],
+    ));
+    assert_eq!(saved_after_restart["models"], preview["models"]);
+    assert!(upstream.requests.try_recv().is_err());
+    {
+        let mut config = restarted
+            .state
+            .backend
+            .configuration
+            .test_config()
+            .lock()
+            .unwrap();
+        config["providers"][0]["name"] = json!("Renamed service");
+    }
+    assert_eq!(
+        parsed_body(&request(
+            &restarted,
+            "/api/providers/demo/models",
+            &[&cookie]
+        ))["cached"],
+        true
+    );
+    {
+        let mut config = restarted
+            .state
+            .backend
+            .configuration
+            .test_config()
+            .lock()
+            .unwrap();
+        config["providers"][0]["base_url"] = json!("https://changed.example.invalid/v1");
+    }
+    assert_eq!(
+        parsed_body(&request(
+            &restarted,
+            "/api/providers/demo/models",
+            &[&cookie]
+        ))["cached"],
+        false
+    );
+    let stale = post(
+        &restarted,
+        "/api/providers/discover",
+        br#"{"provider":"demo","selected":["new"],"cached":true}"#,
+        &[&cookie],
+    );
+    assert!(stale.starts_with("HTTP/1.1 400"), "{stale}");
+    assert!(upstream.requests.try_recv().is_err());
+    {
+        let mut config = restarted
+            .state
+            .backend
+            .configuration
+            .test_config()
+            .lock()
+            .unwrap();
+        config["providers"][0]["base_url"] = json!(upstream.base_url());
+    }
     assert!(
         post(
             &restarted,
@@ -729,6 +812,23 @@ fn discovery_preview_selection_and_model_endpoints_persist_across_restart() {
         .starts_with("HTTP/1.1 200")
     );
     upstream.observed();
+    drop(upstream);
+    let failed_refresh = post(
+        &restarted,
+        "/api/providers/discover",
+        br#"{"provider":"demo"}"#,
+        &[&cookie],
+    );
+    assert!(!failed_refresh.starts_with("HTTP/1.1 200"));
+    let last_good = parsed_body(&request(
+        &restarted,
+        "/api/providers/demo/models",
+        &[&cookie],
+    ));
+    assert_eq!(
+        last_good["models"], preview["models"],
+        "a failed refresh keeps the saved list"
+    );
     restarted.shutdown().expect("shutdown restarted server");
 }
 

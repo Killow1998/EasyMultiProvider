@@ -6,12 +6,16 @@
 mod auth;
 #[path = "claude_cli/image_geometry.rs"]
 mod image_geometry;
+mod local_query;
 #[path = "claude_cli/media.rs"]
 mod media;
+pub(crate) mod model_query;
 #[path = "claude_cli/process.rs"]
 mod process;
 #[path = "claude_cli/projection.rs"]
 mod projection;
+pub(crate) mod quota;
+pub(crate) mod quota_query;
 #[path = "claude_cli/relay.rs"]
 mod relay;
 
@@ -176,7 +180,7 @@ fn execute_complete_with_cli(
     let request_started = Instant::now();
     let (stdout, provider_status) = if local_login {
         let local_home = local_home.as_deref().expect("checked local CLI home");
-        verify_local_subscription(
+        let identity = verify_local_subscription(
             state,
             executable,
             local_home,
@@ -186,7 +190,19 @@ fn execute_complete_with_cli(
             &working_directory,
             &cancelled,
             &mut monitor,
-        )?;
+        )
+        .inspect_err(|_| {
+            state.backend.claude_quota.begin(None);
+            state
+                .backend
+                .management_events
+                .publish(crate::services::management_events::Change::Quota);
+        })?;
+        let generation = state.backend.claude_quota.begin(identity);
+        state
+            .backend
+            .management_events
+            .publish(crate::services::management_events::Change::Quota);
         let command = process::command(process::CommandConfig {
             executable: &executable.executable,
             child_path: &executable.child_path,
@@ -201,9 +217,21 @@ fn execute_complete_with_cli(
             temp: temp.path(),
             working_directory: &working_directory,
         });
-        let output = process::run(command, Arc::clone(&stdin), &cancelled, || {
-            cancellation_reason(state, &mut monitor)
-        })
+        let output = process::run_observed(
+            command,
+            Arc::clone(&stdin),
+            &cancelled,
+            || cancellation_reason(state, &mut monitor),
+            |stdout| {
+                if state
+                    .backend
+                    .claude_quota
+                    .record(generation, stdout, crate::util::system_now())
+                {
+                    quota_query::publish(state);
+                }
+            },
+        )
         .map_err(|code| local_or_process_error(code, true))?;
         (output, 200)
     } else {
@@ -343,8 +371,8 @@ fn verify_local_subscription(
     working_directory: &std::path::Path,
     cancelled: &AtomicBool,
     monitor: &mut Option<&mut DisconnectMonitor>,
-) -> Result<(), ClaudeCliError> {
-    let command = process::auth_status_command(process::AuthStatusCommandConfig {
+) -> Result<Option<String>, ClaudeCliError> {
+    let command = process::auth_status_command(process::LocalCommandConfig {
         executable: &executable.executable,
         child_path: &executable.child_path,
         home,
@@ -361,8 +389,9 @@ fn verify_local_subscription(
                 "claude_cli_timeout" => ClaudeCliError::Failure("claude_cli_auth_status_timeout"),
                 _ => ClaudeCliError::Failure("claude_cli_auth_status_unavailable"),
             })?;
-    match auth::parse_status(&stdout) {
-        auth::LoginStatus::SubscriptionOAuth => Ok(()),
+    let status = auth::parse_status(&stdout);
+    match status {
+        auth::LoginStatus::SubscriptionOAuth => Ok(quota::identity(&stdout)),
         auth::LoginStatus::Missing => Err(ClaudeCliError::Failure("claude_cli_login_required")),
         auth::LoginStatus::ApiKey => {
             Err(ClaudeCliError::Failure("claude_cli_subscription_required"))

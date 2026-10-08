@@ -3,13 +3,13 @@ use crate::app::ServerState;
 use crate::services::configuration::ChangeError;
 use crate::services::observation::operation::{OperationObservation, observe};
 use emp_router::discovery::discover_models;
-use emp_state::provider_api_key;
 use serde_json::{Value, json};
 
 pub(crate) enum DiscoveryError {
     Invalid(String),
     Unavailable,
     Upstream(emp_router::RouterError),
+    LocalCli(&'static str),
 }
 
 impl From<ChangeError> for DiscoveryError {
@@ -99,28 +99,70 @@ fn discover_inner(
         return Err(DiscoveryError::Invalid("provider is required".into()));
     };
     let provider = configured_provider(state, provider_id)?;
-    let discovered = {
-        let _guard = match state.backend.configuration.discovery_lock.lock() {
-            Ok(guard) => guard,
-            Err(_) => return Err(DiscoveryError::Unavailable),
-        };
+    let _guard = state
+        .backend
+        .configuration
+        .discovery_lock
+        .lock()
+        .map_err(|_| DiscoveryError::Unavailable)?;
+    let saved = if body["cached"] == true {
+        receipt.step("read_saved_models", || {
+            super::provider_models::load(state, &provider).ok_or_else(|| {
+                DiscoveryError::Invalid("Update the model list before saving a selection".into())
+            })
+        })?
+    } else {
         match receipt.step("discover_models", || {
-            state.backend.transport.runtime.block_on(discover_models(
-                &state.backend.transport.client,
-                provider.as_object().expect("normalized provider"),
-            ))
+            if provider["execution_backend"] == "claude_cli"
+                && provider["auth_mode"] == "claude_login"
+            {
+                crate::services::claude_cli::model_query::discover(state)
+                    .map_err(DiscoveryError::LocalCli)
+            } else {
+                state
+                    .backend
+                    .transport
+                    .runtime
+                    .block_on(discover_models(
+                        &state.backend.transport.client,
+                        provider.as_object().expect("normalized provider"),
+                    ))
+                    .map_err(DiscoveryError::Upstream)
+            }
         }) {
-            Ok(models) => models,
-            Err(error) => return Err(DiscoveryError::Upstream(error)),
+            Ok(models) => {
+                let config = state
+                    .backend
+                    .configuration
+                    .read()
+                    .map_err(|_| DiscoveryError::Unavailable)?;
+                if !super::provider_models::unchanged(state, &config, &provider) {
+                    return Err(DiscoveryError::Invalid(
+                        "Service changed; update the model list".into(),
+                    ));
+                }
+                receipt
+                    .step("save_model_list", || {
+                        super::provider_models::save(state, &provider, models)
+                    })
+                    .map_err(|_| DiscoveryError::Unavailable)?
+            }
+            Err(error) => return Err(error),
         }
     };
     let Some(selected) = body.get("selected").filter(|value| !value.is_null()) else {
         return Ok(
-            json!({"provider":provider_id,"protocol":provider["protocol"],"available":discovered.len(),"models":discovered,"added":0}),
+            json!({"provider":provider_id,"protocol":provider["protocol"],"available":saved.models.len(),"models":saved.models,"updated_at":saved.updated_at,"added":0}),
         );
     };
     match receipt.step("commit_selection", || {
-        crate::services::catalog::select_models(state, provider_id, &discovered, selected)
+        crate::services::catalog::select_models(
+            state,
+            provider_id,
+            &saved.models,
+            selected,
+            &provider,
+        )
     }) {
         Ok(selected) => {
             receipt.check("configuration_and_catalog_committed", Some(true));
@@ -135,30 +177,24 @@ fn discover_inner(
 }
 
 fn configured_provider(state: &ServerState, provider_id: &str) -> Result<Value, DiscoveryError> {
-    let mut provider = {
-        let config = match state.backend.configuration.read() {
-            Ok(config) => config,
-            Err(_) => return Err(DiscoveryError::Unavailable),
-        };
-        let Some(provider) = config
-            .get("providers")
-            .and_then(Value::as_array)
-            .and_then(|providers| {
-                providers.iter().find(|provider| {
-                    provider.get("id").and_then(Value::as_str) == Some(provider_id)
-                })
-            })
-            .filter(|provider| provider.get("enabled") != Some(&Value::Bool(false)))
-        else {
-            return Err(DiscoveryError::Invalid(format!(
-                "provider is missing or disabled: {provider_id}"
-            )));
-        };
-        provider.clone()
-    };
-    provider["api_key"] = json!(provider_api_key(
-        &provider,
-        &state.backend.configuration.vault
-    ));
-    Ok(provider)
+    let config = state
+        .backend
+        .configuration
+        .read()
+        .map_err(|_| DiscoveryError::Unavailable)?;
+    super::provider_models::provider(state, &config, provider_id).ok_or_else(|| {
+        DiscoveryError::Invalid(format!("provider is missing or disabled: {provider_id}"))
+    })
+}
+
+pub(crate) fn saved_models(
+    state: &ServerState,
+    provider_id: &str,
+) -> Result<Value, DiscoveryError> {
+    let provider = configured_provider(state, provider_id)?;
+    let saved = super::provider_models::load(state, &provider);
+    Ok(match saved {
+        Some(saved) => json!({"models":saved.models,"updated_at":saved.updated_at,"cached":true}),
+        None => json!({"models":[],"updated_at":null,"cached":false}),
+    })
 }

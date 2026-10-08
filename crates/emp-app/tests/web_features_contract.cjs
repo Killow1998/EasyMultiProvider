@@ -26,6 +26,48 @@ function sessionFixture(url = 'http://localhost/?bootstrap=once', saved = '') {
 }
 const response = (status, body = {}) => new Response(JSON.stringify(body), {status, headers:{'Content-Type':'application/json'}});
 
+test('unified chooser preserves local Claude identity and exposes direct connection choices', () => {
+  let html = '';
+  const state = {native_account:{credential_set:true}, providers:[{id:'existing-local', name:'Renamed account', execution_backend:'claude_cli', auth_mode:'claude_login'}]};
+  const chooser = feature('service-chooser.js', 'createServiceChooser')({
+    tr, esc, presets:{chatgpt:{name:'Legacy forward'}, openai:{name:'OpenAI'}, anthropic:{name:'Anthropic'}},
+    icon:() => '', getState:() => state, openModal:(_title, body) => { html = body; },
+  });
+  chooser.open();
+  assert.match(html, /data-ui-action="claude-local-choose" data-id="existing-local"/);
+  assert.match(html, /data-ui-action="claude-cpa-choose"/);
+  assert.match(html, /data-ui-action="service-import-account"/);
+  assert.match(html, /data-ui-action="service-native"/);
+  assert.doesNotMatch(html, /Legacy forward|execution_backend|claude-provider-choose/);
+});
+
+test('service details isolate provider usage, escape labels and discard results after navigation', async () => {
+  let box, html;
+  const pending = [], calls = [];
+  const state = {providers:[{id:'first', name:'<img src=x>', base_url:'https://user:secret@example.invalid/v1?key=secret', protocol:'responses'}, {id:'second', name:'Second'}]};
+  const service = feature('service-list.js', 'createServiceList')({
+    getState:() => state, $:() => box, tr, esc, presets:{}, icon:() => '', protocolLabel:x => x, authLabel:() => 'API Key',
+    usageNumber:String, usageMoney:String, openModal(_title, body) { html = body; box = {innerHTML:''}; },
+    api:async path => { calls.push(path); const value = deferred(); pending.push(value); return value.promise; },
+  });
+  const first = service.details('first');
+  assert.match(html, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(html, /user:secret|key=secret/);
+  assert.match(calls[0], /category=external/);
+  pending[0].resolve({groups:[{category:'external',owner:'first',model:'own-model'}, {category:'external',owner:'second',model:'other-model'}]});
+  await first;
+  assert.match(box.innerHTML, /own-model/);
+  assert.doesNotMatch(box.innerHTML, /other-model/);
+  const stale = service.details('first');
+  const current = service.details('second');
+  pending[1].reject(new Error('old request failed'));
+  await stale;
+  assert.equal(box.innerHTML, '');
+  pending[2].resolve({groups:[]});
+  await current;
+  assert.match(box.innerHTML, /No usage recorded/);
+});
+
 test('management login removes bootstrap secrets and distinguishes upstream rejection from expired sessions', async () => {
   const f = sessionFixture();
   f.replies.push(response(200, {session:'signed-in'}));
@@ -156,4 +198,36 @@ test('the shipped page initializes its feature bindings using its own script ord
     vm.runInContext(source, context, {filename});
   }
   assert.equal(vm.runInContext('typeof openSettings + ":" + typeof openDiagnostics + ":" + typeof openActivityDetails', context), 'function:function:function');
+});
+
+test('quota mode changes bars and history together without changing recorded values', () => {
+  const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
+  const storage = new Map();
+  const context = vm.createContext({Headers, URL, Blob, console,
+    fetch:() => new Promise(() => {}),
+    localStorage:{getItem:key => storage.get(key), setItem:(key, value) => storage.set(key,value)},
+    window:{location:{href:'http://localhost/'}, addEventListener() {}},
+    document:{addEventListener() {}, visibilityState:'hidden'},
+  });
+  for (const script of html.matchAll(/<script(?: src="([^"]+)")?>([\s\S]*?)<\/script>/g)) {
+    vm.runInContext(script[1] ? fs.readFileSync(path.join(web, path.basename(script[1])), 'utf8') : script[2], context);
+  }
+  const run = source => vm.runInContext(source, context);
+  run(`language='en'; globalThis.account={quota:{rate_limits:{primary:{used_percent:24,window_minutes:300},secondary:{used_percent:90,window_minutes:10080}}}}`);
+  assert.match(run('quotaMetersHtml(account)'), /aria-valuenow="76"/);
+  assert.match(run('quotaMetersHtml(account)'), /5h · Remaining/);
+  run("quotaDisplay.set('used')");
+  assert.equal(storage.get('emp.quotaDisplay'), 'used');
+  assert.match(run('quotaMetersHtml(account)'), /aria-valuenow="24"/);
+  assert.match(run('quotaMetersHtml(account)'), /5h · Used/);
+  assert.match(run('quotaMetersHtml(account)'), /quota-meter is-low/); // 90% used stays red.
+  assert.equal(run('account.quota.rate_limits.primary.used_percent'), 24);
+  assert.doesNotMatch(run('quotaMetersHtml({quota_pending:true})'), /aria-valuenow|233%|100%/);
+  run(`quotaChartWidth=()=>600;globalThis.series=[{window_minutes:300,points:[{observed_at:100,remaining_percent:76},{observed_at:200,remaining_percent:60}]}]`);
+  run('quotaChartSvg(series,{start:100,end:200},300)');
+  assert.equal(run('quotaChartData.points[0].value'), 24);
+  assert.equal(run('series[0].points[0].remaining_percent'), 76);
+  run("quotaDisplay.set('remaining')");
+  run('quotaChartSvg(series,{start:100,end:200},300)');
+  assert.equal(run('quotaChartData.points[0].value'), 76);
 });

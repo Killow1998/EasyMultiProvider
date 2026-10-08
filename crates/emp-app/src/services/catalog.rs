@@ -8,6 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub(crate) mod discovery;
+mod provider_models;
 mod selection;
 mod sources;
 pub(crate) use selection::select_models;
