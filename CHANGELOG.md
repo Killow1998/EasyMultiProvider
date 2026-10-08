@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.13 (2026-10-08)
+
+- Manage Codex subscriptions, Claude Code connections and API Providers together
+  in Services, with one Add service entry and aligned provider icons.
+- Open Model settings to reuse a saved Provider model list; Update model list
+  refreshes it explicitly. Discover local subscription models through Claude
+  Code without starting an inference turn.
+- Refresh and view local Claude subscription quota trends. Switch all quota
+  bars and trends between remaining and used amounts in Settings.
+- Import Codex subscriptions by pasting auth.json or selecting its file.
+- Move EMP status, activation, performance and usage controls into the top bar.
+  Compact service and model rows, and center Chinese and English select text.
+
 ## 0.12.12 (2026-10-05)
 
 - Fix Claude CLI requests returning 502 when prompt-cache markers are added to

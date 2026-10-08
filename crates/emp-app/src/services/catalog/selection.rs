@@ -20,12 +20,18 @@ pub(crate) fn select_models(
     provider_id: &str,
     discovered: &[Value],
     selected: &Value,
+    expected_provider: &Value,
 ) -> Result<ModelSelection, ChangeError> {
     let mut config = state
         .backend
         .configuration
         .edit()
         .map_err(|_| ChangeError::Unavailable)?;
+    if !super::provider_models::unchanged(state, &config, expected_provider) {
+        return Err(ChangeError::Invalid(
+            "Service changed; update the model list".into(),
+        ));
+    }
     let merged = merge_selected_models(
         &config,
         provider_id,

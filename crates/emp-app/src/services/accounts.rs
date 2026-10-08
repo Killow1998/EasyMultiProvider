@@ -93,6 +93,7 @@ pub(crate) fn accounts_snapshot(state: &ServerState) -> Option<Value> {
             .cloned()
             .unwrap_or_else(|| Value::Array(Vec::new())),
         "refresh_errors": errors,
+        "claude_quota": state.backend.claude_quota.snapshot(crate::util::system_now()),
     }))
 }
 
