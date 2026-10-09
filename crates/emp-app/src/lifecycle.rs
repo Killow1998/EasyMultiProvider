@@ -349,6 +349,7 @@ impl ServerHandle {
             startup_options.markers.rolled_back,
             Arc::clone(&shutdown),
             Arc::clone(&shutdown_wake),
+            Arc::clone(&backend.diagnostics),
         );
         let state = Arc::new(ServerState {
             shutdown,

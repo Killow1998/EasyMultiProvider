@@ -90,6 +90,7 @@
 <div id="modal_backdrop" class="modal-backdrop hidden">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal_title">
     <div class="modal-header"><h2 id="modal_title"></h2><button type="button" class="modal-close" aria-label="Close" onclick="closeModal()">&times;</button></div>
+    <div id="service_detail_nav" hidden></div>
     <div id="modal_body"></div>
     <div id="modal_status" class="modal-status" role="alert" aria-live="polite"></div>
     <div class="modal-actions"><button id="modal_submit" data-icon="check">确定</button></div>
@@ -192,7 +193,7 @@ const services = createServiceList({
   getState:() => state, $, esc, tr, presets:officialProviders, icon:serviceIconHtml,
   activity:activityIndicatorHtml, accountSummary:accountSummaryHtml, quotaMeters:quotaMetersHtml,
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots, openModal, api,
-  protocolLabel, authLabel, notice, usageSummary:serviceUsage
+  notice, usageSummary:serviceUsage
 });
 const {render:renderServices, details:openProviderDetails} = services;
 const {open:openServiceChooser, importCodex:openCodexImportChooser} = createServiceChooser({tr, esc, presets:officialProviders, icon:serviceIconHtml, openModal, getState:() => state});
@@ -1268,7 +1269,7 @@ async function openAccountDetails(id) {
   const credit = account.quota?.credits;
   const monthly = credit?.individual_limit?.remaining_percent;
   const reset = resetCreditCount(account) > 0 ? `<button type="button" class="secondary" data-icon="refresh" data-ui-action="account-reset-credits" data-id="${esc(id)}">${tr('选择重置','Choose reset')} · ${resetCreditCount(account)}</button>` : '';
-  openModal(tr('账号信息','Account details'), `${services.tabs(id, 'account', 'details', account.duplicate && account.duplicate_of === '当前 Codex 登录')}<div class="account-info-grid"><div><span class="account-info-label">${tr('别名','Alias')}</span>${alias}</div><div><span class="account-info-label">${tr('账号','Account')}</span><div class="account-value-row"><div class="account-value">${esc(mail || id)}${mail ? `<small>${esc(id)}</small>` : ''}</div>${remove}</div></div><div><span class="account-info-label">${tr('登录信息','Sign-in')}</span><span class="account-value">${account.native ? tr('本机 Codex 登录','Local Codex sign-in') : tr('已导入的 Codex 登录信息','Imported Codex sign-in')} · ${account.credential_set ? tr('已保存','Saved') : tr('未检测到','Not detected')}</span></div><div><span class="account-info-label">${tr('订阅','Subscription')}</span><span class="account-value">${esc(subscriptionPlanLabel(account.quota?.plan_type) || '—')}</span></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr('月额度','Monthly quota')} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr('已达消费上限','Spend limit reached')}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr('正在读取用量…','Loading usage…')}</p></div>${reset}`, '', null);
+  services.open(id, 'account', 'details', `<div class="account-info-grid"><div><span class="account-info-label">${tr('别名','Alias')}</span>${alias}</div><div><span class="account-info-label">${tr('账号','Account')}</span><div class="account-value-row"><div class="account-value">${esc(mail || id)}${mail ? `<small>${esc(id)}</small>` : ''}</div>${remove}</div></div><div><span class="account-info-label">${tr('登录信息','Sign-in')}</span><span class="account-value">${account.native ? tr('本机 Codex 登录','Local Codex sign-in') : tr('已导入的 Codex 登录信息','Imported Codex sign-in')} · ${account.credential_set ? tr('已保存','Saved') : tr('未检测到','Not detected')}</span></div><div><span class="account-info-label">${tr('订阅','Subscription')}</span><span class="account-value">${esc(subscriptionPlanLabel(account.quota?.plan_type) || '—')}</span></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr('月额度','Monthly quota')} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr('已达消费上限','Spend limit reached')}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr('正在读取用量…','Loading usage…')}</p></div>${reset}`, '', null);
   accountDetailsId = id;
   await refreshAccountDetailsUsage();
 }
@@ -1288,7 +1289,7 @@ async function saveAccountAlias(element) {
   const name = $('account_alias').value.trim();
   if (!name) { $('modal_status').textContent = tr('请输入别名','Enter an alias'); return; }
   account.name = name; element.disabled = true;
-  try { await persistState(tr('别名已保存','Alias saved'), candidate); element.innerHTML = uiIcon('check'); }
+  try { await persistState(tr('别名已保存','Alias saved'), candidate); services.mount({id:element.dataset.id, kind:'account', active:'details'}); element.innerHTML = uiIcon('check'); }
   catch (error) { $('modal_status').textContent = error.message; }
   finally { element.disabled = false; }
 }
@@ -1575,21 +1576,19 @@ function editAccount(id) {
   if (account.duplicate && account.duplicate_of === '当前 Codex 登录') return notice(tr('模型显示请在原生账户中调整','Adjust model visibility from the Native account'), true);
   const native = account.native === true;
   const editor = {account, native, models:state.subscription_models || [], hidden:new Set(account.hidden_models || []), windows:{...(account.model_context_windows || {})}};
-  subscriptionEditor = editor;
   const visibilityHint = `<p class="muted">${tr('留空使用默认上下文。名称在“模型显示”中设置。','Leave blank for the default context. Rename models in Model display.')}</p>`;
   const modelSelection = `<div class="toolbar"><button type="button" class="secondary" onclick="setSubscriptionModelChecks(true)">${tr('全部显示','Show all')}</button><button type="button" class="secondary" onclick="setSubscriptionModelChecks(false)">${tr('全部隐藏','Hide all')}</button><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh" onclick="refreshSubscriptionModels()">${tr('刷新模型上限','Refresh model limits')}</button></div><div class="subscription-list-head"><span>${tr('在 Codex /model 中显示','Visible in Codex /model')}</span><span>${tr('上下文（tokens）','Context (tokens)')}</span></div><div id="subscription_model_list" class="model-selection"></div>`;
-  const identityEditor = native ? '' : `<p class="muted">${tr('账户 ID','Account ID')}: <code>${esc(id)}</code></p><label>${tr('显示名称 / 显示前缀','Display name / display prefix')}<input id="modal_account_alias" value="${esc(account.name || account.prefix || id)}"></label><p class="muted">${tr('只改变模型列表中的显示前缀，不改变路由。路由前缀：','Changes the display prefix in the model list, not the route. Route prefix: ')}<code>${esc(account.prefix)}</code></p>`;
-  openModal(native ? tr('编辑原生模型','Edit Native models') : tr('编辑账户','Edit account'), `${services.tabs(id, 'account', 'edit')}${identityEditor}${visibilityHint}${modelSelection}`, tr('保存修改','Save changes'), async () => {
-    const alias = native ? '' : ($('modal_account_alias').value.trim() || id);
+  services.open(id, 'account', 'edit', `${visibilityHint}${modelSelection}`, tr('保存修改','Save changes'), async () => {
     for (const input of document.querySelectorAll('input[name="subscription_context"]')) { if (!input.checkValidity()) { input.reportValidity(); throw new Error(tr('上下文必须为目录上限内的正整数','Context must be a positive integer within the catalog limit')); } }
     captureSubscriptionModels(editor);
     const contextWindows = Object.fromEntries(Object.entries(editor.windows).map(([model, value]) => [model, Number(value)]));
     const hiddenModels = [...editor.hidden];
     const candidate = cloneState();
     if (native) { candidate.native_hidden_models = hiddenModels; candidate.native_model_context_windows = contextWindows; candidate.accounts = (candidate.accounts || []).map(item => item.duplicate && item.duplicate_of === '当前 Codex 登录' ? Object.assign({}, item, {hidden_models:[]}) : item); }
-    else { candidate.accounts = candidate.accounts.map(item => item.id === id ? Object.assign({}, item, {name:alias, hidden_models:hiddenModels, model_context_windows:contextWindows}) : item); }
+    else { candidate.accounts = candidate.accounts.map(item => item.id === id ? Object.assign({}, item, {hidden_models:hiddenModels, model_context_windows:contextWindows}) : item); }
     await persistState(tr('账户信息已保存','Account saved'), candidate); closeModal();
   });
+  subscriptionEditor = editor;
   renderSubscriptionModels(editor);
   api('/api/accounts/' + encodeURIComponent(id) + '/models').then(result => { if (subscriptionEditor === editor && !$('modal_backdrop').classList.contains('hidden')) { captureSubscriptionModels(editor); editor.models = result.models; renderSubscriptionModels(editor); } }).catch(error => { if (subscriptionEditor === editor) $('modal_status').textContent = error.message; });
 }
@@ -1683,7 +1682,8 @@ async function refreshClaudeCliAvailability() {
     status.textContent = tr('无法检查 Claude Code CLI。请重新加载管理页后重试。','Could not check Claude Code CLI availability. Reload this page to try again.');
   }
 }
-function openClaudeCpaForm(existing = {}) {
+function openClaudeCpaForm(existing = {}, serviceContext = null) {
+  serviceContext ||= existing.id ? {id:existing.id, kind:'provider', active:'edit'} : null;
   const editing = Boolean(existing.id);
   const identity = editing ? {} : defaultClaudeProviderIdentity('cpa');
   const switchingFromLocal = existing.auth_mode === 'claude_login';
@@ -1709,10 +1709,11 @@ function openClaudeCpaForm(existing = {}) {
       api_key:apiKey
     });
     closeModal();
-  });
+  }, serviceContext);
   void refreshClaudeCliAvailability();
 }
-function openLocalClaudeSubscriptionForm(existing = {}) {
+function openLocalClaudeSubscriptionForm(existing = {}, serviceContext = null) {
+  serviceContext ||= existing.id ? {id:existing.id, kind:'provider', active:'edit'} : null;
   const editing = Boolean(existing.id);
   const identity = editing ? {} : defaultClaudeProviderIdentity('local');
   const protocol = ['auto', 'anthropic_messages'].includes(existing.protocol) ? existing.protocol : 'anthropic_messages';
@@ -1733,24 +1734,24 @@ function openLocalClaudeSubscriptionForm(existing = {}) {
       api_key_file:''
     });
     closeModal();
-  });
+  }, serviceContext);
   void refreshClaudeCliAvailability();
 }
-function editClaudeProvider(provider) {
+function editClaudeProvider(provider, serviceContext = null) {
   return provider.auth_mode === 'claude_login'
-    ? openLocalClaudeSubscriptionForm(provider)
-    : openClaudeCpaForm(provider);
+    ? openLocalClaudeSubscriptionForm(provider, serviceContext)
+    : openClaudeCpaForm(provider, serviceContext);
 }
-function chooseOfficialProvider(key) {
+function chooseOfficialProvider(key, serviceContext = null) {
   const preset = officialProviders[key]; const existing = (state.providers || []).find(p => p.id === preset.id);
   if (existing?.execution_backend === 'claude_cli') return editClaudeProvider(existing);
   const keyField = preset.auth_mode === 'forward' ? `<p class="muted">${tr('使用 Codex 登录','Use Codex sign-in')}</p>` : `<label>API Key${existing && existing.api_key_set ? tr('（留空保持已有值）',' (leave blank to keep the saved key)') : ''}<input id="modal_provider_key" type="password" placeholder="${tr('输入 API Key','Enter API Key')}"></label>`;
   openModal(tr('配置 ','Configure ') + preset.name, `<p class="muted">Endpoint: <code>${esc(preset.base_url)}</code><br>${tr('协议','Protocol')}: ${esc(protocolLabel(preset.protocol))}<br>${tr('认证','Authentication')}: ${esc(authLabel(preset.auth_mode))}</p>${keyField}`, tr('保存服务','Save service'), async () => {
     const keyValue = preset.auth_mode === 'forward' ? '' : $('modal_provider_key').value.trim(); if (preset.auth_mode !== 'forward' && !keyValue && !(existing && existing.api_key_set)) throw new Error(tr('请填写 API Key','Enter an API Key'));
     await saveProvider(Object.assign({}, preset, {api_key:keyValue})); closeModal();
-  });
+  }, serviceContext);
 }
-function openCustomProviderForm(existing) {
+function openCustomProviderForm(existing, serviceContext = null) {
   existing = existing || {};
   if (existing.execution_backend === 'claude_cli') return editClaudeProvider(existing);
   const forwardAuthOption = existing.auth_mode === 'forward' ? `<option value="forward">Forward Codex auth</option>` : '';
@@ -1759,20 +1760,15 @@ function openCustomProviderForm(existing) {
     const protocolValue = $('modal_provider_protocol').value; const authMode = $('modal_provider_auth').value;
     if (authMode !== 'forward' && !keyValue && !existing.api_key_set) throw new Error(tr('请填写 API Key','Enter an API Key'));
     await saveProvider({id, name:$('modal_provider_name').value.trim() || id, base_url:base, protocol:protocolValue, auth_mode:authMode, api_key:keyValue}); closeModal();
-  });
+  }, serviceContext);
   const protocol = $('modal_provider_protocol'); protocol.innerHTML = providerProtocolOptions(); protocol.value = existing.protocol || 'auto';
   if (existing.auth_mode) $('modal_provider_auth').value = existing.auth_mode;
 }
 function editProvider(id) {
   const provider = (state.providers || []).find(p => p.id === id); if (!provider) return;
-  if (provider.execution_backend === 'claude_cli') editClaudeProvider(provider);
-  else {
-    const officialKey = Object.keys(officialProviders).find(key => officialProviders[key].id === provider.id);
-    const official = officialKey && officialProviders[officialKey];
-    if (official && provider.base_url === official.base_url) chooseOfficialProvider(officialKey);
-    else openCustomProviderForm(provider);
-  }
-  $('modal_body').insertAdjacentHTML('afterbegin', services.tabs(id, 'provider', 'edit'));
+  const context = {id, kind:'provider', active:'edit'};
+  if (provider.execution_backend === 'claude_cli') editClaudeProvider(provider, context);
+  else openCustomProviderForm(provider, context);
 }
 async function saveProvider(provider) {
   const old = (state.providers || []).find(p => p.id === provider.id); const localLogin = provider.execution_backend === 'claude_cli' && provider.auth_mode === 'claude_login'; const apiKey = localLogin ? '' : provider.api_key || (old && old.api_key_set ? '••••••••' : '');
@@ -1943,8 +1939,28 @@ async function testModelAudio(id) {
 }
 
 function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryLoading = false; quotaHistoryRequest++; }
-function openModal(title, body, submitLabel, submit) { callReports.stop(); accountDetailsRequest++; accountDetailsId = ''; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; const handler = async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { if (button.onclick === handler) { button.disabled = false; button.textContent = label; } else if (button.onclick === null) button.disabled = false; } }; button.onclick = submit ? handler : null; $('modal_backdrop').classList.remove('hidden'); }
-function closeModal() { callReports.stop(); accountDetailsRequest++; accountDetailsId = ''; subscriptionEditor = null; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
+function openModal(title, body, submitLabel, submit, serviceContext = null) {
+  callReports.stop(); accountDetailsRequest++; accountDetailsId = '';
+  stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); subscriptionEditor = null;
+  $('modal_title').textContent = title;
+  $('modal_body').innerHTML = body;
+  services.mount(serviceContext);
+  $('modal_body').scrollTop = 0;
+  $('modal_status').textContent = '';
+  const button = $('modal_submit'), label = submitLabel || tr('确定','Confirm');
+  button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false;
+  const handler = async () => {
+    button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = '';
+    try { await submit(); } catch (error) { $('modal_status').textContent = error.message; }
+    finally {
+      if (button.onclick === handler) { button.disabled = false; button.textContent = label; }
+      else if (button.onclick === null) button.disabled = false;
+    }
+  };
+  button.onclick = submit ? handler : null;
+  $('modal_backdrop').classList.remove('hidden');
+}
+function closeModal() { callReports.stop(); accountDetailsRequest++; accountDetailsId = ''; subscriptionEditor = null; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); services.mount(null); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 
 let updatePollTimer = null;
 let updatePollGeneration = 0;

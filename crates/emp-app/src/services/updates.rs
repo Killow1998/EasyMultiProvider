@@ -34,6 +34,7 @@ impl Drop for RequestPermit {
 }
 
 impl UpdateState {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         config: &Path,
         version: &str,
@@ -42,6 +43,7 @@ impl UpdateState {
         installation_rolled_back: bool,
         shutdown: Arc<AtomicBool>,
         shutdown_wake: Arc<tokio::sync::Notify>,
+        diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
     ) -> Self {
         let endpoints = test_endpoints().unwrap_or_default();
         let gate = Arc::new(Gate {
@@ -91,7 +93,9 @@ impl UpdateState {
             version,
             endpoints,
             installation_rolled_back,
-            UpdateHooks::new(begin_handoff, reopen_handoff, handoff),
+            UpdateHooks::new(begin_handoff, reopen_handoff, handoff).with_observer(
+                move |event, fields| diagnostics.journal.event("info", event, fields),
+            ),
         )
         .expect("release update client configuration is valid");
         Self { manager, gate }

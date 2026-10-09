@@ -60,6 +60,7 @@ pub(in crate::update) fn timestamp() -> u64 {
 
 impl UpdateManager {
     pub(in crate::update) fn stage(&self, stage: &str) {
+        self.trace_stage(stage);
         if let Ok(mut diagnostic) = self.0.diagnostic.lock() {
             *diagnostic = UpdateDiagnostic {
                 stage: stage.into(),
@@ -148,6 +149,10 @@ impl UpdateManager {
         diagnostic.target_version = snapshot.latest_version;
         diagnostic.retry_count = snapshot.retry_count;
         diagnostic.retry_limit = snapshot.retry_limit;
+        (self.0.observe)(
+            "update_failed",
+            &serde_json::to_value(&diagnostic).unwrap_or_default(),
+        );
         save(self.0.diagnostic_path.as_deref(), &diagnostic);
         if let Ok(mut snapshot) = self.0.snapshot.lock() {
             snapshot.failure = Some(diagnostic);

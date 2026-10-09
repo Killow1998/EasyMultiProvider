@@ -42,6 +42,7 @@ fn download_attempt(
     progress: &mut impl FnMut(u8),
 ) -> Result<()> {
     manager.stage("download_package");
+    let started = Instant::now();
     let mut response = manager.open_package(&asset.url)?;
     if !response.status().is_success() {
         manager.http_error(response.status().as_u16());
@@ -53,6 +54,7 @@ fn download_attempt(
     let mut buffer = [0_u8; 256 * 1024];
     loop {
         let read = response.read(&mut buffer).map_err(|error| {
+            manager.trace_download(size, asset.size, started.elapsed(), "interrupted");
             manager.io_error("download_package", error);
             UpdateError("update_failed")
         })?;
@@ -72,6 +74,7 @@ fn download_attempt(
     }
     file.sync_all()
         .map_err(|error| manager.io_error("sync_package", error))?;
+    manager.trace_download(size, asset.size, started.elapsed(), "received");
     if size < asset.size {
         // A complete HTTP response can still have a truncated package body.
         manager.incomplete_download();

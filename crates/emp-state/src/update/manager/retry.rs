@@ -53,6 +53,7 @@ impl UpdateManager {
                 snapshot.progress = 0;
                 snapshot.retry_count
             };
+            self.trace_retry(&diagnostic, count);
             eprintln!(
                 "EMP update retry: {}",
                 json!({

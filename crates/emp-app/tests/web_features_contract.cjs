@@ -42,7 +42,7 @@ test('unified chooser preserves local Claude identity and exposes direct connect
   assert.doesNotMatch(html, /Legacy forward|execution_backend|claude-provider-choose/);
 });
 
-test('service details isolate provider usage, escape labels and discard results after navigation', async () => {
+test('service details isolate provider usage and discard results after navigation', async () => {
   let box, html;
   const pending = [], calls = [];
   const state = {providers:[{id:'first', name:'<img src=x>', base_url:'https://user:secret@example.invalid/v1?key=secret', protocol:'responses'}, {id:'second', name:'Second'}]};
@@ -52,7 +52,7 @@ test('service details isolate provider usage, escape labels and discard results 
     api:async path => { calls.push(path); const value = deferred(); pending.push(value); return value.promise; },
   });
   const first = service.details('first');
-  assert.match(html, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(html, /<img|Base URL|Authentication|Connection settings/);
   assert.doesNotMatch(html, /user:secret|key=secret/);
   assert.match(calls[0], /category=external/);
   pending[0].resolve({groups:[{category:'external',owner:'first',model:'own-model'}, {category:'external',owner:'second',model:'other-model'}]});
@@ -131,7 +131,7 @@ test('service badges own settings navigation while list actions retain refresh, 
   assert.doesNotMatch(box.innerHTML, /data-ui-action="(?:account|provider)-edit"/);
   for (const action of ['account-details','provider-details','account-refresh','account-quota-history','provider-model-settings','provider-quota-refresh','provider-quota-history']) assert.match(box.innerHTML, new RegExp('data-ui-action="'+action+'"'));
   assert.match(service.tabs('@native','account'), /data-ui-action="account-edit"/);
-  assert.match(service.tabs('api','provider','edit'), /data-ui-action="provider-edit"[^>]*aria-pressed="true"/);
+  assert.match(service.tabs('api','provider','edit'), /data-ui-action="provider-edit"[^>]*aria-selected="true"/);
   assert.match(service.tabs('duplicate','account','details',true), /data-ui-action="account-edit"[^>]*disabled/);
 });
 
