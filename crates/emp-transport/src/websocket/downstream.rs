@@ -124,15 +124,15 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
         Ok(())
     }
 
-    /// Poll one downstream frame. Callers should set a short read timeout on
-    /// the underlying socket and retain this connection across Pending results.
+    /// Read one downstream frame using the underlying transport's read mode.
+    /// TCP readiness loops should use `poll_text_ready` instead of read timeouts.
     pub fn poll_text(&mut self) -> Result<WebSocketPoll<String>, WebSocketError> {
         if self.closed {
             return Ok(WebSocketPoll::Closed {
                 code: self.peer_close_code,
             });
         }
-        match self
+        let poll = self
             .frame_decoder
             .as_mut()
             .ok_or(WebSocketError::new(
@@ -140,8 +140,12 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
                 "websocket read owner is elsewhere",
             ))?
             .poll(self.stream, true, false)
-            .map_err(map_downstream_frame_error)?
-        {
+            .map_err(map_downstream_frame_error)?;
+        self.finish_poll(poll)
+    }
+
+    fn finish_poll(&mut self, poll: FramePoll) -> Result<WebSocketPoll<String>, WebSocketError> {
+        match poll {
             FramePoll::Pending => Ok(WebSocketPoll::Pending),
             FramePoll::Ping(payload) => Ok(WebSocketPoll::Ping(payload)),
             FramePoll::Closed { code, payload } => {
@@ -208,9 +212,54 @@ fn map_downstream_frame_error(error: FrameDecodeError) -> WebSocketError {
 }
 
 impl WebSocketConnection<'_, TcpStream> {
+    /// Read available bytes without a receive timeout. Cloned TCP handles share
+    /// their blocking mode, so the frame writer excludes each temporary change.
+    pub fn poll_text_ready(&mut self) -> Result<WebSocketPoll<String>, WebSocketError> {
+        if self.closed {
+            return Ok(WebSocketPoll::Closed {
+                code: self.peer_close_code,
+            });
+        }
+        let poll = self
+            .frame_decoder
+            .as_mut()
+            .ok_or(WebSocketError::new(
+                1011,
+                "websocket read owner is elsewhere",
+            ))?
+            .poll(
+                &mut ReadyReader {
+                    stream: self.stream,
+                    write_closed: &self.write_closed,
+                },
+                true,
+                false,
+            )
+            .map_err(map_downstream_frame_error)?;
+        self.finish_poll(poll)
+    }
+
     pub fn set_poll_timeout(&mut self, timeout: Duration) -> Result<(), WebSocketError> {
         self.stream
             .set_read_timeout(Some(timeout))
             .map_err(|_| WebSocketError::new(1011, "websocket poll timeout setup failed"))
+    }
+}
+
+struct ReadyReader<'a> {
+    stream: &'a mut TcpStream,
+    write_closed: &'a Mutex<bool>,
+}
+
+impl Read for ReadyReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let _writer = self
+            .write_closed
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.stream.set_nonblocking(true)?;
+        let result = self.stream.read(buffer);
+        self.stream.set_nonblocking(false)?;
+        result
     }
 }

@@ -26,19 +26,13 @@ impl Probe {
         let timeout = socket.read_timeout()?;
         // SAFETY: the owned socket stays alive until Drop unregisters it.
         unsafe { poller.add(&socket, Event::readable(key))? };
-        let probe = Self {
+        Ok(Self {
             socket,
             poller,
             key,
             timeout,
             ready: true,
-        };
-        // Bound spurious readiness and reads after draining TLS/frame buffers.
-        // Idle waits themselves use the OS poller, with no periodic wakeup.
-        probe
-            .socket
-            .set_read_timeout(Some(Duration::from_millis(1)))?;
-        Ok(probe)
+        })
     }
 
     fn pending(&mut self) -> io::Result<()> {
@@ -50,7 +44,6 @@ impl Probe {
 impl Drop for Probe {
     fn drop(&mut self) {
         let _ = self.poller.delete(&self.socket);
-        let _ = self.socket.set_read_timeout(self.timeout);
     }
 }
 
@@ -115,7 +108,7 @@ impl Duplex {
                 return Err(io::ErrorKind::TimedOut.into());
             }
             if read_downstream && self.downstream.ready {
-                match downstream.poll_text() {
+                match downstream.poll_text_ready() {
                     Ok(WebSocketPoll::Text(text)) => return Ok(Some(Message::Downstream(text))),
                     Ok(WebSocketPoll::Ping(payload)) => {
                         downstream.send_pong(&payload).map_err(io::Error::other)?;
@@ -128,7 +121,7 @@ impl Duplex {
                 }
             }
             if self.upstream.ready {
-                match client.poll_receive_text().map_err(io::Error::other)? {
+                match client.poll_receive_text_ready().map_err(io::Error::other)? {
                     WebSocketPoll::Text(text) => {
                         self.last_upstream = Instant::now();
                         // Match Codex: skip malformed or unrelated JSON events.

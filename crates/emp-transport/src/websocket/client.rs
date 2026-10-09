@@ -1,7 +1,7 @@
 //! Upstream WebSocket client lifecycle and frame I/O.
 
 use super::compression::{DecompressionError, PerMessageDeflate};
-use super::network::{ReadWrite, read_http_head, websocket_connection};
+use super::network::{ReadWrite, ReadyReader, read_http_head, websocket_connection};
 use super::{
     ClientWebSocket, ClientWebSocketError, frame_length_prefix, local_socket_error,
     websocket_accept,
@@ -338,15 +338,37 @@ impl ClientWebSocket {
     }
 
     pub fn poll_receive_text(&mut self) -> Result<WebSocketPoll<String>, ClientWebSocketError> {
+        self.poll_receive_text_with(false)
+    }
+
+    /// Drain buffered frames and currently available TCP/TLS bytes without
+    /// changing the blocking writes or the connection's idle timeout.
+    pub fn poll_receive_text_ready(
+        &mut self,
+    ) -> Result<WebSocketPoll<String>, ClientWebSocketError> {
+        self.poll_receive_text_with(true)
+    }
+
+    fn poll_receive_text_with(
+        &mut self,
+        ready: bool,
+    ) -> Result<WebSocketPoll<String>, ClientWebSocketError> {
         if self.closed {
             return Ok(WebSocketPoll::Closed {
                 code: self.peer_close_code,
             });
         }
-        let poll = self
-            .frame_decoder
-            .poll(&mut *self.stream, false, self.compression.is_some())
-            .map_err(|error| self.map_frame_error(error))?;
+        let poll = if ready {
+            self.frame_decoder.poll(
+                &mut ReadyReader(&mut *self.stream),
+                false,
+                self.compression.is_some(),
+            )
+        } else {
+            self.frame_decoder
+                .poll(&mut *self.stream, false, self.compression.is_some())
+        }
+        .map_err(|error| self.map_frame_error(error))?;
         match poll {
             FramePoll::Pending => Ok(WebSocketPoll::Pending),
             FramePoll::Ping(payload) => Ok(WebSocketPoll::Ping(payload)),

@@ -5,6 +5,7 @@
 - Support Codex steering controls on native WebSocket connections and cancel
   HTTP/Claude adapters cleanly when interrupted. Keep stateless warmup responses
   from falsely claiming resumable history, preserving the first WebSocket turn.
+  Preserve Windows WebSocket connections across idle reads and continuation.
 - Distinguish EMP, upstream, connection and Claude CLI errors in call details
   and diagnostic receipts. Preserve native upstream responses and record delivery
   outcomes without logging prompts, responses or credentials.

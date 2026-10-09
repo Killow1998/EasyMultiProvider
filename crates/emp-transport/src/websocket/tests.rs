@@ -51,6 +51,84 @@ fn masked_text_frame(text: &str) -> Vec<u8> {
 }
 
 #[test]
+fn ready_reads_preserve_partial_frames_timeouts_and_blocking_writes() {
+    use std::io::Write;
+    use std::net::{Ipv4Addr, TcpListener, TcpStream};
+    use std::time::Instant;
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut socket, _) = listener.accept().unwrap();
+    let timeout = Some(Duration::from_secs(5));
+    socket.set_read_timeout(timeout).unwrap();
+    peer.set_read_timeout(timeout).unwrap();
+    let probe = socket.try_clone().unwrap();
+    let mut downstream = WebSocketConnection::new(&mut socket);
+
+    assert!(matches!(
+        downstream.poll_text_ready().unwrap(),
+        WebSocketPoll::Pending
+    ));
+    assert_eq!(probe.read_timeout().unwrap(), timeout);
+    let frame = masked_text_frame("partial request");
+    peer.write_all(&frame[..3]).unwrap();
+    assert!(matches!(
+        downstream.poll_text_ready().unwrap(),
+        WebSocketPoll::Pending
+    ));
+    peer.write_all(&frame[3..]).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match downstream.poll_text_ready().unwrap() {
+            WebSocketPoll::Text(text) => {
+                assert_eq!(text, "partial request");
+                break;
+            }
+            WebSocketPoll::Pending => {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            other => panic!("unexpected frame: {other:?}"),
+        }
+    }
+    let mut client = client_socket();
+    client.stream = Box::new(peer);
+    assert!(matches!(
+        client.poll_receive_text_ready().unwrap(),
+        WebSocketPoll::Pending
+    ));
+    assert_eq!(
+        client.readiness_stream().unwrap().read_timeout().unwrap(),
+        timeout
+    );
+    // A response larger than the socket buffer requires working blocking writes
+    // after both sides have made empty and partial nonblocking reads.
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(move || {
+            downstream
+                .send_json(&serde_json::json!({"text": "x".repeat(1024 * 1024)}))
+                .unwrap();
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match client.poll_receive_text_ready().unwrap() {
+                WebSocketPoll::Text(text) => {
+                    let response: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    assert_eq!(response["text"].as_str().unwrap().len(), 1024 * 1024);
+                    break;
+                }
+                WebSocketPoll::Pending => {
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                other => panic!("unexpected frame: {other:?}"),
+            }
+        }
+        writer.join().unwrap();
+    });
+}
+
+#[test]
 fn regular_websockets_keep_legacy_cap_while_sideband_can_use_four_mib() {
     const FOUR_MIB: usize = 4 * 1024 * 1024;
     let declared_length = (FOUR_MIB + 1) as u64;

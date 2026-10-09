@@ -9,17 +9,34 @@ use url::Url;
 
 pub(super) trait ReadWrite: Read + Write + Send {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+    fn set_nonblocking(&self, _nonblocking: bool) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    fn poll_read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.set_nonblocking(true)?;
+        let result = self.read(buffer);
+        // The same transport writes whole frames in blocking mode. In particular,
+        // do not turn a Windows receive timeout into a damaged connection.
+        self.set_nonblocking(false)?;
+        result
+    }
     fn readiness_stream(&self) -> std::io::Result<TcpStream> {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 }
 type OpenedWebSocketTransport = (Box<dyn ReadWrite>, bool, Option<String>);
 impl ReadWrite for socket2::Socket {
+    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
+        socket2::Socket::set_nonblocking(self, nonblocking)
+    }
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         socket2::Socket::set_read_timeout(self, timeout)
     }
 }
 impl ReadWrite for TcpStream {
+    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
+        TcpStream::set_nonblocking(self, nonblocking)
+    }
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         TcpStream::set_read_timeout(self, timeout)
     }
@@ -28,6 +45,9 @@ impl ReadWrite for TcpStream {
     }
 }
 impl<S: ReadWrite> ReadWrite for rustls::StreamOwned<rustls::ClientConnection, S> {
+    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
+        self.sock.set_nonblocking(nonblocking)
+    }
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         self.sock.set_read_timeout(timeout)
     }
@@ -36,11 +56,22 @@ impl<S: ReadWrite> ReadWrite for rustls::StreamOwned<rustls::ClientConnection, S
     }
 }
 impl ReadWrite for Box<dyn ReadWrite> {
+    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
+        self.as_ref().set_nonblocking(nonblocking)
+    }
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         self.as_ref().set_read_timeout(timeout)
     }
     fn readiness_stream(&self) -> std::io::Result<TcpStream> {
         self.as_ref().readiness_stream()
+    }
+}
+
+pub(super) struct ReadyReader<'a>(pub(super) &'a mut dyn ReadWrite);
+
+impl Read for ReadyReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.0.poll_read(buffer)
     }
 }
 
