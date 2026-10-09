@@ -121,6 +121,39 @@ fn native_sse_context_and_incomplete_boundaries_match_codex_http_behavior() {
 }
 
 #[test]
+fn native_sse_retry_headers_survive_pre_output_http_conversion() {
+    for (headers, legacy, expected) in [
+        (json!({"Retry-After":"3.1"}), None, 4),
+        (json!({"rEtRy-AfTeR":"7"}), Some(3), 7),
+        (json!({"Retry-After":"invalid"}), Some(3), 3),
+    ] {
+        let mut error = json!({"status":503,"error_class":"upstream_5xx","headers":headers});
+        if let Some(delay) = legacy {
+            error["retry_after_seconds"] = json!(delay);
+        }
+        let event = json!({"type":"response.failed","response":{"status":"failed","error":error}});
+        let upstream = NativeErrorSseUpstream::start(format!("data: {event}\n\n").into_bytes());
+        let (_directory, server) = native_alias_server(&upstream.base_url());
+        let cookie = session_header(&server);
+        let body =
+            serde_json::to_vec(&json!({"model":"native/alias","input":"hello","stream":true}))
+                .unwrap();
+        let response = post_stream(
+            &server,
+            "/v1/responses",
+            &body,
+            &[&cookie, "Authorization: Bearer caller"],
+        );
+        assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+        assert!(
+            response.contains(&format!("Retry-After: {expected}\r\n")),
+            "{response}"
+        );
+        server.shutdown().unwrap();
+    }
+}
+
+#[test]
 fn native_sse_downstream_disconnect_cancels_open_before_headers() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();

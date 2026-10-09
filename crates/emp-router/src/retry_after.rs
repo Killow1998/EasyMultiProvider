@@ -2,7 +2,8 @@
 
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
 
-pub(crate) fn parse(value: Option<&str>) -> Option<u64> {
+/// Accept bounded numeric or HTTP-date retry advice and round up to seconds.
+pub fn parse(value: Option<&str>) -> Option<u64> {
     parse_at(value, OffsetDateTime::now_utc())
 }
 

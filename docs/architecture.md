@@ -306,6 +306,22 @@ private. The page supplies current-state/language getters and UI operations.
 A changed language or new configuration therefore does not leave a stale copy
 inside a feature.
 
+`report-query.js` owns cancellation and latest-result selection for usage and
+call/performance queries. Its interface is `run`/`cancel` plus result/state
+callbacks; callers do not coordinate request counters. Refresh failures retain
+the displayed data. `period-controls.js` supplies the same presets, explicit
+custom-date query and refresh behavior to all time-based views. The existing
+usage rendering lives in `usage-report.js`; it still consumes page state and
+formatting helpers, so this extraction does not claim full feature isolation.
+Performance navigation stays mounted during data refresh; overview metrics are
+plain facts rather than six equivalent navigation buttons.
+
+HTTP error serialization shares a status/body/retry-header function.
+`api/failure_response/stream.rs` owns the common SSE/WebSocket error detail;
+WebSocket does not allocate an SSE envelope to extract that detail. Native
+pre-output conversion reuses the router's bounded Retry-After parser. Wire
+contracts remain distinct and are exercised at the actual server interface.
+
 Styles are embedded as a separate static asset in their original cascade order.
 All assets ship in the EMP executable, with no new framework, development server
 or frontend build pipeline. Existing page event handlers bind the features'

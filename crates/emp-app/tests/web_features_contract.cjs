@@ -208,15 +208,39 @@ test('common call details escape model/session names and keep missing metrics em
   assert.doesNotMatch(html,/0.00 s|0.0 token/);
 });
 
+test('report refresh cancels superseded requests, retains data on error and ignores closure', async () => {
+  const pending = [], states = [], results = [];
+  const query = feature('report-query.js','createReportQuery',{AbortController})({
+    api:(_path,options) => { const request=deferred(); pending.push({...request,signal:options.signal}); return request.promise; },
+    onState:(loading,error) => states.push([loading,error]),onResult:value => results.push(value),
+  });
+  const old = query.run('/old'), fresh = query.run('/fresh');
+  assert.equal(pending[0].signal.aborted,true);
+  pending[1].resolve('new data'); await fresh;
+  pending[0].resolve('stale data'); await old;
+  assert.deepEqual(results,['new data']);
+  assert.deepEqual(states.at(-1),[false,'']);
+  const failed = query.run('/failed');
+  pending[2].reject(new Error('Network unavailable')); await failed;
+  assert.deepEqual(results,['new data']);
+  assert.deepEqual(states.at(-1),[false,'Network unavailable']);
+  const closed = query.run('/closed'); query.cancel();
+  assert.equal(pending[3].signal.aborted,true);
+  pending[3].resolve('closed result'); await closed;
+  assert.deepEqual(results,['new data']);
+  assert.deepEqual(states.at(-1),[false,'']);
+});
+
 test('call queries coalesce events and discard stale filters and closed windows', async () => {
   const requests = [], timers = new Map(), controls = new Map();
   const content = {innerHTML:'',textContent:'',querySelectorAll:() => []};
-  const root = {innerHTML:'',querySelector(selector) { if (selector === '[data-call-content]') return content; if (!controls.has(selector)) controls.set(selector,{value:''}); return controls.get(selector); }};
+  const root = {innerHTML:'',setAttribute() {},querySelectorAll:() => [],querySelector(selector) { if (selector === '[data-call-content]') return content; if (!controls.has(selector)) controls.set(selector,{value:'',dataset:{}}); return controls.get(selector); }};
   const report = id => ({start:0,end:Date.now()/1000,records:[{request_id:id,client_model:id,state:'completed'}],total:1,offset:0,limit:50});
   const reports = feature('call-reports.js','createCallReports', {
-    URLSearchParams, setTimeout:fn => { timers.set(fn,fn); return fn; }, clearTimeout:id => timers.delete(id),
+    URLSearchParams, createReportQuery:feature('report-query.js','createReportQuery',{AbortController}), setReportState:feature('report-query.js','setReportState'), setTimeout:fn => { timers.set(fn,fn); return fn; }, clearTimeout:id => timers.delete(id),
   })({tr,esc,getLanguage:() => 'en',getState:() => ({}),getActivity:() => ({}),$:() => root,openModal() {},
-    api:path => { const pending=deferred(); requests.push({path,...pending}); return pending.promise; }});
+    periodPickerHtml:() => '',registerPeriodPicker:(_id,_preset,onChange,range) => onChange(range || {start:0,end:Date.now()/1000}),
+    api:(path,options) => { const pending=deferred(); requests.push({path,options,...pending}); return pending.promise; }});
   const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
   const runTimer = async () => { const fn=timers.keys().next().value; timers.delete(fn); fn(); await tick(); };
   reports.openActivity({dataset:{activityKind:'account',activityId:'first'}});
@@ -224,7 +248,8 @@ test('call queries coalesce events and discard stale filters and closed windows'
   root.onchange({target:{dataset:{callFilter:'service'},value:'account:second'}});
   requests[0].resolve(report('stale')); await tick();
   assert.equal(content.innerHTML,'');
-  assert.equal(timers.size,1); await runTimer();
+  assert.equal(requests[0].options.signal.aborted,true);
+  assert.equal(timers.size,0);
   assert.match(requests[1].path,/account=second/);
   requests[1].resolve(report('fresh')); await tick();
   assert.match(content.innerHTML,/fresh/); assert.doesNotMatch(content.innerHTML,/stale/);

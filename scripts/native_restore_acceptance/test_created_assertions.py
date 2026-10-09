@@ -84,6 +84,15 @@ def fixture() -> tuple[dict[str, Any], dict[str, str], list[dict[str, Any]]]:
 
 
 class CreatedAssertionsPromptKeyRegression(unittest.TestCase):
+    def test_noop_restore_requires_verified_shutdown_restoration(self) -> None:
+        report, ids, requests = fixture()
+        report["restore"].update(exit_code=0, action="noop", state="restored",
+            native_base_url_restored=True, native_config_matches_saved=True,
+            provider_config_preserved=True)
+        self.assertFalse(created_assertions(report, ids, requests, [])["restore_succeeded"])
+        report["shutdown_restored_config"] = True
+        self.assertTrue(created_assertions(report, ids, requests, [])["restore_succeeded"])
+
     def test_caller_selects_output_oracle_and_rejects_duplicate_or_changed_output(self) -> None:
         report, ids, requests = fixture()
         valid = created_assertions(report, ids, requests, [])

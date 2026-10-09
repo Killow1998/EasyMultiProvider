@@ -108,6 +108,8 @@ Linux 同时支持扫描当前 `CODEX_HOME/plugins/.plugin-appserver/codex`，
 其他 AppImage 或发行版的安装布局仍需单独验证。
 
 EMP 支持 Codex CLI、桌面 App 和 IDE 扩展，不以统一的最低引擎版本拒绝接入。
+维护范围为最新 Codex 正式版本系列及前九个系列，同系列补丁版合并计算。
+当前范围与验收结果见[Codex 兼容性](docs/codex-compatibility.md)。
 余量读取、额度重置和模型目录检查分别取决于所用引擎提供的接口；缺少某个接口时，
 只报告对应操作不可用。认证、协议和对话历史保护仍然生效。
 
