@@ -279,14 +279,21 @@ test('closing diagnostics discards in-flight reports without a polling timer', a
   assert.match($('diagnostics_summary').textContent, /latest 3 requests/);
 });
 
-test('the shipped page initializes its feature bindings using its own script order', () => {
+test('the shipped page initializes its bindings and retains translated integration status on refresh', () => {
   const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
   const pending = deferred();
+  const nodes = new Map();
+  const node = id => {
+    if (!nodes.has(id)) nodes.set(id, {textContent:'', dataset:{}, childElementCount:1, classList:{toggle() {}}});
+    return nodes.get(id);
+  };
+  if (html.match(/<span id="integration_badge"[^>]*>/)?.[0].includes('data-i18n="loading"')) node('integration_badge').dataset.i18n = 'loading';
   const context = vm.createContext({Headers, URL, Blob, console,
     fetch:() => pending.promise,
     localStorage:{getItem:() => ''},
     window:{location:{href:'http://localhost/'}, addEventListener() {}},
-    document:{addEventListener() {}, visibilityState:'hidden'},
+    document:{addEventListener() {}, visibilityState:'hidden', getElementById:node,
+      querySelectorAll:selector => selector === '[data-i18n]' ? [...nodes.values()].filter(item => item.dataset.i18n) : []},
   });
   for (const script of html.matchAll(/<script(?: src="([^"]+)")?>([\s\S]*?)<\/script>/g)) {
     const filename = script[1] ? path.basename(script[1]) : 'page.js';
@@ -294,6 +301,13 @@ test('the shipped page initializes its feature bindings using its own script ord
     vm.runInContext(source, context, {filename});
   }
   assert.equal(vm.runInContext('typeof openSettings + ":" + typeof openDiagnostics + ":" + typeof callReports.openActivity', context), 'function:function:function');
+  vm.runInContext("renderIntegration({configuration:{state:'emp_applied'},runtime:{state:'catalog_loaded'},codex_compatibility:{installed:'0.162.0'}}); applyTranslations();", context);
+  assert.equal(node('integration_badge').textContent, 'EMP 模型已加载');
+  vm.runInContext("setLanguage('en'); applyTranslations();", context);
+  assert.equal(node('integration_badge').textContent, 'EMP models loaded');
+  assert.equal(node('codex_version').textContent, 'Codex 0.162.0');
+  vm.runInContext("setLanguage('zh-CN'); applyTranslations();", context);
+  assert.equal(node('integration_badge').textContent, 'EMP 模型已加载');
 });
 
 test('quota mode changes bars and history together without changing recorded values', () => {

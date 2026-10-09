@@ -186,7 +186,7 @@ pub(crate) fn run_server(
             .state
             .backend
             .configuration
-            .set_listener(host, port)
+            .set_listener(host, server.local_addr().port())
             .map_err(|_| AppError::ServerStopped)?;
         server.reconcile_startup();
         let usage_workers = crate::services::usage::workers(&server.state)?;

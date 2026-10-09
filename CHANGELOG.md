@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.15 (2026-10-09)
+
+- Keep the loaded EMP status when changing language or refreshing service data.
+  Align English and Chinese top-bar layouts at browser zoom levels, and let
+  wrapped controls scroll with the page instead of covering service buttons.
+- Keep service details and connection settings in one stable dialog, retain
+  edited names, and use consistent refresh controls in Usage and Performance.
+  Cancel stale reads when switching services, model drafts or report views.
+- Honor Windows and macOS system proxies when checking and downloading updates.
+  Read current proxy settings for each attempt and record download progress,
+  retry stages and install outcomes in the diagnostic journal.
+- Preserve Codex instruction roles through Anthropic routing, incremental tool
+  discovery and Retry-After advice in Responses errors.
+- Simplify background-worker ownership and remove redundant startup wrappers.
+  Publish the actual listening port when starting with an automatically assigned
+  port, so web settings can be saved.
+
 ## 0.12.14 (2026-10-09)
 
 - Support Codex steering controls on native WebSocket connections and cancel

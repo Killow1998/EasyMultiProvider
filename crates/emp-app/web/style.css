@@ -273,6 +273,7 @@ input,select,textarea{border-radius:6px;border-color:var(--border-strong)}
 input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}input[type=number]{-moz-appearance:textfield;appearance:textfield}
 .input-action{display:flex;align-items:stretch;gap:6px}.input-action input{flex:1;min-width:0}.input-action button{flex:none;height:auto;min-height:0;white-space:nowrap}
 .modality-option label{display:inline-flex;align-items:center;gap:6px;margin:0;color:var(--text);font-size:13px;cursor:pointer}.modality-option input{width:auto;margin:0}.modality-option .modality-test{height:24px;min-height:24px;padding:0 8px;font-size:12px}.modality-option:not(:has(.modality-test)){padding-right:10px}
+@media(max-width:1800px){.page-header{position:static;flex-direction:column;align-items:stretch}.page-header-controls{justify-content:flex-start}}
 @media(max-width:1100px){.workspace-layout{grid-template-columns:1fr}.workspace-side{position:static;max-height:none;overflow:visible}.page-header{position:static;flex-direction:column;align-items:stretch}.page-header-controls{justify-content:flex-start}}
 @media(max-width:760px){section{padding:12px}.header-group{padding-right:0;border-right:0}section>h2+.toolbar{grid-column:1/-1;justify-content:flex-start}}
 .period-picker{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 16px;margin:0 0 14px;padding-bottom:14px;border-bottom:1px solid var(--border)}

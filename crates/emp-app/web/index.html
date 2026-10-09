@@ -14,7 +14,7 @@
   <div class="page-brand">
     <div class="brand-title"><h1 aria-label="EMP"><svg id="emp_logo" class="dot-logo" aria-hidden="true"></svg></h1><span id="emp_version" class="brand-version"></span></div>
     <div id="integration" class="header-integration" data-state="unknown">
-      <div class="integration-card-header" role="status"><span id="codex_version">Codex</span><span id="integration_badge" data-i18n="loading">加载中</span></div>
+      <div class="integration-card-header" role="status"><span id="codex_version">Codex</span><span id="integration_badge">加载中</span></div>
       <p id="integration_summary" class="muted" hidden></p>
     </div>
     <p data-i18n="subtitle">管理 Codex 的账号和模型。</p>
@@ -115,6 +115,7 @@
 <script src="/assets/diagnostics.js"></script>
 <script>
 let state = null;
+let integrationInfo = null;
 let pendingMigrationFile = null;
 let activeQuotaAccountId = '';
 let activeQuotaServiceKind = 'accounts';
@@ -172,6 +173,8 @@ function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach(element => { element.textContent = t(element.dataset.i18n); });
   document.querySelectorAll('[data-i18n-placeholder]').forEach(element => { element.placeholder = t(element.dataset.i18nPlaceholder); });
   document.querySelectorAll('[data-i18n-aria-label]').forEach(element => { element.setAttribute('aria-label', t(element.dataset.i18nAriaLabel)); });
+  if (integrationInfo) renderIntegration(integrationInfo);
+  else $('integration_badge').textContent = t('loading');
 }
 function setLanguage(value) { language = value === 'en' ? 'en' : 'zh-CN'; savePreference('emp-language', language); if ($('language_select')) $('language_select').value = language; applyTranslations(); if (state) fill(); }
 function setTheme(value) { const theme = ['light','dark'].includes(value) ? value : 'system'; savePreference('emp-theme', theme); if (document.documentElement) document.documentElement.dataset.theme = theme; if ($('theme_select')) $('theme_select').value = theme; }
@@ -539,6 +542,7 @@ function conflictView(configuration) {
   return [tr('需要处理','Needs attention'), tr('Codex 的 config.toml 被其他程序改过。请恢复原生 Codex，再重新启动 EMP。','Another program changed Codex config.toml. Restore Native Codex, then start EMP again.')];
 }
 function renderIntegration(info) {
+  integrationInfo = info;
   const configuration = info.configuration || {};
   const views = {
     native: ['Native', tr('原生 Codex 设置已保存。','Native Codex settings are saved.')],
