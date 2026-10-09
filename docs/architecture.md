@@ -342,6 +342,24 @@ errors, old bookmarks/cookie sessions, rejected settings, current activity
 snapshots, diagnostics close/cancel behavior and the shipped script order.
 The real server test also fetches the page's referenced assets before login.
 
+### 8. Service lifecycle owns its worker handles
+
+`lifecycle.rs` holds background thread handles directly in a `Vec<JoinHandle<()>>`.
+Only the server owner registers and joins them; workers receive shared application
+state, never the handle list. One private spawn operation registers every successful
+spawn. The previous shared mutex, four registration branches and unwrap/poison
+failure paths are removed.
+
+`lifecycle/startup.rs` assembles state and starts workers in the existing order.
+The single-use session-construction wrapper and its copied options object are
+removed. `lifecycle/connections.rs` owns accepting and admitting HTTP connections;
+`services/quota/sampler.rs` owns quota deadlines and waits. Shutdown still closes
+admission, restores integration, wakes and joins workers, then drains credential
+operations and saves rotations. Quota sampling keeps its existing schedule and
+condition-variable lock; this refactor introduces no event framework or new policy.
+The duplicate health test is folded into the idle-listener shutdown contract with
+both unauthenticated status/body assertions retained.
+
 ## Target ownership
 
 This is a logical arrangement inside the existing executable, not a proposal

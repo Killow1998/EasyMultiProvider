@@ -36,19 +36,11 @@ fn desktop_launch_defers_config_selection_to_shared_state_resolver() {
 }
 
 #[test]
-fn health_stays_unauthenticated() {
-    let (_directory, server) = test_server();
-    let response = request(&server, "/healthz", &[]);
-    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
-    assert!(response.ends_with("{\"status\":\"ok\"}"));
-    server.shutdown().expect("shutdown");
-}
-
-#[test]
 fn idle_accept_worker_wakes_for_shutdown_after_serving_a_request() {
     let (_directory, server) = test_server();
     let response = request(&server, "/healthz", &[]);
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(response.ends_with("{\"status\":\"ok\"}"));
 
     thread::sleep(Duration::from_millis(25));
     let started = Instant::now();
