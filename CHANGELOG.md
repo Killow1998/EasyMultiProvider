@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.16 (2026-10-09)
+
+- Keep the EMP logo, status and controls in one top-bar row in both languages.
+  Narrow or zoomed windows scroll within the top bar instead of wrapping.
+  Remove conflicting breakpoint rules that forced stacked layouts.
+
 ## 0.12.15 (2026-10-09)
 
 - Keep the loaded EMP status when changing language or refreshing service data.
