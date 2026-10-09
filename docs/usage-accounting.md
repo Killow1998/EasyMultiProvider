@@ -1,6 +1,6 @@
 # Usage and API-equivalent estimates
 
-Open **Usage & estimates** beside **Performance & health**. Choose Today,
+Open **Usage** beside **Performance** in the header. Choose Today,
 Last 7 days, Last 30 days, All history, or a custom start/end in the browser's local time.
 Filter Native, Other Subscription, External Provider, or Unknown source.
 Results are grouped by Codex subscriptions, Claude Code/CPA and API, then by
