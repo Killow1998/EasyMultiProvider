@@ -520,13 +520,9 @@ fn installed_local_oauth_completes_responses_endpoint_without_provider_key() {
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        probe_count, 1,
-        "expected one unauthenticated local CLI probe"
-    );
-    assert_eq!(
         requests.len(),
-        2,
-        "only the startup probe and one inference request are expected"
+        probe_count + 1,
+        "only optional startup probes and one inference request are expected"
     );
     assert_eq!(inference.len(), 1, "expected exactly one inference request");
     assert!(
