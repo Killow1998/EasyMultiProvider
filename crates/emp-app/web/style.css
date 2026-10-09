@@ -195,9 +195,9 @@ h2{font-size:14px;font-weight:600;margin:0}
 .page-brand{display:flex;align-items:center;flex:none;flex-wrap:nowrap;gap:8px;white-space:nowrap}
 .page-brand .brand-title{flex:none}
 .page-brand>[data-i18n="subtitle"]{display:none}
-.header-integration{min-width:0;max-width:min(480px,100%)}
-.header-integration .integration-card-header{gap:4px 8px;font-size:12px;flex-wrap:nowrap}
-.header-integration #integration_summary{margin:4px 0 0;font-size:12px}
+.header-integration{display:flex;align-items:center;gap:8px;min-width:0;max-width:min(480px,100%)}
+.header-integration .integration-card-header{flex:none;gap:4px 8px;font-size:12px;flex-wrap:nowrap}
+.header-integration #integration_summary{min-width:0;margin:0;font-size:12px;overflow:hidden;text-overflow:ellipsis}
 .page-header-controls{display:flex;align-items:center;justify-content:flex-end;flex:none;flex-wrap:nowrap;gap:4px;white-space:nowrap}
 .page-header-controls :is(button,select,a){height:30px;min-height:30px;font-size:12px}
 .page-header-controls :is(button,a){padding-inline:6px}
