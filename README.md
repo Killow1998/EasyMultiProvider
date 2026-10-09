@@ -103,7 +103,7 @@ in the **Claude Code** section. Both routes require the installed Claude Code CL
 
 ### 4. Apply EMP to Codex
 
-Click **Apply EMP to Codex**. The status line shows your Codex version and
+Click **Enable EMP**. The status line shows your Codex version and
 **EMP models loaded** once the model list is ready. If it asks you to reopen
 Codex, finish your current work and open Codex again.
 
@@ -163,8 +163,7 @@ EMP is designed to keep provider changes from turning into a different coding cl
 EMP preserves native Codex sessions, `resume`, WebSockets, compression, and MCP where supported. During live provider switching, it reconstructs Codex-owned visible history instead of forwarding provider-private opaque state.
 
 To return a conversation with EMP-owned compaction data to native Codex, finish
-active work and close Codex, then choose **Restore Native** in the Codex
-integration area of the Web UI. EMP converts only affected saved histories and
+active work and close Codex, then choose **Restore Native** in the Web UI header. EMP converts only affected saved histories and
 backs up each affected history file before rewriting it, then restores native
 settings. The original conversation can then be resumed on supported Codex.
 When restoration finishes, EMP exits; reopen Codex to continue. You can also
@@ -179,9 +178,14 @@ EMP records local operational metrics so you can see where your coding-agent usa
 - Historical and live token usage by time, account, and Provider.
 - API-equivalent cost estimates with daily price updates.
 - Subscription quota snapshots and local trends.
-- Upstream-reported prompt cache hit rates in token-weighted 10-minute periods.
-- Rolling median TTFT and TPS from the latest 20 valid calls per recently used model, compared with the preceding window.
-- Observed success, 429, 502, 503, and 504 rates.
+- Usage grouped by service type and model, with account and service breakdowns.
+- Call details with the session name, selected model, model sent upstream and
+  upstream-reported model, tokens, cache reads/writes, duration, TTFT and TPS.
+- Performance summaries and time charts for a selected period, with per-model
+  averages and sample counts. TTFT measures time to the first reasoning, text or
+  tool-output block; TPS divides output tokens by the whole call duration,
+  including retry waits.
+- Interrupted, failed and delivered outcomes, dispatch counts and retries.
 - Pricing references: price a model with no public price as another model (for example as `gpt-5.5`). Requests that still have no price count as 0 and are listed as such.
 
 Performance history survives EMP restarts. Missing upstream cache data is shown as unavailable rather than estimated.
@@ -210,7 +214,7 @@ control changes catalog labels, not context windows or request limits.
 
 ## Codex compatibility
 
-The current source version is **v0.12.12**.
+The current source version is **v0.12.14**.
 
 EMP supports Codex CLI, desktop App and IDE extension installations without a
 universal minimum engine version. Each operation depends on the interfaces that
@@ -258,18 +262,18 @@ launcher when your active work permits it. There is no background polling.
 
 ## Web UI
 
-The local Web UI is organized around four main areas:
-
-- **Accounts** — use the compact account summary to view model/token usage and API-equivalent cost, save an alias, choose a reset or remove an imported account. Open Model settings from the account summary; Refresh and Trend stay visible in each row.
-- **Providers** — configure supported services or a custom Provider.
-- **Models** — discover, import, test, edit, hide, or remove Provider models.
-- **Codex integration** — apply the EMP catalog to Codex or restore native Codex routing.
+- **Services** — add subscriptions and API Providers. Click a service badge for
+  its settings, lifetime model usage, alias, quota resets or removal.
+- **Models** — reuse saved model lists and import, test, edit, hide or remove models.
+- **Model display** — arrange the names and context labels shown in Codex.
+- **Header controls** — enable EMP or restore native settings, and open
+  Performance, Usage and Settings.
 
 The header **Settings** button groups automatic activation, Codex web search for
 external models, and automatic-review routing to another subscription when
 Native runs out of quota. All three start enabled; saved choices are retained.
 Click an activity dot to view recent request targets, returned models, timings,
-actual dispatch counts and retries.
+actual dispatch counts, retries and error sources.
 
 EMP automatically detects proxy settings from its launch environment or operating system.
 
