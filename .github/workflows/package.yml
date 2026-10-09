@@ -75,6 +75,11 @@ jobs:
           cargo +1.93.1 test --locked --release -p emp-app --lib
           disconnect -- --test-threads=1
 
+      - name: Verify WebSocket readiness preserves blocking writes
+        run: >-
+          cargo +1.93.1 test --locked --release -p emp-transport --lib
+          ready_reads_preserve_partial_frames_timeouts_and_blocking_writes
+
       - name: Verify Windows process handoff and private state
         if: runner.os == 'Windows'
         shell: pwsh

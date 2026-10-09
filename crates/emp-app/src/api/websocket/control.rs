@@ -11,7 +11,6 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::Duration;
 
 #[derive(Default)]
 struct Response {
@@ -63,32 +62,21 @@ impl Control {
 struct Readiness {
     socket: TcpStream,
     poller: Arc<Poller>,
-    timeout: Option<Duration>,
 }
 impl Readiness {
     fn new(socket: &TcpStream) -> std::io::Result<Self> {
         let socket = socket.try_clone()?;
         let poller = Arc::new(Poller::new()?);
-        let timeout = socket.read_timeout()?;
         // SAFETY: the owned socket is unregistered before it is dropped.
         unsafe {
             poller.add(&socket, Event::readable(0))?;
         }
-        let readiness = Self {
-            socket,
-            poller,
-            timeout,
-        };
-        readiness
-            .socket
-            .set_read_timeout(Some(Duration::from_millis(1)))?;
-        Ok(readiness)
+        Ok(Self { socket, poller })
     }
 }
 impl Drop for Readiness {
     fn drop(&mut self) {
         let _ = self.poller.delete(&self.socket);
-        let _ = self.socket.set_read_timeout(self.timeout);
     }
 }
 
@@ -151,7 +139,7 @@ pub(super) fn run(
                     ready = events.iter().any(|event| event.readable);
                     if !ready { continue; }
                 }
-                match reader.poll_text() {
+                match reader.poll_text_ready() {
                     Ok(WebSocketPoll::Pending) => {
                         ready = false;
                         if readiness.poller.modify(&readiness.socket, Event::readable(0)).is_err() { break; }

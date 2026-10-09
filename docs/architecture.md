@@ -210,8 +210,9 @@ Native Responses WebSocket turns use a socket-readiness loop in
 [`websocket/duplex.rs`](../crates/emp-app/src/api/websocket/duplex.rs).
 It reads both directions on the connection's existing thread, including data
 already buffered in TLS or frame decoding. It does not add a producer task,
-periodic polling worker or upstream event queue. Readiness registrations and
-temporary read timeouts are restored when the turn ends.
+periodic polling worker or upstream event queue. Reads drain available bytes in
+nonblocking mode, then restore blocking mode before frame writes. Receive
+timeouts are left unchanged; readiness registrations are removed at turn end.
 
 Codex's `response.interrupt` is forwarded through the active upstream connection;
 that upstream owns response-ID validation and acknowledgement. An incomplete
@@ -227,7 +228,8 @@ HTTP fallback, external HTTP streams and the single-step Claude CLI also accept
 Codex's steering control (`response.interrupt`, `discard_partial_items`). During
 these turns, a temporary readiness worker owns the existing frame decoder;
 the output writer retains its connection, and complete frame writes are
-serialized with control replies and pongs. The worker waits for socket events,
+serialized with control replies, pongs and temporary read-mode changes on cloned
+TCP handles. The worker waits for socket events,
 retains at most one next request, then returns the decoder, including buffered
 or partial frames. It is joined before the next turn begins.
 
