@@ -214,7 +214,10 @@ control changes catalog labels, not context windows or request limits.
 
 ## Codex compatibility
 
-The current source version is **v0.12.14**.
+The current source version is **v0.12.15**.
+
+Maintenance targets the latest stable Codex minor series and the previous nine;
+patch releases share a series. See the [maintenance window and acceptance results](docs/codex-compatibility.md).
 
 EMP supports Codex CLI, desktop App and IDE extension installations without a
 universal minimum engine version. Each operation depends on the interfaces that

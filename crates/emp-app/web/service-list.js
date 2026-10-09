@@ -1,8 +1,10 @@
 // A view of existing accounts/providers; storage and route identities stay with their owners.
 function createServiceList({getState, $, esc, tr, presets, icon, activity, accountSummary, quotaMeters,
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots, openModal, api,
-  protocolLabel, authLabel, usageSummary, notice}) {
+  usageSummary, notice}) {
   const refreshing = new Set(), errors = new Map();
+  let detailsController = null;
+  function stop() { detailsController?.abort(); detailsController = null; }
   function providerBrand(provider) {
     if (provider.execution_backend === 'claude_cli') return 'claudecode';
     try {
@@ -13,12 +15,6 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
   function providerType(provider) {
     if (provider.execution_backend !== 'claude_cli') return 'API';
     return provider.auth_mode === 'claude_login' ? 'Native' : 'CPA';
-  }
-  function endpoint(provider) {
-    try {
-      const url = new URL(provider.base_url);
-      return url.origin + url.pathname;
-    } catch (_) { return ''; }
   }
   function action(name, id, label, glyph, disabled = false, extra = '') {
     return `<button type="button" class="secondary" ${glyph ? `data-icon="${glyph}"` : ''} data-ui-action="${name}" data-id="${esc(id)}" ${disabled ? 'disabled' : ''} ${extra}>${label}</button>`;
@@ -61,8 +57,44 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
   function tabs(id, kind, active = 'details', disabled = false) {
     const views = kind === 'account'
       ? [['details', 'account-details', tr('账号信息','Account details')], ['edit', 'account-edit', tr('模型设置','Model settings')]]
-      : [['details', 'provider-details', tr('服务信息','Service details')], ['edit', 'provider-edit', tr('连接设置','Connection settings')]];
-    return `<div class="service-detail-tabs" role="group" aria-label="${tr('服务设置','Service settings')}">${views.map(([view, action, label]) => `<button type="button" class="secondary" data-ui-action="${action}" data-id="${esc(id)}" aria-pressed="${view === active}" ${view === 'edit' && disabled ? 'disabled' : ''}>${label}</button>`).join('')}</div>`;
+      : [['details', 'provider-details', tr('用量','Usage')], ['edit', 'provider-edit', tr('连接设置','Connection settings')]];
+    return `<div class="service-detail-tabs" role="tablist" aria-label="${tr('服务设置','Service settings')}">${views.map(([view, action, label]) => `<button id="service-tab-${view}" type="button" class="secondary" role="tab" data-ui-action="${action}" data-id="${esc(id)}" aria-selected="${view === active}" aria-controls="modal_body" tabindex="${view === active ? 0 : -1}" ${view === 'edit' && disabled ? 'disabled' : ''}>${label}</button>`).join('')}</div>`;
+  }
+  function mount(context) {
+    const nav = $('service_detail_nav'), body = $('modal_body');
+    if (!nav || !body) return;
+    body.closest('.modal').classList.toggle('service-detail-modal', Boolean(context));
+    nav.hidden = !context;
+    if (!context) { nav.innerHTML = ''; delete nav.dataset.service; nav.onkeydown = null; body.removeAttribute('role'); body.removeAttribute('aria-labelledby'); return; }
+    const state = getState(), {id, kind, active} = context;
+    const record = kind === 'account' ? [state.native_account, ...(state.accounts || [])].find(item => item?.id === id)
+      : (state.providers || []).find(item => item.id === id);
+    if (!record) return;
+    $('modal_title').textContent = record.native ? 'Native' : record.name || id;
+    const key = kind + ':' + id;
+    if (nav.dataset.service !== key) {
+      nav.dataset.service = key;
+      nav.innerHTML = tabs(id, kind, active, record.duplicate && record.duplicate_of === '当前 Codex 登录');
+    }
+    for (const button of nav.querySelectorAll('[role="tab"]')) {
+      const selected = button.dataset.uiAction.endsWith(active === 'edit' ? '-edit' : '-details');
+      button.setAttribute('aria-selected', String(selected));
+      button.tabIndex = selected ? 0 : -1;
+    }
+    nav.onkeydown = event => {
+      const buttons = [...nav.querySelectorAll('[role="tab"]')].filter(button => !button.disabled);
+      const index = buttons.indexOf(event.target);
+      if (index < 0 || !['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+        : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next].focus(); buttons[next].click();
+    };
+    body.setAttribute('role', 'tabpanel');
+    body.setAttribute('aria-labelledby', 'service-tab-' + active);
+  }
+  function open(id, kind, active, body, label, submit) {
+    openModal('', body, label, submit, {id, kind, active});
   }
   function render() {
     const state = getState(), box = $('services');
@@ -84,18 +116,16 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
   async function details(id) {
     const provider = (getState().providers || []).find(item => item.id === id);
     if (!provider) return;
-    const field = (label, value) => `<div><span class="account-info-label">${label}</span><span class="account-value">${esc(value)}</span></div>`;
-    openModal(tr('服务信息','Service details'), `${tabs(id, 'provider')}
-      <div class="service-detail-heading"><span>${icon(providerBrand(provider), providerType(provider) === 'CPA')}<strong>${esc(provider.name || id)}</strong></span><button type="button" class="danger" data-icon="trash" data-ui-action="provider-remove" data-id="${esc(id)}">${tr('移除','Remove')}</button></div>
-      <div class="account-info-grid">${field(tr('连接方式','Connection'), provider.auth_mode === 'claude_login' ? tr('本机订阅','Local subscription') : providerType(provider))}${field(tr('标识','ID'), id)}${provider.auth_mode === 'claude_login' ? '' : field('Base URL', endpoint(provider))}${field(tr('协议','Protocol'), protocolLabel(provider.protocol))}${provider.auth_mode === 'claude_login' ? '' : field(tr('认证','Authentication'), authLabel(provider.auth_mode))}</div>
+    open(id, 'provider', 'details', `<div class="service-detail-actions"><button type="button" class="danger" data-icon="trash" data-ui-action="provider-remove" data-id="${esc(id)}">${tr('移除','Remove')}</button></div>
       <div id="service_usage">${tr('正在读取用量…','Loading usage…')}</div>`, '', null);
     const box = $('service_usage');
+    const controller = new AbortController(); detailsController = controller;
     try {
-      const data = await api('/api/usage?category=external&start=0&end='+Date.now()/1000);
-      if ($('service_usage') !== box) return;
+      const data = await api('/api/usage?category=external&start=0&end='+Date.now()/1000, {signal:controller.signal});
+      if (controller.signal.aborted || $('service_usage') !== box) return;
       const rows = (data.groups || []).filter(row => row.category === 'external' && row.owner === id);
       box.innerHTML = usageSummary.render({groups:rows});
-    } catch (error) { if ($('service_usage') === box) box.textContent = error.message; }
+    } catch (error) { if (!controller.signal.aborted && $('service_usage') === box) box.textContent = error.message; }
   }
   async function refresh(id, notify = true) {
     if (refreshing.has(id)) return false;
@@ -119,5 +149,5 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
       return false;
     } finally { refreshing.delete(id); render(); }
   }
-  return {render, details, refresh, tabs};
+  return {render, details, refresh, tabs, open, mount, stop};
 }

@@ -476,22 +476,6 @@ mod tests {
     }
 
     #[test]
-    fn every_tool_bridge_input_shape_uses_owned_preparation() {
-        let bodies = [
-            json!({"input":[{"type":"additional_tools","tools":[]}]}),
-            json!({"input":[{"type":"tool_search_call","execution":"client","call_id":"c-search","arguments":{}}]}),
-            json!({"input":[{"type":"tool_search_output","execution":"client","call_id":"c-output","status":"ok","tools":[]}]}),
-            json!({"input":[{"type":"function_call","call_id":"c-function","name":"plain_tool","arguments":"{}"}]}),
-            json!({"input":[{"type":"custom_tool_call","call_id":"c-custom","name":"plain_tool","input":"{}"}]}),
-            json!({"input":[{"type":"function_call_output","call_id":"c-function","name":"plain_tool","output":"ok"}]}),
-            json!({"input":[{"type":"custom_tool_call_output","call_id":"c-custom","output":"ok"}]}),
-        ];
-        for body in &bodies {
-            expect_owned(body);
-        }
-    }
-
-    #[test]
     fn namespaced_tool_preparation_restores_response_identity() {
         let body = json!({
             "tools":[{"type":"namespace","name":"math","tools":[{

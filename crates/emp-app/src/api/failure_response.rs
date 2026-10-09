@@ -14,6 +14,13 @@ use emp_transport::normalize_error_class;
 use emp_transport::public_failure_message;
 use serde_json::Value;
 
+mod stream;
+pub(crate) use stream::{safe_failure_reason, stream_error_code};
+pub(crate) use stream::{
+    stream_failure_value, stream_failure_value_for_route, websocket_router_error,
+    websocket_router_error_for_route,
+};
+
 pub(crate) fn emp_websocket_error(status: u16, code: &str, message: &str) -> Value {
     serde_json::json!({"type":"error", "status":status,
         "error":{"code":code,"origin":"emp","message":error_origin::message("emp", message)}})
@@ -73,40 +80,24 @@ pub(crate) fn route_resolution_response(error: RouteResolutionError) -> Vec<u8> 
     } else {
         "router_error"
     };
-    let body = serde_json::to_vec(&serde_json::json!({
-        "error": {
-            "code": error_class,
-            "type": error_class,
-            "origin":"emp", "message":error_origin::message("emp", &error.to_string()),
-        }
-    }))
-    .expect("route resolution response is JSON serializable");
-    response(
-        &format!(
-            "HTTP/1.1 {} {}",
-            error.status(),
-            status_text(error.status())
-        ),
-        "application/json",
-        &body,
-        &[],
+    http_error(
+        error.status(),
+        serde_json::json!({
+            "code":error_class, "type":error_class, "origin":"emp",
+            "message":error_origin::message("emp", &error.to_string()),
+        }),
+        None,
     )
 }
 
 pub(crate) fn request_router_error_response(status: u16, message: &str) -> Vec<u8> {
-    let body = serde_json::to_vec(&serde_json::json!({
-        "error": {
-            "code": "router_error",
-            "type": "router_error",
-            "origin":"emp", "message":error_origin::message("emp", message),
-        }
-    }))
-    .expect("request router response is JSON serializable");
-    response(
-        &format!("HTTP/1.1 {status} {}", status_text(status)),
-        "application/json",
-        &body,
-        &[],
+    http_error(
+        status,
+        serde_json::json!({
+            "code":"router_error", "type":"router_error", "origin":"emp",
+            "message":error_origin::message("emp", message),
+        }),
+        None,
     )
 }
 
@@ -161,133 +152,7 @@ fn router_error_response_with_route(error: RouterError, route: Option<&ResolvedR
     if let Some(reason) = failure_reason {
         detail["failure_reason"] = Value::String(reason);
     }
-    if let Some(delay) = error.retry_after_seconds() {
-        detail["retry_after_seconds"] = Value::from(delay);
-    }
-    let body = serde_json::to_vec(&serde_json::json!({"error": detail}))
-        .expect("router response is JSON serializable");
-    let retry = error.retry_after_seconds().map(|delay| delay.to_string());
-    let headers = retry
-        .as_deref()
-        .map(|value| vec![("Retry-After", value)])
-        .unwrap_or_default();
-    response(
-        &format!(
-            "HTTP/1.1 {} {}",
-            error.status(),
-            status_text(error.status())
-        ),
-        "application/json",
-        &body,
-        &headers,
-    )
-}
-
-pub(crate) fn stream_error_code(error_class: FailureClass) -> &'static str {
-    match error_class {
-        FailureClass::ContextLengthExceeded => "context_length_exceeded",
-        FailureClass::PaymentRequired => "payment_required",
-        FailureClass::RateLimit => "rate_limit_exceeded",
-        _ => "upstream_error",
-    }
-}
-
-pub(crate) fn safe_failure_reason(value: &str) -> String {
-    value
-        .trim()
-        .to_lowercase()
-        .chars()
-        .map(|character| {
-            if character.is_alphanumeric() || matches!(character, '_' | '-') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .take(64)
-        .collect()
-}
-
-pub(crate) fn stream_failure_value(error: &RouterError, response_id: &str) -> Value {
-    stream_failure_value_with_route(error, response_id, None, false)
-}
-
-pub(crate) fn stream_failure_value_for_route(
-    error: &RouterError,
-    response_id: &str,
-    route: &ResolvedRoute,
-    output_started: bool,
-) -> Value {
-    stream_failure_value_with_route(error, response_id, Some(route), output_started)
-}
-
-fn stream_failure_value_with_route(
-    error: &RouterError,
-    response_id: &str,
-    route: Option<&ResolvedRoute>,
-    output_started: bool,
-) -> Value {
-    let error_class = error.error_class();
-    let mut detail = serde_json::json!({
-        "code": stream_error_code(error_class),
-        "message": format!(
-            "HTTP {}: {}",
-            error.status(),
-            route.map_or_else(
-                || public_failure_message(error_class, error.failure_reason(), error.status()),
-                |route| routed_message(error, route, output_started),
-            )
-        ),
-        "status": error.status(),
-        "error_class": error_class.as_str(),
-    });
-    error_origin::annotate(&mut detail, error_origin::router(error));
-    if let Some(reason) = error.failure_reason() {
-        let reason = safe_failure_reason(reason);
-        if !reason.is_empty() {
-            detail["failure_reason"] = Value::String(reason);
-        }
-    }
-    if error.kind() == RouterErrorKind::Transport {
-        detail["transport_failure"] = Value::Bool(true);
-    }
-    if let Some(delay) = error.retry_after_seconds() {
-        detail["retry_after_seconds"] = Value::from(delay);
-        if error_class == FailureClass::RateLimit {
-            detail["message"] = Value::String(format!(
-                "{} Please try again in {delay}s.",
-                detail["message"].as_str().unwrap_or_default()
-            ));
-        }
-    }
-    serde_json::json!({
-        "type": "response.failed",
-        "response": {
-            "id": response_id,
-            "object": "response",
-            "status": "failed",
-            "error": detail,
-        }
-    })
-}
-
-pub(crate) fn websocket_router_error(error: &RouterError) -> Value {
-    let failure = stream_failure_value(error, "resp_websocket_error");
-    serde_json::json!({
-        "type":"error", "status":error.status(),
-        "error":failure["response"]["error"]
-    })
-}
-
-pub(crate) fn websocket_router_error_for_route(
-    error: &RouterError,
-    route: &ResolvedRoute,
-) -> Value {
-    let failure = stream_failure_value_for_route(error, "resp_websocket_error", route, false);
-    serde_json::json!({
-        "type":"error", "status":error.status(),
-        "error":failure["response"]["error"]
-    })
+    http_error(error.status(), detail, error.retry_after_seconds())
 }
 
 pub(crate) fn pre_output_failure_response(event: &Value, route: &ResolvedRoute) -> Option<Vec<u8>> {
@@ -324,22 +189,17 @@ pub(crate) fn pre_output_failure_response(event: &Value, route: &ResolvedRoute) 
     if let Some(reason) = failure_reason {
         detail["failure_reason"] = Value::String(reason.to_owned());
     }
-    let retry_after = error.get("retry_after_seconds").and_then(Value::as_u64);
-    if let Some(delay) = retry_after {
-        detail["retry_after_seconds"] = Value::from(delay);
-    }
-    let body = serde_json::to_vec(&serde_json::json!({"error": detail})).ok()?;
-    let retry = retry_after.map(|delay| delay.to_string());
-    let headers = retry
-        .as_deref()
-        .map(|value| vec![("Retry-After", value)])
-        .unwrap_or_default();
-    Some(response(
-        &format!("HTTP/1.1 {status} {}", status_text(status)),
-        "application/json",
-        &body,
-        &headers,
-    ))
+    let retry_after = error
+        .get("headers")
+        .and_then(Value::as_object)
+        .and_then(|headers| {
+            headers
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("retry-after"))
+        })
+        .and_then(|(_, value)| emp_router::parse_retry_after(value.as_str()))
+        .or_else(|| error.get("retry_after_seconds").and_then(Value::as_u64));
+    Some(http_error(status, detail, retry_after))
 }
 
 pub(crate) fn pre_output_router_error_response_for_route(
@@ -369,22 +229,24 @@ fn pre_output_router_error_response_with_route(
     {
         detail["failure_reason"] = Value::String(safe_failure_reason(reason));
     }
-    if let Some(delay) = error.retry_after_seconds() {
+    http_error(error.status(), detail, error.retry_after_seconds())
+}
+
+// HTTP responses keep Retry-After in the actual header. The compatibility field
+// remains available to older clients; no other upstream headers are exposed.
+fn http_error(status: u16, mut detail: Value, retry_after: Option<u64>) -> Vec<u8> {
+    if let Some(delay) = retry_after {
         detail["retry_after_seconds"] = Value::from(delay);
     }
-    let body = serde_json::to_vec(&serde_json::json!({"error": detail}))
-        .expect("stream error response is JSON serializable");
-    let retry = error.retry_after_seconds().map(|delay| delay.to_string());
+    let body = serde_json::to_vec(&serde_json::json!({"error":detail}))
+        .expect("error response is JSON serializable");
+    let retry = retry_after.map(|delay| delay.to_string());
     let headers = retry
         .as_deref()
         .map(|value| vec![("Retry-After", value)])
         .unwrap_or_default();
     response(
-        &format!(
-            "HTTP/1.1 {} {}",
-            error.status(),
-            status_text(error.status())
-        ),
+        &format!("HTTP/1.1 {status} {}", status_text(status)),
         "application/json",
         &body,
         &headers,

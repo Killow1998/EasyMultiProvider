@@ -868,15 +868,33 @@ fn installed_cli_websocket_preserves_router_error_class_and_retry_after() {
             "input":"websocket rate limit request"
         }))
         .expect("send websocket turn");
-    let event = (0..4)
-        .map(|_| {
-            socket
-                .receive_json()
-                .expect("websocket error event")
-                .expect("websocket remains open after a turn error")
-        })
-        .find(|event| event["type"] != "codex.response.metadata")
-        .expect("websocket error event after metadata");
+    let mut created = 0;
+    let mut error = None;
+    for _ in 0..4 {
+        let event = socket
+            .receive_json()
+            .expect("websocket error event")
+            .expect("websocket remains open after a turn error");
+        match event["type"].as_str() {
+            Some("codex.response.metadata") => {}
+            Some("response.created") => {
+                created += 1;
+                assert_eq!(event["response"]["status"], "in_progress");
+                assert!(
+                    event["response"]["id"]
+                        .as_str()
+                        .is_some_and(|id| !id.is_empty())
+                );
+            }
+            Some("error") => {
+                error = Some(event);
+                break;
+            }
+            other => panic!("unexpected event before the rate-limit error: {other:?}"),
+        }
+    }
+    assert_eq!(created, 1, "publish the response ID needed for steering");
+    let event = error.expect("websocket rate-limit error after response creation");
     assert_eq!(event["type"], "error");
     assert_eq!(event["status"], 429);
     assert_eq!(event["error"]["code"], "rate_limit_exceeded");

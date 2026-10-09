@@ -855,6 +855,45 @@ fn fake_release_http_install_replaces_running_process_and_preserves_config() {
         installed_hash, candidate_hash,
         "installed executable digest differs from candidate"
     );
+    // The successful handoff cleans staging, but timings must remain in the
+    // ordinary journal so a slow update can be diagnosed after restart.
+    let mut events = Vec::new();
+    for entry in std::fs::read_dir(temp.path().join("state/logs")).unwrap() {
+        let path = entry.unwrap().path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+        {
+            for line in std::fs::read_to_string(path).unwrap().lines() {
+                events.push(serde_json::from_str::<serde_json::Value>(line).unwrap());
+            }
+        }
+    }
+    assert!(events.iter().any(|event| event["event"] == "update_retry"));
+    let download = events
+        .iter()
+        .find(|event| event["event"] == "update_download")
+        .unwrap();
+    assert_eq!(
+        download["fields"]["received_bytes"],
+        download["fields"]["expected_bytes"]
+    );
+    assert!(download["fields"]["duration_ms"].is_number());
+    for stage in [
+        "download_package",
+        "verify_checksum",
+        "verify_version",
+        "drain_requests",
+        "wait_worker",
+    ] {
+        assert!(
+            events
+                .iter()
+                .any(|event| event["event"] == "update_stage_finished"
+                    && event["fields"]["stage"] == stage),
+            "missing timing for {stage}"
+        );
+    }
 }
 
 #[test]

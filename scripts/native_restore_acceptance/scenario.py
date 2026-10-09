@@ -174,8 +174,8 @@ def main() -> int:
         )
         report["codex_version"] = version.stdout.strip() if version.returncode == 0 else "unknown"
         report["binary_hashes"]["codex"]["version_peak_rss_bytes"] = version_peak
-        if version.returncode != 0 or report["codex_version"] != "codex-cli 0.158.0":
-            fail("supplied Codex binary must report exactly codex-cli 0.158.0")
+        if version.returncode != 0 or not report["codex_version"].startswith("codex-cli "):
+            fail("unable to read the supplied Codex binary version")
 
         emp_version, emp_version_peak = run_bounded_capture(
             [str(emp_bin), "--version"],
@@ -186,8 +186,8 @@ def main() -> int:
         )
         report["emp_version"] = emp_version.stdout.strip() if emp_version.returncode == 0 else "unknown"
         report["binary_hashes"]["emp"]["version_peak_rss_bytes"] = emp_version_peak
-        if emp_version.returncode != 0 or report["emp_version"] != "EMP 0.12.3":
-            fail("supplied EMP binary must report exactly EMP 0.12.3")
+        if emp_version.returncode != 0 or not report["emp_version"].startswith("EMP "):
+            fail("unable to read the supplied EMP binary version")
 
         with AppServer(codex_bin, env, root / "app-server-create-parent.stderr.log") as server:
             parent_id = start_thread(server, workspace)

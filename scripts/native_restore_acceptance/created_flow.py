@@ -210,16 +210,16 @@ def run_created_flow(args: argparse.Namespace, address_space_limit_bytes: int) -
         )
         report["codex_version"] = codex_version.stdout.strip() if codex_version.returncode == 0 else "unknown"
         report["binary_hashes"]["codex"]["version_peak_rss_bytes"] = codex_peak
-        if codex_version.returncode != 0 or report["codex_version"] != "codex-cli 0.158.0":
-            fail("supplied Codex binary must report exactly codex-cli 0.158.0")
+        if codex_version.returncode != 0 or not report["codex_version"].startswith("codex-cli "):
+            fail("unable to read the supplied Codex binary version")
 
         emp_version, emp_peak = run_bounded_capture(
             [str(emp_bin), "--version"], address_space_limit_bytes, env=env, cwd=root, timeout=20
         )
         report["emp_version"] = emp_version.stdout.strip() if emp_version.returncode == 0 else "unknown"
         report["binary_hashes"]["emp"]["version_peak_rss_bytes"] = emp_peak
-        if emp_version.returncode != 0 or report["emp_version"] != "EMP 0.12.3":
-            fail("supplied EMP binary must report exactly EMP 0.12.3")
+        if emp_version.returncode != 0 or not report["emp_version"].startswith("EMP "):
+            fail("unable to read the supplied EMP binary version")
 
         auth = {"tokens": {"access_token": NATIVE_TOKEN, "account_id": "fixture-account"}}
         auth_path = codex_home / "auth.json"
@@ -396,6 +396,7 @@ def run_created_flow(args: argparse.Namespace, address_space_limit_bytes: int) -
             emp.stop()
             report["emp_peak_rss_bytes"] = emp.peak_rss_bytes
             emp = None
+        report["shutdown_restored_config"] = (codex_home / "config.toml").read_bytes() == native_config
 
         restore, restore_peak = run_bounded_capture(
             [str(emp_bin), "restore", "--state-dir", str(state_dir), "--json"],

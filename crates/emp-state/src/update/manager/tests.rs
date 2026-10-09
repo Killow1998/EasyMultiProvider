@@ -372,3 +372,84 @@ fn dpkg_owned_install_requires_manual_migration_before_any_download() {
         Err(crate::update::UpdateError("system_install_manual"))
     );
 }
+
+#[test]
+fn update_journal_keeps_retry_stage_timings_after_success() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        for status in ["503 Service Unavailable", "404 Not Found"] {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 512];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        }
+    });
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = Arc::clone(&events);
+    let manager = UpdateManager::with_startup_hooks(
+        std::env::current_exe().unwrap(),
+        Vec::new(),
+        env!("CARGO_PKG_VERSION"),
+        UpdateEndpoints::for_source(&base, format!("{base}/latest")),
+        false,
+        super::UpdateHooks::new(|| Ok(()), || {}, || Ok(())).with_observer(move |event, fields| {
+            observed
+                .lock()
+                .unwrap()
+                .push((event.to_owned(), fields.clone()));
+        }),
+    )
+    .unwrap();
+    manager.start("check").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(name, _)| name == "update_finished")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "update never completed");
+        thread::sleep(Duration::from_millis(10));
+    }
+    server.join().unwrap();
+    assert_eq!(manager.snapshot().state, "no_release");
+    let events = events.lock().unwrap();
+    let retry = events
+        .iter()
+        .find(|(name, _)| name == "update_retry")
+        .unwrap();
+    assert_eq!(retry.1["http_status"], 503);
+    assert_eq!(retry.1["retry_count"], 1);
+    let stages: Vec<_> = events
+        .iter()
+        .filter(|(name, _)| name == "update_stage_finished")
+        .collect();
+    assert_eq!(stages.len(), 2);
+    assert_eq!(stages[0].1["outcome"], "retrying");
+    assert_eq!(stages[1].1["outcome"], "completed");
+    assert!(
+        stages
+            .iter()
+            .all(|(_, fields)| fields["duration_ms"].is_number())
+    );
+    let finished = &events.last().unwrap().1;
+    assert_eq!(finished["outcome"], "completed");
+    assert_eq!(finished["retry_count"], 1);
+    assert!(finished["duration_ms"].is_number());
+}

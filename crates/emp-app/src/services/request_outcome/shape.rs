@@ -41,7 +41,18 @@ pub(super) fn facts(body: &Value, headers: &BTreeMap<String, String>) -> Value {
                 "unknown".into()
             });
         }
-        if matches!(item_type.as_str(), "function_call" | "custom_tool_call") {
+        // Server search results are owned by the upstream, not a Codex tool pair.
+        if matches!(
+            item_type.as_str(),
+            "tool_search_call" | "tool_search_output"
+        ) && item["execution"] == "server"
+        {
+            continue;
+        }
+        if matches!(
+            item_type.as_str(),
+            "function_call" | "custom_tool_call" | "tool_search_call"
+        ) {
             if let Some(id) = item["call_id"]
                 .as_str()
                 .filter(|s| !s.is_empty())
@@ -53,7 +64,7 @@ pub(super) fn facts(body: &Value, headers: &BTreeMap<String, String>) -> Value {
             }
         } else if matches!(
             item_type.as_str(),
-            "function_call_output" | "custom_tool_call_output"
+            "function_call_output" | "custom_tool_call_output" | "tool_search_output"
         ) {
             if item_type == "function_call_output"
                 && item["call_id"].is_null()
@@ -166,28 +177,36 @@ mod tests {
     }
 
     #[test]
-    fn request_byte_count_matches_materialized_json_with_unicode_and_escapes() {
-        let body = json!({
-            "model": "external/model",
-            "input": [{
-                "type": "message",
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": "comma, colon: quote \\\" slash \\\\ newline\\n snow 雪"
-                }]
-            }],
-            "metadata": {"nested": [null, true, 1.25, {"text": "\\\\\\\" , :"}]},
-        });
-        assert_eq!(request_bytes(&body), materialized_reference(&body));
-    }
-
-    #[test]
-    fn request_byte_count_matches_materialized_json_for_large_text() {
-        let mut text = "x".repeat(256 * 1024);
-        text.insert_str(65_534, "\\\" , : 雪");
-        let body =
-            json!({"input":[{"type":"message","content":[{"type":"input_text","text":text}]}]});
-        assert_eq!(request_bytes(&body), materialized_reference(&body));
+    fn request_bytes_and_tool_pairs_preserve_content_free_wire_facts() {
+        let large = "quote \" slash \\ snow 雪, :".repeat(16_384);
+        for body in [
+            json!({"input":large}),
+            json!({"input":[{"type":"tool_search_output","execution":"server","tools":[]}]}),
+            json!({"input":[
+                {"type":"tool_search_call","execution":"client","call_id":"s","arguments":{}},
+                {"type":"tool_search_output","execution":"client","call_id":"s","tools":[]}
+            ]}),
+            json!({"input":[
+                {"type":"tool_search_call","execution":"client","call_id":"s","arguments":{"query":"private-search"}},
+                {"type":"tool_search_output","execution":"client","call_id":"s","tools":[]},
+                {"type":"function_call","call_id":"f","name":"private-tool","arguments":"{}"},
+                {"type":"function_call_output","call_id":"f","output":"private-output"}
+            ]}),
+        ] {
+            assert_eq!(request_bytes(&body), materialized_reference(&body));
+            let facts = super::facts(&body, &Default::default());
+            assert_eq!(
+                facts["tool_pairing_status"],
+                if body["input"].is_array() && body["input"][0]["execution"] != "server" {
+                    "paired"
+                } else {
+                    "none"
+                }
+            );
+            let encoded = facts.to_string();
+            for private in ["private-search", "private-tool", "private-output"] {
+                assert!(!encoded.contains(private));
+            }
+        }
     }
 }

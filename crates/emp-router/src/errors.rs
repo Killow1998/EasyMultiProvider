@@ -56,7 +56,7 @@ pub(super) fn anthropic_error(error: AnthropicError) -> RouterError {
         },
         Some(error.error_class().to_owned()),
         None,
-        "Anthropic protocol projection failed",
+        error.message,
     )
 }
 

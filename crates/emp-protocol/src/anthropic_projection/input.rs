@@ -246,7 +246,10 @@ fn anthropic_content(value: Option<&Value>) -> Result<Vec<Value>, AnthropicError
     }
     Ok(result)
 }
-pub(super) fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, AnthropicError> {
+pub(super) fn messages(
+    body: &Map<String, Value>,
+    system: &mut Vec<Value>,
+) -> Result<Vec<Value>, AnthropicError> {
     let empty_message = Value::String(String::new());
     let source = body.get("input").unwrap_or(&empty_message);
     let source = match source {
@@ -304,6 +307,11 @@ pub(super) fn messages(body: &Map<String, Value>) -> Result<Vec<Value>, Anthropi
             "message" => {
                 flush(&mut result, &mut pending_calls, &mut pending_results);
                 let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
+                if matches!(role, "system" | "developer") {
+                    let text = request_text(item.get("content"), "instructions")?;
+                    system.push(serde_json::json!({"type":"text", "text":text}));
+                    continue;
+                }
                 if !matches!(role, "user" | "assistant") {
                     return Err(request_error(
                         "request projection failed: unsupported Anthropic role",

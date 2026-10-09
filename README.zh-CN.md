@@ -30,7 +30,7 @@ EMP 在本机运行，主要解决两件事：
 时使用导入的账号，选中 `deepseek/deepseek-v4-pro` 时使用 DeepSeek API Key。编码任务、
 权限和工具仍由 Codex 管理。EMP 在本机统一管理模型列表、加密凭据和账号额度。
 
-当前源码版本为 `v0.12.14`。
+当前源码版本为 `v0.12.15`。
 
 ## 功能
 
@@ -108,6 +108,8 @@ Linux 同时支持扫描当前 `CODEX_HOME/plugins/.plugin-appserver/codex`，
 其他 AppImage 或发行版的安装布局仍需单独验证。
 
 EMP 支持 Codex CLI、桌面 App 和 IDE 扩展，不以统一的最低引擎版本拒绝接入。
+维护范围为最新 Codex 正式版本系列及前九个系列，同系列补丁版合并计算。
+当前范围与验收结果见[Codex 兼容性](docs/codex-compatibility.md)。
 余量读取、额度重置和模型目录检查分别取决于所用引擎提供的接口；缺少某个接口时，
 只报告对应操作不可用。认证、协议和对话历史保护仍然生效。
 

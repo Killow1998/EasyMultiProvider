@@ -4,6 +4,11 @@ The management page checks the official repository's latest stable release.
 Checking or installing requires the authenticated local management session. The
 browser never downloads or executes release code itself.
 
+Release checks and downloads use proxy environment variables first, then the
+Windows or macOS system proxy. Each network attempt reads the current settings,
+including a proxy enabled after EMP started. Linux uses proxy environment
+variables. HTTPS validation and official GitHub download hosts remain enforced.
+
 For supported user-writable installations, **Update in background** downloads the
 platform asset, enforces a 512 MiB ceiling, verifies the exact size and
 GitHub-provided SHA-256 digest, and checks the packaged `--version` before any
@@ -104,6 +109,13 @@ storage is full, or check folder permissions and system protection when writes
 are denied. Possible causes are suggestions, not a diagnosis of the network.
 If the receipt cannot be saved, the
 same fixed fields remain in the process console and current management state.
+
+The ordinary rotating journal also records update start, stage start/end,
+stage duration, download bytes and rate, retries, and the operation outcome.
+These records survive successful staging cleanup and process replacement.
+An `install` outcome of `handed_off` means the old process delegated replacement
+to the worker; startup acknowledgement or rollback is still owned by that worker.
+The journal contains no download URLs, proxy credentials or account data.
 
 The source tests cover release selection, URL boundaries, checksums, archive
 selection, drain behavior, management authorization, and binary rollback. Native

@@ -3,7 +3,7 @@ use super::support::*;
 use super::*;
 use std::process::{Child, ChildStdin, Command, Stdio};
 
-struct Codex {
+pub(super) struct Codex {
     child: Child,
     input: ChildStdin,
     output: mpsc::Receiver<Value>,
@@ -11,7 +11,7 @@ struct Codex {
 }
 
 impl Codex {
-    fn start(home: &Path) -> Self {
+    pub(super) fn start(home: &Path) -> Self {
         let mut command =
             Command::new(std::env::var_os("EMP_TEST_CODEX_CLI").unwrap_or_else(|| "codex".into()));
         #[cfg(unix)]
@@ -55,12 +55,12 @@ impl Codex {
         }
     }
 
-    fn send(&mut self, value: Value) {
+    pub(super) fn send(&mut self, value: Value) {
         writeln!(self.input, "{value}").unwrap();
         self.input.flush().unwrap();
     }
 
-    fn wait(&self, predicate: impl Fn(&Value) -> bool) -> Value {
+    pub(super) fn wait(&self, predicate: impl Fn(&Value) -> bool) -> Value {
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             let value = self
@@ -73,7 +73,7 @@ impl Codex {
         }
     }
 
-    fn rpc(&mut self, id: u64, method: &str, params: Value) -> Value {
+    pub(super) fn rpc(&mut self, id: u64, method: &str, params: Value) -> Value {
         self.send(json!({"id":id,"method":method,"params":params}));
         let value = self.wait(|value| value["id"] == id);
         assert!(value.get("error").is_none(), "Codex RPC error: {value}");

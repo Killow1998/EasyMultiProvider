@@ -81,6 +81,7 @@ mod realtime_contract;
 mod realtime_sideband_contract;
 mod request_observation_contract;
 mod response_synthesis_contract;
+mod retry_advice_contract;
 mod session_boundary_contract;
 mod stream_boundary_contract;
 mod websocket_capacity_contract;

@@ -1,19 +1,6 @@
 // Run with: node --test crates/emp-app/tests/web_features_contract.cjs
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+const {assert, fs, path, vm, web, tr, esc, deferred, feature} = require('./web_fixture.cjs');
 const {test} = require('node:test');
-
-const web = path.join(__dirname, '../web');
-const tr = (_zh, en) => en;
-const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return {promise, resolve, reject}; };
-function feature(file, factory, globals = {}) {
-  const context = vm.createContext({Headers, URL, Blob, ...globals});
-  vm.runInContext(fs.readFileSync(path.join(web, file), 'utf8'), context, {filename:file});
-  return context[factory];
-}
 function sessionFixture(url = 'http://localhost/?bootstrap=once', saved = '') {
   let token = saved;
   const calls = [], replies = [];
@@ -42,17 +29,17 @@ test('unified chooser preserves local Claude identity and exposes direct connect
   assert.doesNotMatch(html, /Legacy forward|execution_backend|claude-provider-choose/);
 });
 
-test('service details isolate provider usage, escape labels and discard results after navigation', async () => {
+test('service details isolate provider usage and discard results after navigation', async () => {
   let box, html;
   const pending = [], calls = [];
   const state = {providers:[{id:'first', name:'<img src=x>', base_url:'https://user:secret@example.invalid/v1?key=secret', protocol:'responses'}, {id:'second', name:'Second'}]};
   const service = feature('service-list.js', 'createServiceList')({
     getState:() => state, $:() => box, tr, esc, presets:{}, icon:() => '', protocolLabel:x => x, authLabel:() => 'API Key',
-    usageSummary:serviceUsage(), openModal(_title, body) { html = body; box = {innerHTML:''}; },
-    api:async path => { calls.push(path); const value = deferred(); pending.push(value); return value.promise; },
+    usageSummary:serviceUsage(), openModal(_title, body) { service.stop(); html = body; box = {innerHTML:''}; },
+    api:async (path, options) => { calls.push(path); const value = deferred(); pending.push({...value,signal:options.signal}); return value.promise; },
   });
   const first = service.details('first');
-  assert.match(html, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(html, /<img|Base URL|Authentication|Connection settings/);
   assert.doesNotMatch(html, /user:secret|key=secret/);
   assert.match(calls[0], /category=external/);
   pending[0].resolve({groups:[{category:'external',owner:'first',model:'own-model'}, {category:'external',owner:'second',model:'other-model'}]});
@@ -61,6 +48,7 @@ test('service details isolate provider usage, escape labels and discard results 
   assert.doesNotMatch(box.innerHTML, /other-model/);
   const stale = service.details('first');
   const current = service.details('second');
+  assert.equal(pending[1].signal.aborted,true);
   pending[1].reject(new Error('old request failed'));
   await stale;
   assert.equal(box.innerHTML, '');
@@ -131,7 +119,7 @@ test('service badges own settings navigation while list actions retain refresh, 
   assert.doesNotMatch(box.innerHTML, /data-ui-action="(?:account|provider)-edit"/);
   for (const action of ['account-details','provider-details','account-refresh','account-quota-history','provider-model-settings','provider-quota-refresh','provider-quota-history']) assert.match(box.innerHTML, new RegExp('data-ui-action="'+action+'"'));
   assert.match(service.tabs('@native','account'), /data-ui-action="account-edit"/);
-  assert.match(service.tabs('api','provider','edit'), /data-ui-action="provider-edit"[^>]*aria-pressed="true"/);
+  assert.match(service.tabs('api','provider','edit'), /data-ui-action="provider-edit"[^>]*aria-selected="true"/);
   assert.match(service.tabs('duplicate','account','details',true), /data-ui-action="account-edit"[^>]*disabled/);
 });
 
@@ -208,15 +196,39 @@ test('common call details escape model/session names and keep missing metrics em
   assert.doesNotMatch(html,/0.00 s|0.0 token/);
 });
 
+test('report refresh cancels superseded requests, retains data on error and ignores closure', async () => {
+  const pending = [], states = [], results = [];
+  const query = feature('report-query.js','createReportQuery',{AbortController})({
+    api:(_path,options) => { const request=deferred(); pending.push({...request,signal:options.signal}); return request.promise; },
+    onState:(loading,error) => states.push([loading,error]),onResult:value => results.push(value),
+  });
+  const old = query.run('/old'), fresh = query.run('/fresh');
+  assert.equal(pending[0].signal.aborted,true);
+  pending[1].resolve('new data'); await fresh;
+  pending[0].resolve('stale data'); await old;
+  assert.deepEqual(results,['new data']);
+  assert.deepEqual(states.at(-1),[false,'']);
+  const failed = query.run('/failed');
+  pending[2].reject(new Error('Network unavailable')); await failed;
+  assert.deepEqual(results,['new data']);
+  assert.deepEqual(states.at(-1),[false,'Network unavailable']);
+  const closed = query.run('/closed'); query.cancel();
+  assert.equal(pending[3].signal.aborted,true);
+  pending[3].resolve('closed result'); await closed;
+  assert.deepEqual(results,['new data']);
+  assert.deepEqual(states.at(-1),[false,'']);
+});
+
 test('call queries coalesce events and discard stale filters and closed windows', async () => {
   const requests = [], timers = new Map(), controls = new Map();
   const content = {innerHTML:'',textContent:'',querySelectorAll:() => []};
-  const root = {innerHTML:'',querySelector(selector) { if (selector === '[data-call-content]') return content; if (!controls.has(selector)) controls.set(selector,{value:''}); return controls.get(selector); }};
+  const root = {innerHTML:'',setAttribute() {},querySelectorAll:() => [],querySelector(selector) { if (selector === '[data-call-content]') return content; if (!controls.has(selector)) controls.set(selector,{value:'',dataset:{}}); return controls.get(selector); }};
   const report = id => ({start:0,end:Date.now()/1000,records:[{request_id:id,client_model:id,state:'completed'}],total:1,offset:0,limit:50});
   const reports = feature('call-reports.js','createCallReports', {
-    URLSearchParams, setTimeout:fn => { timers.set(fn,fn); return fn; }, clearTimeout:id => timers.delete(id),
+    URLSearchParams, createReportQuery:feature('report-query.js','createReportQuery',{AbortController}), setReportState:feature('report-query.js','setReportState'), setTimeout:fn => { timers.set(fn,fn); return fn; }, clearTimeout:id => timers.delete(id),
   })({tr,esc,getLanguage:() => 'en',getState:() => ({}),getActivity:() => ({}),$:() => root,openModal() {},
-    api:path => { const pending=deferred(); requests.push({path,...pending}); return pending.promise; }});
+    periodPickerHtml:() => '',registerPeriodPicker:(_id,_preset,onChange,range) => onChange(range || {start:0,end:Date.now()/1000}),
+    api:(path,options) => { const pending=deferred(); requests.push({path,options,...pending}); return pending.promise; }});
   const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
   const runTimer = async () => { const fn=timers.keys().next().value; timers.delete(fn); fn(); await tick(); };
   reports.openActivity({dataset:{activityKind:'account',activityId:'first'}});
@@ -224,7 +236,8 @@ test('call queries coalesce events and discard stale filters and closed windows'
   root.onchange({target:{dataset:{callFilter:'service'},value:'account:second'}});
   requests[0].resolve(report('stale')); await tick();
   assert.equal(content.innerHTML,'');
-  assert.equal(timers.size,1); await runTimer();
+  assert.equal(requests[0].options.signal.aborted,true);
+  assert.equal(timers.size,0);
   assert.match(requests[1].path,/account=second/);
   requests[1].resolve(report('fresh')); await tick();
   assert.match(content.innerHTML,/fresh/); assert.doesNotMatch(content.innerHTML,/stale/);
@@ -266,14 +279,21 @@ test('closing diagnostics discards in-flight reports without a polling timer', a
   assert.match($('diagnostics_summary').textContent, /latest 3 requests/);
 });
 
-test('the shipped page initializes its feature bindings using its own script order', () => {
+test('the shipped page initializes its bindings and retains translated integration status on refresh', () => {
   const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
   const pending = deferred();
+  const nodes = new Map();
+  const node = id => {
+    if (!nodes.has(id)) nodes.set(id, {textContent:'', dataset:{}, childElementCount:1, classList:{toggle() {}}});
+    return nodes.get(id);
+  };
+  if (html.match(/<span id="integration_badge"[^>]*>/)?.[0].includes('data-i18n="loading"')) node('integration_badge').dataset.i18n = 'loading';
   const context = vm.createContext({Headers, URL, Blob, console,
     fetch:() => pending.promise,
     localStorage:{getItem:() => ''},
     window:{location:{href:'http://localhost/'}, addEventListener() {}},
-    document:{addEventListener() {}, visibilityState:'hidden'},
+    document:{addEventListener() {}, visibilityState:'hidden', getElementById:node,
+      querySelectorAll:selector => selector === '[data-i18n]' ? [...nodes.values()].filter(item => item.dataset.i18n) : []},
   });
   for (const script of html.matchAll(/<script(?: src="([^"]+)")?>([\s\S]*?)<\/script>/g)) {
     const filename = script[1] ? path.basename(script[1]) : 'page.js';
@@ -281,6 +301,13 @@ test('the shipped page initializes its feature bindings using its own script ord
     vm.runInContext(source, context, {filename});
   }
   assert.equal(vm.runInContext('typeof openSettings + ":" + typeof openDiagnostics + ":" + typeof callReports.openActivity', context), 'function:function:function');
+  vm.runInContext("renderIntegration({configuration:{state:'emp_applied'},runtime:{state:'catalog_loaded'},codex_compatibility:{installed:'0.162.0'}}); applyTranslations();", context);
+  assert.equal(node('integration_badge').textContent, 'EMP 模型已加载');
+  vm.runInContext("setLanguage('en'); applyTranslations();", context);
+  assert.equal(node('integration_badge').textContent, 'EMP models loaded');
+  assert.equal(node('codex_version').textContent, 'Codex 0.162.0');
+  vm.runInContext("setLanguage('zh-CN'); applyTranslations();", context);
+  assert.equal(node('integration_badge').textContent, 'EMP 模型已加载');
 });
 
 test('quota mode changes bars and history together without changing recorded values', () => {

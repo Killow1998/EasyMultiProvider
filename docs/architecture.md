@@ -306,6 +306,30 @@ private. The page supplies current-state/language getters and UI operations.
 A changed language or new configuration therefore does not leave a stale copy
 inside a feature.
 
+`report-query.js` owns cancellation and latest-result selection for usage and
+call/performance queries. Its interface is `run`/`cancel` plus result/state
+callbacks; callers do not coordinate request counters. Refresh failures retain
+the displayed data. `period-controls.js` supplies the same presets, explicit
+custom-date query and refresh behavior to all time-based views. `usage-report.js` now owns its payload, scan request, fallback timer and pricing
+save lifecycle behind `open`/`refresh`/`stop`. It reads configuration and language
+through getters and receives period controls explicitly. DOM actions stay inside
+the report root instead of adding page-level usage handlers.
+`account-details.js` owns account usage reads and alias interaction;
+`model-editor.js` owns the model draft, capability edits and metadata cancellation.
+`model-settings.js` owns cached/discovered lists. The page composes these owners
+and calls their cleanup when replacing or closing a modal. Provider detail reads
+also cancel on closure. Late query results, save errors and draft cleanup cannot
+alter a replacement window. Configuration persistence, formatting policy and
+model inference remain existing shared operations; they are not duplicated.
+Performance navigation stays mounted during data refresh; overview metrics are
+plain facts rather than six equivalent navigation buttons.
+
+HTTP error serialization shares a status/body/retry-header function.
+`api/failure_response/stream.rs` owns the common SSE/WebSocket error detail;
+WebSocket does not allocate an SSE envelope to extract that detail. Native
+pre-output conversion reuses the router's bounded Retry-After parser. Wire
+contracts remain distinct and are exercised at the actual server interface.
+
 Styles are embedded as a separate static asset in their original cascade order.
 All assets ship in the EMP executable, with no new framework, development server
 or frontend build pipeline. Existing page event handlers bind the features'
@@ -317,6 +341,24 @@ Behavioral checks exercise login expiration versus upstream authentication
 errors, old bookmarks/cookie sessions, rejected settings, current activity
 snapshots, diagnostics close/cancel behavior and the shipped script order.
 The real server test also fetches the page's referenced assets before login.
+
+### 8. Service lifecycle owns its worker handles
+
+`lifecycle.rs` holds background thread handles directly in a `Vec<JoinHandle<()>>`.
+Only the server owner registers and joins them; workers receive shared application
+state, never the handle list. One private spawn operation registers every successful
+spawn. The previous shared mutex, four registration branches and unwrap/poison
+failure paths are removed.
+
+`lifecycle/startup.rs` assembles state and starts workers in the existing order.
+The single-use session-construction wrapper and its copied options object are
+removed. `lifecycle/connections.rs` owns accepting and admitting HTTP connections;
+`services/quota/sampler.rs` owns quota deadlines and waits. Shutdown still closes
+admission, restores integration, wakes and joins workers, then drains credential
+operations and saves rotations. Quota sampling keeps its existing schedule and
+condition-variable lock; this refactor introduces no event framework or new policy.
+The duplicate health test is folded into the idle-listener shutdown contract with
+both unauthenticated status/body assertions retained.
 
 ## Target ownership
 

@@ -253,7 +253,13 @@ def created_assertions(
     )
     assertions["restore_succeeded"] = (
         report.get("restore", {}).get("exit_code") == 0
-        and report.get("restore", {}).get("action") == "restored"
+        and (
+            report.get("restore", {}).get("action") == "restored"
+            or (
+                report.get("restore", {}).get("action") == "noop"
+                and report.get("shutdown_restored_config") is True
+            )
+        )
         and report.get("restore", {}).get("state") == "restored"
         and report.get("restore", {}).get("native_base_url_restored") is True
         and assertions["native_config_matches_saved"]

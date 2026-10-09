@@ -49,6 +49,7 @@ impl UpdateManager {
         if let Err(error) = std::thread::Builder::new()
             .name("emp-update".to_owned())
             .spawn(move || {
+                manager.trace_start(if check { "check" } else { "install" });
                 manager.stage(if check {
                     "check_release"
                 } else {
@@ -60,9 +61,12 @@ impl UpdateManager {
                     manager.install()
                 };
                 if let Err(error) = result {
+                    manager.trace_finish("failed");
                     manager.failed(error);
                     let latest = manager.snapshot().latest_version;
                     manager.set("error", error.0, latest, 0);
+                } else {
+                    manager.trace_finish(if check { "completed" } else { "handed_off" });
                 }
             })
         {
@@ -102,6 +106,7 @@ impl UpdateManager {
             self.http_error(response.status().as_u16());
             return Err(UpdateError("check_failed"));
         }
+        self.stage("read_release");
         let mut raw = Vec::new();
         response
             .take((MAX_RELEASE_BYTES + 1) as u64)
@@ -316,12 +321,11 @@ impl UpdateManager {
         timeout: Duration,
         transport_error: &'static str,
     ) -> Result<Response> {
+        let client = self.client()?;
         let mut url = Url::parse(raw_url).map_err(|_| UpdateError("invalid_download_url"))?;
         for redirect in 0..=MAX_REDIRECTS {
             self.validate_url(&url)?;
-            let response = self
-                .0
-                .client
+            let response = client
                 .get(url.clone())
                 .timeout(timeout)
                 .header("Accept", accept)

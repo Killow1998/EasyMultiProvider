@@ -2,6 +2,7 @@
 pub(super) mod diagnostics;
 mod operations;
 mod retry;
+mod trace;
 pub use diagnostics::UpdateDiagnostic;
 #[cfg(test)]
 mod tests;
@@ -53,16 +54,20 @@ struct Inner {
     dpkg_query: PathBuf,
     restart_args: Vec<String>,
     endpoints: UpdateEndpoints,
-    client: Client,
     begin_handoff: Arc<dyn Fn() -> Result<()> + Send + Sync>,
     reopen_handoff: Arc<dyn Fn() + Send + Sync>,
     handoff: Arc<dyn Fn() -> Result<()> + Send + Sync>,
+    observe: Arc<UpdateObserver>,
+    trace: Mutex<Option<trace::UpdateTrace>>,
 }
+
+type UpdateObserver = dyn Fn(&str, &serde_json::Value) + Send + Sync;
 
 pub struct UpdateHooks {
     begin_handoff: Arc<dyn Fn() -> Result<()> + Send + Sync>,
     reopen_handoff: Arc<dyn Fn() + Send + Sync>,
     handoff: Arc<dyn Fn() -> Result<()> + Send + Sync>,
+    observe: Arc<UpdateObserver>,
 }
 
 impl UpdateHooks {
@@ -76,7 +81,17 @@ impl UpdateHooks {
             begin_handoff: Arc::new(begin_handoff),
             reopen_handoff: Arc::new(reopen_handoff),
             handoff: Arc::new(handoff),
+            observe: Arc::new(|_, _| {}),
         }
+    }
+
+    /// Send content-free update timings to the application's existing journal.
+    pub fn with_observer<F>(mut self, observe: F) -> Self
+    where
+        F: Fn(&str, &serde_json::Value) + Send + Sync + 'static,
+    {
+        self.observe = Arc::new(observe);
+        self
     }
 
     fn immediate<H>(handoff: H) -> Self
@@ -185,21 +200,6 @@ impl UpdateManager {
                 endpoints.repository_url.trim_end_matches('/')
             ),
         };
-        let mut client_builder = Client::builder()
-            .https_only(!endpoints.allow_loopback_http)
-            .redirect(reqwest::redirect::Policy::none())
-            // One owner for the visible retry budget, including body failures.
-            .retry(reqwest::retry::never())
-            .connect_timeout(Duration::from_secs(20))
-            .timeout(Duration::from_secs(600))
-            .user_agent(format!("EMP/{version}"));
-        if endpoints.allow_loopback_http {
-            // Injected local release fixtures must bypass any ambient HTTP proxy.
-            client_builder = client_builder.no_proxy();
-        }
-        let client = client_builder
-            .build()
-            .map_err(|_| UpdateError("update_failed"))?;
         Ok(Self(Arc::new(Inner {
             diagnostic: Mutex::new(UpdateDiagnostic::default()),
             diagnostic_path,
@@ -211,11 +211,34 @@ impl UpdateManager {
             dpkg_query: super::linux::default_query().to_owned(),
             restart_args,
             endpoints,
-            client,
             begin_handoff: hooks.begin_handoff,
             reopen_handoff: hooks.reopen_handoff,
             handoff: hooks.handoff,
+            observe: hooks.observe,
+            trace: Mutex::new(None),
         })))
+    }
+
+    // Read current environment/system settings for each network attempt. A proxy
+    // enabled after EMP starts must also apply to the next update.
+    fn client(&self) -> Result<Client> {
+        // Native system-proxy support uses the same environment-first precedence
+        // on Windows and macOS. Never substitute an untrusted download mirror.
+        let mut client_builder = Client::builder()
+            .https_only(!self.0.endpoints.allow_loopback_http)
+            .redirect(reqwest::redirect::Policy::none())
+            // One owner for the visible retry budget, including body failures.
+            .retry(reqwest::retry::never())
+            .connect_timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(600))
+            .user_agent(format!("EMP/{}", self.snapshot().current_version));
+        if self.0.endpoints.allow_loopback_http {
+            // Injected local release fixtures must bypass any ambient HTTP proxy.
+            client_builder = client_builder.no_proxy();
+        }
+        client_builder
+            .build()
+            .map_err(|_| UpdateError("update_failed"))
     }
 
     pub fn snapshot(&self) -> Snapshot {

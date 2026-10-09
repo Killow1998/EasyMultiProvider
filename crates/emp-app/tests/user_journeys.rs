@@ -96,6 +96,10 @@ fn browser_bootstrap_is_one_use_and_unlocks_management_without_secrets() {
     assert!(!config.text().contains(PROVIDER_KEY));
     assert!(!config.text().contains(NATIVE_TOKEN));
     let config = config.json();
+    assert_eq!(
+        config["port"], emp.port,
+        "publish the actual bound listener port"
+    );
     assert_eq!(config["models"].as_array().expect("models").len(), 4);
     assert_eq!(config["emp_version"], emp_app::VERSION);
     upstream.assert_idle();

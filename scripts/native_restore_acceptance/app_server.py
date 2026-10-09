@@ -23,7 +23,7 @@ class AppServer:
         try:
             self.process = subprocess.Popen(
                 bounded_argv(
-                    [str(codex_bin), "app-server", "--stdio"],
+                    [str(codex_bin), "--disable", "plugins", "app-server", "--stdio"],
                     address_space_limit_bytes,
                 ),
                 stdin=subprocess.PIPE,

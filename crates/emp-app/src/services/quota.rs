@@ -1,5 +1,8 @@
 //! Account-scoped quota refresh, reset and history operations.
 pub(crate) mod commands;
+mod sampler;
+
+pub(crate) use sampler::run as run_sampler;
 
 use crate::app::ServerState;
 use crate::services::accounts::CredentialOperation;
