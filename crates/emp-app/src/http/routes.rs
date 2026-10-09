@@ -438,6 +438,9 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             if request.method == RequestMethod::Get && path == "/api/diagnostics" {
                 return crate::api::diagnostics::read(state);
             }
+            if request.method == RequestMethod::Get && path == "/api/calls" {
+                return crate::api::calls::read(request, state);
+            }
             if request.method == RequestMethod::Get && path == "/api/usage" {
                 return crate::api::usage::read(request, state);
             }

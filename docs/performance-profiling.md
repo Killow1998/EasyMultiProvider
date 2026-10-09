@@ -71,6 +71,61 @@ credential identity and externally updated Codex catalogs; replacing reads with
 a stale snapshot is not an acceptable speed improvement. Preserve byte-level
 wire contracts when changing serialization and count semantics.
 
+## Complete-response event synthesis (2026-10-07)
+
+The opt-in example measures complete JSON responses converted into Responses
+events, including per-event JSON encoding. It uses synthetic text and tool data
+and needs no provider, credentials or listening socket:
+
+```sh
+CARGO_BUILD_JOBS=1 cargo run --release -p emp-router --example response_projection_profile -- 1
+CARGO_BUILD_JOBS=1 cargo run --release -p emp-router --example response_projection_profile -- 8
+```
+
+For comparisons, build first and run the resulting executable in three fresh
+processes for each worker count. Avoid concurrent builds and tests. The example
+counts requested live heap bytes with the system allocator; this is neither RSS
+nor total allocation traffic. Its elapsed time includes fixture creation, thread
+startup and allocation-counter overhead.
+
+The baseline below is the local size-bounded vector implementation immediately
+before replacing the event vector with a pull-based iterator, not a published
+release. These initial iterator measurements still included a cumulative byte
+counter, since removed. Both variants used the same optimized build profile and
+inputs. Median results from three processes per variant and worker count:
+
+| Scenario | Workers | Peak heap before / after | Batch time before / after |
+| --- | ---: | ---: | ---: |
+| Long answer | 1 | 8.77 / 3.63 MiB | 36.66 / 26.62 ms |
+| Many content parts | 1 | 6.80 / 2.95 MiB | 33.96 / 17.53 ms |
+| Tool history | 1 | 3.04 / 1.34 MiB | 22.43 / 14.77 ms |
+| Long answer | 8 | 64.90 / 26.42 MiB | 85.23 / 79.46 ms |
+| Many content parts | 8 | 44.65 / 20.58 MiB | 75.49 / 55.93 ms |
+| Tool history | 8 | 21.83 / 7.95 MiB | 52.58 / 44.46 ms |
+
+Encoded byte totals and event counts per request matched in all scenarios.
+Peak requested heap fell 54–64% in these fixtures. Timing is a small local
+sample; the eight-worker long-answer time ranges overlap. No model-token speed,
+whole-server memory limit or cross-platform performance claim follows from it.
+
+The subsequent change removes that cumulative generated-byte counter: consumers
+write and discard each event before requesting another. The three original
+scenarios retain exactly the same event counts and encoded byte totals. A fourth
+scenario, `repeated_metadata`, uses a source below 100 KiB and delivers 1,028
+events totaling 64.3 MiB per request. Three fresh optimized runs measured:
+
+| Workers | Peak requested heap for the batch | Completed requests |
+| ---: | ---: | ---: |
+| 1 | 0.92 MiB | 1 |
+| 8 | 5.99 MiB | 8 |
+
+This checks that cumulative output can exceed the old 64 MiB cutoff without
+retaining the full event sequence. The source JSON, current event, serialization
+buffer and thread allocations are included. It is not a whole-server RSS bound.
+Loopback endpoint tests separately cover native/external JSON fallback delivering
+more than 64 MiB and cancellation after the first text event, without retry or
+a false completed receipt.
+
 ## Initial measurements (2026-10-04)
 
 Linux, optimized build, hotpath 0.28.3, identical synthetic inputs, three fresh

@@ -81,13 +81,13 @@ Keep the EMP process running while using it.
 
 ### 3. Add what you want to use
 
-Open **Add service** in the Web UI to:
+In the Web UI, either:
 
 - import another Codex / ChatGPT subscription account,
 - add an API Provider,
 - or keep only the current native Codex login and use EMP for model visibility and display settings.
 
-For an API Provider, open **Model settings**, update its model list, select models and save. The list stays available for later selections; **Update model list** refreshes it. You can edit each model's context window.
+For an API Provider, pull the upstream model list, choose the models you want, and optionally edit their context windows.
 
 For Claude, open **Add service** and choose **Local subscription** or **CPA**
 in the **Claude Code** section. Both routes require the installed Claude Code CLI.
@@ -101,7 +101,7 @@ in the **Claude Code** section. Both routes require the installed Claude Code CL
 - **CPA** uses a Claude-Code-compatible CPA Base URL and API key. For direct
   Anthropic API access, add the separate **Anthropic API** Provider.
 
-### 4. Enable EMP
+### 4. Apply EMP to Codex
 
 Click **Enable EMP**. The status line shows your Codex version and
 **EMP models loaded** once the model list is ready. If it asks you to reopen
@@ -135,15 +135,11 @@ a new model is not visible yet.
   Codex catalog responses. EMP refreshes automatically, keeps the last good cache
   when refresh fails, and preserves visibility, aliases, and context overrides.
   A newly exposed model needs no EMP release or manual model-list edit.
-- Add Codex subscriptions, Claude Code connections and API Providers through
-  one **Add service** entry. Import Codex auth.json by pasting its contents or
-  selecting the file.
-- View local Claude subscription quota and trends alongside Codex accounts;
-  choose remaining or used amounts in **Settings**.
+- Add official or custom Providers through the Web UI.
 - Route Claude requests through the installed Claude Code CLI using either the
   current OS user's Claude Code sign-in or a compatible CPA Base URL and API key.
   For local sign-in, open **Model settings**, update the list from Claude Code,
-  and select models to add to Codex. Saved lists can be reused; **Add model manually**
+  and select models to add to Codex. Saved lists can be reused; **Add model**
   remains available for manual entries. Codex executes tool calls, and replies
   are buffered until generation finishes.
 - Forward image inputs and supported inline document content only for Claude
@@ -167,8 +163,7 @@ EMP is designed to keep provider changes from turning into a different coding cl
 EMP preserves native Codex sessions, `resume`, WebSockets, compression, and MCP where supported. During live provider switching, it reconstructs Codex-owned visible history instead of forwarding provider-private opaque state.
 
 To return a conversation with EMP-owned compaction data to native Codex, finish
-active work and close Codex, then choose **Restore Native** in the Codex
-integration area of the Web UI. EMP converts only affected saved histories and
+active work and close Codex, then choose **Restore Native** in the Web UI header. EMP converts only affected saved histories and
 backs up each affected history file before rewriting it, then restores native
 settings. The original conversation can then be resumed on supported Codex.
 When restoration finishes, EMP exits; reopen Codex to continue. You can also
@@ -183,9 +178,14 @@ EMP records local operational metrics so you can see where your coding-agent usa
 - Historical and live token usage by time, account, and Provider.
 - API-equivalent cost estimates with daily price updates.
 - Subscription quota snapshots and local trends.
-- Upstream-reported prompt cache hit rates in token-weighted 10-minute periods.
-- Rolling median TTFT and TPS from the latest 20 valid calls per recently used model, compared with the preceding window.
-- Observed success, 429, 502, 503, and 504 rates.
+- Usage grouped by service type and model, with account and service breakdowns.
+- Call details with the session name, selected model, model sent upstream and
+  upstream-reported model, tokens, cache reads/writes, duration, TTFT and TPS.
+- Performance summaries and time charts for a selected period, with per-model
+  averages and sample counts. TTFT measures time to the first reasoning, text or
+  tool-output block; TPS divides output tokens by the whole call duration,
+  including retry waits.
+- Interrupted, failed and delivered outcomes, dispatch counts and retries.
 - Pricing references: price a model with no public price as another model (for example as `gpt-5.5`). Requests that still have no price count as 0 and are listed as such.
 
 Performance history survives EMP restarts. Missing upstream cache data is shown as unavailable rather than estimated.
@@ -200,6 +200,13 @@ Subscription editing supports per-model context token counts. Leave a field blan
 
 External Provider models use the same 95% rule, so a 256,000-token window shows as 243K in the Codex model picker. The catalog display and EMP request checks use the same effective window.
 
+For Claude Code models, edit the context window to set Codex's history budget.
+EMP checks and compacts that history; Claude Code's own compaction is disabled.
+The configured budget can be smaller than the model's capacity. For models that
+require the extended-context option, keep `[1m]` in the upstream model name;
+models with native 1M context do not need it. Increasing the budget does not
+increase the capacity offered by the model or account.
+
 Use the global eye control in the right-side **Model display** to show or hide
 context labels there and in the Codex model picker for Native, Subscription and
 External Provider models. The left model list does not repeat these labels. The
@@ -207,7 +214,7 @@ control changes catalog labels, not context windows or request limits.
 
 ## Codex compatibility
 
-The current source version is **v0.12.13**.
+The current source version is **v0.12.14**.
 
 EMP supports Codex CLI, desktop App and IDE extension installations without a
 universal minimum engine version. Each operation depends on the interfaces that
@@ -255,18 +262,18 @@ launcher when your active work permits it. There is no background polling.
 
 ## Web UI
 
-The local Web UI is organized around four main areas:
-
-- **Accounts** — use the compact account summary to view model/token usage and API-equivalent cost, save an alias, choose a reset or remove an imported account. Edit, Refresh and Trend stay visible in each row.
-- **Providers** — configure supported services or a custom Provider.
-- **Models** — discover, import, test, edit, hide, or remove Provider models.
-- **Codex integration** — apply the EMP catalog to Codex or restore native Codex routing.
+- **Services** — add subscriptions and API Providers. Click a service badge for
+  its settings, lifetime model usage, alias, quota resets or removal.
+- **Models** — reuse saved model lists and import, test, edit, hide or remove models.
+- **Model display** — arrange the names and context labels shown in Codex.
+- **Header controls** — enable EMP or restore native settings, and open
+  Performance, Usage and Settings.
 
 The header **Settings** button groups automatic activation, Codex web search for
 external models, and automatic-review routing to another subscription when
 Native runs out of quota. All three start enabled; saved choices are retained.
 Click an activity dot to view recent request targets, returned models, timings,
-actual dispatch counts and retries.
+actual dispatch counts, retries and error sources.
 
 EMP automatically detects proxy settings from its launch environment or operating system.
 

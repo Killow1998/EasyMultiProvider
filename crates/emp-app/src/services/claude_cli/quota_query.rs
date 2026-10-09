@@ -28,12 +28,14 @@ pub(crate) fn refresh(state: &ServerState) -> Result<Value, &'static str> {
 
 fn query(state: &ServerState) -> Result<Value, &'static str> {
     with_login(state, true, |config, generation, cancelled| {
-        let stdout = process::run_quota(process::control_command(config), cancelled, || {
-            state
-                .shutdown
-                .load(std::sync::atomic::Ordering::Acquire)
-                .then_some(process::CancellationReason::ServerShutdown)
-        })?;
+        let input = b"{\"type\":\"control_request\",\"request_id\":\"emp-init\",\"request\":{\"subtype\":\"initialize\"}}\n{\"type\":\"control_request\",\"request_id\":\"emp-quota\",\"request\":{\"subtype\":\"get_usage\",\"skip_behaviors\":true}}\n";
+        let stdout =
+            process::run_control(process::control_command(config), input, cancelled, || {
+                state
+                    .shutdown
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .then_some(process::CancellationReason::ServerShutdown)
+            })?;
         let reply = stdout
             .split(|byte| *byte == b'\n')
             .filter_map(|line| serde_json::from_slice::<Value>(line).ok())

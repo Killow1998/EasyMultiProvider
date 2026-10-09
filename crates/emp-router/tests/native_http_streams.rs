@@ -177,6 +177,21 @@ fn serve(
         stream.write_all(body).unwrap();
         return;
     }
+    if case == "long_stream" {
+        let delta = format!(
+            "data: {}\n\n",
+            json!({"type":"response.output_text.delta","delta":"x".repeat(64 * 1024)})
+        );
+        let terminal = b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_long\",\"end_turn\":false,\"usage\":{\"output_tokens\":1025}}}\n\n";
+        let length = delta.len() * 1025 + terminal.len();
+        assert!(length > 64 * 1024 * 1024);
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n").unwrap();
+        for _ in 0..1025 {
+            stream.write_all(delta.as_bytes()).unwrap();
+        }
+        stream.write_all(terminal).unwrap();
+        return;
+    }
     stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nOpenAI-Model: upstream\r\nX-Codex-Turn-State: fixture-turn\r\nConnection: close\r\n\r\n").unwrap();
     let frame = |value: &[u8]| {
         let mut frame = Vec::from(&b"data: "[..]);
@@ -255,6 +270,37 @@ fn ids() -> emp_router::ProjectionIds {
         "rs_fallback",
         "rs_late_fallback",
     )
+}
+
+#[tokio::test]
+async fn native_sse_limits_buffered_events_instead_of_total_delivered_bytes() {
+    let upstream = NativeUpstream::start();
+    let client = HttpClient::new(HttpClientPolicy::default()).unwrap();
+    let router = NativeRouter::new(&client);
+    let body = json!({"model":"requested","input":"hello","stream":true,"_case":"long_stream"});
+    let mut stream = router
+        .open_stream(
+            &route(&upstream.base_url(), false),
+            body.as_object().unwrap(),
+            false,
+            &ids(),
+            |_| {
+                request_headers(NativeAuth::Forward, &incoming(), true)
+                    .map_err(|error| NativeHttpError::router(error.status(), error.to_string()))
+            },
+        )
+        .await
+        .unwrap();
+    let mut deltas = 0;
+    let mut last = Value::Null;
+    while let Some(event) = stream.next_event().await.unwrap() {
+        deltas += usize::from(event.event == "response.output_text.delta");
+        last = event.body;
+    }
+    assert_eq!(deltas, 1025);
+    assert_eq!(last["type"], "response.completed");
+    assert_eq!(last["response"]["usage"]["output_tokens"], 1025);
+    assert_eq!(last["response"]["end_turn"], false);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -399,6 +445,13 @@ async fn a_rejected_stream_credential_fails_the_opening_without_a_refresh() {
     };
     assert_eq!(error.status, 401);
     assert_eq!(error.body["error"]["code"], "auth_rejected");
+    assert_eq!(error.body["error"]["origin"], "upstream");
+    assert!(
+        error.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("[Upstream service]")
+    );
     let requests = upstream.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(
@@ -436,6 +489,7 @@ async fn rate_limited_streams_surface_retry_information_before_opening() {
     assert_eq!(error.status, 429);
     assert_eq!(error.body["error"]["code"], "rate_limit_exceeded");
     assert_eq!(error.body["error"]["retry_after_seconds"], 2);
+    assert_eq!(error.body["error"]["origin"], "upstream");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

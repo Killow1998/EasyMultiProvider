@@ -87,6 +87,50 @@ fn downstream_upgrade_prefix_preserves_first_frame() {
 }
 
 #[test]
+fn temporary_reader_preserves_prefetched_and_partially_decoded_frames() {
+    let next = masked_text_frame("next-turn");
+    let mut prefix = masked_text_frame("control");
+    prefix.extend_from_slice(&next[..3]);
+    let mut original = Cursor::new(Vec::new());
+    let mut input = Cursor::new(next[3..].to_vec());
+    let mut connection = WebSocketConnection::new_with_prefix(&mut original, &prefix).unwrap();
+    let mut reader = connection.take_reader(&mut input).unwrap();
+    assert!(
+        connection.poll_text().is_err(),
+        "two readers cannot own input"
+    );
+    assert_eq!(
+        reader.poll_text().unwrap(),
+        WebSocketPoll::Text("control".into())
+    );
+    connection.reclaim_reader(reader).unwrap();
+    connection.feed_read_bytes(&next[3..]).unwrap();
+    assert_eq!(
+        connection.poll_text().unwrap(),
+        WebSocketPoll::Text("next-turn".into())
+    );
+}
+
+#[test]
+fn a_buffered_pong_does_not_hide_the_following_message_from_readiness_consumers() {
+    let mut client = client_socket();
+    client.frame_decoder.feed(b"\x8a\x00\x81\x02{}").unwrap();
+    assert_eq!(
+        client.poll_receive_text().unwrap(),
+        WebSocketPoll::Text("{}".into())
+    );
+
+    let mut frames = vec![0x8a, 0x80, 1, 2, 3, 4];
+    frames.extend(masked_text_frame("next"));
+    let mut stream = Cursor::new(Vec::new());
+    let mut downstream = WebSocketConnection::new_with_prefix(&mut stream, &frames).unwrap();
+    assert_eq!(
+        downstream.poll_text().unwrap(),
+        WebSocketPoll::Text("next".into())
+    );
+}
+
+#[test]
 fn downstream_ping_is_returned_for_single_owner_pong_and_empty_close_is_preserved() {
     let mut ping = vec![0x89, 0x80 | 4, 1, 2, 3, 4];
     ping.extend([b'p' ^ 1, b'i' ^ 2, b'n' ^ 3, b'g' ^ 4]);

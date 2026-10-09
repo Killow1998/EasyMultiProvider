@@ -1,5 +1,5 @@
 //! Claude error presentation for HTTP and WebSocket callers.
-use crate::http::response::{json_error_response, status_text};
+use crate::http::response::{response, status_text};
 use crate::services::claude_cli::failure_stage;
 use crate::services::claude_cli::{ClaudeCliError, failure_details};
 use crate::services::failure_feedback;
@@ -17,30 +17,19 @@ pub(crate) fn http_response_for_route(error: &ClaudeCliError, route: &ResolvedRo
 fn http_response_with_route(error: &ClaudeCliError, route: Option<&ResolvedRoute>) -> Vec<u8> {
     match error {
         ClaudeCliError::Disconnected => Vec::new(),
-        ClaudeCliError::ShuttingDown => json_error_response(
-            503,
-            status_text(503),
-            "EMP is shutting down",
-            Some("server_shutting_down"),
-            &[],
-        ),
         ClaudeCliError::Router(error) => route.map_or_else(
             || crate::api::failure_response::router_error_response(error.clone()),
             |route| {
                 crate::api::failure_response::router_error_response_for_route(error.clone(), route)
             },
         ),
-        ClaudeCliError::Failure(code) => {
-            let (status, failure_code, message) = failure_details(code);
-            let message = route.map_or_else(
-                || message.to_owned(),
-                |route| failure_feedback::claude_message(route, message, failure_stage(error)),
-            );
-            json_error_response(
-                status,
-                status_text(status),
-                &message,
-                Some(failure_code),
+        ClaudeCliError::Failure(_) | ClaudeCliError::ShuttingDown => {
+            let event = websocket_value_with_route(error, route);
+            let status = event["status"].as_u64().expect("CLI error HTTP status") as u16;
+            response(
+                &format!("HTTP/1.1 {status} {}", status_text(status)),
+                "application/json",
+                &serde_json::to_vec(&json!({"error":event["error"]})).expect("CLI error JSON"),
                 &[],
             )
         }
@@ -54,10 +43,10 @@ pub(crate) fn websocket_value_for_route(error: &ClaudeCliError, route: &Resolved
 fn websocket_value_with_route(error: &ClaudeCliError, route: Option<&ResolvedRoute>) -> Value {
     match error {
         ClaudeCliError::Disconnected => {
-            json!({"type":"error","status":499,"error":{"code":"client_disconnected","message":"client disconnected"}})
+            json!({"type":"error","status":499,"error":{"code":"client_disconnected","origin":"client","message":"[Client] client disconnected"}})
         }
         ClaudeCliError::ShuttingDown => {
-            json!({"type":"error","status":503,"error":{"code":"server_shutting_down","message":"EMP is shutting down"}})
+            json!({"type":"error","status":503,"error":{"code":"server_shutting_down","origin":"emp","message":"[EMP] EMP is shutting down"}})
         }
         ClaudeCliError::Router(error) => route.map_or_else(
             || crate::api::failure_response::websocket_router_error(error),
@@ -69,7 +58,7 @@ fn websocket_value_with_route(error: &ClaudeCliError, route: Option<&ResolvedRou
                 || message.to_owned(),
                 |route| failure_feedback::claude_message(route, message, failure_stage(error)),
             );
-            json!({"type":"error","status":status,"error":{"code":failure_code,"message":message}})
+            json!({"type":"error","status":status,"error":{"code":failure_code,"origin":crate::services::error_origin::claude(error),"message":crate::services::error_origin::message(crate::services::error_origin::claude(error), &message)}})
         }
     }
 }
@@ -132,10 +121,18 @@ mod tests {
             assert!(head.starts_with(&format!("HTTP/1.1 {expected_status} ")));
             let http_value: Value = serde_json::from_str(body).expect("HTTP error JSON");
             assert_eq!(http_value["error"]["code"], expected_code);
+            assert_eq!(
+                http_value["error"]["origin"],
+                crate::services::error_origin::claude(&error)
+            );
 
             let websocket_value = websocket_value_with_route(&error, None);
             assert_eq!(websocket_value["status"], expected_status);
             assert_eq!(websocket_value["error"]["code"], expected_code);
+            assert_eq!(
+                websocket_value["error"]["origin"],
+                http_value["error"]["origin"]
+            );
         }
     }
 

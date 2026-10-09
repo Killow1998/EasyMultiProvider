@@ -175,12 +175,100 @@ Application router and Claude failures are rendered by the API modules.
 Claude execution retains public error classification for its accounting, while
 HTTP and WebSocket presentation use that classification through the same small
 interface. Subscription catalog refresh also returns a typed failure; its HTTP
-adapter owns the status and JSON response. Generated buffered SSE belongs to
+adapter owns the status and JSON response. Generated SSE delivery belongs to
 the streaming adapter. These execution modules no longer import API or HTTP
 response helpers; the private Claude loopback relay still implements its own
 HTTP transport as required.
 
-### 6. Cancellation owns a socket probe and a per-request worker
+Complete Responses JSON is converted by a pull-based iterator in `emp-router`.
+Native and external JSON fallback, generated HTTP SSE, and Claude WebSocket
+delivery request one event at a time. Each consumer writes before requesting
+another event, so a blocked or closed downstream does not build the remaining
+event sequence. Structural validation is separate from event generation; a
+non-streaming Claude reply no longer generates and discards an SSE sequence.
+The iterator validates the source once and yields events without imposing a
+cumulative output-byte limit. Delivered bytes no longer occupy this iterator's
+memory. A failed downstream write drops it, so the remaining events are never
+constructed. No producer task or channel is needed for this synchronous path.
+The complete source JSON, current event and encoded frame still require memory;
+this does not impose a process-wide byte budget across admitted requests.
+
+This follows the consumption model in Codex's `codex-api/src/sse/responses.rs`
+(reference checkout `5b0b253035`, updated 2026-10-07): await bounded-channel sends and stop when the
+receiver closes. EMP's writer supplies that backpressure directly. Ordinary
+JSON body and retained protocol-state limits remain separate from event delivery.
+Native SSE limits the event being parsed, rather than cumulative delivered bytes;
+the ordinary JSON fallback still has its body limit. Declared SSE does not retain
+a second copy of the received body. Native and external Responses stop at the
+first terminal event, release upstream work and ignore trailing data, rather than
+waiting for EOF or draining the socket. Unknown fields, `partial_answer`,
+`end_turn` and interrupted-response metadata remain in the wire response.
+
+### 6. Cancellation follows transport ownership
+
+Native Responses WebSocket turns use a socket-readiness loop in
+[`websocket/duplex.rs`](../crates/emp-app/src/api/websocket/duplex.rs).
+It reads both directions on the connection's existing thread, including data
+already buffered in TLS or frame decoding. It does not add a producer task,
+periodic polling worker or upstream event queue. Readiness registrations and
+temporary read timeouts are restored when the turn ends.
+
+Codex's `response.interrupt` is forwarded through the active upstream connection;
+that upstream owns response-ID validation and acknowledgement. An incomplete
+response with reason `interrupted` remains a valid incremental continuation base,
+as in Codex's current Responses client, without being counted as successful
+context calibration. A pipelined next request is held in one slot and re-enters
+normal route/scope validation after the current terminal. Downstream closure
+cancels a silent upstream. Once an incremental request receives an upstream
+event, a broken connection is reported as an incomplete stream, not as a missing
+previous response that instructs Codex to replay the request.
+
+HTTP fallback, external HTTP streams and the single-step Claude CLI also accept
+Codex's steering control (`response.interrupt`, `discard_partial_items`). During
+these turns, a temporary readiness worker owns the existing frame decoder;
+the output writer retains its connection, and complete frame writes are
+serialized with control replies and pongs. The worker waits for socket events,
+retains at most one next request, then returns the decoder, including buffered
+or partial frames. It is joined before the next turn begins.
+
+A matching active response ID cancels the owned upstream operation through the
+existing cancellation signal. Further output is discarded, and EMP sends
+`response.incomplete` with reason `interrupted`, the same response ID and
+`end_turn: false`. Claude publishes its projected response ID before its buffered
+inference so steering can cancel the CLI process tree and relay. Incorrect
+targets are rejected; late interrupts for the preceding terminal are ignored.
+These adapters have no resumable upstream WebSocket state: an incremental
+continuation receives `previous_response_not_found`, allowing Codex to resend
+full history; the client may switch to HTTP for that recovery. A `generate: false`
+warmup returns an empty response ID because no resumable state exists. Codex then
+sends the complete first request instead of referencing an invented checkpoint.
+Native WebSocket continuations still use the upstream state. EMP does not invent
+usage for cancelled inference.
+
+Control frames are logged separately from model requests. Active interruption
+uses `client_cancelled` and the call state `interrupted`; a disconnected client
+retains its separate cancellation classification. This follows Codex's
+2026-09-26 steering change (`12de0e395d`, PR #48508), without a new version gate
+or setting.
+
+Real Codex app-server tests drive `turn/start` and `turn/steer` through isolated
+EMP servers and synthetic upstreams. Codex's own `instant_interrupt` feature and
+the model's `use_responses_lite` capability determine whether it sends an
+interrupt or drains the current response before applying steering. EMP does not
+change those client settings. The tests also distinguish a Codex RPC rejection
+for a wrong turn ID, which never reaches EMP, from EMP's request validation.
+
+Typed errors generated by the router, history and Claude adapters carry an
+`origin` and a readable source prefix: EMP validation/adaptation, upstream
+service, connection, or Claude Code CLI.
+CLI errors identify the observed CLI boundary; a CLI failure alone does not prove
+whether its service rejected the request. Native upstream events remain intact.
+The delivery receipt records `response_error` with request/connection IDs, phase,
+error code, origin and local write result, without copying the error message or
+request body. Upstream receipts take provenance from the receiving boundary,
+ignoring any upstream `origin` claim. Unclassified errors stay `unknown`.
+Call records retain origin and the separate downstream delivery facts in the
+existing usage database. A local write result is not a client acknowledgement.
 
 [`DisconnectMonitor`](../crates/emp-app/src/services/disconnect.rs) starts its
 worker lazily and waits on interruptible socket readiness. Drop wakes and joins
@@ -193,11 +281,24 @@ See [profiling evidence](performance-profiling.md) for the local measurements.
 Changing all HTTP handling to an async framework is a separate decision, not a
 prerequisite for the ownership fix.
 
+Claude's request-local relay uses socket readiness and a cancellation signal
+shared with its async upstream operation. Cancellation wakes idle accept,
+header/body reads and blocked writes; late subscribers observe the same signal.
+One absolute deadline bounds each relay read/write operation. The CLI process
+monitor retains its bounded exit polling. This does not change subscription
+sampling schedules or introduce an application-wide event framework.
+
+CLI-added date reminders are normalized at this same relay boundary for text
+and multimodal requests. Only the observed fixed reminder format with a valid
+calendar date can move into system metadata. User text, media order and tool
+history still have to match the prepared transcript; an arbitrary extra block
+or a modified transcript remains an error.
+
 ### 7. Frontend features own private state and explicit dependencies
 
 The UI still consumes the same HTTP/SSE endpoints. `management-client.js` owns
 session storage, bootstrap exchange, request authentication and API errors.
-`settings.js`, `request-details.js` and `diagnostics.js` own their feature
+`settings.js`, `call-reports.js` and `diagnostics.js` own their feature
 operations; request selection, diagnostics timers and late-response guards are
 private. The page supplies current-state/language getters and UI operations.
 A changed language or new configuration therefore does not leave a stale copy
@@ -348,3 +449,146 @@ No full workspace rerun, new performance claim or cross-platform result is
 implied. The existing router wire renderers were preserved verbatim; one Claude
 presentation test moved with its owner, and two catalog tests now assert the
 typed refresh result. No extra helper tests or plugin abstractions were added.
+
+## Continuation: implementation ablation (2026-10-08)
+
+Status: implemented and verified locally, preserving the existing pending work.
+This pass changes internal ownership only; it adds no product features and does
+not deploy, publish a release or run CI.
+
+| Owner | Responsibility hidden from callers | Removed duplication |
+| --- | --- | --- |
+| Claude process command policy | Isolated environment, platform setup and inference/auth/control arguments | Inference and control commands share one environment constructor |
+| Claude process lifecycle | Bounded pipes, cancellation, timeout and child-tree cleanup | Removed the default-timeout forwarding function and quota-only forwarding function; quota requests belong to the quota query |
+| Claude response projection | CLI result parsing, tool restoration and response usage | Request construction no longer contains response implementation or its tests |
+| Claude relay transcript | Exact prepared-history comparison, permitted CLI metadata and tool carrier validation | Relay orchestration uses one validation result instead of knowing both validation steps |
+| Router request policy | Model/route agreement, stream mode, supported dialect and reasoning-effort projection | Complete and stream execution share the same validation, retaining their different errors |
+| Frontend call reports | Activity selection, call query, rendering and stale-response protection | Removed the request-details forwarding asset and its page aliases |
+
+The Claude entry files went from 876/831/879 lines to 301/158/133 lines for
+process/projection/relay respectively. Their private production children range
+from 299 to 369 lines; existing tests moved to their owners without changing
+the security assertions. The router entry went from 665 to 482 lines. File
+movement is not counted as code deletion: the measured Rust/JS/HTML/CSS source
+set decreased by 16 lines overall, excluding CommonJS test and documentation
+changes. The useful reduction is fewer independent implementations and fewer
+rules known by callers, rather than a large apparent deletion from moving code.
+
+One forwarding-only frontend test was removed; account selection and merged
+model-selection assertions now execute through the existing call-query test,
+which also exercises event coalescing, filter changes and close-before-response.
+Security, tool-pairing, environment-isolation and cancellation tests remain.
+No public test seam, trait, crate or generic execution framework was introduced.
+
+Acceptance: 55 Claude tests, 12 router library tests, seven external HTTP/stream
+contracts and ten browser behavior contracts passed locally. Twelve existing
+Claude integration tests requiring a separately configured installed CLI remain
+ignored; they were not executed or removed. Two catalog tests needed permission
+to bind their temporary loopback fixture ports after the sandbox denied binding;
+both passed on rerun. Formatting, strict Clippy for the affected application and
+router targets, and diff checks passed. No full workspace, live-account,
+cross-platform or performance result is implied by this pass.
+
+## Claude instruction priority and context ownership (2026-10-08)
+
+Status: implemented locally without deploying, publishing or running CI.
+
+The adapter now combines its tool-proposal bridge prompt with the Responses
+`instructions` and top-level `system`/`developer` messages in the replacement
+Claude system prompt. Those instructions are removed from the user carrier,
+so they are not duplicated. User-provided AGENTS content and nested role fields
+inside tool results stay at their original conversation position. Claude's
+default system prompt is replaced; its tools, skills, MCP and project instructions
+remain disabled. Codex executes the returned tool proposals.
+
+The remaining ordered conversation and tool definitions still use one serialized
+user carrier, with native media blocks for supported attachments. This change
+does not implement native Claude assistant/tool-result messages for every Codex
+history item. Input validation bounds the combined system prompt and carrier,
+and context assessment and calibration now use the same prepared projection.
+
+EMP owns the configured history budget and compaction. Every inference command
+disables Claude Code's independent compaction and passes the requested output
+limit, falling back to the model/provider output setting. It does not overwrite
+Claude Code's physical model capacity with the user history budget: doing so
+made an existing short-window conversation fail before any upstream request.
+The unchanged short-window end-to-end contract passes with this separation.
+
+The selected model retains its `[1m]` tag when invoking Claude Code. The private
+CPA relay removes that tag from the API model ID and preserves the CLI's
+extended-context protocol headers. This selects a supported capacity mode;
+changing an EMP budget does not grant additional model/account capacity.
+
+Acceptance: 58 focused Claude tests, six installed-CLI end-to-end contracts
+against isolated fake CPA servers, and the router's Anthropic passthrough
+contract passed. These cover actual system-prompt delivery, tool history,
+images/documents, extended-context headers and bounded history compaction.
+The six remaining opt-in contracts were not run. No real subscription, cloud
+1M-token workload, full workspace or cross-platform result is implied.
+Formatting, strict Clippy for the affected application/router targets and diff
+checks also passed.
+
+## Service detail ownership (2026-10-08)
+
+Service badges now own information and editing navigation. Codex account dialogs
+switch between account information and existing model settings; provider dialogs
+switch between service information and existing connection settings. The list
+keeps refresh, trend and provider model actions without a separate Edit button.
+No account/provider identity or configuration-save contract changed.
+
+`service-usage.js` renders lifetime summaries for both account and provider
+dialogs. It combines the selected owner's existing usage groups by upstream
+model ID, summing reported tokens and priced costs across dates and tiers.
+Unknown usage remains unknown, and known zero-cost records remain zero.
+The detailed Usage page and ledger retain their category/tier/time breakdowns.
+Provider dialogs filter the owner before aggregation; stale dialog replies
+remain discarded. This removes the duplicate rendering policy without changing
+stored records or pricing.
+
+The self-contained service preview was refreshed. Twelve frontend behavior
+contracts passed, including badge navigation, owner isolation, model grouping,
+partial usage and zero costs. The application build, formatting, strict Clippy
+and diff checks passed locally. No CI, release or production restart occurred.
+First-use onboarding is documented as a proposal, not implemented behavior.
+
+### Installed CLI short-request verification (2026-10-09)
+
+Claude Code 2.1.293 completed a real Haiku 5.5 low-effort request through an
+isolated EMP using the configured CPA endpoint and authentication. With a 1024
+output-token ceiling, the direct request finished in approximately 9.94 seconds:
+1156 input tokens (1154 cached), 376 output tokens, and one correctly projected
+Codex tool proposal. System instruction precedence was verified against a
+conflicting user instruction. Production configuration and services were untouched.
+
+The earlier 256-token ceiling exhausted the budget in thinking before any
+structured proposal was produced. Upstream SSE included message_stop and the
+stop reason max_tokens. Replaying that response locally reproduced the wait,
+without another model call. That verification identified the missing output-budget
+error path; the local fix is described below.
+
+### Claude output-budget termination (2026-10-09)
+
+The CPA relay recognizes Anthropic JSON/SSE stop reasons `max_tokens` and
+`max_output_tokens` before delivering the response to Claude Code. Local-login
+and media calls expose partial CLI events; their stdout reader recognizes the
+same terminal reasons. Both paths cancel the owned CLI process and return
+`claude_cli_output_budget_exhausted` through the existing response/error channel.
+The configured output limit remains unchanged, and EMP does not retry inference.
+The failure journal records the `output_budget` stage without response content.
+
+Two focused parser/process contracts passed. An installed CLI contract against
+an isolated fake CPA passed JSON and SSE responses, including streamed downstream
+delivery, and asserted one upstream request with the original 256-token limit.
+Two normal installed-CLI contracts also passed for tools, text and media.
+These checks do not constitute a new real-provider or real-subscription test.
+
+### Usage service hierarchy (2026-10-09)
+
+The Usage window groups query results by Codex subscription, Claude Code/CPA
+and API, then combines matching model IDs within each type. Expanding a model
+shows the original service/account and tier rows. Removed or unknown providers
+remain under Other records rather than being assigned a guessed type.
+The shared service-usage renderer also retains owner-filtered lifetime summaries.
+The ledger, time/source filters, pricing and chart queries are unchanged.
+Thirteen frontend behavior contracts passed, including aggregation, service
+classification, unknown fields, escaping and preservation of the query rows.

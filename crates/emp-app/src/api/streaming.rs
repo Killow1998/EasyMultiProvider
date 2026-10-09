@@ -102,6 +102,10 @@ impl<'a> ObservedSse<'a> {
         self.observation
             .event_written(event, write_stream_frames(self.stream, frames))
     }
+    fn upstream_event(&mut self, event: &Value, frames: &[Vec<u8>]) -> std::io::Result<()> {
+        self.observation
+            .upstream_event_written(event, write_stream_frames(self.stream, frames))
+    }
 }
 
 pub(crate) fn serve_external_stream(
@@ -196,16 +200,12 @@ enum RelayEvent {
 
 /// Decode the next upstream event for one relay turn.
 trait RelaySource {
-    fn reported_model(&self) -> Option<&str> {
-        None
-    }
+    fn observation(&self) -> &emp_router::model_observation::ModelObservation;
     fn next(
         &mut self,
         runtime: &tokio::runtime::Runtime,
         monitor: Option<&mut DisconnectMonitor>,
     ) -> RelayEvent;
-    /// Drain the upstream on a terminal event (native only).
-    fn finish(self, runtime: &tokio::runtime::Runtime);
 }
 
 fn relay_terminal(event: &RelayEvent) -> bool {
@@ -220,6 +220,9 @@ struct NativeRelay {
 }
 
 impl RelaySource for NativeRelay {
+    fn observation(&self) -> &emp_router::model_observation::ModelObservation {
+        &self.upstream.observation
+    }
     fn next(
         &mut self,
         runtime: &tokio::runtime::Runtime,
@@ -235,10 +238,6 @@ impl RelaySource for NativeRelay {
             DisconnectRace::Ready(Err(error)) => RelayEvent::Failure(error),
         }
     }
-
-    fn finish(self, runtime: &tokio::runtime::Runtime) {
-        runtime.block_on(self.upstream.finish());
-    }
 }
 
 struct ExternalRelay {
@@ -246,8 +245,8 @@ struct ExternalRelay {
 }
 
 impl RelaySource for ExternalRelay {
-    fn reported_model(&self) -> Option<&str> {
-        self.upstream.reported_model.as_deref()
+    fn observation(&self) -> &emp_router::model_observation::ModelObservation {
+        &self.upstream.observation
     }
     fn next(
         &mut self,
@@ -267,7 +266,6 @@ impl RelaySource for ExternalRelay {
             DisconnectRace::Ready(Err(error)) => RelayEvent::Failure(error),
         }
     }
-    fn finish(self, _runtime: &tokio::runtime::Runtime) {}
 }
 
 /// Shared relay inputs that do not change per upstream flavor.
@@ -313,7 +311,7 @@ fn relay_stream(
     let mut started = false;
     loop {
         let event = source.next(runtime, monitor.as_mut());
-        usage.reported_model(source.reported_model());
+        usage.upstream_observation(source.observation());
         let terminal = relay_terminal(&event);
         let completed = terminal
             && match &event {
@@ -367,11 +365,10 @@ fn relay_stream(
                     Some("response.failed" | "error")
                 );
                 if started {
-                    if downstream.event(&event_body, &[frame]).is_err() {
+                    if downstream.upstream_event(&event_body, &[frame]).is_err() {
                         return Ok(false);
                     }
                     if terminal {
-                        source.finish(runtime);
                         return Ok(completed);
                     }
                     continue;
@@ -399,13 +396,12 @@ fn relay_stream(
                     } else {
                         downstream.head_with_headers(response_headers).is_ok()
                     };
-                    if !head_ok || downstream.event(&event_body, &pending).is_err() {
+                    if !head_ok || downstream.upstream_event(&event_body, &pending).is_err() {
                         return Ok(false);
                     }
                     started = true;
                     pending.clear();
                     if terminal {
-                        source.finish(runtime);
                         return Ok(completed);
                     }
                 }
@@ -468,28 +464,24 @@ fn relay_external_stream(
     )
 }
 
-pub(crate) fn generated_response_stream(
+pub(crate) fn serve_generated_response(
+    mut downstream: ObservedSse<'_>,
     response_value: Value,
     ids: &ProjectionIds,
-) -> Result<(Vec<u8>, String), Vec<u8>> {
+) -> Result<(), Vec<u8>> {
     let events = emp_router::response_json_stream_events(response_value, ids, false)
         .map_err(crate::api::failure_response::router_error_response)?;
-    // Retain the terminal type while events are available. Receipts neither
-    // reparse the wire bytes nor clone the response and its possibly large output.
-    let last_event = events
-        .last()
-        .and_then(|event| event["type"].as_str())
-        .unwrap_or_default()
-        .to_owned();
-    let mut output = Vec::new();
-    for event in events {
-        let event_type = event
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("message");
-        output.extend(sse_frame(event_type, &event).map_err(|_| {
-            json_error_response(500, status_text(500), "internal server error", None, &[])
-        })?);
+    if downstream.head().is_err() {
+        return Ok(());
     }
-    Ok((output, last_event))
+    for event in events {
+        let kind = event["type"].as_str().unwrap_or("message");
+        let Ok(frame) = sse_frame(kind, &event) else {
+            return Ok(());
+        };
+        if downstream.event(&event, &[frame]).is_err() {
+            return Ok(());
+        }
+    }
+    Ok(())
 }

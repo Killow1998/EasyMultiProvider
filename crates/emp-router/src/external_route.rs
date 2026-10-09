@@ -16,7 +16,7 @@ impl<'a> ExternalRouter<'a> {
         incoming: &BTreeMap<String, String>,
         ids: &ProjectionIds,
     ) -> Result<CompleteResponse, RouterError> {
-        validate_complete_request(route, body)?;
+        request_policy::validate(route, body, false)?;
         let mut tools = ExternalTools::default();
         let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
         let body = prepared.as_ref();
@@ -45,6 +45,8 @@ impl<'a> ExternalRouter<'a> {
             .header("content-type")
             .unwrap_or("application/json")
             .to_owned();
+        let mut observation = crate::model_observation::ModelObservation::default();
+        observation.observe_headers(response.headers());
         let retry_after_seconds = retry_after::parse(response.header("retry-after"));
         if !(200..300).contains(&status) {
             let raw = response
@@ -124,10 +126,11 @@ impl<'a> ExternalRouter<'a> {
                 projected
             }
         };
+        observation.observe(&upstream, false);
         Ok(CompleteResponse {
+            observation,
             status,
             content_type,
-            reported_model: reported_model(&upstream),
             body: tools
                 .restore_response(projected)
                 .map_err(tool_response_error)?,
@@ -196,7 +199,22 @@ impl<'a> ExternalRouter<'a> {
         }
 
         let mut upstream_body = body.clone();
-        upstream_body["model"] = Value::String(route.upstream_model.clone());
+        // [1m] selects CLI context behavior; it is not part of an API model ID.
+        // Keep custom gateway mappings, but do not reintroduce the stripped tag.
+        let model = route.upstream_model.as_str();
+        let suffix = model.len().saturating_sub(4);
+        let model = if model
+            .get(suffix..)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("[1m]"))
+        {
+            &model[..suffix]
+        } else {
+            model
+        };
+        if model.is_empty() {
+            return Err(invalid_request("Anthropic upstream model is required"));
+        }
+        upstream_body["model"] = Value::String(model.to_owned());
         let encoded = request_encoding::encode_projected_request(&upstream_body).map_err(|_| {
             RouterError::new(
                 RouterErrorKind::InvalidRequest,
@@ -258,7 +276,7 @@ impl<'a> ExternalRouter<'a> {
         ids: &ProjectionIds,
     ) -> Result<ExternalStream, RouterError> {
         let request_started = std::time::Instant::now();
-        validate_stream_request(route, body)?;
+        request_policy::validate(route, body, true)?;
         let mut tools = ExternalTools::default();
         let prepared = tools.prepare_or_borrow(body).map_err(tool_request_error)?;
         let body = prepared.as_ref();
@@ -381,14 +399,17 @@ impl<'a> ExternalRouter<'a> {
                 return Err(upstream_body_too_large());
             }
         }
+        let mut observation = crate::model_observation::ModelObservation::default();
+        observation.observe_headers(response.headers());
         let mut stream = ExternalStream {
             request_started,
-            reported_model: None,
+            observation,
             response: Some(response),
             parser: Some(SseJsonParser::new()),
             projection,
             tools,
             pending: VecDeque::new(),
+            generated: None,
             raw_body: Vec::new(),
             stream_bytes: 0,
             saw_sse: false,

@@ -1,12 +1,11 @@
 //! Authenticated, isolated local control queries shared by quota and model discovery.
-use super::{ClaudeCliError, process, verify_local_subscription};
+use super::{Cancellation, ClaudeCliError, process, verify_local_subscription};
 use crate::app::ServerState;
-use std::sync::atomic::AtomicBool;
 
 pub(super) fn with_login<T>(
     state: &ServerState,
     observing: bool,
-    read: impl FnOnce(process::LocalCommandConfig<'_>, u64, &AtomicBool) -> Result<T, &'static str>,
+    read: impl FnOnce(process::LocalCommandConfig<'_>, u64, &Cancellation) -> Result<T, &'static str>,
 ) -> Result<T, &'static str> {
     let executable =
         emp_codex::installed_cli::resolve_claude_cli().ok_or("claude_cli_unavailable")?;
@@ -18,7 +17,7 @@ pub(super) fn with_login<T>(
     for path in [&config, &cache, &cwd] {
         std::fs::create_dir(path).map_err(|_| "claude_cli_temp_unavailable")?;
     }
-    let cancelled = AtomicBool::new(false);
+    let cancelled = Cancellation::new().map_err(|_| "claude_quota_unavailable")?;
     let login = verify_local_subscription(
         state,
         &executable,

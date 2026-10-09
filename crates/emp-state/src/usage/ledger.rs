@@ -32,6 +32,9 @@ impl From<std::io::Error> for UsageError {
         Self
     }
 }
+mod calls;
+pub use calls::CallFilter;
+
 type Result<T> = std::result::Result<T, UsageError>;
 pub struct UsageLedger {
     path: PathBuf,
@@ -142,6 +145,7 @@ impl UsageLedger {
             tx.commit()?;
         }
         connection.execute_batch(INDEXES)?;
+        calls::initialize(&connection)?;
         private(&self.path)?;
         self.initialized.store(true, Ordering::Release);
         Ok(connection)

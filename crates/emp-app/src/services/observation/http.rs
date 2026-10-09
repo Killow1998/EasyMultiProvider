@@ -8,6 +8,8 @@ use std::time::Instant;
 
 pub(crate) struct HttpObservation {
     diagnostics: Arc<emp_state::diagnostics::Diagnostics>,
+    ledger: Arc<emp_state::usage::ledger::UsageLedger>,
+    events: Arc<crate::services::management_events::ManagementEvents>,
     started: Instant,
     fields: Value,
     pub(crate) model: Option<super::request::RequestObservation>,
@@ -23,6 +25,8 @@ impl HttpObservation {
             .event("info", "http_request_started", &fields);
         Self {
             diagnostics: Arc::clone(&state.backend.diagnostics),
+            ledger: Arc::clone(&state.backend.usage.ledger),
+            events: Arc::clone(&state.backend.management_events),
             started: Instant::now(),
             fields,
             model: None,
@@ -36,17 +40,20 @@ impl HttpObservation {
                 "/v1/responses" | "/v1/responses/compact"
             )
         {
-            self.model = Some(super::request::RequestObservation::new(
-                Arc::clone(&self.diagnostics),
-                self.request_id().map(str::to_owned),
-                None,
-                "http",
-                if request.raw_path().ends_with("/compact") {
-                    "compact"
-                } else {
-                    "responses"
-                },
-            ));
+            self.model = Some(
+                super::request::RequestObservation::new(
+                    Arc::clone(&self.diagnostics),
+                    self.request_id().map(str::to_owned),
+                    None,
+                    "http",
+                    if request.raw_path().ends_with("/compact") {
+                        "compact"
+                    } else {
+                        "responses"
+                    },
+                )
+                .with_ledger(Arc::clone(&self.ledger), Arc::clone(&self.events)),
+            );
         }
         self.fields["method"] = json!(match request.method {
             RequestMethod::Get => "GET",
@@ -95,6 +102,13 @@ impl HttpObservation {
             self.failure("write_failed");
         }
         if let Some(model) = &mut self.model {
+            if self.fields["status"]
+                .as_u64()
+                .is_some_and(|status| status >= 400)
+                && let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n")
+            {
+                model.buffered_error(&bytes[index + 4..], result.is_ok());
+            }
             model.http_response(&self.fields["status"], result);
         }
     }
@@ -180,7 +194,6 @@ fn safe_path(path: &str) -> String {
         | "/api/models/metadata"
         | "/api/models/vision-test-image"
         | "/api/providers/discover"
-        | "/assets/request-details.js"
         | "/api/quit"
         | "/api/request-limits"
         | "/api/runtime/claude-cli"

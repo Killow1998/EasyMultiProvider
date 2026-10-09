@@ -220,11 +220,22 @@ fn open_stream_result_with_monitor(
         DisconnectRace::Ready(result) => result,
         DisconnectRace::Disconnected => {
             crate::services::observation::request_cancelled(state, route, incoming);
+            let mut receipt = crate::services::request_outcome::RequestOutcome::new(
+                state,
+                route,
+                &Value::Object(body.clone()),
+                incoming,
+                Some(&usage_owner),
+                "responses",
+            )
+            .started_at(started);
+            receipt.disconnected();
             return Ok(CancellableNativeStreamOpen::Disconnected);
         }
     };
     match result {
         Ok(mut stream) => {
+            stream.request_started = started;
             stream.usage_owner = Some(usage_owner);
             replace_catalog_etag(state, &mut stream.headers);
             Ok(CancellableNativeStreamOpen::Opened(Box::new(stream)))
@@ -294,6 +305,7 @@ pub(crate) fn complete(
     match result {
         Ok(mut result) => {
             usage.http_status(result.status);
+            usage.upstream_observation(&result.observation);
             if let Ok(value) = serde_json::from_slice::<Value>(&result.body) {
                 usage.observe(&value);
                 crate::services::context::record_event(
@@ -368,6 +380,7 @@ pub(crate) fn compact(
     match result {
         Ok(mut result) => {
             usage.http_status(result.status);
+            usage.upstream_observation(&result.observation);
             if let Ok(value) = serde_json::from_slice::<Value>(&result.body) {
                 usage.observe(&value);
             }

@@ -6,6 +6,14 @@ fn claude_server(base_url: &str) -> (TempDir, ServerHandle) {
 }
 
 fn claude_server_with_model(base_url: &str, upstream_model: &str) -> (TempDir, ServerHandle) {
+    claude_server_with_context(base_url, upstream_model, 0)
+}
+
+fn claude_server_with_context(
+    base_url: &str,
+    upstream_model: &str,
+    context_window: u64,
+) -> (TempDir, ServerHandle) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let config = canonical_root(&directory).join("config.json");
     std::fs::write(
@@ -18,7 +26,7 @@ fn claude_server_with_model(base_url: &str, upstream_model: &str) -> (TempDir, S
             }],
             "models": [{
                 "id":"demo/model", "provider":"demo", "upstream_id":upstream_model,
-                "enabled":true
+                "context_window":context_window, "enabled":true
             }]
         }))
         .expect("encode config"),
@@ -61,7 +69,7 @@ fn claude_summary_server(base_url: &str) -> (TempDir, ServerHandle) {
     (directory, server)
 }
 
-fn structured_messages_sse(proposal: &Value) -> Vec<u8> {
+pub(super) fn structured_messages_sse(proposal: &Value) -> Vec<u8> {
     structured_messages_sse_with_usage(
         proposal,
         json!({"input_tokens":12}),
@@ -251,11 +259,15 @@ impl Drop for SummaryUpstream {
 #[ignore = "requires an installed trusted Claude Code CLI on PATH"]
 fn installed_cli_claude_46_rejects_none_then_preserves_history_with_caller_selected_medium() {
     assert!(emp_codex::installed_cli::resolve_claude_cli().is_some());
-    for model in ["claude-opus-4-6", "claude-sonnet-4-6"] {
+    for model in [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6[1m]",
+    ] {
         let upstream = OneShotUpstream::start_sse(vec![structured_messages_sse(&json!({
             "answer":"same history accepted", "tool_calls":[]
         }))]);
-        let (_directory, server) = claude_server_with_model(&upstream.base_url(), model);
+        let (_directory, server) = claude_server_with_context(&upstream.base_url(), model, 300_000);
         let mut request = json!({
             "model":"demo/model", "stream":false, "reasoning":{"effort":"none"},
             "input":[
@@ -309,8 +321,17 @@ fn installed_cli_claude_46_rejects_none_then_preserves_history_with_caller_selec
             result["output"][0]["content"][0]["text"],
             "same history accepted"
         );
-        let (_, _, forwarded) = upstream.observed();
-        assert_eq!(forwarded["model"], model);
+        let (_, headers, forwarded) = upstream.observed();
+        assert_eq!(
+            forwarded["model"],
+            model.strip_suffix("[1m]").unwrap_or(model)
+        );
+        if model.ends_with("[1m]") {
+            assert!(
+                headers["anthropic-beta"].contains("context-1m"),
+                "CLI context selection must survive the relay"
+            );
+        }
         assert_eq!(forwarded["output_config"]["effort"], "medium");
         let transcript = user_transcript(&forwarded);
         assert_eq!(transcript["input"], original_input);
@@ -351,8 +372,11 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
     let (_directory, server) = claude_server(&upstream.base_url());
     let history = json!({
         "model":"demo/model", "stream":false,
+        "instructions":"unique top-level Codex instruction",
         "reasoning":{"effort":"low"},
         "input":[
+            {"type":"message","role":"system","content":"unique Codex system policy"},
+            {"type":"message","role":"developer","content":[{"type":"input_text","text":"unique Codex developer policy"}]},
             {"type":"message","role":"user","content":[{"type":"input_text","text":"history user"}]},
             {"type":"function_call","call_id":"call_previous","name":"Bash","arguments":"{\"command\":\"printf previous\"}"},
             {"type":"function_call_output","call_id":"call_previous","output":"exact prior tool result: newline\nquote \" café 🧪"},
@@ -409,14 +433,30 @@ fn installed_cli_forwards_one_messages_request_and_only_projects_structured_outp
     // alter the user transcript or remove EMP's system instruction.
     assert!(upstream_body["system"].as_array().is_some_and(|blocks| {
         blocks.iter().any(|block| {
-            block["text"]
-                .as_str()
-                .is_some_and(|text| text.contains("one-request compatibility bridge"))
+            block["text"].as_str().is_some_and(|text| {
+                text.contains("You answer the next turn for the Codex runtime.")
+            })
         })
     }));
     assert_eq!(upstream_body["tools"].as_array().unwrap().len(), 1);
     assert_eq!(upstream_body["tools"][0]["name"], "StructuredOutput");
     let transcript = user_transcript(&upstream_body);
+    let system = upstream_body["system"].to_string();
+    for instruction in [
+        "unique top-level Codex instruction",
+        "unique Codex system policy",
+        "unique Codex developer policy",
+    ] {
+        assert!(
+            system.contains(instruction),
+            "instruction must reach the real system field"
+        );
+        assert!(
+            !transcript.to_string().contains(instruction),
+            "instruction must not be duplicated in user history"
+        );
+    }
+    assert!(transcript.get("instructions").is_none());
     assert_eq!(transcript["model"], "demo/model");
     assert_eq!(transcript["input"][2]["call_id"], "call_previous");
     assert_eq!(
@@ -619,7 +659,7 @@ fn assert_cli_forwards_images_and_documents_with_ordered_tool_history(model: &st
             .iter()
             .any(|block| {
                 block["text"].as_str().is_some_and(|text| {
-                    text.starts_with("You are a one-request compatibility bridge for Codex.")
+                    text.starts_with("You answer the next turn for the Codex runtime.")
                 })
             })
     );

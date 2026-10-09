@@ -80,6 +80,7 @@ mod quota_workspace_contract;
 mod realtime_contract;
 mod realtime_sideband_contract;
 mod request_observation_contract;
+mod response_synthesis_contract;
 mod session_boundary_contract;
 mod stream_boundary_contract;
 mod websocket_capacity_contract;
@@ -456,7 +457,10 @@ impl Drop for OneShotUpstream {
                     b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}",
                 );
             }
-            worker.join().expect("join upstream");
+            let result = worker.join();
+            if !thread::panicking() {
+                result.expect("join upstream");
+            }
         }
     }
 }

@@ -108,6 +108,19 @@ pub fn route_record(event: &Value, journal: &Journal) -> Value {
             "unknown",
         ),
         (
+            "error_origin",
+            "error_origin",
+            &[
+                "emp",
+                "upstream",
+                "transport",
+                "claude_cli",
+                "client",
+                "unknown",
+            ],
+            "unknown",
+        ),
+        (
             "speed_mode",
             "speed_mode",
             &["standard", "fast", "unknown"],

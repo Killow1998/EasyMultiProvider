@@ -2,32 +2,32 @@
 //! response projection; Claude Code performs a single inference through the
 //! request-local Anthropic Messages relay.
 
-#[path = "claude_cli/auth.rs"]
 mod auth;
-#[path = "claude_cli/image_geometry.rs"]
-mod image_geometry;
+mod cancellation;
 mod local_query;
-#[path = "claude_cli/media.rs"]
-mod media;
 pub(crate) mod model_query;
-#[path = "claude_cli/process.rs"]
-mod process;
-#[path = "claude_cli/projection.rs"]
-mod projection;
 pub(crate) mod quota;
 pub(crate) mod quota_query;
-#[path = "claude_cli/relay.rs"]
+use cancellation::Cancellation;
+mod image_geometry;
+mod instructions;
+#[cfg(test)]
+mod instructions_tests;
+mod media;
+mod output_budget;
+mod process;
+mod projection;
 mod relay;
 
 use crate::app::ServerState;
 use crate::services::disconnect::{DisconnectMonitor, DisconnectRace};
 use emp_core::{Protocol, ResolvedRoute};
-use emp_router::{CompleteResponse, ProjectionIds, protocol_candidates};
+use emp_router::{CompleteResponse, protocol_candidates};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::net::TcpListener;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -61,12 +61,17 @@ pub(crate) fn context_estimation_payload(body: &Value) -> Result<Value, ClaudeCl
     media::context_payload(body).map_err(ClaudeCliError::Failure)
 }
 
+fn configured_limit(route: &ResolvedRoute, field: &str) -> Option<u64> {
+    [route.model.value(), route.provider.value()]
+        .into_iter()
+        .find_map(|record| record.get(field)?.as_u64().filter(|value| *value > 0))
+}
+
 pub(crate) fn execute_complete(
     state: &ServerState,
     route: &ResolvedRoute,
     body: &Value,
     incoming: &BTreeMap<String, String>,
-    ids: &ProjectionIds,
     monitor: Option<&mut DisconnectMonitor>,
 ) -> Result<ClaudeCliCompletion, ClaudeCliError> {
     let started = Instant::now();
@@ -78,10 +83,12 @@ pub(crate) fn execute_complete(
         let executable = emp_codex::installed_cli::resolve_claude_cli()
             .ok_or(ClaudeCliError::Failure("claude_cli_unavailable"))?;
         crate::services::observation::execution_attempt(state, route, body, incoming);
-        execute_complete_with_cli(state, route, body, incoming, ids, &executable, monitor)
+        execute_complete_with_cli(state, route, body, incoming, &executable, monitor)
     })();
     if let Err(error) = &result {
-        if matches!(error, ClaudeCliError::Disconnected) {
+        if matches!(error, ClaudeCliError::Failure("claude_cli_interrupted")) {
+            crate::services::observation::request_interrupted(state, route, incoming);
+        } else if matches!(error, ClaudeCliError::Disconnected) {
             crate::services::observation::request_cancelled(state, route, incoming);
         }
         let (status, code) = match error {
@@ -94,7 +101,7 @@ pub(crate) fn execute_complete(
             "warning",
             "claude_cli_request_failed",
             &json!({"request_id":crate::services::observation::request::request_id(incoming),"status":status,"error_code":code,
-                "stage":failure_stage(error),
+                "stage":failure_stage(error), "error_origin":crate::services::error_origin::claude(error),
                 "provider_id":route.provider_id,
                 "model_id":route.requested_model,
                 "upstream_model":route.upstream_model,
@@ -110,7 +117,6 @@ fn execute_complete_with_cli(
     route: &ResolvedRoute,
     body: &Value,
     incoming: &BTreeMap<String, String>,
-    ids: &ProjectionIds,
     executable: &emp_codex::installed_cli::InstalledClaudeCli,
     mut monitor: Option<&mut DisconnectMonitor>,
 ) -> Result<ClaudeCliCompletion, ClaudeCliError> {
@@ -148,6 +154,11 @@ fn execute_complete_with_cli(
     let expected_user_content = cli_input.expected_user_content;
     let model = candidate.upstream_model.as_str();
     let effort = projection::effort(body).map_err(ClaudeCliError::Failure)?;
+    let output_limit = body
+        .get("max_output_tokens")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .or_else(|| configured_limit(&candidate, "output_limit"));
     let schema = projection::proposal_schema().map_err(ClaudeCliError::Failure)?;
 
     let temp =
@@ -174,10 +185,13 @@ fn execute_complete_with_cli(
         None
     };
     let prompt_file = temp.path().join("system-prompt.txt");
-    std::fs::write(&prompt_file, projection::SYSTEM_PROMPT)
+    std::fs::write(&prompt_file, &cli_input.system_prompt)
         .map_err(|_| ClaudeCliError::Failure("claude_cli_temp_unavailable"))?;
-    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled = Arc::new(
+        Cancellation::new().map_err(|_| ClaudeCliError::Failure("claude_cli_relay_unavailable"))?,
+    );
     let request_started = Instant::now();
+    let mut relay_model = None;
     let (stdout, provider_status) = if local_login {
         let local_home = local_home.as_deref().expect("checked local CLI home");
         let identity = verify_local_subscription(
@@ -208,6 +222,7 @@ fn execute_complete_with_cli(
             child_path: &executable.child_path,
             model,
             effort,
+            output_limit,
             prompt_file: &prompt_file,
             schema: &schema,
             input_format: cli_input.input_format,
@@ -251,6 +266,7 @@ fn execute_complete_with_cli(
             child_path: &executable.child_path,
             model,
             effort,
+            output_limit,
             prompt_file: &prompt_file,
             schema: &schema,
             input_format: cli_input.input_format,
@@ -292,7 +308,7 @@ fn execute_complete_with_cli(
                 process_result,
                 Err("claude_cli_disconnected" | "claude_cli_shutdown")
             ) {
-                cancelled.store(true, Ordering::Release);
+                cancelled.cancel();
             }
             let _ = relay.join();
             process_result
@@ -311,17 +327,20 @@ fn execute_complete_with_cli(
         let output = process_result.map_err(|code| local_or_process_error(code, false))?;
         let relay_result =
             relay_result.ok_or(ClaudeCliError::Failure("claude_cli_no_provider_response"))??;
+        relay_model = Some(relay_result.observation);
         (output, relay_result.status)
     };
-    let cli_output = projection::parse_cli_result(&stdout).map_err(|code| {
+    let mut cli_output = projection::parse_cli_result(&stdout).map_err(|code| {
         if local_login && code == "claude_cli_result_error" {
             ClaudeCliError::Failure("claude_cli_local_request_failed")
         } else {
             ClaudeCliError::Failure(code)
         }
     })?;
-    let response =
-        projection::response_from_cli(&cli_output, &candidate, body, ids, provider_status)?;
+    if let Some(observation) = relay_model {
+        cli_output["_emp_model_observation"] = observation.project("");
+    }
+    let response = projection::response_from_cli(&cli_output, &candidate, body, provider_status)?;
     Ok(ClaudeCliCompletion {
         response,
         route: candidate,
@@ -345,7 +364,13 @@ fn cancellation_reason(
                 .block_on(async { monitor.race(tokio::time::sleep(CHILD_POLL)).await }),
             DisconnectRace::Disconnected
         )
-        .then_some(process::CancellationReason::DownstreamDisconnected)
+        .then(|| {
+            if monitor.is_interrupted() {
+                process::CancellationReason::Steering
+            } else {
+                process::CancellationReason::DownstreamDisconnected
+            }
+        })
     })
 }
 
@@ -369,7 +394,7 @@ fn verify_local_subscription(
     cache_home: &std::path::Path,
     temp: &std::path::Path,
     working_directory: &std::path::Path,
-    cancelled: &AtomicBool,
+    cancelled: &Cancellation,
     monitor: &mut Option<&mut DisconnectMonitor>,
 ) -> Result<Option<String>, ClaudeCliError> {
     let command = process::auth_status_command(process::LocalCommandConfig {
@@ -386,6 +411,7 @@ fn verify_local_subscription(
             .map_err(|code| match code {
                 "claude_cli_disconnected" => ClaudeCliError::Disconnected,
                 "claude_cli_shutdown" => ClaudeCliError::ShuttingDown,
+                "claude_cli_interrupted" => ClaudeCliError::Failure("claude_cli_interrupted"),
                 "claude_cli_timeout" => ClaudeCliError::Failure("claude_cli_auth_status_timeout"),
                 _ => ClaudeCliError::Failure("claude_cli_auth_status_unavailable"),
             })?;

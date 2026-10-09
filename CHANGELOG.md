@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.12.14 (2026-10-09)
+
+- Support Codex steering controls on native WebSocket connections and cancel
+  HTTP/Claude adapters cleanly when interrupted. Keep stateless warmup responses
+  from falsely claiming resumable history, preserving the first WebSocket turn.
+- Distinguish EMP, upstream, connection and Claude CLI errors in call details
+  and diagnostic receipts. Preserve native upstream responses and record delivery
+  outcomes without logging prompts, responses or credentials.
+- Isolate Claude CLI instructions, tools, skills and local project settings from
+  Codex-owned requests. Report exhausted output budgets promptly and apply model
+  context budgets without adding Claude's own compaction or tool execution.
+- Stream synthesized response events incrementally and bound intermediate
+  Claude/media buffers. Split request policy, response projection and CLI process
+  handling into focused modules while retaining Codex as the core runtime.
+- Group Usage by service type and model. Merge each service's lifetime usage by
+  model, and share persisted call facts across request details and Performance:
+  session, selected/sent/reported models, tokens, cache usage, duration, TTFT,
+  TPS, retries and delivery.
+- Open service settings from the service badge. Improve browser-zoom layouts,
+  use natural Credit widths, and retain the 233% / 1m111s display when Codex
+  returns quota data without a five-hour window.
+
 ## 0.12.13 (2026-10-08)
 
 - Manage Codex subscriptions, Claude Code connections and API Providers together

@@ -5,6 +5,9 @@ use std::sync::mpsc;
 
 mod http;
 mod incremental;
+mod installed_codex;
+mod interrupt;
+mod interrupt_http;
 mod oversized;
 mod sse;
 mod support;

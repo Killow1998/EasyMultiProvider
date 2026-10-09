@@ -20,6 +20,7 @@ pub mod merged_catalog;
 pub mod quota;
 pub mod quota_history;
 pub mod runtime_probe;
+pub mod session_directory;
 pub mod subscription_contexts;
 
 const MAX_ACCOUNT_CATALOG_BYTES: u64 = 4 * 1024 * 1024;

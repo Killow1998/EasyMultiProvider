@@ -7,14 +7,13 @@
 .service-identity{min-width:0;flex:1}
 .service-identity .account-summary{max-width:100%;vertical-align:middle;margin:0}
 .service-identity .account-name{max-width:180px}
-.service-list .account-credit>strong{min-width:var(--service-credit-width,1ch);text-align:right}
 .service-type{color:var(--muted)}
 .service-note{display:block;font-size:11px;color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .service-actions{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-wrap:nowrap}
 .service-actions button{height:32px;min-height:32px;margin:0;padding:0 8px;min-width:74px;white-space:nowrap;font-size:12px}
 .service-quota{grid-column:1/-1;min-width:0}
-.service-quota .quota-stack{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-width:none;min-width:0}
-.service-quota .quota-meter{min-height:48px}
+.service-quota .quota-stack{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 12px;max-width:none;min-width:0}
+.service-quota .quota-meter{min-height:48px;grid-template-rows:subgrid;grid-row:span 3}
 .service-brand{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;color:var(--text)}
 .service-brand>svg{display:block;width:24px;height:24px;max-width:100%;max-height:100%}
 .service-cpa-badge{position:absolute;bottom:-3px;right:-5px;padding:1px 2px;border:1px solid var(--border-strong);border-radius:3px;background:var(--panel);color:var(--muted);font:700 8px/10px ui-sans-serif,system-ui,sans-serif;letter-spacing:0}
@@ -33,9 +32,12 @@
 .service-detail-heading>span{display:flex;align-items:center;gap:12px;min-width:0}
 .service-detail-heading strong,.service-detail-heading~.account-info-grid .account-value{overflow-wrap:anywhere}
 .service-detail-heading button{flex:none}
+.service-detail-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px}
+.service-detail-tabs button{margin:0}
+.service-detail-tabs button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--text)}
 @container services (max-width:660px){.service-card{grid-template-columns:minmax(0,1fr)}.service-actions{justify-self:end}.service-quota{grid-column:1}}
 @container services (max-width:800px){html[lang="en"] .service-card{grid-template-columns:minmax(0,1fr)}html[lang="en"] .service-actions{justify-self:end}}
-@container services (max-width:420px){.service-card{padding:10px}.service-actions{display:grid;grid-template-columns:minmax(0,.7fr) minmax(0,1.3fr) minmax(0,1fr);width:100%}.service-actions button{min-width:0;padding:0 5px}.service-main{gap:8px}.service-identity .account-name{max-width:130px}}
+@container services (max-width:420px){.service-card{padding:10px}.service-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}.service-actions button{min-width:0;padding:0 5px}.service-main{gap:8px}.service-identity .account-name{max-width:130px}}
 @media(max-width:480px){.service-choice-group .choice-grid{grid-template-columns:minmax(0,1fr)}}
 
 .service-model-count{font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--muted)}
@@ -45,4 +47,6 @@
 .service-quota .quota-pending{max-width:none}
 .service-quota .quota-pending .quota-battery-fill{width:0;min-width:0;animation:none}
 
-@container services (max-width:560px){.service-actions-with-quota{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));width:100%}.service-actions-with-quota button{min-width:0;grid-column:span 2}.service-actions-with-quota button:nth-child(-n+2){grid-column:span 3}}
+@container services (max-width:560px){.service-actions-with-quota{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}.service-actions-with-quota button{min-width:0}}
+
+.usage-service-group{margin:18px 0}.usage-service-group>h3{margin:0 0 8px}.usage-models{min-width:600px}.usage-model-columns{display:grid;grid-template-columns:minmax(180px,1.5fr) repeat(3,minmax(90px,1fr)) 70px;gap:12px;align-items:start;padding:9px 8px;font-variant-numeric:tabular-nums}.usage-model-columns>span:not(:first-child){text-align:right;overflow-wrap:anywhere}.usage-model-heading{color:var(--muted);font-size:12px;border-bottom:1px solid var(--border)}.usage-model{border-bottom:1px solid var(--border);font-size:12px}.usage-model>summary{cursor:pointer;list-style:none}.usage-model>summary::-webkit-details-marker{display:none}.usage-model-name{display:flex;gap:7px;overflow-wrap:anywhere;font-weight:600}.usage-model-name::before{content:"›";flex:none;display:inline-block;transition:transform .15s}.usage-model[open] .usage-model-name::before{transform:rotate(90deg)}.usage-model-columns small{display:block;color:var(--muted);font-size:11px}.usage-model>.usage-table{padding:0 8px 8px}.usage-model>summary:hover{background:var(--panel-soft)}.usage-model>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}

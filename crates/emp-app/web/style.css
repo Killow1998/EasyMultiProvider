@@ -201,14 +201,16 @@ h2{font-size:14px;font-weight:600;margin:0}
 .header-integration{min-width:0;max-width:min(480px,100%)}
 .header-integration .integration-card-header{gap:4px 8px;font-size:12px}
 .header-integration #integration_summary{margin:4px 0 0;font-size:12px}
-.page-header-controls{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px 14px}
+.page-header-controls{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px 8px}
 .page-header-controls :is(button,select,a){height:30px;min-height:30px;font-size:13px}
+.page-header-controls :is(button,a){padding-inline:8px}
 .page-header-controls select{padding-top:3px;padding-bottom:7px;line-height:18px}
-.header-group{gap:6px;padding-right:14px;border-right:1px solid var(--border)}
-.header-group>span{display:inline-flex;align-items:center;align-self:stretch;color:var(--muted);font-size:12px;line-height:1}
+.header-group{gap:6px;padding-right:8px;border-right:1px solid var(--border);max-width:100%;flex-wrap:wrap}
+.header-preference{display:inline-flex;align-items:center;gap:6px;margin:0}
+.header-group>span,.header-preference>span{display:inline-flex;align-items:center;align-self:stretch;color:var(--muted);font-size:12px;line-height:1}
 .workspace-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,34%);gap:clamp(16px,1.6vw,28px);align-items:start}
 .workspace-column>section,.workspace-side>section{margin:0 0 clamp(16px,1.6vw,28px)}
-.workspace-side{position:sticky;top:64px;max-height:calc(100vh - 80px);overflow:auto}
+.workspace-side{position:static;max-height:none;overflow:visible}
 section{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:12px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px 16px 16px;box-shadow:none}
 section>*{grid-column:1/-1}
 section>h2{grid-column:1;margin:0 0 12px}
@@ -360,3 +362,22 @@ input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appear
 .model-card button.visibility{padding:0 8px;height:32px;border:1px solid var(--border-strong);border-radius:8px;background:var(--panel)}
 @container accounts (max-width:840px){html[lang="en"] .account-card{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto}html[lang="en"] .account-card .entity-card-actions{grid-column:1;grid-row:2}html[lang="en"] .account-card .entity-card-quota{grid-row:3}}
 @media(max-width:560px){.account-info-grid{grid-template-columns:minmax(0,1fr)}.account-summary .account-segment{padding:0 6px;gap:4px}.account-summary .account-name{max-width:140px}}
+
+/* Durable call details share the existing modal/table styling. */
+.call-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:14px}
+.call-toolbar input,.call-toolbar select{width:auto;max-width:100%;min-width:0}
+.call-toolbar input[type=datetime-local]{max-width:190px}
+.call-record{border:1px solid var(--border);border-radius:8px;margin:8px 0;overflow:hidden}
+.call-record>summary{display:grid;grid-template-columns:minmax(100px,1fr) minmax(130px,1.2fr) auto auto auto minmax(100px,1fr);gap:12px;align-items:center;padding:12px;cursor:pointer}
+.call-record small,.call-model small,.usage-table td small{display:block;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.call-model,.call-session{min-width:0;overflow-wrap:anywhere}
+.call-detail{border-top:1px solid var(--border);padding:14px}
+.call-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
+.call-fact{min-width:0;display:flex;flex-direction:column;gap:5px;overflow-wrap:anywhere}
+.call-fact>span{color:var(--muted);font-size:12px}.call-fact>strong{font-size:13px}
+.call-detail h3{margin:18px 0 10px;font-size:14px}.call-technical{margin-top:16px}
+.call-overview{padding:14px 0}.call-overview strong{font-size:20px}
+.call-pages{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:12px}
+@media(max-width:1000px){.call-record>summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.call-trend{display:block;width:100%;height:auto;margin:6px 0 14px}

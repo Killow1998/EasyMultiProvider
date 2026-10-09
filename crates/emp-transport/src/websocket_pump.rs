@@ -336,7 +336,9 @@ impl FrameDecoder {
                     }));
                 }
                 9 => return Ok(Some(FramePoll::Ping(frame.payload))),
-                10 => return Ok(Some(FramePoll::Pending)),
+                // Pong consumes no application event. Continue through bytes
+                // already buffered; Pending must mean we need socket input.
+                10 => continue,
                 1 | 2 => {
                     if self.message_opcode.is_some() {
                         return Err(FrameDecodeError::Protocol);

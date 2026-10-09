@@ -6,8 +6,8 @@ use crate::api::history_response::destination_error_response;
 use crate::api::history_response::history_http_error;
 use crate::api::history_response::history_stream_error;
 use crate::api::streaming::ObservedSse;
-use crate::api::streaming::generated_response_stream;
 use crate::api::streaming::serve_external_stream;
+use crate::api::streaming::serve_generated_response;
 use crate::api::streaming::serve_native_stream;
 use crate::app::ServerState;
 use crate::http::auth::proxy_allowed;
@@ -198,7 +198,6 @@ pub(crate) fn responses_request(
                 &route,
                 &summary_body,
                 &incoming,
-                &ids,
                 monitor.as_mut(),
             ) {
                 Ok(completion) => {
@@ -269,16 +268,11 @@ pub(crate) fn responses_request(
         usage.finish();
         persist_protocol_observation(state, &candidate);
         if python_truthy(body.get("stream")) {
-            let (stream_body, last_event) = match generated_response_stream(compacted, &ids) {
-                Ok(body) => body,
-                Err(error) => return ResponsesRequestResult::Buffered(error),
+            let downstream = ObservedSse::new(stream, observation);
+            return match serve_generated_response(downstream, compacted, &ids) {
+                Ok(()) => ResponsesRequestResult::Streamed,
+                Err(error) => ResponsesRequestResult::Buffered(error),
             };
-            let mut downstream = ObservedSse::new(stream, observation);
-            if downstream.head().is_err() || downstream.frames(&[stream_body], &last_event).is_err()
-            {
-                return ResponsesRequestResult::Streamed;
-            }
-            return ResponsesRequestResult::Streamed;
         }
         let compacted = match serde_json::to_vec(&compacted) {
             Ok(body) => body,
@@ -314,7 +308,6 @@ pub(crate) fn responses_request(
             &route,
             &body,
             &incoming,
-            &ids,
             monitor.as_mut(),
         ) {
             Ok(completion) => completion,
@@ -373,6 +366,7 @@ pub(crate) fn responses_request(
         )
         .started_at(completion.request_started);
         usage.http_status(completion.response.status);
+        usage.upstream_observation(&completion.response.observation);
         usage.observe(&response_value);
         usage.finish();
         if response_value["status"] == "completed" {
@@ -380,16 +374,11 @@ pub(crate) fn responses_request(
         }
         crate::services::providers::persist_protocol_observation(state, route);
         if stream_requested {
-            let (stream_body, last_event) = match generated_response_stream(response_value, &ids) {
-                Ok(body) => body,
-                Err(error) => return ResponsesRequestResult::Buffered(error),
+            let downstream = ObservedSse::new(stream, observation);
+            return match serve_generated_response(downstream, response_value, &ids) {
+                Ok(()) => ResponsesRequestResult::Streamed,
+                Err(error) => ResponsesRequestResult::Buffered(error),
             };
-            let mut downstream = ObservedSse::new(stream, observation);
-            if downstream.head().is_err() || downstream.frames(&[stream_body], &last_event).is_err()
-            {
-                return ResponsesRequestResult::Streamed;
-            }
-            return ResponsesRequestResult::Streamed;
         }
         let body = match serde_json::to_vec(&response_value) {
             Ok(body) => body,

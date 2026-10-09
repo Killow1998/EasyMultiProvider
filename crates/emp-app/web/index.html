@@ -36,10 +36,12 @@
       <button id="check_update" type="button" class="secondary" data-icon="update" onclick="openUpdate()" data-i18n="check_update">检查更新</button>
     </div>
     <div class="header-group">
-      <span data-i18n="language_label">语言</span>
-      <select id="language_select" aria-label="Language" onchange="setLanguage(this.value)"><option value="zh-CN">中文</option><option value="en">English</option></select>
-      <span data-i18n="theme_label">外观</span>
-      <select id="theme_select" aria-label="Theme" onchange="setTheme(this.value)"><option value="system" data-i18n="theme_system">跟随系统</option><option value="light" data-i18n="theme_light">浅色</option><option value="dark" data-i18n="theme_dark">深色</option></select>
+      <label class="header-preference" for="language_select"><span data-i18n="language_label">语言</span>
+        <select id="language_select" aria-label="Language" onchange="setLanguage(this.value)"><option value="zh-CN">中文</option><option value="en">English</option></select>
+      </label>
+      <label class="header-preference" for="theme_select"><span data-i18n="theme_label">外观</span>
+        <select id="theme_select" aria-label="Theme" onchange="setTheme(this.value)"><option value="system" data-i18n="theme_system">跟随系统</option><option value="light" data-i18n="theme_light">浅色</option><option value="dark" data-i18n="theme_dark">深色</option></select>
+      </label>
     </div>
     <button type="button" class="secondary" onclick="quitEmp()" data-i18n="quit_emp">退出 EMP</button>
   </div>
@@ -96,13 +98,14 @@
 
 <script src="/assets/service-icons.js"></script>
 <script src="/assets/service-list.js"></script>
+<script src="/assets/service-usage.js"></script>
 <script src="/assets/model-settings.js"></script>
 <script src="/assets/account-import.js"></script>
 <script src="/assets/service-chooser.js"></script>
 <script src="/assets/management-client.js"></script>
 <script src="/assets/quota-display.js"></script>
 <script src="/assets/settings.js"></script>
-<script src="/assets/request-details.js"></script>
+<script src="/assets/call-reports.js"></script>
 <script src="/assets/diagnostics.js"></script>
 <script>
 let state = null;
@@ -143,9 +146,8 @@ const {request:api, fetch:managementFetch, establish:establishSession, errorText
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
 const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr});
 const {open:openSettings, toggle:toggleSetting} = settings;
-const requestDetails = createRequestDetails({getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, utcOffsetLabel, protocolLabel});
-const {open:openActivityDetails, refresh:refreshActivityDetails, normalize:normalizeRequestReceipts} = requestDetails;
-const diagnostics = createDiagnostics({api, getLanguage:() => language, openModal, $, esc, t, tr, localTimeText, notice});
+const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr});
+const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, localTimeText, notice});
 const {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport} = diagnostics;
 const translations = {
   'zh-CN': {
@@ -185,11 +187,12 @@ const officialProviders = {
   zhipu: {id:'zhipu-glm', name:'Zhipu/GLM', base_url:'https://api.z.ai/api/paas/v4', protocol:'chat_completions', auth_mode:'api_key', hint:'GLM OpenAI-compatible API'}
 };
 
+const serviceUsage = createServiceUsage({esc, tr, number:value => usageNumber(value), money:value => usageMoney(value), dateTime:value => utcDateTimeText(value)});
 const services = createServiceList({
   getState:() => state, $, esc, tr, presets:officialProviders, icon:serviceIconHtml,
   activity:activityIndicatorHtml, accountSummary:accountSummaryHtml, quotaMeters:quotaMetersHtml,
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots, openModal, api,
-  protocolLabel, authLabel, notice, usageNumber:value => usageNumber(value), usageMoney:value => usageMoney(value)
+  protocolLabel, authLabel, notice, usageSummary:serviceUsage
 });
 const {render:renderServices, details:openProviderDetails} = services;
 const {open:openServiceChooser, importCodex:openCodexImportChooser} = createServiceChooser({tr, esc, presets:officialProviders, icon:serviceIconHtml, openModal, getState:() => state});
@@ -316,10 +319,17 @@ function openUsage() {
   usageRequest++; usagePayload = null;
   openModal(tr('用量与 API 估算','Usage & API estimates'), `
     ${periodPickerHtml('usage', ['1h','1d','7d','all'])}
-    <div class="usage-filters"><label>${tr('来源','Source')}<select id="usage_category" onchange="loadUsage()"><option value="all">${tr('全部来源','All sources')}</option><option value="native">Native</option><option value="subscription">${tr('其他 Subscription','Other Subscription')}</option><option value="external">External Provider</option><option value="unknown">${tr('来源未确认','Unknown source')}</option></select></label><label>${tr('时间粒度','Group by')}<select id="usage_bucket" onchange="renderUsage()"><option value="minute">${tr('分钟','Minute')}</option><option value="hour">${tr('小时','Hour')}</option><option value="day">${tr('天','Day')}</option></select></label><button type="button" class="secondary" onclick="scanUsageHistory()">${tr('扫描历史','Scan history')}</button></div>
+    <div class="usage-filters"><label>${tr('来源','Source')}<select id="usage_category" onchange="loadUsage()"><option value="all">${tr('全部来源','All sources')}</option><option value="native">Native</option><option value="subscription">${tr('其他 Subscription','Other Subscription')}</option><option value="external">External Provider</option><option value="unknown">${tr('来源未确认','Unknown source')}</option></select></label><label>${tr('时间粒度','Group by')}<select id="usage_bucket" onchange="renderUsage()"><option value="minute">${tr('分钟','Minute')}</option><option value="hour">${tr('小时','Hour')}</option><option value="day">${tr('天','Day')}</option></select></label><button type="button" class="secondary" onclick="scanUsageHistory()">${tr('扫描历史','Scan history')}</button><button type="button" class="secondary" onclick="openUsageCalls()">${tr('调用详情','Call details')}</button></div>
     <div id="usage_status" class="usage-notice" role="status"></div><div id="usage_result"></div>
     <p class="usage-notice">${tr('扫描本机 Codex 历史，并记录 EMP 实时用量，跨重启保留。输入包含缓存，输出包含推理；子项不重复相加。','Scans local Codex history and records EMP usage across restarts. Input includes cache; output includes reasoning. Subsets are not added twice.')}</p>`, '', null);
   registerPeriodPicker('usage', '1d', (period, options) => { if (options.user && $('usage_bucket')) $('usage_bucket').value = usageBucketFor(period); return loadUsage(!options.user); });
+}
+function openUsageCalls() {
+  const period = periodPickers.usage;
+  const category = $('usage_category')?.value;
+  const filters = period ? {start:period.start,end:period.end} : {};
+  if (category && category !== 'all') filters.category = category;
+  callReports.open(filters);
 }
 async function scanUsageHistory() {
   try { await api('/api/usage/scan', {method:'POST',body:'{}'}); loadUsage(); }
@@ -400,11 +410,11 @@ function renderUsage() {
     const label = new Date(row.start*1000).toLocaleString() + ' · ' + usageNumber(tokens) + ' tokens · ' + cost(row);
     return `<rect x="${x}" y="${150-h}" width="${w}" height="${Math.max(1,h)}" rx="2" tabindex="0" role="button" aria-label="${esc(label)}" data-ui-action="usage-zoom" data-start="${Number(row.start)}" data-end="${Number(row.end)}"><title>${esc(label)}</title></rect>`;
   }).join('');
-  const rows = data.groups.sort((a,b)=>(b.cost_nanos-a.cost_nanos)||(b.input_tokens-a.input_tokens)).map(row => `<tr><td>${esc(usageRowSource(row))}<small>${esc(usageOwner(row))}</small></td><td>${esc(row.model)}<small>${row.service_tier === 'default' ? tr('普通','Standard') : esc(row.service_tier)}</small></td><td>${row.input_reports ? usageNumber(row.input_tokens) : '—'}<small>${tr('缓存 ','Cached ')}${row.cache_reports ? usageNumber(row.cached_input_tokens) : '—'}${row.cache_write_tokens ? ' · '+tr('写入 ','Write ')+usageNumber(row.cache_write_tokens) : ''}</small></td><td>${row.output_reports ? usageNumber(row.output_tokens) : '—'}<small>${tr('推理 ','Reasoning ')}${row.reasoning_reports ? usageNumber(row.reasoning_tokens) : '—'}</small></td><td>${cost(row)}</td><td>${usageNumber(row.requests)}</td></tr>`).join('');
+  const groups = serviceUsage.renderGroups(data, state?.providers, row => usageRowSource(row) + ' · ' + usageOwner(row));
   const history = data.history || {}, historical = data.sources?.find(row => row.origin === 'history')?.requests || 0;
   box.innerHTML = `<p class="usage-notice">${history.running || history.queued ? tr('正在后台扫描历史…','Scanning history in the background…') : history.last_scan_at ? tr('历史已扫描 · ','History scanned · ') + usageNumber(history.files) + tr(' 个文件',' files') : tr('等待历史扫描','Waiting for history scan')}${history.errors ? ' · ' + tr('部分文件读取失败','Some files could not be read') : ''}</p>
     <div class="usage-totals"><div class="usage-total"><span>Tokens</span><strong>${totals.input_reports || totals.output_reports ? usageNumber(totals.input_tokens+totals.output_tokens) : '—'}</strong><span>${usageNumber(totals.reported_requests)} / ${usageNumber(totals.requests)} ${tr('次请求有完整用量','requests reported usage')}</span></div><div class="usage-total"><span>${tr('API 等价估算 · USD','API equivalent · USD')}</span><strong>${cost(totals)}</strong><span>${usageNumber(totals.priced_requests)} / ${usageNumber(totals.requests)} ${tr('次请求已计价','requests priced')}</span></div></div>
-    ${totals.requests ? `<svg class="usage-chart" viewBox="0 0 ${width} 190" aria-label="${tr('Token 用量，点击柱形查看明细','Token usage; select a bar to zoom')}"><path d="M70 20V150H698" fill="none" stroke="var(--border)"/><text x="60" y="28" text-anchor="end">${new Intl.NumberFormat('en',{notation:'compact'}).format(max)}</text><text x="60" y="153" text-anchor="end">0</text>${bars}${timeAxisSvg(data.start, data.end, time => 70 + (time-data.start)/range*plot, 170, 70, 698)}</svg><div class="usage-table"><table><thead><tr><th>${tr('来源 / 账号','Source / account')}</th><th>${tr('模型','Model')}</th><th>${tr('输入','Input')}</th><th>${tr('输出','Output')}</th><th>USD</th><th>${tr('请求','Calls')}</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p>${tr('这个时间段还没有用量记录。','No usage recorded in this period.')}</p>`}
+    ${totals.requests ? `<svg class="usage-chart" viewBox="0 0 ${width} 190" aria-label="${tr('Token 用量，点击柱形查看明细','Token usage; select a bar to zoom')}"><path d="M70 20V150H698" fill="none" stroke="var(--border)"/><text x="60" y="28" text-anchor="end">${new Intl.NumberFormat('en',{notation:'compact'}).format(max)}</text><text x="60" y="153" text-anchor="end">0</text>${bars}${timeAxisSvg(data.start, data.end, time => 70 + (time-data.start)/range*plot, 170, 70, 698)}</svg>${groups}` : `<p>${tr('这个时间段还没有用量记录。','No usage recorded in this period.')}</p>`}
     ${historical ? `<p class="usage-notice">${usageNumber(historical)} ${tr('条来自本机历史，按扫描时可用价格折算；旧账号身份未确认，类别仅依据历史模型路由和现有配置推断。未记录的服务档位按普通模式估算。','records from local history, estimated at available scan-time prices. Old account identities are unconfirmed; categories are inferred from model routes and current configuration. Unrecorded service tiers use standard rates.')}</p>` : ''}
     ${data.unmatched_overlap || (historical && data.uncorrelated_realtime) ? `<p class="usage-notice usage-warning">${tr('部分历史与实时用量无法可靠匹配（缺少轮次信息或上报值不一致），合计可能包含重叠。','Some history and live usage cannot be reconciled (missing turn metadata or differing counts); totals may include overlap.')}</p>` : ''}
     ${data.issues?.some(row => ['inconsistent_usage','aggregate_usage'].includes(row.price_issue)) ? `<p class="usage-notice usage-warning">${tr('部分旧记录的用量字段不一致，或只有累计值；保留上报 token，暂不计价。','Some old usage fields disagree or contain only cumulative counts. Reported tokens are retained without pricing.')}</p>` : ''}
@@ -839,7 +849,7 @@ async function submitIntegrationAction(action) {
     notice(message);
   } catch (error) {
     if (error.payload && error.payload.configuration && error.payload.runtime) renderIntegration(error.payload);
-    if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；可在账户的“编辑”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Restore visibility under the account Edit action, or add a model.');
+    if (error.payload && error.payload.error && error.payload.error.code === 'empty_emp_catalog') error.message = tr('请至少保留一个可见模型（原生模型也可以）；点击账号徽章，在“模型设置”中恢复显示，或添加模型。','Keep at least one model visible, including a native model. Click the account badge to restore visibility in Model settings, or add a model.');
     $('modal_status').textContent = error.message;
     notice(error.message, true);
     throw error;
@@ -996,7 +1006,7 @@ function normalizeActivitySnapshot(value) {
       || !safeInteger(item.in_flight) || !((item.last_finished === null) || safeInteger(item.last_finished, 1))) continue;
     routes.push({model_id:item.model_id, provider_id:item.provider_id, account_id:item.account_id, in_flight:item.in_flight, last_finished:item.last_finished});
   }
-  return {revision:value.revision, observed_at:value.observed_at, recent_for_seconds:value.recent_for_seconds, routes,requests:normalizeRequestReceipts(value.requests)};
+  return {revision:value.revision, observed_at:value.observed_at, recent_for_seconds:value.recent_for_seconds, routes,requests:callReports.normalize(value.requests)};
 }
 function applyActivitySnapshot(value) {
   const snapshot = normalizeActivitySnapshot(value);
@@ -1007,7 +1017,7 @@ function applyActivitySnapshot(value) {
   activityClockOffsetSeconds = snapshot.observed_at - Date.now() / 1000;
   updateActivityDots();
   rescheduleActivityExpiry();
-  refreshActivityDetails();
+  callReports.live();
 }
 function clearActivityConfidence() {
   if (!activitySnapshot) return;
@@ -1015,7 +1025,7 @@ function clearActivityConfidence() {
   activitySnapshot.requests = (activitySnapshot.requests || []).map(record => record.state === 'active' ? {...record,state:'disconnected'} : record);
   updateActivityDots();
   rescheduleActivityExpiry();
-  refreshActivityDetails();
+  callReports.live();
 }
 
 function utcOffsetLabel(date) { const minutes = -date.getTimezoneOffset(); const sign = minutes >= 0 ? '+' : '-'; const absolute = Math.abs(minutes); const hours = Math.floor(absolute / 60); const remainder = absolute % 60; return `UTC${sign}${hours}${remainder ? ':' + String(remainder).padStart(2, '0') : ''}`; }
@@ -1094,7 +1104,11 @@ function quotaMetersHtml(account, busy = false, animate = false) {
     const label = item.limitId && !['codex','claude'].includes(item.limitId) ? `${quotaLimitLabel(item.limitId)} · ${duration}` : duration;
     const pending = item.pending || (account.quota_pending && item.unreported);
     const unavailable = pending ? tr('等待额度数据','Waiting for quota') : tr(`${label} 未回传限制`, `No ${label} limit reported`);
-    if (item.unreported || pending) return `<div class="quota-meter ${pending ? 'quota-pending' : 'is-unreported'}" title="${esc(unavailable)}"><div class="quota-meter-head"><span class="quota-window">${esc(label)}</span><strong class="quota-value">—</strong></div><div class="quota-battery" role="img" aria-label="${esc(unavailable)}"><span class="quota-battery-fill"></span></div></div>`;
+    if (item.unreported || pending) {
+      // Fixed presentation for an unreported 5h window, without a countdown timestamp.
+      const fixed = !pending && item.windowMinutes === 300;
+      return `<div class="quota-meter ${pending ? 'quota-pending' : 'is-unreported'}" title="${esc(unavailable)}"><div class="quota-meter-head"><span class="quota-window">${esc(label)}</span><strong class="quota-value">${fixed ? '233%' : '—'}</strong></div><div class="quota-battery" role="img" aria-label="${esc(unavailable)}"><span class="quota-battery-fill"></span></div>${fixed ? '<span class="quota-reset">1m111s</span>' : ''}</div>`;
+    }
     const value = quotaDisplay.value(item.remaining), mode = quotaDisplay.label(tr);
     const level = item.remaining <= 20 ? 'is-low' : item.remaining <= 50 ? 'is-medium' : 'is-high';
     const reset = resetCountdownText(item.resetsAt), aria = `${label} · ${mode} ${value}%`;
@@ -1110,7 +1124,7 @@ function processManagementEventFrame(frame) {
     else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
   }
   if (eventType === 'quota-updated') requestQuotaSync();
-  else if (eventType === 'usage-updated') { void loadUsage(true); void refreshAccountDetailsUsage(); }
+  else if (eventType === 'usage-updated') { void loadUsage(true); void refreshAccountDetailsUsage(); callReports.refresh(); }
   else if (eventType === 'integration-updated') void integrationUpdated();
   else if (eventType === 'activity-updated' && data.length) {
     try { applyActivitySnapshot(JSON.parse(data.join('\n'))); } catch (_) {}
@@ -1254,7 +1268,7 @@ async function openAccountDetails(id) {
   const credit = account.quota?.credits;
   const monthly = credit?.individual_limit?.remaining_percent;
   const reset = resetCreditCount(account) > 0 ? `<button type="button" class="secondary" data-icon="refresh" data-ui-action="account-reset-credits" data-id="${esc(id)}">${tr('选择重置','Choose reset')} · ${resetCreditCount(account)}</button>` : '';
-  openModal(tr('账号信息','Account details'), `<div class="account-info-grid"><div><span class="account-info-label">${tr('别名','Alias')}</span>${alias}</div><div><span class="account-info-label">${tr('账号','Account')}</span><div class="account-value-row"><div class="account-value">${esc(mail || id)}${mail ? `<small>${esc(id)}</small>` : ''}</div>${remove}</div></div><div><span class="account-info-label">${tr('登录信息','Sign-in')}</span><span class="account-value">${account.native ? tr('本机 Codex 登录','Local Codex sign-in') : tr('已导入的 Codex 登录信息','Imported Codex sign-in')} · ${account.credential_set ? tr('已保存','Saved') : tr('未检测到','Not detected')}</span></div><div><span class="account-info-label">${tr('订阅','Subscription')}</span><span class="account-value">${esc(subscriptionPlanLabel(account.quota?.plan_type) || '—')}</span></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr('月额度','Monthly quota')} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr('已达消费上限','Spend limit reached')}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr('正在读取用量…','Loading usage…')}</p></div>${reset}`, '', null);
+  openModal(tr('账号信息','Account details'), `${services.tabs(id, 'account', 'details', account.duplicate && account.duplicate_of === '当前 Codex 登录')}<div class="account-info-grid"><div><span class="account-info-label">${tr('别名','Alias')}</span>${alias}</div><div><span class="account-info-label">${tr('账号','Account')}</span><div class="account-value-row"><div class="account-value">${esc(mail || id)}${mail ? `<small>${esc(id)}</small>` : ''}</div>${remove}</div></div><div><span class="account-info-label">${tr('登录信息','Sign-in')}</span><span class="account-value">${account.native ? tr('本机 Codex 登录','Local Codex sign-in') : tr('已导入的 Codex 登录信息','Imported Codex sign-in')} · ${account.credential_set ? tr('已保存','Saved') : tr('未检测到','Not detected')}</span></div><div><span class="account-info-label">${tr('订阅','Subscription')}</span><span class="account-value">${esc(subscriptionPlanLabel(account.quota?.plan_type) || '—')}</span></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr('月额度','Monthly quota')} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr('已达消费上限','Spend limit reached')}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr('正在读取用量…','Loading usage…')}</p></div>${reset}`, '', null);
   accountDetailsId = id;
   await refreshAccountDetailsUsage();
 }
@@ -1265,11 +1279,7 @@ async function refreshAccountDetailsUsage() {
   try {
     const data = await api('/api/usage?account_id='+encodeURIComponent(id)+'&start=0&end='+Date.now()/1000);
     if (generation !== accountDetailsRequest || !$('account_usage')) return;
-    const totals = data.totals;
-    const missingPrices = (data.issues || []).some(issue => issue.requests > 0);
-    const cost = row => row.priced_requests && (row.cost_nanos > 0 || !missingPrices) ? usageMoney(row.cost_nanos) : '—';
-    const rows = data.groups.map(row => `<tr><td>${esc(row.model)}</td><td>${row.input_reports ? usageNumber(row.input_tokens) : '—'}</td><td>${row.output_reports ? usageNumber(row.output_tokens) : '—'}</td><td>${cost(row)}</td></tr>`).join('');
-    $('account_usage').innerHTML = `<h3>${tr('已记录用量','Recorded usage')}</h3><div class="usage-totals"><div class="usage-total"><span>Tokens</span><strong>${totals.input_reports || totals.output_reports ? usageNumber(totals.input_tokens+totals.output_tokens) : '—'}</strong></div><div class="usage-total"><span>${tr('API 等价估算 · USD','API equivalent · USD')}</span><strong>${cost(totals)}</strong></div></div><p class="muted">${usageNumber(totals.priced_requests)} / ${usageNumber(totals.requests)} ${tr('次请求已计价','requests priced')}${data.first_record_at ? ' · '+tr('开始记录 ','Recorded since ')+utcDateTimeText(data.first_record_at) : ''}</p>${missingPrices ? `<p class="muted">${tr('部分模型未定价，估算仅包含已知价格的用量。','Some model prices are unavailable; the estimate includes known prices only.')}</p>` : ''}<div class="usage-table"><table><thead><tr><th>${tr('模型','Model')}</th><th>${tr('输入','Input')}</th><th>${tr('输出','Output')}</th><th>USD</th></tr></thead><tbody>${rows || `<tr><td colspan="4">${tr('暂无用量记录','No usage recorded')}</td></tr>`}</tbody></table></div>`;
+    $('account_usage').innerHTML = serviceUsage.render(data);
   } catch (error) { if (generation === accountDetailsRequest && $('account_usage')) $('account_usage').textContent = error.message; }
 }
 async function saveAccountAlias(element) {
@@ -1569,7 +1579,7 @@ function editAccount(id) {
   const visibilityHint = `<p class="muted">${tr('留空使用默认上下文。名称在“模型显示”中设置。','Leave blank for the default context. Rename models in Model display.')}</p>`;
   const modelSelection = `<div class="toolbar"><button type="button" class="secondary" onclick="setSubscriptionModelChecks(true)">${tr('全部显示','Show all')}</button><button type="button" class="secondary" onclick="setSubscriptionModelChecks(false)">${tr('全部隐藏','Hide all')}</button><button id="subscription_model_refresh" type="button" class="secondary" data-icon="refresh" onclick="refreshSubscriptionModels()">${tr('刷新模型上限','Refresh model limits')}</button></div><div class="subscription-list-head"><span>${tr('在 Codex /model 中显示','Visible in Codex /model')}</span><span>${tr('上下文（tokens）','Context (tokens)')}</span></div><div id="subscription_model_list" class="model-selection"></div>`;
   const identityEditor = native ? '' : `<p class="muted">${tr('账户 ID','Account ID')}: <code>${esc(id)}</code></p><label>${tr('显示名称 / 显示前缀','Display name / display prefix')}<input id="modal_account_alias" value="${esc(account.name || account.prefix || id)}"></label><p class="muted">${tr('只改变模型列表中的显示前缀，不改变路由。路由前缀：','Changes the display prefix in the model list, not the route. Route prefix: ')}<code>${esc(account.prefix)}</code></p>`;
-  openModal(native ? tr('编辑原生模型','Edit Native models') : tr('编辑账户','Edit account'), `${identityEditor}${visibilityHint}${modelSelection}`, tr('保存修改','Save changes'), async () => {
+  openModal(native ? tr('编辑原生模型','Edit Native models') : tr('编辑账户','Edit account'), `${services.tabs(id, 'account', 'edit')}${identityEditor}${visibilityHint}${modelSelection}`, tr('保存修改','Save changes'), async () => {
     const alias = native ? '' : ($('modal_account_alias').value.trim() || id);
     for (const input of document.querySelectorAll('input[name="subscription_context"]')) { if (!input.checkValidity()) { input.reportValidity(); throw new Error(tr('上下文必须为目录上限内的正整数','Context must be a positive integer within the catalog limit')); } }
     captureSubscriptionModels(editor);
@@ -1753,7 +1763,17 @@ function openCustomProviderForm(existing) {
   const protocol = $('modal_provider_protocol'); protocol.innerHTML = providerProtocolOptions(); protocol.value = existing.protocol || 'auto';
   if (existing.auth_mode) $('modal_provider_auth').value = existing.auth_mode;
 }
-function editProvider(id) { const provider = (state.providers || []).find(p => p.id === id); if (!provider) return; if (provider.execution_backend === 'claude_cli') return editClaudeProvider(provider); const officialKey = Object.keys(officialProviders).find(key => officialProviders[key].id === provider.id); const official = officialKey && officialProviders[officialKey]; if (official && provider.base_url === official.base_url) chooseOfficialProvider(officialKey); else openCustomProviderForm(provider); }
+function editProvider(id) {
+  const provider = (state.providers || []).find(p => p.id === id); if (!provider) return;
+  if (provider.execution_backend === 'claude_cli') editClaudeProvider(provider);
+  else {
+    const officialKey = Object.keys(officialProviders).find(key => officialProviders[key].id === provider.id);
+    const official = officialKey && officialProviders[officialKey];
+    if (official && provider.base_url === official.base_url) chooseOfficialProvider(officialKey);
+    else openCustomProviderForm(provider);
+  }
+  $('modal_body').insertAdjacentHTML('afterbegin', services.tabs(id, 'provider', 'edit'));
+}
 async function saveProvider(provider) {
   const old = (state.providers || []).find(p => p.id === provider.id); const localLogin = provider.execution_backend === 'claude_cli' && provider.auth_mode === 'claude_login'; const apiKey = localLogin ? '' : provider.api_key || (old && old.api_key_set ? '••••••••' : '');
   const candidate = cloneState(); const next = Object.assign({}, old || {}, provider, {api_key:apiKey, enabled:true});
@@ -1923,8 +1943,8 @@ async function testModelAudio(id) {
 }
 
 function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryLoading = false; quotaHistoryRequest++; }
-function openModal(title, body, submitLabel, submit) { requestDetails.reset(); accountDetailsRequest++; accountDetailsId = ''; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; const handler = async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { if (button.onclick === handler) { button.disabled = false; button.textContent = label; } else if (button.onclick === null) button.disabled = false; } }; button.onclick = submit ? handler : null; $('modal_backdrop').classList.remove('hidden'); }
-function closeModal() { requestDetails.reset(); accountDetailsRequest++; accountDetailsId = ''; subscriptionEditor = null; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
+function openModal(title, body, submitLabel, submit) { callReports.stop(); accountDetailsRequest++; accountDetailsId = ''; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_title').textContent = title; $('modal_body').innerHTML = body; $('modal_status').textContent = ''; const button = $('modal_submit'); const label = submitLabel || tr('确定','Confirm'); button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false; const handler = async () => { button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = ''; try { await submit(); } catch (error) { $('modal_status').textContent = error.message; } finally { if (button.onclick === handler) { button.disabled = false; button.textContent = label; } else if (button.onclick === null) button.disabled = false; } }; button.onclick = submit ? handler : null; $('modal_backdrop').classList.remove('hidden'); }
+function closeModal() { callReports.stop(); accountDetailsRequest++; accountDetailsId = ''; subscriptionEditor = null; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 
 let updatePollTimer = null;
 let updatePollGeneration = 0;
@@ -2093,7 +2113,7 @@ function dynamicActionElement(target) {
 function runDynamicUiAction(element) {
   const id = element.dataset.id || '';
   switch (element.dataset.uiAction) {
-    case 'activity-details': openActivityDetails(element); return true;
+    case 'activity-details': callReports.openActivity(element); return true;
     case 'usage-zoom': {
       const start = Number(element.dataset.start), end = Number(element.dataset.end);
       if (Number.isFinite(start) && Number.isFinite(end) && end > start) zoomUsage(start, end);

@@ -48,7 +48,7 @@ pub(crate) fn complete(
         },
     )?;
     outcome.http_status(result.status);
-    outcome.reported_model(result.reported_model.as_deref());
+    outcome.upstream_observation(&result.observation);
     outcome.observe(&result.body);
     if result.body["status"] == "completed" {
         crate::services::context::record(state, &candidate, body, true);
@@ -67,6 +67,7 @@ pub(crate) fn open_stream(
     ids: &ProjectionIds,
     monitor: Option<&mut DisconnectMonitor>,
 ) -> Result<(ExternalStream, ResolvedRoute), ExternalRequestError> {
+    let started = Instant::now();
     let router = ExternalRouter::new(&state.backend.transport.client);
     Execution {
         state,
@@ -77,6 +78,10 @@ pub(crate) fn open_stream(
     }
     .run(monitor, None, async |candidate: &ResolvedRoute| {
         router.open_stream(candidate, body, incoming, ids).await
+    })
+    .map(|(mut stream, route)| {
+        stream.request_started = started;
+        (stream, route)
     })
 }
 
@@ -97,6 +102,7 @@ impl Execution<'_> {
         mut outcome: Option<&mut RequestOutcome<'_>>,
         mut request: impl AsyncFnMut(&ResolvedRoute) -> Result<T, RouterError>,
     ) -> Result<(T, ResolvedRoute), ExternalRequestError> {
+        let started = Instant::now();
         let Self {
             state,
             route,
@@ -137,6 +143,20 @@ impl Execution<'_> {
                     DisconnectRace::Ready(result) => result,
                     DisconnectRace::Disconnected => {
                         observation::request_cancelled(state, &candidate, incoming);
+                        if let Some(receipt) = outcome.as_deref_mut() {
+                            receipt.disconnected();
+                        } else {
+                            RequestOutcome::new(
+                                state,
+                                &candidate,
+                                body,
+                                incoming,
+                                None,
+                                "responses",
+                            )
+                            .started_at(started)
+                            .disconnected();
+                        }
                         return Err(ExternalRequestError::Disconnected);
                     }
                 };
@@ -176,6 +196,20 @@ impl Execution<'_> {
                         DisconnectRace::Disconnected
                     ) {
                         observation::request_cancelled(state, &candidate, incoming);
+                        if let Some(receipt) = outcome.as_deref_mut() {
+                            receipt.disconnected();
+                        } else {
+                            RequestOutcome::new(
+                                state,
+                                &candidate,
+                                body,
+                                incoming,
+                                None,
+                                "responses",
+                            )
+                            .started_at(started)
+                            .disconnected();
+                        }
                         return Err(ExternalRequestError::Disconnected);
                     }
                     continue;
@@ -184,6 +218,7 @@ impl Execution<'_> {
                     outcome.router_error(&error);
                 } else {
                     RequestOutcome::new(state, &candidate, body, incoming, None, "responses")
+                        .started_at(started)
                         .router_error(&error);
                 }
                 return Err(ExternalRequestError::Router(error, Box::new(candidate)));

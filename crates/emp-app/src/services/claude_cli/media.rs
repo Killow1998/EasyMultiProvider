@@ -2,12 +2,16 @@ use super::process::InputFormat;
 use super::projection;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+#[path = "json_budget.rs"]
+mod json_budget;
+use json_budget::JsonByteBudget;
 use serde_json::{Value, json};
 use url::Url;
 
 const MAX_MEDIA_BYTES: usize = projection::MAX_TRANSCRIPT_BYTES;
 
 pub(super) struct PreparedInput {
+    pub(super) system_prompt: String,
     pub(super) stdin: Vec<u8>,
     pub(super) input_format: InputFormat,
     pub(super) expected_user_content: ExpectedUserContent,
@@ -127,17 +131,53 @@ fn preflight_part(part: &Value) -> Result<(), &'static str> {
 }
 
 pub(super) fn prepare(body: &Value) -> Result<PreparedInput, &'static str> {
-    let transcript = projection::normalized_transcript(body);
+    let prepared = prepare_input(body)?;
+    if prepared.stdin.len()
+        > projection::MAX_TRANSCRIPT_BYTES.saturating_sub(prepared.system_prompt.len())
+    {
+        return Err("claude_cli_input_too_large");
+    }
+    Ok(prepared)
+}
+
+fn prepare_input(body: &Value) -> Result<PreparedInput, &'static str> {
+    let mut transcript = projection::normalized_transcript(body);
+    let system_prompt = super::instructions::take(&mut transcript)?;
+    // Text needs no per-part media markers. In particular, never expand item
+    // metadata into thousands of markers only to discard them afterwards.
+    match projection::transcript(&transcript) {
+        Ok(stdin) => {
+            return Ok(PreparedInput {
+                system_prompt,
+                expected_user_content: ExpectedUserContent::Text(stdin.clone()),
+                stdin,
+                input_format: InputFormat::Text,
+            });
+        }
+        Err("unsupported_input_modality") => {}
+        Err(error) => return Err(error),
+    }
     let input = transcript.get("input");
     let items: Vec<&Value> = match input {
         Some(Value::Array(items)) => items.iter().collect(),
         Some(item @ Value::Object(_)) => vec![item],
         _ => Vec::new(),
     };
-    let mut content = vec![text_block(json!({
-        "codex_responses_metadata": request_metadata(&transcript)
-    }))?];
-    let mut has_media = false;
+    let mut budget = JsonByteBudget::new(projection::MAX_TRANSCRIPT_BYTES);
+    budget
+        .charge(&json!({"type":"user","message":{"role":"user","content":[]}}))
+        .map_err(|_| "claude_cli_input_too_large")?;
+    budget
+        .reserve(1)
+        .map_err(|_| "claude_cli_input_too_large")?; // JSONL newline
+    let mut content = Vec::new();
+    push_block(
+        &mut content,
+        &mut budget,
+        text_block(json!({
+            "codex_responses_metadata": request_metadata(&transcript)
+        }))?,
+    )?;
 
     for (item_index, item) in items.into_iter().enumerate() {
         let item_type = item.get("type").and_then(Value::as_str);
@@ -149,16 +189,19 @@ pub(super) fn prepare(body: &Value) -> Result<PreparedInput, &'static str> {
             for (part_index, part) in parts.iter().enumerate() {
                 let attachment = attachment(part)?;
                 let media_part = attachment.is_some();
-                has_media |= media_part;
                 let part = marker_part(part, media_part, "native content block follows");
-                content.push(text_block(json!({
-                    "codex_item_index":item_index,
-                    "item":metadata,
-                    "content_part_index":part_index,
-                    "content_part":part
-                }))?);
+                push_block(
+                    &mut content,
+                    &mut budget,
+                    text_block(json!({
+                        "codex_item_index":item_index,
+                        "item":metadata,
+                        "content_part_index":part_index,
+                        "content_part":part
+                    }))?,
+                )?;
                 if let Some(attachment) = attachment {
-                    content.push(attachment_block(attachment));
+                    push_block(&mut content, &mut budget, attachment_block(attachment))?;
                 }
             }
             if content.len() != before {
@@ -174,16 +217,19 @@ pub(super) fn prepare(body: &Value) -> Result<PreparedInput, &'static str> {
             for (part_index, part) in parts.iter().enumerate() {
                 let attachment = attachment(part)?;
                 let media_part = attachment.is_some();
-                has_media |= media_part;
                 let part = marker_part(part, media_part, "native tool-output block follows");
-                content.push(text_block(json!({
-                    "codex_item_index":item_index,
-                    "item":metadata,
-                    "tool_output_part_index":part_index,
-                    "tool_output_part":part
-                }))?);
+                push_block(
+                    &mut content,
+                    &mut budget,
+                    text_block(json!({
+                        "codex_item_index":item_index,
+                        "item":metadata,
+                        "tool_output_part_index":part_index,
+                        "tool_output_part":part
+                    }))?,
+                )?;
                 if let Some(attachment) = attachment {
-                    content.push(attachment_block(attachment));
+                    push_block(&mut content, &mut budget, attachment_block(attachment))?;
                 }
             }
             if content.len() != before {
@@ -193,19 +239,14 @@ pub(super) fn prepare(body: &Value) -> Result<PreparedInput, &'static str> {
             return Err("unsupported_input_modality");
         }
 
-        content.push(text_block(json!({
-            "codex_item_index":item_index,
-            "item":item
-        }))?);
-    }
-
-    if !has_media {
-        let stdin = projection::transcript(body)?;
-        return Ok(PreparedInput {
-            expected_user_content: ExpectedUserContent::Text(stdin.clone()),
-            stdin,
-            input_format: InputFormat::Text,
-        });
+        push_block(
+            &mut content,
+            &mut budget,
+            text_block(json!({
+                "codex_item_index":item_index,
+                "item":item
+            }))?,
+        )?;
     }
 
     let event = json!({
@@ -218,6 +259,7 @@ pub(super) fn prepare(body: &Value) -> Result<PreparedInput, &'static str> {
         return Err("claude_cli_input_too_large");
     }
     Ok(PreparedInput {
+        system_prompt,
         stdin,
         input_format: InputFormat::StreamJson,
         expected_user_content: ExpectedUserContent::Blocks(content),
@@ -239,7 +281,7 @@ pub(super) fn context_payload(body: &Value) -> Result<Value, &'static str> {
     let schema: Value =
         serde_json::from_str(&schema_json).map_err(|_| "claude_cli_invalid_schema")?;
     Ok(json!({
-        "system":projection::SYSTEM_PROMPT,
+        "system":prepared.system_prompt,
         "messages":[{"role":"user","content":content}],
         "tools":[{"name":"StructuredOutput","input_schema":schema}],
         "max_tokens":body.get("max_output_tokens").cloned().unwrap_or(Value::Null)
@@ -247,11 +289,7 @@ pub(super) fn context_payload(body: &Value) -> Result<Value, &'static str> {
 }
 
 fn request_metadata(transcript: &Value) -> Value {
-    let mut metadata = transcript.clone();
-    if let Some(object) = metadata.as_object_mut() {
-        object.remove("input");
-    }
-    metadata
+    object_without(transcript, "input")
 }
 
 fn is_message(item: &Value) -> bool {
@@ -267,11 +305,16 @@ fn is_media_type(item_type: Option<&str>) -> bool {
 }
 
 fn object_without(value: &Value, field: &str) -> Value {
-    let mut value = value.clone();
-    if let Some(object) = value.as_object_mut() {
-        object.remove(field);
+    match value.as_object() {
+        Some(object) => Value::Object(
+            object
+                .iter()
+                .filter(|(key, _)| key.as_str() != field)
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        ),
+        None => value.clone(),
     }
-    value
 }
 
 fn marker_part(part: &Value, media: bool, marker: &str) -> Value {
@@ -299,8 +342,28 @@ fn marker_part(part: &Value, media: bool, marker: &str) -> Value {
 }
 
 fn text_block(record: Value) -> Result<Value, &'static str> {
+    JsonByteBudget::new(projection::MAX_TRANSCRIPT_BYTES)
+        .charge(&record)
+        .map_err(|_| "claude_cli_input_too_large")?;
     let text = serde_json::to_string(&record).map_err(|_| "claude_cli_invalid_transcript")?;
     Ok(json!({"type":"text","text":text}))
+}
+
+fn push_block(
+    content: &mut Vec<Value>,
+    budget: &mut JsonByteBudget,
+    block: Value,
+) -> Result<(), &'static str> {
+    if !content.is_empty() {
+        budget
+            .reserve(1)
+            .map_err(|_| "claude_cli_input_too_large")?;
+    }
+    budget
+        .charge(&block)
+        .map_err(|_| "claude_cli_input_too_large")?;
+    content.push(block);
+    Ok(())
 }
 
 fn attachment_block(attachment: Attachment) -> Value {
@@ -454,6 +517,10 @@ pub(super) fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     let height = u32::from_be_bytes(data.get(20..24)?.try_into().ok()?);
     (width > 0 && height > 0).then_some((width, height))
 }
+
+#[cfg(test)]
+#[path = "media_budget_tests.rs"]
+mod budget_tests;
 
 #[cfg(test)]
 mod tests {

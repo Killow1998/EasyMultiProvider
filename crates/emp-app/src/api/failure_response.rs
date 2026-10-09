@@ -2,6 +2,7 @@
 
 use crate::http::response::response;
 use crate::http::response::status_text;
+use crate::services::error_origin;
 use crate::services::external::ExternalRequestError;
 use crate::services::failure_feedback;
 use emp_core::ResolvedRoute;
@@ -12,6 +13,11 @@ use emp_transport::FailureClass;
 use emp_transport::normalize_error_class;
 use emp_transport::public_failure_message;
 use serde_json::Value;
+
+pub(crate) fn emp_websocket_error(status: u16, code: &str, message: &str) -> Value {
+    serde_json::json!({"type":"error", "status":status,
+        "error":{"code":code,"origin":"emp","message":error_origin::message("emp", message)}})
+}
 
 pub(crate) fn external_complete_error(error: ExternalRequestError) -> Vec<u8> {
     external_http_error(error, |error, route| {
@@ -48,17 +54,15 @@ pub(crate) fn external_websocket_error(error: ExternalRequestError) -> Value {
         ExternalRequestError::Router(error, route) => {
             websocket_router_error_for_route(&error, &route)
         }
-        ExternalRequestError::Route(error) => serde_json::json!({
-            "type":"error", "status":error.status(),
-            "error":{"code":"router_error","message":error.to_string()}
-        }),
-        ExternalRequestError::Unsupported => serde_json::json!({
-            "type":"error", "status":503,
-            "error":{"code":"router_error","message":"provider protocol is unsupported"}
-        }),
+        ExternalRequestError::Route(error) => {
+            emp_websocket_error(error.status(), "router_error", &error.to_string())
+        }
+        ExternalRequestError::Unsupported => {
+            emp_websocket_error(503, "router_error", "provider protocol is unsupported")
+        }
         ExternalRequestError::Disconnected => serde_json::json!({
             "type":"error", "status":499,
-            "error":{"code":"client_disconnected","message":"client disconnected"}
+            "error":{"code":"client_disconnected","origin":"client","message":"[Client] client disconnected"}
         }),
     }
 }
@@ -73,7 +77,7 @@ pub(crate) fn route_resolution_response(error: RouteResolutionError) -> Vec<u8> 
         "error": {
             "code": error_class,
             "type": error_class,
-            "message": error.to_string(),
+            "origin":"emp", "message":error_origin::message("emp", &error.to_string()),
         }
     }))
     .expect("route resolution response is JSON serializable");
@@ -94,7 +98,7 @@ pub(crate) fn request_router_error_response(status: u16, message: &str) -> Vec<u
         "error": {
             "code": "router_error",
             "type": "router_error",
-            "message": message,
+            "origin":"emp", "message":error_origin::message("emp", message),
         }
     }))
     .expect("request router response is JSON serializable");
@@ -153,6 +157,7 @@ fn router_error_response_with_route(error: RouterError, route: Option<&ResolvedR
             |route| routed_message(&error, route, false),
         ),
     });
+    error_origin::annotate(&mut detail, error_origin::router(&error));
     if let Some(reason) = failure_reason {
         detail["failure_reason"] = Value::String(reason);
     }
@@ -236,6 +241,7 @@ fn stream_failure_value_with_route(
         "status": error.status(),
         "error_class": error_class.as_str(),
     });
+    error_origin::annotate(&mut detail, error_origin::router(error));
     if let Some(reason) = error.failure_reason() {
         let reason = safe_failure_reason(reason);
         if !reason.is_empty() {
@@ -314,6 +320,7 @@ pub(crate) fn pre_output_failure_response(event: &Value, route: &ResolvedRoute) 
         ),
         "param": Value::Null,
     });
+    error_origin::annotate(&mut detail, "upstream");
     if let Some(reason) = failure_reason {
         detail["failure_reason"] = Value::String(reason.to_owned());
     }
@@ -356,6 +363,7 @@ fn pre_output_router_error_response_with_route(
         ),
         "param": Value::Null,
     });
+    error_origin::annotate(&mut detail, error_origin::router(error));
     if let Some(reason) = error.failure_reason()
         && error_class != FailureClass::StreamIncomplete
     {
