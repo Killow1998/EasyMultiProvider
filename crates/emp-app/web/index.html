@@ -100,7 +100,9 @@
 <script src="/assets/service-icons.js"></script>
 <script src="/assets/service-list.js"></script>
 <script src="/assets/service-usage.js"></script>
+<script src="/assets/model-editor.js"></script>
 <script src="/assets/model-settings.js"></script>
+<script src="/assets/account-details.js"></script>
 <script src="/assets/account-import.js"></script>
 <script src="/assets/service-chooser.js"></script>
 <script src="/assets/management-client.js"></script>
@@ -114,10 +116,6 @@
 <script>
 let state = null;
 let pendingMigrationFile = null;
-let modalReasoningLevels = null;
-let modalReasoningSupport = null;
-let modalReasoningSummarySupport = null;
-let editingModelId = '';
 let activeQuotaAccountId = '';
 let activeQuotaServiceKind = 'accounts';
 let quotaHistoryTimer = null;
@@ -191,7 +189,9 @@ const officialProviders = {
   zhipu: {id:'zhipu-glm', name:'Zhipu/GLM', base_url:'https://api.z.ai/api/paas/v4', protocol:'chat_completions', auth_mode:'api_key', hint:'GLM OpenAI-compatible API'}
 };
 
-const serviceUsage = createServiceUsage({esc, tr, number:value => usageNumber(value), money:value => usageMoney(value), dateTime:value => utcDateTimeText(value)});
+const serviceUsage = createServiceUsage({esc, tr, number:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN').format(value || 0), money:value => new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN', {style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:4}).format(value/1e9), dateTime:utcDateTimeText});
+const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, getLanguage:() => language, persistState, openModal, serviceUsage, callReports, eventsConnected:() => quotaEventsConnected, periods:{periodPickerHtml, registerPeriodPicker, setPeriod, periodPickers, periodLocalInput, timeAxisSvg}});
+const {open:openUsage} = usageReport;
 const services = createServiceList({
   getState:() => state, $, esc, tr, presets:officialProviders, icon:serviceIconHtml,
   activity:activityIndicatorHtml, accountSummary:accountSummaryHtml, quotaMeters:quotaMetersHtml,
@@ -199,6 +199,8 @@ const services = createServiceList({
   notice, usageSummary:serviceUsage
 });
 const {render:renderServices, details:openProviderDetails} = services;
+const accountDetails = createAccountDetails({getState:() => state, $, tr, esc, api, services, serviceUsage, persistState, uiIcon, subscriptionPlanLabel, resetCreditCount});
+const {open:openAccountDetails, saveAlias:saveAccountAlias} = accountDetails;
 const {open:openServiceChooser, importCodex:openCodexImportChooser} = createServiceChooser({tr, esc, presets:officialProviders, icon:serviceIconHtml, openModal, getState:() => state});
 
 const confirmedCapabilitySources = new Set(['manual','observed','advertised','official']);
@@ -209,27 +211,6 @@ function confirmedField(model, field) {
 }
 // Codex only sends text and images; other stored modalities are kept but not offered.
 const COMMON_MODALITIES = ['text', 'image'];
-// Modalities with a test the edit panel can run against the saved model.
-const MODALITY_TESTS = {image: () => testModalVision()};
-let modalVisionStatus = 'unknown';
-let modalModalitiesEdited = false;
-let modalReasoningEdited = false;
-function modalityOption(value, checked, testable = false) {
-  const test = testable && MODALITY_TESTS[value] ? `<button type="button" class="secondary modality-test" data-ui-action="modality-test" data-id="${esc(value)}">${tr('测试','Test')}</button>` : '';
-  return `<span class="modality-option"><label><input type="checkbox" data-modality value="${esc(value)}" ${checked ? 'checked' : ''} onchange="modalModalitiesEdited=true;if(this.value==='image')modalVisionStatus=this.checked?'supported':'unsupported'">${esc(modalityLabel(value))}</label>${test}</span>`;
-}
-function modalityOptions(selected, vision, testable) {
-  const audio = testable ? `<button type="button" class="secondary modality-test" onclick="testModalAudio()">${tr('测试音频','Test audio')}</button>` : '';
-  return COMMON_MODALITIES.map(value => modalityOption(value, selected.includes(value), testable)).join('') + audio;
-}
-async function testModalAudio() {
-  if (!editingModelId) return notice(tr('请先保存模型再测试','Save the model before testing'), true);
-  await testModelAudio(editingModelId);
-}
-async function testModalVision() {
-  if (!editingModelId) return notice(tr('请先保存模型再测试','Save the model before testing'), true);
-  if (await testModelVision(editingModelId)) { const box = document.querySelector('[data-modality][value="image"]'); if (box) box.checked = true; modalVisionStatus = 'supported'; modalModalitiesEdited = true; }
-}
 function modalityLabel(value) {
   const labels = language === 'en' ? {text:'text',image:'image',audio:'audio',video:'video'} : {text:'文本',image:'图像',audio:'音频',video:'视频'}; return labels[value] || value;
 }
@@ -952,7 +933,7 @@ function processManagementEventFrame(frame) {
     else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
   }
   if (eventType === 'quota-updated') requestQuotaSync();
-  else if (eventType === 'usage-updated') { void loadUsage(); void refreshAccountDetailsUsage(); callReports.refresh(); }
+  else if (eventType === 'usage-updated') { void usageReport.refresh(); void accountDetails.refresh(); callReports.refresh(); }
   else if (eventType === 'integration-updated') void integrationUpdated();
   else if (eventType === 'activity-updated' && data.length) {
     try { applyActivitySnapshot(JSON.parse(data.join('\n'))); } catch (_) {}
@@ -1083,42 +1064,6 @@ function resetAttemptKey(accountId, creditId) {
   const key = resetIdempotencyKey();
   resetAttempts.set(accountId,{creditId,key});
   return key;
-}
-let accountDetailsRequest = 0;
-let accountDetailsId = '';
-function findAccount(id) { return [state.native_account, ...(state.accounts || [])].filter(Boolean).find(account => account.id === id); }
-async function openAccountDetails(id) {
-  const account = findAccount(id); if (!account) return;
-  const name = account.native ? 'Native' : account.name || account.id;
-  const mail = account.quota?.account_label || '';
-  const alias = account.native ? '<div class="account-alias-edit">Native</div>' : `<div class="account-alias-edit"><input id="account_alias" value="${esc(name)}" aria-label="${esc(tr('别名','Alias'))}"><button type="button" class="secondary" id="account_alias_save" data-ui-action="account-alias-save" data-id="${esc(id)}" title="${esc(tr('保存别名','Save alias'))}" aria-label="${esc(tr('保存别名','Save alias'))}">${uiIcon('save')}</button></div>`;
-  const remove = account.native ? '' : `<button type="button" class="danger" data-icon="trash" data-ui-action="account-remove" data-id="${esc(id)}">${tr('移除','Remove')}</button>`;
-  const credit = account.quota?.credits;
-  const monthly = credit?.individual_limit?.remaining_percent;
-  const reset = resetCreditCount(account) > 0 ? `<button type="button" class="secondary" data-icon="refresh" data-ui-action="account-reset-credits" data-id="${esc(id)}">${tr('选择重置','Choose reset')} · ${resetCreditCount(account)}</button>` : '';
-  services.open(id, 'account', 'details', `<div class="account-info-grid"><div><span class="account-info-label">${tr('别名','Alias')}</span>${alias}</div><div><span class="account-info-label">${tr('账号','Account')}</span><div class="account-value-row"><div class="account-value">${esc(mail || id)}${mail ? `<small>${esc(id)}</small>` : ''}</div>${remove}</div></div><div><span class="account-info-label">${tr('登录信息','Sign-in')}</span><span class="account-value">${account.native ? tr('本机 Codex 登录','Local Codex sign-in') : tr('已导入的 Codex 登录信息','Imported Codex sign-in')} · ${account.credential_set ? tr('已保存','Saved') : tr('未检测到','Not detected')}</span></div><div><span class="account-info-label">${tr('订阅','Subscription')}</span><span class="account-value">${esc(subscriptionPlanLabel(account.quota?.plan_type) || '—')}</span></div></div>${typeof monthly === 'number' ? `<p class="muted">${tr('月额度','Monthly quota')} · ${esc(monthly)}%</p>` : ''}${credit?.spend_control_reached ? `<p class="refresh-error">${tr('已达消费上限','Spend limit reached')}</p>` : ''}<div id="account_usage" class="account-usage"><p class="muted">${tr('正在读取用量…','Loading usage…')}</p></div>${reset}`, '', null);
-  accountDetailsId = id;
-  await refreshAccountDetailsUsage();
-}
-async function refreshAccountDetailsUsage() {
-  const id = accountDetailsId;
-  if (!id || !$('account_usage')) return;
-  const generation = ++accountDetailsRequest;
-  try {
-    const data = await api('/api/usage?account_id='+encodeURIComponent(id)+'&start=0&end='+Date.now()/1000);
-    if (generation !== accountDetailsRequest || !$('account_usage')) return;
-    $('account_usage').innerHTML = serviceUsage.render(data);
-  } catch (error) { if (generation === accountDetailsRequest && $('account_usage')) $('account_usage').textContent = error.message; }
-}
-async function saveAccountAlias(element) {
-  const candidate = cloneState(), account = candidate.accounts.find(item => item.id === element.dataset.id);
-  if (!account) return;
-  const name = $('account_alias').value.trim();
-  if (!name) { $('modal_status').textContent = tr('请输入别名','Enter an alias'); return; }
-  account.name = name; element.disabled = true;
-  try { await persistState(tr('别名已保存','Alias saved'), candidate); services.mount({id:element.dataset.id, kind:'account', active:'details'}); element.innerHTML = uiIcon('check'); }
-  catch (error) { $('modal_status').textContent = error.message; }
-  finally { element.disabled = false; }
 }
 function openResetCredits(accountId) {
   const account = [...(state.native_account ? [state.native_account] : []),...(state.accounts || [])].find(item => item.id === accountId);
@@ -1635,6 +1580,8 @@ function renderModels() {
   updateActivityDots();
 }
 function toggleModelGroup(provider) { if (expandedModelGroups.has(provider)) expandedModelGroups.delete(provider); else expandedModelGroups.add(provider); renderModels(); }
+const modelEditor = createModelEditor({getState:() => state, $, tr, esc, api, persistState, openModal, closeModal, notice, upstreamErrorText, testModelAudio, testModelVision, movePresentation, format:{visionStatus, modalityLabel, compactContext, usableContext}});
+const {open:openManualModelModal} = modelEditor;
 function providerDiscoveryError(error) { return upstreamErrorText(error, tr('无法读取模型列表。','Could not read the model list.')); }
 const providerModelSettings = createProviderModelSettings({getState:() => state, $, api, tr, esc, openModal, closeModal,
   modelSort, capabilitySummary, formatDate, errorText:providerDiscoveryError,
@@ -1645,96 +1592,6 @@ const providerModelSettings = createProviderModelSettings({getState:() => state,
     notice(tr(`已添加 ${result.added} 个模型`, `${result.added} models added`));
   }
 });
-function openManualModelModal(modelId = '', preferredProviderId = '') {
-  const existing = (state.models || []).find(m => m.id === modelId) || {};
-  const selectedProviderId = existing.provider || preferredProviderId || (state.providers || [])[0]?.id || '';
-  const selectedProvider = (state.providers || []).find(provider => provider.id === selectedProviderId);
-  const localClaude = selectedProvider?.auth_mode === 'claude_login';
-  editingModelId = modelId;
-  modalReasoningLevels = Array.isArray(existing.reasoning_levels) ? existing.reasoning_levels : null;
-  modalReasoningSupport = typeof existing.supports_reasoning === 'boolean' ? existing.supports_reasoning : null;
-  modalReasoningSummarySupport = typeof existing.supports_reasoning_summaries === 'boolean' ? existing.supports_reasoning_summaries : null;
-  const options = (state.providers || []).map(p => `<option value="${esc(p.id)}">${esc(p.name || p.id)} (${esc(p.id)})</option>`).join('');
-  const vision = visionStatus(existing);
-  const inputModalities = (Array.isArray(existing.input_modalities) ? existing.input_modalities : ['text']).filter(value => value !== 'image').concat(vision === 'supported' ? ['image'] : []);
-  const upstreamLabel = localClaude ? tr('模型别名或完整 ID','Model alias or full ID') : tr('上游模型名','Upstream model name');
-  const upstreamPlaceholder = localClaude ? tr('输入 Claude Code 支持的别名或完整 ID','Enter a Claude Code model alias or full ID') : tr('例如 glm','for example glm');
-  modalVisionStatus = vision;
-  modalModalitiesEdited = false;
-  modalReasoningEdited = false;
-  const body = `<div class="grid"><div><label>Provider</label><select id="modal_model_provider" onchange="updateManualModelRoute()">${options}</select></div><div><label id="modal_model_upstream_label">${upstreamLabel}</label><input id="modal_model_upstream" value="${esc(existing.upstream_id || '')}" placeholder="${upstreamPlaceholder}" oninput="updateManualModelRoute()"></div><div class="wide"><label>${tr('最大上下文窗口（可选）','Maximum context window (optional)')}</label><div class="input-action"><input id="modal_model_context" type="text" inputmode="numeric" pattern="[0-9]*" value="${Number(existing.context_window || 0)}" oninput="this.value=this.value.replace(/\\D/g,'');previewModalContext()"><button id="modal_model_context_inspect" type="button" class="secondary" onclick="inspectModalModel()" ${localClaude ? 'hidden' : ''}>${tr('获取上游最大值','Fetch upstream maximum')}</button></div><small class="muted" id="modal_model_context_usable">${existing.context_window ? tr(`Codex 可用 ${compactContext(usableContext(existing))}`,`Codex uses ${compactContext(usableContext(existing))}`) : ''}</small></div><div class="wide"><label>${tr('可选思考强度','Available reasoning levels')}</label><div id="modal_model_reasoning" class="modality-options">${reasoningOptions(modalReasoningLevels || [])}</div><small class="muted">${tr('在 Codex 选择模型时切换。','Choose the effort when selecting a model in Codex.')}</small></div><div class="wide"><label>${tr('输入模态','Input modalities')}</label><div id="modal_model_modalities" class="modality-options">${modalityOptions(inputModalities, vision, Boolean(modelId))}</div></div><div class="wide"><p class="muted">${tr('不可变路由','Stable route')}: <code id="modal_model_route"></code></p></div></div><p class="muted">${tr('模型名称和上下文标识请在右侧“模型显示”中设置。','Set the model name and context label in Model display on the right.')}</p>`;
-  openModal(modelId ? tr('编辑模型','Edit model') : tr('手动添加模型','Add model manually'), body, tr('保存模型','Save model'), async () => { await saveManualModel(); closeModal(); });
-  if (selectedProviderId) $('modal_model_provider').value = selectedProviderId;
-  updateManualModelRoute();
-}
-function reasoningOptions(selected) {
-  const levels = [...new Set(['low','medium','high','xhigh','max', ...selected])];
-  return levels.map(level => `<span class="modality-option"><label><input type="checkbox" data-reasoning-level value="${esc(level)}" ${selected.includes(level) ? 'checked' : ''} onchange="modalReasoningEdited=true">${esc(level)}</label></span>`).join('');
-}
-function manualModelRoute() { const provider = $('modal_model_provider')?.value || ''; const entered = $('modal_model_upstream')?.value.trim() || ''; const prefix = provider + '/'; return provider && entered ? prefix + (entered.startsWith(prefix) ? entered.slice(prefix.length) : entered) : ''; }
-function updateManualModelRoute() {
-  const route = manualModelRoute();
-  if ($('modal_model_route')) $('modal_model_route').textContent = route || tr('保存后生成','Generated after save');
-  const provider = (state.providers || []).find(item => item.id === $('modal_model_provider')?.value);
-  const localClaude = provider?.auth_mode === 'claude_login';
-  const label = $('modal_model_upstream_label');
-  const upstream = $('modal_model_upstream');
-  const inspect = $('modal_model_context_inspect');
-  if (label) label.textContent = localClaude ? tr('模型别名或完整 ID','Model alias or full ID') : tr('上游模型名','Upstream model name');
-  if (upstream) upstream.placeholder = localClaude ? tr('输入 Claude Code 支持的别名或完整 ID','Enter a Claude Code model alias or full ID') : tr('例如 glm','for example glm');
-  if (inspect) inspect.hidden = Boolean(localClaude);
-}
-function previewModalContext() { const value = Number($('modal_model_context').value) || 0; $('modal_model_context_usable').textContent = value ? tr(`Codex 可用 ${compactContext(usableContext({context_window:value}))}`,`Codex uses ${compactContext(usableContext({context_window:value}))}`) : ''; }
-async function inspectModalModel() { const provider = $('modal_model_provider').value; const upstream = $('modal_model_upstream').value.trim(); if (!provider || !upstream) return notice(tr('请填写 Provider 和上游模型名','Enter a Provider and upstream model name'), true); if ((state.providers || []).some(item => item.id === provider && item.auth_mode === 'claude_login')) return notice(tr('在“模型设置”中更新 Claude Code 模型列表。','Update the Claude Code model list in Model settings.'), true); try { const result = await api('/api/models/metadata', {method:'POST', body:JSON.stringify({provider, model:upstream})}); $('modal_model_context').value = result.context_window; modalReasoningLevels = Array.isArray(result.reasoning_levels) ? result.reasoning_levels : []; modalReasoningSupport = typeof result.supports_reasoning === 'boolean' ? result.supports_reasoning : null; modalReasoningSummarySupport = typeof result.supports_reasoning_summaries === 'boolean' ? result.supports_reasoning_summaries : null; $('modal_model_reasoning').innerHTML = reasoningOptions(modalReasoningLevels); modalReasoningEdited = true; updateManualModelRoute(); notice(tr(`已获取上限：输入 ${Number(result.input_token_limit).toLocaleString()} · 输出 ${Number(result.output_token_limit).toLocaleString()}`,`Limits fetched: input ${Number(result.input_token_limit).toLocaleString()} · output ${Number(result.output_token_limit).toLocaleString()}`)); } catch (error) { notice(tr('获取失败：','Fetch failed: ') + upstreamErrorText(error), true); } }
-async function saveManualModel() {
-  const provider = $('modal_model_provider').value;
-  const entered = $('modal_model_upstream').value.trim();
-  if (!provider || !entered) throw new Error(tr('Provider 和上游模型名不能为空','Provider and upstream model name are required'));
-  const prefix = provider + '/';
-  const upstream = entered.startsWith(prefix) ? entered.slice(prefix.length) : entered;
-  const id = prefix + upstream;
-  const previous = state.models.find(m => m.id === editingModelId);
-  const collision = state.models.find(m => m.id === id && m.id !== editingModelId);
-  if (collision) throw new Error(tr('模型路由已存在，不能覆盖另一个模型','That model route already exists and cannot overwrite another model'));
-  const imageChecked = Boolean(document.querySelector('[data-modality][value="image"]:checked'));
-  // Unchecked image keeps "unknown" until the user or a test has confirmed it either way.
-  const vision = imageChecked ? 'supported' : (modalVisionStatus === 'unknown' ? 'unknown' : 'unsupported');
-  const kept = (previous?.input_modalities || []).filter(value => !COMMON_MODALITIES.includes(value));
-  const modalities = [...new Set([...document.querySelectorAll('[data-modality]:checked')].map(input => input.value).concat(kept))].filter(value => value !== 'image');
-  if (modalities.length > 16 || modalities.some(value => !/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(value) || value === 'image')) {
-    throw new Error(tr('输入模态无效；图像请使用上方选项','Invalid input modality; use the vision selector for images'));
-  }
-  if (vision === 'supported') modalities.push('image');
-  if (!modalities.length) modalities.push('text');
-  if (modalities.length > 16) throw new Error(tr('输入模态不能超过 16 项','Input modalities cannot exceed 16 entries'));
-  const levels = modalReasoningEdited ? [...document.querySelectorAll('[data-reasoning-level]:checked')].map(input => input.value) : (modalReasoningLevels || previous?.reasoning_levels || []);
-  const support = levels.length ? true : (modalReasoningSupport ?? previous?.supports_reasoning ?? null);
-  const summarySupport = typeof modalReasoningSummarySupport === 'boolean' ? modalReasoningSummarySupport : (previous?.supports_reasoning_summaries ?? null);
-  const model = {
-    ...(previous || {}), id, provider, upstream_id:upstream,
-    display_name:previous?.display_name || upstream, description:previous?.description || '',
-    family_id:previous?.family_id || '', supports_reasoning:support,
-    supports_reasoning_summaries:summarySupport, reasoning_levels:levels,
-    context_window:Number($('modal_model_context').value) || 0,
-    input_modalities:modalities, created_at:previous?.created_at || 0,
-    capability_sources:{...(previous?.capability_sources || {}),
-      ...(modalModalitiesEdited ? {input_modalities:{source:'manual'}} : {}),
-      ...(modalReasoningEdited ? {reasoning_levels:{source:'manual'}, supports_reasoning:{source:'manual'}} : {})},
-    enabled:previous ? previous.enabled : true,
-  };
-  const candidate = cloneState();
-  if (editingModelId && editingModelId !== id) {
-    candidate.models = candidate.models.filter(m => m.id !== editingModelId);
-    movePresentation(editingModelId, id, candidate);
-  }
-  const index = candidate.models.findIndex(m => m.id === id);
-  if (index >= 0) candidate.models[index] = model; else candidate.models.push(model);
-  await persistState(previous ? tr('模型已修改','Model updated') : tr('模型已添加','Model added'), candidate);
-  editingModelId = '';
-  modalReasoningLevels = null;
-  modalReasoningSupport = null;
-  modalReasoningSummarySupport = null;
-}
 async function toggleModel(id, enabled) { const candidate = cloneState(); const model = candidate.models.find(item => item.id === id); if (!model) return; model.enabled = enabled; try { await persistState(enabled ? tr('模型已显示','Model is visible') : tr('模型已隐藏；已从 Codex /model 目录移除','Model hidden and removed from the Codex /model catalog'), candidate); } catch (error) { notice(error.message, true); } }
 async function removeModel(id) { const candidate = cloneState(); candidate.models = candidate.models.filter(m => m.id !== id); try { await persistState(tr('模型已删除','Model deleted'), candidate); } catch (error) { notice(error.message, true); } }
 async function testModel(id) { try { notice(tr(`正在测试 ${id} …`,`Testing ${id}…`)); const result = await api('/v1/responses', {method:'POST', body:JSON.stringify({model:id, input:'Reply with exactly EASY_MULTI_PROVIDER_TEST', max_output_tokens:512})}); notice(tr('测试成功：','Test succeeded: ') + (result.output_text || tr('已收到模型响应','model response received'))); } catch (error) { notice(tr('测试失败：','Test failed: ') + error.message, true); } }
@@ -1766,9 +1623,12 @@ async function testModelAudio(id) {
 }
 
 function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryLoading = false; quotaHistoryRequest++; }
-function openModal(title, body, submitLabel, submit, serviceContext = null) {
-  callReports.stop(); stopUsage(); accountDetailsRequest++; accountDetailsId = '';
+function stopModalFeatures() {
+  callReports.stop(); usageReport.stop(); accountDetails.stop(); providerModelSettings.stop(); modelEditor.stop(); services.stop();
   stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); subscriptionEditor = null;
+}
+function openModal(title, body, submitLabel, submit, serviceContext = null) {
+  stopModalFeatures();
   $('modal_title').textContent = title;
   $('modal_body').innerHTML = body;
   services.mount(serviceContext);
@@ -1778,7 +1638,7 @@ function openModal(title, body, submitLabel, submit, serviceContext = null) {
   button.textContent = label; button.style.display = submit ? 'inline-block' : 'none'; button.disabled = false;
   const handler = async () => {
     button.disabled = true; button.textContent = tr('处理中…','Working…'); $('modal_status').textContent = '';
-    try { await submit(); } catch (error) { $('modal_status').textContent = error.message; }
+    try { await submit(); } catch (error) { if (button.onclick === handler) $('modal_status').textContent = error.message; }
     finally {
       if (button.onclick === handler) { button.disabled = false; button.textContent = label; }
       else if (button.onclick === null) button.disabled = false;
@@ -1787,7 +1647,7 @@ function openModal(title, body, submitLabel, submit, serviceContext = null) {
   button.onclick = submit ? handler : null;
   $('modal_backdrop').classList.remove('hidden');
 }
-function closeModal() { callReports.stop(); stopUsage(); accountDetailsRequest++; accountDetailsId = ''; subscriptionEditor = null; stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); $('modal_backdrop').classList.add('hidden'); services.mount(null); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
+function closeModal() { stopModalFeatures(); $('modal_backdrop').classList.add('hidden'); services.mount(null); $('modal_body').innerHTML = ''; $('modal_status').textContent = ''; $('modal_submit').onclick = null; }
 
 let updatePollTimer = null;
 let updatePollGeneration = 0;
@@ -1957,11 +1817,6 @@ function runDynamicUiAction(element) {
   const id = element.dataset.id || '';
   switch (element.dataset.uiAction) {
     case 'activity-details': callReports.openActivity(element); return true;
-    case 'usage-zoom': {
-      const start = Number(element.dataset.start), end = Number(element.dataset.end);
-      if (Number.isFinite(start) && Number.isFinite(end) && end > start) zoomUsage(start, end);
-      return true;
-    }
     case 'catalog-display-editor': openCatalogDisplayEditor(id); return true;
     case 'quota-display':
       quotaDisplay.set(element.dataset.mode);
@@ -2002,7 +1857,6 @@ function runDynamicUiAction(element) {
     case 'model-toggle': toggleModel(id, element.getAttribute('aria-pressed') !== 'true'); return true;
     case 'model-edit': openManualModelModal(id); return true;
     case 'model-test': testModel(id); return true;
-    case 'modality-test': MODALITY_TESTS[id]?.(); return true;
     case 'model-remove': removeModel(id); return true;
     case 'model-group-toggle': toggleModelGroup(id); return true;
     default: return false;
@@ -2015,13 +1869,6 @@ function handleDynamicUiClick(event) {
 function handleDynamicUiChange(event) {
   const element = dynamicActionElement(event.target);
   if (element?.dataset.uiAction === 'period-edit') runDynamicUiAction(element);
-}
-function handleDynamicUiKeydown(event) {
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-  const element = dynamicActionElement(event.target);
-  if (!element || element.dataset.uiAction !== 'usage-zoom') return;
-  event.preventDefault();
-  runDynamicUiAction(element);
 }
 function handleSubscriptionContextInput(event) {
   const input = event.target;
@@ -2036,7 +1883,6 @@ function handleModalKeydown(event) {
 }
 document.addEventListener('click', handleDynamicUiClick);
 document.addEventListener('change', handleDynamicUiChange);
-document.addEventListener('keydown', handleDynamicUiKeydown);
 document.addEventListener('keydown', handleModalKeydown);
 document.addEventListener('input', handleSubscriptionContextInput);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { startQuotaEvents(); requestQuotaSync(); void checkUpdateHint(); } else stopQuotaEvents(); });

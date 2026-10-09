@@ -310,9 +310,17 @@ inside a feature.
 call/performance queries. Its interface is `run`/`cancel` plus result/state
 callbacks; callers do not coordinate request counters. Refresh failures retain
 the displayed data. `period-controls.js` supplies the same presets, explicit
-custom-date query and refresh behavior to all time-based views. The existing
-usage rendering lives in `usage-report.js`; it still consumes page state and
-formatting helpers, so this extraction does not claim full feature isolation.
+custom-date query and refresh behavior to all time-based views. `usage-report.js` now owns its payload, scan request, fallback timer and pricing
+save lifecycle behind `open`/`refresh`/`stop`. It reads configuration and language
+through getters and receives period controls explicitly. DOM actions stay inside
+the report root instead of adding page-level usage handlers.
+`account-details.js` owns account usage reads and alias interaction;
+`model-editor.js` owns the model draft, capability edits and metadata cancellation.
+`model-settings.js` owns cached/discovered lists. The page composes these owners
+and calls their cleanup when replacing or closing a modal. Provider detail reads
+also cancel on closure. Late query results, save errors and draft cleanup cannot
+alter a replacement window. Configuration persistence, formatting policy and
+model inference remain existing shared operations; they are not duplicated.
 Performance navigation stays mounted during data refresh; overview metrics are
 plain facts rather than six equivalent navigation buttons.
 

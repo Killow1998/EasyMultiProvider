@@ -249,7 +249,14 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
 
     let body = |model: &str| {
         serde_json::to_vec(&json!({
-            "model":model,"input":"hello","stream":false,
+            "model":model,"input":[
+                {"type":"additional_tools","id":"at_fixture","role":"developer","tools":[
+                    {"type":"namespace","name":"files","tools":[{"type":"function","name":"read","parameters":{"type":"object"},"defer_loading":true}]},
+                    {"type":"tool_search","execution":"client","parameters":{"type":"object"}}
+                ]},
+                {"type":"tool_search_call","execution":"client","call_id":"search","arguments":{"query":"read"}},
+                {"type":"tool_search_output","execution":"client","call_id":"search","status":"completed","tools":[]}
+            ],"stream":false,
             "future_request_field":{"opaque":true}
         }))
         .unwrap()
@@ -300,6 +307,11 @@ fn native_responses_endpoint_forwards_zstd_owner_credentials_and_codex_metadata(
         assert_eq!(observed.headers["x-openai-subagent"], "subagent-fixture");
         assert_eq!(observed.body["model"], "upstream");
         assert_eq!(observed.body["future_request_field"]["opaque"], true);
+        let original: Value = serde_json::from_slice(&body("upstream")).unwrap();
+        assert_eq!(
+            observed.body["input"], original["input"],
+            "native incremental tools stay opaque"
+        );
     }
     assert_eq!(forward.headers["authorization"], "Bearer caller-secret");
     assert_eq!(forward.headers["chatgpt-account-id"], "caller-owner");

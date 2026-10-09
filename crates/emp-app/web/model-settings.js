@@ -2,6 +2,7 @@
 function createProviderModelSettings({getState, $, api, tr, esc, openModal, closeModal,
   modelSort, capabilitySummary, formatDate, errorText, onSaved}) {
   let active = null;
+  function stop() { active?.controller?.abort(); active = null; }
   function failure(error) {
     const messages = {
       claude_cli_login_required:tr('请先登录 Claude Code 订阅。','Sign in to a Claude Code subscription.'),
@@ -29,7 +30,7 @@ function createProviderModelSettings({getState, $, api, tr, esc, openModal, clos
   async function open(id) {
     const provider = (getState().providers || []).find(p => p.id === id);
     if (!provider) return;
-    const view = {id, models:[], cached:false, revision:0}; active = view;
+    const view = {id, models:[], cached:false, controller:new AbortController()};
     openModal(tr('模型设置','Model settings') + ' · ' + (provider.name || id), `
       <div id="provider_model_settings">
         <div class="model-list-heading"><span id="model_list_updated" class="muted"></span><button type="button" class="secondary" data-icon="refresh" onclick="providerModelSettings.refresh()">${tr('更新模型列表','Update model list')}</button></div>
@@ -40,22 +41,23 @@ function createProviderModelSettings({getState, $, api, tr, esc, openModal, clos
         if (current(view)) closeModal();
         await onSaved(result);
       });
-    view.node = $('provider_model_settings'); $('modal_submit').disabled = true;
+    active = view; view.node = $('provider_model_settings'); $('modal_submit').disabled = true;
+    const controller = view.controller;
     try {
-      const payload = await api('/api/providers/' + encodeURIComponent(id) + '/models');
-      if (current(view) && view.revision === 0) render(view, payload);
-    } catch (error) { if (current(view) && view.revision === 0) $('modal_status').textContent = failure(error); }
+      const payload = await api('/api/providers/' + encodeURIComponent(id) + '/models', {signal:controller.signal});
+      if (current(view) && !controller.signal.aborted) render(view, payload);
+    } catch (error) { if (current(view) && !controller.signal.aborted) $('modal_status').textContent = failure(error); }
   }
   async function refresh() {
     const view = active;
     if (!view || !current(view) || view.refreshing) return;
     const keep = view.cached ? selected() : null;
-    view.revision++;
+    view.controller.abort(); view.controller = new AbortController();
     const button = view.node.querySelector('.model-list-heading button');
     view.refreshing = true; button.disabled = true; $('modal_submit').disabled = true;
     $('modal_status').textContent = '';
     try {
-      const payload = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider:view.id})});
+      const payload = await api('/api/providers/discover', {method:'POST', body:JSON.stringify({provider:view.id}),signal:view.controller.signal});
       if (current(view)) render(view, {...payload,cached:true}, keep);
     } catch (error) { if (current(view)) $('modal_status').textContent = failure(error); }
     finally {
@@ -79,5 +81,5 @@ function createProviderModelSettings({getState, $, api, tr, esc, openModal, clos
     const visible = options.filter(input => !input.closest('[data-discovered-option]').hidden);
     $('discovered_count').textContent = tr(`已选 ${selected().length}/${options.length}（当前结果 ${visible.filter(input => input.checked).length}/${visible.length}）`, `${selected().length}/${options.length} selected (${visible.filter(input => input.checked).length}/${visible.length} in current results)`);
   }
-  return {open, refresh, filter, select, count};
+  return {open, refresh, filter, select, count, stop};
 }

@@ -38,9 +38,28 @@ not establish real-provider acceptance.
   receive the actual `Retry-After` header. Other upstream headers are not copied.
   See [Codex's streamed error reader](https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/codex-api/src/sse/responses_error.rs).
 - **Tools:** the real-engine fixture exercises tool input/results through
-  compaction and forks. Exhaustive incremental tool-catalog combinations remain
-  outside this acceptance result.
+  compaction and forks. Source contracts additionally exercise 0.162
+  `additional_tools`, client Tool Search input/results, repeated definitions and
+  equal function names in distinct namespaces through Chat, Anthropic and
+  external Responses projection. Streaming restoration suppresses only search
+  argument deltas and retains ordinary function deltas. Real native HTTP tests
+  verify that incremental catalog/history items pass through unchanged. These
+  source fixtures do not constitute a real-engine Tool Search session or an
+  exhaustive incremental event matrix.
 
 Use the [native restore harness](../scripts/native_restore_acceptance/README.md)
 for isolated behavior checks. Record the actual engine version and tested paths
 when moving the maintenance window.
+
+## Runtime discovery and update acceptance
+
+The existing inert installation matrix covers CLI, App and IDE paths on Windows,
+Linux, Intel macOS and Apple Silicon macOS. Host metadata is checked separately
+from the selected engine version; these checks never execute the inert files.
+Passing this matrix does not establish inference in every bundled engine.
+
+Updater fixtures cover interrupted downloads, the existing three-retry budget,
+stage/error receipts surviving cleanup, actual process handoff and preservation
+of configuration and encrypted credentials. Native Windows/macOS system-proxy
+behavior and the next official-package update need host-specific acceptance.
+Do not replace that acceptance with a private build installed on a user's host.

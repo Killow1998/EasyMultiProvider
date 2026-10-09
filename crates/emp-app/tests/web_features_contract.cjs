@@ -1,19 +1,6 @@
 // Run with: node --test crates/emp-app/tests/web_features_contract.cjs
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+const {assert, fs, path, vm, web, tr, esc, deferred, feature} = require('./web_fixture.cjs');
 const {test} = require('node:test');
-
-const web = path.join(__dirname, '../web');
-const tr = (_zh, en) => en;
-const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return {promise, resolve, reject}; };
-function feature(file, factory, globals = {}) {
-  const context = vm.createContext({Headers, URL, Blob, ...globals});
-  vm.runInContext(fs.readFileSync(path.join(web, file), 'utf8'), context, {filename:file});
-  return context[factory];
-}
 function sessionFixture(url = 'http://localhost/?bootstrap=once', saved = '') {
   let token = saved;
   const calls = [], replies = [];
@@ -48,8 +35,8 @@ test('service details isolate provider usage and discard results after navigatio
   const state = {providers:[{id:'first', name:'<img src=x>', base_url:'https://user:secret@example.invalid/v1?key=secret', protocol:'responses'}, {id:'second', name:'Second'}]};
   const service = feature('service-list.js', 'createServiceList')({
     getState:() => state, $:() => box, tr, esc, presets:{}, icon:() => '', protocolLabel:x => x, authLabel:() => 'API Key',
-    usageSummary:serviceUsage(), openModal(_title, body) { html = body; box = {innerHTML:''}; },
-    api:async path => { calls.push(path); const value = deferred(); pending.push(value); return value.promise; },
+    usageSummary:serviceUsage(), openModal(_title, body) { service.stop(); html = body; box = {innerHTML:''}; },
+    api:async (path, options) => { calls.push(path); const value = deferred(); pending.push({...value,signal:options.signal}); return value.promise; },
   });
   const first = service.details('first');
   assert.doesNotMatch(html, /<img|Base URL|Authentication|Connection settings/);
@@ -61,6 +48,7 @@ test('service details isolate provider usage and discard results after navigatio
   assert.doesNotMatch(box.innerHTML, /other-model/);
   const stale = service.details('first');
   const current = service.details('second');
+  assert.equal(pending[1].signal.aborted,true);
   pending[1].reject(new Error('old request failed'));
   await stale;
   assert.equal(box.innerHTML, '');

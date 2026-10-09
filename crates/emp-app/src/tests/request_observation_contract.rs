@@ -118,6 +118,19 @@ fn http_and_compact_use_one_id_from_entry_through_dispatch_and_write() {
         let upstream = OneShotUpstream::start(chat_answer());
         let (root, server) = configured_server(&upstream.base_url());
         let body = json!({"model":"demo/model","input":"private-question","reasoning":{"effort":"medium"}});
+        let mut body = body;
+        if path == "/v1/responses" {
+            body["input"] = json!([
+                {"type":"additional_tools","role":"developer","tools":[
+                    {"type":"tool_search","execution":"client","parameters":{"type":"object"}},
+                    {"type":"namespace","name":"files","tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]}
+                ]},
+                {"type":"tool_search_call","execution":"client","call_id":"s","arguments":{"query":"private-question"}},
+                {"type":"tool_search_output","execution":"client","call_id":"s","status":"completed","tools":[]},
+                {"type":"function_call","call_id":"f","namespace":"files","name":"read","arguments":"{}"},
+                {"type":"function_call_output","call_id":"f","output":"private-question"}
+            ]);
+        }
         let reply = post(
             &server,
             path,
@@ -135,6 +148,7 @@ fn http_and_compact_use_one_id_from_entry_through_dispatch_and_write() {
         assert_eq!(id.len(), 16);
         if path == "/v1/responses" {
             assert_eq!(sent["reasoning_effort"], "medium");
+            assert_eq!(sent["tools"].as_array().unwrap().len(), 2);
             assert!(reply.contains("private-answer"));
         }
         let records = finished(root.path(), 1);
@@ -149,6 +163,7 @@ fn http_and_compact_use_one_id_from_entry_through_dispatch_and_write() {
             "http_request_started",
             "request_started",
             "request_route_selected",
+            "model_operation_started",
             "route_observation",
             "request_finished",
         ] {
@@ -168,6 +183,27 @@ fn http_and_compact_use_one_id_from_entry_through_dispatch_and_write() {
         assert_eq!(done["fields"]["requested_effort"], "medium");
         assert_eq!(done["fields"]["provider_id"], "demo");
         assert_eq!(done["fields"]["last_phase"], "execute_and_relay");
+        let outcome = records
+            .iter()
+            .find(|r| r["event"] == "route_observation")
+            .unwrap();
+        if path == "/v1/responses" {
+            assert_eq!(outcome["fields"]["tool_pairing_status"], "paired");
+        }
+        let report = request(
+            &server,
+            &format!(
+                "/api/calls?start=0&end={}&request={id}",
+                crate::util::system_now() + 1.0
+            ),
+            &[&session_header(&server)],
+        );
+        let report: Value = serde_json::from_str(report.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            report["records"].as_array().unwrap().len(),
+            1,
+            "one call receipt per operation"
+        );
         let text = serde_json::to_string(&records).unwrap();
         for private in [
             "private-question",

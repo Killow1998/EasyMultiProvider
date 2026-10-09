@@ -3,6 +3,8 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots, openModal, api,
   usageSummary, notice}) {
   const refreshing = new Set(), errors = new Map();
+  let detailsController = null;
+  function stop() { detailsController?.abort(); detailsController = null; }
   function providerBrand(provider) {
     if (provider.execution_backend === 'claude_cli') return 'claudecode';
     try {
@@ -117,12 +119,13 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     open(id, 'provider', 'details', `<div class="service-detail-actions"><button type="button" class="danger" data-icon="trash" data-ui-action="provider-remove" data-id="${esc(id)}">${tr('移除','Remove')}</button></div>
       <div id="service_usage">${tr('正在读取用量…','Loading usage…')}</div>`, '', null);
     const box = $('service_usage');
+    const controller = new AbortController(); detailsController = controller;
     try {
-      const data = await api('/api/usage?category=external&start=0&end='+Date.now()/1000);
-      if ($('service_usage') !== box) return;
+      const data = await api('/api/usage?category=external&start=0&end='+Date.now()/1000, {signal:controller.signal});
+      if (controller.signal.aborted || $('service_usage') !== box) return;
       const rows = (data.groups || []).filter(row => row.category === 'external' && row.owner === id);
       box.innerHTML = usageSummary.render({groups:rows});
-    } catch (error) { if ($('service_usage') === box) box.textContent = error.message; }
+    } catch (error) { if (!controller.signal.aborted && $('service_usage') === box) box.textContent = error.message; }
   }
   async function refresh(id, notify = true) {
     if (refreshing.has(id)) return false;
@@ -146,5 +149,5 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
       return false;
     } finally { refreshing.delete(id); render(); }
   }
-  return {render, details, refresh, tabs, open, mount};
+  return {render, details, refresh, tabs, open, mount, stop};
 }
