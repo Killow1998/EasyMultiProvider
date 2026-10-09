@@ -70,14 +70,21 @@ pub fn responses_to_anthropic(body: &Value, upstream_model: &str) -> Result<Valu
             "request projection failed: body must be an object",
         ));
     };
+    let mut system = Vec::new();
+    if let Some(instructions) = body.get("instructions") {
+        system.push(serde_json::json!({"type":"text", "text":request_text(Some(instructions), "instructions")?}));
+    }
+    let messages = messages(body, &mut system)?;
     let mut payload = serde_json::json!({
         "model": upstream_model,
         "max_tokens": anthropic_max_tokens(body.get("max_output_tokens"))?,
-        "messages": messages(body)?,
+        "messages": messages,
         "stream": python_truthy(body.get("stream")),
     });
-    if let Some(instructions) = body.get("instructions") {
-        payload["system"] = Value::String(request_text(Some(instructions), "instructions")?);
+    if system.len() == 1 {
+        payload["system"] = system[0]["text"].clone();
+    } else if !system.is_empty() {
+        payload["system"] = Value::Array(system);
     }
     let projected_tools = tools(body)?;
     if !projected_tools.is_empty() {

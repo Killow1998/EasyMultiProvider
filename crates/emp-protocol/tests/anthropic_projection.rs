@@ -103,7 +103,8 @@ fn request_projection_preserves_history_boundaries_and_rejects_loss() {
     );
 
     for invalid in [
-        json!({"input": [{"type": "message", "role": "system", "content": "system"}]}),
+        json!({"input": [{"type": "message", "role": "tool", "content": "unsupported role"}]}),
+        json!({"input": [{"type": "message", "role": "developer", "content": [{"type":"input_image","image_url":"https://example.invalid/secret.png"}]}]}),
         json!({"input": [{"type": "message", "content": [{"type": "audio", "data": "secret"}]}]}),
         json!({"input": [{"type": "function_call", "call_id": "call", "name": "tool", "arguments": "[]"}]}),
         json!({"input": [{"type": "function_call_output", "call_id": "missing", "output": "value"}]}),
@@ -130,6 +131,34 @@ fn numeric_reasoning_effort_is_rejected_instead_of_silently_dropped() {
         .expect_err("Anthropic effort must be a supported string");
     assert_eq!(error.kind, AnthropicErrorKind::Request);
     assert!(error.to_string().contains("numeric reasoning effort"));
+}
+
+#[test]
+fn responses_lite_preserves_instruction_roles_as_anthropic_system_blocks() {
+    let projected = responses_to_anthropic(&json!({
+        "instructions":"Base instructions",
+        "input":[
+            {"type":"message","role":"developer","content":[{"type":"input_text","text":"Codex instructions"}]},
+            {"type":"message","role":"system","content":"Runtime instructions"},
+            {"type":"message","role":"user","content":"Read the fixture"},
+            {"type":"message","role":"assistant","content":"Result"}
+        ]
+    }), "claude").expect("instruction roles retain priority");
+    assert_eq!(
+        projected["system"],
+        json!([
+            {"type":"text","text":"Base instructions"},
+            {"type":"text","text":"Codex instructions"},
+            {"type":"text","text":"Runtime instructions"}
+        ])
+    );
+    assert_eq!(
+        projected["messages"],
+        json!([
+            {"role":"user","content":[{"type":"text","text":"Read the fixture"}]},
+            {"role":"assistant","content":[{"type":"text","text":"Result"}]}
+        ])
+    );
 }
 
 #[test]

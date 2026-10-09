@@ -6,6 +6,7 @@ use std::sync::mpsc;
 mod http;
 mod incremental;
 mod installed_codex;
+mod installed_tool_search;
 mod interrupt;
 mod interrupt_http;
 mod oversized;

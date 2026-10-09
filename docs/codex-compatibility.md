@@ -16,7 +16,7 @@ Linux Codex binaries, with disposable homes and synthetic loopback providers.
 | Engine | Accepted paths |
 | --- | --- |
 | 0.153.4, 0.154.0, 0.155.1, 0.156.1, 0.157.1, 0.158.0, 0.159.3, 0.160.1, 0.161.0, 0.162.0 | Real MCP tool invocation before/after compaction; external compaction; parent, early fork, later fork and grandchild resume; exact native configuration restoration; idempotent second restore |
-| 0.162.0 | Additional: external streaming steering and native WebSocket interrupt followed by continuation of the same turn |
+| 0.162.0 | Additional: external streaming steering; native WebSocket interrupt and same-turn continuation; deferred Tool Search and same-named namespace tools through Chat, Anthropic, external Responses and native HTTP forwarding |
 
 All ten series passed the common Linux fixture contract. Windows, macOS, App
 and IDE bundled engines need their own acceptance evidence; Linux fixtures do
@@ -43,13 +43,34 @@ not establish real-provider acceptance.
   equal function names in distinct namespaces through Chat, Anthropic and
   external Responses projection. Streaming restoration suppresses only search
   argument deltas and retains ordinary function deltas. Real native HTTP tests
-  verify that incremental catalog/history items pass through unchanged. These
-  source fixtures do not constitute a real-engine Tool Search session or an
-  exhaustive incremental event matrix.
+  verify that incremental catalog/history items pass through unchanged. The
+  real-engine contract additionally runs deferred Tool Search in Codex 0.162.0:
+  search, discover `alpha.read` and `beta.read`, execute both local read tools,
+  return their results, and finish the same turn. It covers Chat, Anthropic,
+  external Responses and native HTTP forwarding with Responses Lite incremental
+  catalogs. Actual request receipts verify search item types and paired history.
+  These checks do not establish every incremental event combination or real
+  upstream-model behavior.
+- **Instruction roles:** Responses Lite developer/system messages are projected
+  to ordered Anthropic system blocks. They retain instruction priority instead
+  of being rejected or downgraded to user messages. Projection failures retain
+  their content-free reason in EMP errors.
 
 Use the [native restore harness](../scripts/native_restore_acceptance/README.md)
 for isolated behavior checks. Record the actual engine version and tested paths
 when moving the maintenance window.
+
+Run the real-engine Tool Search contract with an official Linux 0.162.0 binary:
+
+```sh
+EMP_TEST_CODEX_CLI=/path/to/codex cargo test -p emp-app --lib \
+  installed_codex_discovers_and_calls_same_named_tools_across_protocols \
+  -- --ignored --nocapture
+```
+
+The contract creates disposable Codex homes, randomized loopback EMP/upstream
+ports and local read fixtures. It disables plugins and uses synthetic keys; it
+neither uses the installed EMP service nor consumes real provider quota.
 
 ## Runtime discovery and update acceptance
 
