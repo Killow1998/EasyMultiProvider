@@ -13,7 +13,7 @@ fn history_error_detail(error: &HistoryError) -> Value {
     serde_json::json!({
         "type":"invalid_request_error",
         "code":"invalid_prompt",
-        "message":diagnostic.message(),
+        "origin":"emp", "message":crate::services::error_origin::message("emp", &diagnostic.message()),
         "error_class":"history_reconstruction_failed",
         "reason":diagnostic.reason,
         "category":diagnostic.category
@@ -74,7 +74,7 @@ pub(crate) fn destination_error_response(
                 .map_or_else(|| "unknown".to_owned(), |value| value.to_string());
             let body = serde_json::json!({"error":{
                 "code":"context_length_exceeded", "type":"context_length_exceeded",
-                "message":format!("context length exceeded: estimated input {estimate} tokens, safe input limit {limit}; provider {}, model {}; next action: reduce input or use native remote compaction", assessment.provider_id, assessment.model_id)
+                "origin":"emp", "message":format!("[EMP] context length exceeded: estimated input {estimate} tokens, safe input limit {limit}; provider {}, model {}; next action: reduce input or use native remote compaction", assessment.provider_id, assessment.model_id)
             }});
             response(
                 "HTTP/1.1 413 Payload Too Large",

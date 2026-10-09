@@ -56,6 +56,22 @@ pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'stati
             "claude_cli_timeout",
             "Claude Code CLI request timed out",
         ),
+        "claude_cli_interrupted" => (499, "claude_cli_interrupted", "Claude request interrupted"),
+        "claude_cli_output_budget_exhausted" => (
+            502,
+            "claude_cli_output_budget_exhausted",
+            "Claude reached the output token limit before completing its response. Increase the model output limit or max_output_tokens and retry.",
+        ),
+        "claude_cli_models_unsupported" => (
+            502,
+            "claude_cli_models_unsupported",
+            "Claude Code returned no model list; update Claude Code and retry",
+        ),
+        "claude_cli_invalid_model_list" | "claude_cli_model_list_too_large" => (
+            502,
+            code,
+            "Claude Code returned an invalid model list; retry updating the list",
+        ),
         "unsupported_reasoning_effort_none" => (
             400,
             "unsupported_reasoning_effort",
@@ -147,7 +163,9 @@ pub(crate) fn failure_details(code: &'static str) -> (u16, &'static str, &'stati
 
 pub(crate) fn failure_stage(error: &ClaudeCliError) -> &'static str {
     match error {
-        ClaudeCliError::Disconnected | ClaudeCliError::ShuttingDown => "cancelled",
+        ClaudeCliError::Disconnected
+        | ClaudeCliError::ShuttingDown
+        | ClaudeCliError::Failure("claude_cli_interrupted") => "cancelled",
         ClaudeCliError::Router(_) => "upstream_request",
         ClaudeCliError::Failure(
             "unsupported_reasoning_effort" | "unsupported_reasoning_effort_none",
@@ -164,6 +182,7 @@ pub(crate) fn failure_stage(error: &ClaudeCliError) -> &'static str {
         ) => "cli_process",
         ClaudeCliError::Failure("claude_cli_local_request_failed") => "cli_execution",
         ClaudeCliError::Failure("claude_cli_output_too_large") => "cli_output",
+        ClaudeCliError::Failure("claude_cli_output_budget_exhausted") => "output_budget",
         ClaudeCliError::Failure(
             "claude_cli_result_error"
             | "claude_cli_missing_structured_output"

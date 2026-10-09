@@ -458,7 +458,11 @@ async fn anthropic_passthrough_preserves_cli_body_and_raw_response() {
     });
     let response = router
         .execute_anthropic_passthrough(
-            &route(&server.base_url(), Protocol::AnthropicMessages, "upstream"),
+            &route(
+                &server.base_url(),
+                Protocol::AnthropicMessages,
+                "upstream[1m]",
+            ),
             &request,
             &BTreeMap::new(),
             &BTreeMap::from([(

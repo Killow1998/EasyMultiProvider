@@ -1,6 +1,5 @@
 // Feature state is private; the page supplies current data and UI operations.
-function createDiagnostics({api, getLanguage, openModal, $, esc, t, tr, localTimeText, notice}) {
-  let diagnosticsTimer = null;
+function createDiagnostics({callReports, api, getLanguage, openModal, $, esc, t, tr, localTimeText, notice}) {
   let diagnosticsRequest = 0;
   let supportReportRequest = 0;
   function diagnosticsTransportLabel(value) { const labels = getLanguage() === 'en' ? {http:'HTTP',sse:'SSE',websocket:'WebSocket'} : {http:'普通请求',sse:'流式请求',websocket:'WebSocket'}; return labels[value] || tr('请求','request'); }
@@ -23,54 +22,17 @@ function createDiagnostics({api, getLanguage, openModal, $, esc, t, tr, localTim
     return (labels[value] || ['其他错误','Other error'])[getLanguage() === 'en' ? 1 : 0];
   }
   function performanceNumber(value) { if (value === null || value === undefined || value === '') return null; const number = Number(value); return Number.isFinite(number) && number >= 0 ? number : null; }
-  function performanceMode(value) { return value === 'fast' ? 'Fast' : (value === 'standard' ? tr('普通','Standard') : '—'); }
-  function performanceRate(value) { const number = performanceNumber(value); return number == null ? '—' : number.toFixed(1) + '%'; }
-  function performanceTrend(value, kind) { const change = performanceNumber(Math.abs(Number(value))); if (value === null || value === undefined || change == null || Number(value) === 0) return ''; const improved = Number(value) > 0; const arrow = kind === 'ttft' ? (improved ? '↓' : '↑') : (improved ? '↑' : '↓'); const title = kind === 'ttft' ? tr('与此前样本相比的首字延迟变化','First-token latency change from the previous window') : tr('与此前样本相比的生成速度变化','Generation speed change from the previous window'); return `<span class="metric-trend ${improved ? 'good' : 'bad'}" title="${esc(title)}">${arrow}${change.toFixed(1)}%</span>`; }
+  function performanceRate(value) { const number = performanceNumber(value); return number == null ? '—' : number.toFixed(1)+'%'; }
   function renderDiagnostics(payload) {
     const records = Array.isArray(payload.records) ? payload.records : [];
-    const models = Array.isArray(payload.models) ? payload.models : [];
     const health = payload.health && typeof payload.health === 'object' ? payload.health : {};
     const healthSamples = performanceNumber(health.sample_count) || 0;
     $('diagnostics_summary').textContent = healthSamples ? tr(`最近 ${healthSamples} 次请求的运行情况`,`Health across the latest ${healthSamples} requests`) : tr('完成几次模型调用后，这里会显示汇总结果。','Aggregates appear here after a few model calls.');
     const fallbackAttempts = performanceNumber(health.fallback_attempt_count) || 0;
     if (fallbackAttempts) $('diagnostics_summary').textContent += tr(` · 另有 ${fallbackAttempts} 次连接回退尝试，未重复计入请求`,` · ${fallbackAttempts} transport fallback attempts counted separately`);
     $('health_summary').innerHTML = healthSamples ? `<div class="health-grid"><div class="health-stat"><span>${tr('成功率','Success rate')}</span><strong>${performanceRate(health.success_rate)}</strong><small>${Number(health.success_count || 0).toLocaleString()} / ${Number(health.sample_count || 0).toLocaleString()}</small></div><div class="health-stat"><span>429</span><strong>${performanceRate(health.status_429_rate)}</strong><small>${Number(health.status_429_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>502</span><strong>${performanceRate(health.status_502_rate)}</strong><small>${Number(health.status_502_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>503</span><strong>${performanceRate(health.status_503_rate)}</strong><small>${Number(health.status_503_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>504</span><strong>${performanceRate(health.status_504_rate)}</strong><small>${Number(health.status_504_count || 0).toLocaleString()} ${tr('次','calls')}</small></div><div class="health-stat"><span>${tr('本地排队超限','Local queue limit')}</span><strong>${performanceRate(health.local_capacity_rate)}</strong><small>${Number(health.local_capacity_count || 0).toLocaleString()} ${tr('次','calls')}</small></div></div>` : '';
-    const showSpeedMode = models.some(model => model.speed_mode === 'fast');
-    const windowCalls = Number(payload.performance_window?.calls) || 20;
-    $('performance_records').innerHTML = models.length ? `<div class="performance-table"><table><tr><th>${tr('模型','Model')}</th>${showSpeedMode ? `<th>${tr('模式','Mode')}</th>` : ''}<th>${tr('调用','Calls')}</th><th>TTFT</th><th>TPS</th></tr>${models.map(model => { const ttft = performanceNumber(model.ttft_ms); const tps = performanceNumber(model.tokens_per_second); return `<tr><td><code>${esc(model.model_id)}</code></td>${showSpeedMode ? `<td>${esc(performanceMode(model.speed_mode))}</td>` : ''}<td>${Number(model.call_count || 0).toLocaleString()}</td><td>${ttft == null ? '—' : (ttft / 1000).toFixed(2) + ' s'} <span class="muted">(${Number(model.ttft_samples || 0)})</span>${performanceTrend(model.ttft_change_percent,'ttft')}</td><td>${tps == null ? '—' : tps.toFixed(1) + ' token/s'} <span class="muted">(${Number(model.tps_samples || 0)})</span>${performanceTrend(model.tps_change_percent,'tps')}</td></tr>`; }).join('')}</table><div class="muted">${tr(`最近 ${windowCalls} 次有效调用的中位数；箭头与此前 ${windowCalls} 次比较。`,`Median of the latest ${windowCalls} valid calls; arrows compare with the preceding ${windowCalls}.`)}</div></div>` : '';
     const failures = records.slice().reverse().filter(record => !['client_disconnect','client_cancelled','client_websocket_close'].includes(record.error_class) && (Number(record.status) >= 400 || (record.error_class && record.error_class !== 'none'))).slice(0, 20);
     $('diagnostics_records').innerHTML = failures.length ? failures.map(diagnosticFailureHtml).join('') : `<p class="muted">${tr('近期没有失败记录。','No recent failures.')}</p>`;
-    renderCacheUsage(payload);
-  }
-  function renderCacheUsage(payload) {
-    const target = $('cache_records'); if (!target) return;
-    const opened = new Set([...target.querySelectorAll('details[open]')].map(item => item.dataset.cacheKey));
-    const models = Array.isArray(payload.cache?.models) ? payload.cache.models : [];
-    const rate = value => value === null || value === undefined ? tr('未提供','Not reported') : performanceRate(value);
-    const coverage = item => `${Number(item.sample_count || 0)} / ${Number(item.call_count || 0)}`;
-    const hits = item => item.sample_count ? `${Number(item.hit_count || 0)} / ${Number(item.sample_count)}` : '—';
-    const timeText = seconds => new Date(seconds * 1000).toLocaleTimeString(getLanguage() === 'en' ? 'en-US' : 'zh-CN', {hour:'2-digit',minute:'2-digit',hour12:false});
-    const rows = models.map(model => {
-      const key = JSON.stringify([model.model_id, model.provider_id, model.speed_mode, model.endpoint_fingerprint]);
-      const mode = model.speed_mode === 'fast' ? ' · Fast' : model.speed_mode === 'standard' ? tr(' · 普通',' · Standard') : '';
-      const source = model.provider_id || tr('当前 Codex 登录','Current Codex login');
-      const periods = (Array.isArray(model.periods) ? model.periods : []).map(period => {
-        const day = new Date(period.start * 1000).toLocaleDateString(getLanguage() === 'en' ? 'en-US' : 'zh-CN', {month:'numeric',day:'numeric'});
-        const ongoing = period.complete ? '' : `<span class="muted">${tr('统计中','In progress')}</span>`;
-        return `<tr><td>${esc(day)} ${esc(timeText(period.start))}–${esc(timeText(period.end))} ${ongoing}</td>
-          <td>${rate(period.rate)}</td><td>${hits(period)}</td><td>${coverage(period)}</td></tr>`;
-      }).join('');
-      const tokens = model.sample_count ? `${Number(model.cached_input_tokens).toLocaleString()} / ${Number(model.input_tokens).toLocaleString()} token` : '—';
-      return `<details class="cache-model" data-cache-key="${esc(key)}"${opened.has(key) ? ' open' : ''}>
-        <summary><span>${esc(model.model_id)} · ${esc(source)}${esc(mode)}</span><strong>${rate(model.rate)}</strong></summary>
-        <p class="muted">${tr('有效记录','Reported usage')} ${coverage(model)} · ${tr('命中请求','Requests with cache hits')} ${hits(model)} · ${tr('缓存 / 输入','Cached / input')} ${tokens}</p>
-        <div class="cache-periods"><table><thead><tr><th>${tr('时段','Period')}</th><th>${tr('缓存 token 比例','Cached token rate')}</th><th>${tr('命中请求','Cache-hit requests')}</th><th>${tr('有效记录','Reported usage')}</th></tr></thead><tbody>${periods}</tbody></table></div>
-      </details>`;
-    }).join('');
-    target.innerHTML = `<section class="cache-performance"><h3>${tr('缓存命中率','Prompt cache hit rate')}</h3>
-      <p class="muted">${tr('缓存 token 总数 ÷ 输入 token 总数；每 10 分钟汇总，空闲时段不显示。','Cached input tokens ÷ total input tokens; grouped by 10 minutes, with idle periods omitted.')}</p>
-      ${rows || `<p class="muted">${tr('还没有模型调用记录。','No model calls recorded yet.')}</p>`}
-      <p class="muted">${tr(`最近 7 天，最多 ${Number(payload.capacity) || 512} 次已保留请求。缺少缓存用量的请求不计入比例。`,`Retained requests from the last 7 days, up to ${Number(payload.capacity) || 512} calls. Requests without cache usage are excluded from rates.`)} ${tr('仅反映上游报告的命中情况，不代表与原生调用的差异。','Reports upstream cache usage, not a comparison with direct calls.')}</p></section>`;
   }
   function diagnosticFailureHtml(record) {
     const status = Number(record.status);
@@ -98,7 +60,7 @@ function createDiagnostics({api, getLanguage, openModal, $, esc, t, tr, localTim
     if (['context_length_exceeded','history_reconstruction_failed','external_compaction_failed'].includes(record.error_class)) return tr('请求的上下文或历史未能处理，请保留诊断编号以便排查。','The context or history could not be processed. Keep the diagnostic ID for investigation.');
     return tr('可用诊断编号定位本地日志。没有收到输出，也不能确认上游未执行。','Use the diagnostic ID to locate local logs. Missing output does not prove the upstream did not execute.');
   }
-  function stopDiagnostics() { diagnosticsRequest++; supportReportRequest++; if (diagnosticsTimer !== null) clearInterval(diagnosticsTimer); diagnosticsTimer = null; }
+  function stopDiagnostics() { diagnosticsRequest++; supportReportRequest++; }
   function supportStatusLabel(value) {
     const labels = getLanguage() === 'en' ? {
       auth_required:'Sign-in required', transport_error:'Network or proxy error', rate_limited:'Rate limited',
@@ -179,7 +141,11 @@ function createDiagnostics({api, getLanguage, openModal, $, esc, t, tr, localTim
       return false;
     }
   }
-  function openDiagnostics() { openModal(tr('性能与健康','Performance and health'), `<div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics(); loadSupportReport()">${esc(t('refresh'))}</button><button type="button" class="secondary" data-icon="download" onclick="downloadSupportReport()">${tr('下载脱敏报告','Download redacted report')}</button></div><details class="diagnostics-details" open><summary>${tr('系统诊断','System diagnostics')}</summary><div id="support_report" class="performance-help">${tr('正在读取诊断报告…','Loading support report…')}</div></details><div class="performance-help"><span><strong>TTFT</strong> · ${tr('请求进入 EMP 后，到收到首段正文或工具参数的时间。','Time from EMP receiving the request to the first text or tool-argument output.')}</span><span><strong>TPS</strong> · ${tr('上游回报的全部输出 token 除以完整请求耗时，包含首 token 等待与隐藏推理时间。','All upstream-reported output tokens divided by the complete request duration, including TTFT and hidden reasoning time.')}</span></div><div id="diagnostics_summary" class="muted"></div><div id="health_summary"></div><div id="performance_records"></div><div id="cache_records"></div><details class="failure-list"><summary>${tr('近期失败详情','Recent failure details')}</summary><div id="diagnostics_records"></div></details>`, '', null); loadDiagnostics(); loadSupportReport(); diagnosticsTimer = setInterval(() => { if (document.visibilityState !== 'hidden') { loadDiagnostics(); loadSupportReport(); } }, 10 * 60 * 1000); }
+  function openDiagnostics() {
+    openModal(tr('性能','Performance'), `<div id="performance_call_report"></div><details class="diagnostics-details"><summary>${tr('系统诊断','System diagnostics')}</summary><div class="toolbar"><button type="button" class="secondary" data-icon="refresh" onclick="loadDiagnostics(); loadSupportReport()">${esc(t('refresh'))}</button><button type="button" class="secondary" data-icon="download" onclick="downloadSupportReport()">${tr('下载脱敏报告','Download redacted report')}</button></div><div id="support_report"></div><div id="diagnostics_summary" class="muted"></div><div id="health_summary"></div><div id="diagnostics_records"></div></details>`, '', null);
+    callReports.mount('performance_call_report',{},true);
+    void loadDiagnostics(); void loadSupportReport();
+  }
 
   return {open:openDiagnostics, stop:stopDiagnostics, load:loadDiagnostics, loadSupport:loadSupportReport, downloadSupport:downloadSupportReport};
 }

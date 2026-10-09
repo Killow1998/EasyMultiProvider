@@ -2,6 +2,12 @@
 
 use super::*;
 
+impl From<ResponsesValidationError> for RouterError {
+    fn from(error: ResponsesValidationError) -> Self {
+        responses_validation_error(error)
+    }
+}
+
 pub(super) fn invalid_request(message: &'static str) -> RouterError {
     RouterError::new(
         RouterErrorKind::InvalidRequest,

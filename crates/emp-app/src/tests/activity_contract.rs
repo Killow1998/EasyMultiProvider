@@ -225,7 +225,7 @@ fn next_activity_snapshot(
             if matches(&snapshot) {
                 return snapshot;
             }
-        } else if !frame.starts_with(':') {
+        } else if !frame.starts_with(':') && !frame.starts_with("event: usage-updated\ndata: ") {
             panic!("request activity emitted an unrelated management event: {frame}");
         }
     }
@@ -404,4 +404,96 @@ fn client_cancellation_releases_a_streaming_activity_guard() {
     });
     assert_eq!(only_route(&finished)["in_flight"], 0);
     server.shutdown().expect("shutdown activity test server");
+}
+
+#[test]
+fn completed_http_call_is_persisted_with_original_model_usage_and_delivery() {
+    let upstream = HeldUpstream::start(1);
+    let (_directory, server) =
+        configured_protocol_server(&upstream.base_url(), "responses", "api_key");
+    let session = session_header(&server);
+    let mut socket = open_post_stream(
+        &server,
+        "/v1/responses",
+        &activity_request_body(false),
+        &[
+            &session,
+            "Content-Type: application/json",
+            "thread-id: fixture-thread",
+        ],
+    );
+    let (index, _, _, _) = upstream.observed();
+    let mut body: Value = serde_json::from_slice(&success_response_body()).unwrap();
+    body["model"] = json!("reported-revision");
+    upstream.release(index, 200, serde_json::to_vec(&body).unwrap());
+    assert!(response_until_close(&mut socket).starts_with("HTTP/1.1 200"));
+    assert!(request(&server, "/api/calls", &[]).starts_with("HTTP/1.1 401"));
+    let response = request(&server, "/api/calls?start=0&end=9999999999", &[&session]);
+    assert!(response.starts_with("HTTP/1.1 200"));
+    let report: Value = serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    let row = &report["records"][0];
+    assert_eq!(row["client_model"], "demo/model");
+    assert_eq!(row["upstream_model"], "upstream-model");
+    assert_eq!(row["response_model"], "reported-revision");
+    assert_eq!(row["model_name_status"], "different");
+    assert_eq!(row["session_id"], "fixture-thread");
+    assert_eq!(row["input_tokens"], 1);
+    assert_eq!(row["output_tokens"], 1);
+    assert_eq!(row["ttft_ms"], Value::Null);
+    assert_eq!(row["delivery"]["delivery"], "terminal_written");
+    assert!(
+        !report
+            .to_string()
+            .contains("activity-prompt-must-not-appear")
+    );
+    assert!(!report.to_string().contains("upstream-secret"));
+}
+
+#[test]
+fn real_sse_records_raw_model_conflicts_reasoning_ttft_and_cache_usage() {
+    let upstream = HeldUpstream::start(1);
+    let (_directory, server) =
+        configured_protocol_server(&upstream.base_url(), "responses", "api_key");
+    let session = session_header(&server);
+    let mut socket = open_post_stream(
+        &server,
+        "/v1/responses",
+        &activity_request_body(true),
+        &[&session, "Content-Type: application/json"],
+    );
+    let (index, _, _, _) = upstream.observed();
+    let mut terminal: Value = serde_json::from_slice(&success_response_body()).unwrap();
+    terminal["model"] = json!("terminal-model");
+    terminal["usage"] =
+        json!({"input_tokens":100,"output_tokens":20,"input_tokens_details":{"cached_tokens":50}});
+    let events = [
+        json!({"type":"response.created","response":{"id":"resp_activity_fixture","object":"response","status":"in_progress","model":"first-model","output":[]}}),
+        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"reasoning_fixture","type":"reasoning","summary":[]}}),
+        json!({"type":"response.completed","response":terminal}),
+    ];
+    let raw = events
+        .iter()
+        .map(|event| {
+            format!(
+                "event: {}\ndata: {}\n\n",
+                event["type"].as_str().unwrap(),
+                event
+            )
+        })
+        .collect::<String>();
+    thread::sleep(Duration::from_millis(20));
+    upstream.release(index, 200, raw.into_bytes());
+    let delivered = response_until_close(&mut socket);
+    assert!(delivered.contains("response.completed"), "{delivered}");
+    let wire = request(&server, "/api/calls?start=0&end=9999999999", &[&session]);
+    let report: Value = serde_json::from_str(wire.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    let row = &report["records"][0];
+    assert_eq!(row["response_model"], "terminal-model");
+    assert_eq!(row["model_name_status"], "conflict");
+    assert!(row["ttft_ms"].is_number());
+    assert!(row["duration_ms"].as_u64().unwrap() >= 20);
+    assert_eq!(row["input_tokens"], 100);
+    assert_eq!(row["output_tokens"], 20);
+    assert_eq!(row["cached_input_tokens"], 50);
+    assert_eq!(row["model_declarations"].as_array().unwrap().len(), 2);
 }

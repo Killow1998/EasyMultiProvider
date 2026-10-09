@@ -36,8 +36,11 @@ impl Phase {
 
 pub(crate) struct RequestObservation {
     diagnostics: Arc<Diagnostics>,
+    ledger: Option<Arc<emp_state::usage::ledger::UsageLedger>>,
+    reports_changed: Option<Arc<crate::services::management_events::ManagementEvents>>,
     started: Instant,
     phase_started: Instant,
+    execution_started: Option<Instant>,
     phase: Phase,
     fields: Value,
 }
@@ -63,11 +66,24 @@ impl RequestObservation {
             .event("info", "request_started", &fields);
         Self {
             diagnostics,
+            ledger: None,
+            reports_changed: None,
             started: now,
             phase_started: now,
+            execution_started: None,
             phase: Phase::Authentication,
             fields,
         }
+    }
+
+    pub(crate) fn with_ledger(
+        mut self,
+        ledger: Arc<emp_state::usage::ledger::UsageLedger>,
+        events: Arc<crate::services::management_events::ManagementEvents>,
+    ) -> Self {
+        self.ledger = Some(ledger);
+        self.reports_changed = Some(events);
+        self
     }
 
     pub(crate) fn headers(
@@ -84,6 +100,9 @@ impl RequestObservation {
 
     pub(crate) fn phase(&mut self, phase: Phase) {
         self.close_phase();
+        if matches!(phase, Phase::Execute) {
+            self.execution_started.get_or_insert(self.phase_started);
+        }
         self.phase = phase;
         self.diagnostics.journal.event(
             "info",
@@ -93,6 +112,10 @@ impl RequestObservation {
                 "elapsed_ms":self.started.elapsed().as_millis() as u64,
             }),
         );
+    }
+
+    pub(crate) fn execution_started(&self) -> Instant {
+        self.execution_started.unwrap_or(self.started)
     }
 
     fn close_phase(&mut self) {
@@ -127,6 +150,7 @@ impl RequestObservation {
     /// client socket accepts the error. Never infer history failures from
     /// arbitrary upstream JSON or normal previous-response fallback events.
     pub(crate) fn history_failed(&mut self, error: &HistoryError) {
+        self.fields["error_origin"] = json!("emp");
         let diagnostic = error.diagnostic();
         let failure = json!({
             "category":diagnostic.category, "reason":diagnostic.reason,
@@ -166,7 +190,54 @@ impl RequestObservation {
         event: &Value,
         result: Result<T, E>,
     ) -> Result<T, E> {
+        self.record_event_error(event, result.is_ok(), None);
         self.event_type_written(event["type"].as_str().unwrap_or_default(), result)
+    }
+
+    pub(crate) fn upstream_event_written<T, E>(
+        &mut self,
+        event: &Value,
+        result: Result<T, E>,
+    ) -> Result<T, E> {
+        self.record_event_error(event, result.is_ok(), Some("upstream"));
+        self.event_type_written(event["type"].as_str().unwrap_or_default(), result)
+    }
+
+    fn record_event_error(&mut self, event: &Value, delivered: bool, boundary: Option<&str>) {
+        let error = event.get("error").or_else(|| {
+            event
+                .get("response")
+                .and_then(|response| response.get("error"))
+        });
+        if let Some(error) = error.filter(|error| error.is_object()) {
+            let origin = boundary.unwrap_or_else(|| {
+                error["origin"]
+                    .as_str()
+                    .filter(|origin| {
+                        matches!(
+                            *origin,
+                            "emp" | "upstream" | "transport" | "claude_cli" | "client"
+                        )
+                    })
+                    .unwrap_or("unknown")
+            });
+            self.fields["error_origin"] = json!(origin);
+            self.fields["error_code"] = json!(emp_state::diagnostics::schema::id(&error["code"]));
+            self.diagnostics.journal.event("warning", "response_error", &json!({
+                "request_id":self.fields["request_id"], "connection_id":self.fields["connection_id"],
+                "phase":self.phase.name(), "error_origin":origin, "error_code":self.fields["error_code"],
+                "delivered":delivered,
+            }));
+        }
+    }
+
+    pub(crate) fn buffered_error(&mut self, body: &[u8], delivered: bool) {
+        // Only own bounded error JSON is inspected, never a successful reply.
+        if body.len() <= 64 * 1024
+            && let Ok(event) = serde_json::from_slice(body)
+        {
+            self.record_event_error(&event, delivered, None);
+        }
     }
 
     pub(crate) fn event_type_written<T, E>(
@@ -211,6 +282,26 @@ impl Drop for RequestObservation {
         } else {
             "not_observed"
         });
+        if let Some(ledger) = &self.ledger
+            && let Some(id) = self.fields["request_id"].as_str()
+        {
+            match ledger.record_call_delivery(
+                id,
+                self.fields["operation"].as_str().unwrap_or("responses"),
+                &self.fields,
+            ) {
+                Ok(()) => {
+                    if let Some(events) = &self.reports_changed {
+                        events.publish(crate::services::management_events::Change::Usage);
+                    }
+                }
+                Err(_) => self.diagnostics.journal.event(
+                    "error",
+                    "call_delivery_save_failed",
+                    &json!({"request_id":id}),
+                ),
+            }
+        }
         self.diagnostics
             .journal
             .event("info", "request_finished", &self.fields);
@@ -289,6 +380,58 @@ mod tests {
                     .collect::<Vec<Value>>()
             })
             .collect()
+    }
+
+    #[test]
+    fn error_receipts_record_the_boundary_without_trusting_upstream_claims_or_logging_content() {
+        let root = tempfile::tempdir().unwrap();
+        let diagnostics = Arc::new(Diagnostics::new(&root.path().canonicalize().unwrap()));
+        let event = json!({"type":"error","error":{"code":"quota_exhausted","origin":"emp","message":"private-provider-detail"}});
+        let mut receipt = RequestObservation::new(
+            Arc::clone(&diagnostics),
+            Some("0123456789abcdef".into()),
+            None,
+            "websocket",
+            "responses",
+        );
+        receipt.phase(Phase::Execute);
+        receipt
+            .upstream_event_written(&event, Ok::<_, ()>(()))
+            .unwrap();
+        drop(receipt);
+        let mut receipt = RequestObservation::new(
+            diagnostics,
+            Some("fedcba9876543210".into()),
+            None,
+            "websocket",
+            "responses",
+        );
+        receipt.phase(Phase::ValidateInput);
+        let event = json!({"type":"error","error":{"code":"invalid_request","origin":"emp","message":"private-input-detail"}});
+        receipt
+            .event_written(
+                &event,
+                Err::<(), _>(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            )
+            .unwrap_err();
+        drop(receipt);
+        let journal = records(root.path());
+        let failures: Vec<_> = journal
+            .iter()
+            .filter(|event| event["event"] == "response_error")
+            .collect();
+        assert_eq!(failures.len(), 2);
+        assert_eq!(failures[0]["fields"]["error_origin"], "upstream");
+        assert_eq!(failures[0]["fields"]["error_code"], "quota_exhausted");
+        assert_eq!(failures[0]["fields"]["delivered"], true);
+        assert_eq!(failures[1]["fields"]["error_origin"], "emp");
+        assert_eq!(failures[1]["fields"]["phase"], "validate_input");
+        assert_eq!(failures[1]["fields"]["delivered"], false);
+        assert!(
+            !serde_json::to_string(&journal)
+                .unwrap()
+                .contains("private-")
+        );
     }
 
     #[test]

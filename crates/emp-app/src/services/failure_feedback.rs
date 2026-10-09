@@ -80,14 +80,12 @@ pub(crate) fn annotate_native(error: &mut NativeHttpError, route: &ResolvedRoute
         error.body["error"]["type"].as_str(),
         status_error_class(Some(error.status)),
     );
-    error.body["error"]["message"] = serde_json::Value::String(message(
-        route,
-        class,
-        Some(reason),
-        error.status,
-        false,
-        None,
-    ));
+    let detail = message(route, class, Some(reason), error.status, false, None);
+    error.body["error"]["message"] = crate::services::error_origin::message(
+        error.body["error"]["origin"].as_str().unwrap_or("unknown"),
+        &detail,
+    )
+    .into();
 }
 
 pub(crate) fn claude_message(route: &ResolvedRoute, cause: &str, stage: &str) -> String {

@@ -13,43 +13,7 @@ fn may_carry_context_error(event: &Value) -> bool {
 
 impl NativeStream {
     pub async fn next_event(&mut self) -> Result<Option<NativeStreamEvent>, RouterError> {
-        if let Some(event) = self.pending.pop_front() {
-            return Ok(Some(event));
-        }
-        if let Some(error) = self.failure.take() {
-            return Err(error);
-        }
-        if self.finished {
-            return Ok(None);
-        }
         loop {
-            let next = self
-                .response
-                .as_mut()
-                .ok_or_else(|| {
-                    native_stream_error(
-                        500,
-                        FailureClass::StreamError,
-                        None,
-                        "native stream response is unavailable",
-                    )
-                })?
-                .next_chunk()
-                .await
-                .map_err(crate::transport_error);
-            let result = match next {
-                Ok(Some(chunk)) => self.consume_chunk(&chunk),
-                Ok(None) => self.consume_eof(),
-                Err(error) => Err(error),
-            };
-            if let Err(error) = result {
-                self.response.take();
-                self.finished = true;
-                if self.pending.is_empty() {
-                    return Err(error);
-                }
-                self.failure = Some(error);
-            }
             if let Some(event) = self.pending.pop_front() {
                 return Ok(Some(event));
             }
@@ -59,33 +23,52 @@ impl NativeStream {
             if self.finished {
                 return Ok(None);
             }
-        }
-    }
-
-    pub async fn finish(mut self) {
-        if let Some(response) = self.response.take() {
-            response.finish().await;
+            let result = if let Some(generated) = self.generated.as_mut() {
+                match generated.next() {
+                    Some(event) => self.push_event(event, None),
+                    None => {
+                        self.generated.take();
+                        self.finished = true;
+                        Ok(())
+                    }
+                }
+            } else {
+                let next = self
+                    .response
+                    .as_mut()
+                    .ok_or_else(|| {
+                        native_stream_error(
+                            500,
+                            FailureClass::StreamError,
+                            None,
+                            "native stream response is unavailable",
+                        )
+                    })?
+                    .next_chunk()
+                    .await
+                    .map_err(crate::transport_error);
+                match next {
+                    Ok(Some(chunk)) => self.consume_chunk(&chunk),
+                    Ok(None) => self.consume_eof(),
+                    Err(error) => Err(error),
+                }
+            };
+            if let Err(error) = result {
+                self.response.take();
+                self.generated.take();
+                self.finished = true;
+                self.failure = Some(error);
+            }
         }
     }
 
     fn consume_chunk(&mut self, chunk: &[u8]) -> Result<(), RouterError> {
-        self.stream_bytes = self.stream_bytes.checked_add(chunk.len()).ok_or_else(|| {
-            native_stream_error(
-                502,
-                FailureClass::ProtocolError,
-                Some("upstream_body_too_large"),
-                "upstream stream is too large",
-            )
-        })?;
-        if self.stream_bytes > MAX_UPSTREAM_BODY_BYTES {
-            return Err(native_stream_error(
-                502,
-                FailureClass::ProtocolError,
-                Some("upstream_body_too_large"),
-                "upstream stream is too large",
-            ));
-        }
-        if !self.saw_data {
+        // Keep bytes only while a non-SSE response might be ordinary JSON.
+        // Delivered SSE frames and comment heartbeats do not occupy this buffer.
+        if !self.saw_data && !self.declared_sse {
+            if chunk.len() > MAX_UPSTREAM_BODY_BYTES.saturating_sub(self.raw_body.len()) {
+                return Err(crate::upstream_body_too_large());
+            }
             self.raw_body.extend_from_slice(chunk);
         }
         self.line_buffer.extend_from_slice(chunk);
@@ -100,7 +83,10 @@ impl NativeStream {
             let wire = &buffer[start..=end];
             self.consume_line(&wire[..wire.len() - 1], wire)?;
             if self.saw_data {
-                self.raw_body.clear();
+                self.raw_body = Vec::new();
+            }
+            if self.finished {
+                return Ok(());
             }
             start = end + 1;
             scan = start;
@@ -145,11 +131,12 @@ impl NativeStream {
                     "context length exceeded",
                 ));
             }
-            for event in response_json_stream_events(value, &self.ids, false)? {
-                self.push_event(event, None)?;
-            }
+            self.generated = Some(response_json_stream_events(value, &self.ids, false)?);
+            self.raw_body = Vec::new();
+            self.pending_wire = Vec::new();
+            self.line_buffer = Vec::new();
         }
-        if !self.saw_terminal {
+        if !self.saw_terminal && self.generated.is_none() {
             return Err(native_stream_error(
                 502,
                 FailureClass::StreamIncomplete,
@@ -158,7 +145,7 @@ impl NativeStream {
             ));
         }
         self.response.take();
-        self.finished = true;
+        self.finished = self.generated.is_none();
         Ok(())
     }
 
@@ -224,6 +211,7 @@ impl NativeStream {
         event: Value,
         original_frame: Option<Vec<u8>>,
     ) -> Result<(), RouterError> {
+        self.observation.observe(&event, original_frame.is_some());
         let mut projected =
             rewrite_native_model_event(&event, &self.requested_model, &self.upstream_model);
         let model_changed = projected != event;
@@ -269,9 +257,15 @@ impl NativeStream {
             "response.completed" | "response.incomplete" | "response.failed" | "error"
         ) {
             self.saw_terminal = true;
+            self.finished = true;
+            self.response.take();
+            self.generated.take();
         }
         let frame = if !model_changed && !self.plaintext_collaboration {
-            original_frame.unwrap_or(native_sse_frame(&event_type, &projected)?)
+            match original_frame {
+                Some(frame) => frame,
+                None => native_sse_frame(&event_type, &projected)?,
+            }
         } else {
             native_sse_frame(&event_type, &projected)?
         };
@@ -291,6 +285,7 @@ mod tests {
     fn detached_stream() -> NativeStream {
         NativeStream {
             request_started: std::time::Instant::now(),
+            observation: Default::default(),
             usage_owner: None,
             response: None,
             requested_model: "gpt-test".to_owned(),
@@ -302,8 +297,8 @@ mod tests {
             pending_wire: Vec::new(),
             pending_data: Vec::new(),
             pending: VecDeque::new(),
+            generated: None,
             raw_body: Vec::new(),
-            stream_bytes: 0,
             saw_data: false,
             saw_terminal: false,
             finished: false,

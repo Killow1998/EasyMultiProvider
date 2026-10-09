@@ -10,13 +10,12 @@ use crate::services::events::{stream_event_activity, terminal_stream_event};
 use crate::services::{activity::ActivityGuard, native};
 use crate::util::random_hex;
 use serde_json::Value;
-use std::net::TcpStream;
 
 pub(super) fn serve_native(
     state: &ServerState,
     turn: &Turn,
     websocket: &mut super::ObservedWebSocket<'_, '_>,
-    monitor_stream: Option<&TcpStream>,
+    monitor: &mut crate::services::disconnect::DisconnectMonitor,
     mut native_turn_activity: Option<ActivityGuard<'_>>,
 ) -> TurnResult {
     let Turn {
@@ -71,22 +70,25 @@ pub(super) fn serve_native(
         upstream.usage_owner.as_deref(),
         "responses",
     )
-    .started_at(upstream.request_started)
+    .started_at(websocket.observation.execution_started())
     .transport("websocket");
-    let mut monitor = monitor_stream
-        .and_then(|probe| crate::services::disconnect::DisconnectMonitor::start(probe).ok());
     loop {
         let polled = crate::services::disconnect::raced(
             &state.backend.transport.runtime,
-            monitor.as_mut(),
+            Some(monitor),
             upstream.next_event(),
         );
         match polled {
             DisconnectRace::Disconnected => {
+                if websocket.interrupted() {
+                    usage.interrupted();
+                    return TurnResult::Finished;
+                }
                 usage.disconnected();
                 return TurnResult::Closed;
             }
             DisconnectRace::Ready(Ok(Some(event))) => {
+                usage.upstream_observation(&upstream.observation);
                 usage.observe(&event.body);
                 crate::services::context::record_event(
                     state,
@@ -95,7 +97,7 @@ pub(super) fn serve_native(
                     &event.body,
                 );
                 sent_output |= stream_event_activity(&event.body).0;
-                if websocket.send_json(&event.body).is_err() {
+                if websocket.send_upstream_json(&event.body).is_err() {
                     return TurnResult::Closed;
                 }
                 if terminal_stream_event(&event.body) {
@@ -122,7 +124,7 @@ pub(super) fn serve_external(
     state: &ServerState,
     turn: &Turn,
     websocket: &mut super::ObservedWebSocket<'_, '_>,
-    monitor_stream: Option<&TcpStream>,
+    monitor: &mut crate::services::disconnect::DisconnectMonitor,
 ) -> TurnResult {
     let Turn {
         route,
@@ -145,10 +147,20 @@ pub(super) fn serve_external(
         &Value::Object(request_body.clone()),
         request_headers,
         ids,
-        None,
+        Some(monitor),
     ) {
         Ok(result) => result,
         Err(error) => {
+            if matches!(
+                error,
+                crate::services::external::ExternalRequestError::Disconnected
+            ) {
+                return if websocket.interrupted() {
+                    TurnResult::Finished
+                } else {
+                    TurnResult::Closed
+                };
+            }
             let event = crate::api::failure_response::external_websocket_error(error);
             let _ = websocket.send_json(&event);
             return TurnResult::Finished;
@@ -162,19 +174,21 @@ pub(super) fn serve_external(
         None,
         "responses",
     )
-    .started_at(upstream.request_started)
+    .started_at(websocket.observation.execution_started())
     .transport("websocket");
-    let mut monitor = monitor_stream
-        .and_then(|probe| crate::services::disconnect::DisconnectMonitor::start(probe).ok());
     loop {
         let polled = crate::services::disconnect::raced(
             &state.backend.transport.runtime,
-            monitor.as_mut(),
+            Some(monitor),
             upstream.next_event(),
         );
-        usage.reported_model(upstream.reported_model.as_deref());
+        usage.upstream_observation(&upstream.observation);
         match polled {
             DisconnectRace::Disconnected => {
+                if websocket.interrupted() {
+                    usage.interrupted();
+                    return TurnResult::Finished;
+                }
                 usage.disconnected();
                 return TurnResult::Closed;
             }
@@ -187,7 +201,7 @@ pub(super) fn serve_external(
                     &event.body,
                 );
                 sent_output |= stream_event_activity(&event.body).0;
-                if websocket.send_json(&event.body).is_err() {
+                if websocket.send_upstream_json(&event.body).is_err() {
                     return TurnResult::Closed;
                 }
                 if terminal_stream_event(&event.body) {

@@ -39,12 +39,14 @@ pub(crate) fn retry_scheduled(
 pub(crate) fn request_tokens_per_second(output_tokens: &Value, duration_ms: &Value) -> Option<f64> {
     let tokens = output_tokens
         .as_u64()
-        .filter(|tokens| (1..=10_000_000).contains(tokens))?;
+        .filter(|tokens| (0..=10_000_000).contains(tokens))?;
     let duration = duration_ms
         .as_f64()
-        .filter(|duration| duration.is_finite() && (100.0..=86_400_000.0).contains(duration))?;
+        .filter(|duration| duration.is_finite() && *duration > 0.0 && *duration <= 86_400_000.0)?;
     let rate = tokens as f64 * 1000.0 / duration;
-    (rate > 0.0 && rate <= 1_000_000.0).then(|| (rate * 100.0).round_ties_even() / 100.0)
+    (0.0..=1_000_000.0)
+        .contains(&rate)
+        .then(|| (rate * 100.0).round_ties_even() / 100.0)
 }
 
 pub(crate) fn execution_attempt(
@@ -107,8 +109,32 @@ pub(crate) fn request_cancelled(
     route: &ResolvedRoute,
     incoming: &BTreeMap<String, String>,
 ) {
+    record_cancellation(state, route, incoming, "client_disconnect", None);
+}
+
+pub(crate) fn request_interrupted(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    incoming: &BTreeMap<String, String>,
+) {
+    record_cancellation(
+        state,
+        route,
+        incoming,
+        "client_cancelled",
+        Some("interrupted"),
+    );
+}
+
+fn record_cancellation(
+    state: &ServerState,
+    route: &ResolvedRoute,
+    incoming: &BTreeMap<String, String>,
+    error_class: &str,
+    reason: Option<&str>,
+) {
     let event = json!({"request_id":request::request_id(incoming),
-        "error_class":"client_disconnect","success":false});
+        "error_class":error_class,"error_origin":"client","failure_reason":reason,"success":false});
     state
         .backend
         .diagnostics

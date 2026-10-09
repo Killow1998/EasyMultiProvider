@@ -5,6 +5,7 @@ pub(crate) mod inspection;
 pub(crate) mod integration;
 pub(crate) mod lifecycle;
 pub(crate) mod migration;
+pub(crate) mod provider_quota;
 pub(crate) mod quota;
 pub(crate) mod realtime;
 pub(crate) mod responses;
@@ -15,6 +16,7 @@ pub(crate) mod websocket;
 
 pub(crate) mod runtime;
 
+pub(crate) mod calls;
 pub(crate) mod diagnostics;
 pub(crate) mod updates;
 pub(crate) mod usage;

@@ -1,5 +1,6 @@
 //! Responses WebSocket turns and upstream connection ownership.
 
+use crate::api::failure_response::emp_websocket_error;
 use crate::api::failure_response::websocket_router_error;
 use crate::api::history_response::history_stream_error;
 use crate::app::ServerState;
@@ -28,6 +29,8 @@ use std::io::Write;
 use std::net::TcpStream;
 
 mod claude;
+mod control;
+mod duplex;
 mod http_stream;
 mod native_socket;
 
@@ -37,11 +40,43 @@ use native_socket::{NativeSession, NativeTurnResult, native_stream_error_value};
 struct ObservedWebSocket<'a, 'stream> {
     inner: &'a mut WebSocketConnection<'stream, TcpStream>,
     observation: &'a mut RequestObservation,
+    control: Option<std::sync::Arc<control::Control>>,
+    last_response_id: &'a mut Option<String>,
 }
 impl ObservedWebSocket<'_, '_> {
     fn send_json(&mut self, event: &Value) -> Result<(), emp_transport::WebSocketError> {
-        self.observation
-            .event_written(event, self.inner.send_json(event))
+        self.send(event, false)
+    }
+    fn send_upstream_json(&mut self, event: &Value) -> Result<(), emp_transport::WebSocketError> {
+        self.send(event, true)
+    }
+    fn send(&mut self, event: &Value, upstream: bool) -> Result<(), emp_transport::WebSocketError> {
+        let result = match &self.control {
+            Some(control) => match control.send(self.inner, event) {
+                Ok(false) => return Ok(()),
+                Ok(true) => Ok(()),
+                Err(error) => Err(error),
+            },
+            None => self.inner.send_json(event),
+        };
+        if upstream {
+            self.observation.upstream_event_written(event, result)?;
+        } else {
+            self.observation.event_written(event, result)?;
+        }
+        if crate::services::events::terminal_stream_event(event)
+            && let Some(id) = event["response"]["id"].as_str()
+        {
+            *self.last_response_id = Some(id.to_owned());
+        }
+        Ok(())
+    }
+    fn interrupted(&self) -> bool {
+        self.control.as_ref().is_some_and(|control| {
+            control
+                .interrupted
+                .load(std::sync::atomic::Ordering::Acquire)
+        })
     }
 }
 
@@ -145,8 +180,13 @@ pub(crate) fn serve_responses_websocket(
         return;
     };
     let mut native_session = NativeSession::default();
+    let mut last_response_id = None;
     loop {
-        let text = match websocket.receive_text() {
+        let next = match native_session.pending_request.take() {
+            Some(text) => Ok(Some(text)),
+            None => websocket.receive_text(),
+        };
+        let text = match next {
             Ok(Some(value)) => value,
             Ok(None) => return,
             Err(error) => {
@@ -154,30 +194,66 @@ pub(crate) fn serve_responses_websocket(
                 return;
             }
         };
+        // A steering frame can race the preceding terminal event. It is a
+        // control message, never another inference or a failed model request.
+        if let Ok(value) = serde_json::from_str::<Value>(&text)
+            && value["type"] == "response.interrupt"
+        {
+            let late = value["response_id"]
+                .as_str()
+                .is_some_and(|id| Some(id) == last_response_id.as_deref())
+                && value["mode"] == "discard_partial_items";
+            state.backend.diagnostics.journal.event("info", "websocket_control", &serde_json::json!({
+                "type":"response.interrupt", "late":late, "accepted":late, "connection_id":connection_id,
+                "error_origin":if late {"none"} else {"emp"}, "error_code":if late {""} else {"invalid_request"}
+            }));
+            if !late
+                && websocket
+                    .send_json(&emp_websocket_error(
+                        400,
+                        "invalid_request",
+                        "interrupt response_id does not identify an active response",
+                    ))
+                    .is_err()
+            {
+                return;
+            }
+            continue;
+        }
         let mut observation = RequestObservation::new(
             std::sync::Arc::clone(&state.backend.diagnostics),
             random_hex(8).ok(),
             connection_id,
             "websocket",
             "responses",
+        )
+        .with_ledger(
+            std::sync::Arc::clone(&state.backend.usage.ledger),
+            std::sync::Arc::clone(&state.backend.management_events),
         );
         let mut websocket = ObservedWebSocket {
             inner: &mut websocket,
             observation: &mut observation,
+            control: None,
+            last_response_id: &mut last_response_id,
         };
         websocket.observation.phase(Phase::ReadBody);
         let Some(_permit) = state.updates.enter() else {
-            let _ = websocket.send_json(&serde_json::json!({
-                "type":"error",
-                "status":503,
-                "error":{"code":"updating","message":"EMP is installing an update. Please retry shortly."}
-            }));
+            let _ = websocket.send_json(&emp_websocket_error(
+                503,
+                "updating",
+                "EMP is installing an update. Please retry shortly.",
+            ));
             continue;
         };
         let mut request_body = match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(value)) => value,
             _ => {
-                let _=websocket.send_json(&serde_json::json!({"type":"error","status":400,"error":{"code":"invalid_request","message":"websocket request must be a JSON object"}}));
+                let _ = websocket.send_json(&emp_websocket_error(
+                    400,
+                    "invalid_request",
+                    "websocket request must be a JSON object",
+                ));
                 continue;
             }
         };
@@ -190,7 +266,11 @@ pub(crate) fn serve_responses_websocket(
             .as_deref()
             != Some("response.create")
         {
-            let _=websocket.send_json(&serde_json::json!({"type":"error","status":400,"error":{"code":"invalid_request","message":"websocket request.type must be response.create"}}));
+            let _ = websocket.send_json(&emp_websocket_error(
+                400,
+                "invalid_request",
+                "websocket request.type must be response.create",
+            ));
             continue;
         }
         let etag = response_catalog_etag(state).unwrap_or_default();
@@ -209,22 +289,23 @@ pub(crate) fn serve_responses_websocket(
             Err(RequestPreparationError::ModelRequired) => {
                 let _ = websocket.send_json(&serde_json::json!({
                     "type":"error", "status":400,
-                    "error":{"code":"invalid_request","message":"request.model is required"}
+                    "error":{"code":"invalid_request","origin":"emp","message":"[EMP] request.model is required"}
                 }));
                 continue;
             }
             Err(RequestPreparationError::Route(error)) => {
                 let _ = websocket.send_json(&serde_json::json!({
                     "type":"error", "status":error.status(),
-                    "error":{"code":"router_error","message":error.to_string()}
+                    "error":{"code":"router_error","origin":"emp","message":crate::services::error_origin::message("emp", &error.to_string())}
                 }));
                 continue;
             }
             Ok(_) | Err(_) => {
-                let _ = websocket.send_json(&serde_json::json!({
-                    "type":"error", "status":500,
-                    "error":{"code":"internal_error","message":"internal server error"}
-                }));
+                let _ = websocket.send_json(&emp_websocket_error(
+                    500,
+                    "internal_error",
+                    "internal server error",
+                ));
                 continue;
             }
         };
@@ -247,7 +328,11 @@ pub(crate) fn serve_responses_websocket(
         let ids = match projection_ids() {
             Ok(ids) => ids,
             Err(_) => {
-                let _=websocket.send_json(&serde_json::json!({"type":"error","status":500,"error":{"code":"internal_error","message":"internal server error"}}));
+                let _ = websocket.send_json(&emp_websocket_error(
+                    500,
+                    "internal_error",
+                    "internal server error",
+                ));
                 continue;
             }
         };
@@ -267,7 +352,11 @@ pub(crate) fn serve_responses_websocket(
                 || request_scope != native_session.last_scope)
         {
             native_session.last_response_id = None;
-            let _ = websocket.send_json(&serde_json::json!({"type":"error","error":{"code":"previous_response_not_found","message":"Previous response was not found. Retrying the full request."}}));
+            let _ = websocket.send_json(&crate::api::failure_response::emp_websocket_error(
+                400,
+                "previous_response_not_found",
+                "Previous response was not found. Retry with full history.",
+            ));
             continue;
         }
         request_body =
@@ -365,7 +454,7 @@ pub(crate) fn serve_responses_websocket(
             scope: request_scope,
         };
         let native_turn_activity = if turn.route.dialect == emp_core::Dialect::CodexNative {
-            match native_session.serve(state, &turn, &mut websocket) {
+            match native_session.serve(state, &turn, &mut websocket, monitor_stream.as_ref()) {
                 NativeTurnResult::Finished => continue,
                 NativeTurnResult::Closed => return,
                 NativeTurnResult::HttpFallback(activity) => activity,
@@ -380,7 +469,10 @@ pub(crate) fn serve_responses_websocket(
             .and_then(|value| value.as_bool())
             .unwrap_or(true);
         if !generate {
-            let id = format!("resp_{}", random_hex(16).unwrap_or_else(|_| "0".repeat(32)));
+            // HTTP and CLI adapters do not retain a server-side response.
+            // Codex treats an empty response id as a non-resumable warmup and
+            // sends the full first request, rather than an incremental one.
+            let id = "";
             let usage = serde_json::json!({"input_tokens":0,"input_tokens_details":Value::Null,"output_tokens":0,"output_tokens_details":Value::Null,"total_tokens":0});
             if websocket
                 .send_json(&serde_json::json!({"type":"response.created","response":{"id":id}}))
@@ -393,19 +485,30 @@ pub(crate) fn serve_responses_websocket(
         }
         turn.body.remove("generate");
         turn.body.insert("stream".to_owned(), Value::Bool(true));
-        let result = if crate::services::claude_cli::selected(&turn.route) {
-            claude::serve(state, &turn, &mut websocket, monitor_stream.as_ref())
-        } else if turn.route.dialect == emp_core::Dialect::CodexNative {
-            http_stream::serve_native(
-                state,
-                &turn,
-                &mut websocket,
-                monitor_stream.as_ref(),
-                native_turn_activity,
-            )
-        } else {
-            http_stream::serve_external(state, &turn, &mut websocket, monitor_stream.as_ref())
+        let Some(socket) = monitor_stream.as_ref() else {
+            return;
         };
+        let result = control::run(
+            state,
+            &mut websocket,
+            socket,
+            &mut native_session.pending_request,
+            |websocket, monitor| {
+                if crate::services::claude_cli::selected(&turn.route) {
+                    claude::serve(state, &turn, websocket, monitor)
+                } else if turn.route.dialect == emp_core::Dialect::CodexNative {
+                    http_stream::serve_native(
+                        state,
+                        &turn,
+                        websocket,
+                        monitor,
+                        native_turn_activity,
+                    )
+                } else {
+                    http_stream::serve_external(state, &turn, websocket, monitor)
+                }
+            },
+        );
         if matches!(result, TurnResult::Closed) {
             return;
         }

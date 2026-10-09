@@ -33,6 +33,7 @@ pub struct NativeCompleteResponse {
     pub content_type: String,
     pub body: Vec<u8>,
     pub headers: BTreeMap<String, String>,
+    pub observation: crate::model_observation::ModelObservation,
 }
 
 pub struct NativeWebSocketPlan {
@@ -66,6 +67,7 @@ pub struct NativeStream {
     pub request_started: std::time::Instant,
     /// Opaque hash of the credential owner selected by the application.
     pub usage_owner: Option<String>,
+    pub observation: crate::model_observation::ModelObservation,
     response: Option<HttpResponse>,
     requested_model: String,
     upstream_model: String,
@@ -77,8 +79,8 @@ pub struct NativeStream {
     pending_wire: Vec<u8>,
     pending_data: Vec<Vec<u8>>,
     pending: VecDeque<NativeStreamEvent>,
+    generated: Option<crate::ResponseEvents>,
     raw_body: Vec<u8>,
-    stream_bytes: usize,
     saw_data: bool,
     saw_terminal: bool,
     finished: bool,
@@ -419,6 +421,8 @@ impl<'a> NativeRouter<'a> {
             };
             let status = response.status();
             let content_type = response.header("content-type").unwrap_or("").to_owned();
+            let mut observation = crate::model_observation::ModelObservation::default();
+            observation.observe_headers(response.headers());
             let selected = selected_headers(&response, route);
             if status >= 400 {
                 let retry = retry_after::parse(response.header("retry-after"));
@@ -503,7 +507,11 @@ impl<'a> NativeRouter<'a> {
             } else {
                 raw
             };
+            if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+                observation.observe(&value, false);
+            }
             return Ok(NativeCompleteResponse {
+                observation,
                 status,
                 content_type: if content_type.is_empty() {
                     "application/json".to_owned()
@@ -571,6 +579,8 @@ impl<'a> NativeRouter<'a> {
             })?;
         let status = response.status();
         let content_type = response.header("content-type").unwrap_or("").to_owned();
+        let mut observation = crate::model_observation::ModelObservation::default();
+        observation.observe_headers(response.headers());
         let selected = selected_headers(&response, route);
         if status >= 400 {
             let retry = retry_after::parse(response.header("retry-after"));
@@ -602,20 +612,21 @@ impl<'a> NativeRouter<'a> {
                 selected,
             ));
         }
+        let declared_sse = content_type
+            .to_ascii_lowercase()
+            .contains("text/event-stream");
         if let Some(length) = response.header("content-length") {
             let length = length.parse::<usize>().map_err(|_| {
                 NativeHttpError::router(502, "upstream stream has invalid Content-Length")
             })?;
-            if length > MAX_UPSTREAM_BODY_BYTES {
+            if !declared_sse && length > MAX_UPSTREAM_BODY_BYTES {
                 return Err(NativeHttpError::router(502, "upstream stream is too large"));
             }
         }
-        let declared_sse = content_type
-            .to_ascii_lowercase()
-            .contains("text/event-stream");
         Ok(NativeStream {
             request_started,
             usage_owner: None,
+            observation,
             response: Some(response),
             requested_model: route.requested_model.clone(),
             upstream_model: route.upstream_model.clone(),
@@ -626,8 +637,8 @@ impl<'a> NativeRouter<'a> {
             pending_wire: Vec::new(),
             pending_data: Vec::new(),
             pending: VecDeque::new(),
+            generated: None,
             raw_body: Vec::new(),
-            stream_bytes: 0,
             saw_data: false,
             saw_terminal: false,
             finished: false,

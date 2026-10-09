@@ -240,6 +240,12 @@ impl ClientWebSocket {
         self.peer_close_code
     }
 
+    /// Socket readiness only: all reads must go through this client's TLS and
+    /// frame decoder, including plaintext already buffered inside them.
+    pub fn readiness_stream(&self) -> std::io::Result<std::net::TcpStream> {
+        self.stream.readiness_stream()
+    }
+
     pub fn set_max_message_bytes(&mut self, maximum: usize) -> Result<(), ClientWebSocketError> {
         if maximum == 0 || maximum > MAX_PROXY_REQUEST_BYTES {
             return Err(ClientWebSocketError::new(

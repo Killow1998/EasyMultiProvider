@@ -350,6 +350,19 @@ pub(crate) fn handle_connection(
                     system_now(),
                 ))
             }
+            Some(request)
+                if request.method == RequestMethod::Post
+                    && request.raw_path().starts_with("/api/providers/")
+                    && request.raw_path().ends_with("/quota") =>
+            {
+                Some(crate::api::provider_quota::refresh(
+                    &mut stream,
+                    request,
+                    raw.body_prefix,
+                    state,
+                    system_now(),
+                ))
+            }
             Some(request) => Some(route_request(request, state)),
             None => Some(bad_request_response()),
         }
@@ -425,6 +438,9 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             if request.method == RequestMethod::Get && path == "/api/diagnostics" {
                 return crate::api::diagnostics::read(state);
             }
+            if request.method == RequestMethod::Get && path == "/api/calls" {
+                return crate::api::calls::read(request, state);
+            }
             if request.method == RequestMethod::Get && path == "/api/usage" {
                 return crate::api::usage::read(request, state);
             }
@@ -444,7 +460,9 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
             }
             if request.method == RequestMethod::Get
                 && (path == "/api/config"
-                    || (path.starts_with("/api/accounts/") && path.ends_with("/models")))
+                    || ((path.starts_with("/api/accounts/")
+                        || path.starts_with("/api/providers/"))
+                        && path.ends_with("/models")))
             {
                 return catalog::read_management_request(request, state);
             }
@@ -461,6 +479,18 @@ pub(crate) fn route_request_at(request: Request<'_>, state: &ServerState, now: f
                 let body =
                     serde_json::to_vec(&snapshot).expect("account snapshot is JSON serializable");
                 return response("HTTP/1.1 200 OK", "application/json", &body, &[]);
+            }
+            if request.method == RequestMethod::Get
+                && let Some(id) = path
+                    .strip_prefix("/api/providers/")
+                    .and_then(|path| path.strip_suffix("/quota-history"))
+            {
+                return crate::api::provider_quota::history(
+                    request,
+                    state,
+                    &percent_decode(id, false),
+                    now,
+                );
             }
             if request.method == RequestMethod::Get && path == "/api/integration" {
                 return read_integration_request(state);

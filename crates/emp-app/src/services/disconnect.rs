@@ -92,6 +92,7 @@ pub(crate) struct DisconnectMonitor {
     wake: Arc<Poller>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    interrupted: Option<Arc<AtomicBool>>,
 }
 
 pub(crate) enum DisconnectRace<T> {
@@ -100,6 +101,26 @@ pub(crate) enum DisconnectRace<T> {
 }
 
 impl DisconnectMonitor {
+    /// A WebSocket turn already owns its framed reader. Reuse the cancellation
+    /// race without peeking or starting a competing socket reader.
+    pub(crate) fn from_signal(
+        disconnected: tokio::sync::oneshot::Receiver<()>,
+        interrupted: Arc<AtomicBool>,
+    ) -> std::io::Result<Self> {
+        Ok(Self {
+            disconnected,
+            pending: None,
+            wake: Arc::new(Poller::new()?),
+            stop: Arc::new(AtomicBool::new(false)),
+            worker: None,
+            interrupted: Some(interrupted),
+        })
+    }
+    pub(crate) fn is_interrupted(&self) -> bool {
+        self.interrupted
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+    }
     pub(crate) fn start(stream: &TcpStream) -> std::io::Result<Self> {
         let wake = Arc::new(Poller::new()?);
         let probe = Probe::new(stream, Arc::clone(&wake))?;
@@ -111,6 +132,7 @@ impl DisconnectMonitor {
             wake,
             stop,
             worker: None,
+            interrupted: None,
         })
     }
 

@@ -68,9 +68,11 @@ fn responses_websocket_keeps_connection_and_requests_full_recovery_for_missing_p
         receive_websocket_json(&mut stream)["type"],
         "response.created"
     );
+    let warmup = receive_websocket_json(&mut stream);
+    assert_eq!(warmup["type"], "response.completed");
     assert_eq!(
-        receive_websocket_json(&mut stream)["type"],
-        "response.completed"
+        warmup["response"]["id"], "",
+        "HTTP warmup has no resumable server history"
     );
     let mask = [5u8, 6, 7, 8];
     let close = [0x03u8, 0xe8];

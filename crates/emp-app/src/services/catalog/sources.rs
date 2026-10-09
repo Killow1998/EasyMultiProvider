@@ -68,6 +68,10 @@ impl CatalogSources {
             &self.duplicates,
             regular_file,
         )?;
+        public["claude_quota"] = state
+            .backend
+            .claude_quota
+            .snapshot(crate::util::system_now());
         public["emp_version"] = json!(crate::VERSION);
         public["native_account"] =
             crate::services::accounts::native_account_snapshot(state, config);

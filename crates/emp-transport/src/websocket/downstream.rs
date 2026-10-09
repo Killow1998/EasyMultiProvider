@@ -7,13 +7,17 @@ use crate::{
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub struct WebSocketConnection<'a, S> {
     stream: &'a mut S,
     closed: bool,
     peer_close_code: Option<u16>,
-    frame_decoder: FrameDecoder,
+    frame_decoder: Option<FrameDecoder>,
+    // A temporary read owner may answer ping/close while the turn writes output.
+    // Keep each entire frame atomic across both socket handles.
+    write_closed: Arc<Mutex<bool>>,
 }
 
 impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
@@ -22,7 +26,8 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
             stream,
             closed: false,
             peer_close_code: None,
-            frame_decoder: FrameDecoder::new(MAX_PROXY_REQUEST_BYTES),
+            frame_decoder: Some(FrameDecoder::new(MAX_PROXY_REQUEST_BYTES)),
+            write_closed: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -33,7 +38,7 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
     }
 
     pub fn feed_read_bytes(&mut self, bytes: &[u8]) -> Result<(), WebSocketError> {
-        self.frame_decoder
+        self.decoder()?
             .feed(bytes)
             .map_err(map_downstream_frame_error)
     }
@@ -41,18 +46,64 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
         self.peer_close_code
     }
 
+    /// Transfer the buffered and partially decoded input to one temporary reader.
+    /// The original connection can write, but cannot read until it is reclaimed.
+    pub fn take_reader<'b, T: Read + Write>(
+        &mut self,
+        stream: &'b mut T,
+    ) -> Result<WebSocketConnection<'b, T>, WebSocketError> {
+        let decoder = self.frame_decoder.take().ok_or(WebSocketError::new(
+            1011,
+            "websocket reader already transferred",
+        ))?;
+        Ok(WebSocketConnection {
+            stream,
+            closed: self.closed,
+            peer_close_code: self.peer_close_code,
+            frame_decoder: Some(decoder),
+            write_closed: Arc::clone(&self.write_closed),
+        })
+    }
+
+    pub fn reclaim_reader<T: Read + Write>(
+        &mut self,
+        mut reader: WebSocketConnection<'_, T>,
+    ) -> Result<(), WebSocketError> {
+        if self.frame_decoder.is_some() || !Arc::ptr_eq(&self.write_closed, &reader.write_closed) {
+            return Err(WebSocketError::new(1011, "unrelated websocket reader"));
+        }
+        self.frame_decoder = reader.frame_decoder.take();
+        self.closed |= reader.closed;
+        self.peer_close_code = reader.peer_close_code;
+        Ok(())
+    }
+
+    fn decoder(&mut self) -> Result<&mut FrameDecoder, WebSocketError> {
+        self.frame_decoder.as_mut().ok_or(WebSocketError::new(
+            1011,
+            "websocket read owner is elsewhere",
+        ))
+    }
+
     fn send_frame(&mut self, opcode: u8, payload: &[u8]) -> Result<(), WebSocketError> {
-        if self.closed {
-            return Ok(());
+        let mut write_closed = self
+            .write_closed
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if self.closed || *write_closed {
+            return Err(WebSocketError::new(1006, "websocket closed"));
         }
         let mut header = Vec::with_capacity(10);
         header.push(0x80 | opcode);
         header.extend(&frame_length_prefix(payload.len()));
-        self.stream
+        let result = self
+            .stream
             .write_all(&header)
             .and_then(|_| self.stream.write_all(payload))
             .and_then(|_| self.stream.flush())
-            .map_err(|_| WebSocketError::new(1006, "websocket closed"))
+            .map_err(|_| WebSocketError::new(1006, "websocket closed"));
+        *write_closed |= opcode == 8 || result.is_err();
+        result
     }
 
     pub fn send_pong(&mut self, payload: &[u8]) -> Result<(), WebSocketError> {
@@ -69,15 +120,25 @@ impl<'a, S: Read + Write> WebSocketConnection<'a, S> {
                 "websocket message limit is invalid",
             ));
         }
-        self.frame_decoder.set_max_message_bytes(maximum);
+        self.decoder()?.set_max_message_bytes(maximum);
         Ok(())
     }
 
     /// Poll one downstream frame. Callers should set a short read timeout on
     /// the underlying socket and retain this connection across Pending results.
     pub fn poll_text(&mut self) -> Result<WebSocketPoll<String>, WebSocketError> {
+        if self.closed {
+            return Ok(WebSocketPoll::Closed {
+                code: self.peer_close_code,
+            });
+        }
         match self
             .frame_decoder
+            .as_mut()
+            .ok_or(WebSocketError::new(
+                1011,
+                "websocket read owner is elsewhere",
+            ))?
             .poll(self.stream, true, false)
             .map_err(map_downstream_frame_error)?
         {

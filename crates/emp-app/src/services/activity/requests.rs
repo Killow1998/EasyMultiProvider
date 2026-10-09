@@ -54,6 +54,13 @@ impl Requests {
         let previous = record.clone();
         if event["dispatch_started"] == true {
             record["attempts"] = json!(record["attempts"].as_u64().unwrap_or(0).saturating_add(1));
+            if record["attempt_routes"].is_null() {
+                record["attempt_routes"] = json!([]);
+            }
+            let routes = record["attempt_routes"].as_array_mut().unwrap();
+            if routes.len() < 16 {
+                routes.push(json!({"at":now,"upstream_model":emp_state::diagnostics::schema::id(&event["upstream_model"]),"protocol":emp_state::diagnostics::schema::id(&event["resolved_protocol"])}));
+            }
         }
         for field in [
             "client_model",
@@ -63,11 +70,37 @@ impl Requests {
             "transport",
             "error_class",
             "failure_reason",
+            "session_id",
+            "thread_id",
+            "parent_thread_id",
+            "turn_id",
+            "selected_name",
+            "provider_name",
+            "model_name_status",
         ] {
             let value = emp_state::diagnostics::schema::id(&event[field]);
             if !value.is_empty() {
                 record[field] = json!(value);
             }
+        }
+        for field in [
+            "input_tokens",
+            "output_tokens",
+            "cached_input_tokens",
+            "cache_write_tokens",
+            "cache_write_1h_tokens",
+            "reasoning_tokens",
+            "duration_ms",
+            "ttft_ms",
+            "first_content_ms",
+            "tokens_per_second",
+        ] {
+            if event[field].is_number() {
+                record[field] = event[field].clone();
+            }
+        }
+        if let Some(declarations) = event["model_declarations"].as_array() {
+            record["model_declarations"] = json!(declarations.iter().take(8).collect::<Vec<_>>());
         }
         record["model_id"] = json!(identity.model_id);
         record["provider_id"] = json!(identity.provider_id);
@@ -78,6 +111,8 @@ impl Requests {
             .map_or(Value::Null, |status| json!(status));
         record["state"] = json!(if !finished {
             "active"
+        } else if event["error_class"] == "client_cancelled" {
+            "interrupted"
         } else if event["error_class"] == "client_disconnect" {
             "cancelled"
         } else if matches!(

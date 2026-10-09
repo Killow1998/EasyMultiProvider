@@ -106,7 +106,11 @@ pub(super) fn facts(body: &Value, headers: &BTreeMap<String, String>) -> Value {
             .or_else(|| text(&body["metadata"]["threadId"]))
     );
     result["turn_id"] = json!(text(&metadata["turn_id"]).or_else(|| text(&metadata["turnId"])));
-    result["parent_thread_id"] = metadata["forked_from_thread_id"].clone();
+    result["parent_thread_id"] = json!(
+        header("x-codex-parent-thread-id")
+            .map(str::to_owned)
+            .or_else(|| text(&metadata["forked_from_thread_id"]))
+    );
     result
 }
 #[cfg_attr(feature = "hotpath", hotpath::measure)]

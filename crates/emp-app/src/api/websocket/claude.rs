@@ -4,13 +4,12 @@ use crate::api::failure_response::websocket_router_error;
 use crate::app::ServerState;
 use crate::services::events::terminal_stream_event;
 use serde_json::Value;
-use std::net::TcpStream;
 
 pub(super) fn serve(
     state: &ServerState,
     turn: &Turn,
     websocket: &mut super::ObservedWebSocket<'_, '_>,
-    monitor_stream: Option<&TcpStream>,
+    monitor: &mut crate::services::disconnect::DisconnectMonitor,
 ) -> TurnResult {
     let Turn {
         route,
@@ -19,9 +18,19 @@ pub(super) fn serve(
         ids,
         ..
     } = turn;
-    let started = std::time::Instant::now();
-    let mut monitor = monitor_stream
-        .and_then(|probe| crate::services::disconnect::DisconnectMonitor::start(probe).ok());
+    // Expose an ID before the buffered CLI call, so Codex can steer while waiting.
+    let id = format!(
+        "resp_{}",
+        crate::util::random_hex(16).unwrap_or_else(|_| "0".repeat(32))
+    );
+    if websocket
+        .send_json(&serde_json::json!({"type":"response.created", "response":{
+            "id":id, "object":"response", "status":"in_progress", "output":[]
+        }}))
+        .is_err()
+    {
+        return TurnResult::Closed;
+    }
     let _activity_guard =
         state
             .backend
@@ -34,11 +43,13 @@ pub(super) fn serve(
         route,
         &Value::Object(request_body.clone()),
         request_headers,
-        ids,
-        monitor.as_mut(),
+        Some(monitor),
     ) {
         Ok(completion) => completion,
-        Err(crate::services::claude_cli::ClaudeCliError::Disconnected) => {
+        Err(
+            crate::services::claude_cli::ClaudeCliError::Disconnected
+            | crate::services::claude_cli::ClaudeCliError::Failure("claude_cli_interrupted"),
+        ) => {
             let mut usage = crate::services::request_outcome::RequestOutcome::new(
                 state,
                 route,
@@ -47,8 +58,12 @@ pub(super) fn serve(
                 None,
                 "responses",
             )
-            .started_at(started)
+            .started_at(websocket.observation.execution_started())
             .transport("websocket");
+            if websocket.interrupted() {
+                usage.interrupted();
+                return TurnResult::Finished;
+            }
             usage.disconnected();
             return TurnResult::Closed;
         }
@@ -62,7 +77,7 @@ pub(super) fn serve(
                     None,
                     "responses",
                 )
-                .started_at(started)
+                .started_at(websocket.observation.execution_started())
                 .transport("websocket");
                 usage.router_error(router_error);
             }
@@ -78,7 +93,8 @@ pub(super) fn serve(
         }
     };
     let selected_route = completion.route;
-    let response_value = completion.response.body;
+    let mut response_value = completion.response.body;
+    response_value["id"] = Value::String(id);
     let mut usage = crate::services::request_outcome::RequestOutcome::new(
         state,
         &selected_route,
@@ -87,9 +103,10 @@ pub(super) fn serve(
         None,
         "responses",
     )
-    .started_at(completion.request_started)
+    .started_at(websocket.observation.execution_started())
     .transport("websocket");
     usage.http_status(completion.response.status);
+    usage.upstream_observation(&completion.response.observation);
     usage.observe(&response_value);
     usage.finish();
     if response_value["status"] == "completed" {
@@ -114,6 +131,9 @@ pub(super) fn serve(
         }
     };
     for event in events {
+        if event["type"] == "response.created" {
+            continue;
+        }
         if websocket.send_json(&event).is_err() {
             return TurnResult::Closed;
         }

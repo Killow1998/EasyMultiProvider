@@ -89,14 +89,15 @@ In the Web UI, either:
 
 For an API Provider, pull the upstream model list, choose the models you want, and optionally edit their context windows.
 
-For Claude, choose **Add Provider → Claude**, then **Local Claude subscription**
-or **CPA**. Both routes require the installed Claude Code CLI.
+For Claude, open **Add service** and choose **Local subscription** or **CPA**
+in the **Claude Code** section. Both routes require the installed Claude Code CLI.
 
 - **Local Claude subscription** reuses the Claude Code subscription sign-in for
   the current OS user. Before each request, EMP checks for a Claude.ai subscription
   sign-in; CLI API-key and Console auth do not qualify for this mode. If needed,
-  sign in through Claude Code. Add model aliases or full IDs with **Add model** to
-  choose them in Codex's model picker.
+  sign in through Claude Code. Open **Model settings**, click **Update model list**,
+  select models and save to add them to Codex's model picker. **Add model manually**
+  remains available for additional aliases or full IDs.
 - **CPA** uses a Claude-Code-compatible CPA Base URL and API key. For direct
   Anthropic API access, add the separate **Anthropic API** Provider.
 
@@ -137,8 +138,10 @@ a new model is not visible yet.
 - Add official or custom Providers through the Web UI.
 - Route Claude requests through the installed Claude Code CLI using either the
   current OS user's Claude Code sign-in or a compatible CPA Base URL and API key.
-  Add local-login model aliases or full IDs manually with **Add model**. Codex
-  executes tool calls, and replies are buffered until generation finishes.
+  For local sign-in, open **Model settings**, update the list from Claude Code,
+  and select models to add to Codex. Saved lists can be reused; **Add model**
+  remains available for manual entries. Codex executes tool calls, and replies
+  are buffered until generation finishes.
 - Forward image inputs and supported inline document content only for Claude
   models whose configured capabilities and selected upstream support them.
 - Discover Provider models, import only the ones you want, test them, edit context limits, hide them, or remove them.
@@ -192,6 +195,13 @@ Subscription editing supports per-model context token counts. Leave a field blan
 **Refresh model limits** retrieves the subscription catalog with that account's credentials. Configured values cannot exceed the upstream-advertised maximum. Codex's default 95% effective percentage is preserved, so an advertised 872,000-token window becomes 828,400 usable tokens.
 
 External Provider models use the same 95% rule, so a 256,000-token window shows as 243K in the Codex model picker. The catalog display and EMP request checks use the same effective window.
+
+For Claude Code models, edit the context window to set Codex's history budget.
+EMP checks and compacts that history; Claude Code's own compaction is disabled.
+The configured budget can be smaller than the model's capacity. For models that
+require the extended-context option, keep `[1m]` in the upstream model name;
+models with native 1M context do not need it. Increasing the budget does not
+increase the capacity offered by the model or account.
 
 Use the global eye control in the right-side **Model display** to show or hide
 context labels there and in the Codex model picker for Native, Subscription and
@@ -250,7 +260,7 @@ launcher when your active work permits it. There is no background polling.
 
 The local Web UI is organized around four main areas:
 
-- **Accounts** — use the compact account summary to view model/token usage and API-equivalent cost, save an alias, choose a reset or remove an imported account. Edit, Refresh and Trend stay visible in each row.
+- **Accounts** — use the compact account summary to view model/token usage and API-equivalent cost, save an alias, choose a reset or remove an imported account. Open Model settings from the account summary; Refresh and Trend stay visible in each row.
 - **Providers** — configure supported services or a custom Provider.
 - **Models** — discover, import, test, edit, hide, or remove Provider models.
 - **Codex integration** — apply the EMP catalog to Codex or restore native Codex routing.

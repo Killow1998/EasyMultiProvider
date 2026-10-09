@@ -51,7 +51,7 @@ EMP 在本机运行，主要解决两件事：
 - 通过 Web UI 添加官方或自建 Provider。
 - 通过已安装的 Claude Code CLI 使用 Claude：可复用当前操作系统用户的 Claude Code
   登录，也可连接兼容 Claude Code 的 CPA Base URL 和 API Key。本地登录模型需通过
-  “Add model”手动添加别名或完整模型 ID。工具调用由 Codex 执行，回复在生成完成后显示。
+  “模型设置”更新 Claude Code 模型列表并选择要加入 Codex 的模型。列表保存在本地，仍可手动添加模型。工具调用由 Codex 执行，回复在生成完成后显示。
 - 只有当 Claude 模型的已配置能力和所选上游都支持时，才会转发图片输入和受支持的内联文档内容。
 - 拉取 Provider 模型，自由选择导入模型，修改上下文窗口，执行测试并隐藏
   不常用模型。
@@ -128,6 +128,11 @@ Subscription 的编辑窗口可以逐模型设置上下文 token 数。留空使
 目录；新建任务后应确认有效上下文。Native 导出后，其上下文设置随导入的账号
 迁移，不覆盖目标机器 Native 的设置。外部 Provider 模型同样按 95% 计算，
 例如 256,000 的窗口在 Codex 模型列表中显示为 243K。
+
+Claude Code 模型也可在编辑窗口设置上下文预算，由 EMP 检查和压缩历史，
+Claude Code 自身的压缩已关闭。预算可以小于模型容量。需要扩展上下文模式的
+模型，应在上游模型名称中保留 `[1m]`；原生支持 1M 的模型不需要此后缀。
+调大预算不会增加模型或账号实际提供的容量。
 
 在右侧“模型显示”区域使用全局眼睛开关，可统一显示或隐藏该区域及 Codex 模型选择器中的
 Native、Subscription 和 External Provider 上下文标签。左侧模型列表不重复显示这些标签。
@@ -252,12 +257,12 @@ EMP v0.9.0 至 v0.9.9 使用同一种加密迁移格式。当前版本可以导�
 4. 点击 **将 EMP 应用于 Codex**。
 5. 正常启动 Codex，通过 `/model` 或 App 模型菜单选择模型。
 
-使用 Claude 时，在 Web UI 中选择 **Add Provider → Claude**，再选 **Local Claude subscription** 或 **CPA**。两种方式都需要安装 Claude Code CLI。
+使用 Claude 时，在 Web UI 中点击 **添加服务**，在 **Claude Code** 分组选择 **本机订阅** 或 **CPA**。两种方式都需要安装 Claude Code CLI。
 
-- **Local Claude subscription** 使用当前操作系统用户的 Claude Code 订阅登录。每次请求前，EMP 会检查 Claude.ai 订阅登录；CLI API Key 和 Console 登录不适用于本机模式。若需登录，请在 Claude Code 中登录。使用 **Add model** 手动添加别名或完整模型 ID，即可在 Codex 模型选择器中选择。
+- **Local Claude subscription** 使用当前操作系统用户的 Claude Code 订阅登录。每次请求前，EMP 会检查 Claude.ai 订阅登录；CLI API Key 和 Console 登录不适用于本机模式。若需登录，请在 Claude Code 中登录。打开 **模型设置**，点击 **更新模型列表**，勾选并保存即可加入 Codex 模型选择器。之后可以直接使用保存的列表，也可通过 **手动添加模型** 补充别名或完整 ID。
 - **CPA** 使用兼容 Claude Code 的 CPA Base URL 和 API Key。直接连接 Anthropic API 时，请另加 **Anthropic API** Provider。
 
-只有当前原生账号时，可以跳过导入账号和 Provider：在“Native → 编辑”
+只有当前原生账号时，可以跳过导入账号和 Provider：点击 Native 徽章，在“模型设置”
 中隐藏模型，在“模型显示”中修改显示名称，保存后点击“将 EMP 应用于
 Codex”。至少保留一个可见模型，显示名称不会改变模型 ID。
 
@@ -283,7 +288,7 @@ HTTP 正文、请求头、Cookie 和凭据。
   快照。EMP 运行时每 5 分钟自动采样一次，并提供 1 小时、1 天、1 周和最多 15 天
   的本地余量趋势；历史只包含额度指标，不包含凭据。每个 Subscription 都能控制哪些
   Coding Agent 模型显示在 Codex 中。点击账号卡片可查看模型用量、token 和 API 等价金额，
-  保存别名、选择重置或移除导入账号；编辑、刷新和趋势按钮始终显示在账号行中。
+  保存别名、选择重置或移除导入账号，并切换到模型设置；刷新和趋势按钮保留在账号行中。
 - **Provider**：选择支持的官方预设，或者通过 Base URL 和 API Key 添加自建
   Provider。
 - **模型**：拉取上游模型，并进行导入、测试、编辑、隐藏或删除。模型按照

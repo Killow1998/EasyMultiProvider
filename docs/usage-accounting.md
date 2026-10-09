@@ -2,9 +2,18 @@
 
 Open **Usage & estimates** beside **Performance & health**. Choose Today,
 Last 7 days, Last 30 days, All history, or a custom start/end in the browser's local time.
-Filter Native, Other Subscription, External Provider, or Unknown source. The table separates
-accounts/providers and real upstream model IDs. Select a daily bar to inspect
-its hours. Idle hours have no usage bars.
+Filter Native, Other Subscription, External Provider, or Unknown source.
+Results are grouped by Codex subscriptions, Claude Code/CPA and API, then by
+upstream model ID. Expand a model to see its account/service and tier breakdown.
+Unknown or removed services appear under Other records. Select a daily bar to
+inspect its hours. Idle hours have no usage bars.
+
+Click a service badge to open its information and settings. Its lifetime usage
+summary combines rows with the same upstream model ID across dates, service
+tiers and Native/Subscription categories belonging to that verified account.
+Provider summaries include only that provider's records. Input, output and
+priced costs are summed; missing usage remains missing and known zero-cost
+usage remains zero. Use **Usage** for date and category breakdowns.
 
 ## What is counted
 
@@ -62,6 +71,10 @@ Reported usage on incomplete or failed responses still counts. Missing usage
 is shown as missing, not a successful zero-token call. Pre-request handshake
 failures followed by HTTP fallback are excluded. Repeated observations of the
 same response ID within a route/account/model count once.
+
+Steering is recorded as an interrupted call, separately from provider failure
+and client disconnection. Control frames do not create extra model-call records.
+Unreported usage on cancelled inference remains missing.
 
 ## Prices
 

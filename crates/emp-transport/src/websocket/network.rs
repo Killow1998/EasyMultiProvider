@@ -9,6 +9,9 @@ use url::Url;
 
 pub(super) trait ReadWrite: Read + Write + Send {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+    fn readiness_stream(&self) -> std::io::Result<TcpStream> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
 }
 type OpenedWebSocketTransport = (Box<dyn ReadWrite>, bool, Option<String>);
 impl ReadWrite for socket2::Socket {
@@ -20,15 +23,24 @@ impl ReadWrite for TcpStream {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         TcpStream::set_read_timeout(self, timeout)
     }
+    fn readiness_stream(&self) -> std::io::Result<TcpStream> {
+        self.try_clone()
+    }
 }
 impl<S: ReadWrite> ReadWrite for rustls::StreamOwned<rustls::ClientConnection, S> {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         self.sock.set_read_timeout(timeout)
     }
+    fn readiness_stream(&self) -> std::io::Result<TcpStream> {
+        self.sock.readiness_stream()
+    }
 }
 impl ReadWrite for Box<dyn ReadWrite> {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         self.as_ref().set_read_timeout(timeout)
+    }
+    fn readiness_stream(&self) -> std::io::Result<TcpStream> {
+        self.as_ref().readiness_stream()
     }
 }
 

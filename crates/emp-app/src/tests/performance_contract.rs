@@ -13,10 +13,11 @@ fn request_tps_respects_observation_boundaries() {
         (json!(120), json!(2000), json!(60.0)),
         (json!(123), json!(4567), json!(26.93)),
         (json!(1), json!(86_400_000), json!(0.0)),
-        (json!(0), json!(100), Value::Null),
+        (json!(0), json!(100), json!(0.0)),
+        (json!(120), json!(0), Value::Null),
         (json!(true), json!(100), Value::Null),
         (json!(10_000_001), json!(100), Value::Null),
-        (json!(120), json!(99), Value::Null),
+        (json!(120), json!(99), json!(1212.12)),
         (json!(120), json!(86_400_001), Value::Null),
         (json!(120), json!(100_000_000), Value::Null),
     ];
@@ -120,7 +121,7 @@ fn post_response_stream(server: &ServerHandle, body: &[u8], cookie: &str) -> Str
 }
 
 #[test]
-fn responses_endpoint_records_schema3_full_request_tps_and_preserves_stream_timings() {
+fn responses_endpoint_records_schema4_full_request_tps_and_preserves_stream_timings() {
     let upstream = TimedUsageUpstream::start();
     let directory = tempfile::tempdir().expect("performance temp directory");
     let root = canonical_root(&directory);
@@ -177,17 +178,13 @@ fn responses_endpoint_records_schema3_full_request_tps_and_preserves_stream_timi
         .iter()
         .find(|record| record["model_id"] == "gpt-6-luna")
         .expect("record for the Responses request");
-    assert_eq!(record["performance_schema"], 3);
+    assert_eq!(record["performance_schema"], 4);
     assert_eq!(record["output_tokens"], 120);
     assert!(record["ttft_ms"].as_u64().unwrap() >= 100);
     // Upstream deltas can coalesce in the socket under scheduler load; only
     // first-token and total pacing are deterministic EMP contracts.
-    let generation_ms = record["generation_ms"].as_u64().unwrap();
     let duration_ms = record["duration_ms"].as_u64().unwrap();
-    assert!(
-        generation_ms <= duration_ms,
-        "generation {generation_ms}ms exceeded duration {duration_ms}ms"
-    );
+    assert!(record["ttft_ms"].as_u64().unwrap() <= duration_ms);
     assert!(
         duration_ms >= 200,
         "full request duration was {duration_ms}ms"

@@ -28,6 +28,7 @@ impl fmt::Debug for NativeHttpError {
 
 impl NativeHttpError {
     fn classified(
+        origin: &'static str,
         status: u16,
         class: FailureClass,
         message: impl Into<String>,
@@ -39,7 +40,12 @@ impl NativeHttpError {
         } else {
             reason.unwrap_or(class.as_str())
         };
-        let mut error = json!({"code": code, "type": class.as_str(), "message": message.into()});
+        let label = match origin {
+            "upstream" => "Upstream service",
+            "transport" => "EMP connection",
+            _ => "EMP",
+        };
+        let mut error = json!({"code": code, "type": class.as_str(), "origin":origin, "message":format!("[{label}] {}", message.into())});
         if let Some(reason) = reason {
             error["failure_reason"] = reason.into();
         }
@@ -57,6 +63,7 @@ impl NativeHttpError {
 
     pub fn router(status: u16, message: impl Into<String>) -> Self {
         Self::classified(
+            "emp",
             status,
             status_error_class(Some(status)),
             message,
@@ -68,13 +75,14 @@ impl NativeHttpError {
     pub(super) fn plain(status: u16, message: impl Into<String>) -> Self {
         Self {
             status,
-            body: json!({"error": {"message":message.into()}}),
+            body: json!({"error": {"origin":"emp", "message":format!("[EMP] {}",message.into())}}),
             headers: BTreeMap::new(),
         }
     }
 
     pub(super) fn transport(class: FailureClass, status: u16, reason: Option<&str>) -> Self {
         Self::classified(
+            "transport",
             status,
             class,
             format!("transport failure: class={}", class.as_str()),
@@ -85,6 +93,7 @@ impl NativeHttpError {
 
     pub(super) fn context(headers: BTreeMap<String, String>) -> Self {
         let mut error = Self::classified(
+            "emp",
             413,
             FailureClass::ContextLengthExceeded,
             "context length exceeded: estimated input unknown tokens, safe input limit unknown; provider unknown, model unknown; next action: reduce input or use native remote compaction",
@@ -103,7 +112,7 @@ pub(super) fn projection_error(error: NativeProjectionError) -> NativeHttpError 
         {
             NativeHttpError {
                 status: 409,
-                body: json!({"error": {"code":"history_reconstruction_failed", "message":"History reconstruction failed. Continue in the original task or start a new task.",
+                body: json!({"error": {"code":"history_reconstruction_failed", "origin":"emp", "message":"[EMP] History reconstruction failed. Continue in the original task or start a new task.",
                 "error_class":"history_reconstruction_failed", "reason":"history_projection_incomplete"}}),
                 headers: BTreeMap::new(),
             }
@@ -118,6 +127,7 @@ pub(super) fn projection_error(error: NativeProjectionError) -> NativeHttpError 
 pub(super) fn collaboration_error(error: CollaborationError) -> NativeHttpError {
     match error {
         CollaborationError::NamespaceCollision => NativeHttpError::classified(
+            "emp",
             422,
             FailureClass::RouterError,
             error.to_string(),
@@ -137,7 +147,13 @@ pub(super) fn read_error(kind: HttpTransportErrorKind) -> NativeHttpError {
             NativeHttpError::router(502, "upstream Responses 响应 is too large")
         }
         HttpTransportErrorKind::ReadTimeout => {
-            NativeHttpError::router(504, "upstream request timed out")
+            NativeHttpError::transport(FailureClass::Timeout, 504, Some("read_timeout"))
+        }
+        HttpTransportErrorKind::ConnectTimeout => {
+            NativeHttpError::transport(FailureClass::Timeout, 504, Some("connect_timeout"))
+        }
+        HttpTransportErrorKind::Network => {
+            NativeHttpError::transport(FailureClass::Network, 500, Some("network"))
         }
         _ => NativeHttpError::plain(500, "internal server error"),
     }
@@ -263,6 +279,7 @@ pub(super) fn upstream_http_error(
     });
     let message = public_failure_message(failure.error_class, reason, failure.status);
     let mut error = NativeHttpError::classified(
+        "upstream",
         failure.status,
         failure.error_class,
         message,
