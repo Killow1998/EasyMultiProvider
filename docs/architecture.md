@@ -342,6 +342,48 @@ errors, old bookmarks/cookie sessions, rejected settings, current activity
 snapshots, diagnostics close/cancel behavior and the shipped script order.
 The real server test also fetches the page's referenced assets before login.
 
+#### Frontend development and acceptance
+
+Frontend changes are reviewed in an interactive local **shadow frontend** before
+integration into the running application. It serves the candidate UI on a separate
+loopback origin and reads the running EMP's real management data. Preview edits
+remain in that origin's private browser storage; they do not save production
+configuration or execute account, inference, installer or lifecycle actions.
+The bridge forwards only explicitly allowed read requests and reuses the existing
+management session server-side, without exposing or rotating production credentials.
+Creating this preview does not require rebuilding, installing or restarting EMP.
+
+Retain the existing backend contracts and metric definitions. Check observable
+behavior in English and Simplified Chinese, light/dark appearance and representative
+window sizes and display scaling. Include real-data navigation, loading and refresh,
+empty/error states, sparse charts, keyboard interaction, and modal close/cancellation.
+Use one hover language across clickable controls: preserve their fills and text,
+show a dotted wave around the outline, and use a small lift or icon enlargement.
+Verify actual pointer hover and keyboard focus in both light and dark appearances,
+including primary/secondary/danger buttons, selected controls and service icons.
+Disabled controls stay inactive; reduced-motion preferences retain a static cue.
+Confirm that preview edits leave production settings and the active runtime intact.
+Do not run unrelated suites or paid inference to verify presentation changes.
+
+Preserve the accepted Codex 5h unlimited presentation in both bar and ring modes:
+when a completed quota query does not report a 5h limit, display `233%`, the fixed
+text `1m111s`, and the multicolor flow effect. Keep these values unchanged when
+switching between remaining and used views. They are presentation constants, not
+measured quota or a real reset timestamp; do not write them into quota records,
+trend history or accounting. Pending queries, failed queries and missing account
+data must retain their own states, rather than being treated as unlimited. Include
+this behavior in frontend acceptance for both modes, languages and themes.
+
+Keep one intended preview process, remove task-created browser/test scratch after
+verification, and record the preview location and results in the existing development
+record. After each shadow frontend change is completed and accepted by Xian,
+summarize the accepted changes and explicitly ask whether to migrate them into the
+official frontend, unless Xian has already authorized that migration for the current
+scope. Acceptance alone does not authorize integration, publishing or replacing the
+running application. Once migration is authorized, use the shared presentation
+modules, verify the official embedded assets and actual page, and explicitly report
+whether the result is preview-only or included in the official frontend/release.
+
 ### 8. Service lifecycle owns its worker handles
 
 `lifecycle.rs` holds background thread handles directly in a `Vec<JoinHandle<()>>`.

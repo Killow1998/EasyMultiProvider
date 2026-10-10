@@ -33,6 +33,11 @@ Check English and Simplified Chinese, light and dark themes, zoom/narrow layouts
 keyboard navigation, loading/error states and closing nested dialogs. Preview
 storage is separate from the backend; resetting site data discards drafts.
 
+After Xian accepts a completed shadow change, summarize it and ask whether to
+migrate it into the official frontend, unless that migration is already authorized
+for the current scope. See the [frontend development constraints](../../docs/architecture.md#frontend-development-and-acceptance)
+for the acceptance workflow and the permanent `233%` / `1m111s` unlimited-5h design.
+
 ## Source ownership
 
 Official and preview pages share `crates/emp-app/web/` presentation modules:
