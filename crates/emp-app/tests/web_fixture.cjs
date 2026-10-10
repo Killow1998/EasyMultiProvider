@@ -9,7 +9,7 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return {promise, resolve, reject}; };
 function feature(file, factory, globals = {}) {
   const context = vm.createContext({Headers, URL, URLSearchParams, Blob, AbortController, structuredClone, ...globals});
-  if(file === 'call-reports.js') vm.runInContext(fs.readFileSync(path.join(web,'call-outcomes.js'),'utf8'),context,{filename:'call-outcomes.js'});
+  if(file === 'call-reports.js') for(const dependency of ['call-outcomes.js','performance-chart.js','performance.js']) vm.runInContext(fs.readFileSync(path.join(web,dependency),'utf8'),context,{filename:dependency});
   vm.runInContext(fs.readFileSync(path.join(web, file), 'utf8'), context, {filename:file});
   return context[factory];
 }

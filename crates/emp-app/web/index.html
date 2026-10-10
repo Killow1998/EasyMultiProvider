@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/assets/style.css">
 <link rel="stylesheet" href="/assets/service-list.css">
 
-</head>
+<link rel="stylesheet" href="/assets/presentation.css"></head>
 <body>
 <main>
 <header class="page-header">
@@ -22,8 +22,7 @@
   <div class="page-header-controls">
     <div class="header-group header-emp-actions">
       <button id="integration_toggle" type="button" data-icon="check" data-action="enable" onclick="confirmIntegrationAction(this.dataset.action)" data-i18n="enable_codex" disabled>启用 EMP</button>
-      <button type="button" class="secondary" data-icon="activity" onclick="openDiagnostics()" data-i18n="diagnostics">性能</button>
-      <button type="button" class="secondary" data-icon="usage" onclick="openUsage()" data-i18n="usage">用量</button>
+      <button type="button" class="secondary" data-icon="activity" onclick="statistics.open()" data-i18n="statistics">统计</button>
     </div>
     <div class="header-group">
       <button type="button" class="secondary" data-icon="settings" onclick="openSettings()" data-i18n="settings_menu">设置</button>
@@ -97,7 +96,7 @@
   </div>
 </div>
 
-<script src="/assets/service-icons.js"></script>
+<script src="/assets/service-icons.js"></script><script src="/assets/brand-colors.js"></script>
 <script src="/assets/service-list.js"></script>
 <script src="/assets/service-usage.js"></script>
 <script src="/assets/model-editor.js"></script>
@@ -109,11 +108,11 @@
 <script src="/assets/quota-display.js"></script>
 <script src="/assets/settings.js"></script>
 <script src="/assets/call-outcomes.js"></script>
-<script src="/assets/call-reports.js"></script>
+<script src="/assets/performance-chart.js"></script><script src="/assets/performance.js"></script><script src="/assets/call-reports.js"></script>
 <script src="/assets/report-query.js"></script>
 <script src="/assets/period-controls.js"></script>
 <script src="/assets/usage-report.js"></script>
-<script src="/assets/diagnostics.js"></script>
+<script src="/assets/diagnostics.js"></script><script src="/assets/service-errors.js"></script><script src="/assets/request-errors.js"></script><script src="/assets/interactions.js"></script><script src="/assets/motion.js"></script><script src="/assets/usage-data.js"></script><script src="/assets/statistics.js"></script>
 <script>
 let state = null;
 let integrationInfo = null;
@@ -148,7 +147,7 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 const management = createManagementClient({tr, fetch: (...args) => fetch(...args), storage:() => localStorage, window});
 const {request:api, fetch:managementFetch, establish:establishSession, errorText:upstreamErrorText} = management;
 const quotaDisplay = createQuotaDisplay({read:storedPreference, save:savePreference});
-const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr});
+const settings = createSettings({quotaDisplay, getState:() => state, cloneState, persistState, openModal, $, esc, t, tr, presentationOptions:() => presentationSettingsHtml()});
 const {open:openSettings, toggle:toggleSetting} = settings;
 const callReports = createCallReports({api, getState:() => state, getActivity:() => activitySnapshot, getLanguage:() => language, openModal, $, esc, tr, periodPickerHtml, registerPeriodPicker});
 const diagnostics = createDiagnostics({callReports, api, getLanguage:() => language, openModal, $, esc, t, tr, localTimeText, notice});
@@ -158,7 +157,7 @@ const translations = {
     subtitle:'管理 Codex 的账号和模型。', settings_menu:'设置', language_label:'语言', theme_label:'外观', quit_emp:'退出 EMP', more_actions:'更多操作', theme_system:'跟随系统', theme_light:'浅色', theme_dark:'深色', export_emp:'导出数据', import_emp:'导入数据', codex_integration:'Codex 集成', integration_status:'Codex 状态', loading:'加载中', integration_loading:'正在读取状态…', automatic_runtimes:'选择全部', save_runtimes:'保存选择', rescan_runtimes:'重新扫描', enable_codex:'启用 EMP', restore_codex:'恢复原生', diagnostics:'性能', usage:'用量', subscription_search:'联网搜索', enable_subscription_search:'启用联网搜索', search_account:'搜索账号', current_codex_login:'当前 Codex 登录', save_search:'保存', model_display:'模型显示', search_models:'搜索模型', show_all:'显示全部', collapse:'收起', save_display:'保存', context:'显示上下文', reasoning_summary:'推理摘要', advanced:'高级', no_models:'当前没有模型。', no_matches:'没有匹配的模型。', refresh:'刷新', services_title:'服务', import_account:'导入账号', refresh_quotas:'刷新额度', providers_title:'模型服务', add_provider:'添加服务', models_routes:'模型', add_model:'手动添加模型'
   },
   en: {
-    subtitle:'Manage Codex accounts and models.', settings_menu:'Settings', language_label:'Language', theme_label:'Appearance', quit_emp:'Quit EMP', more_actions:'More actions', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', diagnostics:'Performance', usage:'Usage', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', services_title:'Services', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
+    subtitle:'Manage Codex accounts and models.', settings_menu:'Settings', language_label:'Language', theme_label:'Appearance', quit_emp:'Quit EMP', more_actions:'More actions', theme_system:'System', theme_light:'Light', theme_dark:'Dark', export_emp:'Export data', import_emp:'Import data', codex_integration:'Codex integration', integration_status:'Codex status', loading:'Loading', integration_loading:'Reading status…', automatic_runtimes:'Select all', save_runtimes:'Save selection', rescan_runtimes:'Rescan', enable_codex:'Enable EMP', restore_codex:'Restore Native', statistics:'Statistics', diagnostics:'Performance', usage:'Usage', subscription_search:'Web search', enable_subscription_search:'Enable web search', search_account:'Search account', current_codex_login:'Current Codex login', save_search:'Save', model_display:'Model display', search_models:'Search models', show_all:'Show all', collapse:'Collapse', save_display:'Save', context:'Show context', reasoning_summary:'Reasoning summary', advanced:'Advanced', no_models:'No models yet.', no_matches:'No matching models.', refresh:'Refresh', services_title:'Services', import_account:'Import account', refresh_quotas:'Refresh quota', providers_title:'Model services', add_provider:'Add service', models_routes:'Models', add_model:'Add model manually'
   }
 };
 Object.assign(translations['zh-CN'], {client_scope:'客户端', emp_scope:'EMP', search_scope:'工具'});
@@ -198,8 +197,8 @@ const usageReport = createUsageReport({api, $, tr, esc, getState:() => state, ge
 const {open:openUsage} = usageReport;
 const services = createServiceList({
   getState:() => state, $, esc, tr, presets:officialProviders, icon:serviceIconHtml,
-  activity:activityIndicatorHtml, accountSummary:accountSummaryHtml, quotaMeters:quotaMetersHtml,
-  refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots, openModal, api,
+  activity:activityIndicatorHtml, serviceIcon:(...args)=>serviceActivityIcon(...args), updateServiceErrors:()=>{presentationUpdateServiceRequestErrors();presentationUpdateServiceErrorLabels();}, accountSummary:accountSummaryHtml, quotaMeters:(...args)=>presentationQuotaMeters(...args),
+  refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots:() => updateActivityDots(), openModal, api,
   notice, usageSummary:serviceUsage
 });
 const {render:renderServices, details:openProviderDetails} = services;
@@ -466,7 +465,7 @@ function openCatalogDisplayEditor(family) {
 }
 
 function fill() {
-  drawLogo(); applyTranslations(); if (latestUpdateInfo) renderUpdateHint(latestUpdateInfo); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderCatalogDisplay(); renderServices(); renderModels(); updateActivityDots();
+  drawLogo(); enhanceLogo($('emp_logo')); presentationSyncMotion(); applyTranslations(); if (latestUpdateInfo) renderUpdateHint(latestUpdateInfo); $('emp_version').textContent = state.emp_version ? `v${state.emp_version}` : ''; renderCatalogDisplay(); renderServices(); renderModels(); updateActivityDots();
 }
 async function load() {
   applyPreferences(); drawLogo();
@@ -510,7 +509,7 @@ function drawLogo() {
   svg.setAttribute('viewBox', `0 0 ${(17 * pitch).toFixed(1)} ${(7 * pitch).toFixed(1)}`);
   svg.innerHTML = dots.join('');
 }
-function renderLogoState(live) { drawLogo(); $('emp_logo')?.classList.toggle('emp-live', live); }
+function renderLogoState(live) { drawLogo(); enhanceLogo($('emp_logo')); $('emp_logo')?.classList.toggle('emp-live', live); }
 function toast(title, body, ms = 7000) {
   document.querySelector('.toast')?.remove();
   const box = document.createElement('div');
@@ -829,6 +828,7 @@ function applyActivitySnapshot(value) {
     ? {...snapshot, routes:snapshot.routes.map(route => route.in_flight === 0 ? route : {...route, in_flight:0})}
     : snapshot;
   activityClockOffsetSeconds = snapshot.observed_at - Date.now() / 1000;
+  presentationObserveRequestErrors(snapshot);
   updateActivityDots();
   rescheduleActivityExpiry();
   callReports.live();
@@ -853,23 +853,19 @@ function resetTimestampMillis(value) {
 }
 function resetCountdownText(value, now = Date.now()) {
   const timestamp = resetTimestampMillis(value);
-  if (timestamp === null) return '';
-  const remaining = timestamp - now;
-  if (remaining <= 0) return '0m';
-  if (remaining < 60000) return '<1m';
-  let minutes = Math.ceil(remaining / 60000);
-  const days = Math.floor(minutes / 1440); minutes %= 1440;
-  const hours = Math.floor(minutes / 60); minutes %= 60;
-  const parts = [];
-  if (days) parts.push(`${days}d`);
-  if (hours) parts.push(`${hours}h`);
-  if (minutes) parts.push(`${minutes}m`);
-  return parts.join('');
+  if (!timestamp) return '';
+  const seconds = Math.max(0,Math.floor((timestamp-now)/1000));
+  if (seconds >= 86400) return Math.floor(seconds/86400)+'d'+Math.floor(seconds%86400/3600)+'h';
+  if (seconds >= 3600) return Math.floor(seconds/3600)+'h'+Math.floor(seconds%3600/60)+'m';
+  return Math.floor(seconds/60)+'m'+seconds%60+'s';
 }
 function refreshResetCountdowns() {
-  document.querySelectorAll('[data-reset-countdown]').forEach(element => {
-    element.textContent = resetCountdownText(element.dataset.resetCountdown);
-  });
+  if(document.hidden)return;
+  for(const element of document.querySelectorAll('[data-reset-countdown]')) {
+    if(element.closest('.presentation-motion-paused'))continue;
+    const text=resetCountdownText(element.dataset.resetCountdown);
+    if(element.textContent!==text)element.textContent=text;
+  }
 }
 function localTimeText(value) { const timestamp = Number(value); if (!Number.isFinite(timestamp) || timestamp <= 0) return ''; const date = new Date((timestamp > 100000000000 ? timestamp : timestamp * 1000)); if (Number.isNaN(date.getTime())) return ''; const pad = number => String(number).padStart(2, '0'); return `${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())} (${utcOffsetLabel(date)})`; }
 function compactWindowText(minutes) { const value = Number(minutes); if (!Number.isFinite(value) || value <= 0) return '?'; for (const [unit, label] of [[1440, 'day'], [60, 'hour']]) if (value % unit === 0) return `${value / unit}${label[0]}`; return `${value}m`; }
@@ -1637,6 +1633,7 @@ async function testModelAudio(id) {
 
 function clearQuotaHistoryTimer() { if (quotaHistoryTimer !== null) clearInterval(quotaHistoryTimer); quotaHistoryTimer = null; quotaHistoryLoading = false; quotaHistoryRequest++; }
 function stopModalFeatures() {
+  statistics.stop();
   callReports.stop(); usageReport.stop(); accountDetails.stop(); providerModelSettings.stop(); modelEditor.stop(); services.stop();
   stopDiagnostics(); stopUpdatePoll(); clearQuotaHistoryTimer(); subscriptionEditor = null;
 }
@@ -1906,6 +1903,19 @@ if (window.addEventListener) {
   window.addEventListener('pagehide', stopQuotaEvents);
   window.addEventListener('pageshow', startQuotaEvents);
 }
+</script>
+<script src="/assets/presentation.js"></script>
+<script>
+translations['zh-CN'].statistics='统计';
+const statistics=createStatistics({api,$,tr,esc,getState:()=>state,getLanguage:()=>language,openModal,callReports,periodPickerHtml,registerPeriodPicker,periodPickers,refreshPeriod,loadDiagnostics,loadSupportReport});
+const presentationSyncMotion=installMotion(refreshResetCountdowns);
+installInteractions();
+installServiceErrors();
+const presentationActivityUpdate=updateActivityDots;
+updateActivityDots=function(){presentationActivityUpdate();presentationUpdateServiceRequestErrors();};
+const statisticsUsageRefresh=usageReport.refresh;
+usageReport.refresh=function(...args){if(!statistics.refresh())return statisticsUsageRefresh(...args);};
+
 establishSession().then(load).catch(error => notice(error.message, true));
 </script>
 </body>

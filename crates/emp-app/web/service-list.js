@@ -1,7 +1,7 @@
 // A view of existing accounts/providers; storage and route identities stay with their owners.
 function createServiceList({getState, $, esc, tr, presets, icon, activity, accountSummary, quotaMeters,
   refreshingAccounts, refreshErrors, quotaAnimationAccounts, updateActivityDots, openModal, api,
-  usageSummary, notice}) {
+  usageSummary, notice, serviceIcon = (kind,id,label,brand,cpa) => activity(kind,id,label)+icon(brand,cpa), updateServiceErrors = () => {}}) {
   const refreshing = new Set(), errors = new Map();
   let detailsController = null;
   function stop() { detailsController?.abort(); detailsController = null; }
@@ -24,13 +24,13 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     const label = account.native ? 'Native' : account.name || account.id;
     const status = !account.credential_set ? tr('未登录','Not signed in') : account.credential_status === 'invalid' ? tr('登录已失效','Sign-in expired') : '';
     const duplicateText = account.duplicate ? (duplicate ? tr('模型由 Native 管理','Models managed by Native') : tr('重复账号','Duplicate account') + ' · ' + account.duplicate_of) : '';
-    const detail = [status, duplicateText].filter(Boolean).map(esc).join(' · ');
+    const detail = [duplicateText].filter(Boolean).map(esc).join(' · ');
     const actions = action('account-refresh', account.id, busy ? tr('刷新中…','Refreshing…') : tr('刷新','Refresh'), 'refresh', busy || !account.credential_set)
       + action('account-quota-history', account.id, tr('趋势','Trend'), 'chart');
     return `<article class="entity-card service-card service-account${duplicate ? ' account-duplicate' : ''}" data-service="account:${esc(account.id)}">
-      <div class="service-main">${activity('account', account.native ? '@native' : account.id, label)}${icon('codex')}<div class="service-identity">${accountSummary(account, account.quota?.account_label || label)}${detail ? `<small class="service-note">${detail}</small>` : ''}</div></div>
+      <div class="service-main">${serviceIcon('account', account.native ? '@native' : account.id, label, 'codex', false, refreshErrors[account.id] ? {title:tr('额度刷新失败','Quota refresh failed'),message:refreshErrors[account.id]} : status ? {title:tr('登录需要处理','Sign-in needs attention'),message:status} : null)}<div class="service-identity">${accountSummary(account, account.quota?.account_label || label)}${detail ? `<small class="service-note">${detail}</small>` : ''}</div></div>
       <div class="service-actions">${actions}</div>
-      <div class="service-quota">${quotaMeters(account, busy, quotaAnimationAccounts.has(account.id))}${refreshErrors[account.id] ? `<div class="refresh-error">${esc(refreshErrors[account.id])}</div>` : ''}</div>
+      <div class="service-quota">${quotaMeters(account, busy, quotaAnimationAccounts.has(account.id))}</div>
     </article>`;
   }
   function providerRow(provider, models) {
@@ -49,9 +49,9 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
       + action('provider-quota-history', provider.id, tr('趋势','Trend'), 'chart')
       : modelActions;
     return `<article class="entity-card service-card" data-service="provider:${esc(provider.id)}">
-      <div class="service-main">${activity('provider', provider.id, label)}${icon(brand, cpa)}<div class="service-identity">${summary}</div></div>
+      <div class="service-main">${serviceIcon('provider', provider.id, label, brand, cpa, errors.has(provider.id) ? {title:tr('额度刷新失败','Quota refresh failed'),message:errors.get(provider.id)} : null)}<div class="service-identity">${summary}</div></div>
       <div class="service-actions${local ? ' service-actions-with-quota' : ''}">${actions}</div>
-      ${local ? `<div class="service-quota" title="${esc(getState().claude_quota?.observed_at ? tr('更新于 ', 'Updated ') + new Date(getState().claude_quota.observed_at * 1000).toLocaleString() : tr('使用模型后更新额度', 'Quota updates after model use'))}">${quotaMeters({quota:getState().claude_quota, quota_pending:true}, refreshing.has(provider.id))}${errors.has(provider.id) ? `<div class="refresh-error">${esc(errors.get(provider.id))}</div>` : ''}</div>` : ''}
+      ${local ? `<div class="service-quota" title="${esc(getState().claude_quota?.observed_at ? tr('更新于 ', 'Updated ') + new Date(getState().claude_quota.observed_at * 1000).toLocaleString() : tr('使用模型后更新额度', 'Quota updates after model use'))}">${quotaMeters({quota:getState().claude_quota, quota_pending:true}, refreshing.has(provider.id))}</div>` : ''}
     </article>`;
   }
   function tabs(id, kind, active = 'details', disabled = false) {
@@ -108,7 +108,7 @@ function createServiceList({getState, $, esc, tr, presets, icon, activity, accou
     const rows = accounts.map(accountRow).concat((state.providers || []).map(provider => providerRow(provider, groupedModels.get(provider.id) || [])));
     box.innerHTML = rows.join('') || `<p class="muted">${tr('添加服务，开始使用模型。','Add a service to start using models.')}</p>`;
     quotaAnimationAccounts.clear();
-    updateActivityDots();
+    updateActivityDots(); updateServiceErrors();
     if (focused?.uiAction) {
       [...box.querySelectorAll('[data-ui-action]')].find(button => button.dataset.uiAction === focused.uiAction && button.dataset.id === focused.id)?.focus({preventScroll:true});
     }

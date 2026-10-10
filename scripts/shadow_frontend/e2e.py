@@ -60,6 +60,12 @@ class Browser:
         assert 'error' not in result, result
         return result
 
+    def hover(self, selector):
+        element=self.execute('return document.querySelector(arguments[0]);',selector)
+        assert element,selector
+        status,data=request(self.base+'/actions',{'actions':[{'type':'pointer','id':'mouse','parameters':{'pointerType':'mouse'},'actions':[{'type':'pointerMove','duration':50,'origin':element,'x':0,'y':0}]}]})
+        assert status==200,data
+
     def escape(self):
         status, value = request(self.base + '/actions', {'actions': [{'type': 'key', 'id': 'keyboard',
             'actions': [{'type': 'keyDown', 'value': '\ue00c'}, {'type': 'keyUp', 'value': '\ue00c'}]}]})
@@ -68,14 +74,32 @@ class Browser:
 
 def check_page(browser, shadow):
     cases = []
+    assert browser.execute('return document.body.dataset.quotaStyle;') == ('ring' if shadow else 'bar')
+    assert browser.execute('return document.querySelectorAll("[data-i18n=statistics]").length===1 && !document.querySelector(".page-header-controls [data-i18n=usage]");')
+    assert browser.execute('return document.querySelectorAll("#services .request-activity").length===0 && document.querySelectorAll("#services .presentation-service-icon").length>0;')
+    assert browser.execute('return document.querySelector("#integration_toggle").disabled;') is shadow
     for language in ['en', 'zh-CN']:
         for theme in ['light', 'dark']:
             for width in [640, 1280]:
                 request(browser.base + '/window/rect', {'width': width, 'height': 900})
                 browser.execute('setLanguage(arguments[0]);setTheme(arguments[1]);', language, theme)
-                browser.execute('closeModal();' + ('document.querySelector("[data-i18n=statistics]").click();' if shadow else 'document.querySelector("[data-i18n=diagnostics]").click();'))
+                browser.execute('closeModal();')
+                for control in ['.page-header-controls [data-i18n=settings_menu]','#services .presentation-service-icon','#services .account-summary']:
+                    background=browser.execute('return getComputedStyle(document.querySelector(arguments[0])).backgroundColor;',control)
+                    browser.hover(control)
+                    wait_for(lambda:browser.execute('return !document.querySelector(".presentation-hover-feedback").hidden;'))
+                    assert browser.execute('return getComputedStyle(document.querySelector(arguments[0])).backgroundColor;',control)==background
+                browser.execute('document.querySelector("[data-i18n=statistics]").click();')
                 wait_for(lambda: browser.execute('return !!document.querySelector("[data-call-outcomes]") && !document.querySelector("[data-call-outcomes]").textContent.includes("—");'))
                 assert browser.execute('return document.querySelector("[data-call-outcomes]").textContent.includes("50.0%");')
+                assert browser.execute('const grid=document.querySelector(".presentation-stat-grid");return [...grid.children].every(node=>{const title=node.querySelector("span").getBoundingClientRect(),value=node.querySelector("strong").getBoundingClientRect();return title.bottom<=value.top+1;});')
+                for metric in ['cost_nanos','calls','tokens_per_second','ttft_ms','tokens']:
+                    browser.execute('document.querySelector("[data-stats-metric="+arguments[0]+"]").click();',metric)
+                for group in ['services','models','none']:
+                    browser.execute('const select=document.querySelector("[data-stats-group]");select.value=arguments[0];select.dispatchEvent(new Event("change",{bubbles:true}));',group)
+                for view in ['services','models','calls','overview']:
+                    browser.execute('document.querySelector("[data-stats-view="+arguments[0]+"]").click();',view)
+
                 browser.execute('document.querySelector("[data-call-outcomes]").click();')
                 assert browser.execute('return !!document.querySelector("dialog[open] tbody") && document.querySelector("dialog[open]").textContent.includes("401");')
                 assert browser.execute('const r=document.querySelector("dialog[open]").getBoundingClientRect();return r.left>=0 && r.right<=innerWidth+1 && r.height<=innerHeight;')
@@ -83,20 +107,24 @@ def check_page(browser, shadow):
                 wait_for(lambda: browser.execute('return !document.querySelector("dialog[open]") && !!document.querySelector("[data-call-outcomes]");'))
                 cases.append({'language': language, 'theme': theme, 'width': width})
     browser.execute('closeModal();')
+    browser.execute('document.querySelector("[data-i18n=settings_menu]").click();document.querySelector("[data-presentation-style=bar]").click();')
+    assert browser.execute('return document.body.dataset.quotaStyle === "bar";')
+    browser.execute('document.querySelector("[data-presentation-style=ring]").click();')
+    assert browser.execute('return document.body.dataset.quotaStyle === "ring";')
+    assert browser.execute('const heights=[...document.querySelectorAll("#services .service-card")].map(node=>node.getBoundingClientRect().height);return Math.max(...heights)-Math.min(...heights)<=1;')
+    browser.execute('document.querySelector("[data-presentation-dot-color=purple]").click();closeModal();')
+    browser.execute('document.querySelector("#services [data-ui-action=provider-model-settings]").click();')
+    assert browser.execute('return !!document.querySelector("#modal_body button[data-icon=refresh]");')
+    browser.execute('closeModal();')
     if shadow:
-        browser.execute('document.querySelector("[data-i18n=settings_menu]").click();document.querySelector("[data-shadow-style=bar]").click();')
-        assert browser.execute('return document.body.dataset.quotaStyle === "bar";')
-        browser.execute('document.querySelector("[data-shadow-style=ring]").click();')
-        assert browser.execute('return document.body.dataset.quotaStyle === "ring";')
-        browser.execute('document.querySelector("[data-shadow-dot-color=purple]").click();closeModal();')
         for mode in ['services', 'service-errors']:
             wait_for(lambda: browser.execute('return !!document.getElementById("shadow_demo_button");'))
             browser.execute('document.getElementById("shadow_demo_button").click();document.querySelector("[data-shadow-demo="+arguments[0]+"]").click();', mode)
-            wait_for(lambda: browser.execute('return document.querySelectorAll(".shadow-service-icon").length >= 12;'))
+            wait_for(lambda: browser.execute('return document.querySelectorAll(".presentation-service-icon").length >= 12;'))
             if mode == 'service-errors':
-                assert browser.execute('return document.querySelectorAll(".shadow-service-icon[data-error-message]").length >= 12;')
+                assert browser.execute('return document.querySelectorAll(".presentation-service-icon[data-error-message]").length >= 12;')
             browser.execute('document.querySelector("#shadow_services_demo button").click();')
-            wait_for(lambda: browser.execute('return !!document.getElementById("shadow_demo_button") && !document.getElementById("shadow_services_demo") && document.querySelectorAll(".shadow-service-icon").length > 0 && document.querySelectorAll(".shadow-service-icon").length < 12;'))
+            wait_for(lambda: browser.execute('return !!document.getElementById("shadow_demo_button") && !document.getElementById("shadow_services_demo") && document.querySelectorAll(".presentation-service-icon").length > 0 && document.querySelectorAll(".presentation-service-icon").length < 12;'))
         # Edits remain in preview storage, including credential scrubbing.
         browser.execute('''const script=document.createElement("script");
             script.textContent='shadowSave({...state,providers:state.providers.map(p=>({...p,name:"Draft",api_key:"must-not-persist"}))});';
@@ -122,12 +150,24 @@ def main():
         base, url, state, headers, upstream = start_backend(stack, args.emp.resolve(), root)
         payload = {'model': 'demo/model', 'input': 'ok', 'stream': False}
         assert request(base + '/v1/responses', payload, headers)[0] == 401
+        browser = Browser(stack, root)
+        browser.navigate(url)
+        wait_for(lambda: browser.execute('return !!document.querySelector("#services .presentation-service-icon[data-request-error]");'))
+        browser.execute('document.querySelector("#services .presentation-service-icon[data-request-error]").focus();')
+        wait_for(lambda: browser.execute('return !document.querySelector(".presentation-service-error").hidden;'))
+        assert browser.execute('return document.querySelector(".presentation-service-error").textContent.includes("401");')
+        headers['X-EMP-Session']=json.loads((state/'web-session.json').read_text(encoding='utf-8'))['token']
         upstream.failed = False
         assert request(base + '/v1/responses', payload, headers)[0] == 200
+        wait_for(lambda: browser.execute('return !document.querySelector("#services .presentation-service-icon[data-request-error]");'))
         _, report = request(base + '/api/calls', headers=headers)
         summary = report['summary']
         assert (summary['completed'], summary['failed'], summary['success_samples']) == (1, 1, 2), summary
         assert summary['failure_breakdown'][0]['origin'] == 'upstream', summary
+        status,filtered=request(base+'/api/usage?series=true&start=0&end='+str(time.time()+60)+'&provider=demo&model=demo/model&state=completed',headers=headers)
+        assert status==200 and filtered['totals']['input_tokens']==10 and filtered['totals']['output_tokens']==2,filtered
+        assert len(filtered['series'])==1 and filtered['series'][0]['owner_name']=='Demo'
+        assert request(base+'/api/usage?series=true&start=0&end='+str(time.time()+60)+'&provider=absent',headers=headers)[1]['totals']['requests']==0
         before = request(base + '/api/config', headers=headers)[1]
         stored_before = (state.parent/'config.json').read_bytes()
         shadow_log_path = root / 'shadow.log'
@@ -137,8 +177,6 @@ def main():
         stack.callback(stop, process)
         shadow = wait_for(lambda: shadow_log_path.read_text(encoding='utf-8').split('EMP shadow: ')[-1].strip()
                           if 'EMP shadow:' in shadow_log_path.read_text(encoding='utf-8') else None)
-        browser = Browser(stack, root)
-        browser.navigate(url)
         result['formal'] = check_page(browser, False)
         browser.navigate(shadow)
         result['shadow'] = check_page(browser, True)
@@ -155,8 +193,8 @@ def main():
         for key in ['providers','models','accounts','settings']:
             assert before.get(key) == after.get(key), key
         assert upstream.calls == 2
-        result['checks'] = ['UTF-8 assets under legacy codepage', 'HTTP failure source', 'success denominator', 'native Escape',
-            'nested dialogs', 'light/dark', 'English/Chinese', '125% scale', 'quota style',
+        result['checks'] = ['UTF-8 assets under legacy codepage', 'formal service error bubble and recovery', 'shared Statistics views and colors', 'formal default bars', 'filtered accounting chart series', 'HTTP failure source', 'success denominator', 'native Escape',
+            'nested dialogs', 'actual hover feedback in both themes', 'equal ring row heights', 'light/dark', 'English/Chinese', '125% scale', 'quota style',
             'activity/error demos', 'credential scrubbing', 'backend write rejection', 'backend unchanged']
     if args.output:
         args.output.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')

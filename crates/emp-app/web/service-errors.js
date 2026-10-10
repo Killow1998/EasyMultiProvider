@@ -1,22 +1,21 @@
 // Service artwork and error bubble lifecycle.
-let shadowErrorDemoActive = new URLSearchParams(location.search).get('demo') === 'quota-error';
-let shadowIconSequence = 0;
-function shadowServiceIcon(kind, id, label, brand, cpa = false, error = null) {
+let presentationIconSequence = 0;
+function serviceActivityIcon(kind, id, label, brand, cpa = false, error = null) {
   const template = document.createElement('template');
   template.innerHTML = activityIndicatorHtml(kind,id,label);
   const button = template.content.firstElementChild;
-  button.className = 'service-brand shadow-service-icon';
+  button.className = 'service-brand presentation-service-icon';
   button.dataset.brand = brand;
   button.innerHTML = SERVICE_BRAND_ICONS[brand] || SERVICE_BRAND_ICONS.custom;
-  button.firstElementChild.classList.add('shadow-icon-mono');
-  if (SHADOW_BRAND_COLOR_ICONS[brand]) {
-    template.innerHTML = SHADOW_BRAND_COLOR_ICONS[brand];
+  button.firstElementChild.classList.add('presentation-icon-mono');
+  if (BRAND_COLOR_ICONS[brand]) {
+    template.innerHTML = BRAND_COLOR_ICONS[brand];
     const colored = template.content.firstElementChild;
     if (brand === 'codex') {
       colored.querySelector('path[fill="#fff"][d^="M19.503 0H4.496"]')?.remove();
       colored.setAttribute('viewBox','3 3 18 18');
     }
-    const prefix = `shadow-brand-${++shadowIconSequence}-`;
+    const prefix = `presentation-brand-${++presentationIconSequence}-`;
     const ids = new Map([...colored.querySelectorAll('[id]')].map(node => [node.id,prefix+node.id]));
     for (const node of [colored,...colored.querySelectorAll('*')]) {
       for (const attr of [...node.attributes]) {
@@ -24,37 +23,35 @@ function shadowServiceIcon(kind, id, label, brand, cpa = false, error = null) {
         else node.setAttribute(attr.name,attr.value.replace(/url\(#([^)]*)\)/g,(_,id) => `url(#${ids.get(id) || id})`));
       }
     }
-    colored.classList.add('shadow-icon-color');
+    colored.classList.add('presentation-icon-color');
     button.append(colored);
   }
-  const halo=document.createElement('span'); halo.className='shadow-activity-halo'; halo.dataset.shadowMotion='halo'; halo.setAttribute('aria-hidden','true'); button.append(halo);
+  const halo=document.createElement('span'); halo.className='presentation-activity-halo'; halo.dataset.presentationMotion='halo'; halo.setAttribute('aria-hidden','true'); button.append(halo);
   if (cpa) button.innerHTML += '<span class="service-cpa-badge">CPA</span>';
-  if (shadowServicesDemoActive) error = shadowServiceDemoMode === 'service-errors' ? {title:tr('服务连接失败 · 演示','Service connection failed · Demo'),message:tr('连接超时，请重试。此信息为演示数据。','Connection timed out. Try again. This is sample data.')} : null;
-  if (shadowErrorDemoActive && kind === 'account' && id === '@native') error = {title:tr('额度刷新失败 · 演示','Quota refresh failed · Demo'),message:tr('连接超时，请点击刷新重试。','Connection timed out. Click Refresh to try again.')};
   if (error) {
     button.dataset.errorTitle = error.title;
     button.dataset.errorMessage = String(error.message);
     const badge = document.createElement('span');
-    badge.className = 'shadow-service-error-badge'; badge.setAttribute('aria-hidden','true'); badge.textContent = '!';
+    badge.className = 'presentation-service-error-badge'; badge.setAttribute('aria-hidden','true'); badge.textContent = '!';
     button.append(badge);
   }
   return button.outerHTML;
 }
-function shadowUpdateServiceErrorLabels() {
-  for (const button of document.querySelectorAll('.shadow-service-icon[data-error-message]')) {
+function presentationUpdateServiceErrorLabels() {
+  for (const button of document.querySelectorAll('.presentation-service-icon[data-error-message]')) {
     button.removeAttribute('title');
     button.setAttribute('aria-label',activityDescription(button.dataset.activityLabel,activitySummaryForIndicator(button))+'; '+button.dataset.errorTitle+': '+button.dataset.errorMessage);
   }
 }
 // One body-level bubble avoids clipping in the horizontally scrollable service list.
-function installShadowServiceErrors() {
+function installServiceErrors() {
   const bubble = document.createElement('div');
-  bubble.id = 'shadow-service-error'; bubble.className = 'shadow-service-error';
+  bubble.id = 'presentation-service-error'; bubble.className = 'presentation-service-error';
   bubble.setAttribute('role','tooltip'); bubble.hidden = true;
   const heading = document.createElement('strong'), message = document.createElement('span');
   bubble.append(heading,message); document.body.append(bubble);
   let target = null, dismiss = null;
-  const selector = '.shadow-service-icon[data-error-message]';
+  const selector = '.presentation-service-icon[data-error-message]';
   function hide() {
     clearTimeout(dismiss); target?.removeAttribute('aria-describedby'); target = null; bubble.hidden = true;
   }
@@ -95,6 +92,6 @@ function installShadowServiceErrors() {
   const update = updateActivityDots;
   updateActivityDots = function() {
     update();
-    shadowUpdateServiceErrorLabels();
+    presentationUpdateServiceErrorLabels();
   };
 }

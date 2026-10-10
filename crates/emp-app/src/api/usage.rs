@@ -8,7 +8,10 @@ use crate::http::response::{
 };
 use crate::services::accounts::{account_catalog_headers, native_auth_document, quota_owner_key};
 use crate::util::system_now;
-use emp_state::usage::{account_owner, ledger::UsageLedger};
+use emp_state::usage::{
+    account_owner,
+    ledger::{UsageLedger, UsageSeriesFilter},
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::net::TcpStream;
@@ -30,25 +33,71 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
     if !UsageLedger::valid_period(start, end, &category) {
         return invalid();
     }
-    let account_id = query_values(request.target, "account_id").first().cloned();
-    let result = match account_id {
-        Some(id) => {
-            let Ok(owner) = quota_owner_key(state, &id) else {
-                return json_error_response(
-                    404,
-                    status_text(404),
-                    "Account usage is unavailable",
-                    None,
-                    &[],
-                );
-            };
-            state
-                .backend
-                .usage
-                .ledger
-                .query_owner(start, end, &owner, now)
+    let value = |name: &str| {
+        query_values(request.target, name)
+            .into_iter()
+            .find(|v| !v.is_empty())
+    };
+    let account_id = value("account_id").or_else(|| value("account"));
+    let result = if value("series").as_deref() == Some("true") {
+        let owner = match account_id {
+            Some(id) => match quota_owner_key(state, &id) {
+                Ok(owner) => Some(owner),
+                Err(_) => {
+                    return json_error_response(
+                        404,
+                        status_text(404),
+                        "Account usage is unavailable",
+                        None,
+                        &[],
+                    );
+                }
+            },
+            None => None,
+        };
+        let filter = UsageSeriesFilter {
+            start,
+            end,
+            category,
+            owner,
+            provider: value("provider"),
+            model: value("model"),
+            session: value("session"),
+            state: value("state"),
+        };
+        if [
+            &filter.provider,
+            &filter.model,
+            &filter.session,
+            &filter.state,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|v| v.len() > 256 || v.chars().any(char::is_control))
+        {
+            return invalid();
         }
-        None => state.backend.usage.ledger.query(start, end, &category, now),
+        state.backend.usage.ledger.query_series(&filter, now)
+    } else {
+        match account_id {
+            Some(id) => {
+                let Ok(owner) = quota_owner_key(state, &id) else {
+                    return json_error_response(
+                        404,
+                        status_text(404),
+                        "Account usage is unavailable",
+                        None,
+                        &[],
+                    );
+                };
+                state
+                    .backend
+                    .usage
+                    .ledger
+                    .query_owner(start, end, &owner, now)
+            }
+            None => state.backend.usage.ledger.query(start, end, &category, now),
+        }
     };
     let Ok(mut payload) = result else {
         return json_error_response(
@@ -107,20 +156,22 @@ pub(crate) fn read(request: Request<'_>, state: &ServerState) -> Vec<u8> {
             names.insert(("native", owner), "Native".into());
         }
     }
-    if let Some(groups) = payload["groups"].as_array_mut() {
-        for row in groups {
-            let category = row["category"].as_str().unwrap_or("").to_owned();
-            let owner = row["owner"].as_str().unwrap_or("").to_owned();
-            row["owner_name"] = json!(
-                names
-                    .get(&(category.as_str(), owner.clone()))
-                    .map(String::as_str)
-                    .unwrap_or("")
-            );
-            if matches!(category.as_str(), "native" | "subscription")
-                && !owner.starts_with("history:")
-            {
-                row["account_identity_confirmed"] = json!(owner.starts_with("account:"));
+    for field in ["groups", "series"] {
+        if let Some(groups) = payload[field].as_array_mut() {
+            for row in groups {
+                let category = row["category"].as_str().unwrap_or("").to_owned();
+                let owner = row["owner"].as_str().unwrap_or("").to_owned();
+                row["owner_name"] = json!(
+                    names
+                        .get(&(category.as_str(), owner.clone()))
+                        .map(String::as_str)
+                        .unwrap_or("")
+                );
+                if matches!(category.as_str(), "native" | "subscription")
+                    && !owner.starts_with("history:")
+                {
+                    row["account_identity_confirmed"] = json!(owner.starts_with("account:"));
+                }
             }
         }
     }

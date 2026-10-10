@@ -32,7 +32,7 @@ function mountShadowServiceDemo() {
   entry.textContent=tr('演示','Demos');
   if (!shadowServicesDemoActive) return;
   let banner=document.getElementById('shadow_services_demo');
-  if (!banner) {banner=document.createElement('div');banner.id='shadow_services_demo';banner.className='shadow-error-demo';document.body.append(banner);}
+  if (!banner) {banner=document.createElement('div');banner.id='shadow_services_demo';banner.className='presentation-error-demo';document.body.append(banner);}
   banner.innerHTML=`<span>${shadowServiceDemoMode==='service-errors'?tr('服务演示 · 全部模拟报错','Service demo · All errors simulated'):tr('服务演示 · 全部模拟调用中','Service demo · All calls simulated')}</span><button type="button" class="secondary">${tr('结束演示','End demo')}</button>`;
   banner.querySelector('button').onclick=()=>{const url=new URL(location.href);url.searchParams.delete('demo');location.assign(url);};
 }

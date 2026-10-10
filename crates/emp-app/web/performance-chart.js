@@ -1,5 +1,5 @@
 // Native SVG time chart; missing latency samples stay missing, rather than zero.
-function createShadowPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
+function createPerformanceChart({esc, tr, getLanguage, number, seconds, tps}) {
   const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
   const label = metric => metric === 'tokens' ? 'Token' : metric === 'cost_nanos' ? tr('API 估算 · USD','API estimate · USD') : metric === 'calls' ? tr('调用量','Calls') : metric === 'ttft_ms' ? 'TTFT' : 'TPS';
   const format = (value, metric) => !valid(value) ? '—' : metric === 'cost_nanos' ? 'US$'+(value/1e9).toFixed(4) : metric === 'tokens' ? number(value) : metric === 'calls' ? number(value) : metric === 'ttft_ms' ? seconds(value) : tps(value);
@@ -34,17 +34,17 @@ function createShadowPerformanceChart({esc, tr, getLanguage, number, seconds, tp
     if (parts.reduce((n,part) => n+part.length,0) < 2) return '';
     const max = Math.max(1,...rows.map(row => valid(row[metric]) ? row[metric] : 0));
     const point = p => `${(p.index/(rows.length-1)*140).toFixed(1)},${(25-p.value/max*22).toFixed(1)}`;
-    return `<svg class="shadow-stat-spark" viewBox="0 0 140 28" preserveAspectRatio="none" aria-hidden="true">${parts.map(part => `<polyline points="${part.map(point).join(' ')}"/>`).join('')}</svg>`;
+    return `<svg class="presentation-stat-spark" viewBox="0 0 140 28" preserveAspectRatio="none" aria-hidden="true">${parts.map(part => `<polyline points="${part.map(point).join(' ')}"/>`).join('')}</svg>`;
   }
   function html(report, metric) {
     const {step} = buckets(report);
     const interval = step >= 3600 ? `${+(step/3600).toFixed(1)} ${tr('小时','h')}` : `${+(step/60).toFixed(1)} ${tr('分钟','min')}`;
     const buttons = [['calls',tr('调用量','Calls')],['tokens_per_second','TPS'],['ttft_ms','TTFT']].map(([key,title]) => `<button type="button" class="secondary${metric === key ? ' active' : ''}" aria-pressed="${metric === key}" data-call-metric="${key}">${title}</button>`).join('');
-    return `<div class="shadow-performance-chart"><div class="shadow-chart-heading"><div><h3>${tr('调用趋势','Call activity')}</h3><p>${tr('每','Per ')} ${esc(interval)} · ${esc(date(report.start))} — ${esc(date(report.end))}</p></div><div class="report-tabs" role="group" aria-label="${tr('指标','Metric')}">${buttons}</div></div><div class="shadow-chart-canvas" tabindex="0" role="group" aria-label="${esc(label(metric))} · ${tr('左右方向键查看数据','Use left and right arrows to inspect data')}"><svg class="shadow-time-chart" role="img" aria-label="${esc(label(metric))}"></svg><div class="shadow-chart-tooltip" hidden role="status" aria-live="polite"></div></div></div>`;
+    return `<div class="presentation-performance-chart"><div class="presentation-chart-heading"><div><h3>${tr('调用趋势','Call activity')}</h3><p>${tr('每','Per ')} ${esc(interval)} · ${esc(date(report.start))} — ${esc(date(report.end))}</p></div><div class="report-tabs" role="group" aria-label="${tr('指标','Metric')}">${buttons}</div></div><div class="presentation-chart-canvas" tabindex="0" role="group" aria-label="${esc(label(metric))} · ${tr('左右方向键查看数据','Use left and right arrows to inspect data')}"><svg class="presentation-time-chart" role="img" aria-label="${esc(label(metric))}"></svg><div class="presentation-chart-tooltip" hidden role="status" aria-live="polite"></div></div></div>`;
   }
   function bind(root, report, metric) {
-    const canvas = root.querySelector('.shadow-chart-canvas'); if (!canvas) return () => {};
-    const svg = canvas.querySelector('svg'), tip = canvas.querySelector('.shadow-chart-tooltip');
+    const canvas = root.querySelector('.presentation-chart-canvas'); if (!canvas) return () => {};
+    const svg = canvas.querySelector('svg'), tip = canvas.querySelector('.presentation-chart-tooltip');
     const {rows,step} = buckets(report), parts = segments(rows,metric);
     const bar = ['calls','tokens','cost_nanos'].includes(metric);
     const maximum = Math.max(0,...rows.map(row => valid(row[metric]) ? row[metric] : 0));
@@ -78,7 +78,7 @@ function createShadowPerformanceChart({esc, tr, getLanguage, number, seconds, tp
       const axis = Array.from({length:5}, (_,i) => {
         const value = ceiling*i/4, position = y(value);
         const text = metric === 'cost_nanos' ? '$'+(value/1e9).toLocaleString(undefined,{maximumFractionDigits:3}) : metric === 'ttft_ms' ? `${+(value/1000).toFixed(2)}s` : new Intl.NumberFormat(getLanguage() === 'en' ? 'en-US' : 'zh-CN',{notation:'compact',maximumFractionDigits:1}).format(value);
-        return `<line class="shadow-chart-grid" x1="${left}" x2="${width-14}" y1="${position}" y2="${position}"/><text x="${left-8}" y="${position+4}" text-anchor="end">${esc(text)}</text>`;
+        return `<line class="presentation-chart-grid" x1="${left}" x2="${width-14}" y1="${position}" y2="${position}"/><text x="${left-8}" y="${position+4}" text-anchor="end">${esc(text)}</text>`;
       }).join('');
       const ticks = timeAxisTicks(report.start,report.end,Math.max(2,Math.floor(plotWidth()/105))).map(tick => {
         const position = left+(tick.at-report.start)/(report.end-report.start || 1)*plotWidth();
@@ -94,9 +94,9 @@ function createShadowPerformanceChart({esc, tr, getLanguage, number, seconds, tp
         }).join('');
       }).join('') : parts.map(part => {
         const first = part[0], last = part.at(-1), points = part.map(point).join(' ');
-        return `${part.length > 1 ? `<polygon class="shadow-chart-area" points="${x(first.index)},${bottom} ${points} ${x(last.index)},${bottom}"/><polyline class="shadow-chart-line" points="${points}"/>` : ''}${part.map(p => `<circle class="shadow-chart-point" cx="${x(p.index).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3"/>`).join('')}`;
+        return `${part.length > 1 ? `<polygon class="presentation-chart-area" points="${x(first.index)},${bottom} ${points} ${x(last.index)},${bottom}"/><polyline class="presentation-chart-line" points="${points}"/>` : ''}${part.map(p => `<circle class="presentation-chart-point" cx="${x(p.index).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3"/>`).join('')}`;
       }).join('');
-      const empty = !parts.length || (bar && maximum === 0) ? `<text class="shadow-chart-empty" x="${left+plotWidth()/2}" y="96" text-anchor="middle">${tr('此时间段暂无数据','No data in this period')}</text>` : '';
+      const empty = !parts.length || (bar && maximum === 0) ? `<text class="presentation-chart-empty" x="${left+plotWidth()/2}" y="96" text-anchor="middle">${tr('此时间段暂无数据','No data in this period')}</text>` : '';
       svg.innerHTML = `${axis}${ticks}<rect data-chart-cursor visibility="hidden" y="${top}" width="${plotWidth()/rows.length}" height="${bottom-top}"/>${marks}${empty}`;
       if (index >= 0) show(index);
     }

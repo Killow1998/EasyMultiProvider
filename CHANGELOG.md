@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.18 (2026-10-10)
+
+- Ship the accepted shadow presentation in the official Web UI: service artwork owns activity and call details, with brand colors, bounded halos and error bubbles.
+- Keep bars as the formal default; add mirrored compact quota rings, persistent style selection, two-unit countdowns and the existing 233% / 1m111s unlimited display.
+- Combine performance and usage into Statistics with common filters, Token / USD charts, service/model colors and click-through request outcomes.
+- Add filtered accounting chart series to the existing usage API. Totals and chart groups use the same reconciled ledger; service, model, session and outcome filters apply together.
+- Share the official presentation with the read-only developer preview. Preview command isolation and demos remain separate.
+- Use configurable dotted hover/focus feedback across controls, align language/theme selectors, and pause effects outside the viewport or in the background.
+
 ## 0.12.17 (2026-10-10)
 
 - Separate failed requests, history-resend requests, explicit interruption,

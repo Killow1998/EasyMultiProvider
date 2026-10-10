@@ -35,13 +35,14 @@ storage is separate from the backend; resetting site data discards drafts.
 
 ## Source ownership
 
+Official and preview pages share `crates/emp-app/web/` presentation modules:
+statistics, usage data, quota styles, brand icons, errors, motion and interactions.
+
 - `shadow-web.py`: loopback HTTP permissions and read-only backend access.
-- `frontend.py`: production asset composition.
+- `frontend.py`: shared assets plus preview isolation hooks.
 - `shadow-drafts.js`: preview-only edits and credential scrubbing.
-- `shadow-ui.js`: quota layout, settings and page integration.
-- `shadow-stats.js`, `shadow-usage-data.js`, `shadow_usage.py`: statistics.
-- `shadow-service-errors.js`, `shadow-request-errors.js`: error presentation.
-- `shadow-motion.js`, `shadow-interactions.js`: bounded activity and hover effects.
+- `shadow-ui.js`: preview command guards and demo integration.
+- `shadow_usage.py`: read-only statistics fallback for older installed backends.
 - `shadow-service-demo.js`: sample services and demonstration state.
 
 `contracts/call-outcomes.sql` is the same read projection used by Rust reports.

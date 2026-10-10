@@ -1,27 +1,27 @@
 // Static glyph mask + one moving green layer, rather than a fill animation per dot.
-function enhanceShadowLogo(svg) {
-  if (!svg?.childElementCount || svg.parentElement.classList.contains('shadow-logo-shell')) return;
+function enhanceLogo(svg) {
+  if (!svg?.childElementCount || svg.parentElement.classList.contains('presentation-logo-shell')) return;
   const mask=svg.cloneNode(true); mask.removeAttribute('id'); mask.removeAttribute('class');
   mask.setAttribute('xmlns','http://www.w3.org/2000/svg');
   for (const dot of [...mask.children]) {
     if (!dot.hasAttribute('data-lit')) dot.remove();
     else {dot.removeAttribute('class');dot.removeAttribute('style');dot.setAttribute('fill','white');}
   }
-  const shell=document.createElement('span'); shell.className='shadow-logo-shell';
-  const wave=document.createElement('span'); wave.className='shadow-logo-wave'; wave.setAttribute('aria-hidden','true');
+  const shell=document.createElement('span'); shell.className='presentation-logo-shell';
+  const wave=document.createElement('span'); wave.className='presentation-logo-wave'; wave.setAttribute('aria-hidden','true');
   wave.style.setProperty('--logo-mask',`url("data:image/svg+xml,${encodeURIComponent(mask.outerHTML)}")`);
-  const color=document.createElement('span');color.dataset.shadowMotion='logo';wave.append(color);
+  const color=document.createElement('span');color.dataset.presentationMotion='logo';wave.append(color);
   svg.replaceWith(shell); shell.append(svg,wave);
 }
 // One 15fps owner for the persistent textures; no independent CSS frame loops.
-function installShadowMotion(refreshCountdowns) {
+function installMotion(refreshCountdowns) {
   const tracked=new Set(), motion=matchMedia('(prefers-reduced-motion:reduce)');
   let effects=[], raf=null, frameTimer=null, last=-Infinity, timer=null;
-  const visible=node=>!document.hidden&&!node.closest('.shadow-motion-paused');
+  const visible=node=>!document.hidden&&!node.closest('.presentation-motion-paused');
   function active(node) {
     if(!visible(node))return false;
-    if(node.dataset.shadowMotion==='logo')return node.closest('.shadow-logo-shell').querySelector('.emp-live');
-    if(node.dataset.shadowMotion==='halo')return node.parentElement.dataset.activityState==='active'&&!node.parentElement.hasAttribute('data-error-message');
+    if(node.dataset.presentationMotion==='logo')return node.closest('.presentation-logo-shell').querySelector('.emp-live');
+    if(node.dataset.presentationMotion==='halo')return node.parentElement.dataset.activityState==='active'&&!node.parentElement.hasAttribute('data-error-message');
     return true;
   }
   function paint(time) {
@@ -33,8 +33,8 @@ function installShadowMotion(refreshCountdowns) {
       for(const node of effects) {
         if(!node.isConnected||!active(node))continue;
         running=true;
-        if(node.dataset.shadowMotion==='ring')node.style.transform=`rotate(${motion.matches?90:time/5000*360%360}deg)`;
-        else if(node.dataset.shadowMotion==='logo')node.style.transform=`translateX(${motion.matches?0:Math.cos(time/2200*Math.PI)*15}%)`;
+        if(node.dataset.presentationMotion==='ring')node.style.transform=`rotate(${motion.matches?90:time/5000*360%360}deg)`;
+        else if(node.dataset.presentationMotion==='logo')node.style.transform=`translateX(${motion.matches?0:Math.cos(time/2200*Math.PI)*15}%)`;
         else {
           const wave=motion.matches?1:(1-Math.cos(time/1900*Math.PI*2))/2;
           node.style.opacity=String(.55+.45*wave);node.style.transform=`scale(${.98+.1*wave})`;
@@ -45,18 +45,18 @@ function installShadowMotion(refreshCountdowns) {
   }
   function start(){if(raf===null&&frameTimer===null&&!document.hidden){last=-Infinity;paint(performance.now());}}
   const observer=new IntersectionObserver(entries=>{
-    for(const entry of entries)entry.target.classList.toggle('shadow-motion-paused',!entry.isIntersecting);
+    for(const entry of entries)entry.target.classList.toggle('presentation-motion-paused',!entry.isIntersecting);
     start();
   });
   function sync() {
     for(const node of tracked)if(!node.isConnected){observer.unobserve(node);tracked.delete(node);}
-    for(const node of document.querySelectorAll('.service-card,.model-card,.display-row,.shadow-logo-shell'))if(!tracked.has(node)){
-      node.classList.add('shadow-motion-paused');tracked.add(node);observer.observe(node);
+    for(const node of document.querySelectorAll('.service-card,.model-card,.display-row,.presentation-logo-shell'))if(!tracked.has(node)){
+      node.classList.add('presentation-motion-paused');tracked.add(node);observer.observe(node);
     }
-    effects=[...document.querySelectorAll('[data-shadow-motion]')];start();
+    effects=[...document.querySelectorAll('[data-presentation-motion]')];start();
   }
   function visibility(){
-    document.body.classList.toggle('shadow-page-hidden',document.hidden);
+    document.body.classList.toggle('presentation-page-hidden',document.hidden);
     clearInterval(timer);timer=null;cancelAnimationFrame(raf);clearTimeout(frameTimer);raf=null;frameTimer=null;
     if(!document.hidden){refreshCountdowns();timer=setInterval(refreshCountdowns,1000);start();}
   }

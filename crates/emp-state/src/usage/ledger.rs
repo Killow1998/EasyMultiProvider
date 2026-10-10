@@ -34,6 +34,8 @@ impl From<std::io::Error> for UsageError {
 }
 mod calls;
 pub use calls::CallFilter;
+mod series;
+pub use series::UsageSeriesFilter;
 
 type Result<T> = std::result::Result<T, UsageError>;
 pub struct UsageLedger {
