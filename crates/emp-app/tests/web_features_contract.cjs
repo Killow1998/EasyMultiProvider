@@ -295,20 +295,34 @@ test('closing diagnostics discards in-flight reports without a polling timer', a
   assert.match($('diagnostics_summary').textContent, /latest 3 requests/);
 });
 
+// Native browser effects are accepted in E2E; this VM checks page binding order.
+function pageEffectsGlobals() {
+  const element=()=>({dataset:{},style:{setProperty(){},removeProperty(){}},hidden:true,
+    setAttribute(){},append(){},replaceChildren(){},classList:{toggle(){},contains(){return false;}}});
+  return {matchMedia:()=>({matches:true,addEventListener(){}}),
+    MutationObserver:class{observe(){}},IntersectionObserver:class{observe(){}},
+    ResizeObserver:class{observe(){} disconnect(){}},
+    performance:{now:()=>0},requestAnimationFrame:()=>0,cancelAnimationFrame(){},
+    setInterval:()=>0,clearInterval(){},setTimeout:()=>0,clearTimeout(){},
+    Event:class{}, documentEffects:{hidden:true,body:{...element(),append(){}},createElement:element,
+      querySelector:element,querySelectorAll:()=>[],getElementById:element},windowEffects:{dispatchEvent(){}}};
+}
+
 test('the shipped page initializes its bindings and retains translated integration status on refresh', () => {
   const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
   const pending = deferred();
   const nodes = new Map();
   const node = id => {
-    if (!nodes.has(id)) nodes.set(id, {textContent:'', dataset:{}, childElementCount:1, classList:{toggle() {}}});
+    if (!nodes.has(id)) nodes.set(id, {textContent:'', dataset:{}, childElementCount:1, parentElement:{classList:{contains:()=>true}}, classList:{toggle() {}}});
     return nodes.get(id);
   };
   if (html.match(/<span id="integration_badge"[^>]*>/)?.[0].includes('data-i18n="loading"')) node('integration_badge').dataset.i18n = 'loading';
-  const context = vm.createContext({Headers, URL, Blob, console,
+  const effects=pageEffectsGlobals();
+  const context = vm.createContext({Headers, URL, Blob, console,...effects,
     fetch:() => pending.promise,
     localStorage:{getItem:() => ''},
-    window:{location:{href:'http://localhost/'}, addEventListener() {}},
-    document:{addEventListener() {}, visibilityState:'hidden', getElementById:node,
+    window:{...effects.windowEffects,location:{href:'http://localhost/'}, addEventListener() {}},
+    document:{...effects.documentEffects,addEventListener() {}, visibilityState:'hidden', getElementById:node,
       querySelectorAll:selector => selector === '[data-i18n]' ? [...nodes.values()].filter(item => item.dataset.i18n) : []},
   });
   for (const script of html.matchAll(/<script(?: src="([^"]+)")?>([\s\S]*?)<\/script>/g)) {
@@ -329,11 +343,12 @@ test('the shipped page initializes its bindings and retains translated integrati
 test('quota mode changes bars and history together without changing recorded values', () => {
   const html = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
   const storage = new Map();
-  const context = vm.createContext({Headers, URL, Blob, console,
+  const effects=pageEffectsGlobals();
+  const context = vm.createContext({Headers, URL, Blob, console,...effects,
     fetch:() => new Promise(() => {}),
     localStorage:{getItem:key => storage.get(key), setItem:(key, value) => storage.set(key,value)},
-    window:{location:{href:'http://localhost/'}, addEventListener() {}},
-    document:{addEventListener() {}, visibilityState:'hidden'},
+    window:{...effects.windowEffects,location:{href:'http://localhost/'}, addEventListener() {}},
+    document:{...effects.documentEffects,addEventListener() {}, visibilityState:'hidden'},
   });
   for (const script of html.matchAll(/<script(?: src="([^"]+)")?>([\s\S]*?)<\/script>/g)) {
     vm.runInContext(script[1] ? fs.readFileSync(path.join(web, path.basename(script[1])), 'utf8') : script[2], context);

@@ -30,3 +30,13 @@ Validate changes at their boundary: report integration tests for classification
 and filtering, quota store tests for failed observations, native endpoint tests
 for receipts and unchanged wire behavior, and browser acceptance for dialog and
 preview isolation. See [shadow frontend acceptance](../scripts/shadow_frontend/README.md).
+
+The Statistics window shares its time/service/model/session/outcome filters across
+performance and accounting. `/api/usage?series=true` groups the reconciled ledger
+into at most 48 time buckets (minimum 60 seconds), with the same rows feeding
+Token/USD totals and service/model chart colors. Receipt filters apply only to
+accounting rows linked to matching calls; unmatched history is not guessed.
+
+Official and shadow pages share presentation modules in `crates/emp-app/web/`.
+The shadow server adds only its read-only boundary, local drafts and demos.
+The official page defaults to bars; Settings switches to mirrored quota rings.

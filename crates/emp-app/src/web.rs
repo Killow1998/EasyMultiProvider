@@ -27,6 +27,17 @@ pub(crate) fn asset_response(path: &str) -> Option<Vec<u8>> {
         "/assets/settings.js" => include_bytes!("../web/settings.js"),
         "/assets/diagnostics.js" => include_bytes!("../web/diagnostics.js"),
         "/assets/style.css" => include_bytes!("../web/style.css"),
+        "/assets/brand-colors.js" => include_bytes!("../web/brand-colors.js"),
+        "/assets/interactions.js" => include_bytes!("../web/interactions.js"),
+        "/assets/motion.js" => include_bytes!("../web/motion.js"),
+        "/assets/performance-chart.js" => include_bytes!("../web/performance-chart.js"),
+        "/assets/performance.js" => include_bytes!("../web/performance.js"),
+        "/assets/request-errors.js" => include_bytes!("../web/request-errors.js"),
+        "/assets/service-errors.js" => include_bytes!("../web/service-errors.js"),
+        "/assets/statistics.js" => include_bytes!("../web/statistics.js"),
+        "/assets/usage-data.js" => include_bytes!("../web/usage-data.js"),
+        "/assets/presentation.css" => include_bytes!("../web/presentation.css"),
+        "/assets/presentation.js" => include_bytes!("../web/presentation.js"),
         _ => return None,
     };
     Some(response(

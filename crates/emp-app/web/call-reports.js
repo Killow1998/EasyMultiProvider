@@ -33,23 +33,8 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
     const options = values => values.map(([value,label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join('');
     return `${periodPickerHtml('calls', ['1d','7d','30d'])}<div class="call-toolbar"><select data-call-filter="service" aria-label="${tr('服务','Service')}">${options(services)}</select><select data-call-filter="category" aria-label="${tr('来源','Source')}">${options([['',tr('全部来源','All sources')],['native','Native'],['subscription',tr('订阅','Subscription')],['external','API'],['unknown',tr('未关联','Unlinked')]])}</select><select data-call-filter="model" aria-label="${tr('模型','Model')}">${options([['',tr('全部模型','All models')],...models])}</select><select data-call-filter="state" aria-label="${tr('状态','Status')}">${options([['',tr('全部状态','All states')],['completed',tr('已完成','Completed')],['failed',tr('失败','Failed')],['interrupted',tr('已中断','Interrupted')],['cancelled',tr('连接已断开','Disconnected')],['recovery_required',tr('需要重发历史','History resend requested')],['unknown',tr('结果未记录','Outcome not recorded')]])}</select><input data-call-filter="session" placeholder="${tr('会话 ID','Session ID')}" aria-label="${tr('会话 ID','Session ID')}"></div><div class="report-tabs" role="group" aria-label="${tr('视图','View')}">${current.performance ? ['overview','models','calls'].map((view,index) => `<button type="button" class="secondary" data-call-view="${view}">${[tr('总览','Overview'),tr('模型','Models'),tr('调用','Calls')][index]}</button>`).join('') : ''}</div><div class="report-status" data-report-status role="status" aria-live="polite"></div><div data-call-content></div>`;
   }
-  function trendHtml(report) {
-    const metric = current?.metric || 'tokens_per_second';
-    const rows = (report.periods || []).filter(row => n(row[metric]) !== null);
-    const bucket = Math.max(60,(report.end-report.start)/48);
-    const segments = [];
-    for (const row of rows) { if (!segments.length || row.start - segments.at(-1).at(-1).start > bucket * 1.5) segments.push([]); segments.at(-1).push(row); }
-    const maximum = Math.max(1,...rows.map(row => row[metric]));
-    const start = report.start, span = report.end-start || 1;
-    const points = rows.map(row => ({row,x:20+(row.start-start)/span*720,y:110-row[metric]/maximum*90}));
-    const format = value => metric === 'ttft_ms' ? seconds(value) : metric === 'tokens_per_second' ? tps(value) : number(value);
-    const buttons = [['tokens_per_second','TPS'],['ttft_ms','TTFT'],['calls',tr('调用量','Calls')]].map(([key,label]) => `<button type="button" class="secondary${metric === key ? ' active' : ''}" aria-pressed="${metric === key}" data-call-metric="${key}">${label}</button>`).join('');
-    return `<div class="report-tabs" role="group" aria-label="${tr('指标','Metric')}">${buttons}</div><svg class="call-trend" viewBox="0 0 760 140" role="img" aria-label="${esc(metric === 'ttft_ms' ? 'TTFT' : metric === 'tokens_per_second' ? 'TPS' : tr('调用量','Calls'))}"><line x1="20" y1="110" x2="740" y2="110" stroke="var(--border)"/>${segments.map(segment => '<polyline points="'+segment.map(row => (20+(row.start-start)/span*720).toFixed(1)+','+(110-row[metric]/maximum*90).toFixed(1)).join(' ')+'" fill="none" stroke="var(--accent)" stroke-width="2"/>').join('')}${points.map(p => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4" fill="var(--accent)"><title>${esc(time(p.row.start))} · ${esc(format(p.row[metric]))} · ${tr('样本','Samples')} ${number(metric === 'ttft_ms' ? p.row.ttft_samples : metric === 'tokens_per_second' ? p.row.tps_samples : p.row.calls)}</title></circle>`).join('')}<text x="20" y="12" fill="var(--muted)" font-size="11">${esc(format(maximum))}</text><text x="20" y="135" fill="var(--muted)" font-size="11">${esc(time(start))}</text><text x="740" y="135" text-anchor="end" fill="var(--muted)" font-size="11">${esc(time(report.end))}</text></svg>`;
-  }
-  function summaryHtml(report) {
-    const summary = report.summary || {}, result = outcomes(summary);
-    return `<div class="call-facts call-overview">${field(tr('调用数','Calls'),number(summary.calls))}${field(result.label,result.value,true)}${field(tr('平均耗时','Mean duration'),seconds(summary.duration_ms))}${field('TTFT',seconds(summary.ttft_ms))}${field('TPS',tps(summary.tokens_per_second))}${field(tr('输入缓存率','Input cache rate'),rate(summary.cached_input_tokens,summary.cache_input_tokens))}</div><p class="muted">${esc(result.hint)}</p><p class="muted">${tr('有效样本','Valid samples')}: TTFT ${number(summary.ttft_samples)} · TPS ${number(summary.tps_samples)}</p>${trendHtml(report)}`;
-  }
+  const performance = createPerformanceView({esc,tr,getLanguage,number,seconds,tps,rate,outcomes,bindOutcomes,definition});
+  function summaryHtml(report) { return performance.html(report,current?.metric || 'calls'); }
   function modelHtml(report) {
     const rows = (report.models || []).map(row => `<tr><td><code>${esc(row.model_id)}</code><small>${esc(row.account_id || row.provider_id)} · ${esc(row.upstream_model)} · ${esc(row.speed_mode)} · ${esc(row.requested_effort)}</small></td><td>${number(row.calls)}</td><td>${seconds(row.duration_ms)}</td><td>${seconds(row.ttft_ms)}</td><td>${tps(row.tokens_per_second)}</td></tr>`).join('');
     return `<div class="usage-table"><table><thead><tr>${[['model',tr('模型 / 服务','Model / service')],['calls',tr('调用','Calls')],['duration',tr('平均耗时','Mean duration')],['ttft','TTFT'],['tps','TPS']].map(([key,label]) => '<th><button type="button" class="secondary" data-call-sort="'+key+'">'+label+(current.modelsSort === key ? (key === 'model' ? ' ↑' : ' ↓') : '')+'</button></th>').join('')}</tr></thead><tbody>${rows}</tbody></table></div><div class="call-pages"><button type="button" class="secondary" data-call-action="models-previous" ${report.models_offset ? '' : 'disabled'}>‹</button><span>${number(report.models_total)} ${tr('组','groups')}</span><button type="button" class="secondary" data-call-action="models-next" ${report.models_offset + report.models_limit < report.models_total ? '' : 'disabled'}>›</button></div>`;
@@ -73,8 +58,10 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
     });
     const content = current.view === 'models' ? modelHtml(report) : current.view === 'overview' ? summaryHtml(report) : rows.map(recordHtml).join('') + pages;
     disposeOutcomes();
+    performance.stop();
     target.innerHTML = (rows.length || current.view !== 'calls' ? content : `<p class="muted">${tr('暂无调用记录','No calls recorded')}</p>${pages}`);
-    disposeOutcomes = bindOutcomes(target,report.summary || {},report);
+    disposeOutcomes = () => {};
+    if(current.view === 'overview') performance.bind(target,report,current.metric || 'calls');
     target.querySelectorAll('details[data-call-id]').forEach(node => { node.open = open.has(node.dataset.callId); });
     if (focus) target.querySelectorAll('button').forEach(button => {
       if (button.dataset[focus] === focused.dataset[focus]) button.focus();
@@ -92,7 +79,7 @@ function createCallReports({api, getActivity, getState, openModal, $, esc, tr, g
     timer = setTimeout(() => { timer = null; void load(); },200);
   }
   function live() { if (current?.report && $(current.id)) render($(current.id).querySelector('[data-call-content]'),current.report); }
-  function stop() { disposeOutcomes(); disposeOutcomes = () => {}; current?.query.cancel(); current = null; if (timer !== null) clearTimeout(timer); timer = null; }
+  function stop() { performance.stop(); disposeOutcomes(); disposeOutcomes = () => {}; current?.query.cancel(); current = null; if (timer !== null) clearTimeout(timer); timer = null; }
   function mount(id, filters = {}, performance = false) {
     stop();
     const root = $(id); if (!root) return;

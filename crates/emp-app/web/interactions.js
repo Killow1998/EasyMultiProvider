@@ -1,12 +1,12 @@
 // One temporary sprite sheet: paint the wave once, then move its texture.
 // Geometry/palette changes rebuild it; hover frames only change transform.
-function installShadowInteractions() {
+function installInteractions() {
   const layer=document.createElement('div');
-  layer.className='shadow-hover-feedback'; layer.setAttribute('aria-hidden','true'); layer.hidden=true;
+  layer.className='presentation-hover-feedback'; layer.setAttribute('aria-hidden','true'); layer.hidden=true;
   document.body.append(layer);
   const surface=document.createElement('canvas');surface.setAttribute('aria-hidden','true');surface.width=surface.height=0;
   const motion=matchMedia('(prefers-reduced-motion:reduce)');
-  const selector='button:not(:disabled),a.repo-link,.shadow-dot-custom';
+  const selector='button:not(:disabled),a.repo-link,.presentation-dot-custom';
   let target=null, canvas=null, dots=[], geometry='', width=0, height=0, frames=0, raf=null, frameTimer=null, releaseTimer=null, paletteKey='', lastFrame=-1;
   const observer=new ResizeObserver(draw);
   function release() {
@@ -20,7 +20,7 @@ function installShadowInteractions() {
   }
   function colors() {
     const style=getComputedStyle(layer);
-    return [style.color,style.getPropertyValue('--shadow-dot-secondary').trim()||'#9473c6',style.getPropertyValue('--shadow-dot-third').trim()||'#299c9f'];
+    return [style.color,style.getPropertyValue('--presentation-dot-secondary').trim()||'#9473c6',style.getPropertyValue('--presentation-dot-third').trim()||'#299c9f'];
   }
   function tick(time) {
     raf=null; frameTimer=null;
@@ -86,6 +86,6 @@ function installShadowInteractions() {
   document.addEventListener('focusout',()=>{if(!target?.matches(':hover'))hide();});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)hide(true);});
   motion.addEventListener('change',paint);
-  window.addEventListener('shadow-dot-color-change',paint);
+  window.addEventListener('presentation-dot-color-change',paint);
   window.addEventListener('scroll',draw,true); window.addEventListener('resize',draw); window.addEventListener('blur',()=>hide(true));
 }
