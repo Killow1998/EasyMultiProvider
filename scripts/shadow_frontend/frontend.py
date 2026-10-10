@@ -7,7 +7,7 @@ WEB = HERE.parents[1] / 'crates/emp-app/web'
 
 def frontend(name, bootstrap):
     if name == 'index.html':
-        text = (WEB / name).read_text()
+        text = (WEB / name).read_text(encoding='utf-8')
         text = text.replace('<title>EMP</title>', '<title>EMP · 影子预览</title>')
         text = text.replace('</head>', '<link rel="stylesheet" href="/assets/shadow.css"></head>')
         text = text.replace('<script src="/assets/call-reports.js"></script>', '<script src="/assets/shadow-performance-chart.js"></script><script src="/assets/shadow-performance.js"></script><script src="/assets/call-reports.js"></script>')
@@ -22,7 +22,7 @@ def frontend(name, bootstrap):
         text = text.replace('onclick="openDiagnostics()" data-i18n="diagnostics">性能', 'onclick="shadowStats.open()" data-i18n="statistics">统计')
         text = re.sub(r'<button[^>]+onclick="openUsage\(\)"[^>]*>[^<]*</button>', '', text, count=1)
         text = text.replace('function stopModalFeatures() {', 'function stopModalFeatures() {\n  shadowStats.stop();')
-        text = text.replace('establishSession().then(load)', (HERE / 'shadow-ui.js').read_text() + '\nestablishSession().then(load)')
+        text = text.replace('establishSession().then(load)', (HERE / 'shadow-ui.js').read_text(encoding='utf-8') + '\nestablishSession().then(load)')
         return text.encode()
     if name in {'shadow-drafts.js', 'shadow-service-errors.js', 'shadow.css', 'shadow-performance-chart.js', 'shadow-performance.js', 'shadow-brand-colors.js', 'shadow-interactions.js', 'shadow-motion.js', 'shadow-service-demo.js', 'shadow-request-errors.js', 'shadow-usage-data.js', 'shadow-stats.js'}:
         return (HERE / name).read_bytes()

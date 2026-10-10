@@ -100,7 +100,7 @@ class ShadowHandler(BaseHTTPRequestHandler):
                 query = {key: filters[key] for key in ['start', 'end', 'category']}
                 if filters.get('account'):
                     query['account_id'] = filters['account']
-                token = json.loads(self.server.state_dir.joinpath('web-session.json').read_text())['token']
+                token = json.loads(self.server.state_dir.joinpath('web-session.json').read_text(encoding='utf-8'))['token']
                 connection.request('GET', '/api/usage?'+urllib.parse.urlencode(query), headers={
                     'X-EMP-Session': token, 'Origin': f'http://127.0.0.1:{self.server.backend_port}',
                 })
@@ -119,7 +119,7 @@ class ShadowHandler(BaseHTTPRequestHandler):
             return self.error(404, 'Not found')
         connection = http.client.HTTPConnection('127.0.0.1', self.server.backend_port, timeout=30)
         try:
-            token = json.loads(self.server.state_dir.joinpath('web-session.json').read_text())['token']
+            token = json.loads(self.server.state_dir.joinpath('web-session.json').read_text(encoding='utf-8'))['token']
             connection.request('GET', self.path, headers={
                 'X-EMP-Session': token, 'Origin': f'http://127.0.0.1:{self.server.backend_port}',
                 'Accept': self.headers.get('Accept', 'application/json'),

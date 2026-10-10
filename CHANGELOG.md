@@ -15,7 +15,7 @@
 - Separate call recording, report queries and result presentation. Share the read
   projection with developer tooling and remove redundant implementation assertions.
 - Include the accepted read-only shadow frontend under scripts/shadow_frontend,
-  with configurable backend/state paths, compact quota rings, unified statistics,
+  with configurable backend/state paths, UTF-8 assets, compact quota rings, unified statistics,
   service error bubbles, activity artwork and light/dark interaction previews.
 
 ## 0.12.16 (2026-10-09)

@@ -93,9 +93,9 @@ def start_backend(stack, binary, root):
     process = subprocess.Popen([str(binary), 'serve', '--config', str(config), '--port', '0'],
                                env=env, cwd=root, stdout=log, stderr=log)
     stack.callback(stop, process)
-    url = wait_for(lambda: re.search(r'Open in browser: (http://[^\s]+)', log_path.read_text()))[1]
+    url = wait_for(lambda: re.search(r'Open in browser: (http://[^\s]+)', log_path.read_text(encoding='utf-8')))[1]
     base = url.split('/?')[0]
     state = root / 'state'
-    token = wait_for(lambda: json.loads((state / 'web-session.json').read_text())['token']
+    token = wait_for(lambda: json.loads((state / 'web-session.json').read_text(encoding='utf-8'))['token']
                      if (state / 'web-session.json').exists() else None)
     return base, url, state, {'X-EMP-Session': token}, Upstream

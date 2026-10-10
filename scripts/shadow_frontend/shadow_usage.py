@@ -50,7 +50,7 @@ def aggregate(path: Path, filters, metadata):
         if filters.get('state'):
             call_predicate.append('c.state = ?')
             args.append(filters['state'])
-        projection = (Path(__file__).resolve().parents[2]/'contracts/call-outcomes.sql').read_text().strip()
+        projection = (Path(__file__).resolve().parents[2]/'contracts/call-outcomes.sql').read_text(encoding='utf-8').strip()
         call_predicate = [clause.replace('c.', 'call_records.') for clause in call_predicate]
         predicate.append('EXISTS(SELECT 1 FROM '+projection+' WHERE '+' AND '.join(call_predicate)+')')
     sums = ','.join(f'SUM(COALESCE(u.{field},0)) AS {field}' for field in FIELDS)
